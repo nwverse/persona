@@ -6,7 +6,7 @@ import shutil
 import subprocess
 
 
-LOGS = ("simulator.log", "simulator-boot.log")
+LOGS = ("simulator.log", "simulator-boot.log", "simulator-readiness.log")
 
 
 def collect(output, destination, runner=subprocess.run):

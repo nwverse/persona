@@ -193,6 +193,25 @@ class SimBootTests(unittest.TestCase):
         self.assertEqual(self.verdict(r), f"sim-boot: slim default {PHONE}")
         self.assertEqual(len([c for c in calls if c.startswith("simslim on")]), 1)
 
+    def test_create_only_returns_a_new_shutdown_device_without_booting(self):
+        r, calls = self.run_boot("--create-only", "--profile", "stock", "new owned test device")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), NEW)
+        self.assertEqual(self.device(NEW)["state"], "Shutdown")
+        self.assertEqual(self.device(PHONE)["state"], "Shutdown")
+        self.assertEqual(self.device(WATCH)["state"], "Shutdown")
+        self.assertFalse(any(c.startswith("simslim ") or " boot" in c for c in calls), calls)
+        self.assertEqual(self.verdict(r), f"sim-boot: created stock {NEW}")
+
+    def test_create_only_rejects_existing_devices_and_nonstock_modes(self):
+        for args in (("--profile", "stock", "mine"), ("--profile", "stock", PHONE),
+                     ("new device",), ("--profile", "stock", "--reslim", "new device")):
+            with self.subTest(args=args):
+                r, calls = self.run_boot("--create-only", *args)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertEqual(r.stdout, "")
+                self.assertFalse(any(not c.startswith("xcrun simctl list") for c in calls), calls)
+
     def test_a_new_name_creates_on_the_newest_runtime_that_runs_the_device_type(self):
         r, calls = self.run_boot("Persona Shots 1")
         self.assertEqual(r.returncode, 0, r.stderr)

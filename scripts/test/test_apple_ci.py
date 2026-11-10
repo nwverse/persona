@@ -87,40 +87,19 @@ class AppleCIPreparationTests(unittest.TestCase):
         })
         self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests/aRealInfiniteLoopCanBeDiscardedWithoutBlockingANewCard()', script)
 
-    def test_cold_ios_build_does_not_consume_test_execution_deadline(self):
+    def test_cold_ios_build_does_not_consume_readiness_or_execution_deadlines(self):
         script = SCRIPT.read_text()
-        start = script.index("  # Compile separately:")
-        block = script[start:script.index("  result ios-unit", start)]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            fake = root / 'xcodebuild'
-            fake.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$CALL_LOG"\n'
-                            'if [[ "$*" == *build-for-testing ]]; then exit "$BUILD_STATUS"; fi\n')
-            fake.chmod(0o755)
-            log = root / 'calls.log'
-            shell = ('set -euo pipefail\n'
-                     'ci_run() { local name="$1" limit="$2"; shift 2; "$@"; }\n'
-                     'IOS_TESTS=("$FAKE_XCODE" -derivedDataPath "$OUTPUT/ios-tests")\n'
-                     'IOS_EXCLUSIONS=(-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests)\n' + block)
-            for status in ('0', '7'):
-                with self.subTest(build_status=status):
-                    log.write_text('')
-                    env = dict(os.environ, FAKE_XCODE=str(fake), OUTPUT=str(root),
-                               CALL_LOG=str(log), BUILD_STATUS=status)
-                    result = subprocess.run(['bash', '-c', shell], cwd=ROOT, env=env,
-                                            capture_output=True, text=True, timeout=10)
-                    self.assertEqual(result.returncode, int(status), result.stderr)
-                    calls = log.read_text().splitlines()
-                    self.assertEqual(len(calls), 2 if status == '0' else 1)
-                    self.assertTrue(calls[0].endswith(' build-for-testing'))
-                    if status == '0':
-                        self.assertTrue(calls[1].endswith(' test-without-building'))
-                    for call in calls:
-                        self.assertIn('-only-testing:PersonaTests', call)
-                        self.assertIn('-skip-testing:PersonaTests/OldHubCompatibilityIntegrationTests', call)
-                        self.assertIn('-skip-testing:PersonaTests/AssistantHTMLCardTests', call)
-                        self.assertIn('-skip-testing:PersonaTests/AssistantHTMLSecurityTests', call)
-                        self.assertIn('-derivedDataPath ' + str(root / 'ios-tests'), call)
+        build = script.index("ci_run 'Build iOS offline unit tests' 1800")
+        create = script.index("ci_run 'Create stock iOS 26.0 test simulator' 100")
+        readiness = script.index("ci_run 'Verify hosted iOS test readiness' 900")
+        execution = script.index("ci_run 'iOS offline unit and design/token tests' 1800")
+        self.assertLess(build, create)
+        self.assertLess(create, readiness)
+        self.assertLess(readiness, execution)
+        self.assertIn("-destination 'generic/platform=iOS Simulator'", script[build:create])
+        self.assertIn('"${IOS_UNIT_SELECTION[@]}" build-for-testing', script[build:create])
+        self.assertIn('"${IOS_UNIT_SELECTION[@]}"', script[execution:])
+        self.assertIn('IOS_TESTS=("${IOS_COMMON[@]}"', script)
 
     def test_mac_lane_excludes_the_same_old_hub_lab_suite_as_ios(self):
         # The suite is compiled into PersonaMacTests too; selected without its lab hub it is reported as a skip,
@@ -208,7 +187,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             root = Path(directory)
             output, destination = root / 'output', root / 'artifacts'
             output.mkdir()
-            for name in ('simulator.log', 'simulator-boot.log', 'runtimes-iOS-before.json'):
+            for name in ('simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json'):
                 (output / name).write_text('diagnostic fixture')
             (output / 'config.json').write_text('configuration must stay in output')
             (output / 'private.key').write_text('key fixture must stay in output')
@@ -229,7 +208,7 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
             self.assertEqual(calls[1][1]['timeout'], 30)
             self.assertEqual((destination / 'disk-space.txt').read_text(), 'disk space diagnostic')
             self.assertEqual({path.name for path in destination.iterdir()}, {
-                'simulator.log', 'simulator-boot.log', 'runtimes-iOS-before.json',
+                'simulator.log', 'simulator-boot.log', 'simulator-readiness.log', 'runtimes-iOS-before.json',
                 'ios-unit.xcresult', 'simctl-list.json', 'simctl-list.stderr.txt', 'simctl-list.status.txt',
                 'disk-space.txt', 'disk-space.stderr.txt', 'disk-space.status.txt',
             })
@@ -252,8 +231,9 @@ class AppleFailureDiagnosticsTests(unittest.TestCase):
         script = SCRIPT.read_text()
         workflow = (ROOT / '.github/workflows/apple-test.yml').read_text()
         helper = (ROOT / 'scripts/app/sim-boot.sh').read_text()
-        self.assertIn("ci_run 'Create and boot stock iOS 26.0 test simulator' 1000", script)
-        self.assertIn('SIM_BOOT_TIMEOUT=900', script)
+        self.assertIn("ci_run 'Create stock iOS 26.0 test simulator' 100", script)
+        self.assertIn("ci_run 'Verify hosted iOS test readiness' 900", script)
+        self.assertIn('--create-only --profile stock', script)
         self.assertIn('2> >(tee "$5" >&2)', script)
         self.assertIn('if [ "$code" -ne 0 ]; then', script)
         self.assertLess(script.index("ci_run 'Collect Apple failure diagnostics'"), script.index("ci_run 'Shut down owned simulator'"))
