@@ -41,7 +41,6 @@ func (t Terminal) Local() bool { return true }
 func f(t Terminal) { _ = t.Local(); _ = time.Now().Hour(); _ = time.Local }
 `, nil, 2},
 		{"bool method declared in another file", `package p
-type Terminal struct{}
 func f(t Terminal) bool { return t.Local() }
 `, []string{`package p
 type Terminal struct{}
@@ -49,7 +48,6 @@ func (t Terminal) Local() bool { return true }
 `}, 0},
 		{"another file does not hide the machine clock", `package p
 import "time"
-type Terminal struct{}
 func f(t Terminal) bool { _ = time.Now().Local(); _ = time.Now().Hour(); _ = time.Local; return t.Local() }
 `, []string{`package p
 type Terminal struct{}
