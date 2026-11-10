@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -253,6 +254,24 @@ func TestRepairUsageStreamsTheTranscript(t *testing.T) {
 	if usageRaceEnabled {
 		t.Skip("-race allocates a regexp matcher per line on its own")
 	}
+	// TotalAlloc includes every goroutine. Run this check alone so unrelated work
+	// left by earlier node tests cannot be charged to transcript repair.
+	const child = "PERSONA_TEST_USAGE_ALLOCATION_RECEIPT"
+	receipt := os.Getenv(child)
+	if receipt == "" {
+		receipt = filepath.Join(t.TempDir(), "allocation-passed")
+		ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRepairUsageStreamsTheTranscript$", "-test.count=1", "-test.timeout=50s")
+		cmd.Env = append(os.Environ(), child+"="+receipt)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated usage allocation check: %v\n%s", err, output)
+		}
+		if got, err := os.ReadFile(receipt); err != nil || string(got) != "passed" {
+			t.Fatalf("allocation child did not complete the check: receipt %q, error %v", got, err)
+		}
+		return
+	}
 	path := longTranscript(t, 32<<20)
 	per := bytesPerRun(1, func() {
 		if r, err := repairUsage(path, 0); err != nil || r.lines != 0 {
@@ -261,6 +280,11 @@ func TestRepairUsageStreamsTheTranscript(t *testing.T) {
 	})
 	if per > 1<<20 {
 		t.Errorf("checking a 32 MB transcript allocates %.0f bytes, want under %d", per, 1<<20)
+	}
+	if !t.Failed() {
+		if err := os.WriteFile(receipt, []byte("passed"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

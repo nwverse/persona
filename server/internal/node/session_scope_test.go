@@ -90,7 +90,7 @@ func TestNodeSessionScopeProfilesAndHistory(t *testing.T) {
 	offlineCache.at, offlineCache.home = time.Now(), n.home
 	offlineCache.list = []proto.Session{{SessionID: original, Cwd: "/original/assistant"}}
 	offlineCache.Unlock()
-	rows := n.offline(map[string]bool{})
+	rows := n.appendOffline(nil, map[string]bool{})
 	if len(rows) != 1 || rows[0].SessionID != own {
 		t.Fatalf("history: %+v", rows)
 	}
@@ -132,7 +132,7 @@ func TestNodeSessionScopeInternalAssistantSymlink(t *testing.T) {
 	if got := n.transcriptPath(own); got != path {
 		t.Fatalf("canonical history rejected: %q", got)
 	}
-	rows := n.offline(map[string]bool{})
+	rows := n.appendOffline(nil, map[string]bool{})
 	if len(rows) != 1 || rows[0].SessionID != own || rows[0].Cwd != canonical {
 		t.Fatalf("canonical history was not discovered: %+v", rows)
 	}
