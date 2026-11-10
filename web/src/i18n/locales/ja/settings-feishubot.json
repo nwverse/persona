@@ -84,5 +84,6 @@
   "read_more": "その他の設定",
   "read_more_hint": "受信トレイに集める内容を選択",
   "read_as_you": "あなたとして",
-  "read_reauthorize": "もう一度認証"
+  "read_reauthorize": "もう一度認証",
+  "read_off_footer": "オフ：メンションと個別チャットを読み取りません。ログインとこれまでの内容は残ります。"
 }

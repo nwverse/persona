@@ -97,6 +97,11 @@ func NewWithRunner(r *adapter.Runner) *Connector {
 func (c *Connector) ID() string   { return ID }
 func (c *Connector) Name() string { return Name }
 
+// DisplayName is what people read: "Lark (as you)" in their language, matching the Lark page's "read as you" section.
+func (c *Connector) DisplayName(ctx context.Context) string {
+	return i18n.T(c.lang(ctx), "hub-connectors.larkcli_name")
+}
+
 // Profile is the effective profile used by every lark-cli invocation.
 func (c *Connector) Profile() string {
 	if c == nil {

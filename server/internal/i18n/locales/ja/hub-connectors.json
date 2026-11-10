@@ -18,5 +18,6 @@
   "expiry_reminder": "ログインはあと {count} 日で期限切れになります。ハブのマシンで {command} を実行してください",
   "larkcli_message": "Lark メッセージ",
   "larkcli_direct_message": "Lark ダイレクトメッセージ",
-  "larkcli_mention": "Lark メンション"
+  "larkcli_mention": "Lark メンション",
+  "larkcli_name": "Lark（あなたとして）"
 }

@@ -11,6 +11,7 @@ type Call = { resolve: (s: FeishuBotStatus) => void };
 const calls = vi.hoisted(() => ({ status: [] as Call[], update: [] as (Call & { body: unknown })[] }));
 const connectorList = vi.hoisted(() => ({ value: [] as HubConnector[], calls: 0 }));
 const connectorLogin = vi.hoisted(() => vi.fn());
+const setConnector = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/feishu-bot", async (original) => ({
   ...(await original<typeof import("../../lib/feishu-bot")>()),
   botStatus: () => new Promise<FeishuBotStatus>((resolve) => calls.status.push({ resolve })),
@@ -24,6 +25,7 @@ vi.mock("../../lib/connectors", async (original) => ({
     return Promise.resolve(connectorList.value);
   },
   connectorLogin: (...args: unknown[]) => connectorLogin(...args),
+  setConnector: (...args: unknown[]) => setConnector(...args),
 }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: () => {} }));
 import { t } from "../../i18n";
@@ -74,6 +76,7 @@ beforeEach(() => {
   connectorList.value = [];
   connectorList.calls = 0;
   connectorLogin.mockReset();
+  setConnector.mockReset();
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   host = document.createElement("div");
@@ -164,6 +167,20 @@ describe("Feishu bot dialog", () => {
     const again = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_reauthorize")));
     expect(again).toBeDefined();
     expect([...dialog.querySelectorAll("button")].some((button) => button.textContent === t("settings-feishubot.read_authorize"))).toBe(false);
+  });
+
+  it("switches reading as you off from the Lark page, the same switch as the connector page", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark (as you)", status: "ok", account: "me", enabled: true };
+    setConnector.mockResolvedValue({ ...larkcli, enabled: false });
+    connectorList.value = [{ ...larkcli, enabled: false }];
+    act(() => root.render(<FeishuBot larkcli={larkcli} />));
+    await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    const sw = document.querySelector<HTMLButtonElement>(`[role=dialog] [role="switch"][aria-label="${t("settings-feishubot.read_section")}"]`)!;
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    await act(async () => sw.click());
+    expect(setConnector).toHaveBeenCalledWith("larkcli", { enabled: false });
   });
 
   it("starts lark-cli authorization inline and renders a device-code step", async () => {

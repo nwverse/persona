@@ -18,5 +18,6 @@
   "expiry_reminder": "Login expires in {count} day(s); run {command} on the hub machine",
   "larkcli_message": "Lark message",
   "larkcli_direct_message": "Direct Lark message",
-  "larkcli_mention": "Lark mention"
+  "larkcli_mention": "Lark mention",
+  "larkcli_name": "Lark (as you)"
 }
