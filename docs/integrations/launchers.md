@@ -195,6 +195,7 @@ A key bought for one computer (an isolated container the assistant runs on) shou
 - **Rolling upgrade**: a node without `launchers.catalog` (it answers `unknown method`) gets `launchers.managed` as before, but only with the providers in its scope, keys included, so on-demand and the own-service rule apply only once it is updated. An old manager keeps pushing `launchers.managed` to new nodes, which still take it (every entry there is full).
 - Per-computer keys live in their own setting `launchers.machine_keys` (`[{launcher, machine, key_sealed}]`, sealed and re-sealed with the providers' keys); deleting a provider deletes them.
 - Web: Settings › Model providers › a provider › “Devices” (`web/src/views/settings/ProviderScope.tsx`), grouped by harness in the list.
+- Android: Settings › Model providers › a provider › Edit, or its “Computers” row (`android/feature/settings/src/main/kotlin/persona/feature/settings/ProviderEditScreens.kt`, the form in `ProviderScopeState.kt`); a new provider's “Computers” is under “Advanced” (“More options” on the key step). Grouped by harness in the list.
 
 ## Parameters on the launcher page (`node/launcherprobe.go`)
 
