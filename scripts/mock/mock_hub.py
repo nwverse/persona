@@ -2736,7 +2736,8 @@ def managers_route(h, method, p):
 # POST /mock/meeting_attendance switches that (only the keys sent): {"feed": "ok"|"busy"|"unavailable"|"not_allowed",
 # "answer": "ok"|"slow"|"fail", "answer_seconds": 3, "kb_read_only": false}: busy leaves `fed` behind with no problem,
 # unavailable / not_allowed report attendee_unavailable / attendee_not_allowed, slow answers a question that many seconds
-# after it was asked (202 meanwhile), fail fails it with model_unavailable. GET /mock/meeting_attendance reads back the
+# after it was asked (202 meanwhile), fail fails it with model_unavailable; "on" and "default" switch the feature and
+# meeting_attendance_default for a UI test (the iPhone's MeetingAttendanceUITests). GET /mock/meeting_attendance reads back the
 # modes, every recording's live log and its asks; POST /mock/recording_minutes forgets them too.
 MEETING_ATTENDANCE = os.environ.get("MOCK_NO_MEETING_ATTENDANCE") != "1"
 MEETING_ROLES = ("off", "listener", "participant")
@@ -2925,12 +2926,19 @@ def meeting_ask(h, st, body, rec):
 def recordings_route(h, method, p):
     """The hub's recording sync, and its copy in the knowledge base (KB["recordings"])."""
     if p == "/mock/meeting_attendance":
+        global MEETING_ATTENDANCE
         with MEETING_LOCK:
             if method == "POST":
-                MEETING_MODE.update({k: v for k, v in json.loads(h.last_body or b"{}").items() if k in MEETING_MODE})
-            return h.send_json({"mode": MEETING_MODE, "live": {k: {"attendance": v["role"], "attending_session": v["session"],
-                                                                     "segments": v["segments"], "fed": v["fed"], "asks": v["asks"]}
-                                                                 for k, v in MEETING_LIVE.items()}}) or True
+                body = json.loads(h.last_body or b"{}")
+                MEETING_MODE.update({k: v for k, v in body.items() if k in MEETING_MODE})
+                # A UI test's hub of its own: "on": false is a hub without attending (from its next hello), "default"
+                # the role meeting_attendance_default says.
+                if "on" in body: MEETING_ATTENDANCE = bool(body["on"])
+                if body.get("default") in MEETING_ROLES: ASSISTANT_CONFIG["meeting_attendance_default"] = body["default"]
+            return h.send_json({"mode": MEETING_MODE, "on": MEETING_ATTENDANCE, "default": ASSISTANT_CONFIG["meeting_attendance_default"],
+                                "live": {k: {"attendance": v["role"], "attending_session": v["session"],
+                                             "segments": v["segments"], "fed": v["fed"], "asks": v["asks"]}
+                                         for k, v in MEETING_LIVE.items()}}) or True
     if p == "/mock/recording_minutes" and method == "POST":
         # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
         RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")

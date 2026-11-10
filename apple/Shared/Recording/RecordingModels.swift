@@ -105,6 +105,9 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     var updatedAt: Date? = nil
     /// Set when it was started as a meeting recording (or a watch recording arrived during a calendar event); nil for a note.
     var meeting: RecordingMeeting? = nil
+    /// Persona's part in the meeting and the session that attends (#2981); nil for a note, a watch recording, and a
+    /// meeting recording Persona was never asked to attend (its upload is then exactly as before).
+    var attendance: RecordingAttendance? = nil
 
     /// Monotonic per recording: every save moves `updatedAt` forward, so a later upload always carries a larger one.
     var revision: Int64 { Int64(((updatedAt ?? createdAt).timeIntervalSince1970 * 1000).rounded()) }
@@ -130,6 +133,10 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
 
     var duration: Double { segments.map { $0.start + $0.duration }.max() ?? 0 }
     var isMeeting: Bool { meeting != nil }
+    /// A meeting being recorded on this phone that Persona attends: asking is open, live lines go to the hub.
+    var attended: Bool {
+        active && isMeeting && source == .phone && attendance?.role.attends == true && attendance?.stopped != .unsupported
+    }
     var displayTitle: String {
         guard title.isEmpty else { return title }
         let when = createdAt.formatted(date: .abbreviated, time: .shortened)
@@ -142,8 +149,12 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
         return Set(segments.map(\.index)) == Set(0..<count)
     }
     var transcribedAll: Bool { receivedAll && segments.allSatisfy { $0.sentences != nil } }
+    /// The transcript, in order. Lines the microphone took from Persona's own answers out loud (#2981) are not the
+    /// meeting's and are left out (`RecordingAttendance.spoken`).
     var sentences: [RecordingSentence] {
-        segments.sorted { $0.index < $1.index }.flatMap { $0.sentences ?? [] }
+        let all = segments.sorted { $0.index < $1.index }.flatMap { $0.sentences ?? [] }
+        guard let attendance, !attendance.spoken.isEmpty else { return all }
+        return all.filter { !attendance.spokenBy($0) }
     }
     var transcript: String { sentences.map { "[\(RecordingFormat.clock($0.start))] \($0.text)" }.joined(separator: "\n") }
 }
