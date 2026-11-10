@@ -149,6 +149,29 @@ func TestRingOverTheGoalAndWithoutOne(t *testing.T) {
 	}
 }
 
+// A goal of 0 is no goal; past three views in a reply (the apps draw no more), rings are words; every view emitted
+// passes the hub's own check for assistant views.
+func TestRingZeroGoalViewCapAndCheck(t *testing.T) {
+	zero := strings.Replace(mealsRing, `"value":1950`, `"value":0`, 1)
+	if _, by := downgradedView(t, ringCardsDowngraded(i18n.ZhHans, zero)); by["metric"][0].Value != "1,770 kcal" || by["metric"][0].Detail != "" {
+		t.Fatalf("zero goal: %+v", by["metric"])
+	}
+	view := "```persona-view\n" + `{"sections":[{"items":[{"type":"text","text":"x"}]}],"fallback":"x"}` + "\n```"
+	got := ringCardsDowngraded(i18n.ZhHans, view+"\n\n"+mealsRing+"\n\n"+mealsRing+"\n\n"+mealsRing)
+	if n := len(viewsIn(t, got)); n != 3 || !strings.HasSuffix(got, "- 剩余 180 kcal") || len(cardsIn(t, got)) != 0 {
+		t.Fatalf("views = %d:\n%s", n, got)
+	}
+	for _, b := range wire.AssistantViewBlocks(got) {
+		v, err := b.Parse()
+		if err != nil {
+			t.Fatalf("view %d: %v", b.Index, err)
+		}
+		if err := wire.CheckAssistantView(v); err != nil {
+			t.Fatalf("view %d does not pass CheckAssistantView: %v", b.Index, err)
+		}
+	}
+}
+
 // More parts than an older app draws series: the first three and "other" in the bar, every part a row.
 func TestRingWithManyPartsKeepsFourSeries(t *testing.T) {
 	md := "```persona-card\n" + `{"type":"ring","total":{"value":100,"unit":"g"},"segments":[{"label":"a","value":10},{"label":"b","value":10},{"label":"c","value":10},{"label":"d","value":10},{"label":"e","value":10}]}` + "\n```"

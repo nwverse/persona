@@ -86,9 +86,18 @@ func ringCardsDowngraded(l i18n.Lang, md string) string {
 	if !i18n.Valid(l) {
 		l = i18n.ZhHans
 	}
+	blocks := wire.AssistantViewBlocks(md)
+	// The apps draw at most three persona-view blocks in a reply (the rest as their fallback): rings past that many,
+	// counting the reply's own views, are written as words.
+	views := 3
+	for _, blk := range blocks {
+		if blk.Language == "persona-view" {
+			views--
+		}
+	}
 	var b strings.Builder
 	at := 0
-	for _, blk := range wire.AssistantViewBlocks(md) {
+	for _, blk := range blocks {
 		if blk.Language != "persona-card" || !blk.Complete {
 			continue
 		}
@@ -97,7 +106,8 @@ func ringCardsDowngraded(l i18n.Lang, md string) string {
 			continue
 		}
 		b.WriteString(md[at:blk.Start])
-		b.WriteString(ringReplacement(l, c))
+		b.WriteString(ringReplacement(l, c, views > 0))
+		views--
 		if strings.HasSuffix(md[blk.Start:blk.End], "\n") {
 			b.WriteString("\n")
 		}
@@ -118,10 +128,10 @@ func ringCardsDowngraded(l i18n.Lang, md string) string {
 // more part. Every app that draws persona-card also draws persona-view (one section of metric, chart, row and text),
 // where the hub writes each line itself: what the parts add up to against the goal ("Eaten 1,770 / Goal 1,950 kcal"),
 // what is left or over on its own in the metric's grey detail and never in the bar, the title once.
-func ringReplacement(l i18n.Lang, c wire.PersonaCard) string {
+func ringReplacement(l i18n.Lang, c wire.PersonaCard, asView bool) string {
 	r := ringSummaryOf(l, c)
 	words := ringWords(l, c, r)
-	if c.View() == nil {
+	if !asView || c.View() == nil {
 		return words
 	}
 	// An older app reads a row without a title, and so the whole view, as broken; a bar of nothing says nothing.
@@ -178,6 +188,7 @@ type ringSummary struct {
 	headline string // the metric's value: "Eaten 1,770 / Goal 1,950 kcal", or the parts' sum without a goal
 	left     string // "Remaining 180 kcal" / "Over 150 kcal", empty when on the goal or without one
 	bar      string // the one bar's label: what the parts are ("Eaten"), never the title again
+	goal     bool   // the ring has a total above 0: the headline is the parts against it
 }
 
 func (r ringSummary) amount(v float64) string {
@@ -205,11 +216,12 @@ func ringSummaryOf(l i18n.Lang, c wire.PersonaCard) ringSummary {
 		done = "card_eaten"
 	}
 	r.bar = tt(l, done)
-	if c.Total == nil {
+	// A goal of nothing is no goal.
+	if c.Total == nil || c.Total.Value <= 0 {
 		r.label, r.headline = tt(l, "card_total"), r.amount(sum)
 		return r
 	}
-	r.label = tt(l, "card_progress")
+	r.goal, r.label = true, tt(l, "card_progress")
 	r.headline = tt(l, "card_of_goal", i18n.Args{"done": r.bar, "value": wire.Number(sum), "goal": wire.Number(c.Total.Value)})
 	if r.unit != "" {
 		r.headline += " " + r.unit
@@ -243,7 +255,7 @@ func ringWords(l i18n.Lang, c wire.PersonaCard, r ringSummary) string {
 	if c.Subtitle != "" {
 		lines = append(lines, c.Subtitle)
 	}
-	if c.Total != nil {
+	if r.goal {
 		lines = append(lines, "- "+r.headline)
 	} else {
 		lines = append(lines, "- "+r.label+": "+r.headline)
