@@ -20,7 +20,8 @@ import (
 // device; changing anything needs full access (read_only_device otherwise).
 
 // subscriptionsFeature is in the manager's report once subscriptions deliver to the Inbox and the knowledge base
-// (#2039): the apps show their entry rows only then, so a subscription the user turns on does what its switch says.
+// (#2039, so now): the apps show their entry rows only then, so a subscription the user turns on does what its switch
+// says.
 const subscriptionsFeature = "source_subscriptions"
 
 // subscriptionsShown says whether the report carries subscriptionsFeature.
@@ -34,7 +35,13 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 	} else {
 		store = subscriptions.NewMemStore() // no database (tests): kept in memory only
 	}
-	h.subs = subscriptions.New(subscriptions.Options{
+	h.subs = subscriptions.New(h.subscriptionOptions(store))
+	go h.subs.Run(ctx)
+}
+
+// subscriptionOptions are the service's parts in this manager, over store.
+func (h *Manager) subscriptionOptions(store subscriptions.Store) subscriptions.Options {
+	return subscriptions.Options{
 		Store:      store,
 		Connectors: subscriptionConnectors{h},
 		Location:   h.userLocation,
@@ -46,14 +53,86 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 			h.broadcast(map[string]any{"type": "subscription", "id": s.ID, "connector": s.Connector, "revision": s.Revision,
 				"state": s.State, "removed": removed})
 		},
-		Logf: h.logf,
+		Logf:     h.logf,
+		Features: subscriptions.Features{Deliver: true, Generate: true},
 		// Drafting recipes (#2040): the assistant holds the keys and the purpose subscription.recipe.
 		Model:    subscriptionModel{h},
 		Models:   h.purposeModelInfo,
 		Language: func(ctx context.Context) string { return h.contextLang(ctx).Name() },
-		Features: subscriptions.Features{Generate: true},
-	})
-	go h.subs.Run(ctx)
+		// The destinations (#2039): each subscription is an internal source of the Inbox's rounds (readSubscriptions)
+		// and of the knowledge base's archives (kbArchives, subscriptionArchive).
+		Lang: h.userLang,
+		ExtensionRules: func(ext string) string {
+			if h.extensions == nil {
+				return ""
+			}
+			return h.extensionTriageRules(ext)
+		},
+		Delivered: func(s subscriptions.Subscription) {
+			if s.ToInbox {
+				h.kickInbox()
+			}
+			if s.ToKB {
+				h.kbKick(s.ID, connector.ScopeChats)
+			}
+		},
+		Forget: h.forgetSubscription,
+	}
+}
+
+// readSubscriptions adds the subscriptions to an Inbox round as sources a plugin's connector would be (their new items
+// are triaged before they enter, and wait without a model unless they carry a fallback tier): every round names them,
+// so the Inbox keeps their held-back counts; a round that reads the connectors reads their things too.
+func (h *Manager) readSubscriptions(ctx context.Context, r *assistantwire.InboxRound, things bool) {
+	if h.subs == nil {
+		return
+	}
+	if !things { // a round of the Feishu chats (a Lark event): the names only, no items read
+		list, _, err := h.subs.List(ctx, subscriptions.Filter{})
+		if err != nil {
+			h.logf("inbox: subscriptions: %v", err)
+		}
+		for _, s := range list {
+			r.Names[s.ID] = s.Label
+		}
+		return
+	}
+	srcs, err := h.subs.InboxSources(ctx)
+	if err != nil {
+		h.logf("inbox: subscriptions: %v", err)
+		return
+	}
+	for _, src := range srcs {
+		r.Names[src.ID] = src.Name
+		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Kinds: src.Kinds,
+			Things: src.Things})
+	}
+}
+
+// subscriptionArchive is a subscription as the knowledge base reads a connector's archive.
+type subscriptionArchive struct {
+	subs *subscriptions.Service
+	id   string
+}
+
+func (a subscriptionArchive) Changes(ctx context.Context, cursor string, limit int) ([]connector.ChatBatch, string, bool, error) {
+	return a.subs.Changes(ctx, a.id, cursor, limit)
+}
+
+// forgetSubscription removes what the Inbox and the knowledge base took from a subscription (a delete with its data,
+// which switched it off first). Both parts are asked; either failing leaves the subscription for another delete.
+func (h *Manager) forgetSubscription(ctx context.Context, s subscriptions.Subscription) error {
+	f, kerr := h.forgetArchive(ctx, s.ID)
+	n, ierr := h.forgetInbox(ctx, s.ID)
+	if err := errors.Join(kerr, ierr); err != nil {
+		if kbOffline(kerr) || kbOffline(ierr) || errors.Is(ierr, errAssistantOffline) {
+			return &subscriptions.Error{Status: http.StatusServiceUnavailable, Code: assistantwire.CodeAssistantOffline,
+				Message: "the assistant is away: its Inbox items and knowledge-base chats could not be deleted yet"}
+		}
+		return err
+	}
+	h.logf("subscription %s: deleted %d chat(s) from the knowledge base and %d Inbox item(s)", s.ID, f.Chats, n)
+	return nil
 }
 
 // subscriptionModel makes the drafting calls on the purpose subscription.recipe, through the assistant

@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -70,6 +71,18 @@ type Options struct {
 	Language func(ctx context.Context) string
 	// Models says what a model purpose runs on now (ModelOf); nil: nothing can be called.
 	Models func(ctx context.Context, purpose string) ModelInfo
+
+	// The destinations (#2039, deliver.go).
+	// Lang is the user's language, for the texts the manager writes into the Inbox (a catch-up digest, a failure notice).
+	Lang func() i18n.Lang
+	// ExtensionRules are an extension's own triage rules (its triage_rules setting), "" when it has none.
+	ExtensionRules func(extension string) string
+	// Delivered tells the destinations a subscription has something new for them: a run kept items, or the Inbox's
+	// catch-up is ready.
+	Delivered func(s Subscription)
+	// Forget removes what the destinations took from a subscription (its Inbox items, its knowledge-base chats), for a
+	// delete with its data. nil: nothing to remove.
+	Forget func(ctx context.Context, s Subscription) error
 }
 
 // Clock is time for the runner: tests drive it.
@@ -132,6 +145,15 @@ func New(o Options) *Service {
 	}
 	if o.Language == nil {
 		o.Language = func(context.Context) string { return "English" }
+	}
+	if o.Lang == nil {
+		o.Lang = func() i18n.Lang { return i18n.Default }
+	}
+	if o.ExtensionRules == nil {
+		o.ExtensionRules = func(string) string { return "" }
+	}
+	if o.Delivered == nil {
+		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
 		busy: map[string]bool{}, asked: map[string]bool{}, wake: make(chan struct{}, 1)}
@@ -751,19 +773,32 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 		return Subscription{}, &Error{Status: http.StatusUnprocessableEntity, Code: CodeIntervalTooShort,
 			Message: fmt.Sprintf("the interval must be at least %d seconds", fl)}
 	}
-	wasOn := on(*cur)
+	wasOn, turnedOn := on(*cur), false
 	if p.ToInbox != nil {
 		next.ToInbox = *p.ToInbox
 		changed = append(changed, "to_inbox")
+		// The Inbox catches up from a day before it was turned on, once the first run since has read the source.
+		switch {
+		case next.ToInbox && !cur.ToInbox:
+			next.InboxFrom, next.InboxCatchup, turnedOn = &now, nil, true
+		case !next.ToInbox:
+			next.InboxFrom, next.InboxCatchup = nil, nil
+		}
 	}
 	if p.ToKB != nil {
 		next.ToKB = *p.ToKB
 		changed = append(changed, "to_kb")
+		switch {
+		case next.ToKB && !cur.ToKB:
+			next.KBFrom, turnedOn = &now, true
+		case !next.ToKB:
+			next.KBFrom = nil
+		}
 	}
 	switch {
 	case !on(next):
 		next.NextRunAt = nil
-	case !wasOn || p.Recipe != nil: // a new recipe runs soon, also after needs_recipe stopped it
+	case !wasOn || p.Recipe != nil || turnedOn: // a new recipe or destination runs soon, also after needs_recipe stopped it
 		next.NextRunAt = &now
 	case schedule:
 		n := s.nextRun(next, now, false)
@@ -791,7 +826,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	}
 	s.o.Audit(ctx, next.Connector, "subscription_updated", by, map[string]any{"subscription": id, "fields": changed})
 	s.o.Changed(shown(next), false)
-	if on(next) && (!wasOn || p.Recipe != nil) {
+	if on(next) && (!wasOn || p.Recipe != nil || turnedOn) {
 		s.poke()
 	}
 	return shown(next), nil
@@ -817,8 +852,9 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 	return out, nil
 }
 
-// Delete removes a subscription with its dedup keys and pending items. withData asks the destinations to remove what
-// they already took from it (#2039); it is recorded either way.
+// Delete removes a subscription with its dedup keys and pending items. withData also has the destinations remove what
+// they took from it (#2039): its destinations are switched off first, so they take nothing more meanwhile; when the
+// removal fails the subscription stays (off), and deleting again finishes it. It is recorded either way.
 func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor) error {
 	sub, err := s.o.Store.GetSubscription(ctx, id)
 	if err != nil {
@@ -826,6 +862,15 @@ func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor
 	}
 	if sub == nil {
 		return notFound("subscription")
+	}
+	if withData && s.o.Forget != nil {
+		if sub, err = s.switchOff(ctx, *sub); err != nil {
+			return err
+		}
+		if err := s.o.Forget(ctx, *sub); err != nil {
+			s.o.Logf("subscription %s: delete its data: %v", id, err)
+			return err
+		}
 	}
 	if err := s.o.Store.DeleteSubscription(ctx, id); err != nil {
 		return err
@@ -837,6 +882,36 @@ func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor
 	s.o.Logf("subscription %s: deleted (data %v)", id, withData)
 	s.o.Changed(shown(*sub), true)
 	return nil
+}
+
+// switchOff turns both destinations of sub off (a delete with its data, before the destinations remove theirs),
+// at whatever revision it is now.
+func (s *Service) switchOff(ctx context.Context, sub Subscription) (*Subscription, error) {
+	for range 3 {
+		if !on(sub) {
+			return &sub, nil
+		}
+		next, prev := sub, sub.Revision
+		next.ToInbox, next.ToKB, next.InboxFrom, next.InboxCatchup, next.KBFrom, next.NextRunAt = false, false, nil, nil, nil, nil
+		next.Revision, next.UpdatedAt = prev+1, s.now()
+		ok, err := s.o.Store.UpdateSubscription(ctx, next, prev)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			s.o.Changed(shown(next), false)
+			return &next, nil
+		}
+		cur, err := s.o.Store.GetSubscription(ctx, sub.ID)
+		if err != nil {
+			return nil, err
+		}
+		if cur == nil {
+			return nil, notFound("subscription")
+		}
+		sub = *cur
+	}
+	return nil, errorf(http.StatusConflict, CodeConflict, "the subscription was changed meanwhile")
 }
 
 func newID() string {

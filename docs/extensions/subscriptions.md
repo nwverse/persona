@@ -1,6 +1,6 @@
 # Source subscriptions
 
-Source subscriptions let the manager pull new information from a connector's read-only tools into the Inbox or knowledge base. The design is tracked in #2036. The optional catalog protocol (#2037), the manager's storage, validation, scheduler, runner and API (#2038) and drafting a recipe with a model (#2040) are implemented; destinations (#2039) and client pages (#2041) are follow-up stages. A catalog alone does not turn on polling or store source content, and until #2039 a subscription's items wait in the manager without reaching the Inbox or the knowledge base.
+Source subscriptions let the manager pull new information from a connector's read-only tools into the Inbox or knowledge base. The design is tracked in #2036. The optional catalog protocol (#2037), the manager's storage, validation, scheduler, runner and API (#2038), delivery to the Inbox and the knowledge base (#2039) and drafting a recipe with a model (#2040) are implemented; client pages (#2041) are a follow-up stage. A catalog alone does not turn on polling or store source content.
 
 ## Source catalog
 
@@ -96,7 +96,7 @@ Manager migration `0482_subscriptions.sql`:
 
 - `subscriptions`: one row per subscription. The settings, recipe, run state and last 20 runs are a `json` document, with `revision` (a change is written only at the revision the client saw) and `lease_until` beside it.
 - `subscription_seen`: dedup keys per subscription, the newest 5000 and none older than 400 days.
-- `subscription_items`: new items waiting for the destinations (#2039), bodies cut to 8000 characters.
+- `subscription_items`: new items for the destinations, bodies cut to 8000 characters. They are kept past what the destinations read: 8 days (the Inbox's 7-day window and a day), 30 days while the knowledge base is on (one that stops reading for longer misses them). Each run prunes the older ones; their dedup keys stay.
 
 A run writes its seen keys, its items and the cursor in one transaction; nothing is kept from a run that did not finish.
 
@@ -120,7 +120,7 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/v1/subscriptions?connector=&extension=` | `{subscriptions, features: {deliver, generate}}`; `generate` is true (#2040), `deliver` turns true with #2039 |
+| `GET /api/v1/subscriptions?connector=&extension=` | `{subscriptions, features: {deliver, generate}}`; both are true: `deliver` (#2039) and `generate` (#2040) |
 | `GET /api/v1/subscriptions/summary` | `{connectors: [{connector, extension, subscribable?, on, failing}]}` from cached catalogs only (never a live call); `subscribable` is absent until the catalog was read |
 | `GET /api/v1/subscriptions/catalog?connector=` | the connector's sources and tools read now, each tool with its `input_schema` and `subscribable` or `refused` with a code, the source's own recipes and its subscriptions; `direct` says whether the connector's own Inbox / archive feeds are on. Without `connector`: `{catalogs: [...]}`, every connector's catalog from earlier reads only (never a call; a connector not read yet is left out and read in the background) |
 | `GET /api/v1/subscriptions/{id}` | `{subscription, runs}`: the newest 20 runs first, `{at, ms, trigger, new, count, error}` |
@@ -129,10 +129,32 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | `POST /api/v1/subscriptions/{id}/generate` | Drafts a recipe with the model. A subscription's `id`, with `{revision?}`: the draft that passes is saved (`recipe_origin: "model"`, `recipe_at` now), its run state starts over (`needs_recipe` clears), and its switches, label, rules and interval stay (a new mode takes that mode's default interval) → `{recipe, note, dry_run, subscription}`; 409 `conflict` when it is at another revision, before or after drafting. `-` with `{connector, source}`: a source not subscribed yet → `{recipe, note, dry_run}`, nothing written. A draft that still fails is 422 with the check's code, `dry_run` and `recipe` (the draft as far as it got, for the manual editor). 503 `no_model` when no model is set up for it, 502 `model_failed` when a call failed (503 with `retry_after` while the model's connection is held) |
 | `PUT /api/v1/subscriptions/{id}` | `{revision, label?, recipe?, to_inbox?, to_kb?, interval_seconds?, daily_at?, triage_rules?, fallback_tier?}`; 409 `conflict` at another revision, 422 `interval_too_short` |
 | `POST /api/v1/subscriptions/{id}/run` | 202: runs as soon as the connector's limits allow, also while it is off |
-| `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items |
+| `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items. With `data=1` it first switches both destinations off and has the Inbox and the knowledge base remove what they took ("Destinations"); 503 `assistant_offline` while the assistant is away, the subscription left off for another delete |
 | `POST /api/v1/subscriptions/-/ui` | the pages below, with an extension page's request and answer; every device may draw them, actions need full access |
 
-A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature only once subscriptions deliver (`features.deliver`, #2039), so the apps show their entry rows only then; it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
+A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature now that subscriptions deliver (`features.deliver`, #2039), and the apps show their entry rows only with it; it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
+
+### Destinations
+
+Every subscription is an internal source of the manager, beside the connectors and not listed with them (`server/internal/subscriptions/deliver.go`, wired in `server/internal/extmgr/subscriptions.go`). Neither destination is written by the subscription: the Inbox keeps what it took by thread and `last`, the knowledge base by its cursor and message-id receipts, so a replay, a run made again after its lease, or a restarted manager hands them the same things and they add nothing.
+
+**Inbox.** Each collection round names every subscription as a source (id the subscription's, name its label) and, in rounds that read the connectors, hands in its things as a plugin's connector's (`extension`): new items are triaged before they enter (`docs/assistant/inbox.md` "AI triage"). A run that keeps items or ends a catch-up asks for a round at once. Things are made from the held items each round, as a connector answers `Collect` from its memory:
+
+- One row a thread, `sub:<subscription>:<thread or uid>`: the thread's newest item (by its time, never later than when it was stored) is the row's title, sender, preview (the body's first 200 characters), `at` and `last` (its uid); the thread's earlier items are listed above it in the context, one line each (at most 10), then the newest's title, sender and time, due date, body (3000 characters) and link. `url` is the link when it is https. The kind is the recipe's, the label the subscription's, `can_reply` false, and a `source` tag (the subscription's id and label) lets the user mute it.
+- Rules: the subscription's `triage_rules`, else its extension's own `triage_rules` setting, else none (the Inbox's `inbox.rules`).
+- Fallback (`extra.rule_tier`, used only when no model can triage the item), by `fallback_tier`: `""` FYI, and Needs you for a thread with a due date or of kind `sub_deadline`; `fyi` or `action` for everything; `wait` none, so new items wait for the model.
+- **Catch-up.** Turning the Inbox on (also after the knowledge base was on alone, and again after it was off) records the time, and the first run that succeeds after it marks the end of the catch-up. Until then the Inbox gets nothing. The catch-up is what was stored from a day before the Inbox was turned on up to that run: three items or fewer come in as rows; more become one `sub_digest` row, `sub:<subscription>:catchup`, triaged once, its context a line an item (time · sender · title link), newest first, at most 50 and then "and N more". Items whose due date was still ahead when the catch-up ended stay rows of their own. Later items come in as rows, a new thread row even for a thread in the digest.
+- **Snapshots** come in as one row, `sub:<subscription>:snapshot`, the newest kept state (a snapshot is kept only when its content changed, so an unchanged one never moves the row).
+- **Failure notice.** A subscription that is on and has not pulled for 24 hours (`failing_since`) adds one FYI row by rule, `sub:<subscription>:failing` of kind `sub_failing` ("<label> hasn't pulled anything since <time>" with the reason for the error's code). It is one row a failure (`last` is the failure's start) and is filed as done (read) once the subscription pulls again.
+- The texts the manager writes (the digest's title and its "and N more", the due line, the notice) are in the user's language (`subscriptions-deliver` catalogs). The kinds are described for the models in `server/internal/prompts/inbox/kinds/subscription.md`, handed in with the round as the source's kinds.
+- A round reads at most the newest 300 items stored after the catch-up and 500 of the catch-up.
+
+**Knowledge base.** `connectors.archives` lists the subscriptions with "Add to knowledge base" on, and `connectors.changes {id: <subscription>, cursor}` pages through their held items (100 a call): the cursor is the last stored position read, and the knowledge base moves it once it has written the batch (`cursors/<subscription>.json`). It starts a day before the knowledge base was turned on: the first run's page for a new subscription, and the same for a cursor kept from before the knowledge base was last off (what was stored while it was off is skipped). The knowledge base reads it on its own schedule (10 minutes) and soon after a run that kept items.
+
+- Chats: one a thread (`t` and a hash of the thread, named by the thread's first item it reads) for `group_by: thread`, else one for the subscription (`all`, named by the label); a snapshot always the latest. The chat kind is `subscription` (the selection keeps every message, for `text_days`).
+- Messages: the item's uid as the message id (receipts drop it on a replay), its sender's name (no sender id, so no person is made), its time, and the text `【title】` and the body, then the due line and the link on lines of their own.
+
+**Deleting with the data.** `DELETE …?data=1` switches both destinations off (so neither takes more meanwhile), then has the knowledge base forget the subscription's chats and cursor (`kb.forget`) and the Inbox its items (`inbox.forget`), and only then deletes the subscription. While the assistant is away that answers 503 `assistant_offline` and the subscription stays, off; deleting it again finishes. A delete without `data` leaves the Inbox items and knowledge-base chats as they are.
 
 ### Pages
 
@@ -159,6 +181,4 @@ is 403 `read_only_device`.
 
 ## Follow-up behavior
 
-Both destination switches start off. Enabling a destination requires a full-access device and confirmation of what is pulled, how often, where it is stored, and which model triages it. Model recipe drafting separately requires consent before a trimmed sample is sent to the Information processing model; the pages will ask for it (their drafting entry comes with #2041's follow-up; the API does not), naming the connection the purpose `subscription.recipe` runs on: `Service.RecipeModel` (`{ok, provider, model}`, from the assistant's `models.usable`; `ok` false means drafting would answer `no_model`). `Service.ModelOf` answers the same for `kb` and `inbox.triage`, which the destinations' consent names. The sample is never stored.
-
-Inbox delivery reuses admission and triage with generic subscription kinds; knowledge-base delivery uses message-id receipts. Initial Inbox catch-up covers one day, combining more than three caught-up items into a digest while retaining separate future deadlines. Knowledge-base catch-up takes the first page. Snapshots append only when content changes. Destination storage, deletion, status pages and scheduling are not enabled by the catalog capability itself.
+Both destination switches start off. Enabling a destination requires a full-access device and confirmation of what is pulled, how often, where it is stored, and which model triages it (the pages, #2041). Model recipe drafting separately requires consent before a trimmed sample is sent to the Information processing model; the pages will ask for it (their drafting entry comes with #2041's follow-up; the API does not), naming the connection the purpose `subscription.recipe` runs on: `Service.RecipeModel` (`{ok, provider, model}`, from the assistant's `models.usable`; `ok` false means drafting would answer `no_model`). `Service.ModelOf` answers the same for `kb` and `inbox.triage`, which the destinations' consent names. The sample is never stored. Destination storage, deletion, status pages and scheduling are not enabled by the catalog capability itself.
