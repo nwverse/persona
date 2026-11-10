@@ -27,7 +27,8 @@ final class NodeMenuUITests: XCTestCase {
     @MainActor private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES"]
+        // By space: the ⋯ these tests open is a space group's, and the list groups by repository by default.
+        app.launchArguments = ["-pairURL", pair, "-dev.openChat", "", "-tab", "dev", "-openAgentsFresh", "YES", "-dev.grouping", "space"]
         app.launchPinned()
         return app
     }
@@ -76,7 +77,8 @@ final class NodeMenuUITests: XCTestCase {
         shot(app, "row-git")
         let before = try actions().count
         app.buttons["拉取"].tap()
-        XCTAssertTrue(text(app, containing: "拉取：已是最新").waitForExistence(timeout: 15), "no toast with the node's summary")
+        // The outcome in the app's words (#2895), as NodeMenuTests has it.
+        XCTAssertTrue(text(app, containing: "拉取：已经是最新代码").waitForExistence(timeout: 15), "no toast with the node's summary")
         shot(app, "row-pulled")
         let pulled = try actions().dropFirst(before)
         XCTAssertEqual(pulled.first?["route"], "panes/git")
