@@ -108,6 +108,10 @@ fun JGroupItem(
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
+    if (LocalHomeDrawer.current && style == AppStyle.Glass) {
+        Column(modifier.fillMaxWidth(), content = content)
+        return
+    }
     val radius = if (separate) PersonaTheme.shapes.card else PersonaTheme.shapes.panel.coerceAtMost(26.dp).let { if (style == AppStyle.Board) 10.dp else it }
     val shape = if (separate) RoundedCornerShape(radius) else RoundedCornerShape(
         topStart = if (position.first) radius else 0.dp, topEnd = if (position.first) radius else 0.dp,
@@ -257,10 +261,13 @@ private fun RowFrame(
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
+    val drawer = LocalHomeDrawer.current && style == AppStyle.Glass
     Row(
-        modifier.fillMaxWidth().heightIn(min = 56.dp).selectedRow(selected).onSecondaryClick(onLongClick)
+        modifier.fillMaxWidth().heightIn(min = if (drawer) HomeTokens.drawerRowHeight else 56.dp)
+            .then(if (drawer) Modifier.clip(RoundedCornerShape(Tokens.Radius.control)).background(if (selected) palette.sunken else Color.Transparent) else Modifier.selectedRow(selected))
+            .onSecondaryClick(onLongClick)
             .then(if (onClick != null || onLongClick != null) Modifier.combinedClickable(enabled = enabled, role = role, onClickLabel = onClickLabel, onClick = onClick ?: {}, onLongClick = onLongClick) else Modifier)
-            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = rowPadding, vertical = 10.dp),
+            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = if (drawer) Tokens.Space.m else rowPadding, vertical = if (drawer) Tokens.Space.xs else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         content()

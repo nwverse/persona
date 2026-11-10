@@ -47,7 +47,7 @@ enum ToolPresentation {
         if n.hasPrefix("phone_") { return "iPhone" }
         if n.hasPrefix("mail_") { return String(localized: "Mail [Assistant View 3d708e]") }
         switch n {
-        // Persona managing its own conversations (docs/assistant/assistant.md「管理自己的对话」).
+        // Persona managing its own conversations (docs/assistant/assistant.md「Managing its own conversations」).
         case "conversations_list": return String(localized: "List Chats")
         case "conversation_read": return String(localized: "Read Chat")
         case "conversation_rename": return String(localized: "Rename Chat")
@@ -147,10 +147,9 @@ enum ToolPresentation {
     }
 }
 
-/// A run of tool calls (and the thoughts between them), collapsed to the latest step while Claude works.
+/// A run of tool calls (and thoughts), collapsed until the user opens it.
 struct ToolGroupView: View {
     var steps: [ToolStep]
-    var isLatest: Bool
     /// Every step listed, no "N steps" fold (inside a line that was already tapped open).
     var flat = false
     @State private var expanded = false
@@ -163,7 +162,7 @@ struct ToolGroupView: View {
     var body: some View {
         let calls = calls
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            if calls.count > 2 && !expanded && !flat {
+            if !steps.isEmpty && !expanded && !flat {
                 Button {
                     toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, unfold: $unfold) { expanded = true }
                 } label: {
@@ -180,8 +179,6 @@ struct ToolGroupView: View {
                     .background(Theme.Fill.well, in: .capsule)
                 }
                 .buttonStyle(.plain)
-                // Always show the last call: it is what Claude is doing right now.
-                if let last = calls.last { ToolCallRow(call: last, autoExpand: isLatest && last.isRunning) }
             } else {
                 ForEach(steps) { step in
                     switch step {
@@ -192,7 +189,7 @@ struct ToolGroupView: View {
                     }
                 }
                 .unfolding(unfold)
-                if calls.count > 2 && !flat {
+                if !steps.isEmpty && !flat {
                     Button("Collapse") { toggleInPlace(pin, pinKey, animation: Theme.Motion.standard, unfold: $unfold, closing: true) { expanded = false } }
                         .font(Theme.Font.labelMedium)
                         .padding(.leading, Theme.Space.m)
@@ -1160,7 +1157,7 @@ extension EnvironmentValues {
     @Entry var openFold: ((Item) async throws -> Void)? = nil
 }
 
-/// Work the page left out (`Item.fold`, docs/protocol/protocol.md「折叠的工作」). It shows only once its work line is open, and
+/// Work the page left out (`Item.fold`, docs/protocol/protocol.md「Folded work」). It shows only once its work line is open, and
 /// then fetches the steps, which take its place.
 struct FoldedWorkRow: View {
     @Environment(\.openFold) private var openFold

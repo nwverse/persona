@@ -56,8 +56,8 @@ struct PersonaMacApp: App {
         .defaultSize(width: Theme.Size.macWindowHeight, height: Theme.Size.macWindowHeight)
 
         // A link dragged out of the panel, an inbox item opened on its own (Mac/Link, Mac/Inbox).
-        WindowGroup(String(localized: "Web Pages"), id: MacLinkWindow.id, for: URL.self) { $url in
-            MacLinkWindow(url: url).environment(model)
+        WindowGroup(String(localized: "Web Pages"), id: MacLinkWindow.id, for: MacLinkWindow.Value.self) { $value in
+            MacLinkWindow(value: value).environment(model)
                 .markdownInlineImageProvider(MathInlineImages()).markdownImageProvider(WebMarkdownImages()) // inline formulas (MathMarkdown)
                 .markdownCodeSyntaxHighlighter(PersonaCodeHighlighter()) // fences colored by language, as on the web (#2684)
         }
@@ -128,7 +128,7 @@ struct MacCommands: Commands {
     let model: AppModel
 
     var body: some Commands {
-        // File: New Agent Chat ⌘N, New Persona Chat ⇧⌘N (docs/apple/mac.md「菜单和快捷键」). Not while unpaired: nothing to start on.
+        // File: New Agent Chat ⌘N, New Persona Chat ⇧⌘N (docs/apple/mac.md「Menus and shortcuts」). Not while unpaired: nothing to start on.
         CommandGroup(replacing: .newItem) {
             Button("New Agent Chat…") {
                 MacShellState.shared.showMain() // the sheet is the main window's
@@ -319,7 +319,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
                     done()
                     return
                 }
-                // The group the push came from (docs/protocol/multi-hub.md「推送」).
+                // The group the push came from (docs/protocol/multi-hub.md「Push and notifications」).
                 let key = ref?.key(AppModel.shared)
                 if let key, let reply = NotificationActions.replyText(action: action, text: text) {
                     Task {
@@ -382,7 +382,7 @@ enum MacLaunchArguments {
         default: break
         }
         // `-openMacExtensionPage <extension>/<ui>` (or the old `-openMacPluginPage`): an extension's page in the sidebar
-        // (docs/extensions/extensions.md「UI 插槽」), shown once the hub lists it.
+        // (docs/extensions/extensions.md「UI slots」), shown once the hub lists it.
         if let key = d.string(forKey: "openMacExtensionPage") ?? d.string(forKey: "openMacPluginPage") { MacShellState.shared.pluginPage = key }
         // `-openMacSection todos`: the window opens on that sidebar section (the To-dos page, for screenshots).
         if let raw = d.string(forKey: "openMacSection"), let section = MacSection(rawValue: raw) {
@@ -498,7 +498,7 @@ enum MacLaunchArguments {
             }
         }
         // `-perfCounts YES -macPerfLog YES`: what hub pushes cost (PerfCount: bodies, main-thread ms), logged every 2 s,
-        // for measuring against the mock hub's /mock/churn without a UI test (docs/apple/mac.md「性能」).
+        // for measuring against the mock hub's /mock/churn without a UI test (docs/apple/mac.md「Details」).
         if PerfCount.enabled, d.bool(forKey: "macPerfLog") {
             Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
                 MainActor.assumeIsolated { NSLog("macPerf %@", PerfCount.summary) }

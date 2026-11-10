@@ -22,6 +22,11 @@ import (
 // The hub's end-to-end tests of tasks (real todos, a real node) are hub/tasks_test.go; these need the assistant's own
 // state or timing.
 
+// toolTaskPlan is task_plan from the conversation sessionID on the main machine.
+func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
+	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
+}
+
 // newTaskService is an assistant on a fake hub with machine box, whose task agents are followed at once.
 func newTaskService(t *testing.T) (*Service, *fakeHub) {
 	t.Helper()

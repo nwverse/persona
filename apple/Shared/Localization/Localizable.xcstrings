@@ -574,6 +574,46 @@
         }
       }
     },
+    "Automatic workout reports": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Automatic workout reports"}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポートを自動生成"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "运动后自动生成报告"}}}},
+    "Workout report": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Workout report"}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポート"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "运动报告"}}}},
+    "Couldn't read workout report settings. Turn the feature on again to start fresh.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Couldn't read workout report settings. Turn the feature on again to start fresh."}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポートの設定を読み込めませんでした。機能を再度オンにしてやり直してください。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "无法读取运动报告设置。请重新开启此功能以重新开始。"}}}},
+    "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off."}}, "ja": {"stringUnit": {"state": "translated", "value": "初期設定はオフです。有効にすると、Persona を開いた際に新しい10分以上のワークアウトを確認し、測定データを hub に送信してレポートを作成します。有効にする前の運動は取り込みません。オフにしても、送信済みのレポートは完了する場合があります。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "默认关闭。开启后，打开 Persona 会检查新完成且至少持续 10 分钟的运动，并将运动数据发送到你的 hub 生成报告。不导入开启前的运动。关闭后，已提交的报告仍可能完成。"}}}},
+    "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted."}}, "ja": {"stringUnit": {"state": "translated", "value": "レポートには測定値カード、データがある場合は心拍数グラフ、簡潔なまとめが含まれます。ヘルスケアの読み取り権限は iOS の設定で管理できます。結果が空の場合、権限が許可されていない可能性もあります。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "报告包含数据卡片、有数据时的心率图，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"}}}},
+    "%lld child worktrees" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktree"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktrees"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子ワークツリー%lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个子工作树"
+          }
+        }
+      }
+    },
     "%@ stopped, not done yet" : {
       "localizations" : {
         "en" : {
@@ -3978,6 +4018,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "CI"
+          }
+        }
+      }
+    },
+    "Changes the extension ID from %@ to %@. Needs your confirmation; its settings and data stay.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes the extension ID from %@ to %@. Needs your confirmation; its settings and data stay."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拡張機能の ID が %1$@ から %2$@ に変わります。確認が必要です。設定とデータはそのまま保持されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扩展 ID 会从 %1$@ 改为 %2$@，需要你确认；设置和数据保持不变。"
           }
         }
       }
@@ -14534,24 +14596,24 @@
       },
       "extractionState" : "manual"
     },
-    "A Responses API key can't be tested here; save it and use it." : {
+    "This API protocol's key can't be tested here; save it and use it." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses 协议的 Key 没法在这里测试，保存后直接用就行。"
+            "value" : "这种协议的 Key 没法在这里测试，保存后直接用就行。"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A Responses API key can't be tested here; save it and use it."
+            "value" : "This API protocol's key can't be tested here; save it and use it."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses プロトコルのキーはここではテストできません。保存してそのまま使えます。"
+            "value" : "この種類のAPIのキーはここではテストできません。保存してそのまま使えます。"
           }
         }
       },
@@ -14855,6 +14917,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "A file goes up to this conversation's computer, and its path into your message." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A file goes up to this conversation's computer, and its path into your message."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルはこの会話のコンピュータにアップロードされ、そのパスがメッセージに入ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件会上传到这个对话所在的电脑，路径写进你的消息。"
+          }
+        }
+      }
     },
     "A file in Lark Drive. Download it to preview." : {
       "localizations" : {
@@ -15729,6 +15813,28 @@
       },
       "extractionState" : "manual"
     },
+    "Access Your Photos" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Your Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真へのアクセス"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "访问你的照片"
+          }
+        }
+      }
+    },
     "Accessibility" : {
       "comment" : "macOS privacy setting name",
       "localizations" : {
@@ -16349,6 +16455,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Add a caption…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a caption…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "キャプションを追加…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加说明…"
+          }
+        }
+      }
     },
     "Add a computer first" : {
       "localizations" : {
@@ -25131,6 +25259,28 @@
       },
       "extractionState" : "manual"
     },
+    "Browse Files" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Browse Files"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルを参照"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浏览文件"
+          }
+        }
+      }
+    },
     "Browser" : {
       "localizations" : {
         "en" : {
@@ -29980,6 +30130,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Choose Photos" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真を選択"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择照片"
+          }
+        }
+      }
     },
     "Choose Provider" : {
       "localizations" : {
@@ -38928,6 +39100,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "有照片读不出来（可能还在 iCloud 里没下载完）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Couldn't read the gateway; showing the last numbers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the gateway; showing the last numbers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ゲートウェイを読み取れませんでした。前回の数値を表示しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读网关出错，显示的是上次的数字"
           }
         }
       },
@@ -60701,6 +60896,28 @@
       },
       "extractionState" : "manual"
     },
+    "Let Persona see your photos to pick them here, or choose them in the system's picker." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let Persona see your photos to pick them here, or choose them in the system's picker."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona に写真へのアクセスを許可するとここで選べます。システムのピッカーで選ぶこともできます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Persona 访问照片后可以在这里直接挑选，也可以用系统的选择器。"
+          }
+        }
+      }
+    },
     "Let the Assistant Control This Computer" : {
       "localizations" : {
         "en" : {
@@ -63469,6 +63686,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "确认它开着、网络通、node 在运行，然后重新连接"
+          }
+        }
+      }
+    },
+    "Manage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理"
           }
         }
       }
@@ -71298,6 +71537,29 @@
       },
       "extractionState" : "manual"
     },
+    "No agents on it now. Reopen it to hand it to an agent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No agents on it now. Reopen it to hand it to an agent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在エージェントはいません。エージェントに任せるには、まず再開してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现在没有 Agent 在做。要交给 Agent，先重新打开。"
+          }
+        }
+      }
+    },
     "No agents right now" : {
       "localizations" : {
         "en" : {
@@ -77751,6 +78013,52 @@
       },
       "extractionState" : "manual"
     },
+    "Offline: its mutes show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its mutes show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにミュートが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的静音。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its rules show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its rules show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにルールが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的规则。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Offline: starts once connected" : {
       "localizations" : {
         "en" : {
@@ -83208,6 +83516,28 @@
       },
       "extractionState" : "manual"
     },
+    "Persona can see only the photos you chose." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona can see only the photos you chose."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が見られるのは選択した写真だけです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 只能看到你选定的照片。"
+          }
+        }
+      }
+    },
     "Persona doesn't listen when it's not on screen. Go back to Persona to keep talking" : {
       "localizations" : {
         "en" : {
@@ -84106,6 +84436,28 @@
       },
       "extractionState" : "manual"
     },
+    "Photo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
+          }
+        }
+      }
+    },
     "Photo · %@" : {
       "localizations" : {
         "en" : {
@@ -84335,6 +84687,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Picked, %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picked, %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択済み、%lld 枚目"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选，第 %lld 张"
+          }
+        }
+      }
     },
     "Picking one fills it in; it's sent only when you tap Send" : {
       "localizations" : {
@@ -86384,6 +86758,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Push to the Remote?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Push to the Remote?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートにプッシュしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送到远端？"
+          }
+        }
+      }
     },
     "Push When Done" : {
       "localizations" : {
@@ -88459,6 +88855,52 @@
       },
       "extractionState" : "manual"
     },
+    "Clear Recent Setups" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Recent Setups"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近の設定をすべて消去"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除最近配置"
+          }
+        }
+      }
+    },
+    "Remove from Recent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from Recent"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近から削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从最近中移除"
+          }
+        }
+      }
+    },
     "Recent" : {
       "localizations" : {
         "en" : {
@@ -88619,6 +89061,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Recents" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recents"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近の項目"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近项目"
+          }
+        }
+      }
     },
     "Recommended" : {
       "localizations" : {
@@ -102715,6 +103179,28 @@
         }
       }
     },
+    "Slide to cancel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slide to cancel"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スライドでキャンセル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滑动取消"
+          }
+        }
+      }
+    },
     "Slider" : {
       "localizations" : {
         "en" : {
@@ -107632,6 +108118,28 @@
       },
       "extractionState" : "manual"
     },
+    "Take Photo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take Photo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真を撮る"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
+          }
+        }
+      }
+    },
     "Take screenshot" : {
       "localizations" : {
         "en" : {
@@ -110803,6 +111311,50 @@
       },
       "extractionState" : "manual"
     },
+    "The current branch goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current branch goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のブランチをアップストリームブランチにプッシュします。強制プッシュはしません。リモートに新しいコミットがあれば止めて知らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前分支会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。"
+          }
+        }
+      }
+    },
+    "The current branch in “%@” goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current branch in “%@” goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」の現在のブランチをアップストリームブランチにプッシュします。強制プッシュはしません。リモートに新しいコミットがあれば止めて知らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”的当前分支会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。"
+          }
+        }
+      }
+    },
     "The current main chat will be archived as “%@” and you can find it under Archived. The new main chat starts with your next message." : {
       "localizations" : {
         "en" : {
@@ -111393,6 +111945,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "网关没有给出模型列表，在下面手动添加。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The gateway turned the key away; update it in Admin → Usage sources. Showing the last numbers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The gateway turned the key away; update it in Admin → Usage sources. Showing the last numbers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ゲートウェイがキーを拒否しました。管理画面 → 使用量ソースで更新してください。前回の数値を表示しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网关不认这把 Key，请到管理界面 → 用量来源更新。显示的是上次的数字"
           }
         }
       },
@@ -120140,6 +120715,29 @@
       },
       "extractionState" : "manual"
     },
+    "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话和 Agent 不能用它。信息处理、信息筛选等没有单独选模型的用途，现在可能会改用它；要调整，到「模型配置」里选。"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットとエージェントでは使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "To use it for the main conversation or agents, pick it in Model Settings." : {
       "localizations" : {
         "zh-Hans" : {
@@ -121072,6 +121670,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Touch and hold to dictate. Slide left to cancel, or up to keep dictating." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touch and hold to dictate. Slide left to cancel, or up to keep dictating."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長押しで音声入力。左にスライドでキャンセル、上にスライドで入力を続けます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按住听写。左滑取消，上滑可松手继续听写。"
+          }
+        }
+      }
     },
     "Touch and hold an item in the Inbox to mute its repo, conversation, or sender." : {
       "localizations" : {
@@ -133862,6 +134482,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "All Photos" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべての写真"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部照片"
+          }
+        }
+      }
     },
     "api.anthropic.com, with an API key from the Anthropic Console" : {
       "localizations" : {

@@ -235,7 +235,7 @@ fun ChatNoteChip(text: String, icon: PhIcon, onClick: () -> Unit, modifier: Modi
 
 /**
  * A line the chat shows in place of a message Persona typed in for the model (a task's notice, a scheduled run…;
- * docs/protocol/protocol.md "Messages Persona injects"): centered, the look of [ChatNoteChip], an icon in [tint], one line. Tappable
+ * docs/protocol/protocol.md "Messages injected by Persona"): centered, the look of [ChatNoteChip], an icon in [tint], one line. Tappable
  * (with a caret) only when [onClick] is set.
  */
 @Composable

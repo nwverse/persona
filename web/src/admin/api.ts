@@ -220,7 +220,7 @@ export const setExtensionEnabled = async (id: string, enabled: boolean) => admin
 export const uninstallExtension = async (id: string, keepData: boolean) =>
   adminApi<ExtensionRemovalResult>(`${await extRoot()}/${enc(id)}`, "DELETE", { keep_data: keepData });
 
-// ── extension markets (docs/extensions/extensions.md "Extension markets"): the apps' routes under /extensions/-/, behind the admin session. Installing
+// ── extension markets (docs/extensions/extensions.md "Extension marketplace"): the apps' routes under /extensions/-/, behind the admin session. Installing
 // and upgrading from a market's preview go through installExtension / upgradeExtension above (the preview's id and digest).
 
 const markets = async () => `${await extRoot()}/-/markets`;
@@ -235,7 +235,7 @@ export const getCatalog = async (q?: string, market?: string, refresh?: boolean)
 export const previewFromMarket = async (market: string, extension: string) =>
   adminApi<ExtensionPreview>(`${await extRoot()}/-/catalog/preview`, "POST", { market, extension, plugin: extension });
 
-// ── how the extensions run (docs/extensions/extensions.md "Activity"): counts and logs, on a hub from #1857 on (older ones 404) ──
+// ── how the extensions run (docs/extensions/extensions.md "Runtime status"): counts and logs, on a hub from #1857 on (older ones 404) ──
 
 export const getMetricsOverview = (window: MetricsWindow = "24h") => adminApi<MetricsOverview>(`/extensions/-/metrics?window=${window}`);
 

@@ -20,10 +20,13 @@ import (
 // an engine switch (its list is pushed once, as before), another connection (another peer) and a failed write. The
 // next list after any of them goes out as it always did.
 type sentList struct {
-	mu   sync.Mutex // held while writing: the wire has the lists in the order last was set
+	mu   sync.Mutex // held while encoding and writing: the wire has the lists in the order last was set
 	peer *rpc.Peer  // the connection last went to
 	last []byte     // nil: not known
 	at   uint64     // epoch when last was written
+	// scratch is where the next list is encoded to be compared with last; a list that goes swaps the two, so a list
+	// the manager holds already is encoded and dropped without allocating (#2826).
+	scratch []byte
 
 	// epoch moves after anything written outside mu that the manager applies to its list (an answer, a switch);
 	// pending counts the sessions.list answers being built or not yet written: no list is taken as held meanwhile.
@@ -38,14 +41,15 @@ func (n *Node) sendSessions(list []proto.Session) {
 	if peer == nil {
 		return
 	}
-	b, err := json.Marshal(map[string]any{"sessions": list})
 	s := &n.sent
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	b, err := appendSessionsParams(s.scratch[:0], list)
 	if err != nil { // nothing goes, as from Notify
 		s.last = nil
 		return
 	}
+	s.scratch = b // kept for the next list, unless this one goes and becomes last
 	// pending before epoch, never the other way round: the skip is decided as of the pending read. An answer that
 	// starts after it lists the sessions later than list was built, so the manager may well take it. One that ends
 	// between the two reads has moved the epoch read below. Read epoch first and an answer could start and end in
@@ -60,8 +64,33 @@ func (n *Node) sendSessions(list []proto.Session) {
 		return
 	}
 	// Kept as of epoch: an answer still pending blocks the skip above until it ends, and then the epoch has moved, as
-	// it has for an answer or a switch that went while this was written (it may be after it on the wire).
-	s.peer, s.last, s.at = peer, b, epoch
+	// it has for an answer or a switch that went while this was written (it may be after it on the wire). Notify has
+	// copied b onto the wire by now, so it is ours to keep; the old last becomes the next list's scratch.
+	s.peer, s.at = peer, epoch
+	s.last, s.scratch = b, s.last[:0]
+	if cap(s.scratch) > 1<<20 { // a rare huge list's buffer is not kept twice
+		s.scratch = nil
+	}
+}
+
+// appendSessionsParams appends to b what json.Marshal gives for {"sessions": list}: each session written by
+// proto.AppendSession, a nil list as null. A session AppendSession leaves to encoding/json has the whole list encoded
+// by json.Marshal, its bytes and its error both.
+func appendSessionsParams(b []byte, list []proto.Session) ([]byte, error) {
+	if list == nil {
+		return append(b, `{"sessions":null}`...), nil
+	}
+	b = append(b, `{"sessions":[`...)
+	for i := range list {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		var ok bool
+		if b, ok = proto.AppendSession(b, &list[i]); !ok {
+			return json.Marshal(map[string]any{"sessions": list})
+		}
+	}
+	return append(b, "]}"...), nil
 }
 
 // sendRevs writes revs as sessions.revs; the manager's list is not the last one written any more.

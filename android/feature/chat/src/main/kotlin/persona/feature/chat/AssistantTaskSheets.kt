@@ -121,6 +121,8 @@ private fun TaskDetailSheet(todoId: String, host: AssistantTaskHost, onDismiss: 
             }
         }
         Spacer(Modifier.height(Tokens.Space.l))
+        TaskOwnerDecision(todo, host)
+        TaskLifecycleDetails(todo, host)
         val failure = todo.startFailure
         when {
             shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)

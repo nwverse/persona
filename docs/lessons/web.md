@@ -1,5 +1,10 @@
 # Lessons: web UI and interactions
 
+## Stable task rows need lifecycle evidence, not stale progress (#2878)
+
+A completed or accepted task can still retain its last blocked progress report. Completion labels/checkmarks must use the current review or receipt summary, not keep a stale “stuck” subtitle underneath. Reused tasks also retain old plan and card upserts: deduplicate by to-do id, prefer its current durable plan, and scope completion evidence to that run's creation time. Test delayed upserts and owner acceptance changes while a previous `asked_at` request is in flight. The palette guard reads the first `:root` block; add shared geometry tokens there instead of introducing another block that hides the palettes from the guard.
+
+
 ## A collapsed execution default is more than an open-state flag (#2602)
 
 The old Agent work line was called folded, but still previewed five tool/thinking steps and left every intermediate text visible. The assistant-only default-open change then exposed the full trace. Removing just that default does not implement a single replace-in-place text segment: grouping, stream-to-item handoff, preview rendering and manual history loading must agree. Keep a stable text-slot identity, put every tool kind and older text inside the same summary, and do not use text length or Markdown shape to exempt intermediate narration. Retain all plan updates for manual inspection even when the composer selects only the latest plan.
@@ -8,6 +13,10 @@ External jump/search reveals use the expansion-memory API, not the summary butto
 
 A background wake can reopen an exchange before its recap. Find the live exchange from the latest source item rather than the last drawn block; keep continuation calls in the normal summary, not a second drawer. Test actual browser replacement, manual expansion, folded history, recap wakes and reload. A lazy collapse can retain its children during its closing animation; checking raw `textContent` then is not a visibility assertion. Use the latest-text slot and folded header state, or browser-visible locators.
 
+
+## Optional sidebar entries need both setup and list results (#2934)
+
+A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
 
 ## Report evidence is separate from report prose (#2554)
 
@@ -18,6 +27,12 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - `source: installed` does not grant a full-rights web client owner-only management of local or attached installations. Market lifecycle actions follow the manager-owned `origin` and the existing endpoint policy; a manifest field or arbitrary URL cannot grant that capability. Keep unavailable controls visible with a reason rather than inventing an API request.
 - A saved Auto-upgrade preference is not its effective execution state. Show the saved value while separately explaining extension-disabled, removed-market and manager-global pauses. Read global preferences and catalog refreshes with the same explicit manager as the extension; a default-manager read can describe the wrong same-ID copy.
 - Preserve dirty configuration when maintenance reads or lifecycle writes return an entire detail. A catalog with a newer version must not become a misleading “no new version” notice merely because the background upgrade list has not caught up; use the catalog's authoritative `upgradable` result and retain the consent preview.
+
+## Leaving a page is more than its Back button (#2800)
+
+- A guard on the page's own Back covers one way out of several: another row in a list beside it, another category, the sidebar, browser Back and a reload all unmount it without asking. Keep unsaved edits outside the component (in memory, keyed by owner and item, cleared on a new credential) and put them back after the first read is shown, so the existing save bar marks them; mark the list row too, and use `beforeunload` only for a reload or a closed tab, which memory cannot survive.
+- Keep what the user changed, not the whole form: store the draft with the configuration it was made on and, on return (or a newer read), put only the changed fields on the configuration just read. A whole-form snapshot shows another device's change as the old value, and Save quietly puts it back.
+- An item page pushed over its list needs its own Back to go back (`history.back()`), not to replace the entry with the list's URL: a replace leaves the item's entry under it, so the next browser Back reopens the item. An overlay open over the item has its own entry on top; take its marker (`takeOverlayEntry`) and go back past both.
 
 ## Chat states need their way out, and fallbacks need a second trigger (#2450)
 
@@ -156,7 +171,7 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 
 ## A live card inside work the hub folded (2026-11-06, #3434)
 
-- **`fold_work` hides the step a card hangs on**: a chat opened (or reloaded) while a workflow runs gets the turn's work as one `fold` item, the Workflow call inside it, so "the run's card stays in the open" never sees the call. Pulling the step out of the client's groups is not enough: find the folds whose `[ts, fold.until]` holds the run's `started_at` exactly (the node sets it from the call's own line; a tolerance picks the fold that ended just before the call) and fetch them (`foldsHoldingCalls`, `SegmentView`). Remember what was asked per mounted exchange, not per page: `useTranscript` keeps no cache, so another chat and back (or a rewrite) brings the same fold id back, and a page-wide "asked" set left the card buried for good. Check with the mock hub's `fold_work` on, not only with live pushes, which are never folded.
+- **`fold_work` hides the step a card hangs on**: a chat opened (or reloaded) while a workflow runs gets the turn's work as one `fold` item, the Workflow call inside it, so "the run's card stays in the open" never sees the call. Pulling the step out of the client's groups is not enough: find the folds whose `[ts, fold.until]` holds the run's `started_at` exactly (the node sets it from the call's own line; a tolerance picks the fold that ended just before the call) and fetch them (`foldsHoldingCalls`, `SegmentView`; since #2631 the card stays inside the folded summary, so the web fetches the folds when the reader opens it and `foldsHoldingCalls` is gone). Remember what was asked per mounted exchange, not per page: `useTranscript` keeps no cache, so another chat and back (or a rewrite) brings the same fold id back, and a page-wide "asked" set left the card buried for good. Check with the mock hub's `fold_work` on, not only with live pushes, which are never folded.
 - **A card that only stays out of the fold while running vanishes when it ends**: the step becomes an activity, folds into "Worked Xs" and remounts there folded, so its end (the chip turning, the summary, a failed run's error) is never seen where the reader was looking. Keep it out of the fold for as long as it is a card (the hub lists the run), and let it fold itself in place.
 - **The hub's newest-60 cap shifts a block shown from its first rows**: each new agent anywhere in the run drops the oldest listed one, so a block that shows its first 12 loses its top row each time. A block the cap cut into shows its last rows, with what is hidden (and what is not listed) above them.
 - **Progress pushed every ~1.5 s must not reach every exchange**: putting `session.workflows` in the chat context rendered the whole chat on each push. The context carries only which calls have a run and which still run (`workflowCallsKey`), and each card reads its own run from the store.
@@ -410,6 +425,9 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Pending bubbles and transcript echoes (2026-11-03, #950)
 
 - Match sent messages in the transcript with more than exact equality and no time check: an older identical "Continue" among recent entries immediately removes a new bubble (hiding later send failure); one entry can also remove two identical bubbles. Match iOS / Android rules (`lib/echo.ts`: normalization, computer clock at most 2 minutes behind, prefix matching for truncated text, one transcript entry claims only one bubble, recorded in `claimed`).
+- A transcript echo can arrive before the send's HTTP 200 (#2792). Keep accepted messages across reloads until their copy arrives, but mark acceptance only on an entry still in storage: recreating one already removed by the echo revives the pending bubble on reload. Test both response orders, and keep storage writes and echo claims outside React state updaters so StrictMode cannot repeat them. Browser reload checks must also wait for the chat to finish loading, advancing an installed test clock while waiting; `DOMContentLoaded` alone can expose an empty loading shell and mistake it for a lost message. Check readiness independently of the message under test.
+
+- Local storage is shared across tabs (#2792). Restoring accepted messages on every conversation visit is safe, but unconfirmed or failed entries need the original once-per-page, per-conversation guard: an entry written after this page opened may still be sending in another tab. Test both the initial restoration and later transcript updates, and reset the guard only when simulating a fresh page.
 
 ## Composer cleared only after delivery (#1176)
 
@@ -430,6 +448,22 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Validation: Playwright (`playwright-core` + cached Chrome for Testing), CDP `Emulation.setCPUThrottlingRate`, `long-animation-frame`, and `Page.startScreencast` frames. Playwright's bundled ffmpeg decodes only MJPEG; record JPEG frames, combining into a file before reading if no pipe.
   `recordVideo` produces no file on this machine (ffmpeg version mismatch errors, then silent after symlinking). Measuring dev Vite is meaningless: React dev expansion takes 700ms; production builds are what users see.
 
+## Skipping off-screen exchanges in a chat without browser scroll anchoring (2026-11-09, #2485)
+
+- `content-visibility: auto` on finished exchanges takes most of the layout and style cost of a long chat off sends and cold opens. With `overflow-anchor: none` (#1124), each exchange that is drawn for the first time above the view swaps its guessed height for its real one and moves the reader.
+  Correct this in the ResizeObserver that already pins rows (after layout, before paint): add up the height changes of exchanges whose top was above the view's top before the change, and add the total to `scrollTop`. An exchange the view's top cuts through counts too, so its end and everything under it stay in place.
+- A ResizeObserver's first report of an element is its size when the observer looks, and for a new `content-visibility: auto` element Chromium settles whether it is near the view earlier in that frame. An exchange an earlier page adds just above the view is drawn before that first report, so the change from the guess to its drawn height is never reported, while the page's own scroll correction (in the layout effect) used the guess: the view jumped 230-570 px per page. Count from the height read when the element starts being watched, in the same layout effects.
+- `contain-intrinsic-size: auto` remembers a height only while the element has it. Putting it on an exchange at the moment it starts skipping (a new exchange came in) leaves nothing remembered, and an off-screen one drops to the guess. Give every exchange `auto` ahead of time and switch only `content-visibility`.
+- The checks that hand the chat its whole history at once miss both: one needs pages arriving while the reader scrolls up, the other an exchange arriving while the reader is scrolled up (`web_chat_scroll_e2e.py --hub`).
+- A good guess matters less than the correction, but a bad one makes the scroll bar thumb jump. Counting the reply's lines at the bubble's width guessed 1.8 times the drawn height (median). Counting them at 2.5 times the bubble's characters to a line brought that to 1.25.
+- The browser's smooth `scrollTo` aims once. When rows above the target change height on the way, it lands off the row (rail jumps at 200 turns landed thousands of px away). Setting `scrollTop` to fix that cancels the smooth scroll, and calling `scrollTo` again each frame restarts its curve, so it never arrives (10 s instead of 1.5 s).
+  Drive the jump instead: read the target each frame and ease toward it (`glide.ts`, at Chromium's pace of √distance × 15 ms, at most 1.5 s), then hold the row while things settle.
+- A script that sets `scrollTop` while the chat still follows the end is pulled straight back, because a scroll from a script is not the reader leaving. Leave the end with a wheel first.
+- Paint containment clips overflow and outlines, and Chromium applies `overflow-clip-margin` to it. Fixed-position descendants are contained as well: the zoomed Mermaid diagram is `fixed inset-0` and not portaled, so exchanges holding `[aria-modal="true"]` are excluded.
+- With the exchanges skipped, a cold open still forced a layout of the whole chat before its first paint: each bubble reads its own height in a layout effect (`getComputedStyle` + `scrollHeight`) to decide whether it folds, and then `useFoldScroll` reads its scroll height for the fade.
+  A message that cannot pass 14 lines even in a bubble far narrower than any real one now skips the first read, and a block that is not folded skips the second. Skipping only the first moved the whole cost to the second read (in the profile `moreBelow` took what the bubble's effect had taken): after removing a forced layout, profile again, because the next read in the same commit pays for it.
+- Context that every row reads but only an open menu uses (why "Rewind to here" is off) belongs in a small store, read with `useSyncExternalStore` only while the menu is open. A set that every reader checks for its own id (fresh words) becomes a per-id subscription. With these, a send and a pushed item render the rows they touch instead of every exchange.
+
 ## Opening and refreshing chats stays at latest (2026-11-04, #1340)
 
 - Do not determine latest-following solely from distance to bottom at scroll-event time. Events caused by our `scrollTop = scrollHeight` arrive next frame;
@@ -438,7 +472,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Upward scroll position does not necessarily mean user action: composer height remeasurement briefly collapses it, growing the viewport and causing the browser to clamp `scrollTop` upward a few pixels; again, the event arrives late.
   Stop following only when the user is scrolling (upward wheel, touch, scroll keys, scrollbar drag, and within 700ms afterward) and position moves upward (`followsAfterScroll`).
 - When content below the list (composer, task dock, question card) grows, content stays unchanged but viewport shrinks. ResizeObserver must observe the viewport too, or the latest row is covered.
-- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "How to run").
+- Regression: `scripts/test/web_chat_scroll_e2e.py` (usage in `docs/web/web.md`, "Running it").
 
 ## Spreadsheet viewer (2026-11-04, #1310)
 

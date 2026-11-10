@@ -4,7 +4,7 @@ import type { Session } from "./types";
 
 const conv = (id: string, extra: Partial<Session> = {}) => ({ machine_id: "hub", session_id: id, title: id, cwd: "", status: "idle", ...extra }) as Session;
 
-describe("conversation origins (docs/protocol/protocol.md「助手对话的来源」)", () => {
+describe("conversation origins (docs/protocol/protocol.md「Origin of assistant chats」)", () => {
   it("counts none, user and channel as the user's own and anything else as automatic", () => {
     expect(autoOrigin(conv("a"))).toBeUndefined();
     expect(autoOrigin(conv("a", { origin: "user" }))).toBeUndefined();

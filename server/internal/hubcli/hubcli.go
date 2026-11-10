@@ -17,7 +17,7 @@ import (
 
 // Usage is the hub's commands, as `personad hub …` (clitext.Named puts the program's name in).
 const Usage = `  personad hub [run]        run the hub (config ~/.persona/hub.json); behind its edge on Linux and macOS, which
-                           holds the ports and switches to a new binary with no restart (docs/operations/hub-restart.md「蓝绿切换」)
+                           holds the ports and switches to a new binary with no restart (docs/operations/hub-restart.md "Blue-green switching")
   personad hub switch [--binary <path>] [--prev <path>] [--timeout 8m] | --status
                            have the running edge start <path> (default: the program the hub runs now, personad or
                            persona-hub) and switch to it once it is up, waiting at most --timeout; --status only says what

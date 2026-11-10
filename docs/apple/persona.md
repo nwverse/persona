@@ -241,7 +241,7 @@ The built-in Mochi drawing doesn't use bitmaps; `AssistantAvatar` draws the same
 Items the pack doesn't provide use the current interface style's own colors. With any other theme color selected, only the avatar's `primary` is still used (the avatar's glow).
 Android (#3048) reads `accent`, `bubble`, `bubble_text` (**Settings › Interface Style › Theme Color › Match Avatar**, `ThemeColors.persona`); accent is likewise pushed toward black / white until it clears the floor, and the bubble is adjusted when text on it falls below 4.5:1; `primary` isn't read yet.
 
-The web (#2980) reads only `accent`: when **Settings › General › Appearance › Theme Color** is set to **Match Avatar**, it replaces the accent token group, and bubbles use a pale tint derived from it (web bubbles use dark text), see `docs/web/web.md` ("Theme color and font size").
+The web (#2980) reads only `accent`: when **Settings › General › Appearance › Theme Color** is set to **Match Avatar**, it replaces the accent token group, and bubbles use a pale tint derived from it (web bubbles use dark text), see `docs/web/web.md` ("Theme color and text size").
 
 | persona.json | token | Where it's used |
 | --- | --- | --- |

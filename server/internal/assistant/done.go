@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// Closing a finished task (docs/assistant/todos.md "Auto-complete", #1092). When a task's agents have all stopped and its receipt
+// Closing a finished task (docs/assistant/todos.md "Automatic completion", #1092). When a task's agents have all stopped and its receipt
 // went out, the judge model reads the task's title, the prompt it was handed out with and what its agents said last,
 // and only "done" closes the todo (done_by auto, with why). Anything else — not finished, waiting on someone,
 // needing the user, unsure, no model, a model error, an agent whose turn the model service cut off (#1516) — leaves
