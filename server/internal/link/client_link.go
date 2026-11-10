@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -161,7 +160,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) e
 				return
 			case <-pairT.C:
 				// Only the mtime says when to look: endpoints and renames rewrite link.json with the same pairing.
-				if now := modTime(o.Path); !now.Equal(seen) {
+				if now := stampOf(o.Path); !now.Equal(seen) {
 					seen = now
 					if repaired(o.Path, c) {
 						reconnect(errRepaired)
@@ -303,13 +302,6 @@ func repaired(path string, c *Config) bool {
 		return false
 	}
 	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine
-}
-
-func modTime(path string) time.Time {
-	if fi, err := os.Stat(path); err == nil {
-		return fi.ModTime()
-	}
-	return time.Time{}
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).
