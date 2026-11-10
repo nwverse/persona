@@ -130,6 +130,7 @@ type Service struct {
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
 	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
 	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
+	offers     routeBook         // route.go: the directions offered for New chats
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
@@ -180,6 +181,7 @@ func New(o Options) *Service {
 	s.alwaysRoutes()
 	s.reporterRoutes()
 	s.directionRoutes()
+	s.routeRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()

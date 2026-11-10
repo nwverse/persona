@@ -278,7 +278,7 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
 
 Off by default: with no leaders, everything above is unchanged and only the main chat supervises. Layering: user → main chat (secretary) → one leader per repository or long-running project → workers.
 
-- **Opening one**: start a side conversation for the project (`conversation_new` from the main chat, or New chat in the app), then add its id to `assistant.leaders` with `persona_settings` (`set`, the whole list of conversation ids; `conversations_list` has them). The user approves the change on the phone. Only Persona conversations on the assistant's computer other than the main chat are accepted. Removing an id ends it; tasks it handed out keep their supervisor in the ledger but their signals go back to the main chat.
+- **Opening one**: the owner's tap, or the assistant with the owner's approval. A New chat is routed as it opens (below, "New chat opens a direction"): **Start direction** on its offer, or **Make it a direction** on any side conversation, makes it a leader at once; **End direction** takes one out. These are the owner's own choice, so they need no phone approval and are never redone by the hub. The assistant can still add a side conversation's id to `assistant.leaders` with `persona_settings` (`set`, the whole list of conversation ids; `conversations_list` has them), which the user approves on the phone. Either way, only Persona conversations on the assistant's computer other than the main chat are accepted, and at most 20. Removing an id ends it; tasks it handed out keep their supervisor in the ledger but their signals go back to the main chat.
 - **What a leader gets**: its context starts with "这是 leader 对话" (prompts `assistant/context.md`). A task it hands out with `task_plan` is supervised with the leader as `supervisor` (tasks handed out before it became one are not). The supervision loop routes each signal to its task's supervisor when that is a current leader (`digestTo`, `server/internal/assistant/supervise_leader.go`): the leader gets its own "📋 督办" message (when its conversation is gone, the main chat gets them instead) (the leader variant of `prompts/assistant/supervise.md`), with the same gathering, queueing, deduplication and folding as the main chat's. It reviews its tasks with `task_review` (accepted, rework with the same 2-round limit, cancelled); another side conversation cannot.
 - **What still goes to the main chat**: a leader's `needs_user` (the user gets the decision card as always, and the main chat gets an `escalated` entry with the leader's reason and recommendation, so it neither asks again nor loses track); any signal of a task waiting for the user; failed and retried starts (the start remedies, `task_start_screen` / `task_start_keys` / `task_retry`, stay main-chat tools); and tasks waiting for the user's nod to ship stay in the snapshot's approvals list. The main chat may still review a leader's task (for example after the user answered there); the task stays the leader's.
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools; the main chat and leaders are not limited.
@@ -293,6 +293,26 @@ in Waiting on you or stopped unfinished with no move for 24 hours. Stuck is told
 10-minute loop, because it asks the agents' machines. What was told is kept in `assistant.leader_reports`, so a restart
 tells nothing again. Reviews from before reports started on the hub are not told. The main-chat entry for a stuck task,
 and the leader lines in the briefings, come with the prompts (P1). See `docs/extensions/extensions.md` "Leader events".
+
+**New chat opens a direction (#3607).** Right after the owner sends a New chat's first message (an app's
+`POST /api/v1/assistant/conversations`: not the main chat, a guest, the health space, a purpose or an extension's), the
+hub asks the model purpose `assistant.route` (Model configuration › Information processing, under the knowledge
+category, like chat titles) whether the sentence opens a direction or is a quick chat, off the conversation's path
+(`route.go`, prompts `assistant/route.md`, `route_input.md`). It gets the current leaders and the knowledge base's
+project names, and the model call has 2 seconds: a slower, failed or unreadable answer is a quick chat, and nothing shows.
+A direction is only offered: the offer (its name, the existing kb project the sentence names or a new project's name,
+and with 6 leaders or more the closest existing leader to use instead) is kept in `assistant.route_offers` for 7 days
+and told to the apps (`direction_offer`). The owner's taps:
+
+| Tap | Endpoint | What it does |
+| --- | --- | --- |
+| Start direction | `POST /api/v1/assistant/directions/{id}/start` | Takes the offer: adds the conversation to `assistant.leaders`, files its record under the offer's project (a new one is made in the knowledge base as a long project), names it as offered unless the owner named it; 404 without an offer |
+| Just a quick chat | `DELETE /api/v1/assistant/directions/offers/{id}` | Drops the offer; nothing else changes |
+| Make it a direction | `POST /api/v1/assistant/directions/{id}/make` | The same for any side conversation, with no offer; `{"project"?, "title"?}` |
+| End direction | `POST /api/v1/assistant/directions/{id}/end` | Takes it out of `assistant.leaders`; its record is ended, nothing is deleted |
+
+Each records the direction `by: "user"`, so the hub never files it under another project itself (one made without a project stays so until the owner picks one); `leader.changed` follows as for any change. The apps' strip, the ⋯ items and
+the New agent field come with W1 / I1 / A1.
 
 ## Data and APIs (hub)
 
