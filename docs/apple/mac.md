@@ -757,7 +757,7 @@ How the checklist was reviewed, and the roles and rules for real-window checks d
   - Mac (2026-11-02 real Mac mini): scrolling up expands full header; idle 3s collapses to pill; click expands.
   - No collapse on Mac (decided 2026-11-05, #1337): always full, regardless of scroll/idle/landing (`ChatChrome.folds`). Transition frames hitch (about 30 ms/s bouncing), and Mac has enough height. iPhone unchanged.
   - Circular ‹ only with a previous page (decided 2026-11-05, #1337): list-opened chat (first split detail page) no ‹, title centered; pushed from space etc. has ‹ and returns (`-openOverSpace YES` + `-openSession` captured; action unchanged, real click untested while locked).
-    No extra small ‹ in title row (`splitDetailPage(ownsBack: true)`), only chat's own. Previously first page had a no-op ‹; `../lessons/macos.md`. iPhone unchanged.
+    No extra small ‹ in title row (`splitDetailPage(ownsBack: true)`), only chat's own. Previously first page had a no-op ‹; `../lessons/macos.md` ("`opacity(0)` cannot hide a button inside a glass container"). iPhone unchanged.
 - [x] Session info (run/usage/location, copy ID/resume) — ChatView.swift (SessionInfoSheet). Mac: right Inspector (⌥⌘I/title click); Persona window sheet.
 - [x] ⋯: Terminal, Files, Git (N), All Agents in Space, Rename…, Mute, Copy Session ID/Resume, Clear Context /clear, Close Agent… — ChatView.swift
   - Mac (2026-11-02 real Mac mini): Terminal, Git(N), Files, working-only Interrupt, Rename, Mute, Copy Resume/Directory, All Agents in Space, Close; Files/Git add Back to Chat. Inventory outdated: Clear Context /clear now under composer + › Shortcuts (when supported), Session ID in info (shared iOS). Same-named row actions share functions, individually checked above.
