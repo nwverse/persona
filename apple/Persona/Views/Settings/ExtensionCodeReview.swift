@@ -280,3 +280,38 @@ nonisolated extension CodeReview {
         return url
     }
 }
+
+// MARK: Suggestions (`diff.suggestions`)
+
+nonisolated extension CodeReview {
+    enum BodyPart: Equatable, Sendable {
+        case text(String)
+        case suggestion([String])
+    }
+
+    private static let suggestion = try! NSRegularExpression(pattern: #"^```suggestion[^\S\n]*\n([\s\S]*?)^```[^\S\n]*$"#,
+                                                              options: .anchorsMatchLines)
+
+    /// A comment's body cut at its ```suggestion blocks: the text around them, and each block's lines.
+    static func splitSuggestions(_ body: String) -> [BodyPart] {
+        let ns = body as NSString
+        var out: [BodyPart] = []
+        var at = 0
+        for m in suggestion.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
+            let before = ns.substring(with: NSRange(location: at, length: m.range.location - at)).trimmingCharacters(in: .newlines)
+            if !before.isEmpty { out.append(.text(before)) }
+            var inner = ns.substring(with: m.range(at: 1))
+            if inner.hasSuffix("\n") { inner.removeLast() }
+            out.append(.suggestion(inner.isEmpty ? [] : inner.components(separatedBy: "\n")))
+            at = m.range.location + m.range.length
+        }
+        let rest = ns.substring(from: at).trimmingCharacters(in: .newlines)
+        if !rest.isEmpty { out.append(.text(rest)) }
+        return out
+    }
+
+    /// A suggestion block that starts from `lines`, for the comment box.
+    static func suggestionBlock(_ lines: [String]) -> String {
+        "```suggestion\n" + lines.joined(separator: "\n") + "\n```"
+    }
+}

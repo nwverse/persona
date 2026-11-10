@@ -5,7 +5,8 @@ import XCTest
 /// (`MOCK_EXTENSIONS=1`, `TEST_RUNNER_PERSONA_EXTENSIONS_HUB`): the toolbar over the diffs (viewed so far, the open
 /// threads, display options), a viewed file folded at first and saying why, a file checked viewed folding and counted,
 /// the open threads' button unfolding the next one's file, the lines over a hunk asked of the extension (`context`;
-/// the mock makes them up), a rename's similarity. In both styles (each launch passes
+/// the mock makes them up), a suggestion in a thread drawn as a change, a thread to resolve, a comment on the lines
+/// between two line numbers with a suggestion started from them, a rename's similarity. In both styles (each launch passes
 /// `-ui.style`), light and dark; with `PERSONA_SHOTS`, screenshots. `PERSONA_REVIEW_BEFORE=1`: only the screenshots, for
 /// an app from before (the same steps, nothing checked).
 final class ExtensionCodeReviewUITests: XCTestCase {
@@ -61,6 +62,8 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             // The open threads' button: the first is on retry.go, which unfolds to show it.
             open.tap()
             XCTAssertTrue(retryFolded.waitForNonExistence(timeout: 5), app.debugDescription)
+            // retry.go's draft thread suggests a change: drawn as one.
+            XCTAssertTrue(text(app, "建议的修改").waitForExistence(timeout: 5), app.debugDescription)
             shot(app, "thread-" + look)
 
             // The display options: whitespace.
@@ -78,6 +81,18 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             gap.tap()
             XCTAssertTrue(text(app, "src/upload/client.go: line 19").waitForExistence(timeout: 5), app.debugDescription)
             shot(app, "context-" + look)
+            // Its thread can be resolved.
+            XCTAssertTrue(app.buttons["code-thread-resolve-t3"].exists, app.debugDescription)
+
+            // Two line numbers: a comment on the lines between, a suggestion started from them.
+            tapNumber(text(app, "新增第 22 行"))
+            tapNumber(text(app, "新增第 25 行"))
+            XCTAssertTrue(text(app, "评论第 22–25 行").waitForExistence(timeout: 5), app.debugDescription)
+            app.buttons["code-inline-suggest"].tap()
+            let field = app.descendants(matching: .any)["code-inline-comment"]
+            XCTAssertTrue((field.value as? String)?.contains("suggestion") == true, field.debugDescription)
+            shot(app, "comment-range-" + look)
+            app.buttons["code-inline-cancel"].tap()
 
             // A rename says how alike it is.
             let limits = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "相似 96%")).firstMatch
@@ -90,6 +105,12 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             whitespace.tap()
             app.terminate()
         } }
+    }
+
+    /// A diff line's number (the gutter's first column).
+    @MainActor private func tapNumber(_ line: XCUIElement) {
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        line.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 14, dy: 0)).tap()
     }
 
     @MainActor private func text(_ app: XCUIApplication, _ t: String) -> XCUIElement {

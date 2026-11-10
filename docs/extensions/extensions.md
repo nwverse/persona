@@ -2684,7 +2684,10 @@ Views, components, actions, responses, placements and context all use schema-gen
   components without drawing the page again, and a page drawn again keeps diffs loaded since. Hidden lines (`context`): between hunks a bar says how many lines are hidden, with the next hunk's
   header, and shows 20 more down or up, or all (a few: all at once; the first gap only up, the last only down, to the end of the file once its length is known); the lines are asked quietly for the
   new side (`to` "end" when the length is not known yet), kept per file so showing more of a gap that came needs no request, and `expand` is not used then. `code.line_url` adds **Copy Link to
-  Line** to the code viewer's line menu (https only). Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots › code-review-v5`; the mock answers
+  Line** to the code viewer's line menu (https only). Commenting: a second line number on the same side picks the lines between (`start_line`, the picked lines tinted, the box under the
+  last one, what is typed kept); the box sends alone (**Comment**) or as a draft of the pending review (`draft`, **Add to Review**, first once a review is under way), its ✕ closes it, and
+  **Suggest Change** (`suggestions`, new side) starts a ```suggestion block from the lines as they are. A comment's suggestion is drawn as a small diff of the lines it is on; **Resolve** /
+  **Reopen** send `resolve`; a resolved thread is folded to its first comment. Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots › code-review-v5`; the mock answers
   `context` with made-up lines of a 90-line file).
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with

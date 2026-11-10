@@ -57,6 +57,40 @@
         }
       }
     },
+    "%lld more comments": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld more comment"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld more comments"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还有 %lld 条评论"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほか %lld 件のコメント"
+          }
+        }
+      }
+    },
     "%lld unresolved": {
       "localizations": {
         "en": {
@@ -32052,6 +32086,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Comment on old lines %lld–%lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment on old lines %1$lld–%2$lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "评论原第 %1$lld–%2$lld 行"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "元の %1$lld〜%2$lld 行目にコメント"
+          }
+        }
+      }
     },
     "Comment on the doc": {
       "localizations": {
@@ -86431,6 +86487,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "停止播报"
+          }
+        }
+      }
+    },
+    "Suggested Change": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suggested Change"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "建议的修改"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提案された変更"
           }
         }
       }

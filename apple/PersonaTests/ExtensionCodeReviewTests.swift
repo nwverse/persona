@@ -280,6 +280,46 @@ extension ExtensionCodeReviewTests {
     }
 }
 
+// MARK: Commenting
+
+extension ExtensionCodeReviewTests {
+    @Test func twoLineNumbersPickTheLinesBetween() {
+        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        state.pick(.init(diff: "d", side: "new", line: 25))
+        #expect(state.composing == CodePageState.Anchor(diff: "d", side: "new", line: 25))
+        state.pick(.init(diff: "d", side: "new", line: 22))
+        #expect(state.composing == CodePageState.Anchor(diff: "d", side: "new", line: 25, start: 22), "the box under the last line")
+        #expect(state.composing?.covers("d", "new", 23) == true && state.composing?.covers("d", "old", 23) == false)
+        state.pick(.init(diff: "d", side: "new", line: 30))
+        #expect(state.composing == CodePageState.Anchor(diff: "d", side: "new", line: 30, start: 22), "from the first line picked")
+        state.pick(.init(diff: "d", side: "old", line: 3))
+        #expect(state.composing == CodePageState.Anchor(diff: "d", side: "old", line: 3), "the other side starts again")
+        state.pick(.init(diff: "d", side: "old", line: 3))
+        #expect(state.composing == nil, "the one line tapped again closes it")
+    }
+
+    @Test func suggestionsInAComment() {
+        let body = "Name the error:\n\n```suggestion\n// Retry calls f.\nfunc Retry() error {\n```\nThanks."
+        #expect(CodeReview.splitSuggestions(body) == [.text("Name the error:"), .suggestion(["// Retry calls f.", "func Retry() error {"]), .text("Thanks.")])
+        #expect(CodeReview.splitSuggestions("```suggestion\n```") == [.suggestion([])], "a suggestion that removes the lines")
+        #expect(CodeReview.splitSuggestions("plain") == [.text("plain")])
+        #expect(CodeReview.suggestionBlock(["a", "b"]) == "```suggestion\na\nb\n```")
+    }
+
+    @Test func theCommentBoxSitsUnderTheLastLinePicked() throws {
+        let v = try Self.view()
+        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        let key = "diff:src/upload/client.go"
+        state.pick(.init(diff: key, side: "new", line: 22))
+        state.pick(.init(diff: key, side: "new", line: 25))
+        let blocks = CodePageBlocks.of(v, sections: Self.mains(v), state: state, look: .unified, canComment: true)
+        guard let at = blocks.firstIndex(where: { if case .inlineComposer = $0 { true } else { false } }),
+              case .diffLine(_, _, _, let l, _, _) = blocks[at - 1], case .inlineComposer(let id, _, let a) = blocks[at]
+        else { Issue.record("no comment box after a line"); return }
+        #expect(l.new == 25 && a.start == 22 && id == "ic:\(key):new")
+    }
+}
+
 @MainActor private final class Recorded {
     var count = 0
 }

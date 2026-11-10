@@ -161,10 +161,12 @@ struct CodeBlockStack: View {
         case .diffLine(_, let key, let d, let line, let language, let digits):
             CodeDiffRow(line: line, language: language, digits: digits,
                         comment: d.comment == nil ? nil : { compose(key, line) })
+                .overlay { if picked(key, line) { pickedFill } }
                 .padding(.horizontal, Theme.Space.page)
         case .diffPair(_, let key, let d, let left, let right, let language, let digits):
             CodeDiffPairRow(left: left, right: right, language: language, digits: digits,
                             comment: d.comment == nil ? nil : { compose(key, $0) })
+                .overlay { if picked(key, left) || picked(key, right) { pickedFill } }
                 .padding(.horizontal, Theme.Space.page)
         case .diffNote(_, let text):
             Text(text).font(Theme.Font.secondary).foregroundStyle(.secondary)
@@ -196,8 +198,8 @@ struct CodeBlockStack: View {
             .foregroundStyle(Theme.accent)
             .background(Theme.Fill.chip)
             .padding(.horizontal, Theme.Space.page)
-        case .inlineThread(let id, _, let t):
-            inlineThread(id: id, t).id(Self.threadAnchor(id))
+        case .inlineThread(let id, let d, let t):
+            inlineThread(id: id, d, t).id(Self.threadAnchor(id))
         case .diffFolded(_, let key, let note):
             Button {
                 withAnimation(Theme.Motion.state) { state.setFolded(key, false, initially: true) }
@@ -403,25 +405,71 @@ struct CodeBlockStack: View {
 
     // MARK: Inline comments
 
+    /// A line number tapped: the comment box on it, or (another line on the same side) on the lines between.
     private func compose(_ key: String, _ line: CodeDiffLine) {
         guard let a = line.anchor else { return }
-        withAnimation(Theme.Motion.state) { state.compose(.init(diff: key, side: a.side, line: a.line)) }
+        withAnimation(Theme.Motion.state) { state.pick(.init(diff: key, side: a.side, line: a.line)) }
     }
 
-    private func inlineThread(id: String, _ t: ExtensionThread) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if t.pending == true || t.outdated == true || t.resolved == true {
+    /// A line the comment being written is on.
+    private func picked(_ key: String, _ line: CodeDiffLine?) -> Bool {
+        guard let c = state.composing, c.start != nil, let a = line?.anchor else { return false }
+        return c.covers(key, a.side, a.line)
+    }
+
+    private var pickedFill: some View {
+        Rectangle().fill(Theme.accent.opacity(Theme.Quote.fillOpacity)).allowsHitTesting(false)
+    }
+
+    /// The text of a diff's lines on the new side, `from`…`to`: from its hunks, else from the lines that came for its
+    /// gaps (UI version 5): what a suggestion starts from, and what one in a comment changes.
+    private func newLines(_ d: ExtensionDiffComponent, _ from: Int, _ to: Int) -> [String] {
+        guard from <= to else { return [] }
+        var byNumber: [Int: String] = [:]
+        for l in state.lines(of: d.hunks ?? []).joined() where l.kind != .del && l.kind != .note {
+            if let n = l.new { byNumber[n] = l.text }
+        }
+        let cache = state.lineCaches[d.path]
+        return (from...to).map { byNumber[$0] ?? cache?.line($0) ?? "" }
+    }
+
+    private func inlineThread(id: String, _ d: ExtensionDiffComponent, _ t: ExtensionThread) -> some View {
+        // A resolved thread is folded to its first comment until opened.
+        let folded = t.resolved == true && t.comments.count > 1 && !state.openThreads.contains(id)
+        let comments = folded ? Array(t.comments.prefix(1)) : t.comments
+        // What a suggestion in it changes: the lines it is on (new side).
+        let original = t.side == "new" && d.suggestions == true ? newLines(d, t.startLine ?? t.line, t.line) : nil
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            if t.pending == true || t.outdated == true || t.resolved == true || t.resolve != nil {
                 HStack(spacing: Theme.Space.s) {
                     if t.pending == true { Chip(text: String(localized: "Draft"), look: .neutral).lineLimit(1) }
                     if t.outdated == true { Chip(text: String(localized: "Outdated [Extension Code Stack 1148b6]"), look: .neutral).lineLimit(1) }
                     if t.resolved == true { Chip(text: String(localized: "Resolved"), look: .tint(Theme.positive)).lineLimit(1) }
+                    Spacer(minLength: 0)
+                    // Resolve / reopen (UI version 5): {thread, resolved}.
+                    if let r = t.resolve, let thread = t.id {
+                        Button { run(r, ["thread": thread, "resolved": t.resolved == true ? "false" : "true"]) } label: {
+                            Text(t.resolved == true ? String(localized: "Reopen") : String(localized: "Resolve")).lineLimit(1)
+                        }
+                        .font(Theme.Font.caption)
+                        .buttonStyle(.borderless)
+                        .disabled(model.running != nil)
+                        .accessibilityIdentifier("code-thread-resolve-\(thread)")
+                    }
                 }
             }
-            ForEach(Array(t.comments.enumerated()), id: \.offset) { _, c in
+            ForEach(Array(comments.enumerated()), id: \.offset) { _, c in
                 CodeCommentView(author: c.author, avatar: c.avatar?.url, at: c.at, markdown: c.body ?? "",
-                                badge: c.badge.map { ($0.text, $0.tone) }, event: c.event == true, link: $link)
+                                badge: c.badge.map { ($0.text, $0.tone) }, event: c.event == true, link: $link, original: original)
             }
-            if let r = t.reply {
+            if folded {
+                Button { withAnimation(Theme.Motion.state) { state.openThread(id) } } label: {
+                    Text("\(t.comments.count - 1) more comments").font(Theme.Font.caption).lineLimit(1)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("code-thread-more-\(t.id ?? id)")
+            }
+            if let r = t.reply, !folded {
                 CodeComposerView(placeholder: String(localized: "Reply…"), text: draft(id),
                                  buttons: [(String(localized: "Reply"), nil, r.id, { send(r, id: id, ["body": draftText(id)]) })],
                                  running: model.running, identifier: "code-thread-reply-\(t.id ?? id)")
@@ -435,23 +483,71 @@ struct CodeBlockStack: View {
         .accessibilityLabel(String(localized: "Comments on line \(t.line)"))
     }
 
+    /// The comment being written on a line or lines: sent alone (`comment`) or as a draft of the pending review
+    /// (`draft`, UI version 5; first once a review is under way), with a suggestion started from the lines when the
+    /// extension takes them (`suggestions`). Another line number on the same side picks the lines between.
     private func inlineComposer(id: String, d: ExtensionDiffComponent, anchor: CodePageState.Anchor) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text(anchor.side == "old" ? String(localized: "Comment on old line \(anchor.line)") : String(localized: "Comment on line \(anchor.line)"))
-                .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-            CodeComposerView(placeholder: String(localized: "Write a comment…"), text: draft(id),
-                             buttons: [(String(localized: "Cancel"), nil, "cancel", { withAnimation(Theme.Motion.state) { state.compose(nil) } }),
-                                       (String(localized: "Comments"), nil, d.comment?.id ?? "comment", {
-                                           guard let a = d.comment else { return }
-                                           send(a, id: id, ["path": d.path, "side": anchor.side, "line": String(anchor.line),
-                                                            "body": draftText(id)]) { state.compose(nil) }
-                                       })],
+        let values = { () -> [String: String] in
+            var v = ["path": d.path, "side": anchor.side, "line": String(anchor.line), "body": draftText(id)]
+            if let s = anchor.start { v["start_line"] = String(s) }
+            return v
+        }
+        let close = { withAnimation(Theme.Motion.state) { state.compose(nil) } }
+        let comment: ComposerButton? = d.comment.map { a in
+            (title: String(localized: "Comment"), tone: nil, id: a.id, run: { send(a, id: id, values()) { close() } })
+        }
+        let toReview: ComposerButton? = d.draft.map { a in
+            (title: String(localized: "Add to Review"), tone: nil, id: a.id, run: { send(a, id: id, values()) { close() } })
+        }
+        let reviewing = (model.view?.review?.count ?? 0) > 0
+        let buttons: [ComposerButton] = (reviewing ? [toReview, comment] : [comment, toReview]).compactMap { $0 }
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(spacing: Theme.Space.s) {
+                Text(caption(anchor)).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                if d.suggestions == true, anchor.side == "new" {
+                    Button { suggest(d, anchor, id: id) } label: {
+                        Label { Text("Suggest Change").lineLimit(1) } icon: { ThemedIcon(Theme.Icon.edit) }
+                    }
+                    .font(Theme.Font.caption)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("code-inline-suggest")
+                }
+                Button(action: close) {
+                    ThemedIcon(Theme.Icon.close)
+                        .foregroundStyle(.secondary)
+                        .scaledFrame(width: Theme.Size.wellS, height: Theme.Size.wellS)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Cancel"))
+                .accessibilityIdentifier("code-inline-cancel")
+            }
+            CodeComposerView(placeholder: String(localized: "Write a comment…"), text: draft(id), buttons: buttons,
                              running: model.running, identifier: "code-inline-comment")
         }
         .padding(Theme.Space.m)
         .background(Theme.pageBackground)
         .overlay(alignment: .leading) { Rectangle().fill(Theme.accent).frame(width: Theme.Size.line * 2) }
         .padding(.horizontal, Theme.Space.page)
+    }
+
+    typealias ComposerButton = (title: String, tone: String?, id: String, run: () -> Void)
+
+    private func caption(_ a: CodePageState.Anchor) -> String {
+        switch (a.side == "old", a.start) {
+        case (true, let s?): String(localized: "Comment on old lines \(s)–\(a.line)")
+        case (false, let s?): String(localized: "Comment on lines \(s)–\(a.line)")
+        case (true, nil): String(localized: "Comment on old line \(a.line)")
+        case (false, nil): String(localized: "Comment on line \(a.line)")
+        }
+    }
+
+    /// A suggestion started from the lines the comment is on, as they are now, after what is written.
+    private func suggest(_ d: ExtensionDiffComponent, _ a: CodePageState.Anchor, id: String) {
+        let block = CodeReview.suggestionBlock(newLines(d, a.start ?? a.line, a.line))
+        let now = draftText(id)
+        state.drafts[id] = now.isEmpty ? block : now + "\n" + block
     }
 
     private func draft(_ id: String) -> Binding<String> {

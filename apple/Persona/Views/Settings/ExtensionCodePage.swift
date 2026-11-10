@@ -72,6 +72,13 @@ nonisolated extension ExtensionComponent {
         var diff: String
         var side: String
         var line: Int
+        /// A comment on several lines (UI version 5's `start_line`): from this one to `line`, on the same side.
+        var start: Int? = nil
+
+        /// Whether line `n` of `side` in diff `key` is one the comment is on.
+        func covers(_ key: String, _ side: String, _ n: Int) -> Bool {
+            diff == key && self.side == side && ((start ?? line)...line).contains(n)
+        }
     }
 
     func toggle(dir: String, tree: String) {
@@ -205,6 +212,27 @@ nonisolated extension ExtensionComponent {
 
     func compose(_ a: Anchor?) {
         composing = composing == a ? nil : a
+        version += 1
+    }
+
+    /// A line number tapped: the comment box opens on it; another line on the same side of the same diff makes it a
+    /// comment on the lines from the first to that one (`start_line`, UI version 5); the one line tapped again closes it.
+    func pick(_ a: Anchor) {
+        if let c = composing, c.diff == a.diff, c.side == a.side, c.line != a.line || c.start != nil {
+            let first = c.start ?? c.line
+            composing = first == a.line ? Anchor(diff: a.diff, side: a.side, line: a.line)
+                : Anchor(diff: a.diff, side: a.side, line: max(first, a.line), start: min(first, a.line))
+        } else {
+            composing = composing == a ? nil : a
+        }
+        version += 1
+    }
+
+    /// Resolved threads opened to all their comments, by block id.
+    private(set) var openThreads: Set<String> = []
+
+    func openThread(_ id: String) {
+        openThreads.insert(id)
         version += 1
     }
 
@@ -404,8 +432,11 @@ enum CodePageBlock: Identifiable {
             for (i, t) in threads["\(a.side):\(a.line)"] ?? [] {
                 out.append(.inlineThread(id: threadID(key, t, i), diff: d, thread: t))
             }
-            let anchor = CodePageState.Anchor(diff: key, side: a.side, line: a.line)
-            if state.composing == anchor { out.append(.inlineComposer(id: "ic:\(key):\(a.side)\(a.line)", diff: d, anchor: anchor)) }
+            // The comment box under the last line it is on.
+            if let c = state.composing, c.diff == key, c.side == a.side, c.line == a.line {
+                // By diff and side: what is typed stays while the lines it is on change.
+                out.append(.inlineComposer(id: "ic:\(key):\(a.side)", diff: d, anchor: c))
+            }
             return out
         }
         // A gap's unchanged lines, as any other (side by side: on both sides).

@@ -540,6 +540,9 @@ struct CodeCommentView: View {
     var badge: (text: String, tone: String?)?
     var event: Bool
     @Binding var link: LinkTarget?
+    /// The lines a comment on code is on (the new side): its ```suggestion blocks are drawn as changing them
+    /// (UI version 5). Nil: the body as written.
+    var original: [String]? = nil
 
     var body: some View {
         if event {
@@ -563,7 +566,16 @@ struct CodeCommentView: View {
                         }
                         Spacer(minLength: 0)
                     }
-                    ExtensionMarkdown(text: markdown, link: $link)
+                    if let original, markdown.contains("```suggestion") {
+                        ForEach(Array(CodeReview.splitSuggestions(markdown).enumerated()), id: \.offset) { _, part in
+                            switch part {
+                            case .text(let t): ExtensionMarkdown(text: t, link: $link)
+                            case .suggestion(let lines): CodeSuggestionView(from: original, to: lines)
+                            }
+                        }
+                    } else {
+                        ExtensionMarkdown(text: markdown, link: $link)
+                    }
                 }
             }
             .accessibilityElement(children: .combine)
@@ -593,6 +605,34 @@ struct CodeAvatarView: View {
 // MARK: Composer
 
 /// A box to write in (Markdown, several lines) and the buttons that send what is written: Comment / Approve / Request Changes.
+/// A suggested change in a comment (UI version 5): the lines it is on, removed, and what it makes them, added.
+struct CodeSuggestionView: View {
+    var from: [String]
+    var to: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.flush) {
+            Text("Suggested Change").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs)
+            ForEach(Array(from.enumerated()), id: \.offset) { _, l in row(.del, l) }
+            ForEach(Array(to.enumerated()), id: \.offset) { _, l in row(.add, l) }
+        }
+        .background(Theme.Fill.chip)
+        .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func row(_ kind: CodeDiffLine.Kind, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.xs) {
+            Text(CodeDiffInk.mark(kind)).foregroundStyle(CodeDiffInk.markColor(kind)).accessibilityHidden(true)
+            Text(verbatim: text.isEmpty ? " " : text).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(Theme.Font.code)
+        .padding(.horizontal, Theme.Space.s)
+        .background(CodeDiffInk.fill(kind))
+    }
+}
+
 struct CodeComposerView: View {
     var placeholder: String
     @Binding var text: String
