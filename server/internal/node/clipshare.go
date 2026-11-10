@@ -42,6 +42,8 @@ var clipboardBackend = func() clipBackend {
 		return macClip{}
 	case "windows":
 		return winClip{}
+	case "linux":
+		return newLinuxClip()
 	}
 	return unsupportedClip{reason: proto.ClipboardReasonOS}
 }
