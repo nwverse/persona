@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 const offlineWindow = 7 * 24 * time.Hour
@@ -131,6 +132,9 @@ func (n *Node) scanOffline() []proto.Session {
 		m := n.meta(c.path, c.st)
 		if isLauncherCheckRun(c.path, m) {
 			continue // a launcher health check's run, a hundred a day on each computer: no session of the user's (#2959)
+		}
+		if c.count == others && !forked[id] && transcript.ClaudeProgram(m.entrypoint) {
+			continue // a program's run of Claude Code (`claude -p`, an SDK), left to it as a running one is (claudebg.go)
 		}
 		// Where the session is: an assistant conversation's start directory, before the filters look at it.
 		cwd := n.assistantHome(id, m.cwd)

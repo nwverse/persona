@@ -34,10 +34,12 @@ type quickMeta struct {
 	cwd string
 	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
 	// a first prompt bigger than the head read).
-	start    string
-	model    string
-	surface  string // the client it runs in (transcript.Meta.Surface)
-	lastText string
+	start   string
+	model   string
+	surface string // the client it runs in (transcript.Meta.Surface)
+	// entrypoint: Claude Code's latest (transcript.Meta.Entrypoint); "sdk-…" is a program's run (transcript.ClaudeProgram).
+	entrypoint string
+	lastText   string
 	// answer is the latest turn's answer from its first words on (transcript.Meta.TurnAnswer); "" when the tail read
 	// held none of its words.
 	answer string
@@ -287,6 +289,10 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	m.surface = tm.Surface
 	if m.surface == "" {
 		m.surface = prev.surface // Claude writes it on every line, a rollout on its first: the head read above has it
+	}
+	m.entrypoint = tm.Entrypoint
+	if m.entrypoint == "" {
+		m.entrypoint = prev.entrypoint
 	}
 	m.wake, m.turnClosed, m.lastTextAt, m.lastPromptAt = tm.LastTurnWake, tm.TurnClosed, tm.LastTextAt, tm.LastPromptAt
 	if m.lastText == "" && off > 0 {
