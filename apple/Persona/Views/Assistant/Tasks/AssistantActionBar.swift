@@ -143,10 +143,12 @@ nonisolated enum AssistantEntries {
 
     /// Splits a conversation's things into the two entries (the web's `assistantEntries`). `main`: the main
     /// conversation's id (it watches every task and the Agents opened by hand); `messageWaits`: whether a message card
-    /// still waits for Send (the app adds the inbox's word and Later); `restored`: tasks brought back from shelved.
+    /// still waits for Send (the app adds the inbox's word and Later); `restored`: tasks brought back from shelved;
+    /// `going`: the agents going on (`AppModel.goingAgents`), else read from `sessions`, which then must be every session.
     @MainActor static func split(conversation: String, main: String?, group: String = "", todos: [TodoItem], sessions: [Session],
                                  interactions: [Interaction], plans: [String: TaskPlan], feed: [FeedItem], now: Date = .now,
-                                 restored: [String: Date] = [:], messageWaits: (FeedItem) -> Bool = AssistantEntries.messageWaits) -> Result {
+                                 restored: [String: Date] = [:], going: [DockAgent]? = nil,
+                                 messageWaits: (FeedItem) -> Bool = AssistantEntries.messageWaits) -> Result {
         let lookup = TodosLogic.makeSessionLookup(sessions)
         let isMain = !(main ?? "").isEmpty && main == conversation
         let pair = { (m: String, s: String) in m + "/" + s }
@@ -197,7 +199,7 @@ nonisolated enum AssistantEntries {
             t.activeAgents.map { SessionKey(group: group, machineID: $0.machineID, sessionID: $0.sessionID) }
         })
         let manual = Set(todos.filter { ($0.origin ?? "").isEmpty }.map(\.id))
-        let dock = DockAgent.shown(DockAgent.going(sessions), conversation: conversation, main: main, group: group,
+        let dock = DockAgent.shown(going ?? DockAgent.going(sessions), conversation: conversation, main: main, group: group,
                                    taskAgents: taskAgents, manualTodos: manual)
         var running: [Row] = []
         for agent in dock where !folded.contains(pair(agent.key.machineID, agent.key.sessionID)) {
@@ -334,10 +336,13 @@ struct AssistantActionBar: View {
         let store = TasksStore.shared
         let model = AppModel.shared
         let todos = store.todos.values.sorted { ($0.createdAt ?? .distantPast, $0.id) > ($1.createdAt ?? .distantPast, $1.id) }
+        // Only the tasks' own agents, which is all a task's status reads, and the agents going on as the dock had them: the
+        // bar must not follow every agent's push (AllSessionsReadersTests, #3446).
         let entries = AssistantEntries.split(
             conversation: conversation, main: model.assistantMain?.sessionID, group: model.hub?.group ?? "", todos: todos,
-            sessions: model.allSessions(inFront: true), interactions: model.pendingInteractions, plans: store.plans,
-            feed: store.feed(conversation), restored: TodoRestores.load(),
+            sessions: todos.filter { $0.doneAt == nil || $0.failedToStart }.flatMap { store.sessions($0) },
+            interactions: model.pendingInteractions, plans: store.plans,
+            feed: store.feed(conversation), restored: TodoRestores.load(), going: model.goingAgents,
             // the hub's fields, the inbox's word on the item, and Later
             messageWaits: { item in
                 guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(id) else { return false }

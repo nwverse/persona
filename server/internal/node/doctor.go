@@ -650,7 +650,8 @@ func checkHerdr(ctx context.Context, path string) DoctorCheck {
 func checkAgentSandbox(dir string) DoctorCheck {
 	c := DoctorCheck{Name: "agent-sandbox", Status: DoctorOK, Items: []string{}}
 	on, from := agentSandboxOn(dir)
-	sup := sandbox.AgentSupport(agentSandboxProbe()) // on macOS sandbox-exec runs true once; elsewhere nothing runs
+	support := agentSandboxProbe() // macOS runs sandbox-exec true; Linux runs a real default-allow bwrap probe
+	sup := sandbox.AgentSupport(support)
 	last := readAgentSandboxStatus(dir)
 	wheres := make([]string, 0, len(last))
 	for w := range last {
@@ -687,7 +688,7 @@ func checkAgentSandbox(dir string) DoctorCheck {
 		c.Status, c.Detail = DoctorWarn, "已开启，但工具不可用："+sup.Why
 		c.Hint = "agent 照常启动，不进沙箱"
 	default:
-		c.Detail = "已开启（" + from + "）；" + agentSandboxLimits
+		c.Detail = "已开启（" + from + "）；" + agentSandboxLimits(support.OS)
 		c.Hint = "环境变量 " + agentSandboxEnv + " 只对设置它的进程生效（node 看 launchd 的环境，personad launch 看 pane 的 shell）"
 		for _, w := range wheres {
 			if s := last[w].State; s == sandbox.AgentSkipped || s == sandbox.AgentUnavailable {
@@ -705,9 +706,19 @@ func checkAgentSandbox(dir string) DoctorCheck {
 }
 
 // agentSandboxLimits is what the doctor reminds of while the sandbox is on (docs/server/agent-sandbox.md): what it does not
-// stop, which agents it does not cover, and what stops working in it.
-const agentSandboxLimits = "挡不住 docker；在 herdr 或 Orca 里不经托管启动器（personad launch）启动的 agent，" +
-	"比如直接用 claude 或 ~/.zshrc 里的启动器，包括 herdr 重启后接着跑的，不在沙箱里；沙箱里 ps、top、sudo 这类 setuid 程序起不来"
+// stop, which agents it does not cover, and platform-specific behavior that needs a restart or stops working.
+func agentSandboxLimits(goos string) string {
+	limits := "挡不住 docker；在 herdr 或 Orca 里不经托管启动器（personad launch）启动的 agent，" +
+		"比如直接用 claude 或 ~/.zshrc 里的启动器，包括 herdr 重启后接着跑的，不在沙箱里"
+	switch goos {
+	case "darwin":
+		return limits + "；沙箱里 ps、top、sudo 这类 setuid 程序起不来"
+	case "linux":
+		return limits + "；node 重启后沙箱内 agent 也要一并重启（node.sock 是启动时快照）"
+	default:
+		return limits
+	}
+}
 
 // agentSandboxWords are the statuses in the doctor's words.
 var agentSandboxWords = map[string]string{

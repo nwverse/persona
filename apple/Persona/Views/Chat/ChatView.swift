@@ -2121,13 +2121,15 @@ struct ChatView: View {
         let conversation = key.sessionID
         let tasks = TasksStore.shared
         TaskQuestions(conversation: conversation)
-        if let range = TaskMentionList.mention(in: model.drafts[key] ?? "") {
-            TaskMentionList(conversation: conversation) { todo in
-                withAnimation(Theme.Motion.state) {
-                    var draft = model.drafts[key] ?? ""
-                    draft.removeSubrange(range)
-                    model.drafts[key] = draft
-                    tasks.routes[conversation] = todo.id
+        DraftReader(key: key) { typed in
+            if let range = TaskMentionList.mention(in: typed) {
+                TaskMentionList(conversation: conversation) { todo in
+                    withAnimation(Theme.Motion.state) {
+                        var draft = model.drafts[key] ?? ""
+                        draft.removeSubrange(range)
+                        model.drafts[key] = draft
+                        tasks.routes[conversation] = todo.id
+                    }
                 }
             }
         }
@@ -2233,8 +2235,12 @@ struct ChatView: View {
                     offeredNext = nil
                 }
             }
-            .onChange(of: model.drafts[key] ?? "") { _, draft in
-                if !draft.isEmpty, let recap = pendingRecap { dismissRecap(recap) } // typing closes it
+            .background {
+                DraftReader(key: key) { typed in
+                    Color.clear.onChange(of: typed) { _, draft in
+                        if !draft.isEmpty, let recap = pendingRecap { dismissRecap(recap) } // typing closes it
+                    }
+                }
             }
     }
 
@@ -5970,6 +5976,22 @@ private struct ListScroll: Equatable {
     var content: CGFloat = 0
 }
 
+/// The composer's draft, read in a body of its own: the footer around it (cards, dock, the composer's own view) is not
+/// drawn again for every keystroke. Observation tracks `AppModel.drafts` as one value, so any read of it in the footer's
+/// body made each keystroke rebuild and compare the whole footer.
+private struct DraftReader<Content: View>: View {
+    let key: SessionKey
+    @ViewBuilder var content: (String) -> Content
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        #if DEBUG || PERF_SIGNPOST
+        let _ = PerfTrace.body("DraftReader")
+        #endif
+        content(model.drafts[key] ?? "")
+    }
+}
+
 private struct ChatRegion<Content: View>: View {
     let name: StaticString
     @ViewBuilder var content: () -> Content
@@ -5977,6 +5999,9 @@ private struct ChatRegion<Content: View>: View {
     var body: some View {
         #if PERF_SIGNPOST
         let _ = PerfTrace.event(name)
+        #endif
+        #if DEBUG
+        let _ = PerfCount.body("\(name)")
         #endif
         content()
     }

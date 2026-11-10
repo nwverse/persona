@@ -4,6 +4,7 @@ import { pair, takeToken } from "./lib/auth";
 import { useCloseOnBack } from "./lib/back-close";
 import { SCRIM_FADE, useLingers } from "./lib/lingers";
 import { PageBoundary } from "./views/PageBoundary";
+import { PerAssistant } from "./views/PerAssistant";
 import { OverlayBoundary, useOpened } from "./views/LazyOverlay";
 import { navigationCrumb } from "./lib/error-reports";
 import { lazyPage, preloadPages } from "./lib/lazy-page";
@@ -426,7 +427,7 @@ function Shell() {
             <ConnectionPill />
           </div>
         )}
-        <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}>{main}</Suspense></PageBoundary>
+        <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}><PerAssistant route={route}>{main}</PerAssistant></Suspense></PageBoundary>
       </main>
       <SidePanel />
       {paletteOpened && (
