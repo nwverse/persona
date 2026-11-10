@@ -58,6 +58,10 @@ def run(args):
                         def api(route):
                             parsed = urlparse(route.request.url)
                             path = parsed.path.removeprefix("/api/v1")
+                            # The existing automatic briefing uses POST even on a read-only UI visit. It is synthetic here.
+                            if route.request.method == "POST" and path == f"/assistant/conversations/{MAIN}/today":
+                                route.fulfill(status=200, content_type="application/json", body=json.dumps(dict(id="fixture-today", conversation=MAIN, at=AT, kind="today", body={})))
+                                return
                             if route.request.method != "GET":
                                 writes.append(path)
                                 route.fulfill(status=405, body="Read-only fixture"); return
@@ -134,6 +138,7 @@ def run(args):
                             ws.send(json.dumps(dict(type="sessions_list", revision=f"r{revision[0]}")))
                         expect(wf.locator('[data-task-mark="waiting"]')).to_have_count(1)
                         expect(wf).not_to_contain_text("Final check")
+                        # No Agent send, approval or task mutation; the existing auto-briefing POST is stubbed above.
                         assert not writes, writes
                         assert not errors, errors
                         print(f"PASS: {width}px {theme} {text_size}; background/workflow/subagent spinner, real-wait clock, phase update and completion, zero writes", flush=True)

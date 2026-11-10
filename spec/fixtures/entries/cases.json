@@ -1428,10 +1428,12 @@
             "subagents": [
               {
                 "id": "sub-a",
+                "session_id": "worker@sub-a",
                 "running": true
               },
               {
                 "id": "sub-b",
+                "session_id": "worker@sub-b",
                 "running": true
               }
             ]

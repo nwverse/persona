@@ -234,7 +234,8 @@ class AssistantTraysShotsTest {
                 fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
                     workers[0].copy(state = "idle", status = "idle", backgroundWorking = false, backgroundTasksCount = 0,
                         work = persona.core.contracts.WorkState(phase = "blocked", on = "external", wait = "Wait for deployment")) else it }; settle()
-                rule.onNodeWithTag("assistant-wait-clock").assertIsDisplayed()
+                shot("waiting-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
+                rule.onNodeWithTag("assistant-wait-clock", useUnmergedTree = true).assertIsDisplayed()
                 rule.onAllNodesWithTag("assistant-agent-manual").assertCountEquals(0)
             }
             assertNotEquals("Light and dark captures must differ", corners[0], corners[1])
