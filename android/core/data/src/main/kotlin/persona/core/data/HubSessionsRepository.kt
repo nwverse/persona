@@ -549,7 +549,7 @@ class HubSessionsRepository(
         lock.withLock {
             if (mutableSessions.value.any { it.key == session.key }) return@withLock
             // A single start response isn't authoritative filtered membership. Reconcile the bounded list instead.
-            if (mode == Mode.Paged) { invalidations.trySend(Unit); return@withLock }
+            if (mode == Mode.Paged) { invalidations.trySend(""); return@withLock }
             sessionChanges[session.machineId] = ++revision
             mutableSessions.value = (mutableSessions.value + session).let { if (mode.holdsAll) it else it.take(WINDOW_SIZE) }
             persist()
