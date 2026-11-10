@@ -175,3 +175,12 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   text (super rule 2); changing them needs the administrator's approval.
 
 - A source the manager hands to the Inbox itself, rather than a registered connector, must be named in every round's `names`, the Feishu-chats rounds included (#2039). The Inbox keeps a source's held-back count and read error only while rounds name it (`recordHeld`, `recordReads`), and a chats-only round, which follows every Lark event, would otherwise drop a source subscription's "waiting for triage" count within seconds. Name such sources cheaply in those rounds (no items read) and hand in their things only in rounds that read the connectors (`extmgr` `readSubscriptions`).
+
+- **`/stop` has to read the conversation's state, and a state that may be stale is not "nothing running"** (#3793). The
+  command and the progress card's Stop button shared `stopConversation`, which answered "stopped the turn" whenever the
+  conversation existed and sent `session.interrupt`; for an ordinary herdr agent the node answers that by pressing Escape
+  in the agent's terminal (`node/node.go`), so an idle window got a keystroke and the owner was told a turn was stopped
+  that had already finished. Refuse only when the state says the last turn ended (`unread` / `idle`, and not `Starting`)
+  — a state that cannot be told still tries, the owner asked — and let a live run this chat sent into that conversation
+  win (`channel.Run.Seen` false: the turn may just not be read as working yet), or a `/stop` sent right after the message
+  stops nothing.

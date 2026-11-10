@@ -1,4 +1,8 @@
 {
+  "closeout_not_deployed": "说已部署，但线上不是这次的改动",
+  "closeout_not_finished": "没做完",
+  "closeout_not_finished_text": "没做完：{text}",
+  "closeout_not_merged": "说已合并，但 PR 还没合并",
   "done": "做完了",
   "waiting_for_you": "在等你"
 }

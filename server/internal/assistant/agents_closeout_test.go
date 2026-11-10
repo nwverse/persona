@@ -51,8 +51,9 @@ func TestCloseoutNotDoneOverModel(t *testing.T) {
 	if w := entryOf(t, s, "s2").Work; w.Phase != "" || w.Closeout == nil || w.Closeout.Missing != "还差线上验证" {
 		t.Fatalf("not done read as %+v", w)
 	}
-	if _, shown := reportOf(t, s, "s2"); shown {
-		t.Fatal("an unfinished turn was shown as triaged")
+	// Shown with no phase, so it stays Unread, and with a line saying it is not finished (agents_closeout_brief_test.go).
+	if w, shown := reportOf(t, s, "s2"); !shown || w.Phase != "" || w.Line == "" {
+		t.Fatalf("an unfinished turn is reported as %+v (shown %v)", w, shown)
 	}
 }
 

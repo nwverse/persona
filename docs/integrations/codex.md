@@ -317,6 +317,12 @@ herdr reports blocked when Codex has an unanswered async question, so `agent pro
 - Real Codex: `scripts/test/test-codex.sh` (`docs/operations/testing.md`, "Codex integration testing") starts Codex in isolated herdr, asks questions and requests approvals, with one case per UI state and multiple turns each.
 - App: `CodexCardsTests` (mock `MOCK_CODEX=1`), light / dark screenshots.
 
+## Closeout
+
+A Codex Agent learns the closeout's form (`docs/assistant/agent-work.md`, "Closeout") the way it learns its task: in the prompt. With the `closeout` triage switch on, the prompts of `task_plan`, `agent_start` and `dispatch_start` end with the form, whatever launcher runs them, and the first message is what a Codex session is started with ("Starting from the phone"). Triage reads the closeout from the last reply of the turn as the node reads it from the rollout, so a Codex closeout is parsed like any other (`TestCodexCloseoutIsRead`).
+
+Two things Claude Code sessions have are missing here. Persona installs no Codex hooks of its own (the engine's integration only reports the session id, "Recognition"), so no Codex stop is held when a turn that did work ends without a closeout, and a Codex session started without a task prompt (from an app, in a terminal) is told nothing up front. Codex's own Stop and SessionStart hooks would need the user to trust them in `config.toml` first ("Research: app-server and approval hooks for Codex in Agents (2026-11-02, conclusions only, not implemented)" below). `assistant/codex_instructions.md` is the developer instructions of the Codex-run assistant, not of Agents, and assistant conversations write no closeout.
+
 ## Not supported yet
 
 - Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue only through the App.
