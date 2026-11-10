@@ -1,4 +1,4 @@
-package phone
+package iphone
 
 // Finding a paired phone on the network by its Bonjour advertisement, each time a session (re)connects: a phone's
 // address on Wi-Fi changes with DHCP, so the address resolved once is never trusted for long. A one-shot multicast DNS

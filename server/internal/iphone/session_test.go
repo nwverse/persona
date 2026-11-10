@@ -1,4 +1,4 @@
-package phone
+package iphone
 
 import (
 	"context"
@@ -13,10 +13,12 @@ import (
 
 // fastTiming shortens the session's delays for a test.
 func fastTiming(t *testing.T) {
-	saved := []time.Duration{backoffMin, backoffMax, stableAfter, parkAfter, minGap, browseWait, answerMargin}
+	saved := []time.Duration{backoffMin, backoffMax, stableAfter, parkAfter, minGap, browseWait, answerMargin, healthEvery, healthTimeout, usbFresh}
 	backoffMin, backoffMax, stableAfter, parkAfter, minGap, browseWait, answerMargin = 5*time.Millisecond, 40*time.Millisecond, time.Hour, time.Hour, time.Millisecond, 20*time.Millisecond, 0
+	healthEvery, healthTimeout, usbFresh = time.Hour, 50*time.Millisecond, 0
 	t.Cleanup(func() {
 		backoffMin, backoffMax, stableAfter, parkAfter, minGap, browseWait, answerMargin = saved[0], saved[1], saved[2], saved[3], saved[4], saved[5], saved[6]
+		healthEvery, healthTimeout, usbFresh = saved[7], saved[8], saved[9]
 	})
 }
 
@@ -35,14 +37,21 @@ type fakeLink struct {
 	closed   bool
 	err      error
 	sendFail bool
+	sendHang bool // the bridge stopped reading stdin
 	phone    *fakePhone
 }
 
-func (l *fakeLink) Send(line []byte) error {
+func (l *fakeLink) Send(ctx context.Context, line []byte) error {
 	l.mu.Lock()
 	if l.closed || l.sendFail {
 		l.mu.Unlock()
 		return errors.New("broken pipe")
+	}
+	if l.sendHang {
+		l.mu.Unlock()
+		<-ctx.Done()
+		l.Close()
+		return ctx.Err()
 	}
 	l.mu.Unlock()
 	var r request
@@ -192,7 +201,7 @@ func TestCallConnectsAndStaysConnectedWhileIdle(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond) // idle: nothing closes the link
 	d := m.Devices(context.Background())
-	if len(d) != 1 || d[0].State != StateConnected || d[0].Address != "192.0.2.5:49152" || string(d[0].Info) != `{"name":"Test Phone"}` {
+	if len(d) != 1 || d[0].State != StateConnected || d[0].Address != "192.0.2.5" || d[0].Port != 49152 || string(d[0].Info) != `{"name":"Test Phone"}` {
 		t.Fatalf("Devices = %+v", d)
 	}
 	if _, err := call(t, m, "screenshot", time.Second); err != nil || p.dialCount() != 1 {
@@ -446,5 +455,135 @@ func TestParseAddress(t *testing.T) {
 		if _, err := ParseAddress(bad); err == nil {
 			t.Errorf("ParseAddress(%q) accepted", bad)
 		}
+	}
+}
+
+func TestRecordChangedByAnotherProcessRestartsLink(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// The command line runs with a Manager of its own over the same directory.
+	cli := New(m.store.Dir)
+	defer cli.Close()
+	if err := cli.SetAddress(testUDID, "192.0.2.6"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.dials[len(p.dials)-1]; got.Host != "192.0.2.6" {
+		t.Fatalf("dialed %+v, want the new address", got)
+	}
+	if d := m.Devices(context.Background()); d[0].LastError != "" || d[0].State != StateConnected {
+		t.Fatalf("a restart on purpose isn't a failure: %+v", d[0])
+	}
+	// Forgotten by the command line: the next call says so, and nothing reaches the phone.
+	if err := cli.Forget(testUDID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, m, "tap", time.Second); Code(err) != CodeNotPaired {
+		t.Fatalf("want not_paired, got %v", err)
+	}
+	if ops := p.ops(); len(ops) != 2 {
+		t.Fatalf("phone got %v", ops)
+	}
+}
+
+func TestHealthCheckFindsDeadLinkAndForget(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	healthEvery = 20 * time.Millisecond
+	locked := true
+	p.handler = func(l *fakeLink, r request) {
+		if r.Op == "device_info" {
+			b, _ := json.Marshal(map[string]any{"name": "Test Phone", "os_version": "26.2", "locked": locked})
+			l.answer(r, string(b))
+			return
+		}
+		l.answer(r, `{}`)
+	}
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { d := m.Devices(context.Background()); return d[0].Locked != nil && *d[0].Locked })
+	if d := m.Devices(context.Background()); d[0].OSVersion != "26.2" {
+		t.Fatalf("Devices = %+v", d[0])
+	}
+	// The phone goes silent (a half-open link): the probe times out and the link starts again.
+	p.mu.Lock()
+	p.handler = func(*fakeLink, request) {}
+	p.mu.Unlock()
+	waitFor(t, func() bool { return p.dialCount() >= 2 })
+	// Forgotten from another process while idle: the link is closed without any call.
+	p.mu.Lock()
+	p.handler = nil
+	p.mu.Unlock()
+	cli := New(m.store.Dir)
+	defer cli.Close()
+	_ = cli.Forget(testUDID)
+	waitFor(t, func() bool { d := m.Devices(context.Background()); return len(d) == 0 })
+	waitFor(t, func() bool {
+		l := p.lastLink()
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return l.closed
+	})
+}
+
+func TestPairAgainAfterForgetWorksAtOnce(t *testing.T) {
+	m, _ := testManager(t, Record{Address: "192.0.2.5"})
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := m.store.Load(testUDID)
+	_ = m.Forget(testUDID)
+	if _, err := call(t, m, "tap", time.Second); Code(err) != CodeNotPaired {
+		t.Fatalf("want not_paired, got %v", err)
+	}
+	waitFor(t, func() bool { d := m.Devices(context.Background()); return len(d) == 0 })
+	_ = m.store.Save(rec)
+	path, _ := m.store.RecordPath(testUDID)
+	_ = os.WriteFile(path, []byte("opaque"), 0o600)
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatalf("paired again: %v", err)
+	}
+}
+
+func TestSendThatNeverLeavesIsNotUncertain(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	l := p.lastLink()
+	l.mu.Lock()
+	l.sendHang = true
+	l.mu.Unlock()
+	_, err := call(t, m, "tap", 100*time.Millisecond)
+	if Code(err) != CodeUnreachable || Sent(err) != "no" {
+		t.Fatalf("want unreachable, nothing sent; got %v", err)
+	}
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatalf("the next call gets a new link: %v", err)
+	}
+	if ops := p.ops(); len(ops) != 2 || ops[1] != "tap" {
+		t.Fatalf("phone got %v: the tap that never left must not count", ops)
+	}
+}
+
+func TestCallRejectsBadIDs(t *testing.T) {
+	m, _ := testManager(t, Record{})
+	if _, err := m.Call(context.Background(), "../x", "tap", nil); Code(err) != "bad_request" || Sent(err) != "no" {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

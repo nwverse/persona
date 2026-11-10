@@ -1,7 +1,7 @@
-// Package phone keeps this computer's paired iPhones: the pairing records made once over trusted USB, finding each
+// Package iphone keeps this computer's paired iPhones: the pairing records made once over trusted USB, finding each
 // phone again on the network (Bonjour, a manual address) and one resident session per phone through the device
-// bridge (docs/extensions/phone-pairing.md). The node's phone capability calls it; it knows nothing of the hub.
-package phone
+// bridge (docs/extensions/iphone-pairing.md). The node's phone capability calls it; it knows nothing of the hub.
+package iphone
 
 import (
 	"encoding/json"
@@ -17,10 +17,11 @@ import (
 // Record is what this computer keeps about one paired phone besides the pairing record itself: nothing secret. The
 // pairing record (keys) is the bridge's own format in RecordFile next to it, never read here.
 type Record struct {
-	UDID      string `json:"udid"`
-	Name      string `json:"name,omitempty"`
-	Model     string `json:"model,omitempty"`
-	OSVersion string `json:"os_version,omitempty"`
+	// UDID is the phone's stable id: the same across addresses, reconnections and iOS updates.
+	UDID        string `json:"udid"`
+	Name        string `json:"name,omitempty"`
+	ProductType string `json:"product_type,omitempty"` // the model identifier, e.g. iPhone16,2
+	OSVersion   string `json:"os_version,omitempty"`
 	// Identifier is what the phone advertises in its _remotepairing._tcp TXT record, from the bridge at pairing
 	// time: how Bonjour tells this phone from others on the network.
 	Identifier string `json:"identifier,omitempty"`

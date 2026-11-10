@@ -1,4 +1,4 @@
-package phone
+package iphone
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// fakeBridgeScript speaks the bridge's command line (docs/extensions/phone-bridge.md) well enough for these tests.
+// fakeBridgeScript speaks the bridge's command line (its wire contract, #3451) well enough for these tests.
 // serve answers every request, except op "drop", which loses the link without an answer.
 const fakeBridgeScript = `#!/bin/sh
 cmd=$1; shift

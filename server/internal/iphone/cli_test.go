@@ -1,4 +1,4 @@
-package phone
+package iphone
 
 import (
 	"bytes"
@@ -59,7 +59,7 @@ func TestCommand(t *testing.T) {
 			t.Errorf("%v: exit %d, want 2", args, code)
 		}
 	}
-	if code, out, _ := runCLI(t, m, "-h"); code != 0 || !strings.Contains(out, "phone pair") {
+	if code, out, _ := runCLI(t, m, "-h"); code != 0 || !strings.Contains(out, "iphone pair") {
 		t.Fatalf("-h: %d %q", code, out)
 	}
 }

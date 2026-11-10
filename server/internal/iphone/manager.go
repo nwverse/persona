@@ -1,6 +1,7 @@
-package phone
+package iphone
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,8 @@ type Manager struct {
 	cancel context.CancelFunc
 
 	mu       sync.Mutex
+	usb      []USBDevice // usbList's last answer, at usbAt
+	usbAt    time.Time
 	closed   bool
 	wg       sync.WaitGroup // the sessions' supervisors and the job
 	sessions map[string]*session
@@ -50,8 +53,8 @@ func New(dir string) *Manager {
 	}
 }
 
-// Dir is where the node keeps its paired phones: <PERSONA_HOME>/phone.
-func Dir() string { return filepath.Join(identity.HomeDir(), "phone") }
+// Dir is where the node keeps its paired phones: <PERSONA_HOME>/iphone.
+func Dir() string { return filepath.Join(identity.HomeDir(), "iphone") }
 
 var defaultManager = sync.OnceValue(func() *Manager { return New(Dir()) })
 
@@ -130,26 +133,30 @@ func (m *Manager) dialer() (Dialer, error) {
 
 // Device is one phone: paired here, plugged in over USB, or both.
 type Device struct {
-	UDID      string `json:"udid"`
-	Name      string `json:"name,omitempty"`
-	Model     string `json:"model,omitempty"`
-	OSVersion string `json:"os_version,omitempty"`
-	Paired    bool   `json:"paired"`
-	USB       bool   `json:"usb"` // plugged in over USB now (what pairing needs)
+	// UDID is the phone's stable id (the same across addresses and reconnections).
+	UDID        string `json:"udid"`
+	Name        string `json:"name,omitempty"`
+	ProductType string `json:"product_type,omitempty"` // the model identifier, e.g. iPhone16,2
+	OSVersion   string `json:"os_version,omitempty"`
+	Paired      bool   `json:"paired"`
+	USB         bool   `json:"usb"` // plugged in over USB now (what pairing needs)
 	// State is the session's (State* constants); Since is when it got there.
 	State string    `json:"state"`
 	Since time.Time `json:"since,omitzero"`
 	// Transport is how the session reaches the phone: "network" (the only one: USB is for pairing).
 	Transport string `json:"transport,omitempty"`
-	// Address is where the session is connected, and how that address was found (manual / bonjour / last). Local
-	// to this computer: the phone's network address isn't sent to the hub.
+	// Locked is the phone's lock state from its last device_info; nil when unknown.
+	Locked *bool `json:"locked,omitempty"`
+	// Address and Port are where the session is connected, AddressSource how that was found (manual / bonjour /
+	// last). Local to this computer: the phone's network address isn't sent to the hub.
 	Address       string `json:"address,omitempty"`
+	Port          int    `json:"port,omitempty"`
 	AddressSource string `json:"address_source,omitempty"`
-	// ManualAddress is the address set with `personad phone address`, if any.
+	// ManualAddress is the address set with `personad iphone address`, if any.
 	ManualAddress string `json:"manual_address,omitempty"`
 	LastError     string `json:"last_error,omitempty"`
 	LastErrorCode string `json:"last_error_code,omitempty"`
-	// Info is the bridge's device_info from the session's ready event.
+	// Info is the bridge's last device_info (the session's ready event, then its health checks).
 	Info     json.RawMessage `json:"info,omitempty"`
 	PairedAt time.Time       `json:"paired_at,omitzero"`
 }
@@ -162,19 +169,12 @@ func (m *Manager) Devices(ctx context.Context) []Device {
 		m.logf("phone: %v", err)
 	}
 	usb := map[string]USBDevice{}
-	if b, err := m.bridge(); err == nil {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		list, err := b.USBList(ctx)
-		cancel()
-		if err == nil {
-			for _, d := range list {
-				usb[d.UDID] = d
-			}
-		}
+	for _, d := range m.usbList(ctx) {
+		usb[d.UDID] = d
 	}
 	out := make([]Device, 0, len(recs)+len(usb))
 	for _, r := range recs {
-		d := Device{UDID: r.UDID, Name: r.Name, Model: r.Model, OSVersion: r.OSVersion, Paired: true, State: StateIdle,
+		d := Device{UDID: r.UDID, Name: r.Name, ProductType: r.ProductType, OSVersion: r.OSVersion, Paired: true, State: StateIdle,
 			Transport: "network", ManualAddress: r.Address, PairedAt: r.PairedAt}
 		_, d.USB = usb[r.UDID]
 		delete(usb, r.UDID)
@@ -187,9 +187,37 @@ func (m *Manager) Devices(ctx context.Context) []Device {
 		out = append(out, d)
 	}
 	for _, u := range usb {
-		out = append(out, Device{UDID: u.UDID, Name: u.Name, Model: u.Model, OSVersion: u.ProductVersion, USB: true, State: StateIdle})
+		out = append(out, Device{UDID: u.UDID, Name: u.Name, ProductType: u.Model, OSVersion: u.ProductVersion, USB: true, State: StateIdle})
 	}
 	return out
+}
+
+// usbFresh is how long a usb-list answer is reused: status is polled every few seconds while the app waits.
+var usbFresh = 5 * time.Second
+
+// usbList is the phones plugged in over USB, from the bridge, at most usbFresh old; nil without a bridge.
+func (m *Manager) usbList(ctx context.Context) []USBDevice {
+	m.mu.Lock()
+	if m.now().Sub(m.usbAt) < usbFresh {
+		list := m.usb
+		m.mu.Unlock()
+		return list
+	}
+	m.mu.Unlock()
+	b, err := m.bridge()
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	list, err := b.USBList(ctx)
+	if err != nil {
+		return nil
+	}
+	m.mu.Lock()
+	m.usb, m.usbAt = list, m.now()
+	m.mu.Unlock()
+	return list
 }
 
 // Call sends op with args to the phone udid and returns the bridge's result. It connects first when needed, waiting
@@ -204,14 +232,17 @@ func (m *Manager) Call(ctx context.Context, udid, op string, args json.RawMessag
 	if m.ctx.Err() != nil {
 		return nil, &Error{Code: CodeUnreachable, Message: "the node is shutting down"}
 	}
+	if !ValidUDID(udid) {
+		return nil, unsent(&Error{Code: "bad_request", Message: "invalid device id"})
+	}
 	if _, err := m.store.Load(udid); err != nil {
 		if errors.Is(err, ErrNotPaired) {
-			return nil, &Error{Code: CodeNotPaired, Message: "this phone isn't paired with this computer: plug it in over USB and run personad phone pair"}
+			return nil, unsent(&Error{Code: CodeNotPaired, Message: "this phone isn't paired with this computer: plug it in over USB and run personad iphone pair"})
 		}
-		return nil, err
+		return nil, unsent(&Error{Code: "internal", Message: err.Error()})
 	}
 	if _, err := m.dialer(); err != nil {
-		return nil, err
+		return nil, unsent(err)
 	}
 	return m.session(udid).call(ctx, op, args)
 }
@@ -264,16 +295,29 @@ func (m *Manager) disconnect(udid string) {
 	}
 }
 
-// remember keeps ep as the last address udid was reached at, re-reading the record so a change made meanwhile (by the
-// command line) isn't lost.
-func (m *Manager) remember(udid string, ep Endpoint) {
+// remember keeps ep as the last address udid was reached at (when Bonjour found it), and what the bridge's
+// device_info says of the phone now (its name and iOS version change). It re-reads the record so a change made
+// meanwhile (by the command line) isn't lost, and writes only when something changed.
+func (m *Manager) remember(udid string, ep Endpoint, info json.RawMessage) {
 	rec, err := m.store.Load(udid)
 	if err != nil {
 		return
 	}
-	rec.LastHost, rec.LastPort = ep.Host, ep.Port
+	was := rec
+	if ep.Source == "bonjour" {
+		rec.LastHost, rec.LastPort = ep.Host, ep.Port
+	}
+	var di deviceInfo
+	if len(info) > 0 && json.Unmarshal(info, &di) == nil {
+		rec.Name = cmp.Or(di.Name, rec.Name)
+		rec.ProductType = cmp.Or(di.ProductType, rec.ProductType)
+		rec.OSVersion = cmp.Or(di.OSVersion, rec.OSVersion)
+	}
+	if rec == was {
+		return
+	}
 	if err := m.store.Save(rec); err != nil {
-		m.logf("phone %s: %v", short(udid), err)
+		m.logf("iphone %s: %v", short(udid), err)
 	}
 }
 
@@ -294,7 +338,7 @@ func (m *Manager) Pair(ctx context.Context, udid string, step func(string)) (Rec
 		return Record{}, err
 	}
 	cleanup := func() {
-		if prevErr != nil { // nothing was paired before: leave no half-made directory
+		if errors.Is(prevErr, ErrNotPaired) { // nothing was paired before: leave no half-made directory
 			_ = m.store.Forget(udid)
 		}
 	}
@@ -317,7 +361,7 @@ func (m *Manager) Pair(ctx context.Context, udid string, step func(string)) (Rec
 		cleanup()
 		return Record{}, err
 	}
-	rec := Record{UDID: udid, Name: info.Name, Model: info.Model, OSVersion: info.ProductVersion, Identifier: info.Identifier, PairedAt: m.now().UTC()}
+	rec := Record{UDID: udid, Name: info.Name, ProductType: info.ProductType, OSVersion: info.ProductVersion, Identifier: info.Identifier, PairedAt: m.now().UTC()}
 	if prevErr == nil {
 		rec.Address = prev.Address
 	}

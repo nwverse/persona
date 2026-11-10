@@ -1,4 +1,4 @@
-package phone
+package iphone
 
 import (
 	"errors"

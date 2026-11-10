@@ -1,9 +1,9 @@
-package phone
+package iphone
 
 import "errors"
 
-// Error is a failure with a code the caller can act on: the bridge's own codes (docs/extensions/phone-bridge.md)
-// pass through, plus the session's below.
+// Error is a failure with a code the caller can act on: the bridge's own codes (its wire contract, #3451) pass
+// through, plus the session's below.
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

@@ -1,4 +1,4 @@
-package phone
+package iphone
 
 import (
 	"context"
@@ -14,27 +14,27 @@ import (
 	"github.com/nwverse/persona/server/internal/clitext"
 )
 
-// Usage is `personad phone`'s part of the usage text.
-const Usage = `  personad phone list|pair|forget|address|find|call …
+// Usage is `personad iphone`'s part of the usage text.
+const Usage = `  personad iphone list|pair|forget|address|find|call …
                            this computer's paired iPhones for phone control: pair one over USB once, then the node
-                           reaches it on the network (docs/extensions/phone-pairing.md; personad phone -h)`
+                           reaches it on the network (docs/extensions/iphone-pairing.md; personad iphone -h)`
 
 const commandUsage = `usage:
-  personad phone list [--json]
+  personad iphone list [--json]
                            the iPhones paired with this computer and the ones plugged in over USB
-  personad phone pair [<udid>]
+  personad iphone pair [<udid>]
                            pair the iPhone plugged in over USB (the only one, or <udid>): unlock it, tap Trust and enter
                            its passcode when it asks; the record stays on this computer only
-  personad phone forget <udid>
+  personad iphone forget <udid>
                            remove the pairing from this computer
-  personad phone address <udid> <host[:port]> | --clear
+  personad iphone address <udid> <host[:port]> | --clear
                            where to reach it when Bonjour can't (a VPN address or name); --clear goes back to Bonjour
-  personad phone find [--json]
+  personad iphone find [--json]
                            the iPhones advertising RemotePairing on this network (Bonjour), and which are paired here
-  personad phone call <udid> <op> [<json args>]
+  personad iphone call <udid> <op> [<json args>]
                            send one bridge operation through a session of this command's own, for checks`
 
-// Command runs `personad phone args…` and returns its exit code: 0 done, 1 failed, 2 usage.
+// Command runs `personad iphone args…` and returns its exit code: 0 done, 1 failed, 2 usage.
 func Command(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return command(ctx, New(Dir()), args, stdout, stderr)
 }
@@ -63,7 +63,7 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "list":
-		fs := flag.NewFlagSet("phone list", flag.ContinueOnError)
+		fs := flag.NewFlagSet("iphone list", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		asJSON := fs.Bool("json", false, "print JSON")
 		if err := fs.Parse(rest); err != nil || fs.NArg() > 0 {
@@ -177,7 +177,7 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 		}
 		return 0
 	case "find":
-		fs := flag.NewFlagSet("phone find", flag.ContinueOnError)
+		fs := flag.NewFlagSet("iphone find", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		asJSON := fs.Bool("json", false, "print JSON")
 		if err := fs.Parse(rest); err != nil || fs.NArg() > 0 {

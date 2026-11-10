@@ -1,4 +1,4 @@
-package phone
+package iphone
 
 import (
 	"bufio"
@@ -19,14 +19,14 @@ import (
 	"github.com/nwverse/persona/server/internal/osproc"
 )
 
-// BridgeName is the device bridge's program (docs/extensions/phone-bridge.md): it speaks RemotePairing to the phone;
+// BridgeName is the device bridge's program (its wire contract is #3451's): it speaks RemotePairing to the phone;
 // this package only runs it.
-const BridgeName = "persona-phone-bridge"
+const BridgeName = "persona-iphone-bridge"
 
 // BridgeEnv names the bridge's path explicitly.
-const BridgeEnv = "PERSONA_PHONE_BRIDGE"
+const BridgeEnv = "PERSONA_IPHONE_BRIDGE"
 
-// FindBridge is the bridge's path: $PERSONA_PHONE_BRIDGE, else next to this program, else in PATH.
+// FindBridge is the bridge's path: $PERSONA_IPHONE_BRIDGE, else next to this program, else in PATH.
 func FindBridge() (string, error) {
 	if p := os.Getenv(BridgeEnv); p != "" {
 		if _, err := os.Stat(p); err != nil {
@@ -56,7 +56,7 @@ type Bridge struct{ Path string }
 type USBDevice struct {
 	UDID           string `json:"udid"`
 	Name           string `json:"name,omitempty"`
-	Model          string `json:"model,omitempty"`
+	Model          string `json:"model,omitempty"` // the product type, e.g. iPhone16,2
 	ProductVersion string `json:"product_version,omitempty"`
 }
 
@@ -64,7 +64,8 @@ type USBDevice struct {
 type PairInfo struct {
 	UDID           string `json:"udid"`
 	Name           string `json:"name,omitempty"`
-	Model          string `json:"model,omitempty"`
+	Model          string `json:"model,omitempty"` // the product type, e.g. iPhone16,2
+	ProductType    string `json:"product_type,omitempty"`
 	ProductVersion string `json:"product_version,omitempty"`
 	Identifier     string `json:"identifier,omitempty"`
 }
@@ -104,6 +105,9 @@ func (b Bridge) Pair(ctx context.Context, udid, out string) (PairInfo, error) {
 	}
 	if info.UDID == "" {
 		info.UDID = udid
+	}
+	if info.ProductType == "" {
+		info.ProductType = info.Model
 	}
 	return info, nil
 }
@@ -210,9 +214,9 @@ func hostPort(host string, port int) string {
 
 // Link is one running bridge session with one phone: requests in, answers and events out, one line of JSON each.
 type Link interface {
-	// Send writes one request line. A failed Send left no complete line with the bridge, which acts only on whole
-	// lines, so nothing of it reached the phone.
-	Send(line []byte) error
+	// Send writes one request line, giving up (and closing the link) when ctx ends first. A failed Send left no
+	// complete line with the bridge, which acts only on whole lines, so nothing of it reached the phone.
+	Send(ctx context.Context, line []byte) error
 	// Lines are the bridge's stdout lines; closed when the session ends.
 	Lines() <-chan []byte
 	// Err is why the session ended, once Lines is closed.
@@ -298,12 +302,22 @@ type procLink struct {
 	closeOnce sync.Once
 }
 
-func (l *procLink) Send(line []byte) error {
+func (l *procLink) Send(ctx context.Context, line []byte) error {
 	if !bytes.HasSuffix(line, []byte("\n")) {
 		line = append(line, '\n')
 	}
-	_, err := l.stdin.Write(line)
-	return err
+	done := make(chan error, 1)
+	go func() {
+		_, err := l.stdin.Write(line)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done(): // the bridge stopped reading: the line isn't whole there, and closing stdin ends the write
+		l.Close()
+		return ctx.Err()
+	}
 }
 
 func (l *procLink) Lines() <-chan []byte { return l.lines }

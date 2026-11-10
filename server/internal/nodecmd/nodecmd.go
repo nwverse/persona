@@ -12,13 +12,13 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/office"
 	"github.com/nwverse/persona/server/internal/osproc"
-	"github.com/nwverse/persona/server/internal/phone"
 	"github.com/nwverse/persona/server/internal/scriptcli"
 	"github.com/nwverse/persona/server/internal/toolcli"
 )
@@ -46,7 +46,7 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
                            message as its last argument, no shell in between (docs/integrations/codex.md「Starting from the phone」)
-` + phone.Usage
+` + iphone.Usage
 
 // SysmonUsage is `sysmon`'s line in the usage text.
 const SysmonUsage = `  personad sysmon [n]       print this machine's system info and 1 + n metric samples (n default 3, at most 8640,
@@ -87,8 +87,8 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.Notify(ctx, rest, os.Stdout, os.Stderr))
 	case "office":
 		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
-	case "phone": // this computer's paired iPhones (internal/phone)
-		os.Exit(phone.Command(ctx, rest, os.Stdout, os.Stderr))
+	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
+		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":
 		n, err := sysmonCount(rest)
 		if err != nil {
