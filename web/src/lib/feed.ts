@@ -404,24 +404,36 @@ export async function loadFeed(conversation: string) {
   }
 }
 
-/** One pass of loadFeed: the pages since the newest item the feed has now. */
+/** One bounded feed traversal. New hubs return a snapshot cursor; older hubs retain the timestamp fallback. */
 async function readFeedPages(conversation: string) {
   let last = st.feeds[conversation]?.at(-1)?.at;
+  let cursor: string | undefined;
+  const endpoint = `/assistant/conversations/${enc(conversation)}/feed`;
+  // Capture an authoritative owner, when known, for the whole traversal. An unknown conversation can still be
+  // routed by the hub itself; never stamp a guessed default onto cards arriving before their session metadata.
+  const owner = conversationManager(conversation)
+    ?? Object.values(getState().sessions).flat().find((s) => s.session_id === conversation)?.manager
+    ?? managerHeaderFor(endpoint);
+  const headers = owner ? { [MANAGER_HEADER]: owner } : undefined;
   for (let n = 0; n < FEED_PAGES; n++) {
     const readingAt = feedRevision;
-    const path = `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`;
-    const owner = managerHeaderFor(path) ?? defaultManager();
-    const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(path);
+    const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
+    const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
     if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
     const items = res.items ?? [];
-    for (const it of items) draftOwners.set(it, owner);
+    if (owner) for (const it of items) draftOwners.set(it, owner);
     // A write or push accepted after this read started wins over the captured response.
     received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), res.plans ?? undefined);
     if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
     // the cards' snapshot comes whole with every page: what an event missed comes back here
     applySnapshot(conversation, res);
+    if (typeof res.next_cursor === "string") {
+      if (!res.next_cursor || res.next_cursor === cursor || !items.length) break;
+      cursor = res.next_cursor;
+      continue;
+    }
     const newest = items.at(-1)?.at;
-    // the next page starts after this one's newest; one that did not move on would come back the same
+    // Compatibility: a hub without cursors advances by its last original timestamp.
     if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
     last = newest;
   }

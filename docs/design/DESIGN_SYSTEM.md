@@ -482,7 +482,9 @@ The web Agent close action uses `capabilities.close`, with terminal-only closing
 Task-progress reply drafts (#3743) use the reversible rung: **Send** is primary, **Later** and **Don't handle** are
 secondary. Don't handle removes only the exact draft from Needs you, sends nothing and leaves its task, Agent and
 Inbox source open. It persists a task decision and offers receipt-scoped Undo in the web's existing six-second toast
-or Android's snackbar. A newer progress draft remains eligible; Undo cannot overwrite it. Web uses `Button` with
+or Android's snackbar. Android's production `JAppSnackbarHost` keeps the Material geometry and duration but uses
+`inverseOnSurface` for action text, so Undo remains readable in every style and appearance. A newer progress draft
+remains eligible; Undo cannot overwrite it. Web uses `Button` with
 44 px grid-based minimum targets and stacks the action group at narrow widths. Android reuses `DraftDecisionButtons`
 with the existing 48 dp button token and stacks the entire group at large text sizes or narrow widths, primary first.
 The original card's not-sent receipt remains inspectable. This deliberately does not reuse Inbox completion, which
