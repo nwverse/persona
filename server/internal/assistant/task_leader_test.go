@@ -467,7 +467,14 @@ func TestTaskLeaderSurvivesARestart(t *testing.T) {
 	if got := hub.notices(); len(got) != 0 {
 		t.Fatalf("the main conversation was told: %q", got)
 	}
-	// The plan keeps the role too: starting the task again keeps its leader.
+	// The saved plans keep the role and the parent, so starting a task again (a retry) links the same way.
+	if p, err := restarted.loadPlan(ctx, todo.PlanID); err != nil || p.Tasks[0].Role != roleLeader || p.Tasks[0].Parent != "" {
+		t.Fatalf("the leader's plan after a restart: %+v %v", p, err)
+	}
+	if p, err := restarted.loadPlan(ctx, w.PlanID); err != nil || p.Conversation != "s1" || p.Tasks[0].Role != "" || p.Tasks[0].Parent != todo.ID {
+		t.Fatalf("the worker's plan after a restart: %+v %v", p, err)
+	}
+	// And in the rows the link is read from:
 	rows, err := database.ListAllTodoAgents(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -502,11 +509,10 @@ func TestTaskLeaderListWaitsForItsLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() {
-		time.Sleep(100 * time.Millisecond)
+	time.AfterFunc(100*time.Millisecond, func() {
 		_ = s.linkTodoAgentWithSource(ctx, todo.ID, "box", "sx", "leader", "/code/app", "", "", sourceLeader, "")
 		s.leaderStarts.Add(-1)
-	}()
+	})
 	if got := s.leaderTools(ctx, "box", "sx"); len(got) != 1 || got[0].Name != "task_plan" {
 		t.Fatalf("the leader's list after its link: %v", got)
 	}
@@ -566,8 +572,6 @@ func TestWorkerSignalsDoNotReachTheMainConversation(t *testing.T) {
 	turn(proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
 	waitFor(t, "the judge to close the worker's to-do", func() bool { return todoNow(s, w.ID).DoneAt != nil })
 	s.sendDigest(ctx)
-	time.Sleep(200 * time.Millisecond) // a signal would be told after the short test delays (shortSupervise)
-	s.sendDigest(ctx)
 	if got := f.notices(); len(got) != 0 {
 		t.Fatalf("the main conversation was told about a worker: %q", got)
 	}
@@ -586,5 +590,52 @@ func TestWorkerSignalsDoNotReachTheMainConversation(t *testing.T) {
 		if it.Ref == w.ID {
 			t.Fatalf("the worker's to-do is in the main conversation's feed: %+v", it)
 		}
+	}
+}
+
+// dot (the main conversation) hands a task leader to a leader conversation with task_plan's supervisor: the leader's own
+// task is that leader conversation's to supervise, its report goes there, and its workers still report to the task
+// leader's agent: main → leader conversation → task leader → worker, and no deeper.
+func TestTaskLeaderUnderALeaderConversation(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	f.known["lead1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	var in map[string]any
+	_ = json.Unmarshal(leaderPlanArgs("leader"), &in)
+	in["supervisor"] = "lead1"
+	raw, _ := json.Marshal(in)
+	res, err := s.toolTaskPlan(ctx, "conv1", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.startPlan(ctx, planIDRe.FindString(res), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the leader's link", func() bool { return len(onlyTodo(s).Agents) == 1 })
+	todo := onlyTodo(s)
+	if v := todo.Supervision; v == nil || v.Supervisor != "lead1" || todo.Agents[0].Source != sourceLeader {
+		t.Fatalf("the task leader's task: %+v %+v", todo.Supervision, todo.Agents)
+	}
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
+	w := planWorker(t, s, f, nil)
+
+	if res := s.agentTool(ctx, "box", w.Agents[0].SessionID, "report_to_supervisor", json.RawMessage(`{"kind":"progress","text":"worker 的进度"}`)); res.IsError {
+		t.Fatalf("%+v", res)
+	}
+	if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", json.RawMessage(`{"kind":"blocked","text":"leader 的阻塞"}`)); res.IsError {
+		t.Fatalf("%+v", res)
+	}
+	waitFor(t, "the leader conversation's message", func() bool { return len(f.noticesTo("lead1")) == 1 })
+	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "leader 的阻塞") || strings.Contains(n, "worker 的进度") {
+		t.Fatalf("the leader conversation's message:\n%s", n)
+	}
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("the main conversation was told: %q", got)
+	}
+	if got := sendsTo(f, "box", "s1"); len(got) != 1 || !strings.Contains(got[0], "worker 的进度") {
+		t.Fatalf("the task leader's messages: %q", got)
 	}
 }

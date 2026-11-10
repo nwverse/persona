@@ -776,8 +776,8 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	}
 	// One inferred task keeps the whole plan waiting.
 	mixed, _ := json.Marshal(map[string]any{"tasks": []map[string]any{
-		{"title": "修登录崩溃", "prompt": "修", "machine": "box", "cwd": "/code/app", "user_requested": true, "why": "-"},
-		{"title": "顺便升级依赖", "prompt": "升级", "machine": "box", "cwd": "/code/app", "user_requested": false, "why": "-"},
+		{"title": "修登录崩溃", "prompt": "修", "machine": "box", "cwd": "/code/app", "permission": "bypassPermissions", "user_requested": true, "why": "-"},
+		{"title": "顺便升级依赖", "prompt": "升级", "machine": "box", "cwd": "/code/app", "permission": "bypassPermissions", "user_requested": false, "why": "-"},
 	}})
 	if res, err := s2.toolTaskPlan(context.Background(), "conv1", mixed); err != nil || !strings.Contains(res, "nothing has started") {
 		t.Fatalf("a mixed plan: %q %v", res, err)
