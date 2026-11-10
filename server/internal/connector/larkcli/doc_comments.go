@@ -23,13 +23,16 @@ const (
 	documentPollInterval   = 2 * time.Minute
 	documentRateBackoff    = 30 * time.Second
 	documentTimeoutBackoff = 10 * time.Second
-	maxCommentPages        = 10
-	maxReplyPages          = 10
-	maxWikiSpaces          = 20
-	maxWikiSpacePages      = 10
-	maxWikiNodes           = 500
-	maxWatchedDocuments    = 200
-	maxDocumentURLLength   = 4096
+	// An unreadable document is probed again after this long: its owner may share it again, or the user may sign in
+	// again with the missing permission. A new login (another account or other granted scopes) probes it at once.
+	documentUnreadableRetry = 10 * time.Minute
+	maxCommentPages         = 10
+	maxReplyPages           = 10
+	maxWikiSpaces           = 20
+	maxWikiSpacePages       = 10
+	maxWikiNodes            = 500
+	maxWatchedDocuments     = 200
+	maxDocumentURLLength    = 4096
 )
 
 // DocumentOptions are the connector's watched-document choices. An empty
@@ -168,6 +171,8 @@ type watchedDocument struct {
 	Seen       map[string]string
 	Things     map[string]connector.InboxThing
 	Unreadable bool
+	// RetryAt is when an unreadable document is probed again.
+	RetryAt time.Time
 }
 
 type documentInbox struct {
@@ -177,6 +182,11 @@ type documentInbox struct {
 	things    map[string]connector.InboxThing
 	warnings  map[string]string
 	rateUntil time.Time
+	// login identifies the lark-cli login the unreadable marks were made under; a different login clears them.
+	login string
+	// missingScopes is set when lark-cli says the login itself lacks a scope for comments. That is the connector's
+	// state, not any one document's, so no document is marked for it.
+	missingScopes []string
 }
 
 func newDocumentInbox() *documentInbox {
@@ -224,7 +234,7 @@ func (d *documentInbox) warning(lang i18n.Lang) string {
 	return strings.Join(parts, " · ")
 }
 
-func (d *documentInbox) markUnreadable(link, title string) {
+func (d *documentInbox) markUnreadable(link, title string, now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if title == "" {
@@ -236,7 +246,60 @@ func (d *documentInbox) markUnreadable(link, title string) {
 		d.docs[link] = doc
 	}
 	doc.Unreadable = true
+	doc.RetryAt = now.Add(documentUnreadableRetry)
 	d.warnings[link] = title
+}
+
+// skipUnreadable reports whether link is marked unreadable and not yet due for another probe. The caller holds d.mu.
+func (d *documentInbox) skipUnreadable(doc *watchedDocument, now time.Time) bool {
+	return doc != nil && doc.Unreadable && now.Before(doc.RetryAt)
+}
+
+// markReadable clears an unreadable mark after a probe succeeded.
+func (d *documentInbox) markReadable(link string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if doc := d.docs[link]; doc != nil {
+		doc.Unreadable, doc.RetryAt = false, time.Time{}
+	}
+	delete(d.warnings, link)
+}
+
+// setLogin records the current lark-cli login. When it differs from the one the marks were made under, every
+// unreadable document is probed again and a missing-scope state is dropped until lark-cli reports it again.
+func (d *documentInbox) setLogin(login string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.login == login {
+		return
+	}
+	d.login = login
+	d.missingScopes = nil
+	for _, doc := range d.docs {
+		doc.RetryAt = time.Time{}
+	}
+}
+
+func (d *documentInbox) setMissingScopes(scopes []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.missingScopes = append([]string(nil), scopes...)
+}
+
+func (d *documentInbox) scopesMissing() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.missingScopes...)
+}
+
+// scopeError reports whether err says the login lacks a scope (the whole connector), rather than that one document
+// cannot be read.
+func scopeError(err error) ([]string, bool) {
+	var e *adapter.Error
+	if errors.As(err, &e) && e != nil && e.Kind == adapter.KindMissingPermission && len(e.MissingScopes) > 0 {
+		return e.MissingScopes, true
+	}
+	return nil, false
 }
 
 func (d *documentInbox) rateLimited(now time.Time) bool {
@@ -284,6 +347,9 @@ func (c *Connector) pollDocumentsRound(ctx context.Context) bool {
 	if err != nil || !auth.LoggedIn || auth.OpenID == "" {
 		return false
 	}
+	granted := append([]string(nil), auth.GrantedScopes...)
+	sort.Strings(granted)
+	c.docs.setLogin(auth.OpenID + "\x00" + strings.Join(granted, " "))
 	resolved := c.resolveWatched(ctx)
 	c.syncWatched(resolved)
 	if len(resolved) == 0 {
@@ -298,12 +364,18 @@ func (c *Connector) pollDocumentsRound(ctx context.Context) bool {
 	for _, link := range links {
 		c.docs.mu.Lock()
 		doc := c.docs.docs[link]
-		unreadable := doc == nil || doc.Unreadable
+		skip := doc == nil || c.docs.skipUnreadable(doc, c.currentTime())
 		c.docs.mu.Unlock()
-		if unreadable {
+		if skip {
 			continue
 		}
 		changed, err := c.pollDocument(ctx, doc, auth.OpenID, c.lang(ctx))
+		if scopes, ok := scopeError(err); ok {
+			// The login lacks a comment scope: every document would fail the same way, so none is marked and the
+			// round stops. Settings shows the missing scope; a new login clears it.
+			c.docs.setMissingScopes(scopes)
+			break
+		}
 		if err != nil {
 			switch adapter.KindOf(err) {
 			case adapter.KindRateLimited:
@@ -311,13 +383,17 @@ func (c *Connector) pollDocumentsRound(ctx context.Context) bool {
 			case adapter.KindTimeout:
 				c.docs.setRateLimit(c.currentTime().Add(documentTimeoutBackoff))
 			case adapter.KindMissingPermission:
-				c.docs.markUnreadable(link, doc.Title)
+				c.docs.markUnreadable(link, doc.Title, c.currentTime())
 			}
 			if adapter.KindOf(err) == adapter.KindRateLimited || adapter.KindOf(err) == adapter.KindTimeout {
 				break
 			}
 			continue
 		}
+		// A document read fine: the login has the comment scopes again (re-granted on the Open Platform without a new
+		// login, say), so the missing-scope state goes too.
+		c.docs.markReadable(link)
+		c.docs.setMissingScopes(nil)
 		if changed {
 			moved = true
 		}
@@ -369,7 +445,7 @@ func (c *Connector) resolveWatched(ctx context.Context) map[string]watchedDocume
 		metadata := watchedDocument{URL: link, Type: documentType(link), Title: link}
 		c.docs.mu.Lock()
 		cached := c.docs.docs[link]
-		if cached != nil && cached.Unreadable {
+		if c.docs.skipUnreadable(cached, c.currentTime()) {
 			metadata.Canonical, metadata.Title, metadata.Type = cached.Canonical, cached.Title, cached.Type
 			c.docs.mu.Unlock()
 			out[link] = metadata
@@ -377,12 +453,16 @@ func (c *Connector) resolveWatched(ctx context.Context) map[string]watchedDocume
 		}
 		c.docs.mu.Unlock()
 		info, err := c.runner.InspectDocument(ctx, link)
+		if scopes, ok := scopeError(err); ok {
+			c.docs.setMissingScopes(scopes)
+			return out
+		}
 		if err == nil {
 			metadata.Canonical = documentFirstNonEmpty(info.CanonicalURL, info.URL)
 			metadata.Title = documentFirstNonEmpty(info.Title, link)
 			metadata.Type = normalizeDocumentType(documentFirstNonEmpty(info.Type, metadata.Type))
 		} else if adapter.KindOf(err) == adapter.KindMissingPermission {
-			c.docs.markUnreadable(link, link)
+			c.docs.markUnreadable(link, link, c.currentTime())
 			out[link] = metadata
 			continue
 		} else if adapter.KindOf(err) == adapter.KindRateLimited {
@@ -407,7 +487,7 @@ func (c *Connector) resolveWatched(ctx context.Context) map[string]watchedDocume
 				metadata := watchedDocument{URL: link, Type: normalizeDocumentType(node.ObjectType), Title: node.Title}
 				c.docs.mu.Lock()
 				cached := c.docs.docs[link]
-				if cached != nil && cached.Unreadable {
+				if c.docs.skipUnreadable(cached, c.currentTime()) {
 					metadata.Canonical, metadata.Title, metadata.Type = cached.Canonical, cached.Title, cached.Type
 					c.docs.mu.Unlock()
 					out[link] = metadata
@@ -415,12 +495,16 @@ func (c *Connector) resolveWatched(ctx context.Context) map[string]watchedDocume
 				}
 				c.docs.mu.Unlock()
 				info, err := c.runner.InspectDocument(ctx, link)
+				if scopes, ok := scopeError(err); ok {
+					c.docs.setMissingScopes(scopes)
+					return out
+				}
 				if err == nil {
 					metadata.Canonical = documentFirstNonEmpty(info.CanonicalURL, info.URL)
 					metadata.Title = documentFirstNonEmpty(info.Title, metadata.Title, link)
 					metadata.Type = normalizeDocumentType(documentFirstNonEmpty(info.Type, metadata.Type))
 				} else if adapter.KindOf(err) == adapter.KindMissingPermission {
-					c.docs.markUnreadable(link, documentFirstNonEmpty(metadata.Title, link))
+					c.docs.markUnreadable(link, documentFirstNonEmpty(metadata.Title, link), c.currentTime())
 					out[link] = metadata
 					continue
 				} else if adapter.KindOf(err) == adapter.KindRateLimited {

@@ -146,8 +146,22 @@ JSON
       +list-comments)
         case "$scenario" in
           comments_unreadable)
-            cat "$base/error_permission.json" >&2
-            exit 3
+            # phase "reply" is the document shared again: it reads normally.
+            if [ "$phase" = "reply" ]; then
+              cat "$base/comments_initial.json"
+            else
+              cat "$base/error_permission.json" >&2
+              exit 3
+            fi
+            ;;
+          comments_missing_scope)
+            # phase "reply" is the login after the scope was granted.
+            if [ "$phase" = "reply" ]; then
+              cat "$base/comments_initial.json"
+            else
+              cat "$base/error_comment_scope.json" >&2
+              exit 3
+            fi
             ;;
           comments_rate_limited)
             cat "$base/error_rate_limited.json" >&2

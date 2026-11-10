@@ -118,7 +118,7 @@ Settings › Connectors › Lark via lark-cli › Watched documents; an empty li
 
 On each Inbox round the connector runs `drive +list-comments --solved-status false` as the lark-cli user, then reads each
 thread with `drive +list-replies`. It keeps an opaque cursor per watched document and deduplicates comment and reply ids.
-Rate limits pause the document poller; a permission or not-found result marks that document unreadable and stops retrying it.
+Rate limits pause the document poller. A permission or not-found result marks that document unreadable: it is probed again every 10 minutes, and at once after a new lark-cli login (another account or other granted scopes); a successful read clears the mark. A missing comment scope belongs to the login, not to a document: no document is marked, the round stops and the connector's status lists the scope until a read succeeds again.
 The title, quoted passage (or “Whole document”), latest matching comment text, and a link with the comment id are kept in
 one Inbox item per thread (`kind: "doc"`). A comment that mentions the user by open_id is included, as is a later reply
 when the user has written in that thread; resolved threads are skipped. The connector never replies or changes a comment.

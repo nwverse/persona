@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,32 +89,100 @@ func TestDocumentCommentsUnwatchedAndResolvedAreSkipped(t *testing.T) {
 	}
 }
 
-func TestUnreadableDocumentWarningIsPermanentForTheRound(t *testing.T) {
+func TestUnreadableDocumentIsProbedAgainLater(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "fake.log")
 	t.Setenv("LARKCLI_FAKE_LOG", logPath)
 	c := docTestConnector(t, "comments_unreadable")
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
 	if err := c.SetOptions(json.RawMessage(`{"documents":["https://example.feishu.cn/docx/doc_example"]}`)); err != nil {
 		t.Fatal(err)
+	}
+	count := func(what string) int {
+		log, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(log), what)
 	}
 	if c.pollDocuments(context.Background()) {
 		t.Fatal("unreadable document produced an item")
 	}
-	if c.pollDocuments(context.Background()) {
-		t.Fatal("unreadable document produced an item on retry")
-	}
-	log, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Count(string(log), "+list-comments"); got != 1 {
-		t.Fatalf("unreadable document was retried %d times: %s", got, log)
-	}
-	if got := strings.Count(string(log), "+inspect"); got != 1 {
-		t.Fatalf("unreadable document metadata was retried %d times: %s", got, log)
-	}
 	st := c.Status(context.Background())
 	if st.State != connector.StateOK || !strings.Contains(st.Error, "Example design document") {
 		t.Fatalf("settings warning = %+v", st)
+	}
+	// Within the retry interval the document is not probed again.
+	now = now.Add(documentUnreadableRetry / 2)
+	if c.pollDocuments(context.Background()) {
+		t.Fatal("unreadable document produced an item on retry")
+	}
+	if got := count("+list-comments"); got != 1 {
+		t.Fatalf("unreadable document was retried %d times before the interval", got)
+	}
+	if got := count("+inspect"); got != 1 {
+		t.Fatalf("unreadable document metadata was retried %d times before the interval", got)
+	}
+	// The owner shares it again; after the interval it is read and the warning goes.
+	t.Setenv("LARKCLI_FAKE_PHASE", "reply")
+	now = now.Add(documentUnreadableRetry)
+	if !c.pollDocuments(context.Background()) {
+		t.Fatal("a readable document again produced nothing")
+	}
+	if st := c.Status(context.Background()); st.Error != "" {
+		t.Fatalf("warning kept after the document became readable: %+v", st)
+	}
+}
+
+func TestNewLoginProbesUnreadableDocumentsAtOnce(t *testing.T) {
+	c := docTestConnector(t, "comments_unreadable")
+	if err := c.SetOptions(json.RawMessage(`{"documents":["https://example.feishu.cn/docx/doc_example"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	c.pollDocuments(context.Background())
+	link := "https://example.feishu.cn/docx/doc_example"
+	c.docs.mu.Lock()
+	skipped := c.docs.skipUnreadable(c.docs.docs[link], c.currentTime())
+	c.docs.mu.Unlock()
+	if !skipped {
+		t.Fatal("document not marked unreadable")
+	}
+	c.docs.setLogin("another login")
+	c.docs.mu.Lock()
+	skipped = c.docs.skipUnreadable(c.docs.docs[link], c.currentTime())
+	c.docs.mu.Unlock()
+	if skipped {
+		t.Fatal("a new login did not make the document due for a probe")
+	}
+}
+
+func TestMissingCommentScopeIsTheConnectorsStateNotTheDocuments(t *testing.T) {
+	c := docTestConnector(t, "comments_missing_scope")
+	links := `["https://example.feishu.cn/docx/doc_example","https://example.feishu.cn/docx/doc_other"]`
+	if err := c.SetOptions(json.RawMessage(`{"documents":` + links + `}`)); err != nil {
+		t.Fatal(err)
+	}
+	if c.pollDocuments(context.Background()) {
+		t.Fatal("missing scope produced an item")
+	}
+	c.docs.mu.Lock()
+	for link, doc := range c.docs.docs {
+		if doc.Unreadable {
+			t.Errorf("%s marked unreadable for a missing scope", link)
+		}
+	}
+	c.docs.mu.Unlock()
+	st := c.Status(context.Background())
+	if !slices.Contains(st.MissingScopes, "docs:document.comment:read") {
+		t.Fatalf("status does not name the missing scope: %+v", st)
+	}
+	// The scope is granted: the next round reads the documents with no wait and the state clears.
+	t.Setenv("LARKCLI_FAKE_PHASE", "reply")
+	if !c.pollDocuments(context.Background()) {
+		t.Fatal("documents not read after the scope was granted")
+	}
+	if st := c.Status(context.Background()); len(st.MissingScopes) != 0 {
+		t.Fatalf("missing scope kept after it was granted: %+v", st)
 	}
 }
 

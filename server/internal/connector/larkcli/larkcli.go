@@ -134,6 +134,9 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 	}
 	missing := append([]string(nil), auth.MissingScopes...)
 	missing = append(missing, missingRequiredScopes(auth.GrantedScopes)...)
+	if c.docs != nil {
+		missing = append(missing, c.docs.scopesMissing()...)
+	}
 	if missing = uniqueScopes(missing); len(missing) > 0 {
 		return c.statusMissingScopes(ctx, st, missing, auth.AppID, auth.Brand)
 	}
