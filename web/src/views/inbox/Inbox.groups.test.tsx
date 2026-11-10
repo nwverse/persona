@@ -93,35 +93,35 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("收件箱分组 (#2059)", () => {
-  it("按来源：筛选条的顺序，组标题带条数；FYI 只有一组就不画组标题", async () => {
+describe("inbox groups (#2059)", () => {
+  it("by source: in the chips' order, titles with counts; FYI with one group draws no title", async () => {
     expect(groups("action")).toEqual(["lark", "mail:acc1"]);
     expect(head("action", "lark").textContent).toContain("飞书2");
     expect(head("action", "mail:acc1").textContent).toContain("邮件 · me@example.com2");
     expect(groups("fyi")).toEqual([]);
   });
 
-  it("按时间：今天 / 昨天 / 具体日期；切换记在本机", async () => {
+  it("by time: today, yesterday, each date; the switch is kept on this device", async () => {
     await click([...host.querySelectorAll('[role="radio"]')].find((b) => b.textContent === "按时间"));
     expect(groups("action").slice(0, 2)).toEqual(["today", "yesterday"]);
     expect(groups("action")[2]).toMatch(/^d:\d{4}-\d{2}-\d{2}$/);
     expect(localStorage.getItem("inbox.grouping")).toBe("time");
   });
 
-  it("组可以折叠，折叠后只剩标题和条数，开合记在本机", async () => {
+  it("a group folds to its title and count, and its fold is kept on this device", async () => {
     await click(toggle("action", "mail:acc1"));
     expect(toggle("action", "mail:acc1").getAttribute("aria-expanded")).toBe("false");
     expect(head("action", "mail:acc1").querySelector("[inert]")).not.toBeNull();
     expect(JSON.parse(localStorage.getItem("inbox.folds")!)).toEqual({ "|action|mail:acc1": false });
   });
 
-  it("已处理按处理时间，接上 hub 的历史：刚刚处理 / 7 天前 / 1 个月前", async () => {
+  it("Done by when it was done, continued from the hub's history: just now, 7+ days, 1+ month", async () => {
     expect(calls.list.some((c) => c.path.startsWith("/inbox/done?") && c.path.includes("sources=all"))).toBe(true);
     expect(groups("done")).toEqual(["just", "week", "month"]);
     expect(head("done", "month").textContent).toContain("1 个月前1");
   });
 
-  it("老 hub 没有历史（404）：已处理只有列表里的", async () => {
+  it("an old hub without history (404): Done has only the list's items", async () => {
     act(() => root.unmount());
     calls.historyStatus = 404;
     resetInboxForTests();
@@ -132,7 +132,7 @@ describe("收件箱分组 (#2059)", () => {
     expect(host.querySelector('[data-section="done"]')?.textContent).not.toContain("+");
   });
 
-  it("等你回复的 Agent 在「需要你」最前面单独一组，条数是 Agent 的个数", async () => {
+  it("Agents waiting on you are their own group first in Needs you, counting the Agents", async () => {
     act(() => root.unmount());
     Object.assign(getState(), { interactions: [{ id: "ix1", machine_id: "m", session_id: "s1", session_title: "改登录页", kind: "question" }] });
     resetInboxForTests();
@@ -144,7 +144,7 @@ describe("收件箱分组 (#2059)", () => {
     Object.assign(getState(), { interactions: [] });
   });
 
-  it("多选：组标题的勾整组选，折叠的组也能选；全选只选看得到的；底栏写折叠了几项", async () => {
+  it("selecting: a group's tick picks all of it, folded or not; Select All picks what is in sight; the bar counts the folded ones", async () => {
     await click(toggle("action", "mail:acc1"));
     await click(button("选择"));
     // the folded mail group's tick picks both of its items

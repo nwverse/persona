@@ -75,8 +75,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("收件箱：选择 (#2059)", () => {
-  it("「选择」把看得到的未处理条目变成勾选框，点一下是选上而不是打开", async () => {
+describe("inbox selection (#2059)", () => {
+  it("Select turns the open items in sight into ticks; a click picks instead of opening", async () => {
     expect(boxes()).toHaveLength(0);
     expect(bar()).toBeNull();
     await click(button("选择"));
@@ -103,7 +103,7 @@ describe("收件箱：选择 (#2059)", () => {
     expect(boxes()[0].getAttribute("aria-checked")).toBe("true");
   });
 
-  it("全选只选列表里看得到的；再点一次是取消全选", async () => {
+  it("Select All picks only what the list shows; a second click deselects all", async () => {
     await click(button("选择"));
     await click(button("全选"));
     expect(boxes().every((b) => b.getAttribute("aria-checked") === "true")).toBe(true);
@@ -112,7 +112,7 @@ describe("收件箱：选择 (#2059)", () => {
     expect(boxes().some((b) => b.getAttribute("aria-checked") === "true")).toBe(false);
   });
 
-  it("已处理的条目选不了，变淡", async () => {
+  it("done items can't be picked and are dimmed", async () => {
     await click(button("选择"));
     await click([...host.querySelectorAll("[data-section=done] button")].find((b) => b.getAttribute("aria-expanded") !== null));
     const done = host.querySelector('[data-item="d1"]')!;
@@ -121,7 +121,7 @@ describe("收件箱：选择 (#2059)", () => {
     expect(done.className).toContain("opacity-45");
   });
 
-  it("「标为已处理」一次批量请求带版本，然后退出选择", async () => {
+  it("Mark as Done is one bulk request with versions, then selection ends", async () => {
     await click(button("选择"));
     await click(boxes()[0]);
     await click(boxes()[2]);
@@ -134,7 +134,7 @@ describe("收件箱：选择 (#2059)", () => {
     expect(button("选择")).toBeDefined();
   });
 
-  it("「完成」和 Esc 都退出选择，什么都不提交", async () => {
+  it("Done and Esc both end selection without sending anything", async () => {
     await click(button("选择"));
     await click(boxes()[0]);
     await click(button("完成"));

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Groups inside the inbox's sections (docs/assistant/inbox.md「分组」, #2059): Needs You, FYI and Collapsed by source or by
+/// Groups inside the inbox's sections (docs/assistant/inbox.md "Grouping and selection", #2059): Needs You, FYI and Collapsed by source or by
 /// time (the switch at the top, kept on this device), Done always by when it was done. The same rules as the web's
 /// lib/inbox-groups.ts. Pure: tests give `now` and the calendar.
 nonisolated enum InboxGroups {
