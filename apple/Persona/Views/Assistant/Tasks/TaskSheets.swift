@@ -18,7 +18,10 @@ struct TaskDetailSheet: View {
     @Environment(\.detailPushed) private var pushed
     private var store: TasksStore { .shared }
 
-    init(todoID: String) { self.todoID = todoID }
+    init(todoID: String, initialAgent: SessionKey? = nil) {
+        self.todoID = todoID
+        _picked = State(initialValue: initialAgent)
+    }
     init(agent: SessionKey) { agentKey = agent }
 
     /// What an agent no task stands for says about itself (in ⋯, and the header while it has no page).

@@ -16,7 +16,11 @@ final class TasksStore {
     /// Conversation id → the task the next message goes straight to (Message “xx”), set by @ or Message.
     var routes: [String: String] = [:]
     /// The task whose detail sheet is open, and whether the board is.
-    var detailTask: String?
+    var detailTask: String? {
+        didSet { detailTaskAgent = nil }
+    }
+    /// A dispatch's resolved Agent, carried into its task detail. Ordinary task opens clear this selection.
+    private(set) var detailTaskAgent: SessionKey?
     /// The agent (not a task's, #1113) whose page the detail sheet shows instead.
     var detailAgent: SessionKey?
     /// The agent whose page the assistant page pushes full screen (the sheet's Full Screen): the page takes it and clears it.
@@ -81,6 +85,7 @@ final class TasksStore {
             fullAgent = nil
             detailAgent = nil
             detailTask = id
+            detailTaskAgent = agent
         }
     }
 

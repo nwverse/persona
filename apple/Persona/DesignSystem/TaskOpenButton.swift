@@ -4,14 +4,18 @@ import SwiftUI
 /// the whole row is one accessible button with the design system's minimum touch target.
 struct TaskOpenButton: View {
     var title: String
+    /// Drop a dispatch prefix before truncating the task name at very large text sizes.
+    var shortTitle: String? = nil
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: Theme.Space.s) {
-                Text(title)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ViewThatFits(in: .horizontal) {
+                    Text(title).lineLimit(1).fixedSize()
+                    Text(shortTitle ?? title).lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Text("Open [Dispatched Task]")
                     .foregroundStyle(Theme.accent)
                     .lineLimit(1)

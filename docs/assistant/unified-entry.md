@@ -242,7 +242,9 @@ lines, and in the user's own color and alignment they read as something the user
   without a to-do keep their title without a link, and their per-task feed items do not add duplicate links.
   Apple renders this with `DispatchedTaskLinks` and `DispatchedTasks`: on iPhone a live lead Agent is pushed using
   `TasksStore.expand`, and Back returns to the same Assistant conversation without switching to Agents. On Mac the
-  task's own detail hosts the Agent chat; while no Agent is available, the task detail shows its starting/failure state.
+  task's own detail hosts the Agent chat, carrying the resolved `SessionKey` into its initial selection (validated
+  against that task's active sessions); while no Agent is available, the detail shows its starting/failure state.
+  A very large text size drops the dispatch prefix before truncating the task name; Open always stays one line.
   Open plans keep Start / Edit / Don't Start. No new hub field or setting is needed. Dispatch links have no full task
   card instruction list, so Persona's routed hand-offs remain separate folded feed lines instead of being hidden.
   Tests: `DispatchedTasksTests`, `TaskSheetExpandTests`, `DispatchedTaskCardTests`; synthetic hub:

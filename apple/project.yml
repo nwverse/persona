@@ -786,6 +786,8 @@ targets:
       - path: PersonaTests/SupervisionTests.swift
       - path: PersonaTests/BriefCardTests.swift
       - path: PersonaTests/TodoDecisionCompletionTests.swift
+      - path: PersonaTests/TaskSheetExpandTests.swift
+      - path: PersonaTests/DispatchedTasksTests.swift
       - path: PersonaTests/FakeHub.swift
     dependencies:
       - target: PersonaMac

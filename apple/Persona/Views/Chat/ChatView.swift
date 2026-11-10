@@ -615,7 +615,9 @@ struct ChatView: View {
         .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
                                                  set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
             Group {
-                if let id = TasksStore.shared.detailTask { TaskDetailSheet(todoID: id) }
+                if let id = TasksStore.shared.detailTask {
+                    TaskDetailSheet(todoID: id, initialAgent: TasksStore.shared.detailTaskAgent).id(id)
+                }
                 else if let key = TasksStore.shared.detailAgent { TaskDetailSheet(agent: key) }
             }
             #if os(macOS)

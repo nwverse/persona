@@ -16,7 +16,8 @@ struct DispatchedTaskLinks: View {
                 }
                 ForEach(tasks) { task in
                     if let id = task.todoID {
-                        TaskOpenButton(title: tasks.count == 1 ? String(localized: "Dispatched: \(task.title)") : task.title) {
+                        TaskOpenButton(title: tasks.count == 1 ? String(localized: "Dispatched: \(task.title)") : task.title,
+                                       shortTitle: task.title) {
                             open(id)
                         }
                         .accessibilityIdentifier("dispatch.task.\(id)")
