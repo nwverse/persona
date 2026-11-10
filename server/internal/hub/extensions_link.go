@@ -126,7 +126,8 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 	}
 	for k, x := range a {
 		y, ok := b[k]
-		if !ok || string(x.Computer) != string(y.Computer) || string(x.Browser) != string(y.Browser) || x.ScreenPort != y.ScreenPort {
+		if !ok || string(x.Computer) != string(y.Computer) || string(x.Browser) != string(y.Browser) || string(x.IPhone) != string(y.IPhone) ||
+			x.ScreenPort != y.ScreenPort {
 			return false
 		}
 	}
@@ -158,29 +159,25 @@ func (h *Hub) features() []string {
 	return out
 }
 
-// computerOf / browserOf are machine m's Cua and ego state as the manager reports it (nil when not on).
-func (h *Hub) computerOf(m *Machine) *proto.Computer {
+// extrasOf is machine m's Cua, ego and iPhone state as the manager reports it (each nil when not on), read from one
+// report: extReport merges every manager's report each time it is called.
+func (h *Hub) extrasOf(m *Machine) (*proto.Computer, *proto.Browser, *proto.IPhone) {
 	x, ok := h.extReport().Machines[m.cfg.ID]
-	if !ok || len(x.Computer) == 0 {
-		return nil
+	if !ok {
+		return nil, nil, nil
 	}
-	var c proto.Computer
-	if json.Unmarshal(x.Computer, &c) != nil {
-		return nil
-	}
-	return &c
+	return decodeExtra[proto.Computer](x.Computer), decodeExtra[proto.Browser](x.Browser), decodeExtra[proto.IPhone](x.IPhone)
 }
 
-func (h *Hub) browserOf(m *Machine) *proto.Browser {
-	x, ok := h.extReport().Machines[m.cfg.ID]
-	if !ok || len(x.Browser) == 0 {
+func decodeExtra[T any](raw json.RawMessage) *T {
+	if len(raw) == 0 {
 		return nil
 	}
-	var b proto.Browser
-	if json.Unmarshal(x.Browser, &b) != nil {
+	var v T
+	if json.Unmarshal(raw, &v) != nil {
 		return nil
 	}
-	return &b
+	return &v
 }
 
 // screenAllowed: the app may open m's screen (cua or ego is on for it).

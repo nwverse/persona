@@ -642,6 +642,11 @@ export interface Interaction {
   always_label?: string;
   /** Permission scopes remembered by the hub for this conversation. */
   always_keys?: string[];
+  /** Whether answering "Always allow" is kept, as the manager says (#3590): false hides the choice, true offers it;
+   *  absent (an older hub, an Agents session's card) the card's own rule (offersAlways). */
+  always_honored?: boolean;
+  /** The manager's own tool by its name for people ("iPhone control" for iphone_do); absent on other cards. */
+  tool_title?: string;
   /** Why another agent asks for the permission, in its own words (a Codex and compatible variants approval read off the terminal). */
   reason?: string;
   /** An MCP form or link (kind elicitation, docs/protocol/protocol.md "MCP elicitation"): the server, where it is configured, and
