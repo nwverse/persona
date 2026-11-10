@@ -200,6 +200,8 @@ func (h *Hub) publicLoop(ctx context.Context) {
 	}
 }
 
+// newHubHTTPServer: no ReadTimeout or WriteTimeout, which would cut WebSockets and long uploads; idleBodies bounds the
+// waits for a request body instead (bodyidle.go).
 func newHubHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr: addr, Handler: handler,
@@ -261,7 +263,7 @@ func (h *Hub) serveHTTP(ctx context.Context) error {
 		stopTests = func() {}
 		return err
 	}
-	handler := h.routes()
+	handler := idleBodies(h.routes()) // a body that stops coming is answered and let go (bodyidle.go)
 	plain := newHubHTTPServer(h.cfg.Listen, handler)
 	plain.BaseContext = func(net.Listener) context.Context { return requestCtx }
 	errs := make(chan error, 2)

@@ -123,11 +123,14 @@ nonisolated struct ExtensionUpgrade: Codable, Hashable, Sendable, Identifiable {
     var detail: String?
     /// "user" when a skipped version is one the user rolled back from (nil: it didn't start).
     var skippedBy: String?
+    /// The new version's ID when it changes the extension's ID (`id` stays the installed one).
+    var renameTo: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, market, from, to, state, detail
         case addedPermissions = "added_permissions"
         case skippedBy = "skipped_by"
+        case renameTo = "rename_to"
     }
 }
 
@@ -452,7 +455,13 @@ enum ExtensionText {
     static func upgradeDetail(_ u: ExtensionUpgrade) -> String {
         let why = u.detail.flatMap { $0.isEmpty ? nil : $0 }
         switch u.state {
-        case "needs_permission": return morePermissions(u.addedPermissions ?? [])
+        case "needs_permission":
+            // A rename is confirmed for the ID change, not for permissions: the hub's words, or ours for a version
+            // Check for Updates found (#2511).
+            if let renameTo = u.renameTo {
+                return why ?? String(localized: "Changes the extension ID from \(u.id) to \(renameTo). Needs your confirmation; its settings and data stay.")
+            }
+            return morePermissions(u.addedPermissions ?? [])
         case "waiting_idle": return String(localized: "Updates automatically when the extension is idle")
         case "available": return String(localized: "Updates automatically later")
         case "off": return String(localized: "Auto-update is off")

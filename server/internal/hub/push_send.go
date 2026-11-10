@@ -122,15 +122,9 @@ func (p *Pusher) sendLiveActivity(d Device, token string, payload map[string]any
 	return done
 }
 
-// wake sends a silent background push: iOS gives the app ~30 s to connect and run a pending phone_* call.
-// Best effort: the system throttles these and never delivers them to a force-quit app. Phones only: the phone_*
-// tools run on the iPhone (a Mac registers as a desktop, docs/apple/mac.md).
-func (p *Pusher) wake(reason string) {
-	p.sendAs(map[string]any{"aps": map[string]any{"content-available": 1}, "persona_wake": reason, compat.WakeField: reason}, "", "background", "5",
-		func(d Device) bool { return d.Kind != kindMac })
-}
-
-// wakeDevices preserves the iOS background push payload while limiting its recipients (the phone_* tools' wake).
+// wakeDevices sends a silent background push to the devices in ids: iOS gives the app ~30 s to connect and run a
+// pending phone_* call. Best effort: the system throttles these and never delivers them to a force-quit app. Phones
+// only: the phone_* tools run on the iPhone (a Mac registers as a desktop, docs/apple/mac.md).
 func (p *Pusher) wakeDevices(reason string, ids map[string]bool) {
 	if p == nil {
 		return

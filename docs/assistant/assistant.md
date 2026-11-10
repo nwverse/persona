@@ -161,7 +161,7 @@ Benefits: clear ownership; assistant crashes / hangs don't bring down hub, and v
 - Assistant-only tools doing hub work: hub-owned `persona_settings` entries (triage rules, muted config directories) return through `app.tool` (mail and source-specific triage rules belong to the manager's extensions; hub forwards `extensions.hub_call settings.*`). Lark tools belong to its connector plugin, never the assistant.
 
 **No longer in hub**: `findAgent` / `machineByName`. The assistant resolves Agents and machines over the bus (`devices.list` / `sessions.list`) and keeps `conversationName` after moving the Lark bot; extmgr keeps its own `machineByName` (`extmgr/machines.go`).
-The text helpers have one implementation (`server/internal/textfmt`): the hub aliases `clip`, `oneLine`, `planTitle` (`hub/tools_shared.go`), the assistant also `firstLine`, `ago`, `short`, `agentLabel`, `stateNames` (`assistant/text.go`).
+The text helpers have one implementation (`server/internal/textfmt`): the hub aliases `clip`, `oneLine`, `planTitle` (`hub/tools_shared.go`), the assistant also `firstLine`, `ago`, `short`, `agentLabel`, `stateNames` (`assistant/text.go`); `kb`, `extmgr` and `usagesource` alias `Clip`, `Cut` (no ellipsis) and `Short` the same way.
 
 Observable differences:
 

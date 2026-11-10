@@ -11880,7 +11880,8 @@ if MOCK_COMPUTER:
 MOCK_BROWSER = os.environ.get("MOCK_BROWSER", "")
 
 def mock_usage_windows():
-    """GET /api/v1/usage/windows (#2432): two Codex / Claude accounts relative to now; MOCK_USAGE=none has none."""
+    """GET /api/v1/usage/windows (#2432): two Codex / Claude accounts relative to now; MOCK_USAGE=none has none,
+    MOCK_USAGE=stale has the Claude account read two hours ago and out of date (#1906: ultracode's quota line says so)."""
     if os.environ.get("MOCK_USAGE") == "none":
         return {"accounts": []}
     now = time.time()
@@ -11903,8 +11904,9 @@ def mock_usage_windows():
             {"id": "kimi-1", "provider": "kimi", "name": "kimi-spare", "sampled_at": iso(now - 20 * 60), "sources": ["Relay", "Team pool"],
              "windows": [win("7d", 10080, 5, 6 * 24 * 3600)]},
         ], "checked_at": iso(now)}
+    old = os.environ.get("MOCK_USAGE") == "stale"
     return {"accounts": [
-        {"id": "claude-1", "provider": "claude", "name": "Claude", "sampled_at": iso(now - 12),
+        {"id": "claude-1", "provider": "claude", "name": "Claude", "sampled_at": iso(now - (2 * 3600 if old else 12)), **({"stale": True} if old else {}),
          "windows": [win("5h", 300, 86, 55 * 60), win("7d", 10080, 41, (2 * 24 + 3) * 3600)]},
         {"id": "codex-1", "provider": "codex", "name": "Codex Pro", "plan": "pro", "sampled_at": iso(now - 190),
          "windows": [win("5h", 300, 22, 4 * 3600), win("7d", 10080, 63, (3 * 24 + 5) * 3600)]},
@@ -12615,23 +12617,36 @@ _PREVIEWS = {}
 _PREVIEW_BODIES = {}
 
 
+def _ext_predecessor(c):
+    """The installed extension catalog item c takes over under its new ID (a rename: its `replaces`, from this market)."""
+    old = PLUGINS.get(c.get("replaces", ""))
+    return old if old and old.get("origin") == "market:%s/%s" % (c["market"], old["id"]) else None
+
+
 def _ext_make_preview(c):
     """A preview of catalog item c as the hub answers it (an upgrade's when it is installed); kept for the install."""
     pid = "pv%06d" % (len(_PREVIEWS) + len(_PREVIEW_BODIES) + 1) + uuid.uuid4().hex[:4]
-    cur = PLUGINS.get(c["id"])
+    renamed = None if c["id"] in PLUGINS else _ext_predecessor(c)
+    cur = PLUGINS.get(c["id"]) or renamed
     pv = {"preview_id": pid, "manifest": {"id": c["id"], "name": c["name"], "version": c["version"], "description": c["description"]},
           "permissions": c["permissions"], "permissions_digest": "d-" + c["id"], "expires_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 600)), "market": c["market"]}
     if cur and cur["source"] == "installed":
         added = [x for x in c["permissions"] if x not in cur.get("permissions", [])]
         pv.update({"upgrade": True, "from": cur.get("version"), "more_permissions": bool(added)})
         if added: pv["added_permissions"] = added
+        if renamed:  # the hub's notice leads the warnings (extension.Preview.In)
+            pv["rename_from"] = renamed["id"]
+            pv["warnings"] = ["此次更新会将扩展 ID 从 %s 更改为 %s，需要明确确认。设置和数据仍属于同一个安装。" % (renamed["id"], c["id"])]  # i18n-ignore: the hub's words
     _PREVIEWS[pid] = c
     _PREVIEW_BODIES[pid] = pv
     return pv
 
 
 def _ext_install(c):
-    """Catalog item c installed (or upgraded) from its market."""
+    """Catalog item c installed (or upgraded) from its market; a rename moves the installed one to the new ID."""
+    old = None if c["id"] in PLUGINS else _ext_predecessor(c)
+    if old:
+        PLUGINS[c["id"]] = PLUGINS.pop(old["id"]) | {"id": c["id"]}
     pl = PLUGINS.get(c["id"]) or {"id": c["id"], "source": "installed", "enabled": True, "form": {"fields": []}, "config": {}, "secrets": []}
     pl.update({"name": c["name"], "version": c["version"], "description": c["description"], "status": "running", "kind": next(iter(c["contributes"]), ""),
                "contributes": c["contributes"], "permissions": c["permissions"], "origin": "market:%s/%s" % (c["market"], c["id"]), "publisher": c.get("publisher")})
@@ -12643,9 +12658,11 @@ def _ext_install(c):
 def _catalog_item(c):
     it = dict(c, market_name=MARKETS.get(c["market"], {}).get("name", ""))
     pl = PLUGINS.get(c["id"])
+    if not pl and (pl := _ext_predecessor(c)):
+        it["rename_from"] = pl["id"]  # the hub checked it came from this market
     if pl:
         it["installed"], it["installed_source"] = pl.get("version", ""), pl["source"]
-        it["from_this_market"] = pl.get("origin", "") == "market:%s/%s" % (c["market"], c["id"])
+        it["from_this_market"] = pl.get("origin", "") == "market:%s/%s" % (c["market"], pl["id"])
         it["upgradable"] = pl["source"] == "installed" and pl.get("version", "") < c["version"]
     return {k: v for k, v in it.items() if v not in (None, "", False)} | {"tags": c.get("tags", [])}
 
@@ -12653,7 +12670,8 @@ def _catalog_item(c):
 # Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
 # one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), rolled_back_by_user (the
-# user rolled back from 1.1.0 by hand: skipped as the user's, #1826), none.
+# user rolled back from 1.1.0 by hand: skipped as the user's, #1826), renamed (the market lists 1.1.0 under a new ID,
+# example-gateway-next, that `replaces` it: waits for the owner to confirm the ID change, #2511), none.
 AUTO_UPGRADE = {"auto": True}
 # A market plugin's upgrade while it is on, put back when it is switched on again (_auto_upgrade_paused).
 _UPGRADE_WHILE_ON = {}
@@ -12686,10 +12704,15 @@ def _gateway_upgrade(state):
         up["detail"] = "插件正在用"
     elif state == "skipped":
         pl["upgrade_note"] = {"kind": "rolled_back", "from": "1.0.0", "to": "1.1.0", "detail": "exited with status 3", "at": at(5)}
+    elif state == "renamed":
+        nxt = next(c for c in CATALOG if c["id"] == "example-gateway")
+        nxt.update({"id": "example-gateway-next", "replaces": "example-gateway", "permissions": pl["permissions"]})
+        up.update({"state": "needs_permission", "rename_from": "example-gateway", "rename_to": nxt["id"],
+                   "detail": "此次更新会将扩展 ID 从 example-gateway 更改为 example-gateway-next，需要明确确认。设置和数据仍属于同一个安装。"})  # i18n-ignore: the hub's words
     elif state == "rolled_back_by_user":  # no note: the version it was upgraded to is not installed any more
         up["state"], up["skipped_by"] = "skipped", "user"
         up["detail"] = "你从这个版本回滚过，所以不会自动装它；要装就手动更新"  # i18n-ignore: the hub's words
-    if state in ("needs_permission", "waiting_idle", "skipped", "disabled", "rolled_back_by_user"):
+    if state in ("needs_permission", "waiting_idle", "skipped", "disabled", "rolled_back_by_user", "renamed"):
         pl["upgrade"] = up
     elif state == "upgraded":
         pl["upgrade_note"] = {"kind": "upgraded", "from": "0.9.0", "to": "1.0.0", "at": at(3)}
@@ -13010,7 +13033,9 @@ def markets_route(handler, p, body):
                  and (not words or words in "\n".join([c["id"], c["name"], c["description"], c.get("publisher", "")] + c.get("tags", [])).lower())]
         handler.send_json({"markets": list(MARKETS.values()), "plugins": items, "platform": "linux-amd64"}); return True
     if p == "/api/v1/plugins/-/catalog/preview" and method == "POST":
-        c = next((c for c in CATALOG if c["market"] == req.get("market") and c["id"] == req.get("plugin")), None)
+        same = [c for c in CATALOG if c["market"] == req.get("market")]
+        # An installed extension's old ID previews its successor, as the hub does (#2511).
+        c = next((c for c in same if c["id"] == req.get("plugin")), None) or next((c for c in same if c.get("replaces") == req.get("plugin")), None)
         if not c or c.get("problem"):
             handler.send_json({"error": (c or {}).get("problem") or "这个市场里没有插件 %s" % req.get("plugin"), "code": "invalid_plugin"}, 400); return True
         pv = _ext_make_preview(c)

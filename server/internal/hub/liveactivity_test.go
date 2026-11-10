@@ -1312,7 +1312,7 @@ func TestFleetOpenPhone(t *testing.T) {
 func TestSessionsSentOnce(t *testing.T) {
 	h := newTestHub(t)
 	app := &client{out: make(chan []byte, 16), subs: map[[2]string]bool{}, role: roleFull}
-	h.clients[app] = struct{}{}
+	addTestClient(h, app)
 	box, mini := &Machine{cfg: MachineConfig{ID: "box"}}, &Machine{cfg: MachineConfig{ID: "mini"}}
 	a := []proto.Session{{SessionID: "s1", Status: proto.StatusWorking, LastText: "reading"}}
 	b := []proto.Session{{SessionID: "s1", Status: proto.StatusWorking, LastText: "writing"}}
