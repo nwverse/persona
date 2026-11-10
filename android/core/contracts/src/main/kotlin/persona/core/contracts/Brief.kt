@@ -5,8 +5,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlin.math.abs
+import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 // The fixed facts of a morning or evening routine, carried by a `brief` feed item. Every section is optional for
 // compatibility with older hubs; one malformed row is skipped without discarding the rest of the card.
@@ -81,8 +83,10 @@ data class BriefBody(
 private fun JsonObject.text(name: String): String? =
     (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
-private fun JsonObject.whole(name: String): Int? = (this[name] as? JsonPrimitive)?.intOrNull
-private fun JsonObject.long(name: String): Long? = (this[name] as? JsonPrimitive)?.longOrNull
+private fun JsonObject.whole(name: String): Int? = (this[name] as? JsonPrimitive)?.doubleOrNull
+    ?.takeIf { it.isFinite() && abs(it) < 1e12 }?.roundToInt()
+private fun JsonObject.long(name: String): Long? = (this[name] as? JsonPrimitive)?.doubleOrNull
+    ?.takeIf { it.isFinite() && abs(it) < 1e12 }?.roundToLong()
 private fun JsonObject.rows(name: String): List<JsonObject> = (this[name] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
 
 private fun briefRow(body: JsonObject): BriefRow? {

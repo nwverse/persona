@@ -51,8 +51,8 @@ class TasksContractTest {
 
     @Test fun briefRowsDecodeIndependently() {
         val item = JsonCodec.decodeFromString<FeedItem>("""{"id":"brief2","kind":"brief","body":{
-            "title":"Evening briefing","waiting_unknown":true,
-            "waiting":[{"id":"w1","title":"Answer?","machine_id":"box","session_id":"agent"},{"title":"missing id"},"bad"],
+            "title":"Evening briefing","hours":12.0,"waiting_unknown":true,
+            "waiting":[{"id":"w1","title":"Answer?","waited_s":1.5,"machine_id":"box","session_id":"agent"},{"title":"missing id"},"bad"],
             "done":[{"id":"d1","title":"Done"}],"done_total":0,
             "accept":[{"id":"a1","outcome":"decide","recommend":"Canary"},{"id":"a2","outcome":"decide"},{"id":"a3","outcome":"done"}],
             "later":[{"id":"l1","title":"Later"}],"later_total":3,
@@ -62,6 +62,7 @@ class TasksContractTest {
         assertEquals(12, brief.hours)
         assertTrue(brief.waitingUnknown)
         assertEquals(listOf("w1"), brief.waiting.map { it.id })
+        assertEquals(2, brief.waiting.single().waitedS)
         assertEquals(SessionKey("box", "agent"), brief.waiting.single().chat(waiting = true, pending = emptyList()))
         assertEquals(1, brief.doneTotal)
         assertEquals(listOf(BriefTake.Recommendation, null, BriefTake.GotIt), brief.accept.map { it.take })

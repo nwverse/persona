@@ -10,9 +10,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -39,6 +36,9 @@ import persona.core.designsystem.currentLocale
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.tasks.AssistantLines
+import persona.core.domain.tasks.BriefOutcome
+import persona.core.domain.tasks.briefAcceptOutcomeKey
+import persona.core.domain.tasks.briefLaterOutcomeKey
 
 /** A routine's fixed facts in the real assistant feed, shared by all three design-system styles. */
 @Composable
@@ -159,8 +159,13 @@ private fun BriefPast(brief: BriefBody, host: AssistantTaskHost) {
             stringResource(R.string.brief_past, brief.hours, brief.doneTotal, brief.failedTotal))
         if (brief.done.isEmpty() && brief.failed.isEmpty()) BriefNote(stringResource(R.string.brief_nothing))
         brief.failed.forEach { row: BriefFailed ->
+            val label = stringResource(when {
+                row.skipped -> R.string.brief_skipped
+                row.kind == "task" -> R.string.brief_failed_task
+                else -> R.string.brief_failed_routine
+            })
             BriefMarkLine(PhIcons.XCircle, Status.NeedsYou, row.id, row.title,
-                listOfNotNull(briefTime(row.at), row.why?.takeIf(String::isNotBlank)).joinToString(" · ").takeIf(String::isNotBlank),
+                listOfNotNull(label, briefTime(row.at), row.why?.takeIf(String::isNotBlank)).joinToString(" · "),
                 if (row.kind == "task") ({ host.sheet.value = TaskSheet.Task(row.id) }) else null)
         }
         brief.done.forEach { row: BriefDone ->
@@ -184,7 +189,8 @@ private fun BriefAccept(brief: BriefBody, host: AssistantTaskHost) {
 @Composable
 private fun BriefAcceptRow(row: BriefRow, host: AssistantTaskHost) {
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
-    var outcome by rememberSaveable(row.id, row.askedAt) { mutableStateOf<String?>(null) }
+    val outcomes by host.tasks.briefOutcomes.collectAsStateWithLifecycle()
+    val outcome = outcomes[briefAcceptOutcomeKey(row.id, row.askedAt.orEmpty())]
     val askedAt = row.askedAt.orEmpty()
     val sending = "accept:${row.id}" in busy
     Column(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
@@ -196,14 +202,24 @@ private fun BriefAcceptRow(row: BriefRow, host: AssistantTaskHost) {
         }
         Text(briefMeta(row), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         if (outcome != null) {
-            Text(outcome.orEmpty(), Modifier.testTag("brief-outcome-${row.id}"), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+            val text = when (outcome) {
+                BriefOutcome.Taken -> stringResource(when (row.take) {
+                    BriefTake.Accept, null -> R.string.brief_accepted
+                    BriefTake.GotIt -> R.string.brief_noted
+                    BriefTake.Recommendation -> R.string.brief_recommendation_taken
+                })
+                BriefOutcome.Completed -> stringResource(R.string.chat_tray_done)
+                BriefOutcome.AlreadyHandled -> stringResource(R.string.brief_already_handled)
+                BriefOutcome.HubTooOld -> stringResource(R.string.brief_hub_too_old)
+                else -> ""
+            }
+            Text(text, Modifier.testTag("brief-outcome-${row.id}"), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             BriefOpen("brief-open-${row.id}") { host.sheet.value = TaskSheet.Task(row.id) }
             if (outcome == null && row.isDecision) {
-                val finished = stringResource(R.string.chat_tray_done)
                 JButton(stringResource(R.string.brief_complete_directly), {
-                    host.tasks.finishBrief(row.id, askedAt, host.onError) { outcome = finished }
+                    host.tasks.finishBrief(row.id, askedAt, host.onError)
                 }, Modifier.testTag("brief-finish-${row.id}"), enabled = askedAt.isNotBlank() && !sending,
                     kind = JButtonKind.Secondary, size = JButtonSize.Small, loading = sending)
             }
@@ -214,12 +230,7 @@ private fun BriefAcceptRow(row: BriefRow, host: AssistantTaskHost) {
                     BriefTake.GotIt -> R.string.brief_got_it
                     BriefTake.Recommendation -> R.string.brief_take_recommendation
                 })
-                val taken = stringResource(when (take) {
-                    BriefTake.Accept -> R.string.brief_accepted
-                    BriefTake.GotIt -> R.string.brief_noted
-                    BriefTake.Recommendation -> R.string.brief_recommendation_taken
-                })
-                JButton(label, { host.tasks.acceptBrief(row.id, askedAt, host.onError) { outcome = taken } },
+                JButton(label, { host.tasks.acceptBrief(row.id, askedAt, host.onError) },
                     Modifier.testTag("brief-take-${row.id}"), enabled = askedAt.isNotBlank() && !sending,
                     kind = JButtonKind.Primary, size = JButtonSize.Small, loading = sending)
             }
@@ -239,17 +250,25 @@ private fun BriefLater(brief: BriefBody, host: AssistantTaskHost) {
 @Composable
 private fun BriefLaterRow(row: BriefRow, host: AssistantTaskHost) {
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
-    var handled by rememberSaveable(row.id) { mutableStateOf(false) }
+    val outcomes by host.tasks.briefOutcomes.collectAsStateWithLifecycle()
+    val outcome = outcomes[briefLaterOutcomeKey(row.id)]
     val chat = row.chat(waiting = false, pending = emptyList())
     Column(Modifier.fillMaxWidth().padding(vertical = Tokens.Space.xs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
         Text(row.title, style = PersonaTheme.type.bodyStrong, color = PersonaTheme.palette.ink)
         Text(briefMeta(row), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-        if (handled) Text(stringResource(R.string.brief_marked_handled), Modifier.testTag("brief-outcome-${row.id}"),
-            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+        if (outcome != null) {
+            val text = stringResource(when (outcome) {
+                BriefOutcome.MarkedHandled -> R.string.brief_marked_handled
+                BriefOutcome.AlreadyHandled -> R.string.brief_already_handled
+                BriefOutcome.HubTooOld -> R.string.brief_hub_too_old
+                else -> R.string.brief_marked_handled
+            })
+            Text(text, Modifier.testTag("brief-outcome-${row.id}"), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+        }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             if (chat != null) BriefOpen("brief-open-${row.id}") { host.onOpen(chat) }
-            if (!handled) JButton(stringResource(R.string.brief_handled), {
-                host.tasks.markBriefHandled(row.id, host.onError) { handled = true }
+            if (outcome == null) JButton(stringResource(R.string.brief_handled), {
+                host.tasks.markBriefHandled(row.id, host.onError)
             }, Modifier.testTag("brief-handled-${row.id}"), enabled = "later:${row.id}" !in busy,
                 kind = JButtonKind.Secondary, size = JButtonSize.Small, loading = "later:${row.id}" in busy)
         }

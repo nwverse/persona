@@ -24,4 +24,9 @@
     <string name="brief_noted">確認済み</string>
     <string name="brief_recommendation_taken">推奨を採用しました</string>
     <string name="brief_marked_handled">処理済みにしました</string>
+    <string name="brief_already_handled">すでに処理済み</string>
+    <string name="brief_hub_too_old">この hub バージョンはこのボタンに対応していません</string>
+    <string name="brief_failed_task">開始できませんでした</string>
+    <string name="brief_failed_routine">実行失敗</string>
+    <string name="brief_skipped">スキップしました</string>
 </resources>

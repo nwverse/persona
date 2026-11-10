@@ -24,4 +24,9 @@
     <string name="brief_noted">Noted</string>
     <string name="brief_recommendation_taken">Recommendation taken</string>
     <string name="brief_marked_handled">Marked as handled</string>
+    <string name="brief_already_handled">Already handled</string>
+    <string name="brief_hub_too_old">The hub is too old for this button</string>
+    <string name="brief_failed_task">Did not start</string>
+    <string name="brief_failed_routine">Run failed</string>
+    <string name="brief_skipped">Skipped</string>
 </resources>

@@ -13,8 +13,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -46,6 +50,7 @@ import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
+import persona.core.contracts.api.HubCodedFailure
 import persona.core.contracts.api.TasksApi
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
@@ -66,14 +71,21 @@ class BriefCardShotsTest {
         "title":"Morning briefing","hours":12,
         "waiting":[{"id":"wait1","title":"Approve the release?","from":"Release agent","waited_s":600,"machine_id":"box","session_id":"agent1"}],
         "done":[{"id":"done1","title":"Ship the fix","at":"2026-11-10T08:00:00Z"}],"done_total":1,
-        "failed":[{"kind":"routine","id":"failed1","title":"Check the gateway","at":"2026-11-10T07:00:00Z","why":"The test gateway was offline"}],"failed_total":1,
+        "failed":[{"kind":"routine","id":"failed1","title":"Check the gateway","at":"2026-11-10T07:00:00Z","why":"The test gateway was offline"},
+            {"kind":"routine","id":"failed2","title":"Night patrol","at":"2026-11-10T06:00:00Z","skipped":true}],"failed_total":2,
         "accept":[{"id":"accept1","title":"Verify the fix","detail":"Changed the parser","verdict":"done","asked_at":"2026-11-10T08:30:00Z","waited_s":120},
             {"id":"decision1","title":"Choose the rollout","verdict":"decide","outcome":"decide","recommend":"Canary first","asked_at":"2026-11-10T08:31:00Z","waited_s":180},
             {"id":"decision2","title":"Close the experiment","verdict":"decide","outcome":"decide","recommend":"Keep it","asked_at":"2026-11-10T08:32:00Z","waited_s":240}],
         "later":[{"id":"later1","title":"Document the migration?","waited_s":300,"machine_id":"box","session_id":"agent2"}],"later_total":1,
         "progress":[{"id":"progress1","title":"Run the tests","stage":"verify"}],"progress_total":1}}""")
 
+    private class TestFailure(override val status: Int?) : RuntimeException("test failure"), HubCodedFailure {
+        override val code: String? = null
+    }
+
     private class Api(val item: FeedItem) : TasksApi {
+        var acceptStatus: Int? = null
+        var laterStatus: Int? = null
         val accepted = mutableListOf<Pair<String, String>>()
         val completed = mutableListOf<String>()
         val handled = mutableListOf<String>()
@@ -85,8 +97,14 @@ class BriefCardShotsTest {
             Todo("progress1", title = "Run the tests"),
         )
         override suspend fun feed(conversation: String, since: String?) = FeedResponse(listOf(item))
-        override suspend fun acceptTask(todoId: String, askedAt: String) { accepted += todoId to askedAt }
-        override suspend fun markLaterHandled(questionId: String) { handled += questionId }
+        override suspend fun acceptTask(todoId: String, askedAt: String) {
+            acceptStatus?.let { throw TestFailure(it) }
+            accepted += todoId to askedAt
+        }
+        override suspend fun markLaterHandled(questionId: String) {
+            laterStatus?.let { throw TestFailure(it) }
+            handled += questionId
+        }
         override suspend fun patchTodo(id: String, title: String?, notes: String?, done: Boolean?): Todo {
             if (done == true) completed += id
             return Todo(id, title = "Choose the rollout", doneAt = if (done == true) "2026-11-10T09:00:00Z" else null)
@@ -137,6 +155,9 @@ class BriefCardShotsTest {
             rule.onNodeWithText("Approve the release?").assertIsDisplayed()
             rule.onNodeWithText("Ship the fix").assertIsDisplayed()
             rule.onNodeWithText("Check the gateway").assertIsDisplayed()
+            rule.onNodeWithText("Run failed", substring = true).assertIsDisplayed()
+            rule.onNodeWithText("Skipped", substring = true).assertIsDisplayed()
+            rule.onNodeWithText("Night patrol").assertIsDisplayed()
             rule.onNodeWithText("Verify the fix").assertIsDisplayed()
             rule.onNodeWithText("Document the migration?").assertIsDisplayed()
             rule.onNodeWithText("Run the tests").assertIsDisplayed()
@@ -181,5 +202,26 @@ class BriefCardShotsTest {
         rule.onNodeWithTag("brief-open-accept1").performClick()
         assertEquals(listOf(SessionKey("box", "agent1"), SessionKey("box", "agent2")), opened)
         assertEquals(TaskSheet.Task("accept1"), host.sheet.value)
+    }
+
+    @Test fun briefOutcomesAreSharedAndTerminal() {
+        val api = Api(brief()).apply { acceptStatus = 409; laterStatus = 404 }
+        val host = host(api)
+        rule.setContent {
+            PersonaTheme(reduceMotion = true) {
+                val feeds by host.tasks.feeds.collectAsStateWithLifecycle()
+                feeds["main"].orEmpty().forEach { item ->
+                    repeat(2) { AssistantExtraLine(AssistantExtra.Feed(item), host) }
+                }
+            }
+        }
+        rule.onAllNodesWithTag("brief-take-accept1").assertCountEquals(2).onFirst().performClick()
+        rule.onAllNodesWithText("Already handled").assertCountEquals(2)
+        rule.onAllNodesWithTag("brief-take-accept1").assertCountEquals(0)
+        rule.onAllNodesWithTag("brief-handled-later1").assertCountEquals(2).onFirst().performClick()
+        rule.onAllNodesWithText("The hub is too old for this button").assertCountEquals(2)
+        rule.onAllNodesWithTag("brief-handled-later1").assertCountEquals(0)
+        assertEquals(emptyList<Pair<String, String>>(), api.accepted)
+        assertEquals(emptyList<String>(), api.handled)
     }
 }

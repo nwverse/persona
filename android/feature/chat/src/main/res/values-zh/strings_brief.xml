@@ -24,4 +24,9 @@
     <string name="brief_noted">已记下</string>
     <string name="brief_recommendation_taken">已采纳建议</string>
     <string name="brief_marked_handled">已标为处理</string>
+    <string name="brief_already_handled">已在别处处理</string>
+    <string name="brief_hub_too_old">当前 hub 版本不支持这个按钮</string>
+    <string name="brief_failed_task">未能启动</string>
+    <string name="brief_failed_routine">运行失败</string>
+    <string name="brief_skipped">已跳过</string>
 </resources>

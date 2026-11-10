@@ -38,6 +38,7 @@ import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.RequestManager
+import persona.core.contracts.api.hubCodedFailure
 import persona.core.contracts.api.TasksApi
 import persona.core.domain.views.AssistantCardActions
 import persona.core.domain.views.AssistantViewStore
@@ -46,6 +47,11 @@ import persona.core.domain.views.AssistantViewStore
  * The to-dos last read from this pairing's hub, kept on the phone (iOS TodoStore's StateCache): a cold start or an open
  * without the hub shows them instead of "No to-dos" until the hub answers.
  */
+/** A brief row's durable action result, shared by every copy of the same round in the conversation. */
+enum class BriefOutcome { Taken, Completed, MarkedHandled, AlreadyHandled, HubTooOld }
+fun briefAcceptOutcomeKey(todoId: String, askedAt: String) = "accept:$todoId:$askedAt"
+fun briefLaterOutcomeKey(questionId: String) = "later:$questionId"
+
 interface TodoCache {
     suspend fun read(): List<Todo>?
     suspend fun write(todos: List<Todo>)
@@ -95,6 +101,8 @@ class TasksStore(
     /** Conversation → the task the next message goes straight to ("Say to 'xx'"). */
     val routes = MutableStateFlow<Map<String, String>>(emptyMap())
     val busy = MutableStateFlow<Set<String>>(emptySet())
+    private val _briefOutcomes = MutableStateFlow<Map<String, BriefOutcome>>(emptyMap())
+    val briefOutcomes = _briefOutcomes.asStateFlow()
     /** Message card ids put off with "Later"; another draft for the same inbox item remains visible. */
     val later = MutableStateFlow<Set<String>>(emptySet())
     /** Conversation → when the Today card was last asked for, and the day of the card the hub gave (null while asking). */
@@ -502,37 +510,62 @@ class TasksStore(
     }
 
     /** Accept the exact round carried by a brief, even if the task's current ask has since changed. */
-    fun acceptBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit, onAccepted: () -> Unit) {
+    fun acceptBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit) {
         if (todoId.isBlank() || askedAt.isBlank()) return
+        val key = briefAcceptOutcomeKey(todoId, askedAt)
+        if (key in _briefOutcomes.value) return
         act("accept:$todoId", onError) {
-            api.acceptTask(todoId, askedAt)
-            synchronized(todosLock) {
-                acceptedAsks += todoId to askedAt
-                _todos.update { rows -> rows.map { if (it.id == todoId && it.ask?.askedAt == askedAt) it.copy(ask = null) else it } }
+            try {
+                api.acceptTask(todoId, askedAt)
+                synchronized(todosLock) {
+                    acceptedAsks += todoId to askedAt
+                    _todos.update { rows -> rows.map { if (it.id == todoId && it.ask?.askedAt == askedAt) it.copy(ask = null) else it } }
+                }
+                _briefOutcomes.update { it + (key to BriefOutcome.Taken) }
+                reloadTodos()
+            } catch (error: Throwable) {
+                if (!briefActionTerminal(key, error)) throw error
             }
-            reloadTodos()
-            onAccepted()
         }
     }
 
     /** Complete a decision directly, without accepting or sending its recommendation. */
-    fun finishBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit, onFinished: () -> Unit) {
+    fun finishBrief(todoId: String, askedAt: String, onError: (Throwable) -> Unit) {
         if (todoId.isBlank() || askedAt.isBlank()) return
+        val key = briefAcceptOutcomeKey(todoId, askedAt)
+        if (key in _briefOutcomes.value) return
         act("accept:$todoId", onError) {
             val completed = api.patchTodo(todoId, done = true)
             check(completed.id == todoId && completed.isDone) { "Completion was not confirmed" }
+            _briefOutcomes.update { it + (key to BriefOutcome.Completed) }
             reloadTodos()
-            onFinished()
         }
     }
 
     /** Remove a question from the hub's later-briefing queue. */
-    fun markBriefHandled(questionId: String, onError: (Throwable) -> Unit, onHandled: () -> Unit) {
+    fun markBriefHandled(questionId: String, onError: (Throwable) -> Unit) {
         if (questionId.isBlank()) return
+        val key = briefLaterOutcomeKey(questionId)
+        if (key in _briefOutcomes.value) return
         act("later:$questionId", onError) {
-            api.markLaterHandled(questionId)
-            onHandled()
+            try {
+                api.markLaterHandled(questionId)
+                _briefOutcomes.update { it + (key to BriefOutcome.MarkedHandled) }
+            } catch (error: Throwable) {
+                if (!briefActionTerminal(key, error)) throw error
+            }
         }
+    }
+
+    /** 409 / 404 are terminal answers, not a retry that could repeat a completed action. */
+    private fun briefActionTerminal(key: String, error: Throwable): Boolean {
+        val outcome = when (hubCodedFailure(error)?.status) {
+            409 -> BriefOutcome.AlreadyHandled
+            404 -> BriefOutcome.HubTooOld
+            else -> null
+        } ?: return false
+        _briefOutcomes.update { it + (key to outcome) }
+        return true
     }
 
     /** User completion is not acceptance: no recommendation is sent and no agent is resumed. */
