@@ -394,7 +394,7 @@ func (n *Node) codexDesktopTurn(path string) string {
 var codexTurnMarks sync.Map
 
 // codexOrigin is where a rollout's thread came from, from its first line (session_meta): the Codex App writes
-// originator "Codex Desktop" (source "vscode" for its chats, "exec" for its background runs, a thread_spawn object for
+// originator "Codex Desktop" or "codex_work_desktop" (source "vscode" for its chats, "exec" for its background runs, a thread_spawn object for
 // subagents), the Codex CLI "codex-tui" / "cli", `codex exec` and the SDKs over it "codex_exec" / "codex_sdk_*" with
 // source "exec" (their subagents keep the originator). Only the App's threads go through its IPC bus.
 type codexOrigin struct {
@@ -436,7 +436,7 @@ func readCodexOrigin(path string) codexOrigin {
 	if json.Unmarshal(line, &m) != nil || m.Type != "session_meta" {
 		return codexOrigin{} // not written yet: read again next time
 	}
-	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop", cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
 	var source string
 	if json.Unmarshal(m.Payload.Source, &source) != nil {
 		source = "" // an object: a subagent

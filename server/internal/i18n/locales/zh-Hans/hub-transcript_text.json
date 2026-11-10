@@ -106,5 +106,11 @@
   "model_refusal": "Claude Code 拒绝通知（{subtype}）。原始记录：",
   "model_refusal_fallback": "Claude Code 在上游拒绝请求后，从 {original} 切换到了 {fallback}。类别：{category}。范围：{scope}。如果备用模型不可用，请新开对话，或在 Claude Code 终端中用 /model 选择配置的模型。请求仍可能再次被拒绝。原始记录：",
   "card_remaining": "剩余",
-  "card_total": "合计"
+  "card_total": "合计",
+  "card_done": "实际",
+  "card_eaten": "已吃",
+  "card_progress": "进度",
+  "card_of_goal": "{done} {value} / 目标 {goal}",
+  "card_over": "超出",
+  "card_other": "其他"
 }
