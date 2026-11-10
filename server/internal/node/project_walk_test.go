@@ -193,6 +193,36 @@ func TestWalkProjectsMatchesGlobOnGeneratedTrees(t *testing.T) {
 	t.Logf("%d transcripts, %d subagent transcripts", mains, subs)
 }
 
+// The usage meter lists its transcripts every 10 seconds, and the walk stats none that the directory says is a file:
+// over 20 projects of 20 transcripts, each with a subagent's, it made 9,106 allocations, where the two globs made
+// 11,479 and a stat per transcript adds 800. The bound is the count measured, plus 3%.
+func TestWalkProjectsAllocationBudget(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	for p := range 20 {
+		project := filepath.Join(root, fmt.Sprintf("-work-%d", p))
+		for s := range 20 {
+			agents := filepath.Join(project, fmt.Sprintf("s%d", s), "subagents")
+			if err := os.MkdirAll(agents, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range []string{filepath.Join(project, fmt.Sprintf("s%d.jsonl", s)), filepath.Join(agents, "agent-a.jsonl")} {
+				if err := os.WriteFile(f, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	if m, s := walkProjects(root); len(m) != 400 || len(s) != 400 {
+		t.Fatalf("listed %d transcripts and %d subagent transcripts, want 400 of each", len(m), len(s))
+	}
+	if a := testing.AllocsPerRun(10, func() { walkProjects(root) }); a > 9380 && !raceEnabled {
+		t.Errorf("listing 800 transcripts made %.0f allocations, want at most 9,380", a)
+	}
+}
+
+// raceEnabled: built with -race, whose instrumentation allocates on its own (race_test.go).
+var raceEnabled bool
+
 // projectTranscripts lists what the two globProjects calls listed, in their order: every projects directory's
 // transcripts, then every one's subagent transcripts. A projects directory whose path holds a glob metacharacter is
 // still read as the globs read it (as a pattern).
