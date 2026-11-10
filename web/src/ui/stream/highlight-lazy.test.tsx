@@ -168,4 +168,75 @@ describe("Markdown's code before and after the highlighter", () => {
     }
     expect(observers[0].off).toBe(true); // the far block went: nothing left to watch
   });
+
+  it("finds a block's scroller by its mark and reads no block in an exchange far off screen (#2905)", async () => {
+    await act(async () => void (await loadHighlight()));
+    const observers: { root: Element | null; seen: Set<Element> }[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        o: (typeof observers)[number];
+        constructor(_cb: IntersectionObserverCallback, opts: IntersectionObserverInit) {
+          this.o = { root: (opts.root as Element) ?? null, seen: new Set() };
+          observers.push(this.o);
+        }
+        observe = (el: Element) => this.o.seen.add(el);
+        unobserve = (el: Element) => this.o.seen.delete(el);
+        disconnect = () => {};
+      },
+    );
+    let frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => frames.push(run));
+    // where each box is (top, height); what is not placed has no box
+    const at = new Map<Element, [number, number]>();
+    const read: Element[] = [];
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      read.push(this);
+      const p = at.get(this);
+      return p ? new DOMRect(0, p[0], 100, p[1]) : new DOMRect();
+    });
+    const styles = vi.spyOn(window, "getComputedStyle");
+    const code = (s: string) => "```ts\n" + s + "\n```";
+    act(() =>
+      root.render(
+        <div data-chat-scroll>
+          <section data-segment>
+            <Markdown text={code("const a = 1")} />
+          </section>
+          <section data-segment>
+            <Markdown text={code("let b = 2")} />
+          </section>
+          <section data-segment>
+            <div data-scroll-box>
+              <Markdown text={code("var c = 3")} />
+            </div>
+          </section>
+        </div>,
+      ),
+    );
+    const chat = host.querySelector("[data-chat-scroll]")!;
+    const [near, far, inner] = [...host.querySelectorAll("section")];
+    const box = host.querySelector("[data-scroll-box]")!;
+    const pres = [...host.querySelectorAll("pre")];
+    at.set(chat, [0, 500]);
+    at.set(near, [0, 300]).set(pres[0], [50, 50]);
+    at.set(far, [3000, 300]).set(pres[1], [3050, 50]); // an exchange six screens down, which the chat skips drawing
+    at.set(inner, [300, 1000]).set(box, [300, 100]).set(pres[2], [900, 50]); // below what its own box shows
+    styles.mockClear();
+    act(() => {
+      const run = frames;
+      frames = [];
+      run.forEach((f) => f(0));
+    });
+    expect(pres[0].querySelector(".hljs-keyword")!.textContent).toBe("const");
+    expect(pres[1].querySelector("[class*=hljs-]")).toBeNull();
+    expect(pres[2].querySelector("[class*=hljs-]")).toBeNull();
+    expect(read).not.toContain(pres[1]); // its exchange's box said it is far
+    expect(styles).not.toHaveBeenCalled(); // the marks, not the styles of every box up the page
+    // the far block waits on the chat, the other on its own box
+    expect(observers.map((o) => [o.root, [...o.seen]])).toEqual([
+      [chat, [pres[1]]],
+      [box, [pres[2]]],
+    ]);
+  });
 });

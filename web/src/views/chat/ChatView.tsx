@@ -1375,7 +1375,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {/* everything over the composer: it shrinks and scrolls before the composer does (the composer grew, and its
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
             the box clips what is in it, so its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
-        <div data-chat-dock-above className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
+        <div data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
         {short ? (
           // a phone on its side: the plan's pill, the run's status and the queue share one line
           (pills || running || queue) && (
