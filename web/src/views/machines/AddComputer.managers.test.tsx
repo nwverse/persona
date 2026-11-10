@@ -12,7 +12,7 @@ vi.hoisted(() => {
   g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
 });
 import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
-import { resetRoster, setRoster, type ManagerList } from "../../lib/managers";
+import { loadRoster, resetRoster, setRoster, type ManagerList } from "../../lib/managers";
 import { getState } from "../../lib/store";
 import { AddComputer } from "./AddComputer";
 
@@ -32,13 +32,16 @@ let posts: { path: string; body: { add?: Record<string, unknown>; machine?: stri
 // what the hub says the new computer's manager is: the one asked (a hub with add.manager), another, or none (one from before it)
 let answer: (asked: string | undefined) => string | undefined;
 let refuse = "";
+let refuseStatus = 404;
+// what GET /managers does: never answers (the tests put the roster in place), or fails with this status
+let rosterStatus = 0;
 
 function hub(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const path = String(input).split("?")[0]!.replace(/^.*\/api\/v1/, "");
-  if (path === "/managers") return new Promise(() => {}); // the tests put the roster in place themselves
+  if (path === "/managers") return rosterStatus ? Promise.resolve(json({ error: "unavailable" }, rosterStatus)) : new Promise(() => {});
   if (init?.method === "POST") posts.push({ path, body: init.body ? JSON.parse(String(init.body)) : {} });
   if (path === "/auth/pair-codes") {
-    if (refuse) return Promise.resolve(json({ error: "That assistant isn't on this hub any more", code: refuse }, 404));
+    if (refuse) return Promise.resolve(json({ error: "That assistant isn't on this hub any more", code: refuse }, refuseStatus));
     const asked = posts.at(-1)?.body.add?.manager as string | undefined;
     const manager = answer(asked);
     return Promise.resolve(json({
@@ -78,6 +81,8 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   posts = [];
   refuse = "";
+  refuseStatus = 404;
+  rosterStatus = 0;
   answer = (asked) => asked;
   resetManagerChoice();
   resetRoster();
@@ -163,11 +168,47 @@ describe("Add computer for the current assistant", () => {
     expect(posts[0].body.add?.manager).toBe("assistant");
   });
 
-  it("shows the hub's words for a manager it doesn't have", async () => {
+  it.each([
+    [404, "no_manager"],
+    [409, "installing"],
+    [503, "assistant_offline"],
+    [503, "owners_unknown"],
+  ])("shows the hub's own words for %s %s", async (status, code) => {
     act(() => chooseManager("m-work"));
-    refuse = "no_manager";
+    refuse = code;
+    refuseStatus = status;
     await add();
-    expect(text()).toContain("That assistant isn't on this hub any more");
+    const said = "That assistant isn't on this hub any more";
+    const shown = [...document.querySelectorAll("*")].filter((n) => n.children.length === 0 && n.textContent === said);
+    expect(shown.length).toBeGreaterThan(0);
+  });
+
+  it("adds to the kept pick when the roster can't be read, and says nothing is wrong", async () => {
+    resetRoster();
+    act(() => chooseManager("m-work"));
+    rosterStatus = 503;
+    await act(async () => void (await loadRoster()));
+    await add();
+    expect(posts[0]).toEqual({ path: "/auth/pair-codes", body: { add: { name: "New one", os: "mac", manager: "m-work" } } });
+  });
+
+  it("sends exactly the request it always did to a hub with no roster, and says nothing", async () => {
+    resetRoster();
+    rosterStatus = 404;
+    await act(async () => void (await loadRoster()));
+    answer = () => undefined;
+    await add();
+    expect(posts[0]).toEqual({ path: "/auth/pair-codes", body: { add: { name: "New one", os: "mac" } } });
+    expect(note()).toBeNull();
+  });
+
+  it("names the only assistant, and says nothing when an old hub's reply has no manager", async () => {
+    resetRoster();
+    setRoster({ default: "assistant", managers: [{ id: "assistant", name: "Persona", online: true }] });
+    answer = () => undefined;
+    await add();
+    expect(posts[0].body.add?.manager).toBe("assistant");
+    expect(note()).toBeNull();
   });
 
   it("lists every assistant's computers waiting to be confirmed when the hub's limit is reached", async () => {

@@ -189,6 +189,15 @@ export function addErrorText(e: unknown): string {
       return t("lib-add-computer.err_forbidden");
     case "invalid_name":
       return t("lib-add-computer.err_invalid_name");
+    // add.manager's own refusals (docs/protocol/protocol.md "Computer pairing codes"): the hub says which assistant and
+    // why in the request's language, which the generic words for the status would hide
+    case "no_manager":
+    case "installing":
+    case "assistant_offline":
+    case "owners_unknown": {
+      const said = (e as ApiError).body.error;
+      return typeof said === "string" && said ? said : errorText(e);
+    }
     default:
       return errorText(e);
   }

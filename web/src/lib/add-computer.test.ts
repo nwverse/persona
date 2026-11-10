@@ -102,6 +102,17 @@ describe("words", () => {
     expect(addErrorText(err("too_many_pending"))).toContain("3 台");
     expect(addErrorText(err("exists", "这个 id 已经有了"))).toBe("这个 id 已经有了");
   });
+
+  it("shows the hub's own words for add.manager's refusals, not the generic words for the status", () => {
+    const refused = (status: number, code: string, error: string) => new ApiError(status, error, { code, error });
+    expect(addErrorText(refused(404, "no_manager", "That assistant isn't on this hub"))).toBe("That assistant isn't on this hub");
+    expect(addErrorText(refused(409, "installing", "That assistant is still being installed"))).toBe("That assistant is still being installed");
+    expect(addErrorText(refused(503, "assistant_offline", "The computer's assistant is offline"))).toBe("The computer's assistant is offline");
+    expect(addErrorText(refused(503, "owners_unknown", "Try again in a moment"))).toBe("Try again in a moment");
+    // no words from the hub: the generic ones
+    expect(addErrorText(new ApiError(503, "HTTP 503", { code: "owners_unknown" }))).not.toBe("");
+    expect(addErrorText(new ApiError(503, "HTTP 503", { code: "owners_unknown" }))).not.toBe("HTTP 503");
+  });
 });
 
 describe("confirming a computer waiting to be confirmed", () => {

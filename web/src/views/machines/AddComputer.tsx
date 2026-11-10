@@ -28,7 +28,7 @@ import {
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { readinessChanged } from "../../lib/readiness";
 import { clock, secondsLeft } from "../../lib/connect-device";
-import { useKnownDefault, useShownManager } from "../../lib/manager-choice";
+import { useChosenManager, useKnownDefault, useShownManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { useStore } from "../../lib/store";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -73,12 +73,14 @@ export function AddComputer({ open, onClose, again, confirm }: { open: boolean; 
   const canAdd = useStore((s) => canAddComputer(s.features));
   // A new computer is the current assistant's (docs/assistant/managers.md "Clients"): its real id, the default's too,
   // once the roster said which that is; until then (the first moments after a reload) nothing is added, and a hub
-  // without a roster gets the request it always got. An offline one can't take one now.
+  // without a roster gets the request it always got. A roster that failed to read (not a 404, which clears the pick)
+  // leaves the kept pick, which is the one named. An offline one can't take one now.
   const roster = useRoster();
   const shownManager = useShownManager();
+  const picked = useChosenManager();
   const knownDefault = useKnownDefault();
   const rosterKnown = Boolean(roster) || Boolean(knownDefault);
-  const target = roster ? shownManager : undefined;
+  const target = roster ? shownManager : (picked ?? undefined);
   const offline = useShownOffline();
 
   const reset = () => {
