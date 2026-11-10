@@ -300,7 +300,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p[holdPushesParam] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
