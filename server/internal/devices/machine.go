@@ -53,6 +53,8 @@ type MachineConfig struct {
 	HerdrAutostart   *bool    `json:"herdr_autostart,omitempty"`
 	HerdrAutoinstall bool     `json:"herdr_autoinstall,omitempty"`
 	ClaudeStartDir   string   `json:"claude_start_dir,omitempty"`
+	// InboxDir is the receive folder transfers put files in (hub/config.go, docs/protocol/file-transfer.md).
+	InboxDir string `json:"inbox_dir,omitempty"`
 	// ClaudeGlobalHooks: the node puts report-only hooks into its default claude config directory (hub/config.go).
 	ClaudeGlobalHooks bool `json:"claude_global_hooks,omitempty"`
 	// UsageWindows false: the node does not read the agents' subscription rate-limit windows (hub/config.go, #2432).
