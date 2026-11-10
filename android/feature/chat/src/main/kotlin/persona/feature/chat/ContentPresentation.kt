@@ -106,7 +106,22 @@ internal fun keepLineBreaks(text: String): String = softBreak.replace(text, "$1 
 private val softBreak = Regex("([^\n])\n(?=[^\n])")
 
 /** A reply's Markdown to parse ahead: the cache key and the text [MessageContent] draws under it. */
-internal data class MarkdownText(val key: String, val text: String)
+internal data class MarkdownText(val key: String, val text: String) {
+    private val asked by lazy { PathLinks.asked(text) }
+    @Volatile private var linked: Pair<Set<String>, String>? = null
+
+    /**
+     * What the row parses [text] as (ChatMarkdownBody): with the paths [paths] knows to be there as links, when the page
+     * opens paths (null: it does not, or has no files pane). The same source under the same key, so the row finds this
+     * parse instead of parsing again.
+     */
+    fun source(paths: PathPresence?): String {
+        if (paths == null) return text
+        val linkable = asked.filterTo(LinkedHashSet(), paths::linkable)
+        linked?.takeIf { it.first == linkable }?.let { return it.second }
+        return PathLinks.markdown(text, linkable).also { linked = linkable to it }
+    }
+}
 
 /**
  * The Markdown of a conversation's replies (at most [limit] of them), with the keys and the text the rows draw (a cut
