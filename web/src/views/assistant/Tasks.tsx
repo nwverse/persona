@@ -39,7 +39,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { runningWorkflows, workflowCounts, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -250,7 +250,7 @@ export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: 
   return (lead && interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)) ?? interactions.find(mine);
 }
 
-/** What a waiting task needs, in a line (#3301): "Asking you: which framework?", "Needs permission: swift test", "Plan to approve", the words
+/** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Needs your permission: swift test", "Plan awaiting approval", the words
  *  the to-dos page's agent rows use; undefined without a card. */
 export function taskAsk(ix: Interaction | undefined): string | undefined {
   if (!ix) return undefined;
@@ -465,6 +465,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
   const workflow = status === "working" || status === "waiting" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
   // what its agent last told Persona (report_to_supervisor): while the task is open
   const reported = status !== "done" && status !== "failed" ? progressLine(todo.supervision) : undefined;
+  // nobody is working on it (#3618): the hub's finding and why, ahead of what its agent last reported
+  const orphan = status !== "needs_you" ? orphanedLine(todo) : undefined;
   // its agent's own task list (#5302), unless a report to Persona came after it: the report says more
   const plan = status !== "done" && status !== "failed" && planShown(lead, todo.supervision) ? planLine(lead) : "";
   return (
@@ -506,6 +508,12 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
             <span data-plan-line title={planLabel(lead)} aria-label={planLabel(lead)} className="flex min-w-0 items-center gap-1 text-[12px] text-ink-3">
               <Icon name="list" size={11} stroke={2.2} className="shrink-0" />
               <span className="truncate tabular-nums">{plan}</span>
+            </span>
+          )}
+          {orphan && (
+            <span data-orphaned-line className="flex min-w-0 items-center gap-1 text-[12px] text-orange">
+              <Icon name="warning" size={11} stroke={2.2} className="shrink-0" />
+              <span className="truncate"><span className="font-medium">{orphan.lead}</span>{orphan.reason && <span className="text-ink-3"> · {orphan.reason}</span>}</span>
             </span>
           )}
           {reported && (
@@ -635,8 +643,9 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
   const known = useStore((s) => s.todos.some((t) => t.id === item.ref));
   const planned = useFeed((s) => item.kind === "task" && Object.values(s.plans).some((p) => p.conversation === item.conversation && p.tasks.some((task) => task.todo_id === item.ref)));
   if (simplified) {
-    if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint conversation={item.conversation} count={plan.tasks.length} /> : null;
-    if (item.kind === "task") return planned ? null : <DispatchHint conversation={item.conversation} count={1} />;
+    // the dispatched tasks themselves, each opening its own task (its Agent's chat), never the whole In progress tray (#3700)
+    if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint tasks={plan.tasks.map((task) => ({ todo: task.todo_id, title: task.title }))} /> : null;
+    if (item.kind === "task") return planned ? null : <DispatchHint tasks={[{ todo: item.ref, title }]} />;
     if (item.kind === "review" || item.kind === "receipt" || item.kind === "report") return null;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
   }
@@ -932,7 +941,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
 // ── Today ──
 
 /** The "Today" card's "Needs you" row's lines under its title (#4478), one per task, each truncated on its own: what its task
- *  waits on ("Asking you: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
+ *  waits on ("Has a question: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
  *  has no card) and "N more" past them. A card just answered here is not one it waits on (answeredLookup). */
 const TODAY_WAITING_MAX = 3;
 function todayWaitingLines(s: State, waiting: { id: string; title: string }[]): string[] {
@@ -1176,10 +1185,45 @@ const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
-function DispatchHint({ conversation, count }: { conversation: string; count: number }) {
+/** What a reply dispatched, under it (#3700): one task reads "Dispatched: <title> · Open", several list their titles; each
+ *  opens that task's detail beside the conversation, its Agent's chat or, before the Agent starts, the task card (openTask).
+ *  A task the hub could not start has no to-do yet and is shown without a link (its plan card says why). */
+function DispatchHint({ tasks }: { tasks: { todo?: string; title: string }[] }) {
+  if (tasks.length === 1) {
+    const [task] = tasks;
+    return (
+      <DispatchedTask todo={task!.todo} title={task!.title} hint className="max-w-full">
+        {(title) => (
+          <>
+            <span className="truncate">{t("assistant-tasks.dispatch_single", { title })}</span>
+            {task!.todo && <span className="shrink-0 font-semibold text-accent">· {t("assistant-tasks.dispatch_open")}</span>}
+          </>
+        )}
+      </DispatchedTask>
+    );
+  }
   return (
-    <button type="button" data-dispatch-hint onClick={() => window.dispatchEvent(new CustomEvent("persona:task-progress", { detail: conversation }))} className="inline-flex max-w-full items-center gap-2 self-start rounded-full bg-field px-3 py-1.5 text-sm text-ink-2 hover:bg-hover">
-      <span className="truncate">{t("assistant-tasks.dispatch_hint", { count })}</span>
+    <div data-dispatch-hint={tasks.length} className="flex max-w-full flex-col items-start gap-1.5 self-start">
+      <span className="px-1 text-[12px] text-ink-2">{t("assistant-tasks.dispatch_many", { count: tasks.length })}</span>
+      <div className="flex max-w-full flex-wrap gap-1.5">
+        {tasks.map((task, i) => (
+          <DispatchedTask key={task.todo ?? `unstarted-${i}`} todo={task.todo} title={task.title} className="max-w-[280px]">
+            {(title) => <span className="truncate">{title}</span>}
+          </DispatchedTask>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** One dispatched task's link: the to-do's current title (the plan's until the to-do arrives). */
+function DispatchedTask({ todo, title, hint, className, children }: { todo?: string; title: string; hint?: boolean; className: string; children: (title: string) => ReactNode }) {
+  const current = useStore((s) => (todo ? s.todos.find((x) => x.id === todo)?.title : undefined)) ?? title;
+  const pill = cx("inline-flex min-w-0 items-center gap-2 self-start rounded-full bg-field px-3 py-1.5 text-sm text-ink-2", className);
+  if (!todo) return <span data-dispatch-hint={hint ? 1 : undefined} data-dispatched-task="" className={pill}>{children(current)}</span>;
+  return (
+    <button type="button" data-dispatch-hint={hint ? 1 : undefined} data-dispatched-task={todo} title={current} onClick={() => openTask(todo)} className={cx(pill, "hover:bg-hover")}>
+      {children(current)}
       <Icon name="chevronRight" className="shrink-0" />
     </button>
   );
@@ -1217,9 +1261,12 @@ function ProgressTaskRow({ card, conversation, activity }: { card: TaskCardMetad
   // stopped and not done: the hub's completion check says why (#3180); an agent's open question or waiting line says more
   const why = ask || waits ? undefined : stoppedReason(todo, state);
   const stopped = why === undefined ? undefined : why ? t("assistant-tasks.progress_stopped_reason", { reason: why }) : t("assistant-tasks.progress_stopped");
+  // nobody is working on it (#3618): said ahead of why it stopped and of its agent's last report
+  const orphan = todo && !ask ? orphanedLine(todo) : undefined;
+  const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : liveLine ?? waits ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : liveLine ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
@@ -1332,13 +1379,10 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const rest = entries.needsYou.filter((item) => !asking.includes(item));
   const counts: Record<AssistantTray, number> = { needs: ownCount + entries.needsYou.length, running: entries.running.length };
   useEffect(() => {
-    const running = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("running"); };
     const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
-    window.addEventListener("persona:task-progress", running);
     window.addEventListener("persona:task-pending", needs);
     window.addEventListener("persona:task-start", needs);
     return () => {
-      window.removeEventListener("persona:task-progress", running);
       window.removeEventListener("persona:task-pending", needs);
       window.removeEventListener("persona:task-start", needs);
     };

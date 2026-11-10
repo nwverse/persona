@@ -68,6 +68,19 @@ class ShellCountsTest {
         assertEquals(listOf("k2"), ShellCounts.interactions(on("m-2"), inboxCards).map { it.id })
     }
 
+    /** The Agents tab's badge counts sessions, not cards (#3580): the same number iOS and the web show. */
+    @Test fun theAgentsBadgeCountsEachWaitingAgentOnce() {
+        val work = ShellCounts(on("m-2"), sessions, mutes)
+        val mine = cards.filter(work::owned)
+        // 工作: s2 once for its two cards, s3 in Needs you with no card; the muted s5 not.
+        assertEquals(2, work.agentsWaiting(mine))
+        // 助手: s1's card; its quiet s4 not.
+        val default = ShellCounts(on(null), sessions, mutes)
+        assertEquals(1, default.agentsWaiting(cards.filter(default::owned)))
+        // A card on no session counts by itself.
+        assertEquals(3, work.agentsWaiting(mine + Interaction("c6", "mac", "")))
+    }
+
     @Test fun theBadgesCountEachAgentOnceAndTheDotIsAnotherAssistantsBadge() {
         val default = ShellCounts(on(null), sessions, mutes)
         // 助手: s1 (its quiet s4 not); 工作: s2 once for two cards, s3 in Needs you, its inbox's 2 (the muted s5 not).

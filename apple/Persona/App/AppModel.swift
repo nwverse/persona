@@ -702,6 +702,7 @@ final class AppModel {
         drafts = drafts.filter { !demo.contains($0.key) }
         heldAttachments = heldAttachments.filter { !demo.contains($0.key) }
         starterDrafts = [:] // the demo's group is the empty one, as a hub's may be
+        healthReports = [:]
         if let k = assistantCurrent, demo.contains(k) { assistantCurrent = nil }
         if let k = openChat, demo.contains(k) { openChat = nil }
         for key in demo { ChatCache.remove(key, in: stateFolder) }
@@ -738,9 +739,10 @@ final class AppModel {
         chats = [:]
         subscribers = [:]
         shown = []
-        // What was picked for a next message goes with the hubs it was for (#2626).
+        // What was picked for a next message goes with the hubs it was for (#2626), Health's reports too (#2836).
         heldAttachments = [:]
         starterDrafts = [:]
+        healthReports = [:]
         saveOutbox()
     }
 
@@ -2125,6 +2127,17 @@ final class AppModel {
         starterDrafts[key] = draft
         return draft
     }
+
+    /// Health's checkup reports on their way up, per hub group (#2836): the page is built again with the whole tree when
+    /// iPhone Duo folds or opens, and the uploads under way lost their place in it.
+    @ObservationIgnored private var healthReports: [String: FileUploads] = [:]
+
+    func healthReportUploads() -> FileUploads {
+        if let held = healthReports[hubGroup] { return held }
+        let held = FileUploads()
+        healthReports[hubGroup] = held
+        return held
+    }
     @ObservationIgnored let draftWriter = Debouncer()
     /// A send the computer refused because its input box holds a draft (SendSafety.swift).
     var sendRefusal: SendRefusal?
@@ -2852,6 +2865,7 @@ final class AppModel {
         for key in chats.keys where gone.contains(key.group) { dropChat(key) }
         drafts = drafts.filter { !gone.contains($0.key.group) }
         heldAttachments = heldAttachments.filter { !gone.contains($0.key.group) }
+        healthReports = healthReports.filter { !gone.contains($0.key) }
         if let k = openChat, gone.contains(k.group) { openChat = nil }
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
@@ -2949,15 +2963,19 @@ final class AppModel {
 
     private func countBadges() {
         var b = TabBadges()
+        func place(_ key: SessionKey) -> TabBadges.Place {
+            TabBadges.place(key, session: sessionIndex[key], quiet: isQuiet(key), mutes: pinsStore(key.group)?.mutes)
+        }
         for ix in interactions.values {
             // A quiet task's agent asking is the main conversation's to tell (#1731): its count goes there, not on Agents.
-            switch TabBadges.place(ix.sessionKey, session: sessionIndex[ix.sessionKey], quiet: isQuiet(ix.sessionKey),
-                                   mutes: pinsStore(ix.sessionKey.group)?.mutes) {
+            switch place(ix.sessionKey) {
             case .assistant, .quiet: b.assistant += 1
-            case .agents: b.agents += 1
-            case .muted: break
+            case .agents, .muted: break
             }
         }
+        // Agents counts what its Needs You section lists: one per session that waits for the user, not one per card.
+        b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: pendingInteractions, waiting: AgentsNeedsYou.waiting(allSessions)),
+                                        place: place)
         if b != badges { badges = b }
         if !watchingMutes { watchingMutes = true; watchMutes() }
     }

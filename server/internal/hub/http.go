@@ -1403,6 +1403,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			h.mu.Lock()
 			c.runtimeCLI, c.sim, c.name, c.since = true, msg.Simulator, msg.DeviceName, time.Now()
 			h.mu.Unlock()
+			h.noteClientAppSimulator(c, msg.Simulator)
 			return
 		}
 		deviceID := msg.DeviceID
@@ -1421,6 +1422,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 			c.phoneToolNames[tool.Name] = true
 		}
 		h.mu.Unlock()
+		h.noteClientAppSimulator(c, msg.Simulator)
 		if strings.HasPrefix(c.device, "pair_") {
 			// A pairing token is traded for a device token within seconds and the phone registers again under it:
 			// calls still reach this connection, but nothing is saved under a credential about to disappear.

@@ -160,8 +160,8 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	defer cancel()
 	loc := s.location(ctx)
 	now := time.Now().In(loc)
-	devices, phone := s.devicesAndPhone(ctx)
-	snap := prompts.Snapshot{Now: now, Zone: loc.String(), PhoneOnline: phone}
+	devices, phone, apps := s.devicesAndPhone(ctx)
+	snap := prompts.Snapshot{Now: now, Zone: loc.String(), PhoneOnline: phone, Apps: snapshotApps(apps)}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { // one ask for both sections: each connector builds its chats and meetings in one answer
@@ -232,7 +232,7 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			w := c.Work
 			if w != nil && w.Phase != proto.WorkWorking {
-				a.Line = w.Line
+				a.Line, a.Closeout = w.Line, snapshotCloseout(w)
 			}
 			if a.Line == "" && c.AwaitsReply {
 				a.Line = c.Asks // what it asks (#5096)

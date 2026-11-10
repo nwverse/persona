@@ -301,6 +301,7 @@ struct SettingsView: View {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
                                 .foregroundStyle(Color.primary)
+                                .keyboardShortcut(.cancelAction) // Esc closes it too: a phone's full-screen cover has no swipe down
                                 .accessibilityIdentifier("settings-close")
                         }
                     }

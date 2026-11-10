@@ -1075,6 +1075,82 @@ if os.environ.get("MOCK_WORK"):
              work={"phase": "blocked", "on": "user", "line": "等你选 D2 / D4，要不要推到 beta"}),
     ]
 
+# MOCK_CLOSEOUT=1 (#3612, docs/assistant/agent-work.md "Closeout"): stopped agents that ended their turn with a closeout, one
+# per state the web draws: done with merged and deployed both confirmed by the hub; done saying merged where the hub
+# found the pull request open (the hub cannot call the turn finished: no phase, no line); blocked on someone, nothing
+# checked; not done, with a reply that is only the block. Each one's last reply carries the raw block (CLOSEOUT_REPLIES,
+# put in ITEMS below). Session lists with summary=1 leave `did` and `verified` out, as the hub's do. Settings › Session
+# triage has the `closeout` switch either way.
+MOCK_CLOSEOUT = os.environ.get("MOCK_CLOSEOUT") == "1"
+TRIAGE["closeout"] = False
+if MOCK_CLOSEOUT:
+    TRIAGE["enabled"] = True
+CLOSEOUT_DONE = "a9c00000-0000-4000-8000-000000000001"
+CLOSEOUT_DISPROVED = "a9c00000-0000-4000-8000-000000000002"
+CLOSEOUT_BLOCKED = "a9c00000-0000-4000-8000-000000000003"
+CLOSEOUT_NOT_DONE = "a9c00000-0000-4000-8000-000000000004"
+CLOSEOUT_REPLIES = {
+    CLOSEOUT_DONE: ("导出超时修好了：大报表改成分页流式写出，线上导出 50 万行用时从 94 秒降到 11 秒。\n\n"
+                    '<closeout status="done" merged="yes" deployed="yes">\n'
+                    "did: 报表导出改成分页流式写出，不再一次读进内存\n"
+                    "did: 给导出接口补了 50 万行的压测用例\n"
+                    "artifact: pr https://github.com/example/app/pull/31\n"
+                    "artifact: commit 4f2a91c\n"
+                    "verified: 线上导出 50 万行，用时 11 秒（之前 94 秒超时）\n"
+                    "</closeout>"),
+    CLOSEOUT_DISPROVED: ("支付 SDK 升到 v4 了，回调验签换成了新接口，PR 已经合并。\n\n"
+                         '<closeout status="done" merged="yes" deployed="no">\n'
+                         "did: 支付 SDK 从 v3 升到 v4，回调验签换成新接口\n"
+                         "artifact: pr https://github.com/example/app/pull/32\n"
+                         "verified: 单元测试 212 个全过；沙箱环境没有测\n"
+                         "missing: 上线前要有人在沙箱里走一遍真实支付\n"
+                         "</closeout>"),
+    CLOSEOUT_BLOCKED: ("迁移脚本写好了，在预发库上跑过一遍。正式库要等 DBA 给迁移窗口，我先停在这里。\n\n"
+                       '<closeout status="blocked" merged="no" deployed="n/a">\n'
+                       "did: 写了用户表拆分的迁移脚本，可重复执行\n"
+                       "artifact: branch feat/split-users\n"
+                       "artifact: doc docs/migrations/split-users.md\n"
+                       "verified: 预发库跑通，120 万行用时 3 分 40 秒\n"
+                       "waiting: DBA 批准正式库的迁移窗口\n"
+                       "</closeout>"),
+    CLOSEOUT_NOT_DONE: ('<closeout status="not_done">\n'
+                        "did: 搜索页的结果高亮做了一半，中文分词还没接\n"
+                        "verified: untested\n"
+                        "missing: 需要你确认用哪个分词库\n"
+                        "</closeout>"),
+}
+if MOCK_CLOSEOUT:
+    SESSIONS += [
+        sess("server", CLOSEOUT_DONE, "修复报表导出超时", "/home/me/code/app", "done", "unread", "app", 7, "export", 3, 3,
+             CLOSEOUT_REPLIES[CLOSEOUT_DONE],
+             work={"phase": "done", "line": "报表导出改成分页流式写出，不再一次读进内存", "by": "rule",
+                   "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/31"}, {"kind": "commit", "ref": "4f2a91c"}],
+                   "closeout": {"status": "done", "merged": "yes", "deployed": "yes",
+                                "did": ["报表导出改成分页流式写出，不再一次读进内存", "给导出接口补了 50 万行的压测用例"],
+                                "verified": "线上导出 50 万行，用时 11 秒（之前 94 秒超时）",
+                                "checked": {"merged": "yes", "deployed": "yes"}}}),
+        sess("server", CLOSEOUT_DISPROVED, "升级支付 SDK", "/home/me/code/app", "done", "unread", "app", 7, "pay", 4, 5,
+             CLOSEOUT_REPLIES[CLOSEOUT_DISPROVED],
+             work={"phase": "", "by": "rule", "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/32"}],
+                   "closeout": {"status": "done", "merged": "yes", "deployed": "no",
+                                "did": ["支付 SDK 从 v3 升到 v4，回调验签换成新接口"],
+                                "verified": "单元测试 212 个全过；沙箱环境没有测",
+                                "missing": "上线前要有人在沙箱里走一遍真实支付",
+                                "checked": {"merged": "no"}}}),
+        sess("server", CLOSEOUT_BLOCKED, "拆分用户表", "/home/me/code/app", "done", "unread", "app", 7, "migrate", 5, 8,
+             CLOSEOUT_REPLIES[CLOSEOUT_BLOCKED],
+             work={"phase": "blocked", "on": "external", "line": "等 DBA 批准正式库的迁移窗口", "wait": "DBA 批准迁移窗口", "by": "model",
+                   "artifacts": [{"kind": "branch", "ref": "feat/split-users"}, {"kind": "doc", "ref": "docs/migrations/split-users.md"}],
+                   "closeout": {"status": "blocked", "waiting": "DBA 批准正式库的迁移窗口", "merged": "no",
+                                "did": ["写了用户表拆分的迁移脚本，可重复执行"],
+                                "verified": "预发库跑通，120 万行用时 3 分 40 秒"}}),
+        sess("server", CLOSEOUT_NOT_DONE, "搜索结果高亮", "/home/me/code/app", "done", "unread", "app", 7, "search", 6, 10,
+             CLOSEOUT_REPLIES[CLOSEOUT_NOT_DONE],
+             work={"phase": "blocked", "on": "user", "line": "等你确认用哪个分词库", "by": "model",
+                   "closeout": {"status": "not_done", "did": ["搜索页的结果高亮做了一半，中文分词还没接"],
+                                "verified": "untested", "missing": "需要你确认用哪个分词库"}}),
+    ]
+
 # MOCK_SOURCES=1: sessions that do not live in a terminal engine (docs/protocol/protocol.md "Codex sources and capabilities"): a live Codex
 # app-server thread the phone can write to and join (POST …/attach; joining lets it approve), a Codex history thread it
 # can only read, and an agent runtime's session (DSH: agent_label, no terminal) whose permission card has no
@@ -1713,6 +1789,9 @@ SCHEDULE_RAN = []  # what "Run now" started (UI tests read it back at /mock/sche
 ASSISTANT_HUB_NOTES = "代码都在 ~/code 下，平时用 MacBook 开发。\n周报每周五下班前先给我草稿，不要直接发。\n服务器上的 /srv 目录不要动。"
 ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "Asia/Shanghai", "notes": None, "main": ASK1,
                     "main_tasks_quiet": True,  # Notify tasks dispatched from the main chat only in that chat (#1731), on by default
+                    # Every agent Persona starts is a supervised task (#3617), off by default; closed sessions archive
+                    # themselves after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
+                    "agent_tasks": False, "archive_closed_days": 3,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off")}
 
@@ -1728,6 +1807,8 @@ def assistant_state(space="", archived=False):
            "timezone": cfg["timezone"], "notes_effective": notes.strip(), "main_tasks_quiet": cfg["main_tasks_quiet"],
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
+    if not os.environ.get("MOCK_LEGACY_HUB"):
+        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -2133,6 +2214,15 @@ TODO_ASKS = {
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
 
+# MOCK_ORPHANED=1 (#3618, docs/assistant/todos.md "Nobody is working on this"): open to-dos whose agents are gone, as GET
+# /api/v1/todos carries it, on to-dos whose agents have stopped, one per reason: closed after a model error (the PR
+# check), the computer offline (the blog) and, with MOCK_TASKS, closed (the blog task) and the release notes' task card
+# in the main chat (closed after an error). A done to-do carries none.
+TODO_ORPHANED = {
+    "todo_review": "error", "todo_blog": "offline", "todo_task_blog": "closed", "todo_task_release": "error",
+} if os.environ.get("MOCK_ORPHANED") == "1" else {}
+TODO_ORPHANED_SINCE = ago(hours=5)
+
 
 def sorted_todos():
     tds = copy.deepcopy(TODOS)
@@ -2141,6 +2231,8 @@ def sorted_todos():
     for t in out:
         if t.get("done_at") is None and t["id"] in TODO_ASKS and t["id"] not in BRIEF_ACCEPTED:
             t["ask"] = dict(TODO_ASKS[t["id"]], asked_at=TODO_ASKED_AT)
+        if t.get("done_at") is None and t["id"] in TODO_ORPHANED:
+            t["orphaned"] = {"reason": TODO_ORPHANED[t["id"]], "since": TODO_ORPHANED_SINCE}
     return out
 
 
@@ -3349,6 +3441,13 @@ if os.environ.get("MOCK_OPENCODE"):
     ITEMS[OC_IDLE] = [it("user", "text", 60 * 4, text="CI 里的依赖缓存为什么一直没命中？")] + [
         it("assistant", "text", 60 * 3, text="缓存键里带了时间戳，每次都是新的；改成 lockfile 的哈希就好了。")]
 ITEMS[RECIPE] = [it("user", "text", 60 * 27, text="菜谱网站加个搜索")] + [it("assistant", "text", 60 * 26, text="搜索做好了，支持按食材和用时筛选。")]
+if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
+    for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
+                             (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "npm test"),
+                             (CLOSEOUT_BLOCKED, "把用户表按地区拆开", "./scripts/migrate.sh --env staging"),
+                             (CLOSEOUT_NOT_DONE, "搜索结果里把命中的词标出来", "npm run build")):
+        ITEMS[_sid] = ([it("user", "text", 30, text=_ask)] + tool("Bash", {"command": _cmd, "description": "跑一遍"}, "ok", 12)
+                       + [it("assistant", "text", 3, text=CLOSEOUT_REPLIES[_sid])])
 
 ITEMS[ASK1] = (
     [it("user", "text", 4, text="今天有什么需要我处理的？")]
@@ -9631,10 +9730,61 @@ def all_sessions():
     return [decorated_session(s) for s in (SESSIONS + ASSISTANT)]
 
 
+LIST_JOURNAL = {}  # revision -> {identity: row} of the unfiltered list as it was (a bounded delta journal, #3759)
+LIST_JOURNAL_SIZE = 128  # the hub keeps at most 128 revisions too (docs/protocol/protocol.md "Incremental recovery")
+LIST_TUPLE = lambda s: json.dumps([s["machine_id"], s["session_id"]], separators=(",", ":"))
+
+
+def list_revision(rows):
+    """The paged list's checkpoint for rows, journaled so a later `since` can answer what changed after it."""
+    revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
+    if revision not in LIST_JOURNAL:
+        LIST_JOURNAL[revision] = {LIST_TUPLE(s): json.loads(json.dumps(s)) for s in rows}
+        while len(LIST_JOURNAL) > LIST_JOURNAL_SIZE: del LIST_JOURNAL[next(iter(LIST_JOURNAL))]
+    return revision
+
+
+def current_list_revision():
+    """What a `sessions_list` hint carries: the list's revision now, as the hub's hints do."""
+    return list_revision(out_by_machine(all_sessions()))
+
+
+# GET /api/v1/sessions as the hub's traffic counters would see it, split by what the query asked for (#3759):
+# /mock/sessions_reads, ?reset=1 starts counting again. `full` is the no-query complete list; `baseline` a page without
+# `since` (summary=0 is a complete row); `since` a delta page; `counts` / `lookup` the small reads.
+SESSIONS_READS = {"reads": {}, "hints": 0, "started": time.monotonic()}
+SESSIONS_READS_LOCK = threading.Lock()
+
+
+def sessions_read(handler, size, status):
+    q = parse_qs(urlparse(handler.path).query)
+    mode = ("lookup" if "session_id" in q else "counts" if q.get("counts", [""])[0] == "1" else "since" if "since" in q
+            else "full" if not (set(q) - {"manager", "machine_id"}) else "baseline")
+    if status >= 400: mode += "_%d" % status
+    client = (handler.headers.get("X-Persona-Client") or "").split("/")[0] or "unknown"
+    with SESSIONS_READS_LOCK:
+        row = SESSIONS_READS["reads"].setdefault(client, {}).setdefault(mode, {"count": 0, "bytes": 0})
+        row["count"] += 1
+        row["bytes"] += size
+
+
+def sessions_reads_hint():
+    with SESSIONS_READS_LOCK: SESSIONS_READS["hints"] += 1
+
+
+def sessions_reads(reset):
+    with SESSIONS_READS_LOCK:
+        out = {"reads": copy.deepcopy(SESSIONS_READS["reads"]), "hints": SESSIONS_READS["hints"],
+               "seconds": round(time.monotonic() - SESSIONS_READS["started"], 1)}
+        if reset: SESSIONS_READS.update(reads={}, hints=0, started=time.monotonic())
+    return out
+
+
 def paged_sessions(query):
     """Small screenshot fixture for paging hubs; unqueried reads retain the legacy full list.
 
-    Changed fixtures expire cursors/revisions instead of retaining a delta journal.
+    `since` answers from a bounded journal of earlier revisions (rows that changed, entered or left the filter);
+    an unknown or evicted one is 409 revision_expired, as after a hub restart. Cursors stay frozen to their revision.
     """
     rows = out_by_machine(all_sessions())
     # ?manager=<id> (feature sessions_manager): that manager's computers' sessions only, in the whole list, the pages
@@ -9648,16 +9798,20 @@ def paged_sessions(query):
         rows = [s for s in rows if s.get("manager") == named]
     if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
-    revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
+    revision = list_revision(rows)
     fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
               "group": "space_id", "source": "source_kind", "provider": "agent"}
     search = query.get("q", [""])[0].lower()
-    rows = [s for s in rows if all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
-                                  for k, v in fields.items())
-            and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
-            and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
-    rows.sort(key=lambda s: json.dumps([s["machine_id"], s["session_id"]], separators=(",", ":")))
-    rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+
+    def matching(rows):
+        rows = [s for s in rows if all(not query.get(k, [""])[0] or query[k][0] == s.get(v, "")
+                                      for k, v in fields.items())
+                and (not query.get("project", [""])[0] or query["project"][0] == (s.get("repo_root") or s.get("workspace_cwd") or s.get("cwd", "")))
+                and (not search or search in "\n".join(str(s.get(k, "")) for k in ("title", "cwd", "space_name", "slot_name", "last_text")).lower())]
+        rows.sort(key=LIST_TUPLE)
+        rows.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
+        return rows
+    rows = matching(rows)
     if query.get("counts", [""])[0] == "1":
         counts = {"total": len(rows), "revision": revision, "machine": {}, "project": {}, "group": {}, "state": {}}
         for s in rows:
@@ -9667,8 +9821,15 @@ def paged_sessions(query):
                 counts[key][value] = counts[key].get(value, 0) + 1
         return counts, 200
     since = query.get("since", [None])[0]
-    if since and since != revision:
-        return {"error": "Fixture changed; reload the list", "code": "revision_expired"}, 409
+    removed = []
+    if since:
+        if since not in LIST_JOURNAL:
+            return {"error": "Fixture changed; reload the list", "code": "revision_expired"}, 409
+        before = {LIST_TUPLE(s): s for s in matching(list(LIST_JOURNAL[since].values()))}
+        now = {LIST_TUPLE(s) for s in rows}
+        removed = sorted(k for k in before if k not in now)
+        total = len(rows)
+        rows = [s for s in rows if json.dumps(before.get(LIST_TUPLE(s)), sort_keys=True) != json.dumps(s, sort_keys=True)]
     cursor = query.get("cursor", [revision + ":0"])[0]
     try:
         frozen, offset = cursor.rsplit(":", 1)
@@ -9677,11 +9838,20 @@ def paged_sessions(query):
             raise ValueError()
     except ValueError:
         return {"error": "Fixture cursor expired", "code": "cursor_expired"}, 409
-    selected = [] if since else rows[offset:offset + limit]
+    # A delta page spends one slot per removal, like an upsert: removals first, then changed rows.
+    changes = [("remove", k) for k in removed] + [("row", s) for s in rows]
+    page = changes[offset:offset + limit]
+    selected = [s for kind, s in page if kind == "row"]
     if query.get("summary", [""])[0] == "1":
         selected = [{**s, "waiting": bool(s.get("background_waiting"))} for s in selected]
-    more = not since and offset + limit < len(rows)
-    result = {"sessions": selected, "remove": [], "has_more": more, "revision": revision, "total": len(rows)}
+        for i, s in enumerate(selected):  # a row's closeout says where it stands, not what it did (hub sessions_list.go)
+            if (s.get("work") or {}).get("closeout"):
+                row = {k: v for k, v in s["work"]["closeout"].items() if k not in ("did", "verified")}
+                selected[i] = {**s, "work": {**s["work"], "closeout": row}}
+    more = offset + limit < len(changes)
+    if not since: total = len(rows)
+    result = {"sessions": selected, "remove": [k for kind, k in page if kind == "remove"], "has_more": more,
+              "revision": revision, "total": total}
     if more:
         result["next_cursor"] = revision + ":" + str(offset + limit)
     return result, 200
@@ -11879,6 +12049,7 @@ def net_control(path, q):
 # machine list (a new last_seen), and `steps` new steps in the turn of each conversation a connection has open. GET
 # /mock/churned tells how many rounds have gone out. &final=1: then the turn ends (a last reply, the working agents
 # done; counted as one more round). For checking that what the user is doing survives the updates.
+# &rows=<k>: only k working agents change a round, taking turns, as on a real hub (a row or two a second; #3759).
 # &inbox=1: each round also changes an inbox item (a new Feishu message: the inbox's "Needs you" count changes every other
 # round) and pushes `inbox`, and pushes the pending interactions again; &waiting=1: one more interaction comes and goes
 # (the waiting count changes every round, its card shows and goes on the Agents list). The real hub does both all day;
@@ -12248,7 +12419,9 @@ def calculator_png(w=230, h=408):
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=False):
+def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=False, rows=0):
+    """`rows` > 0: only that many working agents change a round, taking turns (a real hub changes a row or two a
+    second, #3759); 0: every working agent every round."""
     import time
     flips = [s for s in SESSIONS if s["state"] == "working"][-1:] if real else []
     for k in range(rounds):
@@ -12264,12 +12437,13 @@ def churn(rounds, ms, steps=1, final=False, inbox=False, waiting=False, real=Fal
                 if k % 3 == 1: s.update(state="unread", status="done", state_since=now)
                 elif k % 3 == 2: s.update(state="working", status="working", state_since=now)
         working = [s for s in SESSIONS if s["state"] == "working"]
-        for s in working:
+        changing = [working[(k * rows + j) % len(working)] for j in range(min(rows, len(working)))] if rows else working
+        for s in changing:
             text = "第 %d 轮更新：还在跑，刚看完一处。" % (k + 1)
             if real and k % 2:  # a longer last line: the row grows to its two lines, then shrinks back
                 text += "接下来把剩下的几个模块的测试都跑一遍，看看还有没有别的地方用到了这个旧接口，顺手把文档也改了。"
             s.update(updated_at=now, last_text=text)
-        if len(working) >= 2 and k % 2 == 1:  # the busiest space is now a different one
+        if len(working) >= 2 and k % 2 == 1 and not rows:  # the busiest space is now a different one
             working[0]["updated_at"] = ago(minutes=30)
         for m in MACHINES:
             m["last_seen"] = now
@@ -14931,6 +15105,8 @@ class H(BaseHTTPRequestHandler):
                                     405: "method_not_allowed", 409: "conflict", 502: "upstream_error",
                                     503: "node_offline"}.get(status, "internal"))
         body = json.dumps(obj, ensure_ascii=False).encode()
+        if self.command == "GET" and urlparse(self.path).path == "/api/v1/sessions":
+            sessions_read(self, len(body), status)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -15052,9 +15228,10 @@ class H(BaseHTTPRequestHandler):
             threading.Thread(target=churn, args=(int(q.get("n", ["20"])[0]), int(q.get("ms", ["300"])[0]),
                                                  int(q.get("steps", ["1"])[0]), q.get("final", ["0"])[0] == "1",
                                                  q.get("inbox", ["0"])[0] == "1", q.get("waiting", ["0"])[0] == "1",
-                                                 q.get("real", ["0"])[0] == "1"), daemon=True).start()
+                                                 q.get("real", ["0"])[0] == "1", int(q.get("rows", ["0"])[0] or 0)), daemon=True).start()
             return self.send_json({"ok": True})
         if p == "/mock/churned": return self.send_json(CHURN)
+        if p == "/mock/sessions_reads": return self.send_json(sessions_reads(q.get("reset", ["0"])[0] == "1"))
         if p == "/mock/send-fail":
             SEND_FAIL["on"] = q.get("on", ["1"])[0] == "1"
             return self.send_json(SEND_FAIL)
@@ -17033,6 +17210,13 @@ class H(BaseHTTPRequestHandler):
                 if is_read_only(self): return self.send_json({"error": "只有完整权限的设备可以改", "code": "forbidden"}, 403)
                 if body["meeting_attendance_default"] not in MEETING_ROLES:
                     return self.send_json({"error": "meeting_attendance_default 只能是 off、listener 或 participant"}, 400)
+            if "archive_closed_days" in body:  # 0–3650, as the hub checks it (#3618)
+                days = body["archive_closed_days"]
+                if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
+                    return self.send_json({"error": "archive_closed_days must be 0–3650"}, 400)
+                ASSISTANT_CONFIG["archive_closed_days"] = days
+            if isinstance(body.get("agent_tasks"), bool):
+                ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -17399,9 +17583,16 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Sec-WebSocket-Accept", accept); self.end_headers(); self.wfile.flush()
         lock = threading.Lock()
 
+        hinted = [None]  # the last revision this connection was told: the hub hints again only when the list changed
+
         def send(obj):
             if paged and obj.get("type") == "sessions":
-                obj = {"type": "sessions_list", "revision": "mock-sessions"}
+                revision = current_list_revision()
+                with lock:
+                    if revision == hinted[0]: return
+                    hinted[0] = revision
+                obj = {"type": "sessions_list", "revision": revision}
+                sessions_reads_hint()
             if obj.get("error") and "code" not in obj:
                 obj = {**obj, "code": "terminal_busy" if obj.get("state") == "busy" else "internal"}
             with lock:
@@ -19370,6 +19561,62 @@ def features():
 
 MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 agent_session_archives 和 agent_session_archive_close（archive：只有归档，像旧管理器）；"
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
+MOCK_HELP.append("MOCK_CLOSEOUT=1  Four stopped agents on the server that ended their turn with a closeout (#3612): done with merged and deployed confirmed by the hub; "
+                 "done saying merged where the hub found it is not; blocked on someone, nothing checked; not done, its reply only the block. Each last reply carries the raw block")
+MOCK_HELP.append("MOCK_ORPHANED=1  Open to-dos nobody is working on (#3618): `orphaned` on the PR check (error), the blog (offline) and, "
+                 "with MOCK_TASKS=1, the blog task (closed) and the release notes task (error)")
+
+# MOCK_TASK_TRAY_ACTIVITY=1|summary: four deterministic tray rows for Apple UI verification.
+# Parent turns have ended: a command, a workflow, a subagent, and a wake-up with no background work.
+# summary uses the compact #3588 projection, without chat-only background/subagent/workflow arrays.
+if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") in ("1", "summary"):
+    activity_rows = [
+        ("tray-command", WIDGET, "Background build verification"),
+        ("tray-workflow", ORDERS, "Workflow review verification"),
+        ("tray-subagent", REVIEW, "Subagent review verification"),
+        ("tray-wait", BLOG, "Scheduled wake-up verification"),
+    ]
+    keep = {sid for _, sid, _ in activity_rows}
+    SESSIONS[:] = [s for s in SESSIONS if s.get("assistant") or s["session_id"] in keep]
+    TODOS_INIT[:] = []
+    for index, (tid, sid, title) in enumerate(activity_rows):
+        session = next(s for s in SESSIONS if s["session_id"] == sid)
+        session.update(state="working", status="working", pending_interactions=0,
+                       background_working=True, background_waiting=False, title=title)
+        for field in ("background", "subagents", "workflows", "loop", "activity", "work"):
+            session.pop(field, None)
+        if sid == WIDGET:
+            session["background"] = [{"id": "tray-build", "kind": "shell", "description": "Build verification"},
+                                     {"id": "tray-monitor", "kind": "monitor", "description": "Test verification"}]
+        elif sid == ORDERS:
+            session["workflows"] = [{"task_id": "tray-run", "run_id": "tray-workflow-run", "name": "Review changes",
+                                     "running": True, "status": "running", "phases": ["Review", "Verify"],
+                                     "phase": "Verify", "phase_index": 2, "agents_started": 6, "agents_done": 5,
+                                     "agents_running": 1}]
+            session["background"] = [{"id": "tray-run", "kind": "workflow", "run_id": "tray-workflow-run"}]
+        elif sid == REVIEW:
+            session["subagents"] = [{"id": "tray-child", "session_id": sid + "@tray-child", "running": True,
+                                     "description": "Verify changes", "background": True}]
+        else:
+            session.update(background_working=False, background_waiting=True)
+        if os.environ.get("MOCK_TASK_TRAY_ACTIVITY") == "summary":
+            session["waiting"] = True
+            session["background_tasks_count"] = 2 if sid == WIDGET else 0
+            if sid == ORDERS:
+                progress = dict(session["workflows"][0], phase_count=2)
+                progress.pop("phases", None)
+                progress.pop("run_id", None)
+                session.update(running_workflows=1, workflow_progress=progress)
+            if sid == REVIEW:
+                session["running_subagents"] = 1
+            for field in ("background", "subagents", "workflows"):
+                session.pop(field, None)
+        ORIG_STATE[sid] = ("working", "working")
+        todo = _task_todo(tid, title, "", session["machine_id"], sid, "/demo", index + 1, "")
+        TODOS_INIT.append(todo)
+    TODOS = copy.deepcopy(TODOS_INIT)
+    TASK_PLANS.clear()
+    TASK_FEED[ASK1] = []
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")

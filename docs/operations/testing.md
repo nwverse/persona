@@ -1233,6 +1233,27 @@ Compare same real pushes before/after hub session-list/Live Activity timing chan
 | Live Activity (App closed) | 188/hour, mismatch max 2.5 s | 115, max 29.2 s (60-second throttle: 60, 58.8 s) |
 | Live Activity (App open) | Same | 0 |
 
+## Session list reads (#3759)
+
+How often a client reads `GET /api/v1/sessions`, and what kind of read, while it sits open on a paging hub.
+
+- The mock in paging mode with a list about the size of a busy hub: `MOCK_SESSIONS_LIST=1 MOCK_AGENTS=2 PORT=<port> python3 scripts/mock/mock_hub.py`
+  (266 sessions, a 207 KB complete list). Its `since` answers from a journal of the last 128 revisions (changed, added and
+  removed rows, rows entering or leaving a filter; an older one is `409 revision_expired`), and each `sessions_list` hint
+  carries the list's current revision, once per change.
+- `GET /mock/sessions_reads` counts the reads by client (the `X-Persona-Client` platform: `web`, `ios-app`) and kind: `full`
+  (no paging query), `baseline` (a page without `since`), `since`, `counts`, `lookup`, with bytes, plus the hints sent;
+  `?reset=1` starts again.
+- `GET /mock/churn?n=120&ms=500&rows=1`: a minute in which one working agent changes every half second (a real hub changes a
+  row or two a second); without `rows` every working agent changes every round.
+- Web: `node web/e2e/session-list-reads.mjs <web URL> --hub <mock URL> [--max-full 0]` (the mock's default pins keep the
+  sidebar on its complete fallback): a quiet minute, then a churn minute; fails when the churn minute has more than
+  `--max-full` complete lists.
+- iOS: launch with `-pairURL persona://pair?url=<mock>&token=mock -app.tab chats -openAgentsFresh YES` (the Agents tab in the
+  default By Repository grouping, which needs every row), then read the counters around the same two minutes.
+- A real hub's `traffic` journal lines count by route template, not query: there a complete list and a delta are told
+  apart only by `body_bytes / count`.
+
 ## Live Activity screenshots (`LiveActivityShots`)
 
 `simctl io screenshot` doesn't capture Dynamic Island/lock-screen activities. `LiveActivityShots` uses `-showFleetSample` for fictional activity,

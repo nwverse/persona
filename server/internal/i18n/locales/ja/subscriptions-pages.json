@@ -99,6 +99,7 @@
   "plain.snapshot": "{every}、「{source}」の読み取り専用ツール「{tool}」でスナップショットを保存します。内容が同じなら保存しません。",
   "plain.weak_dedup": "結果に ID がないので内容で重複を判定します。内容が変わると新しいものとして入ります。",
   "problem.annotation": "提供元が変更を伴うと示しています",
+  "problem.assistant_offline": "オフにしましたが、アシスタントが応答しないため保存内容はまだ削除されていません。少ししてから試してください",
   "problem.bad_args": "引数がツールの仕様と合いません",
   "problem.bad_recipe": "取得方法の形式が正しくありません",
   "problem.bad_request": "リクエストが正しくありません",
