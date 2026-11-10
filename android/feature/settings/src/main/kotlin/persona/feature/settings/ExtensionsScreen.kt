@@ -70,7 +70,9 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
     LaunchedEffect(model) { ExtensionChanges.of(extensions).collect { model.load() } }
     // Signed in or out somewhere else: " · Not signed in" follows.
     LaunchedEffect(model) { model.watchAuth() }
-    val list = state.extensions
+    // The current assistant's alone (docs/assistant/managers.md "Clients"): a merged list is filtered by each one's stamp.
+    val assistant = currentAssistant()
+    val list = state.extensions?.filter { assistant.owns(it.manager) }
     val roster = LocalManagerRoster.current
     val detail = LocalDetailKey.current
     JListPage(title = stringResource(R.string.settings_ext_title), onBack = onBack, refreshing = state.loading && list != null, onRefresh = { scope.launch { model.load() } }) {
@@ -92,8 +94,6 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
             JEmptyState(stringResource(R.string.settings_ext_empty_title), stringResource(R.string.settings_ext_empty_text), icon = PhIcons.PuzzlePiece)
         }
         if (!list.isNullOrEmpty()) {
-            // Several managers (docs/assistant/managers.md step 4): each one's extensions under its name instead of one list.
-            val byManager = roster?.groups(list) { it.manager }
             val rows: LazyListScope.(List<HubExtension>) -> Unit = { shown ->
                 // keyed by manager and id in every path: a built-in is listed under each manager, and the list can come
                 // before the roster; a pair that still repeats (a hub that stamps nothing) takes its place too
@@ -109,13 +109,8 @@ internal fun ExtensionsPage(extensions: ExtensionManagement?, onBack: () -> Unit
                     }
                 }
             }
-            if (byManager == null) {
-                item("top") { JSectionHeader(stringResource(R.string.settings_ext_list_header), count = list.size) }
-                rows(list)
-            } else byManager.forEach { group ->
-                item("manager-${group.id}") { JManagerHeader(group, count = group.items.size) }
-                rows(group.items)
-            }
+            item("top") { JSectionHeader(stringResource(R.string.settings_ext_list_header), count = list.size) }
+            rows(list)
             item("footer") {
                 SettingsCaption(stringResource(if (state.markets && onMarket != null) R.string.settings_ext_list_footer_market
                     else R.string.settings_ext_list_footer),
