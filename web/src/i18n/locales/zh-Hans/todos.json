@@ -212,5 +212,9 @@
   "calendar_undated_other": "{count} 条待办没有截止，不在日历上。",
   "calendar_see_list": "在列表里看 →",
   "calendar_back": "返回日历",
-  "calendar_close": "关闭"
+  "calendar_close": "关闭",
+  "ask_ok": "就这样",
+  "ask_answer": "去对话里回答",
+  "ask_answer_hint": "没有推荐方案，请到它来自的对话里回答。",
+  "ask_failed": "没有成功：{error}"
 }

@@ -35,7 +35,8 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { runningWorkflows, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
 import { boardSections, type BoardSectionKey } from "../../lib/task-board";
@@ -513,6 +514,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
           )}
         </span>
       </div>
+      {/* what its result waits on from the user, and the one tap that answers it (#2056) */}
+      <TodoAskLine todo={todo} className="px-1" />
       {/* what Persona sent its agent (#1542): the hand-off sent with this card is drawn only here */}
       <TaskSentList todoId={todo.id} conversation={conversation} />
       {status === "done" && todo.supervision && (
@@ -1306,7 +1309,9 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
     const failure = status === "failed" ? startFailure(todo, plans) : undefined;
     const ask = status === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined;
     const limit = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
-    const now = failure ?? ask ?? limit ?? progressOf(lead)?.text;
+    // what its result waits on from the user (#2056), before its agent's last step
+    const verdict = openAsk(todo)?.verdict;
+    const now = failure ?? ask ?? limit ?? verdict ?? progressOf(lead)?.text;
     return [where, now].filter(Boolean).join(" · ");
   };
   return (
