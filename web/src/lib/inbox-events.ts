@@ -1,4 +1,4 @@
-// Inbox events (docs/assistant/inbox.md "Events, handling chain, suggestions"): what a hub of this phase adds on an inbox item — the section it
+// Inbox events (docs/assistant/inbox.md "Events and handling chain"): what a hub of this phase adds on an inbox item — the section it
 // is in (`status`, with "In progress" between "Needs you" and "FYI"), urgent, the manager's summary, the processing conversation
 // (`handling`), at most one suggestion with its version, and the handling chain. Every field is optional: an item from an
 // older hub has none of them and the inbox draws exactly what it drew before.

@@ -2,7 +2,7 @@
 import AppKit
 import QuartzCore
 
-/// Measures how smooth the Mac app is, from inside, the same way every run (#1337, docs/apple/mac.md「卡顿怎么量」).
+/// Measures how smooth the Mac app is, from inside, the same way every run (#1337, docs/apple/mac.md「Measuring hitches on Mac」).
 ///
 /// The Mac this was written on has no Instruments display tracing (Developer Mode off) and posted wheel events from a
 /// shell tool are filtered out (no Accessibility grant), so the scroll is driven here and frames are timed here: a
@@ -51,7 +51,7 @@ import QuartzCore
 }
 
 /// Counts UserDefaults writes during a run, and which keys ended up different: each write invalidates every view with
-/// an `@AppStorage` (CLAUDE.md「常变的状态别写 UserDefaults」).
+/// an `@AppStorage` (CLAUDE.md「Most common pitfalls」).
 @MainActor final class MacDefaultsWatch {
     private var token: Any?
     private var before: [String: Any] = [:]
@@ -167,7 +167,7 @@ func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
         scroll = sv
         let speed = CGFloat(d.object(forKey: "showPerfSpeed") != nil ? d.double(forKey: "showPerfSpeed") : 12)
         let seconds = d.object(forKey: "showPerfSeconds") != nil ? d.double(forKey: "showPerfSeconds") : 6
-        // `-showPerfGlide YES`: iOS's pattern (docs/operations/testing.md「整个 App」); `-showPerfGlide up` starts toward the top.
+        // `-showPerfGlide YES`: iOS's pattern (docs/operations/testing.md「Whole App」); `-showPerfGlide up` starts toward the top.
         // `-showPerfGlide live`: ping-pong as the user's own scroll, NSScrollView's live-scroll notifications around it
         // (SwiftUI's scroll phase is `.interacting`). Without them SwiftUI does not take it for the user scrolling: the
         // chat kept following its newest end and landing on the saved place against the drive, and a short chat's glide

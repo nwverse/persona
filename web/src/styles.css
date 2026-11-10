@@ -2,10 +2,20 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Assistant trays share the dock's bounded height; count meters use the small line token. */
+.assistant-action-tray { max-height: var(--assistant-tray-max); }
+.task-count-meter { height: var(--task-count-meter-height); }
+@media (forced-colors: active) {
+  .task-count-meter { border: 1px solid CanvasText; }
+  .task-count-meter > span { background: Highlight; }
+}
+
 /* Design tokens, keyframes and component grammar from Beautiful UI (https://www.beautifului.dev/, MIT,
  * Copyright (c) 2026 Shane Levine; see THIRD_PARTY_NOTICES.md). Every view reads colors through these.
  * Text tokens (--ink, --ink-2, --ink-3, --accent-ink) keep WCAG AA 4.5:1 on every background token (#2804, theme-contrast.test.ts). */
 :root {
+  --assistant-tray-max: min(20rem, 40dvh);
+  --task-count-meter-height: 0.25rem;
   --page: #fafafb;
   --canvas: #f1f2f3;
   --surface: #fff;

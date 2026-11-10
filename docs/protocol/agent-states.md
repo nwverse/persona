@@ -217,7 +217,7 @@ A common pattern: an Agent runs `herdr pane split` in its own tab, then starts C
   If the top-left is a shell rather than an Agent, the group has no number 0 and the Agents are peers (the web doesn't mark a starter).
 - Parent/child relationships across tabs (an Agent opening a subtask in another tab / workspace) are not inferred; if needed later, agree on an explicit marker (like to-dos' `persona_from`).
 
-For the web, see `docs/web/web.md`; Android, `docs/android/android.md` ("Several Agents in one tab") (#2515). iOS / Mac (#2516; the pure logic is in `apple/Persona/Views/Chats/TabPanes.swift`, same rules as the web's `herdr-tree.ts`):
+For the web, see `docs/web/web.md`; Android, `docs/android/android.md` ("Session controls, session origin and capabilities") (#2515). iOS / Mac (#2516; the pure logic is in `apple/Persona/Views/Chats/TabPanes.swift`, same rules as the web's `herdr-tree.ts`):
 
 - In the Agents list (by repository / by project; cards, capsules, compact list), a tab with several Agents first gets a tab row: the status dot of the one most in need of attention, the tab name and its title, "N Agents"; tap it to collapse / expand.
   Below it, ordered by pane position: the starter on top, labeled **Started It**, the rest indented one level beneath it. Each row names its own Agent (when both are Claude they're numbered "Claude 2"; the starter is told apart by its label) and no longer repeats the tab name.

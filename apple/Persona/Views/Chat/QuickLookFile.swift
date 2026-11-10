@@ -6,7 +6,7 @@ import SwiftUI
 import Quartz
 #endif
 
-/// Files the file viewer hands to the system's QuickLook (docs/apple/ios.md「文件查看器」): Office and iWork documents and
+/// Files the file viewer hands to the system's QuickLook (docs/apple/ios.md「File viewer」): Office and iWork documents and
 /// RTF, which no viewer of ours draws. Feishu attachments open the same way (`LarkAttachmentView`).
 nonisolated enum QuickLookFileType {
     static let extensions: Set<String> = ["docx", "doc", "xlsx", "xls", "pptx", "ppt", "pages", "numbers", "key", "rtf"]
@@ -172,7 +172,7 @@ struct QuickLookView: NSViewRepresentable {
 #endif
 
 /// Thumbnails for the file list (the Files tab) and the chat's file cards, drawn by the machine (`GET …/file/thumb`, hub
-/// feature `file_thumb`, docs/protocol/protocol.md「文件预览」), three at a time, kept in memory and on disk:
+/// feature `file_thumb`, docs/protocol/protocol.md「File preview」), three at a time, kept in memory and on disk:
 /// - with the file's size and modified time (a listing): by what the file is, so a changed file is asked again;
 /// - with only its path (a card in a conversation; size 0, no time): by the path.
 /// Every disk copy is checked once per launch with its opaque ETag: a node upgrade can change the picture without

@@ -1,4 +1,4 @@
-// The full surface of a terminal panel (docs/integrations/terminal.md "The full herdr UI"): herdr's own client, in a PTY on the
+// The full surface of a terminal panel (docs/integrations/terminal.md "Full herdr UI"): herdr's own client, in a PTY on the
 // computer, drawn by xterm — its sidebar, tabs and splits, driven from here. The feed is full.ts; what the page shares
 // with the single-pane surface (the key bar, the find bar, the right-click menu, the saved commands) is the same
 // components. The header's controls for this surface are drawn into the panel's header through `slot`.

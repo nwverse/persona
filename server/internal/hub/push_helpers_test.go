@@ -3,6 +3,7 @@ package hub
 import (
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -19,6 +20,12 @@ func (p *Pusher) notifyInteraction(ix proto.Interaction, machine string) {
 
 func (p *Pusher) notifyDone(machineID, machine, sessionID, title, text string, wants func(NotifyPrefs) bool) {
 	p.sendLocalized(func(l i18n.Lang) map[string]any { return donePayloadIn(l, machineID, machine, sessionID, title, text) }, "", wants)
+}
+
+// wake is wakeDevices's push sent to every device but a Mac.
+func (p *Pusher) wake(reason string) {
+	p.sendAs(map[string]any{"aps": map[string]any{"content-available": 1}, "persona_wake": reason, compat.WakeField: reason}, "", "background", "5",
+		func(d Device) bool { return d.Kind != kindMac })
 }
 
 // interactionPayload is interactionPayloadIn in the default language.

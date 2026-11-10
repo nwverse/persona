@@ -669,7 +669,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	return it
 }
 
-// foldNoise keeps noise one event per atom (docs/assistant/inbox.md "Events and the handling chain"): the noise a plan opens goes into the
+// foldNoise keeps noise one event per atom (docs/assistant/inbox.md "Events and handling chain"): the noise a plan opens goes into the
 // conversation's open noise event, or into one new event for all of it; an existing noise event never takes what
 // the model sorts higher (that opens its own event instead). Under b.mu.
 func (b *inboxBook) foldNoise(connectorID, thread string, plan *groupPlan) {

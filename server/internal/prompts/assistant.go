@@ -215,7 +215,7 @@ type Snapshot struct {
 	Machines      []SnapshotMachine
 	Needs, Unread []SnapshotAgent
 	// Waiting: stopped on something the hub waits out for them (a retry, a deploy, another agent); Done: finished
-	// within a day, with the conclusion (docs/assistant/agent-work.md "Persona knows").
+	// within a day, with the conclusion (docs/assistant/agent-work.md "What Persona knows").
 	Waiting, Done []SnapshotAgent
 	// Awaiting: stopped on a question to the user, who looked at it and has not answered (docs/protocol/agent-states.md
 	// "Awaiting your reply", #5096).
@@ -553,7 +553,7 @@ type TurnContext struct {
 func RenderTurnContext(c TurnContext) string { return render("assistant/turn_context", c) }
 
 // TaskDone is the system prompt deciding whether a task opened from an assistant conversation is finished, so the
-// hub can mark its todo done (assistant/task_done, docs/assistant/todos.md "Auto-complete").
+// hub can mark its todo done (assistant/task_done, docs/assistant/todos.md "Automatic completion").
 type TaskDone struct {
 	Owner string
 	// Delivery: also say how far the work was delivered (assistant.done_needs_delivery, docs/assistant/todos.md "Delivery"): only
@@ -628,7 +628,7 @@ type HandoffTurn struct {
 func RenderMainHandoff(h MainHandoff) string { return render("assistant/main_handoff", h) }
 
 // Acceptance is a deployed task, for the three lines of its "Please accept" card (assistant/acceptance_input; the system
-// prompt is assistant/acceptance; docs/extensions/bots.md "Please accept").
+// prompt is assistant/acceptance; docs/extensions/bots.md "Task progress and review requests").
 type Acceptance struct {
 	Title, Prompt, Reply string
 	Links                []string // the only links it may pick
@@ -660,3 +660,6 @@ type WorkspaceSession struct {
 func RenderWorkspaceMention(w WorkspaceMention) string {
 	return render("assistant/workspace_mention", w)
 }
+
+// RenderWorkoutReport describes one consented workout, never a medical diagnosis.
+func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }

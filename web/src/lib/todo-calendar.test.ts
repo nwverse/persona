@@ -8,12 +8,16 @@ import {
   calendarTitle,
   clusters,
   dayKey,
+  dropOnAxis,
+  dropOnDay,
+  dropPatch,
   entriesOn,
   firstHour,
   fitDay,
   lanes,
   MORNING,
   minutesInto,
+  movedTodo,
   parseDayKey,
   slotAt,
   startOfWeek,
@@ -142,5 +146,42 @@ describe("to-dos on the calendar (#2029)", () => {
     expect(dayKey(at(9, 23, 59))).toBe("2026-11-09");
     expect(parseDayKey("2026-11-09")).toBe(at(9, 0));
     expect(parseDayKey("nope")).toBeUndefined();
+  });
+});
+
+describe("moving a to-do on the calendar (#2045)", () => {
+  const timed = entry("t", at(10, 18, 0));
+  const allDay = entry("d", at(10, 0), { allDay: true });
+
+  it("a block dropped on the axis: its top edge at the nearest quarter hour, within the day", () => {
+    expect(dropOnAxis(at(12, 0), 14 * 60 + 7)).toEqual({ day: at(12, 0), at: at(12, 14, 0) });
+    expect(dropOnAxis(at(12, 0), 14 * 60 + 8)).toEqual({ day: at(12, 0), at: at(12, 14, 15) });
+    expect(dropOnAxis(at(12, 0), -40).at).toBe(at(12, 0, 0));
+    expect(dropOnAxis(at(12, 0), 24 * 60 + 30).at).toBe(at(12, 23, 45)); // never into the next day
+    expect(dropOnAxis(at(12, 9), 9 * 60, 30).at).toBe(at(12, 9, 0)); // any moment of the day is that day
+  });
+
+  it("dropped on a day as a whole: the same time there, or all day", () => {
+    expect(dropOnDay(timed, at(14, 0))).toEqual({ day: at(14, 0), at: at(14, 18, 0) });
+    expect(dropOnDay(timed, at(14, 9), true)).toEqual({ day: at(14, 0) });
+    expect(dropOnDay(allDay, at(14, 0))).toEqual({ day: at(14, 0) });
+  });
+
+  it("what is saved: due_at for a moment, due_date for a day, nothing where it already is", () => {
+    expect(dropPatch(timed, { day: at(10, 0), at: at(10, 18, 15) })).toEqual({ due_at: iso(at(10, 18, 15)) });
+    expect(dropPatch(timed, { day: at(10, 0), at: at(10, 18, 0) })).toBeUndefined();
+    expect(dropPatch(timed, { day: at(10, 0) })).toEqual({ due_date: "2026-11-10" }); // to the All day row
+    expect(dropPatch(allDay, { day: at(10, 0) })).toBeUndefined();
+    expect(dropPatch(allDay, { day: at(11, 0) })).toEqual({ due_date: "2026-11-11" });
+    expect(dropPatch(allDay, { day: at(10, 0), at: at(10, 9, 30) })).toEqual({ due_at: iso(at(10, 9, 30)) });
+  });
+
+  it("a moved to-do is drawn at once where it went, its other due field cleared", () => {
+    const due = todo("x", { due_date: "2026-11-10", title: "Ship" });
+    const moved = movedTodo(due, { due_at: iso(at(12, 9, 30)) });
+    expect(moved).toMatchObject({ id: "x", title: "Ship", due_at: iso(at(12, 9, 30)), due_date: null });
+    expect(todoEntry(moved)).toMatchObject({ start: at(12, 9, 30), allDay: false });
+    expect(todoEntry(movedTodo(moved, { due_date: "2026-11-13" }))).toMatchObject({ start: at(13, 0), allDay: true });
+    expect(due.due_date).toBe("2026-11-10");
   });
 });

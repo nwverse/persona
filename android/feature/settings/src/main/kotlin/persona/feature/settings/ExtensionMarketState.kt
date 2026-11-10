@@ -378,7 +378,9 @@ internal class CatalogExtensionModel(
         mutable.update { it.copy(loading = true) }
         try {
             val catalog = OfficialMarket.named(res, api.catalog(market = market))
+            // A link from before a rename names the old ID; the market lists the extension under its new one (#2511).
             val extension = catalog.extensions.firstOrNull { it.market == market && it.id == id }
+                ?: catalog.extensions.firstOrNull { it.market == market && it.replaces == id }
             mutable.update {
                 it.copy(extension = extension ?: it.extension, missing = extension == null, error = null,
                     marketName = catalog.markets.firstOrNull { m -> m.id == market }?.label ?: extension?.marketName)

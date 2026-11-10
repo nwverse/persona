@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// One message of a terminal stream (docs/protocol/protocol.md「终端流」).
+/// One message of a terminal stream (docs/protocol/protocol.md「Terminal stream」).
 nonisolated enum TerminalEvent: Sendable {
     /// VT bytes for a cols × rows grid; a full one is the whole screen.
     case frame(epoch: String, seq: Int, full: Bool, cols: Int, rows: Int, data: Data)
@@ -22,7 +22,7 @@ nonisolated enum ServerEvent: Sendable {
     case machines([Machine])
     case sessions(machineID: String, [Session])
     /// What changed in a machine's list since the last (a hub that has `sessions_delta`, asked for on connect): the
-    /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「会话增量」).
+    /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「Session deltas」).
     case sessionsDelta(machineID: String, upsert: [Session], remove: [String])
     /// A lightweight hint, never an authoritative row checkpoint.
     case sessionsList(revision: String)
@@ -43,7 +43,7 @@ nonisolated enum ServerEvent: Sendable {
     /// Feishu conversations with new or changed messages (the Lark gateway's realtime events, relayed by the hub); account:
     /// the Feishu account they are in when it is not the hub's own (`ol_account`).
     case lark(feedIDs: [String], settingsChanged: Bool, account: Int?)
-    /// A messaging source's changes (#2138, docs/extensions/extension-messaging.md「九」): its conversations, of `account` (nil: the
+    /// A messaging source's changes (#2138, docs/extensions/extension-messaging.md「Live events and the Inbox」): its conversations, of `account` (nil: the
     /// default one).
     case messaging(source: String, conversations: [String], settingsChanged: Bool, account: String?)
     /// Personal agent sessions (the gateway's agent-bridge, hub/agents.go) that changed: `<source>:<sessionKey>` ids, empty
@@ -78,9 +78,9 @@ nonisolated enum ServerEvent: Sendable {
     case taskPlan(TaskPlan)
     case terminal(SessionKey, TerminalEvent)
     /// Folders a Files / Git pane watches (`fs_watch`) changed on the computer, or the Git status of `cwd` did (#2439,
-    /// docs/protocol/protocol.md「文件自动刷新」).
+    /// docs/protocol/protocol.md「File auto-refresh」).
     case fsChanged(machineID: String, cwd: String, dirs: [String], git: Bool)
-    /// A plugin changed the badge on one of its main-navigation entries (docs/extensions/extensions.md「UI 插槽」 badges): nil clears it.
+    /// A plugin changed the badge on one of its main-navigation entries (docs/extensions/extensions.md「UI slots」 badges): nil clears it.
     case pluginBadge(plugin: String, id: String, badge: ExtensionBadge?, manager: String?)
     /// An extension's data changed (`ui.invalidate`, docs/extensions/extensions.md「ui.invalidate」): its interface `id` (nil: all of
     /// them) is drawn again where it is shown.
@@ -443,7 +443,7 @@ final class LiveConnection {
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var prepareEvent: (@Sendable (ServerEvent) -> Void)?
     @ObservationIgnored var onConnected: (() -> Void)?
-    /// Picks where each attempt goes when a group has several hubs (HubRoute, docs/protocol/multi-hub.md「选路」): asked before
+    /// Picks where each attempt goes when a group has several hubs (HubRoute, docs/protocol/multi-hub.md「Connections and routing」): asked before
     /// every attempt; nil keeps the config given to `connect`.
     @ObservationIgnored var route: (@MainActor () async -> ServerConfig?)?
     /// The credential each attempt goes with (AppModel.currentCredential): a pairing token this device already traded
@@ -819,7 +819,7 @@ final class LiveConnection {
         }
     }
 
-    /// client_hello (docs/protocol/protocol.md, docs/protocol/i18n.md「协议」): this connection's interface language, so the hub's
+    /// client_hello (docs/protocol/protocol.md, docs/protocol/i18n.md「Protocol: telling hub the language」): this connection's interface language, so the hub's
     /// notices and errors on it, and the user's language for what it produces later, match the app. The naming
     /// contract and MCP forms and links are advertised here (`helloFeatures`), with the platform and version this app's
     /// requests carry (`X-Persona-Client`): the hub lists those cards in a REST answer only to a client whose hello

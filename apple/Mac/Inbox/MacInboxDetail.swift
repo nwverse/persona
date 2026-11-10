@@ -104,7 +104,7 @@ struct MacInboxItemDetail: View {
     }
 
     private var current: InboxItem { InboxStore.shared.items.first { $0.key == item.key } ?? item }
-    /// The manager the links opened from the item read through: the item's; nil for the default's.
+    /// The manager the item's chat and the links opened from the item read through: the item's; nil for the default's.
     private var linkManager: String? { model.linkManager(item.manager) }
 
     var body: some View {
@@ -175,7 +175,7 @@ struct MacInboxItemDetail: View {
         } else if let m = current.moment {
             LarkMomentsPostView(postID: m.postID, pushed: true, manager: linkManager) // the Moments post and its comments
         } else if let c = item.larkConversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: linkManager)
         } else if let m = item.mailSummary {
             MailDetailView(summary: m, accounts: accounts)
         } else {
@@ -204,7 +204,7 @@ struct MacInboxItemWindow: View {
     }
 }
 
-/// The inbox page until the window's three columns take the pieces over (docs/apple/mac.md「三栏接口」): the filters, the
+/// The inbox page until the window's three columns take the pieces over (docs/apple/mac.md「Current Mac UI」): the filters, the
 /// list and the detail side by side, the list's width dragged and remembered.
 struct MacInboxPage: View {
     @AppStorage("mac.inbox.listWidth") private var listWidth: Double = Theme.Size.macInboxListIdeal

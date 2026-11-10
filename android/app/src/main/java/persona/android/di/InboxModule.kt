@@ -36,6 +36,7 @@ object InboxModule {
     @Provides @Singleton fun inboxDetails(owner: InboxDataOwner): persona.feature.inbox.InboxRepository = owner.inbox
     @Provides @Singleton fun assistant(owner: InboxDataOwner): AssistantRepository = owner.assistant
     @Provides @Singleton fun conversations(owner: InboxDataOwner): AssistantConversations = owner.assistant
+    @Provides @Singleton fun inboxTrays(owner: InboxDataOwner): AssistantInboxTrays = owner.trays
 }
 
 /** Replace all repositories and file owners together when the pairing generation changes. */
@@ -142,6 +143,29 @@ class InboxDataOwner @Inject constructor(
             check(runtime.scopedData.value === data) { AppText.get(R.string.app_error_switched) }
             block(repositories)
         }.await()
+    }
+
+    val trays = object : AssistantInboxTrays {
+        override fun drafts(scope: String): Flow<List<AssistantInboxDraft>> = current.flatMapLatest { owner ->
+            if (owner == null || owner.data.scope.path != scope || runtime.scopedData.value !== owner.data) flowOf(emptyList())
+            else owner.inbox.snapshot.map { snapshot ->
+                snapshot.records.mapNotNull { record ->
+                    record.event.suggestion?.takeIf { it.kind == "reply" && !it.handback && it.text.isNotBlank() && !record.item.isDone }
+                        ?.let { AssistantInboxDraft(record.item.id, record.item.title, it, record.manager) }
+                }
+            }
+        }
+        override suspend fun send(scope: String, draft: AssistantInboxDraft, clientId: String): Boolean = use { owner ->
+            if (owner.data.scope.path != scope) throw CancellationException("Pairing changed")
+            val record = owner.inbox.snapshot.value.records.firstOrNull { it.item.id == draft.itemId && it.manager == draft.manager }
+            if (record?.event?.suggestion != draft.suggestion) return@use false
+            owner.inbox.actOnSuggestion(SuggestionRequest(draft.itemId, draft.suggestion.version, SuggestionAction.Confirm,
+                text = draft.suggestion.text, clientId = clientId)) == SuggestionOutcome.Done
+        }
+        override suspend fun refresh(scope: String) = use { owner ->
+            if (owner.data.scope.path != scope) throw CancellationException("Pairing changed")
+            owner.inbox.refresh()
+        }
     }
 
     val inbox = object : persona.feature.inbox.InboxRepository {

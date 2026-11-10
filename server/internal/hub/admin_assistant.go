@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The assistant's cards (docs/assistant/assistant-views.md "Prompts and switches", #2023): hub.json's assistant.persona_view, switched from
+// The assistant's cards (docs/assistant/assistant-views.md "Prompts and toggles", #2023): hub.json's assistant.persona_view, switched from
 // the admin UI without a restart. What reads it per request (Hello: the view tools and actions, inline registration,
 // the channel relay) follows at once. The assistant's own instructions do not: its CLAUDE.md is written when its
 // directory is next prepared (a new conversation, or a warm spare process), and a process reads it and its tool list

@@ -121,7 +121,7 @@ func (r *spaceRig) check(cwd, session, command string) string {
 	return d
 }
 
-// A health conversation's Feishu writes are confirmed on the phone each time (docs/assistant/health.md "Outgoing"), also when a
+// A health conversation's Feishu writes are confirmed on the phone each time (docs/assistant/health.md "Outbound"), also when a
 // rule allows the route and the request reaches the gate proxy on its own instead of through the gated command: it is
 // refused, the API is not asked, and no card is made.
 func TestGateProxyHealthWriteWithAnAllowRuleNeedsTheCard(t *testing.T) {

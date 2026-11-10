@@ -118,7 +118,7 @@ func (t *typedStart) again(ctx context.Context) error {
 // pane_send_failed comes back as terminalNotReady.
 func (n *Node) typeStart(ctx context.Context, launch host.Launcher, created *host.Created, ws, anchor, cmd string, shells ...string) (*typedStart, error) {
 	t := &typedStart{launch: launch, created: created, line: cmd}
-	if startsFromFile(launch) && n.dir != "" && takesAssign(shells...) {
+	if n.typesStartFile(launch, shells...) {
 		path, err := writeStartScript(n.dir, cmd)
 		if err != nil {
 			n.closeNewTab(ctx, launch, created, ws)
@@ -132,6 +132,11 @@ func (n *Node) typeStart(ctx context.Context, launch host.Launcher, created *hos
 		return nil, startRunError(err)
 	}
 	return t, nil
+}
+
+// typesStartFile: runAgentCommand types `. <file>` into launch's pane whose shells are shells, not the command itself.
+func (n *Node) typesStartFile(launch host.Launcher, shells ...string) bool {
+	return startsFromFile(launch) && n.dir != "" && takesAssign(shells...)
 }
 
 // startsFromFile: the launcher's panes get a start file (herdr, herdr-core) rather than the command typed out.

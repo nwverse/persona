@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Retiring a finished task's agent (hub tasks_close.go, docs/assistant/todos.md "Closing the agent of a finished task"): its pane closes and
+// Retiring a finished task's agent (hub tasks_close.go, docs/assistant/todos.md "Close Agents for completed tasks"): its pane closes and
 // the agent process with it, while everything needed to bring it back stays — the session id, its transcript, and in
 // the node's state the launcher, directory and model it ran with. The next message to it resumes it (send: claude
 // --resume, codex resume, traex resume) in a new tab of the same engine. Only an agent that can come back that way is

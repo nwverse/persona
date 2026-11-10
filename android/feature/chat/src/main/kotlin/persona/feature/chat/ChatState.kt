@@ -66,6 +66,9 @@ internal class ChatTimeline {
         expanded[item.id]?.takeIf { it.first.fold == item.fold }?.second ?: listOf(item)
     }.distinctBy { it.id }
 
+    /** Keeps the lines of turns that did not change since the last [lines]: a chat changes at its end. */
+    private val memo = ChatLinesMemo()
+
     /** [live]: the agent is at work; [open] is the same persisted choice for live and historical lines. */
     @Synchronized fun lines(items: List<Item>, live: Boolean, open: Set<String>): persona.core.domain.lines.ChatSnapshot {
         val options = if (window.isFrozen) LineOptions(liveTurnId = frozenLiveId, openWork = open)
@@ -77,7 +80,7 @@ internal class ChatTimeline {
         val source = searchItems(items).filter { it.kind != "turn_duration" }.map { item ->
             item.asLineItem().copy(exchangeId = foldAnchors[item.id])
         }
-        return chatLines(source, options)
+        return memo.lines(source, options)
             .also { if (!window.isFrozen) shownLiveId = it.liveTurnId }
     }
 }

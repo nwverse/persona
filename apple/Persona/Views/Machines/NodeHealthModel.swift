@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// What This Computer Can Do (#3018, the web's #2429, docs/server/machines.md「自检」): what `personad node doctor` finds on a computer, read
+// What This Computer Can Do (#3018, the web's #2429, docs/server/machines.md「Doctor: what this computer can do」): what `personad node doctor` finds on a computer, read
 // as features. The node reports individual checks (server/internal/node/doctor.go, DoctorReport as it is); a person
 // wants to know whether phone approvals work, so each feature is a set of those checks and takes the worst state among
 // them. The grouping, the states and the words are the web's (web/src/lib/node-health.ts): change both together.
@@ -345,7 +345,7 @@ nonisolated enum NodeHealth {
 }
 
 extension APIClient {
-    /// What This Computer Can Do (docs/server/machines.md「自检」): the node's self-check, read only. Full devices only (403 otherwise);
+    /// What This Computer Can Do (docs/server/machines.md「Doctor: what this computer can do」): the node's self-check, read only. Full devices only (403 otherwise);
     /// an old node answers "unknown method", an old hub a plain 404. The hub gives the node 45 s.
     func nodeDoctor(machine: String) async throws -> DoctorReport {
         try JSON.decoder.decode(DoctorReport.self, from: await request("GET", "/api/v1/machines/\(machine)/doctor", timeout: 50))

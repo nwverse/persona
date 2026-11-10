@@ -11,7 +11,7 @@
           "#638"
         ],
         "code": {
-          "web": "web/src/lib/turns.ts collectWakeRuns",
+          "web": "web/src/lib/turns.ts buildBlocks",
           "ios": "Turn.pickAnswerAcrossWakes",
           "android": "RawTurn.finish"
         }
