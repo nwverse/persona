@@ -35,6 +35,7 @@ export function createAgyRuntime(options = {}) {
   const maxSessions = options.maxSessions ?? 80
 
   const activeTurns = new Map() // personaId -> { streamingText, startedAt }
+  const createdAt = new Map() // owned sessions remain discoverable before their first transcript export
   const completedTurns = new Set() // owned ACP turns that ended before a native transcript was available
   const sessionTitles = new Map() // agyId -> title
   const sessionCwds = new Map() // agyId -> cwd
@@ -351,7 +352,7 @@ export function createAgyRuntime(options = {}) {
     const { convs, cwdByConv } = readCacheMetadata()
     const states = readConversationStates()
     const brainRoot = join(agyDir, 'brain')
-    const seenIds = new Set([...Object.keys(convs), ...states.keys()])
+    const seenIds = new Set([...Object.keys(convs), ...states.keys(), ...createdAt.keys()])
     if (existsSync(brainRoot)) {
       try {
         for (const name of readdirSync(brainRoot)) {
@@ -384,7 +385,7 @@ export function createAgyRuntime(options = {}) {
           if (st.mtimeMs > mtimeMs) mtimeMs = st.mtimeMs
         } catch {}
       }
-      if (!mtimeMs) mtimeMs = Date.now()
+      if (!mtimeMs) mtimeMs = createdAt.get(rawId) || Date.now()
 
       const cwd = sessionCwds.get(rawId) || workspacePathOf(native, workspacePathOf(summary, cwdByConv[rawId] || home))
       if (cwd) sessionCwds.set(rawId, cwd)
@@ -406,7 +407,10 @@ export function createAgyRuntime(options = {}) {
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
       let status = running ? 'working' : transcriptStatus(steps, native)
-      if (!hasTranscript && completedTurns.has(pid) && !running) status = 'done'
+      if (!hasTranscript && !running) {
+        if (completedTurns.has(pid)) status = 'done'
+        else if (createdAt.has(rawId)) status = 'idle'
+      }
       const title =
         sessionTitles.get(rawId) ||
         native?.title ||
@@ -503,6 +507,7 @@ export function createAgyRuntime(options = {}) {
     const isAsst = Boolean(params.assistant) || isAssistantDir(cwd)
     const res = await acp.newSession({ cwd, mcpServers: [] })
     const rawId = res.sessionId
+    createdAt.set(rawId, Date.now())
     sessionConfiguration(rawId, res)
     const pid = toPersonaId(rawId)
     sessionCwds.set(rawId, cwd)
@@ -531,6 +536,7 @@ export function createAgyRuntime(options = {}) {
       rev: 1,
       model: sessionModels.get(rawId),
       launcher: 'agy',
+      effort: sessionModes.get(rawId)?.effort,
       agent_label: LABEL,
       space_id: cwd,
       space_name: basename(cwd),

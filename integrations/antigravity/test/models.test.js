@@ -39,10 +39,6 @@ async function fixture(t) {
   await n.ready
   const { session } = await n.peer.call('session.start', { cwd: home })
   const sessionId = session.session_id
-  // Make a read-only transcript export so the inventory contains this fixture session.
-  const brain = join(agyDir, 'brain', sessionId.slice(4))
-  mkdirSync(brain, { recursive: true })
-  writeFileSync(join(brain, 'transcript.jsonl'), JSON.stringify({ step_index: 0, type: 'USER_INPUT', status: 'DONE', content: 'Test', created_at: new Date().toISOString() }))
   const row = () => n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === sessionId)
   return { n, catalog, settings, sessionId, row, session, calls: () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) }
 }
@@ -66,6 +62,8 @@ test('session controls confirm native state and preserve acknowledged fields on 
   assert.equal(n.hello.caps.models, true)
   assert.equal(session.model, entries[0].modelId)
   assert.equal(session.permission_mode, 'auto')
+  assert.equal(session.effort, 'medium')
+  await until('empty owned session remains listed', () => row()?.status === 'idle')
   await n.peer.call('session.modes', { session_id: sessionId, model: entries[1].modelId, permission_mode: 'auto' })
   await until('native configuration', () => row()?.model === entries[1].modelId && row()?.permission_mode === 'auto')
   await assert.rejects(n.peer.call('session.modes', { session_id: sessionId, model: 'missing' }), /Model unavailable/)
