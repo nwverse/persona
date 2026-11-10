@@ -599,6 +599,16 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 Pages follow chats through WebSocket pushes. Full queues, apparently-open dead connections, or server bugs can lose a push; after the Agent stops, no next batch exposes it. Session lists still push (`sessions_delta`), so pages can detect stale content: list `updated_at` newer than latest item's `ts`, with no items for a while, triggers an `after_seq` fetch (`lib/stale-page.ts`, 10-second throttle, foreground only). Compare "file changed" with "page content," not "push arrived," avoiding dependence on any particular healthy push path. Merge retrieved data silently; label "Not real-time" only if fallback repeats.
 Writes without items (titles, modes) also advance `updated_at`, returning empty fetches. Record "Already checked this `updated_at`" to avoid refetching every 10 seconds. Deduplicate fetched items against concurrent pushes (count only `seq` above `covered`), or healthy streams appear to lose data.
 
+## Time cannot tell the last line of a burst was lost, and a push cannot settle a rev (2026-11-10, #1179)
+
+- **What went wrong**: the fallback above ignored an `updated_at` within `STALE_SLACK_MS` (1 s) of the newest line's `ts`, since the file's mtime and the line's own clock compare loosely. When the last line of a burst came 0.3 s after the line before and its push was lost, the page never asked, until the agent wrote again.
+- **Now**: the page also watches the session's `rev` (the list's row and the hub's `revs` event, which moves only the rev; `RevWatch` in `lib/stale-page.ts`) and asks once quiet when it moved since the page's newest read was *sent*. The time rule stays for subagents, which have no rev.
+- **Remembering the list's version when items last came does not work** (#1193's first take): the list comes from the node's poll and the push from its transcript watch, so a list can come before the push for an earlier line, and that push then "acknowledges" a version whose last line never came. Nothing says which lines a rev covers; only a read sent after the move does.
+- **A read's arrival is not its coverage**: a rev that moves while the read is on its way may be for a line written after the node read the file. The watch counts moves and keeps how many it had heard when the read went out.
+- **Cost**: the node reports revs on its next tick, mostly after the items, so an open chat makes one empty `after_seq` read each time it goes quiet, as on iOS (#1189).
+- **Tests that restart the clock**: `lastPulls` in `useTranscript` outlives a page on purpose (reopening a chat does not ask again at once). The sync scenarios start every case at the same fake time with the same session, so an earlier case's ask lay in the future and its pacing silently blocked the next case's: they call `resetStalePullsForTests`.
+- Tests: `useTranscript.gap.test.tsx` ("a lost last line of a burst"), `stale-page.test.ts`, the shared case `burst_last_push_lost_pulls`.
+
 ## Scripted scrolling ignores reduced motion (2026-11-05, #2664)
 
 - Global `prefers-reduced-motion` rules in `styles.css` reduce CSS animation / transition duration to 1 ms, but cannot control explicit JS `scrollTo({ behavior: "smooth" })` / `scrollIntoView({ behavior: "smooth" })`.

@@ -16,14 +16,14 @@ const PAGE = "turns=2&fold_work=1&lazy_images=1";
 const STALE_TICK_MS = 2000;
 /** When each session was last asked for what its stream may have lost: kept across remounts, so reopening a page does not ask again at once. */
 const lastPulls = new Map<string, number>();
+/** After an older page fails, loadEarlier waits this long before asking again (scrolling at the top calls it on every tick), doubling up to the cap. */
+const EARLIER_RETRY_MS = 3000;
+const EARLIER_RETRY_MAX_MS = 30_000;
 
 /** Tests only: forget the asks, as a fresh page load does (each sync case starts its clock at the same moment again). */
 export function resetStalePullsForTests() {
   lastPulls.clear();
 }
-/** After an older page fails, loadEarlier waits this long before asking again (scrolling at the top calls it on every tick), doubling up to the cap. */
-const EARLIER_RETRY_MS = 3000;
-const EARLIER_RETRY_MAX_MS = 30_000;
 
 export interface Transcript {
   items: Item[];
