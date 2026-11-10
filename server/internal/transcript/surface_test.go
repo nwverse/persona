@@ -30,17 +30,11 @@ func TestParseLineReadsTheSurface(t *testing.T) {
 	}
 }
 
-// A program's run (an SDK, `claude -p`) by its entrypoint; the latest line's wins, so one resumed in a terminal is not.
-func TestClaudeProgramByTheLatestEntrypoint(t *testing.T) {
-	for in, want := range map[string]bool{"sdk-cli": true, "sdk-ts": true, "sdk-py": true, "cli": false, "claude-desktop": false, "": false} {
-		if got := ClaudeProgram(in); got != want {
-			t.Errorf("ClaudeProgram(%q) = %v, want %v", in, got, want)
+// A one-shot run of Claude Code's command line by a program (`claude -p`); the Agent SDKs' interactive hosts are not.
+func TestClaudeOneShot(t *testing.T) {
+	for in, want := range map[string]bool{"sdk-cli": true, "sdk-ts": false, "sdk-py": false, "cli": false, "claude-desktop": false, "": false} {
+		if got := ClaudeOneShot(in); got != want {
+			t.Errorf("ClaudeOneShot(%q) = %v, want %v", in, got, want)
 		}
-	}
-	var m Meta
-	ParseLine(0, []byte(`{"type":"user","uuid":"a","message":{"role":"user","content":"hi"},"entrypoint":"sdk-cli"}`), &m)
-	ParseLine(1, []byte(`{"type":"user","uuid":"b","message":{"role":"user","content":"go on"},"entrypoint":"cli"}`), &m)
-	if m.Entrypoint != "cli" || m.Surface != SurfaceCLI {
-		t.Fatalf("entrypoint %q, surface %q", m.Entrypoint, m.Surface)
 	}
 }

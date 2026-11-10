@@ -126,9 +126,6 @@ type Meta struct {
 	// line, in a terminal), "" when the transcript does not say (an SDK, an older version). Claude Code writes its
 	// entrypoint on every line, a Codex rollout its originator on the first (surface.go).
 	Surface string
-	// Entrypoint is the latest line's entrypoint, as Claude Code writes it: "cli", "claude-desktop…", "sdk-…" (a program's
-	// run, ClaudeProgram).
-	Entrypoint string
 	// VersionAt is when the line that said Version was written (zero when it had no timestamp).
 	VersionAt      time.Time
 	PermissionMode string
@@ -417,7 +414,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		meta.Version, meta.VersionAt = e.Version, e.Timestamp
 	}
 	if e.Entrypoint != "" {
-		meta.Surface, meta.Entrypoint = ClaudeSurface(e.Entrypoint), e.Entrypoint
+		meta.Surface = ClaudeSurface(e.Entrypoint)
 	}
 	if meta.StartedAt.IsZero() && !e.Timestamp.IsZero() {
 		meta.StartedAt = e.Timestamp

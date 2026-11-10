@@ -21,11 +21,10 @@ func ClaudeSurface(entrypoint string) string {
 	return ""
 }
 
-// ClaudeProgram: a Claude Code transcript's entrypoint is a program's run of it, through an SDK ("sdk-cli" for `claude -p`,
-// "sdk-ts", "sdk-py"…): a script or a tool at work, not a session of the user's.
-func ClaudeProgram(entrypoint string) bool {
-	return strings.HasPrefix(entrypoint, "sdk-")
-}
+// ClaudeOneShot: a Claude Code transcript's entrypoint is a one-shot run of its command line by a program (`claude -p`,
+// "sdk-cli"): a script at work, not a session of the user's. The Agent SDKs' ("sdk-ts", "sdk-py") are not: interactive
+// hosts (Paseo, ACP clients) run the user's own sessions through them.
+func ClaudeOneShot(entrypoint string) bool { return entrypoint == "sdk-cli" }
 
 // CodexSurface is the client of a Codex rollout's originator (its session_meta): "Codex Desktop" is the Codex App,
 // "codex-tui" / "codex_cli_rs" the command line. `codex exec` and the SDKs over it say neither.
