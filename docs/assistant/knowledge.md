@@ -259,8 +259,9 @@ not report one never matches its rule.
 
 ### Selection (#1523)
 
-`server/internal/kb/selection.go` is the selection document (`kb.Selection`: `messages`, `docs`, `items`, `history`, the JSON of #1523) and its evaluator, pure and
-table-tested (`selection_test.go` covers every example of the issue). `kb.Defaults()` is what a missing document means; `Validate` / `ParseSelection` refuse
+`server/internal/kb/selection.go` is the selection document (`kb.Selection`: `messages`, `docs`, `items`, `history`, the JSON of #1523), with its validation
+(`selection_validate.go`) and its evaluator for messages and documents (`selection_messages.go`, `selection_docs.go`), pure and table-tested (`selection_test.go`
+covers every example of the issue). `kb.Defaults()` is what a missing document means; `Validate` / `ParseSelection` refuse
 unknown fields and rule names, an `order` that does not hold every rule exactly once, `days` / `attachment_days` / `back_days` outside 1…36500 (null is fine),
 `context` outside 0…200, `include_all` or `context` on another rule, and items without a source, a kind (`chat` / `doc`) or an id, twice, or stored without being read.
 The manager hands the document to the engine (`Engine.Selection`); an engine without one keeps everything as before.
