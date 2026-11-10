@@ -2348,6 +2348,11 @@ def stamp_managers(path, obj):
     dflt = MANAGERS["default"]
     if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
+    if path == "/api/v1/inbox" and isinstance(obj.get("items"), list):
+        # the merged list leaves out a manager that doesn't answer (ownership_lists.go mergeList): an offline one's items
+        # aren't in it, so the apps say it is offline rather than empty
+        offline = {m["id"] for m in MANAGERS["list"] if not m.get("online")}
+        obj = dict(obj, items=[x for x in obj["items"] if not (isinstance(x, dict) and x.get("manager") in offline)])
     for key in ("extensions", "plugins", "connectors"):
         if path == "/api/v1/" + key and isinstance(obj.get(key), list):
             obj = dict(obj, **{key: merged_by_manager(obj[key])})
