@@ -390,7 +390,7 @@ struct InteractionPanel: View {
         switch interaction.kind {
         case .question: interaction.questions?.first?.question ?? ""
         case .plan: PlanText.title(interaction.plan ?? "")
-        case .permission: interaction.summary ?? ""
+        case .permission: interaction.permissionTarget ?? ""
         case .screen: interaction.screenDialog?.question ?? ""
         case .elicitation: interaction.elicitation?.message ?? ""
         }
@@ -713,7 +713,7 @@ struct PermissionForm: View {
                 ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
                 Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
-            Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
+            Text(interaction.permissionSubject ?? "")
                 .font(Theme.Font.code)
                 .padding(Theme.Space.m)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -779,7 +779,7 @@ struct AgentPermissionForm: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
+            Text(interaction.permissionSubject ?? "")
                 .font(Theme.Font.code)
                 .padding(Theme.Space.m)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1606,7 +1606,7 @@ struct BUIPermissionForm: View {
     private var command: some View {
         HStack(alignment: .top, spacing: Theme.Space.s) {
             ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-            Text(interaction.summary ?? interaction.toolInput?.pretty ?? "")
+            Text(interaction.permissionSubject ?? "")
                 .font(Theme.Font.code)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
