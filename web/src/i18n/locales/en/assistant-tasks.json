@@ -9,6 +9,8 @@
   "plan_waiting": "Waiting for your Start",
   "dispatch_hint": "Dispatched {count} · See In progress",
   "progress_count": "{value}/{total}",
+  "progress_stopped": "Stopped, not done yet",
+  "progress_stopped_reason": "Stopped, not done yet · {reason}",
   "progress_pr": "PR #{number}",
   "receipt_review_followup": "Persona follows up",
   "report_progress": "Progress update · {title}",
