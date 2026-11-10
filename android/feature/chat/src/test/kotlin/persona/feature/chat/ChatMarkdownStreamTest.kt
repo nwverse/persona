@@ -7,6 +7,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.util.Collections
+import java.util.IdentityHashMap
 import kotlin.random.Random
 import com.mikepenz.markdown.model.State as MarkdownResult
 
@@ -49,8 +51,18 @@ class ChatMarkdownStreamTest {
         val stream = ChatMarkdownStream { whole++; parseMarkdown(it) }
         stream.start("s")
         val text = reply(16_000)
-        for (end in 40..text.length step 40) stream.parse("s", text.substring(0, end))
+        // What each step parsed: the text from its first top-level node that is not one the step before kept.
+        var parsed = 0L
+        var kept: Set<ASTNode> = emptySet()
+        for (end in 40..text.length step 40) {
+            val nodes = (stream.parse("s", text.substring(0, end)).first as MarkdownResult.Success).node.children
+            parsed += end - (nodes.firstOrNull { it !in kept }?.startOffset ?: end)
+            kept = Collections.newSetFromMap(IdentityHashMap<ASTNode, Boolean>()).apply { addAll(nodes) }
+        }
         assertEquals(1, whole) // the first step, which has nothing to go on from
+        // About a section and the delta each step: 29,693 characters in all. A boundary that stopped moving would make
+        // each step parse nearly all of the text again, about 3.2 million.
+        assertTrue("$parsed characters parsed", parsed < 30_600)
     }
 
     @Test fun anEditOrALinkDefinitionParsesTheWholeText() {
