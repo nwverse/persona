@@ -1213,7 +1213,8 @@ The web app can be installed on a phone's home screen / a computer's desktop and
 
 - **manifest** (`public/manifest.webmanifest`): `standalone`; `start_url` / `scope` are both `./` (relative to the manifest: `/` at the root path, `/<prefix>/` under a subpath); background and theme colors are the light `--page`.
   Shortcuts on long-pressing the icon: New chat, Inbox, Agents, Machines. The hub explicitly sets `application/manifest+json` for `.webmanifest` (Go's built-in table doesn't have it, and nosniff is on);
-  it and `sw.js` are `no-cache` like `index.html` (`server/internal/hub/web.go`).
+  it, `sw.js`, the icons and every other file beside `index.html` (not the licenses) are `no-cache` like `index.html` (`server/internal/hub/web.go`): checked again on each load, and a 304 while unchanged.
+  The data directory's copy revalidates by `Last-Modified`; the copy built into the hub has no modification times, so each of those files carries an `ETag`, the first 128 bits of its content's SHA-256, worked out on its first request and kept (`index.html`'s covers the sub-path's `<base>`, and is weak when it goes gzipped).
 - **Icons** are all scaled down from `AppIcon.appiconset`, not redrawn: `app-icon-192/512.png` (`purpose: any`; desktop installs use `mac-512@2x.png`, the Mac icon with rounded corners and margins);
   `app-icon-maskable-192/512.png` (Android's mask: the full-bleed `icon.png` scaled to 84%, the surroundings filled by extending its own edges, so the waving line falls inside the central 80% safe circle);
   `apple-touch-icon.png` (180, full-bleed `icon.png`; iOS adds the rounded corners itself).
@@ -1223,7 +1224,7 @@ The web app can be installed on a phone's home screen / a computer's desktop and
 - **service worker** (`src/sw.ts`, built separately by Vite into `sw.js` at the root; rules in `lib/sw-routes.ts`, with unit tests):
   - Opening the page: it first waits for the hub's `index.html` (3.5 seconds); if it arrives it is used and a copy is stored. If the hub is slow or unreachable it uses the stored copy, the page starts as usual and shows its own "Can't reach the hub". When the server answers the page load with a redirect (an `opaqueredirect`, a 3xx or a followed redirect) or 401/403, such as an expired sign-in in front of the hub sending the browser to its login page, that answer goes to the browser instead of the stored copy, and a redirected page is never stored as the shell (`lib/sw-shell.ts`). The shell is stored under the single key `/`, so `?token=` links never enter the cache.
   - Hashed files under `/assets/`: cache first, fetched if missing; the most recent 400 are kept (about three builds, so a version change never deletes ones in use). Whenever the shell updates, it also fetches the scripts and CSS its first screen needs, so it can open during the next outage too.
-  - Icons and the manifest at the root: the hub's first, the stored copy if that fails.
+  - Icons and the manifest at the root: the hub's first, the stored copy if that fails. The worker's fetch goes through the browser's HTTP cache, so an unchanged icon costs a 304.
   - `/api/` (data, WebSocket, images) and `/admin` never go through it, so data is always live.
   - It only registers in a secure context (https or localhost). Opened over plain http on the intranet it is an ordinary web page; iOS can still "Add to Home Screen", but without the offline shell. Chrome / Edge need https to install (public TLS: see `docs/operations/network.md`).
     It doesn't register in development (`npm run dev`), nor under a reverse proxy subpath (see "Subpath" above).
