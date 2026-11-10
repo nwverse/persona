@@ -13,13 +13,13 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
-import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Owns continuity for one pairing. Retains at most 64 session entries in access-order LRU;
  * observed entries are protected, idle entries lose their jobs on eviction. A 65th simultaneous
- * observer is rejected. These are unmeasured policy limits, not performance measurements.
+ * observer is rejected. Only observed chats synchronize message bodies; four idle entries keep warm navigation.
+ * These are policy limits, not performance measurements.
  */
 class HubChatRepository(
     private val transport: ChatTransport,
@@ -28,7 +28,6 @@ class HubChatRepository(
     private val sessions: SessionsRepository,
     private val scope: CoroutineScope,
     private val foreground: StateFlow<Boolean> = MutableStateFlow(true),
-    private val now: () -> Instant = Instant::now,
     private val seen: (suspend (SessionKey) -> Unit)? = null,
     /** Told the session's transcript whenever it gains items (the outbox finds the messages sent from here in it). */
     private val transcript: (suspend (SessionKey, List<Item>) -> Unit)? = null,
@@ -61,6 +60,9 @@ class HubChatRepository(
         var lastUserId: String? = null
         var eventError: String? = null
         var observedTranscript: List<Item>? = null
+        var durationItems: List<Item>? = null
+        var durations: Map<String, RecordedDuration> = emptyMap()
+        var durationSeconds: Map<String, Long> = emptyMap()
         /** Back online or reopened and no live delta since: the empty delta that ends a turn may have been missed. */
         var reconnected = false
     }
@@ -165,7 +167,7 @@ class HubChatRepository(
         }
         scope.launch {
             foreground.collect { if (it && connection.state.value == ConnectionState.Online) {
-                backgroundCandidates().forEach(::requestSync)
+                retainedEntries().filter { synchronized(entries) { it.references > 0 } }.forEach { requestSync(it.key) }
             } }
         }
     }
@@ -263,6 +265,7 @@ class HubChatRepository(
                         entry.timer?.cancel()
                         entry.subscribed = false
                         connection.send(envelope("unsubscribe", session))
+                        trimIdleEntries()
                     }
                 }
             }
@@ -385,25 +388,26 @@ class HubChatRepository(
 
     private fun retainedEntries(): List<Entry> = synchronized(entries) { entries.values.toList() }
 
+    /** Metadata and unread counts come from the session list; closed chats need no message-body prefetch. */
+    private fun trimIdleEntries() = synchronized(entries) {
+        val idle = entries.values.filter { it.references == 0 }
+        idle.dropLast(4).forEach { victim ->
+            entries.remove(victim.key)
+            victim.ready.complete(Unit)
+            victim.scope.cancel()
+        }
+    }
+
     private suspend fun update(key: SessionKey, change: (Entry) -> Unit) {
         val entry = existing(key) ?: return
         entry.ready.await()
         entry.lock.withLock { change(entry); publish(entry) }
     }
 
-    private fun backgroundCandidates(): List<SessionKey> = sessions.sessions.value
-        .filter { it.isLive || it.updated?.isAfter(now().minusSeconds(24 * 60 * 60)) == true }
-        .map { it to it.updated } // each time parsed once, not on every comparison
-        .sortedWith(compareByDescending<Pair<Session, java.time.Instant?>> { it.first.isLive }.thenByDescending { it.second }.thenBy { it.first.key.path })
-        .take(40).map { it.first.key }
-
     private fun requestSync(key: SessionKey) {
-        val active = existing(key)?.let { synchronized(entries) { it.references > 0 } } == true
-        if (!active && (!foreground.value || key !in backgroundCandidates())) return
         if (connection.state.value != ConnectionState.Online) return
         val entry = synchronized(entries) {
-            if (key !in entries && entries.size >= 64 && entries.values.none { it.references == 0 }) return
-            entry(key)
+            entries[key]?.takeIf { it.references > 0 } ?: return
         }
         entry.scope.launch {
             entry.ready.await()
@@ -527,12 +531,18 @@ class HubChatRepository(
         val metadata = entry.currentSessions?.firstOrNull { it.key == entry.key }
             ?: sessions.sessions.value.firstOrNull { it.key == entry.key }
         val previous = metadata ?: entry.previousSession
-        val userId = entry.reducer.items.lastOrNull { it.startsRecordedTurn }?.id
+        val recorded = entry.reducer.items
+        val userId = recorded.lastOrNull { it.startsRecordedTurn }?.id
         if (entry.lastUserId != userId) {
             if (entry.lastUserId != null) entry.turnDurationSeconds = null
             entry.lastUserId = userId
         }
-        val durations = recordedTurnDurations(entry.reducer.items)
+        if (entry.durationItems !== recorded) {
+            entry.durationItems = recorded
+            entry.durations = recordedTurnDurations(recorded)
+            entry.durationSeconds = entry.durations.mapValues { it.value.seconds }
+        }
+        val durations = entry.durations
         durations[userId]?.takeIf { it.seq > entry.durationAfterSeq }?.let { entry.turnDurationSeconds = it.seconds }
         if (metadata != null) entry.previousSession = metadata
         val machineOnline = entry.machineOnline.takeIf { connection.state.value == ConnectionState.Online }
@@ -555,7 +565,7 @@ class HubChatRepository(
         } ?: SessionRuntimeState(turnDurationSeconds = entry.turnDurationSeconds)
         if (runtime.ended || metadata?.status in listOf("idle", "done", "offline", "blocked")) entry.stopRequested = false
         val seenAt = parseTime(metadata?.seenAt)
-        val lastSeen = entry.lastSeen?.id ?: entry.reducer.items.lastOrNull {
+        val lastSeen = entry.lastSeen?.id ?: recorded.lastOrNull {
             seenAt != null && parseTime(it.ts)?.let { time -> time <= seenAt } == true
         }?.id
         // Only the hub's fresh list counts (cleared while offline); a session missing from it is left alone. While it
@@ -565,7 +575,7 @@ class HubChatRepository(
             entry.realtime.finish()
             entry.reconnected = false
         }
-        val items = entry.realtime.items(entry.reducer.items)
+        val items = entry.realtime.items(recorded)
         entry.state.update { it.copy(items = items, loading = false,
             history = entry.reducer.history,
             streamingItemIds = entry.realtime.streamingItemIds(),
@@ -573,9 +583,9 @@ class HubChatRepository(
             lastSeenMessageId = lastSeen?.let(entry.realtime::displayId),
             ended = runtime.ended || (it.ended && !relisted), replaced = runtime.replaced || (it.replaced && !relisted),
             stopping = runtime.stopping, turnDurationSeconds = runtime.turnDurationSeconds,
-            recordedTurnDurations = durations.mapValues { it.value.seconds }) }
+            recordedTurnDurations = entry.durationSeconds) }
         // However the items came (an event, a page, a catch-up), a message sent from here that is in them is shown.
-        val observed = entry.reducer.items
+        val observed = recorded
         if (transcript != null && observed.isNotEmpty() && observed != entry.observedTranscript) {
             entry.observedTranscript = observed
             entry.scope.launch {

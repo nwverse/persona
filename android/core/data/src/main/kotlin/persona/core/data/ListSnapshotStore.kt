@@ -18,9 +18,9 @@ import kotlinx.serialization.json.decodeToSequence
 /** Atomic, pairing-scoped snapshots. Failed reads never delete or replace the original file. */
 class ListSnapshotStore(private val directory: File) {
     private val lock = Mutex()
-    suspend fun read(key: String): String? = withContext(Dispatchers.IO) { lock.withLock {
+    suspend fun read(key: String, maxBytes: Long = Long.MAX_VALUE): String? = withContext(Dispatchers.IO) { lock.withLock {
         val file = File(directory, snapshotHash(key))
-        if (file.exists()) file.readText() else null
+        if (file.exists() && file.length() <= maxBytes) file.readText() else null
     } }
     /** Decode only the first window, including when an older app left a full history snapshot. */
     @OptIn(ExperimentalSerializationApi::class)

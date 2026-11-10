@@ -19,6 +19,20 @@ import persona.core.domain.inbox.InboxItem
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class InboxConversationsTest {
+    @Test fun defaultControllerDoesNotLoadUnopenedConversationBodies() = runTest {
+        val repository = ConversationRepository(listOf(item("a", "room", "action")))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        runCurrent()
+        assertEquals(1, controller.state.value.rows.size)
+        assertTrue(repository.opened.isEmpty())
+        val key = controller.state.value.rows.single().key
+        val opened = backgroundScope.launch { controller.observe(key).collect {} }
+        runCurrent()
+        assertTrue(repository.opened.isNotEmpty())
+        opened.cancel()
+        runCurrent()
+    }
+
     @Test fun readFyiLeavesTheUnreadGroupsWithoutBecomingPendingOrCompleted() {
         val fyi = item("f", "room", "fyi")
         val read = setOf(InboxReadVersion("f", "v1"))
@@ -35,7 +49,7 @@ class InboxConversationsTest {
     @Test fun explicitlyOpeningBeyondPrefetchLoadsAndKeepsTheCurrentCompletedConversation() = runTest {
         val records = (1..26).map { item("item-${it.toString().padStart(2, '0')}", "room-${it.toString().padStart(2, '0')}", "fyi") }
         val repository = ConversationRepository(records)
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val key = controller.state.value.rows.last().key
         repository.window(key.thread).value = window(message(26))
@@ -62,7 +76,7 @@ class InboxConversationsTest {
         assertEquals(2, grouped.rows.map { it.key }.distinct().size)
         val repository = ConversationRepository(listOf(mine, other, item("f", "fyi", "fyi")))
         repository.window("room").value = window(message(1))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val key = controller.state.value.rows.single { it.records.single().item.id == "a" }.key
         val read = controller.readAll(setOf(InboxConversationSection.Action), setOf(key))
@@ -78,7 +92,7 @@ class InboxConversationsTest {
 
     @Test fun anotherManagersRowIsReadAndAcknowledgedAsThatManager() = runTest {
         val repository = ConversationRepository(listOf(item("a", "room", "action"), item("b", "other-room", "action").copy(manager = "m-3")))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val chat = listOf("lark", "conversations", "other-room")
         assertEquals(setOf("m-3"), repository.opened.filter { it.first == "other-room" }.map { it.second?.manager(chat) }.toSet())
@@ -97,7 +111,7 @@ class InboxConversationsTest {
     @Test fun anotherManagersShownMessagesAreReadAsThatManager() = runTest {
         val repository = ConversationRepository(listOf(item("b", "other-room", "fyi").copy(manager = "m-3")))
         repository.window("other-room").value = window(message(1))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         assertTrue(controller.read(controller.captureFyi().single()))
         assertEquals("m-3", repository.visibleUnder.single()?.manager(listOf("lark", "conversations", "other-room")))
@@ -130,7 +144,7 @@ class InboxConversationsTest {
 
     @Test fun capturesOnlyVerifiedMessagesAndNeverUsesEventCount() = runTest {
         val repository = ConversationRepository(listOf(item("a", "room", "fyi")))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val key = controller.state.value.rows.single().key
         assertNull(controller.capture(key))
@@ -149,7 +163,7 @@ class InboxConversationsTest {
         val repository = ConversationRepository(listOf(item("a", "room", "action")))
         repository.window("room").value = window(message(1))
         val composers = ReplyComposers(repository, backgroundScope)
-        val controller = InboxConversations(repository, "paired", backgroundScope, composers)
+        val controller = InboxConversations(repository, "paired", backgroundScope, composers, prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val key = controller.state.value.rows.single().key
         val snapshot = controller.capture(key)!!
@@ -165,7 +179,7 @@ class InboxConversationsTest {
     @Test fun failurePreservesUnreadAndRetryUsesCapturedMessagesOnly() = runTest {
         val repository = ConversationRepository(listOf(item("a", "room", "fyi")))
         repository.window("room").value = window(message(1))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val snapshot = controller.captureFyi()
         repository.accepted = false
@@ -187,7 +201,7 @@ class InboxConversationsTest {
         val repository = ConversationRepository(listOf(item("a", "room", "fyi")))
         repository.window("room").value = window(message(1))
         repository.gate = CompletableDeferred()
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val snapshot = controller.captureFyi().single()
         val first = async { controller.read(snapshot) }
@@ -208,7 +222,7 @@ class InboxConversationsTest {
     @Test fun changedItemVersionRejectsStaleCacheAndBulkSkipsIt() = runTest {
         val repository = ConversationRepository(listOf(item("a", "room", "fyi")))
         repository.window("room").value = window(message(1))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val snapshot = controller.captureFyi().single()
         repository.snapshot.value = InboxSnapshot(records = listOf(item("a", "room", "fyi", version = "v2")))
@@ -222,7 +236,7 @@ class InboxConversationsTest {
         val repository = ConversationRepository(listOf(item("f", "fyi", "fyi"), item("a", "action", "action"), item("doc", null, "fyi")))
         repository.window("fyi").value = window(message(1))
         repository.window("action").value = window(message(2))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val captured = controller.captureFyi()
         assertEquals(listOf("fyi"), captured.map { it.key.thread })
@@ -236,7 +250,7 @@ class InboxConversationsTest {
     @Test fun partialViewportReadsOnlyItsMessagesAndLeavesTheConversationUnread() = runTest {
         val repository = ConversationRepository(listOf(item("a", "room", "action")))
         repository.window("room").value = window(message(1), message(2))
-        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope), prefetchWindows = PREFETCHED_WINDOWS)
         runCurrent()
         val snapshot = controller.capture(controller.state.value.rows.single().key, listOf(message(1)))!!
         assertFalse(snapshot.complete)

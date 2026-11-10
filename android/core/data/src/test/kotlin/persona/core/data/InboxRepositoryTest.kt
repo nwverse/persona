@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -17,6 +18,26 @@ import java.nio.file.Files
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class InboxRepositoryTest {
+    @Test fun persistentSnapshotSubscribersDoNotPollAHubButInboxEventsStillRefresh() = runTest {
+        val directory = Files.createTempDirectory("inbox-no-poll-test").toFile()
+        try {
+            val transport = FakeTransport()
+            val hub = FakeHub()
+            val repository = repository(transport, directory, backgroundScope, hub)
+            repeat(5) { backgroundScope.launch { repository.snapshot.collect() } }
+            runCurrent()
+            repository.snapshot.first { it.refreshes > 0 }
+            val initial = transport.inboxCalls.get()
+            assertTrue(initial > 0)
+            advanceTimeBy(60_000); runCurrent()
+            assertEquals("shell and capsule subscribers must not start full-list polling", initial, transport.inboxCalls.get())
+            hub.events.emit(InboxEvent())
+            runCurrent()
+            advanceTimeBy(1_001); runCurrent()
+            repository.snapshot.first { it.refreshes > initial }
+            assertEquals(initial + 1, transport.inboxCalls.get())
+        } finally { directory.deleteRecursively() }
+    }
     @Test fun updatingWaitsForEveryLarkPageAndPreservesVerifiedWindowOnOnline() = runBlocking {
         val directory = Files.createTempDirectory("window-reconcile-test").toFile()
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -1244,8 +1265,8 @@ class InboxRepositoryTest {
             assertEquals(1, repository.snapshot.value.records.size)
             val loading = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
             owner.launch { repository.snapshot.collect { loading += it.loading } }
-            // The page being shown starts the polling fallback with one refresh of its own; let it finish.
-            withTimeout(5_000) { repository.snapshot.first { it.refreshes >= 2 } }
+            // Snapshot observation no longer starts another full-list refresh on an event-driven hub.
+            delay(100)
             loading.clear()
             suspend fun settled(): Int { delay(window * 4); return transport.inboxCalls.get() }
             val before = settled()
@@ -1296,7 +1317,7 @@ class InboxRepositoryTest {
             repository.refresh()
             val seen = java.util.Collections.synchronizedList(mutableListOf<InboxSnapshot>())
             owner.launch { repository.snapshot.collect { seen += it } }
-            withTimeout(5_000) { repository.snapshot.first { it.refreshes >= 2 } }
+            delay(100)
             seen.clear()
 
             repeat(2) {

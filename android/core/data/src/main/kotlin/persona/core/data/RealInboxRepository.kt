@@ -203,8 +203,10 @@ class RealInboxRepository(
                 quietly { refresh() }
             }
         }
-        // Polling remains a fallback for hubs without invalidation events.
-        scope.launch {
+        // Hub connections already refresh on InboxEvent and reconnect. Snapshot subscribers include the shell and
+        // capsule even with no inbox page shown, so their count must not start another full-list poller.
+        // Legacy transports without a hub event stream retain the polling fallback.
+        if (hubConnection == null) scope.launch {
             current.subscriptionCount.map { it > 1 }.distinctUntilChanged().collectLatest { visible ->
                 if (visible) while (isActive) {
                     try { if (online()) refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
@@ -745,7 +747,17 @@ class RealInboxRepository(
     private fun windowKey(window: Window) = "${window.source.scope}:lark:${window.feedId}:${window.around}"
     private suspend fun restoreWindow(window: Window) = window.lock.withLock {
         if (window.restored) return@withLock
-        snapshots.restore<JsonObject>(windowKey(window))?.let { data ->
+        // Old versions cached whole traversed histories. A cache is only a first-paint hint: leave an oversized
+        // file untouched and fetch the latest page, with older history available through its server cursor.
+        var cached: JsonObject? = null
+        quietly {
+            cached = withContext(Dispatchers.IO) {
+                snapshots?.read(windowKey(window), maxBytes = 512L * 1024)?.let {
+                    persona.core.contracts.JsonCodec.decodeFromString<JsonObject>(it)
+                }
+            }
+        }
+        cached?.let { data ->
             val raw = data.array("messages").map { it.jsonObject }
             val positions = raw.mapNotNull { it.number("position") }
             if (window.around == null || positions.isNotEmpty() && window.around in positions.min()..positions.max()) {
