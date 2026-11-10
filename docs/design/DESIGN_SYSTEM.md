@@ -342,7 +342,7 @@ The closeout card (web, #3612; `web/src/views/chat/CloseoutCard.tsx`) is a stopp
 - Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
   - Section titles are the Agents list's state headers (`SectionHeader`: the name and a `CountBadge` in the state's tone; `FoldButton` for the folding ones), and the count is the items listed under the title. No separate summary line repeats them (#3712).
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
-  - A filter and a sort for such a list go in one button's menu next to the view switch, the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (iOS To-dos, #3740).
+  - A filter and a sort for such a list go in one button's menu next to the view switch, the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (iOS and Android To-dos, #3740).
 
 #### Sessions that need the user
 

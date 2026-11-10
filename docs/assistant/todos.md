@@ -669,13 +669,13 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 
 ## List filter and sort
 
-#3740 (iOS so far; web and Android follow). Beside List | Calendar, the list view has one filter button whose menu (the system's) picks what the list shows and how rows are ordered; both are kept per device (`todos.filter`, `todos.sort`) and worked out on the device from the list it already has, so nothing is asked of the hub.
+#3740 (iOS and Android; the web follows). Beside List | Calendar, the list view has one filter button whose menu (the system's) picks what the list shows and how rows are ordered; both are kept per device (`todos.filter`, `todos.sort`) and worked out on the device from the list it already has, so nothing is asked of the hub.
 
 - **Show**: All (the default), No Due Date, Today, This Week, This Month, each with how many to-dos it would show. Today, This Week and This Month take the to-dos due in them (a due day by its day, a due moment by itself) and also open to-dos already overdue, drawn red ("Was due …"); a done to-do counts only by its own due date. The week is the calendar's (`TodoCalendar.userCalendar`, "Calendar" above): Monday to Sunday in Simplified Chinese, the same days the calendar view shows.
 - **Sort By**: Recent Activity (the default: most recently active first, the list as it always was), Due Date (earliest first, those without one last) or Priority (high, normal, low; then by due date). Rows are ordered inside each status section; the sections keep their order, so Needs you stays first. A merged row sorts by its earliest due and its highest priority member.
 - **With the sections and counts**: the search and the filter pick the to-dos first, then the SOP places them (`docs/assistant/todo-status-sop.md`), so a section with nothing left does not show and each section's count is the to-dos its rows list. A filter opens Other open, as a search does; Shelved and Done stay folded with their counts. Needs you is filtered like the rest, and a line over the list says how many to-dos waiting on the user it leaves out, with Show All. The sidebar's badge and the assistant's Progress count every to-do, whatever this page shows.
 - **Seen**: an active filter shows as a chip beside the button that clears it (`docs/design/DESIGN_SYSTEM.md` 3.4, "List controls"); the button's mark is filled while the filter or the order is not the default. A filter that leaves nothing shows which ("Nothing due this week") and Show All.
-- **Code**: `apple/Shared/TodoListFilter.swift` (`TodoListLogic`, pure; `TodoListFilterTests`), the button and the list in `apple/Persona/Views/Todos/TodosView.swift`.
+- **Code**: iOS `apple/Shared/TodoListFilter.swift` (`TodoListLogic`, pure; `TodoListFilterTests`), the button and the list in `apple/Persona/Views/Todos/TodosView.swift`; Android in `docs/android/android.md`.
 
 ## Project
 
@@ -713,7 +713,7 @@ A to-do it makes is the user's own (no `origin`): work for an agent still goes t
 
 - **Due date, reminder, priority** (#1683): under a row's status, a flag for high priority, the due date ("Due Thu, Nov 12, 18:00", or the day alone; red and "Was due" once it has passed) and a bell while a reminder is still to be pushed. Open to-dos are ordered with what needs the user (needs you, unread; on the web also interrupted and awaiting review) first, then by due date, earliest first, then those without one as before (iOS / Mac `TodosLogic.sortTodos`, web `sortTodos`, Android `ordered`). The detail edits them: iOS / Mac a section of switches and pickers under the title (due date with All Day, Remind Me, Priority), saved shortly after each change (`TodoPlanSection`); the web a row of date / time / datetime inputs and a priority menu (`TodoPlanEditor`); Android shows the line on the list only so far. Checked by `TodoPlanTests` (iOS UI, mock hub) and `scripts/test/web_todo_plan_e2e.py`.
 - **Calendar** (#2029): List | Calendar at the top of the page; the calendar's day, week and month ("Calendar" above).
-- **Filter and sort** (#3740, iOS so far): beside List | Calendar, filter by due date and sort inside each section ("List filter and sort" above).
+- **Filter and sort** (#3740, iOS and Android): beside List | Calendar, filter by due date and sort inside each section ("List filter and sort" above).
 
 ### 3. Hand to Agent
 - **Start a new one** or **Hand to an existing one**.
