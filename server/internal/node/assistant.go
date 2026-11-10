@@ -61,6 +61,9 @@ type assistantProc struct {
 	stdin    io.WriteCloser
 	exited   chan struct{}
 	born     time.Time
+	// personaMCPOnly is fixed at Claude process start. A warm spare must still match
+	// the hub's current capability before it becomes a new conversation.
+	personaMCPOnly bool
 	// stderrDone closes when its stderr ends (watchAssistantStderr has read all of it): what a failed start printed
 	// is complete only then. nil for Codex.
 	stderrDone chan struct{}
@@ -101,6 +104,7 @@ type assistantProc struct {
 	runtime       string   // proto.AssistantRuntimeAgentSDK when it runs on the bridge (assistant_sdk.go), "" on the CLI
 	fallback      string   // why it runs on the CLI though asked to run on the Agent SDK
 	sdkVersion    string   // the bridge's SDK version (its ready line)
+	claudeVersion string   // the Claude Code its system/init named (claude_code_version), "" before it
 
 	// declaredWindow: the window the launcher declares (assistantCompaction.declared), 0 for none; replyModel: the
 	// model of the conversation's last reply. compactIdleAt follows the window Claude Code reports for it (followWindow).
@@ -207,6 +211,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	resume := id != ""
 	st, _ := n.state.get(id)
 	isMain := executionOption(options).IsMain
+	interject := executionOption(options).Interject // this message, not the conversation (assistant_interject.go)
 	if len(options) == 0 {
 		isMain = st.IsMain
 	}
@@ -382,9 +387,13 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 
+	interject = interject && !fresh && p.interjects()
 	content := []map[string]any{}
 	if live != "" {
 		content = append(content, map[string]any{"type": "text", "text": live})
+	}
+	if interject {
+		content = append(content, interjectNote())
 	}
 	for _, img := range images {
 		content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": img.Mime, "data": img.Data}})
@@ -422,6 +431,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			werr = p.awaitStart(assistantStartWait)
 		}
 		if werr == nil {
+			if interject {
+				n.backgroundForeground(p)
+			}
 			break
 		}
 		n.stopAssistant(id)
@@ -489,6 +501,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Subtype  string                   `json:"subtype"`
 			Tasks    json.RawMessage          `json:"tasks"`
 			Tools    []string                 `json:"tools"`
+			Version  string                   `json:"claude_code_version"`
 			Response assistantControlResponse `json:"response"`
 			Event    struct {
 				Type  string `json:"type"`
@@ -520,6 +533,11 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		switch ev.Type {
 		case "system":
 			if ev.Subtype == "init" {
+				if ev.Version != "" {
+					p.mu.Lock()
+					p.claudeVersion = ev.Version
+					p.mu.Unlock()
+				}
 				n.toolsAtStart(p.id, ev.Tools)
 				continue
 			}
@@ -750,6 +768,9 @@ func (n *Node) assistantSessions() []proto.Session {
 				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(m.lastText), st.Size()
 				s.PermissionMode, s.Effort = n.currentModes(p.id, m)
 				setContext(&s, m)
+				// Background shells outlive the turn, as in a pane's session: a channel run (Lark) waits for the turn
+				// they start, and a list shows them (channel.Background).
+				n.setBackground(&s, m)
 				s.ModelFallback = m.modelFallback
 				untitled(&s, m)
 				if !busy {

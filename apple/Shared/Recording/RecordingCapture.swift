@@ -15,6 +15,7 @@ final class RecordingCapture {
     private(set) var state: State = .idle
     private(set) var elapsed: Double = 0
     private(set) var recordingID: UUID?
+    private(set) var rolling = false
     var error: String?
     /// Non-blocking hint, e.g. the Bluetooth microphone was not found and the phone mic is used.
     private(set) var notice: String?
@@ -138,10 +139,10 @@ final class RecordingCapture {
     }
 
     /// `title` / `meeting`: what the recording is called and, for a meeting recording, its meeting (docs/apple/recording.md).
-    func start(locale: String = "zh-CN", input: RecordingInput = .phone, title: String = "", meeting: RecordingMeeting? = nil) async {
+    func start(locale: String = "zh-CN", input: RecordingInput = .phone, title: String = "", meeting: RecordingMeeting? = nil, rolling: Bool = false) async {
         guard state == .idle else { return }
         generation = UUID(); let token = generation
-        state = .starting; error = nil; notice = nil
+        state = .starting; error = nil; notice = nil; self.rolling = rolling
         self.input = input
         let allowed = await Self.permission()
         guard generation == token, state == .starting else { return }
@@ -156,7 +157,7 @@ final class RecordingCapture {
             try await configureSession(token: token)
             // Cancelled while Bluetooth discovery was running: cancelStarting() already released the session and mic.
             guard generation == token else { return }
-            let entry = try RecordingLibrary.shared.create(source: Self.source, locale: locale, title: title, meeting: meeting)
+            let entry = try RecordingLibrary.shared.create(source: Self.source, locale: locale, title: title, meeting: meeting, kind: rolling ? .rolling : .clip)
             recordingID = entry.id
             let writer = RecordingSegmentWriter(directory: RecordingLibrary.shared.folder(entry.id))
             writer.segmentLength = Self.segmentLength
@@ -172,7 +173,7 @@ final class RecordingCapture {
         } catch {
             guard generation == token else { return }
             if let id = recordingID { RecordingLibrary.shared.change(id) { $0.active = false; $0.expectedSegments = 0 } }
-            recordingID = nil; state = .idle
+            recordingID = nil; state = .idle; self.rolling = false
             releaseAudioSession()
             self.error = String(localized: "Can't open the microphone. Try again later.")
         }
@@ -180,7 +181,7 @@ final class RecordingCapture {
 
     func cancelStarting() {
         guard state == .starting else { return }
-        generation = UUID(); state = .idle; notice = nil
+        generation = UUID(); state = .idle; notice = nil; rolling = false
         releaseAudioSession()
     }
 
@@ -231,6 +232,13 @@ final class RecordingCapture {
         }
     }
 
+    /// Erases the last few minutes of a rolling recording everywhere; the segment being written is dropped when it finalizes.
+    func eraseRecent() {
+        guard rolling, let id = recordingID else { return }
+        let now = Date.now
+        RecordingLibrary.shared.erase(id, from: now.addingTimeInterval(-RecordingRolling.eraseMinutes * 60), to: now)
+    }
+
     @discardableResult func stop() -> UUID? {
         if state == .starting { cancelStarting(); return nil }
         guard let writer, let id = recordingID else { return nil }
@@ -242,9 +250,10 @@ final class RecordingCapture {
         for segment in writer.finishedSegments { save(segment, id: id) }
         RecordingLibrary.shared.change(id) { entry in
             entry.active = false
-            entry.expectedSegments = (entry.segments.map(\.index).max() ?? -1) + 1
+            entry.expectedSegments = entry.nextIndex
+            entry.endedAt = .now
         }
-        self.writer = nil; recordingID = nil; state = .idle; interrupted = false; notice = nil
+        self.writer = nil; recordingID = nil; state = .idle; interrupted = false; notice = nil; rolling = false
         releaseAudioSession()
         onSaved?(id)
         return id
@@ -262,7 +271,8 @@ final class RecordingCapture {
     }
 
     private func save(_ segment: RecordingSegmentWriter.Segment, id: UUID) {
-        RecordingLibrary.shared.addSegment(id, RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration))
+        RecordingLibrary.shared.addSegment(id, RecordingSegment(index: segment.index, start: segment.start, duration: segment.duration,
+                                                                startedAt: segment.startedAt))
         onSaved?(id)
     }
 
@@ -283,10 +293,18 @@ final class RecordingCapture {
 
     private func interruption(_ type: AVAudioSession.InterruptionType?) {
         if type == .began, state == .recording, let writer, let id = recordingID {
-            interrupted = true; writer.pause(); state = .paused
+            interrupted = true
+            resumeTask?.cancel(); resumeTask = nil
+            writer.pause(); state = .paused
             // A long call: what was said before it is kept even if the app is stopped before the call ends (a segment
             // still open would be deleted by `recover`). The next segment starts when the recording resumes.
             if let segment = writer.cut() { save(segment, id: id) }
+            if rolling {
+                error = String(localized: "Rolling recording paused — tap Continue to resume")
+                #if os(watchOS)
+                WKInterfaceDevice.current().play(.notification)
+                #endif
+            }
         } else if type == .ended {
             // The system says whether to resume (`shouldResume`); a recording resumes either way: the meeting goes on.
             resumeAfterInterruption()
