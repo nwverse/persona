@@ -2,7 +2,7 @@
 // task cards that follow their agents, the hub's lines (answered, receipt, routed), the "Today" card, message cards about
 // a task, quick results, the dock above the composer, the tasks' questions, the route chip, and a task's detail in the
 // side panel.
-import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
 import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
 import { useRestoredTodos } from "../../lib/todo-restore";
@@ -42,7 +42,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { runningWorkflows, workflowCounts, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { askOptions, dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, orphanedLine, runningSubagents, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -61,6 +61,9 @@ import { useClamped } from "../../ui/use-clamped";
 import { Icon, type IconName } from "../../ui/icons";
 import { ReportLine, ReviewBadge, ReviewLine } from "./Supervision";
 import { AcceptRow, BriefCard } from "./Brief";
+
+// A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget).
+const DecisionRow = lazy(() => import("./DecisionRow").then((m) => ({ default: m.DecisionRow })));
 import { SentLine, TaskSentList } from "./Sent";
 import { latestReview, progressLine } from "../../lib/supervision";
 import { planLabel, planLine, planShown } from "../../lib/plan";
@@ -1412,7 +1415,15 @@ function NeedsYouRow({ item }: { item: NeedsYouItem }) {
   const { todo, asks, status } = item;
   if (asks.length) return <div data-needs-row={item.key}><button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
   const ask = openAsk(todo);
-  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), ...ask }} /></div>;
+  // a decision with its options is answered on the row (#3804); any other ask keeps its one button
+  if (ask && askOptions(ask).length)
+    return (
+      // until its code is here: the row's surface with the task's title, so the tray does not jump
+      <Suspense fallback={<div data-needs-row={item.key} className="truncate rounded-control bg-field px-3 py-2.5 text-[12px] text-ink-2">{todo.title}</div>}>
+        <DecisionRow key={todo.id + ask.asked_at} rowKey={item.key} todo={todo} ask={ask} />
+      </Suspense>
+    );
+  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), outcome: ask.outcome, verdict: ask.verdict, recommend: ask.recommend, asked_at: ask.asked_at }} /></div>;
   return <button type="button" data-needs-row={item.key} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
 }
 

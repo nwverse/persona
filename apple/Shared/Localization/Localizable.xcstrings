@@ -45518,6 +45518,50 @@
       },
       "extractionState": "manual"
     },
+    "Dispatched %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispatched %1$lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "派出 %1$lld 件"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld 件を依頼"
+          }
+        }
+      }
+    },
+    "Dispatched: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dispatched: %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "派出 1 件：%1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "依頼：%1$@"
+          }
+        }
+      }
+    },
     "Display": {
       "localizations": {
         "en": {
@@ -86612,6 +86656,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "下でチェックしたコンピューターだけ。ほかのコンピューターからは見えません。"
+          }
+        }
+      }
+    },
+    "Open [Dispatched Task]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開く"
           }
         }
       }

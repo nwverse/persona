@@ -324,6 +324,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 | `.surface(in:)` | floating panels: composer, strips, toasts, notices | `apple/Persona/DesignSystem/Styling.swift:8` |
 | `.card()` | grouped-row card, padding default 14 | `apple/Persona/DesignSystem/Components.swift:429` |
 | `NoticeBanner` | persistent in-page notice, neutral, caution or danger, one action | `apple/Persona/DesignSystem/Notice.swift:7` |
+| `TaskOpenButton` | compact task-title + Open navigation row, one line with a 44 pt minimum hit area | `apple/Persona/DesignSystem/TaskOpenButton.swift` |
 | `ReadinessCard` | what the main conversation still needs | `apple/Persona/DesignSystem/ReadinessCard.swift:8` |
 
 `.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
@@ -407,6 +408,11 @@ Search may take query operators and scopes; they live inside the search field.
 - Focus: the `switch` class rounds the focus outline to the pill and offsets it 2 px; it shows on keyboard focus only (`:focus-visible`), never after a click. Forced colors draw the track border and knob in system colors.
 - Why green and not the accent: an on/off switch reads as iOS's, and one color on every page; the accent stays for selection and links. Pill-shaped chips that toggle a mode (botmux, find bar's match case) are not switches of this kind.
 
+The web Recordings retention setting (#3780 / #3862) reuses the settings select and numeric input: minutes show
+**Forever** by default, or a finite duration with editable days. The finite option names the duration it will save;
+returning to Forever sends `0`. Only the hub-confirmed value is shown after a save, and transcript days stay separate.
+This is a requested default and interaction change, not a new style or component.
+
 ### 3.8 Chips, badges, avatars, marks
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
@@ -456,6 +462,13 @@ Drawn as Telegram draws them (#2984), with one look on every platform: the web a
 ### 4.1 Navigation hierarchy (super rule 3)
 
 `docs/SUPER_RULES.md` rule 3: Assistant and Agents are the only primary home destinations on iOS, Android and web. Settings opens from the sidebar. Everything else (Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Health, extension pages) is pushed from the drawer. Push by value for new pages; mixing view-based and value-based pushes in one stack is a known trap. An optional Messages page can be switched on and becomes a third primary destination; whether that fits rule 3 needs the rule owner (DS-26).
+
+A dispatched task's Open link (#3711) is a compact row using existing typography, fill, radius and 44 pt touch-target
+ tokens, not a filter or a link to the whole In Progress list. One task shows its title and Open; a plan lists only its
+ own tasks in order. On iPhone it pushes the existing Agent page by `SessionKey` on the Assistant stack, preserving
+ Back to the conversation; on Mac it opens the task's detail. Before an Agent is available it opens that task's
+ starting/failure detail. This targeted navigation correction reuses existing pages; no new visual style or setting.
+ Details and wire contract: `docs/assistant/unified-entry.md`, "What a dispatch opens".
 
 ### 4.2 Gestures
 

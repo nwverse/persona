@@ -346,6 +346,7 @@
     <string name="agents_todo_delete_action">削除</string>
     <string name="agents_todo_done_failed">ToDoを完了できませんでした：%1$s</string>
     <string name="agents_todo_delete_failed">ToDoを削除できませんでした：%1$s</string>
+    <string name="agents_todo_state_didnt_start">起動失敗</string>
     <string name="agents_todo_start_failed">起動できませんでした：%1$s</string>
     <string name="agents_todo_in_progress">進行中</string>
     <plurals name="agents_todo_agents">
@@ -526,6 +527,14 @@
     <string name="agents_todo_calendar_nothing_due">この日が期限のToDoはありません</string>
     <string name="agents_todo_calendar_all_day">終日</string>
     <string name="agents_todo_calendar_reminder">リマインダーあり</string>
+    <string name="agents_todo_calendar_moved">%1$sに移動しました</string>
+    <string name="agents_todo_calendar_undo">元に戻す</string>
+    <string name="agents_todo_calendar_move_failed">期限を変更できませんでした：%1$s</string>
+    <string name="agents_todo_calendar_change_due">期限を変更</string>
+    <string name="agents_todo_calendar_change_due_action">期限を変更…</string>
+    <string name="agents_todo_calendar_change_due_of">期限を変更：%1$s…</string>
+    <string name="agents_todo_calendar_date">日付</string>
+    <string name="agents_todo_calendar_time">時刻</string>
     <plurals name="agents_todo_calendar_undated">
         <item quantity="other">期限なし %1$d 件</item>
     </plurals>

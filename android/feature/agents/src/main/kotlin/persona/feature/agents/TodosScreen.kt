@@ -19,6 +19,7 @@ import persona.core.domain.tasks.Triage
 import persona.core.domain.tasks.TriageRule
 import persona.core.domain.tasks.TriageSection
 import persona.core.domain.tasks.acceptedAtRest
+import persona.core.domain.tasks.checksAsOpen
 import persona.core.domain.tasks.triageTodos
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -31,7 +32,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.domain.tasks.moveTo
 import persona.core.contracts.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -44,6 +47,7 @@ import android.text.format.DateFormat
 import androidx.compose.ui.platform.LocalConfiguration
 import java.time.Instant
 import java.time.ZoneId
+import java.util.Locale
 import java.time.format.DateTimeFormatter
 
 data class TodoMostUrgent(
@@ -155,6 +159,39 @@ fun TodosScreen(
             }
         }
     }
+    // A to-do moved on the calendar (#2045, iOS TodoCalendarMove): drawn there at once; once the hub has it, a success
+    // buzz and "Moved to …" with Undo (which moves it back, without a second notice); a failed save is put back and said
+    // as the shell says failures (an error buzz, a nudge while offline).
+    val feedback = LocalAppFeedback.current
+    val haptics = rememberHaptics()
+    val locale = LocalConfiguration.current.locales[0]
+    fun moveFailed(e: Exception) {
+        if (feedback?.failure(e) != true) onError(res.getString(R.string.agents_todo_calendar_move_failed, e.message.orEmpty()))
+    }
+    val moveTodo: (String, TodoDue) -> Unit = move@{ id, due ->
+        val store = tasks ?: return@move
+        val todo = todos.firstOrNull { it.id == id } ?: return@move
+        val back = todo.due ?: return@move
+        val to = todo.moveTo(due) ?: return@move
+        scope.launch {
+            try {
+                store.setTodoDue(id, to)
+                haptics(Haptic.Success)
+                val undo = FeedbackAction(res.getString(R.string.agents_todo_calendar_undo)) {
+                    scope.launch {
+                        try { store.setTodoDue(id, back) }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { moveFailed(e) }
+                    }
+                }
+                feedback?.notice(res.getString(R.string.agents_todo_calendar_moved, dueWords(to, locale, ZoneId.systemDefault(), now)), undo)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                moveFailed(e)
+            }
+        }
+    }
     val delete: (Todo) -> Unit = { todo ->
         scope.launch {
             try {
@@ -242,6 +279,7 @@ fun TodosScreen(
                     onOpenTodo = onOpenTodo,
                     bottomPadding = padding.calculateBottomPadding(),
                     modifier = Modifier.weight(1f),
+                    onMove = if (tasks != null) moveTodo else null,
                 )
             }
             return@JPage
@@ -388,7 +426,8 @@ private fun TodoTriageRow(
     onRestore: () -> Unit,
 ) {
     val res = agentResources()
-    val finished = todo.isDone && triage.rule != TriageRule.FailedStart
+    // a failed start waiting on the owner reads open, says why in red, and its checkbox closes it (#3713)
+    val finished = !todo.checksAsOpen(triage)
     val state = todo.state(sessionLookup)
     val accepted = triage.rule == TriageRule.Accepted || todo.acceptedAtRest(sessionLookup)
     val urgent = mostUrgentAgent(todo, sessionLookup)
@@ -425,6 +464,8 @@ private fun TodoTriageRow(
                             JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
                         finished && todo.doneBy == "auto" -> JTag(stringResource(R.string.agents_todo_auto_done))
                         finished -> {}
+                        // the hub closed it, yet it waits on the owner: not Done (#3713)
+                        !todo.startError.isNullOrEmpty() -> JTag(stringResource(R.string.agents_todo_state_didnt_start), Tone.Danger)
                         else -> JTag(state.label)
                     }
                 }
@@ -436,7 +477,7 @@ private fun TodoTriageRow(
                 } else {
                     // One line of what is going on (iOS TodoRow): why it finished on its own, the most urgent
                     // agent's latest (red while it waits for you), the notes, or that no agent has it yet.
-                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] })
+                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] }, startFailed = todo.startError?.takeIf { it.isNotEmpty() })
                     // Done as asked but not live yet (#3306): where it is held, while its agents are not at it again.
                     todo.hold?.takeIf { state != TodoState.Working && state != TodoState.NeedsYou }?.let {
                         TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxxl))
@@ -514,6 +555,17 @@ internal fun TodoHoldLine(hold: TodoHold, modifier: Modifier = Modifier) {
     )
 }
 
+/** A due date in words, as a to-do's line says it: "Thu, Nov 12, 18:00", or the day alone; the year only when not [now]'s. */
+internal fun dueWords(due: TodoDue, locale: Locale, zone: ZoneId, now: Instant): String {
+    val year = now.atZone(zone).year
+    fun format(skeleton: String, of: Int) =
+        DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, if (of == year) skeleton else "y$skeleton"), locale)
+    return when (due) {
+        is TodoDue.At -> due.at.atZone(zone).let { format("EEEMMMdHHmm", it.year).format(it) }
+        is TodoDue.Day -> format("EEEMMMd", due.day.year).format(due.day)
+    }
+}
+
 /** A to-do's due date ("Due Thu, Nov 12, 18:00", red once past), high priority and a reminder still to push, in a line
  * (iOS `TodoPlanLine`, #1683); nothing without them. */
 @Composable
@@ -522,14 +574,10 @@ internal fun TodoPlanLine(todo: Todo, modifier: Modifier = Modifier) {
     val locale = LocalConfiguration.current.locales[0]
     val now = Instant.now()
     val sameYear = { i: Instant -> i.atZone(zone).year == now.atZone(zone).year }
-    val dateOnly = { i: Instant ->
-        DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, if (sameYear(i)) "EEEMMMd" else "yEEEMMMd"), locale)
-    }
     val withTime = { i: Instant ->
         DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, if (sameYear(i)) "EEEMMMdHHmm" else "yEEEMMMdHHmm"), locale)
     }
-    val dueText = parseTime(todo.dueAt)?.let { withTime(it).format(it.atZone(zone)) }
-        ?: todo.dueDay?.let { d -> dateOnly(d.atStartOfDay(zone).toInstant()).format(d) }
+    val dueText = todo.due?.let { dueWords(it, locale, zone, now) }
     val remind = todo.remind?.takeIf { todo.remindedAt == null && !todo.isDone }
     val high = todo.priority == "high" && !todo.isDone
     if (dueText == null && remind == null && !high) return
@@ -580,10 +628,11 @@ internal fun mostUrgentSummary(urgent: TodoMostUrgent?, card: Interaction? = nul
 
 /** The open row's line under the title: the auto-done reason, the most urgent agent, the notes, or "Not handed to an agent yet". */
 @Composable
-private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interaction?) {
+private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interaction?, startFailed: String? = null) {
     val palette = PersonaTheme.palette
     val reason = todo.autoDoneReason
-    val summary = when (val line = mostUrgentSummary(urgent, card)) {
+    // a failed start waiting on the owner: why it did not start, in red (DESIGN_SYSTEM 5.6)
+    val summary = if (startFailed != null) stringResource(R.string.agents_todo_start_failed, startFailed) else when (val line = mostUrgentSummary(urgent, card)) {
         is TodoUrgentSummary.StartFailed -> stringResource(R.string.agents_todo_start_failed, line.error)
         is TodoUrgentSummary.Words -> line.text
         is TodoUrgentSummary.Asks -> line.text.text()
@@ -608,7 +657,11 @@ private fun TodoActivityLine(todo: Todo, urgent: TodoMostUrgent?, card: Interact
         Text(
             text,
             style = PersonaTheme.type.caption,
-            color = if (waiting) palette.needsYou.text else palette.ink2,
+            color = when {
+                startFailed != null && reason == null -> palette.danger.text
+                waiting -> palette.needsYou.text
+                else -> palette.ink2
+            },
             maxLines = if (notes != null && text == notes) 1 else 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)

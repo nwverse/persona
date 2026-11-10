@@ -523,6 +523,9 @@ type Supervise struct {
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
+	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
+	// owner_cannot_answer; #3804).
+	Decisions bool
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
@@ -557,12 +560,30 @@ type SuperviseEntry struct {
 	// cards a leader gave the user.
 	Asks      []SuperviseAsk
 	Decisions string
+	// recheck and owner_cannot_answer: the decision as it was asked; owner_cannot_answer: the owner's answer
+	// (decide_yourself, not_what_i_asked, explain_first).
+	Decision *SuperviseDecision
+	Response string
 	// From the task's brief (#3822): Asked is the owner's message that led to the work (clipped) and AskedAt its day;
 	// Started says who started it when it was not the owner; Dropped are the criteria scope changes took out.
 	// (assistant, leader, routine, hub) and StartedWhy the reason given.
 	Asked, AskedAt, Started, StartedWhy string
 	Dropped                             []string
 }
+
+// SuperviseDecision is a decision a task's supervisor put to the owner (task_review needs_user), as a supervision
+// entry repeats it: why only the owner can decide, the question, the options with what each leads to, the one
+// recommended, what waiting costs, and whether it is never taken by default.
+type SuperviseDecision struct {
+	WhyOwner, Question, Recommend, Cost string
+	Options                             []SuperviseOption
+	NeverDefault                        bool
+	// Background: where the task came from and where it stood, as the hub told the owner.
+	Background string
+}
+
+// SuperviseOption is one option of a SuperviseDecision.
+type SuperviseOption struct{ Label, LeadsTo string }
 
 // SuperviseAsk is one card of a task's agent on its way to the user: its interaction id, kind (question, permission,
 // plan), the agent's machine (a name) and short session id, what it asks, and whether the rung below did not handle it in time.

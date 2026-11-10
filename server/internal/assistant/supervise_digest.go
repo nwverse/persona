@@ -147,7 +147,10 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Escalated: escalatedIn(list),
 			LeaderStuck: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:     slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
-			Asked:       askedIn(list), AskMinutes: int(askHoldFor.Minutes())})
+			Decisions: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool {
+				return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
+			}),
+			Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes())})
 	}
 	b.mu.Lock()
 	queued := b.queued[to]
@@ -319,6 +322,15 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
 			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
 		}
+	case sigUndecidable:
+		if st != reviewNeedsUser {
+			return prompts.SuperviseEntry{}, false // decided or reviewed again meanwhile
+		}
+	case sigRecheck:
+		if a, ok := s.askCopy(t.ID); st != reviewNeedsUser || !ok || !a.AcceptedAt.IsZero() ||
+			"recheck@"+a.AskedAt.UTC().Format(time.RFC3339Nano) != g.Key {
+			return prompts.SuperviseEntry{}, false // answered, or asked again, meanwhile
+		}
 	}
 	var asks []prompts.SuperviseAsk
 	if g.Kind == sigAsk {
@@ -344,6 +356,12 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	if g.Kind == sigOrphaned {
 		e.Orphan = g.Orphan
+	}
+	if g.Kind == sigRecheck || g.Kind == sigOwnerCannot {
+		e.Decision = g.Decision
+	}
+	if g.Kind == sigOwnerCannot { // the owner's answer is the signal, not a reason in brackets
+		e.Detail, e.Response = "", g.Detail
 	}
 	if g.Kind == sigFailed {
 		s.remedyEntry(ctx, t, &e) // its kept tab, and the turn that hears of it (start_remedy.go)
@@ -397,7 +415,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigOverdue: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigOverdue: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:

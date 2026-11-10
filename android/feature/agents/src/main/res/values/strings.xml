@@ -361,6 +361,7 @@
     <string name="agents_todo_delete_action">Delete</string>
     <string name="agents_todo_done_failed">Couldn\'t complete the to-do: %1$s</string>
     <string name="agents_todo_delete_failed">Couldn\'t delete the to-do: %1$s</string>
+    <string name="agents_todo_state_didnt_start">Didn\'t start</string>
     <string name="agents_todo_start_failed">Couldn\'t start: %1$s</string>
     <string name="agents_todo_in_progress">In progress</string>
     <plurals name="agents_todo_agents">
@@ -543,6 +544,14 @@
     <string name="agents_todo_calendar_nothing_due">Nothing is due this day</string>
     <string name="agents_todo_calendar_all_day">All day</string>
     <string name="agents_todo_calendar_reminder">Reminder set</string>
+    <string name="agents_todo_calendar_moved">Moved to %1$s</string>
+    <string name="agents_todo_calendar_undo">Undo</string>
+    <string name="agents_todo_calendar_move_failed">Couldn\'t change the due date: %1$s</string>
+    <string name="agents_todo_calendar_change_due">Change Due Date</string>
+    <string name="agents_todo_calendar_change_due_action">Change Due Date…</string>
+    <string name="agents_todo_calendar_change_due_of">Change Due Date: %1$s…</string>
+    <string name="agents_todo_calendar_date">Date</string>
+    <string name="agents_todo_calendar_time">Time</string>
     <plurals name="agents_todo_calendar_undated">
         <item quantity="one">1 without a due date</item>
         <item quantity="other">%1$d without a due date</item>

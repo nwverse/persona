@@ -264,7 +264,7 @@ func TestPairJob(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("pair job still running")
 		}
-		time.Sleep(10 * time.Millisecond)
+		<-time.After(10 * time.Millisecond)
 	}
 	if j := m.Job(); j.State != JobDone || j.Kind != "pair" || j.UDID != testUDID {
 		t.Fatalf("job = %+v", j)
@@ -272,7 +272,7 @@ func TestPairJob(t *testing.T) {
 	t.Setenv("FAKE_PAIR_FAIL", "1")
 	_ = m.StartPair(testUDID)
 	for m.Job().State == JobRunning {
-		time.Sleep(10 * time.Millisecond)
+		<-time.After(10 * time.Millisecond)
 	}
 	if j := m.Job(); j.State != JobFailed || j.Code != "trust_pending" {
 		t.Fatalf("job = %+v", j)
@@ -281,7 +281,7 @@ func TestPairJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	for m.Job().State == JobRunning {
-		time.Sleep(10 * time.Millisecond)
+		<-time.After(10 * time.Millisecond)
 	}
 	if _, err := m.store.Load(testUDID); err != ErrNotPaired {
 		t.Fatalf("after forget: %v", err)

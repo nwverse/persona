@@ -346,6 +346,7 @@
     <string name="agents_todo_delete_action">删除</string>
     <string name="agents_todo_done_failed">完成待办失败：%1$s</string>
     <string name="agents_todo_delete_failed">删除待办失败：%1$s</string>
+    <string name="agents_todo_state_didnt_start">没开起来</string>
     <string name="agents_todo_start_failed">启动失败：%1$s</string>
     <string name="agents_todo_in_progress">正在进行</string>
     <plurals name="agents_todo_agents">
@@ -526,6 +527,14 @@
     <string name="agents_todo_calendar_nothing_due">这天没有到期的待办</string>
     <string name="agents_todo_calendar_all_day">全天</string>
     <string name="agents_todo_calendar_reminder">有提醒</string>
+    <string name="agents_todo_calendar_moved">已移到 %1$s</string>
+    <string name="agents_todo_calendar_undo">撤销</string>
+    <string name="agents_todo_calendar_move_failed">没能改截止时间：%1$s</string>
+    <string name="agents_todo_calendar_change_due">改截止时间</string>
+    <string name="agents_todo_calendar_change_due_action">改截止时间…</string>
+    <string name="agents_todo_calendar_change_due_of">改截止时间：%1$s…</string>
+    <string name="agents_todo_calendar_date">日期</string>
+    <string name="agents_todo_calendar_time">时间</string>
     <plurals name="agents_todo_calendar_undated">
         <item quantity="other">%1$d 条没有截止</item>
     </plurals>
