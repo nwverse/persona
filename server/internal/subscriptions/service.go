@@ -701,7 +701,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	switch {
 	case !on(next):
 		next.NextRunAt = nil
-	case !wasOn:
+	case !wasOn || p.Recipe != nil: // a new recipe runs soon, also after needs_recipe stopped it
 		next.NextRunAt = &now
 	case schedule:
 		n := s.nextRun(next, now, false)
@@ -729,7 +729,7 @@ func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Sub
 	}
 	s.o.Audit(ctx, next.Connector, "subscription_updated", by, map[string]any{"subscription": id, "fields": changed})
 	s.o.Changed(shown(next), false)
-	if on(next) && !wasOn {
+	if on(next) && (!wasOn || p.Recipe != nil) {
 		s.poke()
 	}
 	return shown(next), nil

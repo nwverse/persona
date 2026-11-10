@@ -64,7 +64,7 @@ type Problem struct {
 	Message string `json:"message"`
 }
 
-// Subscription is one subscription as the API shows it (docs/extensions/subscriptions.md "Subscription").
+// Subscription is one subscription as the API shows it (docs/extensions/subscriptions.md "API").
 type Subscription struct {
 	ID         string `json:"id"`
 	Connector  string `json:"connector"`
