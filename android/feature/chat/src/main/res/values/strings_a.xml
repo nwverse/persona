@@ -489,6 +489,7 @@
     <string name="chat_review_title">Done when</string>
     <string name="chat_review_none">No criteria were given</string>
     <string name="chat_review_open">Not reviewed yet</string>
+    <string name="chat_review_unchecked">Not checked</string>
     <string name="chat_review_met">Met</string>
     <string name="chat_review_missing">Missing</string>
     <string name="chat_review_note">Supervisor: %1$s</string>

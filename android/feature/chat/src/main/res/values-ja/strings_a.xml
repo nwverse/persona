@@ -461,6 +461,7 @@
     <string name="chat_review_title">完了条件</string>
     <string name="chat_review_none">完了条件は未指定</string>
     <string name="chat_review_open">未検収</string>
+    <string name="chat_review_unchecked">未確認</string>
     <string name="chat_review_met">達成</string>
     <string name="chat_review_missing">不足</string>
     <string name="chat_review_note">監督メモ：%1$s</string>

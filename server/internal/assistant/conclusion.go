@@ -67,6 +67,8 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
 	case decideAsk(a):
 		return i18n.T(l, "assistant-reports.verdict_taken")
+	case a.BySupervisor:
+		return i18n.T(l, "assistant-reports.accepted_by_supervisor")
 	case a.Conclusion:
 		return i18n.T(l, "assistant-reports.verdict_acked")
 	}
@@ -86,7 +88,12 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 		color = feishubot.Orange
 	}
 	c := feishubot.NewCard(icon+" "+title, color, verdictText(l, &a))
-	c.Markdown("**" + feishubot.EscapeMarkdown(verdictText(l, &a)) + "**")
+	// The goal, where it is now (with how far the work went out) and the evidence below (#3218).
+	now := feishubot.EscapeMarkdown(verdictText(l, &a))
+	if live := liveText(l, s.todoStages(ctx)[t.ID]); live != "" && a.Outcome != outcomeDecide {
+		now += " · " + feishubot.EscapeMarkdown(live)
+	}
+	c.Markdown(i18n.T(l, "assistant-reports.goal_head", i18n.Args{"goal": feishubot.EscapeMarkdown(clip(oneLine(t.Title), 80)), "now": now}))
 	if r := recommendText(l, &a); r != "" {
 		c.Markdown(feishubot.EscapeMarkdown(r))
 	}
@@ -119,6 +126,31 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 	return c.Note(i18n.T(l, hint))
 }
 
+// liveText says how far a task's work went out, from its delivery (delivery.go) or else its stage; "" when not known.
+func liveText(l i18n.Lang, st todoStage) string {
+	if d := st.Delivery; d != nil {
+		switch d.State {
+		case deliveryLive:
+			return i18n.T(l, "assistant-reports.live_live")
+		case deliveryNone:
+			return i18n.T(l, "assistant-reports.live_none")
+		case deliveryPR, deliveryMerged, deliveryOff:
+			return i18n.T(l, "assistant-reports.live_held_"+d.State)
+		}
+	}
+	switch st.Stage {
+	case "verify":
+		return i18n.T(l, "assistant-reports.live_live")
+	case "deploy":
+		return i18n.T(l, "assistant-reports.live_unchecked")
+	case "review":
+		return i18n.T(l, "assistant-reports.live_held_pr")
+	case "merge":
+		return i18n.T(l, "assistant-reports.live_held_merged")
+	}
+	return ""
+}
+
 // conclusionInput is what a review says of a task's result, for its conclusion card.
 type conclusionInput struct {
 	Outcome   string // outcomeDone, outcomeCannot or outcomeDecide
@@ -130,6 +162,9 @@ type conclusionInput struct {
 	// Deadline and Reversible: a decision's deadline and whether it can be undone (#3127, decision_deadline.go).
 	Deadline   time.Time
 	Reversible bool
+	// Verified: the supervisor checked the evidence (supervisorVerified): a done or cannot conclusion tells the owner and
+	// is not left for them to acknowledge (#3240).
+	Verified bool
 }
 
 // askConclusion keeps supervised task t's conclusion as its ask and posts its card when the bot can; true when the card
@@ -164,6 +199,9 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 	}
 	if a.Reason == "" && in.Outcome == outcomeDone {
 		a.Reason = i18n.T(l, "assistant-reports.verdict_done_default")
+	}
+	if in.Verified && in.Outcome != outcomeDecide {
+		a.AcceptedAt, a.BySupervisor = a.AskedAt, true
 	}
 	if ag := lastAgent(t); ag.SessionID != "" {
 		a.MachineID, a.SessionID = ag.MachineID, ag.SessionID

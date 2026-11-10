@@ -461,6 +461,7 @@
     <string name="chat_review_title">验收标准</string>
     <string name="chat_review_none">派活时没写验收标准</string>
     <string name="chat_review_open">还没验收</string>
+    <string name="chat_review_unchecked">未检查</string>
     <string name="chat_review_met">达成</string>
     <string name="chat_review_missing">缺口</string>
     <string name="chat_review_note">督办说明：%1$s</string>

@@ -222,21 +222,22 @@ type Snapshot struct {
 	Awaiting []SnapshotAgent
 	// Muted: agents (or their spaces) the user turned notifications off for that would be in one of the above; in
 	// none of them, as the Live Activity and the Agents badge count none of them (#4562).
-	Muted         []SnapshotAgent
-	Working       []SnapshotAgent
-	Workflows     []SnapshotWorkflow // background workflow runs still running, newest first
-	PhoneOnline   bool
-	KB            string            // RenderKBDigest, "" leaves it out
-	Chats         *SnapshotChats    // nil: Feishu did not answer in time
-	Calendar      *SnapshotCalendar // nil: the calendar did not answer in time
-	Followups     []SnapshotFollowup
-	Routines      []SnapshotRoutine // the daily tasks that are on (at most eight)
-	RoutinesTotal int               // all of them
-	Missed        []SnapshotMiss    // scheduled runs that failed or were skipped since yesterday 18:00, newest first
-	MissedTotal   int               // all of them (Missed is the newest six)
-	Tasks         []SnapshotTask    // tasks opened from assistant conversations (task_plan), newest first
-	Plans         []SnapshotPlan    // plan cards in the main conversation waiting for "Start", newest first (at most five)
-	PlansTotal    int
+	Muted          []SnapshotAgent
+	Working        []SnapshotAgent
+	Workflows      []SnapshotWorkflow // background workflow runs still running, newest first
+	PhoneOnline    bool
+	KB             string             // RenderKBDigest, "" leaves it out
+	Chats          *SnapshotChats     // nil: Feishu did not answer in time
+	Calendar       *SnapshotCalendar  // nil: the calendar did not answer in time
+	Followups      []SnapshotFollowup // the next eight
+	FollowupsTotal int                // all of them
+	Routines       []SnapshotRoutine  // the daily tasks that are on (at most eight)
+	RoutinesTotal  int                // all of them
+	Missed         []SnapshotMiss     // scheduled runs that failed or were skipped since yesterday 18:00, newest first
+	MissedTotal    int                // all of them (Missed is the newest six)
+	Tasks          []SnapshotTask     // tasks opened from assistant conversations (task_plan), newest first
+	Plans          []SnapshotPlan     // plan cards in the main conversation waiting for "Start", newest first (at most five)
+	PlansTotal     int
 	// Asked: the assistant's ask_user questions nobody answered in time, now to-dos waiting for the user's call (#1617),
 	// oldest first.
 	Asked []SnapshotAsked
@@ -247,7 +248,19 @@ type Snapshot struct {
 	// Approvals: open tasks whose finished work waits for the user's nod to go live (merge, deploy, turn on, send),
 	// oldest first: told to the user as one list to approve at once (docs/assistant/todos.md "Delivery").
 	Approvals []SnapshotApproval
+	// Omit: the sections left out to keep the block within its budget (assistant/context.go fitSnapshot).
+	Omit SnapshotOmit
 }
+
+// SnapshotOmit marks the sections a snapshot leaves out for size (#3203). An omitted section still renders its heading
+// and its count, with the tool that lists it, never as empty: the node sends only the sections that changed, so a
+// section that went missing would read as unchanged, and one rendered without its items as "none".
+type SnapshotOmit struct {
+	Muted, Done, Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+}
+
+// SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).
+func SnapshotCut() string { return render("assistant/snapshot_cut", nil) }
 
 // SnapshotApproval is a task held short of live until the user approves: what it is, how far it got, where it is held.
 type SnapshotApproval struct {
@@ -377,10 +390,18 @@ func RenderLostTasks(tasks []string) string {
 	return render("assistant/lost_tasks", struct{ Tasks []string }{tasks})
 }
 
+// RenderInterject goes with a message the user sent while the conversation was still answering, once its foreground
+// work was moved to the background (node/assistant_interject.go): answer it first. A <persona-context> block only.
+func RenderInterject() string { return render("assistant/interject", nil) }
+
 // RenderUsageRetry sends a conversation's message to the model again after a gateway's impossible usage made Claude
 // Code refuse it as too long and Persona repaired the transcript (assistant/usage_retry, node/assistant_usage.go). It
 // is a <persona-context> block only: the apps show no bubble for it.
 func RenderUsageRetry() string { return render("assistant/usage_retry", nil) }
+
+// RenderModelRetry resumes the same request after a bounded transient model failure. It adds no user bubble and never
+// rewrites the original request (node/assistant_recovery.go).
+func RenderModelRetry() string { return render("assistant/model_retry", nil) }
 
 // TaskNotice tells the main conversation (or a reporting one) about one of its quiet tasks (#1731): it was done, waits for the user, was
 // cut off by the model service or did not start. The assistant decides what to tell the user.
@@ -568,6 +589,9 @@ type TaskDone struct {
 	// Delivery: also say how far the work was delivered (assistant.done_needs_delivery, docs/assistant/todos.md "Delivery"): only
 	// live or nothing to ship closes the task.
 	Delivery bool
+	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
+	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
+	Checks bool
 }
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
@@ -613,6 +637,9 @@ type TaskDoneReply struct {
 	Machine, Ask, Text string
 	From               string `json:"from,omitempty"`
 	Source             string `json:"source,omitempty"`
+	// Earlier is the agent's reply in the turn before the user's own follow-up in this session (its report of the
+	// work, when the follow-up only asks whether it is done); never set for a side-conversation turn (#3111).
+	Earlier string `json:"earlier,omitempty"`
 }
 
 func RenderTaskDoneInput(in TaskDoneInput) string { return render("assistant/task_done_input", in) }

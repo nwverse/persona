@@ -346,7 +346,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		text := strings.TrimSpace(last.LastText)
 		if g.Kind == sigReport {
 			text = "" // it said what it had to in the report
-		} else if g.Kind == sigReview || g.Kind == sigIdle {
+		} else if g.Kind == sigReview || g.Kind == sigIdle || g.Kind == sigUnjudged {
 			if _, answer := s.lastTurn(ctx, last.MachineID, last.SessionID); answer != "" {
 				text = answer
 			}
@@ -360,7 +360,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigEscalated: 0, sigIdle: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigReview: 5, sigStalled: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigEscalated: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigReview: 5, sigStalled: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:

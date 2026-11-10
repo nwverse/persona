@@ -17,6 +17,8 @@ export interface BotFeatures {
   workbench?: boolean;
   /** Only tasks' conclusions are pushed; a finished turn, waiting and interrupted stay in the to-do list and the briefing (#1226); a hub from before leaves it out. */
   only_conclusions?: boolean;
+  /** The task report also pushes execution steps (each finished turn, interruptions, closings), the card as before #3218; off: only goal-level changes. A hub from before leaves it out (and pushes them). */
+  report_steps?: boolean;
 }
 
 export interface FeishuBotStatus {
@@ -52,7 +54,7 @@ export interface FeishuBotUpdate {
   nudge_after?: number;
 }
 
-export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false, only_conclusions: false, workbench: false };
+export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false, only_conclusions: false, workbench: false, report_steps: false };
 
 /** What a hub from before the setting does: nudge after an hour. */
 export const DEFAULT_NUDGE_AFTER = 60;

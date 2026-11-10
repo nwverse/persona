@@ -136,19 +136,19 @@ func (s *Service) briefProgress(ctx context.Context, skip map[string]bool) ([]br
 	var out []briefProgress
 	total := 0
 	for _, t := range open {
-		if taskState(t, s.taskAgents(ctx, t)) != "working" {
+		if st := taskState(t, s.taskAgents(ctx, t)); st != "working" && st != "waiting" { // under way either way (#3274)
 			continue
 		}
 		total++
 		if len(out) < briefProgressMax {
-			out = append(out, briefProgress{ID: t.ID, Title: t.Title, Stage: t.Stage})
+			out = append(out, briefProgress{ID: t.ID, Title: t.Title, Stage: t.Stage, StageKind: t.StageKind})
 		}
 	}
 	return out, total
 }
 
 // briefProgress is one task being worked on, and how far (its stage, "" when not known).
-type briefProgress struct{ ID, Title, Stage string }
+type briefProgress struct{ ID, Title, Stage, StageKind string }
 
 // briefRun is the facts of one run of a routine, kept until its turn has been mirrored and pushed: they are computed when
 // the run starts and said when it ends, so the card and the push say what the run was given.

@@ -2,61 +2,11 @@
 
 Snapshot commit `738ba824c`, date 2026-11-10. All line numbers refer to that commit and will drift. Verify before relying on one.
 
-**Before you add or change UI or an interaction** on any client, read the principles below and the parts of this document your change touches, and run the "UI change self-check" at the end. The PR description names the rules it followed and gives a reason for every deviation (`CLAUDE.md`, "Design spec for UI changes").
+**Before you add or change UI or an interaction** on any client, read `docs/design/PRINCIPLES.md` and the parts of this document your change touches, and run the "UI change self-check" at the end. The PR description names the rules it followed and gives a reason for every deviation (`CLAUDE.md`, "Design spec for UI changes").
 
 ## Product design principles
 
-Five principles decide product questions before any visual rule applies. Each one comes with a check that a reviewer can run on a PR. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
-
-### Principle 1: Defaults first
-
-The common tasks work with no setup, and the default behavior is stable and can be explained in one sentence. Persona is built for everyday people, not only for developers.
-
-- A new install, with only a hub paired, can do the frequent tasks: chat with Persona, start an Agent, answer an Agent's question, approve a plan or tool.
-- A default never changes silently between versions. If one has to change, the release says so and the old behavior stays reachable.
-- Words a non-developer would not know (hub, node, runtime, launcher, MCP) stay off primary screens and out of error messages, or come with a plain explanation (section 5).
-
-Check: the feature works on a fresh install with untouched settings, and the PR can state its default behavior in one plain sentence.
-
-### Principle 2: Progressive disclosure
-
-Advanced features and options meant for expert choices start hidden or collapsed, and the user turns them on in settings. The primary screen shows only what most people need.
-
-- New advanced options default to off and live in Settings (or behind a "More" or advanced group), not on the main chat or Agents screens.
-- Detail opens on request: tool execution stays one summary line until opened (super rule 2, section 4.7), and new visual styles are opt-in choices next to the default Liquid Glass style.
-- Expert terms and raw values (model IDs, ports, paths) appear only inside the advanced area that needs them.
-
-Check: with the feature switched off, the primary screens look and behave exactly as before the PR.
-
-### Principle 3: User control
-
-Every setting that changes behavior can be seen, changed and undone by the user. Persona may change its own settings through an Agent, but it says what will change, asks before applying, and keeps a way back.
-
-- Each behavior-changing setting is visible in Settings with its current value. No hidden flags whose only switch is a chat command.
-- Reversible actions offer Undo (a toast with Undo, section 4.4). Irreversible ones ask first, with the destructive button styled destructive and Cancel available.
-- When Persona or an Agent changes a setting, it first states the effect in plain words (what changes, for which conversations or devices, starting when), waits for the user's confirmation, records the change, and offers a rollback. The model profile switch is the reference pattern: list with a rollback preview, switch, roll back (`docs/assistant/model-profiles.md`).
-
-Check: for each new setting, the PR names where the user sees it, how they change it back, and, if an Agent can change it, the confirmation step and the rollback path.
-
-### Principle 4: Consistency first
-
-Reuse the interaction patterns and components that already exist before inventing one. A new pattern needs a written reason.
-
-- Pages are built from the design-system components (section 3) and tokens (section 2). Never assemble a lookalike of an existing component in a page.
-- The same action looks and behaves the same on every screen and, as far as each platform allows, on iOS, Android and web (section 7).
-- A new component or interaction pattern goes into the design system with a short note in this document saying why the existing ones did not fit.
-
-Check: the PR lists the components and patterns it reused; anything new carries its reason and a matching update to this document.
-
-### Principle 5: Model and product are separate
-
-Speed, model choice, how Persona presents itself and which features are on are four separate settings. A change to one must not quietly change another.
-
-- Model choice and speed belong to model settings and model profiles (`docs/assistant/model-profiles.md`). Product features never hard-code a model or depend on one model's quirks.
-- The avatar, theme color and interface style are three independent choices (`docs/apple/persona.md`). The avatar does not switch models, and switching models does not change the avatar or the UI.
-- Feature switches decide what Persona can do, not which model does it. Turning a feature on does not change the model, and switching profiles does not turn features on or off.
-
-Check: the PR names which of the four dimensions it touches, and switching any other dimension leaves its behavior unchanged.
+The six product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
 ## 1. Purpose, scope and sources of truth
 
@@ -350,6 +300,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Status: `StatusDot` (fixed size 9, labelled), `AgentStateBadge`.
 - Row actions: swipe actions and a context menu with the same actions. Agents rows on iOS have no swipe (context menu only, #1244).
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
+- Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
 
 ### 3.5 Navigation
 
@@ -358,6 +309,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Page titles: `.pageTitle`, `.detailTitle` (`apple/Persona/DesignSystem/PageTitle.swift`).
 - Side rail for iPhone Duo (`apple/Persona/DesignSystem/ShellSideRail.swift:50`).
 - Platforms: web phone shell matches (drawer plus top-bar switch); Android `HomeNavigation` has a 36 dp segment height versus Apple's 44 (DS-18).
+- Assistant switcher: the head of the sidebar is the current assistant (avatar, name, status line, a chevron) and opens the roster: installed assistants as a single-choice list (the default tagged, the current one checked, a count on the others, an offline one's whole row faded to 55% and still selectable), the ones still installing, then New assistant and Manage assistants… (`docs/assistant/managers.md`, "The current assistant"). Web: `web/src/views/AssistantSwitcher.tsx`, a `Menu` whose rows take a lead mark, a tag, a count (with the words a screen reader says for it, `badgeLabel`) and a faded state (`dim`); the row's earlier entries (appearance's three rows under a heading, other hubs, Settings, Disconnect) follow under a divider. The menu scrolls, and no submenu opens over its last rows, so every row stays reachable at 200% zoom and the largest text size. Why a new pattern: the assistant is a scope for the whole app, not a page, so it sits above the pages rather than in the assistant page's top bar where the segmented switcher was. Android: `AssistantSwitcher` opens the roster in `JMenu` (its content slot holds the rows above New assistant and Manage assistants…), as wide as the sidebar and over its rows, closed by a tap outside, scrolled when it does not fit.
 
 ### 3.6 Sheets
 
@@ -374,15 +326,20 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Forms use `.formButton` and `FormAction`.
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
+- `SystemPasteButton` (`apple/Persona/DesignSystem/ClipboardButtons.swift`) wraps the system `PasteButton` for anything that sends what is on the phone's clipboard: a capsule in the accent with the system's own icon and word. Why not `.themedButton`: only the system Paste button reads the clipboard without iOS asking "Allow Paste?" first (the tap is the permission), and the system draws it, so it can be tinted and shaped but not restyled. Place it beside a themed button that does the same thing by reading the clipboard, with one line saying it sends without the prompt (the computer page's Clipboard section, #3064).
 - Web buttons are 32 px tall (hit area expanded on touch). Android: Large 48, Medium 40, Small 32 dp (DS-06).
 
 ### 3.8 Chips, badges, avatars, marks
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
 
+Assistant avatar: a disc with the first character of the assistant's name. The default assistant's is the AI purple; any other takes one of five hues (blue, green, orange, pink, indigo, in that order) by the sum of its id's UTF-8 bytes modulo 5, so every client colors the same assistant alike. A status mark sits at its foot (online green, offline neutral, installing orange) and, on the sidebar's head only, a mark at its head when another assistant has something waiting. Web: `web/src/ui/AssistantAvatar.tsx` with the `--ai` and `--hue-*` tokens. The letter is sized by the disc, not by the system's text size, so it never outgrows it. Android: `JManagerAvatar` (the status mark's ring is cut out of the disc, so the surface behind shows around it), with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows (an offline one's row faded with `HomeTokens.assistantOfflineAlpha`). Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
+
+The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
+
 ### 3.9 Empty states
 
-`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`.
+`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
 
@@ -440,7 +397,7 @@ Today there are seven mechanisms and the same action can use different ones (DS-
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
-- Deep links: `persona://` and `jarvis://` custom schemes, no associated domains.
+- Deep links: the `persona://` custom scheme, plus the former name's scheme kept for old links (`docs/protocol/rolling-upgrade-compatibility.md`); no associated domains.
 - Reminders are agent tools and Scheduled Tasks, not a UI object.
 - Wording differs per surface for the same event (section 5.4).
 
@@ -451,6 +408,12 @@ Links open inside the app in a card that fills the screen. Dragged down to 0.6 i
 ### 4.7 Tool execution collapsed (super rule 2)
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
+
+Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
+parent-chat message bubbles (#3378). Reuse the existing work summary and manually opened tool/report disclosures;
+keep each delivery separately inspectable, including its full text. Nonterminal `running` / `waiting` reports retain
+the existing progress presentation. Empty completion pointers update status without creating another report. The
+shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
 
 ## 5. Content
 
@@ -491,6 +454,7 @@ No HTTP codes, key algorithms, CLI flags or raw error text in the primary line. 
 | Node | never in user-facing English |
 | Agent | lowercase mid-sentence; "Agents" for the tab |
 | Persona | the product and the main assistant |
+| Assistant | one of the hub's assistants, each with its own chats, inbox and computers (`manager` in code, the protocol and docs); zh-Hans 助手, ja アシスタント. Never "manager" in user-facing text |
 | Lark | in en and ja, except where Feishu is a separate option |
 | sign in / sign-in | verb / noun |
 
@@ -610,8 +574,9 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Defaults first: works on a fresh install with untouched settings, and the default behavior fits in one plain sentence (principle 1).
 - [ ] Progressive disclosure: advanced options are off by default and live in Settings or an advanced group, and the primary screens are unchanged when the feature is off (principle 2).
 - [ ] User control: every new behavior-changing setting is visible, changeable and reversible. If Persona or an Agent can change it, the PR names the explanation, the confirmation and the rollback (principle 3).
-- [ ] Consistency: lists the existing components and patterns reused. Anything new has its reason written down and an update to this document (principle 4).
+- [ ] Consistency: lists the existing components, patterns and count definitions reused; a number shown under an existing name uses the same rule. Anything new has its reason written down and an update to this document (principle 4).
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
+- [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
 
 **Rules**
 

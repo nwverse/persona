@@ -15,6 +15,7 @@ import (
 const (
 	sigReview      = "review"      // the work looks finished: review it
 	sigIdle        = "idle"        // its agents stopped, and the work is not finished
+	sigUnjudged    = "unjudged"    // its agents stopped, and the judge could not say whether the work is finished
 	sigNeedsYou    = "needs_you"   // an agent waits for an answer
 	sigStalled     = "stalled"     // working, but nothing moved for long
 	sigInterrupted = "interrupted" // the model service cut its turn off
@@ -80,7 +81,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigFailed, sigInterrupted, sigStarted, sigEscalated: // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated: // started: the user waits to hear it
 		return true
 	case sigReport:
 		return g.Report != upReportProgress

@@ -36,8 +36,13 @@ type WorkoutHeartRate struct {
 
 var workoutUUID = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
+// workoutClockSkew bounds how far past the hub's clock a workout may end. The phone drops a report the hub
+// answers 400, so the bound only rejects data that cannot be a finished workout, never ordinary clock drift.
+const workoutClockSkew = 24 * time.Hour
+
+// validate failures are permanent: the phone drops the report instead of retrying it.
 func (v WorkoutReport) validate(now time.Time) error {
-	if !workoutUUID.MatchString(v.ID) || v.EnabledAt.IsZero() || v.Start.Before(v.EnabledAt) || !v.End.After(v.Start) || v.End.After(now.Add(time.Minute)) || v.Duration < 600 || v.Duration > v.End.Sub(v.Start).Seconds()+1 || v.End.Sub(v.Start) > 7*24*time.Hour || len(v.Title) > 200 || len(v.Source) > 256 || len(v.Activity) > 80 || len(v.HeartRate) > 10080 {
+	if !workoutUUID.MatchString(v.ID) || v.EnabledAt.IsZero() || v.Start.Before(v.EnabledAt) || !v.End.After(v.Start) || v.End.After(now.Add(workoutClockSkew)) || v.Duration < 600 || v.Duration > v.End.Sub(v.Start).Seconds()+1 || v.End.Sub(v.Start) > 7*24*time.Hour || len(v.Title) > 200 || len(v.Source) > 256 || len(v.Activity) > 80 || len(v.HeartRate) > 10080 {
 		return errors.New("invalid workout")
 	}
 	for _, n := range []*float64{&v.Duration, v.Distance, v.Energy} {
