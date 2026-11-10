@@ -75,8 +75,9 @@ struct OpenSessionIntent: OpenIntent {
     nonisolated func perform() async throws -> some IntentResult {
         let key = target.key
         await MainActor.run {
-            AppModel.shared.selectedTab = .chats
-            AppModel.shared.openChat = AppModel.shared.resolve(path: key.path) ?? key
+            // As a notification opens it: a Persona conversation on Assistant, an Agent's on Agents.
+            let model = AppModel.shared
+            model.open(model.resolve(path: key.path) ?? key)
         }
         return .result()
     }

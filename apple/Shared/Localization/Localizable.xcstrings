@@ -106614,6 +106614,29 @@
       },
       "extractionState" : "manual"
     },
+    "Start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Start %lld Tasks" : {
       "localizations" : {
         "en" : {
