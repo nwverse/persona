@@ -15,7 +15,7 @@ import (
 )
 
 // Usage is `personad iphone`'s part of the usage text.
-const Usage = `  personad iphone list|pair|forget|address|find|call …
+const Usage = `  personad iphone list|pair|forget|address|find|mount-ddi|call …
                            this computer's paired iPhones for phone control: pair one over USB once, then the node
                            reaches it on the network (docs/extensions/iphone-pairing.md; personad iphone -h)`
 
@@ -31,6 +31,9 @@ const commandUsage = `usage:
                            where to reach it when Bonjour can't (a VPN address or name); --clear goes back to Bonjour
   personad iphone find [--json]
                            the iPhones advertising RemotePairing on this network (Bonjour), and which are paired here
+  personad iphone mount-ddi <udid> [--ddi-dir <dir>] [--force]
+                           mount the developer disk image the phone's screenshots, input and apps need, from Xcode's
+                           copy on this computer (or <dir>); asks Apple's signing server when the phone has no ticket
   personad iphone call <udid> <op> [<json args>]
                            send one bridge operation through a session of this command's own, for checks`
 
@@ -229,6 +232,45 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 		}
 		w.Flush()
 		return 0
+	case "mount-ddi":
+		udid, dir, force, ok := mountArgs(rest)
+		if !ok {
+			return usage("")
+		}
+		args, _ := json.Marshal(struct {
+			DDIDir string `json:"ddi_dir,omitempty"`
+			Force  bool   `json:"force,omitempty"`
+		}{dir, force})
+		// Uploading the image through the tunnel and asking Apple's signing server take a while.
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		result, err := m.Call(cctx, udid, "mount_ddi", args)
+		if err != nil {
+			return fail(err)
+		}
+		var r struct {
+			Already   bool   `json:"already"`
+			Image     string `json:"image"`
+			Ticket    string `json:"ticket"`
+			Refreshed *bool  `json:"services_refreshed"`
+		}
+		_ = json.Unmarshal(result, &r)
+		if r.Already {
+			fmt.Fprintln(stdout, "The developer disk image is already mounted on "+udid+".")
+			return 0
+		}
+		fmt.Fprintln(stdout, "Mounted the developer disk image on "+udid+".")
+		ticket := map[string]string{"phone": "the phone's own", "apple": "from Apple's signing server"}[r.Ticket]
+		if ticket == "" {
+			ticket = r.Ticket
+		}
+		fmt.Fprintf(stdout, "  image: %s\n  ticket: %s\n", r.Image, ticket)
+		if r.Refreshed != nil && !*r.Refreshed {
+			fmt.Fprintln(stdout, "  services: not read again; the session reconnects on the next call")
+		} else {
+			fmt.Fprintln(stdout, "  services: read again")
+		}
+		return 0
 	case "call":
 		if len(rest) < 2 || len(rest) > 3 {
 			return usage("")
@@ -261,8 +303,36 @@ func explain(err error) string {
 		return "The phone hasn't trusted this computer yet: unlock it, tap Trust and enter its passcode, then run pair again."
 	case "locked":
 		return "The phone is locked: unlock it and try again."
+	case "ddi_missing":
+		return "No developer disk image on this computer: install Xcode (it brings one), or pass --ddi-dir with a folder holding BuildManifest.plist and the images. (" + err.Error() + ")"
+	case "ddi_unsupported_device":
+		return "This computer's developer disk image has no build for this phone; a newer Xcode may have one. (" + err.Error() + ")"
+	case "tss_failed":
+		return "Apple's signing server didn't personalize the image: check this computer's internet connection and try again. (" + err.Error() + ")"
+	case "developer_mode_off":
+		return "Developer Mode is off on the phone: turn it on in Settings › Privacy & Security › Developer Mode, then try again."
 	}
 	return err.Error()
+}
+
+// mountArgs reads `mount-ddi <udid> [--ddi-dir <dir>] [--force]`, flags in any order.
+func mountArgs(args []string) (udid, dir string, force, ok bool) {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--force":
+			force = true
+		case a == "--ddi-dir" && i+1 < len(args) && args[i+1] != "":
+			i++
+			dir = args[i]
+		case strings.HasPrefix(a, "--ddi-dir=") && len(a) > len("--ddi-dir="):
+			dir = strings.TrimPrefix(a, "--ddi-dir=")
+		case !strings.HasPrefix(a, "-") && udid == "":
+			udid = a
+		default:
+			return "", "", false, false
+		}
+	}
+	return udid, dir, force, udid != ""
 }
 
 func printJSON(w io.Writer, v any) int {

@@ -14,7 +14,12 @@ use idevice::core_device::{
     UniversalHidServiceClient, build_screen_audio_offer, build_screen_video_offer, build_start_audio_parameters,
     build_start_video_parameters,
 };
+use idevice::dvt::device_info::DeviceInfoClient;
+use idevice::dvt::message::AuxValue;
+use idevice::dvt::remote_server::RemoteServerClient;
+use idevice::installation_proxy::InstallationProxyClient;
 use idevice::lockdown::LockdownClient;
+use idevice::mobile_image_mounter::ImageMounter;
 use idevice::remote_pairing::{RemotePairingClient, RpPairingSocket, connect_tls_psk_tunnel_native};
 use idevice::rsd::RsdHandshake;
 use idevice::springboardservices::{InterfaceOrientation, SpringBoardServicesClient};
@@ -28,7 +33,7 @@ use tokio::task::JoinHandle;
 use crate::error::{BridgeError, Code, Phase, from_idevice};
 use crate::geometry::{self, Orientation, Point, Screen};
 use crate::keys::{LEFT_SHIFT, Stroke};
-use crate::ops::{Action, AppTarget, ImageFormat, KeyInput, ShotOptions, SwipeSpec};
+use crate::ops::{Action, AppTarget, KeyInput, ShotOptions, SwipeSpec};
 use crate::record::Record;
 use crate::run::Phone;
 use crate::shot;
@@ -43,7 +48,6 @@ const TAP_GAP: Duration = Duration::from_millis(80);
 const KEY_GAP: Duration = Duration::from_millis(15);
 /// What this computer says it is when opening the display stream. Values the phone accepts from a Mac.
 const CLIENT_SUPPORTED_FEATURES: u64 = 140;
-const SIGKILL: u32 = 9;
 const DEVELOPER_MODE: (&str, Option<&str>) = ("DeveloperModeStatus", Some("com.apple.security.mac.amfi"));
 /// Stopping the display stream when idle must not hang `serve` on a link that has gone quiet.
 const STOP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -67,6 +71,12 @@ pub struct Device {
     gate: Option<Gate>,
     apps: Option<AppServiceClient<Box<dyn ReadWrite>>>,
     springboard: Option<SpringBoardServicesClient>,
+    /// Where the service directory answers inside the tunnel, to read it again after a mount.
+    rsd_port: u16,
+    /// The iOS major version, read once.
+    ios_major: Option<u32>,
+    /// The service directory could not be read again after a mount: the session must be started afresh.
+    stale: bool,
 }
 
 /// The phone takes synthetic input only while a display stream is running; its video is read and dropped.
@@ -178,6 +188,9 @@ impl Device {
             gate: None,
             apps: None,
             springboard: None,
+            rsd_port: info.server_rsd_port,
+            ios_major: None,
+            stale: false,
         };
         let udid = device.udid_reported().await?;
         if !udid.eq_ignore_ascii_case(&target.udid) {
@@ -244,6 +257,14 @@ impl Device {
             *slot = lockdown.get_value(Some(key), domain).await.ok();
         }
         out
+    }
+
+    async fn ios_major(&mut self) -> Option<u32> {
+        if self.ios_major.is_none() {
+            let [v] = self.lockdown_values([("ProductVersion", None)]).await;
+            self.ios_major = v.as_ref().and_then(plist::Value::as_string).and_then(major_version);
+        }
+        self.ios_major
     }
 
     async fn developer_mode(&mut self) -> Option<bool> {
@@ -335,17 +356,23 @@ impl Device {
         let frame = screen.map(|s| s.frame(orientation));
 
         let screenshot = self.has_service::<ScreenCaptureServiceClient<Box<dyn ReadWrite>>>();
-        let input = self.has_service::<UniversalHidServiceClient<Box<dyn ReadWrite>>>()
+        let input_services = self.has_service::<UniversalHidServiceClient<Box<dyn ReadWrite>>>()
             && self.has_service::<IndigoHidClient<Box<dyn ReadWrite>>>()
             && self.has_service::<DisplayServiceClient<Box<dyn ReadWrite>>>();
-        let apps = self.has_service::<AppServiceClient<Box<dyn ReadWrite>>>();
+        let old_ios = self.ios_major().await.is_some_and(|m| !input_supported(m));
+        let input = input_services && !old_ios;
+        let apps = self.has_service::<AppServiceClient<Box<dyn ReadWrite>>>()
+            && self.has_service::<RemoteServerClient<Box<dyn ReadWrite>>>();
         let missing = if developer_mode == Some(false) {
             Code::DeveloperModeOff
         } else {
             Code::DdiNotMounted
         };
         let mut notes = Map::new();
-        for (cap, ok) in [("screenshot", screenshot), ("input", input), ("apps", apps)] {
+        if input_services && old_ios {
+            notes.insert("input".into(), json!(Code::Unsupported.as_str()));
+        }
+        for (cap, ok) in [("screenshot", screenshot), ("input", input_services), ("apps", apps)] {
             if !ok {
                 notes.insert(cap.into(), json!(missing.as_str()));
             }
@@ -381,11 +408,8 @@ impl Device {
     async fn screenshot(&mut self, opts: ShotOptions) -> Result<Value, BridgeError> {
         let orientation = self.orientation().await;
         let screen = self.screen().await?;
-        let format = match opts.format {
-            ImageFormat::Png => DeviceImageFormat::Png,
-            ImageFormat::Jpeg => DeviceImageFormat::Jpeg,
-        };
-        let raw = self.capture(format).await?;
+        // Always PNG from the phone: iOS 18 refuses "jpeg"; the bridge converts.
+        let raw = self.capture(DeviceImageFormat::Png).await?;
         let image = shot::prepare(raw, &opts, orientation)?;
         let (pw, ph) = screen.frame(orientation);
         let mut out = json!({
@@ -408,6 +432,11 @@ impl Device {
 
     /// Opens the input gate if it is not open, and the input services.
     async fn ready_for_input(&mut self) -> Result<(), BridgeError> {
+        if let Some(major) = self.ios_major().await
+            && !input_supported(major)
+        {
+            return Err(input_needs_newer_ios(major));
+        }
         if self.gate.is_none() {
             let gate = self.open_gate().await?;
             self.gate = Some(gate);
@@ -673,11 +702,34 @@ impl Device {
         result.map_err(|e| from_idevice(e, Phase::Operation, what))
     }
 
-    async fn installed(&mut self) -> Result<Vec<idevice::core_device::AppListEntry>, BridgeError> {
-        self.with_apps("list apps", async |a| {
-            a.list_apps(false, true, false, false, true).await
-        })
-        .await
+    /// Installed apps, from the installation service: CoreDevice's app list never answered on iOS 18.
+    async fn installed(&mut self) -> Result<Vec<InstalledApp>, BridgeError> {
+        let work = async {
+            let mut proxy = InstallationProxyClient::connect_rsd(&mut self.adapter, &mut self.rsd)
+                .await
+                .map_err(|e| from_idevice(e, Phase::Operation, "installation service"))?;
+            let options = plist::Value::Dictionary(
+                [
+                    ("ApplicationType".to_owned(), plist::Value::String("Any".into())),
+                    (
+                        "ReturnAttributes".to_owned(),
+                        plist::Value::Array(
+                            BROWSE_ATTRIBUTES
+                                .iter()
+                                .map(|a| plist::Value::String((*a).into()))
+                                .collect(),
+                        ),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            );
+            proxy
+                .browse(Some(options))
+                .await
+                .map_err(|e| from_idevice(e, Phase::Operation, "list apps"))
+        };
+        Ok(parse_browse(answer_within(work, "list apps").await??))
     }
 
     async fn list_apps(&mut self, include_system: bool) -> Result<Value, BridgeError> {
@@ -685,13 +737,13 @@ impl Device {
             .installed()
             .await?
             .into_iter()
-            .filter(|a| include_system || !a.is_first_party)
+            .filter(|a| include_system || !a.system)
             .map(|a| {
                 json!({
-                    "bundle_id": a.bundle_identifier,
+                    "bundle_id": a.bundle_id,
                     "name": a.name,
                     "version": a.version,
-                    "type": if a.is_first_party { "system" } else { "user" },
+                    "type": if a.system { "system" } else { "user" },
                 })
             })
             .collect();
@@ -717,7 +769,7 @@ impl Device {
         match launched {
             Ok(r) => Ok(json!({"bundle_id": bundle_id, "pid": r.pid})),
             Err(e) => match self.installed().await {
-                Ok(apps) if !apps.iter().any(|a| a.bundle_identifier == bundle_id) => Err(BridgeError::new(
+                Ok(apps) if !apps.iter().any(|a| a.bundle_id == bundle_id) => Err(BridgeError::new(
                     Code::AppNotFound,
                     format!("no app {bundle_id} on the phone"),
                 )),
@@ -726,35 +778,244 @@ impl Device {
         }
     }
 
+    /// Ends an app through the instruments service (it lists processes with their executables and kills by
+    /// pid): CoreDevice's process list never answered on iOS 18. Only an app process is ever killed.
     async fn terminate_app(&mut self, target: AppTarget) -> Result<Value, BridgeError> {
-        let processes = self
-            .with_apps("list processes", async |a| a.list_processes().await)
-            .await?;
-        let pid = match target {
-            AppTarget::Pid(pid) => processes.iter().any(|p| p.pid == pid).then_some(pid),
-            AppTarget::BundleId(id) => {
-                let apps = self.installed().await?;
-                let app = apps
-                    .iter()
-                    .find(|a| a.bundle_identifier == id)
-                    .ok_or_else(|| BridgeError::new(Code::AppNotFound, format!("no app {id} on the phone")))?;
-                processes
-                    .iter()
-                    .find(|p| {
-                        p.executable_url
-                            .as_ref()
-                            .is_some_and(|u| runs_from(&u.relative, &app.path))
-                    })
-                    .map(|p| p.pid)
-            }
+        let bundle_path = match &target {
+            AppTarget::BundleId(id) => Some(
+                self.installed()
+                    .await?
+                    .into_iter()
+                    .find(|a| &a.bundle_id == id)
+                    .ok_or_else(|| BridgeError::new(Code::AppNotFound, format!("no app {id} on the phone")))?
+                    .path,
+            ),
+            AppTarget::Pid(_) => None,
         };
-        let Some(pid) = pid else {
-            return Ok(json!({"terminated": false}));
+        if !self.has_service::<RemoteServerClient<Box<dyn ReadWrite>>>() {
+            return Err(self.missing_service("terminate app").await);
+        }
+        let work = async {
+            let server = RemoteServerClient::connect_rsd(&mut self.adapter, &mut self.rsd)
+                .await
+                .map_err(|e| from_idevice(e, Phase::Operation, "terminate app"))?;
+            let mut procs = Instruments { server };
+            terminate(&mut procs, &target, bundle_path.as_deref()).await
         };
-        self.with_apps("terminate app", async move |a| a.send_signal(pid, SIGKILL).await)
-            .await?;
-        Ok(json!({"terminated": true}))
+        answer_within(work, "terminate app").await?
     }
+}
+
+/// A running process as the instruments service lists it.
+#[derive(Debug, Clone, PartialEq)]
+struct Process {
+    pid: u32,
+    executable: String,
+    is_app: bool,
+}
+
+/// Two ways the instruments service is asked to end a process.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Kill {
+    /// `killPid:` with the pid as an archived number.
+    KillPid,
+    /// `sendSignal:toPid:` with SIGKILL.
+    Signal,
+}
+
+/// The phone's processes, for `terminate`; the instruments service on a phone, a stand-in in tests.
+#[allow(async_fn_in_trait)]
+trait Processes {
+    async fn list(&mut self) -> Result<Vec<Process>, BridgeError>;
+    async fn kill(&mut self, pid: u32, how: Kill) -> Result<(), BridgeError>;
+    async fn pause(&mut self, d: Duration);
+}
+
+/// How long a killed process gets to disappear from the list before the next try.
+const KILL_SETTLE: Duration = Duration::from_millis(400);
+const KILL_CHECKS: u32 = 4;
+
+/// Ends the app process `target` names (by pid, or the main executable of the bundle at `bundle_path`), and
+/// says it ended only once the phone no longer lists it.
+async fn terminate<P: Processes>(
+    p: &mut P,
+    target: &AppTarget,
+    bundle_path: Option<&str>,
+) -> Result<Value, BridgeError> {
+    let find = |list: &[Process]| {
+        list.iter()
+            .filter(|p| p.is_app)
+            .find(|p| match (target, bundle_path) {
+                (AppTarget::Pid(pid), _) => p.pid == *pid,
+                (_, Some(path)) => main_executable_of(&p.executable, path),
+                _ => false,
+            })
+            .map(|p| p.pid)
+    };
+    let Some(pid) = find(&p.list().await?) else {
+        return Ok(json!({"terminated": false}));
+    };
+    for how in [Kill::KillPid, Kill::Signal] {
+        p.kill(pid, how).await?;
+        for _ in 0..KILL_CHECKS {
+            p.pause(KILL_SETTLE).await;
+            if !p.list().await?.iter().any(|x| x.pid == pid) {
+                let how = match how {
+                    Kill::KillPid => "kill",
+                    Kill::Signal => "signal",
+                };
+                return Ok(json!({"terminated": true, "pid": pid, "how": how}));
+            }
+        }
+    }
+    Err(BridgeError::new(
+        Code::Unsupported,
+        format!(
+            "terminate app: the phone accepted the request but process {pid} is still running; ending apps doesn't work on this phone"
+        ),
+    ))
+}
+
+/// Whether `executable` is the bundle's own executable, directly inside it (not an extension nested deeper).
+fn main_executable_of(executable: &str, bundle_path: &str) -> bool {
+    if bundle_path.is_empty() || !runs_from(executable, bundle_path) {
+        return false;
+    }
+    let exe = executable.strip_prefix("file://").unwrap_or(executable);
+    let exe = percent_decode(exe);
+    let parent = exe.trim_end_matches('/').rsplit_once('/').map_or("", |(dir, _)| dir);
+    let canon = |p: &str| {
+        let p = p.trim_end_matches('/');
+        p.strip_prefix("/private").unwrap_or(p).to_owned()
+    };
+    canon(parent) == canon(bundle_path)
+}
+
+struct Instruments {
+    server: RemoteServerClient<Box<dyn ReadWrite>>,
+}
+
+impl Processes for Instruments {
+    async fn list(&mut self) -> Result<Vec<Process>, BridgeError> {
+        let fail = |e| from_idevice(e, Phase::Operation, "list processes");
+        let list = DeviceInfoClient::new(&mut self.server)
+            .await
+            .map_err(fail)?
+            .running_processes()
+            .await
+            .map_err(fail)?;
+        Ok(list
+            .into_iter()
+            .map(|p| Process {
+                pid: p.pid,
+                executable: p.real_app_name,
+                is_app: p.is_application,
+            })
+            .collect())
+    }
+
+    async fn kill(&mut self, pid: u32, how: Kill) -> Result<(), BridgeError> {
+        let fail = |e| from_idevice(e, Phase::Operation, "terminate app");
+        let mut channel = self
+            .server
+            .make_channel("com.apple.instruments.server.services.processcontrol")
+            .await
+            .map_err(fail)?;
+        let (selector, args) = match how {
+            Kill::KillPid => ("killPid:", vec![AuxValue::archived_value(i64::from(pid))]),
+            Kill::Signal => (
+                "sendSignal:toPid:",
+                vec![AuxValue::archived_value(9i64), AuxValue::archived_value(i64::from(pid))],
+            ),
+        };
+        channel
+            .call_method(Some(plist::Value::String(selector.into())), Some(args), true)
+            .await
+            .map_err(fail)?;
+        // The answer, if the phone sends one, says nothing reliable; the process list does.
+        let _ = tokio::time::timeout(Duration::from_secs(2), channel.read_message()).await;
+        Ok(())
+    }
+
+    async fn pause(&mut self, d: Duration) {
+        tokio::time::sleep(d).await;
+    }
+}
+
+/// The first iOS whose CoreDevice takes remote input (the screen stream and HID): older ones answer error 9021.
+const FIRST_IOS_WITH_REMOTE_INPUT: u32 = 27;
+
+fn input_supported(ios_major: u32) -> bool {
+    ios_major >= FIRST_IOS_WITH_REMOTE_INPUT
+}
+
+fn input_needs_newer_ios(ios_major: u32) -> BridgeError {
+    BridgeError::new(
+        Code::Unsupported,
+        format!(
+            "this iPhone runs iOS {ios_major}, which doesn't support remote input; it needs iOS {FIRST_IOS_WITH_REMOTE_INPUT} or later"
+        ),
+    )
+}
+
+/// "18.7.3" → 18.
+fn major_version(v: &str) -> Option<u32> {
+    v.split('.').next()?.trim().parse().ok()
+}
+
+/// How long the app operations wait for the phone before saying it didn't answer, instead of running into the
+/// request's deadline and ending the session.
+const APP_ANSWER: Duration = Duration::from_secs(20);
+
+async fn answer_within<T>(work: impl std::future::Future<Output = T>, what: &str) -> Result<T, BridgeError> {
+    tokio::time::timeout(APP_ANSWER, work).await.map_err(|_| {
+        BridgeError::new(
+            Code::ServiceUnavailable,
+            format!("{what}: the phone did not answer within {} s", APP_ANSWER.as_secs()),
+        )
+    })
+}
+
+const BROWSE_ATTRIBUTES: &[&str] = &[
+    "CFBundleIdentifier",
+    "CFBundleDisplayName",
+    "CFBundleName",
+    "CFBundleShortVersionString",
+    "ApplicationType",
+    "Path",
+];
+
+#[derive(Debug, Clone, PartialEq)]
+struct InstalledApp {
+    bundle_id: String,
+    name: String,
+    version: Option<String>,
+    /// Apple's own (`ApplicationType` System), not one the user installed.
+    system: bool,
+    path: String,
+}
+
+/// The installation service's `Browse` answer, entries without a bundle ID skipped.
+fn parse_browse(values: Vec<plist::Value>) -> Vec<InstalledApp> {
+    let mut apps: Vec<InstalledApp> = values
+        .iter()
+        .filter_map(plist::Value::as_dictionary)
+        .filter_map(|d| {
+            let text = |k: &str| d.get(k).and_then(plist::Value::as_string).map(str::to_owned);
+            let bundle_id = text("CFBundleIdentifier")?;
+            Some(InstalledApp {
+                name: text("CFBundleDisplayName")
+                    .or_else(|| text("CFBundleName"))
+                    .unwrap_or_else(|| bundle_id.clone()),
+                version: text("CFBundleShortVersionString"),
+                system: text("ApplicationType").is_some_and(|t| t != "User"),
+                path: text("Path").unwrap_or_default(),
+                bundle_id,
+            })
+        })
+        .collect();
+    apps.sort_by(|a, b| a.bundle_id.cmp(&b.bundle_id));
+    apps
 }
 
 /// Whether an executable (a `file://` URL, percent-encoded) lies inside an app bundle (a plain path). Either
@@ -789,8 +1050,136 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+impl Device {
+    /// `mount_ddi` (ddi.rs), then the service directory read again so the developer services show up in this
+    /// session. If that fails the mount still stands and is reported; the session asks to be started afresh.
+    async fn mount_ddi(&mut self, dir: Option<String>, force: bool) -> Result<Value, BridgeError> {
+        let dir = crate::ddi::resolve_dir(dir.as_deref(), std::env::var_os(crate::ddi::DIR_ENV));
+        let mut result = crate::ddi::mount(self, &dir, force).await?;
+        if result["already"] == true {
+            return Ok(result);
+        }
+        let refreshed = match self.adapter.connect(self.rsd_port).await {
+            Ok(stream) => RsdHandshake::new(stream).await.ok(),
+            Err(_) => None,
+        };
+        match refreshed {
+            Some(rsd) => {
+                self.rsd = rsd;
+                self.springboard = None;
+                self.apps = None;
+                result["services_refreshed"] = json!(true);
+            }
+            None => {
+                self.stale = true;
+                result["services_refreshed"] = json!(false);
+            }
+        }
+        Ok(result)
+    }
+
+    async fn mounter(&mut self) -> Result<ImageMounter, BridgeError> {
+        ImageMounter::connect_rsd(&mut self.adapter, &mut self.rsd)
+            .await
+            .map_err(|e| from_idevice(e, Phase::Operation, "image mounter"))
+    }
+}
+
+/// A mount error: what the phone said, kept apart from a dropped link or a locked phone.
+fn mount_error(e: IdeviceError, what: &str) -> BridgeError {
+    let mapped = from_idevice(e, Phase::Operation, what);
+    match mapped.code {
+        Code::Disconnected | Code::DeveloperModeOff | Code::Locked | Code::Timeout => mapped,
+        _ => BridgeError::new(Code::MountFailed, mapped.message),
+    }
+}
+
+impl crate::ddi::Mounter for Device {
+    async fn mounted(&mut self) -> Result<bool, BridgeError> {
+        match self.mounter().await?.lookup_image(crate::ddi::IMAGE_TYPE).await {
+            Ok(_) => Ok(true),
+            Err(IdeviceError::NotFound) => Ok(false),
+            Err(e) => Err(from_idevice(e, Phase::Operation, "look up mounted images")),
+        }
+    }
+
+    async fn developer_mode(&mut self) -> Result<Option<bool>, BridgeError> {
+        match self.mounter().await?.query_developer_mode_status().await {
+            Ok(on) => Ok(Some(on)),
+            Err(_) => Ok(self.developer_mode().await),
+        }
+    }
+
+    async fn identifiers(&mut self) -> Result<(u64, u64), BridgeError> {
+        let ids = self
+            .mounter()
+            .await?
+            .query_personalization_identifiers(None)
+            .await
+            .map_err(|e| from_idevice(e, Phase::Operation, "personalization identifiers"))?;
+        let get = |k: &str| ids.get(k).and_then(plist::Value::as_unsigned_integer);
+        match (get("BoardId"), get("ChipID")) {
+            (Some(board), Some(chip)) => Ok((board, chip)),
+            _ => Err(BridgeError::internal("the phone did not say its board and chip")),
+        }
+    }
+
+    async fn device_ticket(&mut self, image_hash: Vec<u8>) -> Result<Option<Vec<u8>>, BridgeError> {
+        // No ticket for this image is an error from the phone, which also closes this connection.
+        Ok(self
+            .mounter()
+            .await?
+            .query_personalization_manifest("DeveloperDiskImage", image_hash)
+            .await
+            .ok())
+    }
+
+    async fn signed_ticket(&mut self, manifest: &plist::Dictionary) -> Result<Vec<u8>, BridgeError> {
+        let [ecid] = self.lockdown_values([("UniqueChipID", None)]).await;
+        let ecid = ecid
+            .and_then(|v| v.as_unsigned_integer())
+            .ok_or_else(|| BridgeError::internal("the phone did not give the chip ID the signing request needs"))?;
+        let mut mounter = self.mounter().await?;
+        mounter
+            .get_manifest_from_tss(manifest, ecid)
+            .await
+            .map_err(|e| match e {
+                IdeviceError::Socket(_) | IdeviceError::Http(_) | IdeviceError::UnexpectedResponse(_) => {
+                    BridgeError::new(
+                        Code::TssFailed,
+                        format!("Apple's signing server (gs.apple.com) gave no ticket: {e}"),
+                    )
+                }
+                other => from_idevice(other, Phase::Operation, "personalization request"),
+            })
+    }
+
+    async fn upload_and_mount(
+        &mut self,
+        image: Vec<u8>,
+        ticket: Vec<u8>,
+        trust_cache: Vec<u8>,
+    ) -> Result<(), BridgeError> {
+        let mut mounter = self.mounter().await?;
+        mounter
+            .upload_image(crate::ddi::IMAGE_TYPE, &image, ticket.clone())
+            .await
+            .map_err(|e| mount_error(e, "upload the disk image"))?;
+        mounter
+            .mount_image(crate::ddi::IMAGE_TYPE, ticket, Some(trust_cache), None)
+            .await
+            .map_err(|e| mount_error(e, "mount the disk image"))
+    }
+}
+
 impl Phone for Device {
     async fn run(&mut self, action: Action) -> Result<Value, BridgeError> {
+        if self.stale {
+            return Err(BridgeError::new(
+                Code::Disconnected,
+                "the phone's services changed with the mounted disk image: connect again",
+            ));
+        }
         let input = action.is_input();
         let result = match action {
             Action::DeviceInfo => self.device_info().await,
@@ -809,6 +1198,7 @@ impl Phone for Device {
             } => self.launch_app(bundle_id, args, env, kill_existing).await,
             Action::TerminateApp(t) => self.terminate_app(t).await,
             Action::ListApps { include_system } => self.list_apps(include_system).await,
+            Action::MountDdi { ddi_dir, force } => self.mount_ddi(ddi_dir, force).await,
             gesture => self.gesture(gesture).await.map(|()| json!({})),
         };
         if input {
@@ -865,6 +1255,153 @@ mod tests {
             Code::Unreachable
         );
         assert_eq!(socket_addr("zz::1%1", 1).await.unwrap_err().code, Code::Unreachable);
+    }
+
+    /// A stand-in process list: `dies_on` says which kill (if any) actually ends the process.
+    struct Procs {
+        list: Vec<Process>,
+        dies_on: Option<Kill>,
+        kills: Vec<(u32, Kill)>,
+    }
+
+    impl Processes for Procs {
+        async fn list(&mut self) -> Result<Vec<Process>, BridgeError> {
+            Ok(self.list.clone())
+        }
+        async fn kill(&mut self, pid: u32, how: Kill) -> Result<(), BridgeError> {
+            self.kills.push((pid, how));
+            if self.dies_on == Some(how) {
+                self.list.retain(|p| p.pid != pid);
+            }
+            Ok(())
+        }
+        async fn pause(&mut self, _: Duration) {}
+    }
+
+    const SETTINGS: &str = "/Applications/Preferences.app";
+
+    fn procs(dies_on: Option<Kill>) -> Procs {
+        let p = |pid, exe: &str, is_app| Process {
+            pid,
+            executable: exe.into(),
+            is_app,
+        };
+        Procs {
+            list: vec![
+                p(10, "/Applications/Preferences.app/PlugIns/Widget.appex/Widget", true),
+                p(12411, "/Applications/Preferences.app/Preferences", true),
+                p(7, "/usr/libexec/somed", false),
+            ],
+            dies_on,
+            kills: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn terminate_says_true_only_when_the_process_is_gone() {
+        let by_bundle = AppTarget::BundleId("com.apple.Preferences".into());
+        let mut p = procs(Some(Kill::KillPid));
+        assert_eq!(
+            terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap(),
+            json!({"terminated": true, "pid": 12411, "how": "kill"})
+        );
+        assert_eq!(
+            p.kills,
+            [(12411, Kill::KillPid)],
+            "the main executable, not its extension"
+        );
+
+        let mut p = procs(Some(Kill::Signal));
+        assert_eq!(
+            terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap(),
+            json!({"terminated": true, "pid": 12411, "how": "signal"})
+        );
+        assert_eq!(p.kills, [(12411, Kill::KillPid), (12411, Kill::Signal)]);
+
+        let mut p = procs(None);
+        let err = terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap_err();
+        assert_eq!(err.code, Code::Unsupported);
+        assert!(err.message.contains("still running"));
+    }
+
+    #[tokio::test]
+    async fn terminate_leaves_what_isnt_running_or_isnt_an_app() {
+        let mut p = procs(Some(Kill::KillPid));
+        let gone = terminate(
+            &mut p,
+            &AppTarget::BundleId("com.example.x".into()),
+            Some("/var/containers/Bundle/Application/1/X.app"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(gone, json!({"terminated": false}));
+        assert_eq!(
+            terminate(&mut p, &AppTarget::Pid(7), None).await.unwrap(),
+            json!({"terminated": false})
+        );
+        assert_eq!(
+            terminate(&mut p, &AppTarget::Pid(999), None).await.unwrap(),
+            json!({"terminated": false})
+        );
+        assert!(p.kills.is_empty());
+        assert_eq!(
+            terminate(&mut p, &AppTarget::Pid(10), None).await.unwrap()["terminated"],
+            true
+        );
+    }
+
+    #[test]
+    fn finds_the_main_executable() {
+        assert!(main_executable_of(
+            "/private/var/containers/Bundle/Application/1/My App.app/My App",
+            "/var/containers/Bundle/Application/1/My App.app"
+        ));
+        assert!(!main_executable_of(
+            "/Applications/Preferences.app/PlugIns/W.appex/W",
+            SETTINGS
+        ));
+        assert!(!main_executable_of("/Applications/Preferences.app/Preferences", ""));
+    }
+
+    #[test]
+    fn input_needs_ios_27() {
+        assert_eq!(major_version("18.7.3"), Some(18));
+        assert_eq!(major_version("27.0"), Some(27));
+        assert_eq!(major_version("x"), None);
+        assert!(!input_supported(18));
+        assert!(input_supported(27));
+        let e = input_needs_newer_ios(18);
+        assert_eq!(e.code, Code::Unsupported);
+        assert!(e.message.contains("iOS 18") && e.message.contains("iOS 27"));
+    }
+
+    #[test]
+    fn reads_the_installation_services_app_list() {
+        let app = |id: Option<&str>, name: &str, t: &str| {
+            let mut d = plist::Dictionary::new();
+            if let Some(id) = id {
+                d.insert("CFBundleIdentifier".into(), id.into());
+            }
+            d.insert("CFBundleName".into(), name.into());
+            d.insert("ApplicationType".into(), t.into());
+            d.insert(
+                "Path".into(),
+                format!("/private/var/containers/Bundle/Application/1/{name}.app").into(),
+            );
+            plist::Value::Dictionary(d)
+        };
+        let apps = parse_browse(vec![
+            app(Some("com.example.b"), "B", "User"),
+            app(None, "Nameless", "User"),
+            app(Some("com.apple.Preferences"), "Settings", "System"),
+            plist::Value::String("odd".into()),
+        ]);
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].bundle_id, "com.apple.Preferences");
+        assert!(apps[0].system);
+        assert!(!apps[1].system);
+        assert_eq!(apps[1].name, "B");
+        assert!(runs_from("/var/containers/Bundle/Application/1/B.app/B", &apps[1].path));
     }
 
     #[test]

@@ -105,7 +105,7 @@ argument list, so they never show in the process list. Screenshots written with 
 | `device.address` | string | As `serve --host`; left out for a simulator record. |
 | `device.port` | int, optional | RemotePairing port. Default 49152 (not verified on a real device). |
 | `device.pairing_file` | string | The pairing record on this computer. The bridge only reads it. |
-| `timeout_ms` | int, optional | Deadline for the request (in `call`, connecting included). Default 30000, clamped to 1000–120000. |
+| `timeout_ms` | int, optional | Deadline for the request (in `call`, connecting included). Default 30000, clamped to 1000–120000; `mount_ddi` defaults to 120000, clamped to 1000–300000. |
 | `args` | object, optional | The operation's arguments; omitted means `{}`. |
 
 Unknown fields are ignored, so a newer node can talk to an older bridge within the same `v`. Arguments are checked before anything is
@@ -145,6 +145,10 @@ sent to the phone: an invalid one never leaves half a gesture.
 | `disconnected` | `serve`: the link dropped during this operation; whether an input operation reached the phone is unknown |
 | `timeout` | `timeout_ms` passed |
 | `trust_pending`, `not_found` | `pair` only: tap Trust on the phone and retry; no such phone on USB |
+| `ddi_missing` | `mount_ddi`: no developer disk image in the directory (Xcode brings one; or pass `ddi_dir`) |
+| `ddi_unsupported_device` | `mount_ddi`: the image has no build for this phone's board and chip; a newer Xcode may |
+| `tss_failed` | `mount_ddi`: Apple's signing server could not be reached or gave no ticket |
+| `mount_failed` | `mount_ddi`: the phone refused the image, or accepted it without listing it as mounted |
 | `internal` | Anything else, including a panic in the bridge or a library it uses: every command catches it and fails as above, exit code 1, `message` saying what panicked and where (`the bridge failed unexpectedly: … (idevice-0.1.68/src/…:518)`), never exit code 101 with a backtrace |
 
 ## Coordinates
@@ -181,11 +185,14 @@ ready event.
 - `orientation`: `portrait` | `portrait_upside_down` | `landscape_left` | `landscape_right` (Home button or indicator on that side).
 - Any field the phone did not answer is `null`. `locked` is always `null` in v1: no service found yet says whether the screen is locked.
 - `capabilities`: whether the phone lists the services each group needs (`screenshot`; `input` for touches, keys and buttons; `apps`),
-  and `ax_tree`, always `false` in v1. For each `false`, `notes` gives the reason with an error code: `developer_mode_off`,
-  `ddi_not_mounted`, `unsupported`. A listed service can still fail when used; the operation's error says so.
+  and `ax_tree`, always `false` in v1. `input` is also `false` below **iOS 27**, read from the phone's version (never by trying):
+  older iOS has no remote input. For each `false`, `notes` gives the reason with an error code: `developer_mode_off`,
+  `ddi_not_mounted`, `unsupported` (for `input`: the iOS version). A listed service can still fail when used; the operation's error says so.
 - `ddi_mounted`: whether the developer services are listed at all; `null` when Developer Mode is off, since then nothing is listed either way.
 
 ### `screenshot`
+
+The bridge always asks the phone for PNG (iOS 18.7.3 refuses "jpeg", error 4864) and converts to JPEG itself when asked.
 
 | Arg | Default | Meaning |
 | --- | --- | --- |
@@ -228,6 +235,10 @@ Node fields: `id` (unique within one answer only), `role` (lower camel case), `l
 
 ### Input: `tap`, `long_press`, `drag`, `swipe`, `keys`, `button`
 
+**Needs iOS 27 or later.** On older iOS the phone refuses remote input outright (CoreDevice error 9021, "Remote control requires iOS
+27.0 or later on this device", seen on iOS 18.7.3), so every input operation answers `unsupported` at once, saying so, without touching
+the phone; `capabilities.input` is `false` there. On those phones the bridge can look (screenshots) and start apps, not touch.
+
 The phone takes synthetic input only while a display stream to this computer is running. The bridge starts one before the first input
 (about a third of a second), reads and drops its video, and in `serve` keeps it for 10 seconds after the last input so a series of taps
 does not restart it. Results are `{}`.
@@ -254,12 +265,48 @@ Durations are capped at 10 seconds.
 
 ### `terminate_app`
 
-`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true }`, `false` when it was not running.
+`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true, "pid": 412, "how": "kill" | "signal" }` (`how`: which request
+ended it), or `{ "terminated": false }` when it was not running.
+Through the instruments service, which needs the developer disk image: its process list finds the app's main executable (never an
+extension inside the bundle, never a process that isn't an app), then `killPid:`, and if the process is still listed after about
+1.5 seconds, `sendSignal:toPid:` with SIGKILL. `true` only once the phone no longer lists the process; if it survives both,
+`unsupported` ("the phone accepted the request but process … is still running").
 
 ### `list_apps`
 
 `{ "include_system": true }` → `{ "apps": [ { "bundle_id": "…", "name": "…", "version": "…", "type": "user" } ] }`: `type` `user` |
-`system` (Apple's own).
+`system` (Apple's own). Through the installation service, which needs no developer disk image. (CoreDevice's own app and process
+lists never answered on iOS 18.7.3, so the bridge doesn't use them.) The app operations give up after 20 seconds without an answer with
+`service_unavailable`, leaving the session usable.
+
+### `mount_ddi`
+
+`{ "ddi_dir": "<folder>", "force": false }`, both optional. The developer services behind `screenshot`, input and the app operations are
+listed only while the phone has the personalized developer disk image mounted (`device_info`: `ddi_mounted`, and `ddi_not_mounted` in
+`notes`). This mounts it, **only when asked**: no other operation mounts it on its own, and the node offers it only as a command for the
+phone's owner (`personad iphone mount-ddi <udid> [--ddi-dir <dir>] [--force]`, [iphone-pairing.md](iphone-pairing.md)), never to the
+assistant.
+
+1. Already mounted (and not `force`): `{"mounted": true, "already": true}`, nothing else happens.
+2. Developer Mode off: `developer_mode_off`.
+3. The image comes from `ddi_dir`, else `$PERSONA_IPHONE_DDI_DIR`, else Xcode's `/Library/Developer/DeveloperDiskImages/iOS_DDI/Restore`.
+   Nothing is downloaded. From its `BuildManifest.plist` the bridge picks the build for the phone's board and chip, and reads the
+   image and trust cache it names (paths must stay inside the folder). None there: `ddi_missing`; no build for this phone:
+   `ddi_unsupported_device`.
+4. The ticket: the phone's own for this image if it has one, else one from Apple's signing server (TSS). A failure there is
+   `tss_failed`, and nothing is uploaded.
+5. Upload, mount, then check the phone lists it: `{"mounted": true, "already": false, "image": "<file>", "ticket": "phone" | "apple",
+   "services_refreshed": true}`. A refusal is `mount_failed` (or `locked`, `developer_mode_off`).
+6. The service directory is read again so this session sees the developer services. If that fails, the mount still stands and is
+   reported with `"services_refreshed": false`; the next request then answers `disconnected` and the node connects again.
+
+**The signing request**: the library sends it to `http://gs.apple.com/TSS/controller?action=2`, **plain HTTP**: it hard-codes the
+address and keeps the request body to itself, so the bridge cannot send it over HTTPS without changing the library. The request
+carries the phone's board and chip IDs, its **ECID** (unique chip ID), the nonce the phone generated for this image, and the hashes of
+the image and trust cache. The ECID crosses the network **in clear text**. The bridge writes none of this to disk or to its output.
+Unlock the phone and keep it awake while mounting. Takes up to a couple of minutes (the image is about 17 MB through the tunnel).
+
+On the simulator backend, `unsupported`: a simulator has its developer services already.
 
 ## USB and Bonjour: `usb-list`, `pair`, `match`
 
@@ -322,7 +369,7 @@ Results from the simulator backend say nothing about a real iPhone. The differen
 | --- | --- | --- |
 | Accessibility tree | yes, through the test runner | `unsupported` in v1 |
 | `keys {text}` | any text | printable ASCII, tab and newline only |
-| Input path | XCUIAutomation inside the simulator | HID events over the tunnel while a display stream is held open; not verified on a real device |
+| Input path | XCUIAutomation inside the simulator | HID events over the tunnel while a display stream is held open: only iOS 27 or later; `unsupported` below |
 | `button` | `home` only | `home`, `lock`, `volume_up`, `volume_down` |
 | Connection | none: local `simctl` and a loopback runner | RemotePairing, encrypted tunnel, service directory; not verified on a real device |
 | Developer Mode, disk image, lock state | not applicable (`null`) | read from the phone |
@@ -355,16 +402,19 @@ phone has run against one only where the table says so:
 
 | Part | Status |
 | --- | --- |
-| RemotePairing verify, tunnel, userspace TCP, service directory | not verified on a real device |
+| RemotePairing verify, tunnel, userspace TCP, service directory | checked on a real iPhone (iPhone13,4, iOS 18.7.3) over its USB network interface |
 | Default port 49152; reaching the phone over Tailscale | not verified on a real device |
-| `device_info` fields (lockdown keys for screen size, Developer Mode, battery) | not verified on a real device |
-| `screenshot`, its rotation in landscape | not verified on a real device |
-| `list_apps`, `launch_app`, `terminate_app` | not verified on a real device |
-| Input gate (display stream), touch coordinates and rotation, keys, buttons | not verified on a real device |
+| `device_info` fields (lockdown keys for screen size, Developer Mode, battery) | checked on that iPhone: build, battery, 428 × 926 points, scale 3, Developer Mode |
+| `screenshot` | checked on that iPhone: PNG about 1 s; JPEG (the phone refuses it, so the bridge converts) about 4 s in `call`. Landscape rotation not verified |
+| `launch_app` | checked on that iPhone |
+| `list_apps` | checked on that iPhone through the installation service: 121 user apps, 329 in all, under a second (CoreDevice's list never answered there) |
+| `terminate_app` | checked on that iPhone: Settings (pid 12411) ended in 3 s, a second call answered `terminated: false`, the screenshot showed the home screen, and the next launch got a new pid (12460). Which request ended it (`how`) was not recorded then. Before the fix, `killPid:` with the pid as a plain integer was accepted but ended nothing while the bridge reported success |
+| Input gate (display stream), touch coordinates and rotation, keys, buttons | **Not verified on any real iPhone. Below iOS 27 it is not available**: that iPhone (iOS 18.7.3) itself refused the display stream with CoreDevice error 9021 ("Remote control requires iOS 27.0 or later"), so input answers `unsupported` up front there. **On iOS 27 or later, input over this route has never been tried on a real device** |
 | `usb-list` | checked on a real iPhone (iPhone13,4, iOS 18.7.3, trusting the computer): it lists the phone with its name |
 | `pair` over USB (consent prompt, `altIRK`) | not verified on a real device yet. First try on that iPhone: it already trusted the computer and answered the pairing request with pairing data straight away instead of asking its user, so the library asked the bridge for the PIN, got an empty one and panicked (exit code 101). The bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error |
 | `match` against a real advertisement | not verified on a real device; unit-tested against the library's tag function |
 | `ax_tree` | `unsupported` |
+| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | checked on that iPhone: mounted in 3.3 s, then `already: true`; `device_info` showed `ddi_mounted: true` and the developer services. The ticket's source (the phone's own or Apple's signing server) was not recorded: no `--force` remount was run |
 | Simulator backend: pair, `device_info`, `screenshot`, apps, `ax_tree` (with a system alert), tap, `keys` (ASCII and Chinese), swipe, `button home`, `serve`, runner cleanup after exit and after `kill -9` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
 ## Open questions
@@ -373,4 +423,4 @@ phone has run against one only where the table says so:
 - **Text beyond ASCII**: the key channel cannot type it. The phone's pasteboard service plus a paste shortcut might, at the cost of the
   user's clipboard; not done.
 - **Locked screen**: no service found yet that reports it.
-- **Developer disk image**: mounting it is not in v1 (`ddi_not_mounted`); #3470 tracks it.
+- **Signing request over HTTPS**: needs the library to let the caller choose the address or send the body itself.

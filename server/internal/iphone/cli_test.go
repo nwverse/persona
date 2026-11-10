@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -80,5 +82,54 @@ func TestCommandBridgeMissing(t *testing.T) {
 	m.findBridge = func() (string, error) { return "", &Error{Code: CodeBridgeMissing, Message: "x"} }
 	if code, _, errOut := runCLI(t, m, "pair"); code != 1 || !strings.Contains(errOut, BridgeName) {
 		t.Fatalf("pair: %d %q", code, errOut)
+	}
+}
+
+func TestCommandMountDDI(t *testing.T) {
+	m, _ := bridgeManager(t)
+	requests := filepath.Join(t.TempDir(), "requests")
+	t.Setenv("FAKE_SERVE_REQUESTS", requests)
+	if code, _, _ := runCLI(t, m, "pair", testUDID); code != 0 {
+		t.Fatal("pair failed")
+	}
+	if code, _, _ := runCLI(t, m, "address", testUDID, "192.0.2.7:49152"); code != 0 {
+		t.Fatal("address failed")
+	}
+	code, out, errOut := runCLI(t, m, "mount-ddi", testUDID, "--ddi-dir", "/tmp/ddi", "--force")
+	if code != 0 || !strings.Contains(out, "Mounted the developer disk image") || !strings.Contains(out, "image: x.dmg") || !strings.Contains(out, "from Apple's signing server") || !strings.Contains(out, "services: read again") {
+		t.Fatalf("mount-ddi: %d %q %q", code, out, errOut)
+	}
+	sent, _ := os.ReadFile(requests)
+	if !strings.Contains(string(sent), `"op":"mount_ddi"`) || !strings.Contains(string(sent), `"args":{"ddi_dir":"/tmp/ddi","force":true}`) {
+		t.Fatalf("bridge got %s", sent)
+	}
+	for _, args := range [][]string{{"mount-ddi"}, {"mount-ddi", testUDID, "--ddi-dir"}, {"mount-ddi", testUDID, "--nope"}, {"mount-ddi", testUDID, "other"}} {
+		if code, _, _ := runCLI(t, m, args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	if code, _, errOut := runCLI(t, m, "mount-ddi", "00000000-NOTPAIRED0001"); code != 1 || !strings.Contains(errOut, "isn't paired") {
+		t.Fatalf("not paired: %d %q", code, errOut)
+	}
+}
+
+func TestMountArgs(t *testing.T) {
+	for _, c := range []struct {
+		in    []string
+		udid  string
+		dir   string
+		force bool
+		ok    bool
+	}{
+		{[]string{"U"}, "U", "", false, true},
+		{[]string{"--force", "U", "--ddi-dir=/d"}, "U", "/d", true, true},
+		{[]string{"U", "--ddi-dir", "/d"}, "U", "/d", false, true},
+		{[]string{"--ddi-dir="}, "", "", false, false},
+		{[]string{}, "", "", false, false},
+	} {
+		udid, dir, force, ok := mountArgs(c.in)
+		if udid != c.udid || dir != c.dir || force != c.force || ok != c.ok {
+			t.Errorf("%v: got %q %q %v %v", c.in, udid, dir, force, ok)
+		}
 	}
 }

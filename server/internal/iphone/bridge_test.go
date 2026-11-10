@@ -49,9 +49,14 @@ serve)
     id=$(printf '%s' "$line" | sed 's/.*"id":"\([^"]*\)".*/\1/')
     op=$(printf '%s' "$line" | sed 's/.*"op":"\([^"]*\)".*/\1/')
     echo "$op" >> "$FAKE_SERVE_LOG"
+    if [ -n "$FAKE_SERVE_REQUESTS" ]; then echo "$line" >> "$FAKE_SERVE_REQUESTS"; fi
     if [ "$op" = "drop" ]; then
       echo '{"event":"disconnected","reason":"wifi lost"}'
       exit 1
+    fi
+    if [ "$op" = "mount_ddi" ]; then
+      echo '{"v":1,"id":"'"$id"'","ok":true,"op":"mount_ddi","result":{"mounted":true,"already":false,"image":"x.dmg","ticket":"apple","services_refreshed":true}}'
+      continue
     fi
     echo '{"v":1,"id":"'"$id"'","ok":true,"op":"'"$op"'","result":{"op":"'"$op"'"}}'
   done

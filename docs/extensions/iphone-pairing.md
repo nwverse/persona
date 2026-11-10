@@ -19,7 +19,11 @@ Code: `server/internal/iphone` (records, Bonjour, sessions, the `personad iphone
 personad iphone pair            # the only iPhone plugged in over USB
 personad iphone pair <udid>     # one of several
 personad iphone list            # paired here, and plugged in now
+personad iphone mount-ddi <udid> [--ddi-dir <dir>] [--force]   # the developer disk image, when the phone reports it missing
 ```
+
+`mount-ddi` is the owner's own step, not something the assistant can do: it sends the phone's identifiers to Apple's signing server
+when the phone has no ticket for the image ([iphone-bridge.md](iphone-bridge.md), "`mount_ddi`").
 
 1. Plug the phone in with a cable and unlock it.
 2. `personad iphone pair` asks the bridge (`persona-iphone-bridge pair --udid <udid> --out <path>`) for the trusted

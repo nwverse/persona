@@ -680,6 +680,10 @@ impl<R: Commands> Phone for SimDevice<R> {
                 max_nodes,
                 include_offscreen,
             } => self.ax_tree(max_depth, max_nodes, include_offscreen).await,
+            Action::MountDdi { .. } => Err(BridgeError::new(
+                Code::Unsupported,
+                "a simulator has its developer services already; there is no disk image to mount",
+            )),
             input => self.input(input).await,
         }
     }

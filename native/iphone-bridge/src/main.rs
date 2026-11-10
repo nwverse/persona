@@ -1,6 +1,7 @@
 //! persona-iphone-bridge: operates a paired iPhone over RemotePairing for a Persona node.
 //! Wire contract: docs/extensions/iphone-bridge.md.
 
+mod ddi;
 mod device;
 mod error;
 mod files;
