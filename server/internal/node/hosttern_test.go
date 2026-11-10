@@ -310,3 +310,21 @@ func TestTernSessionListedAndSent(t *testing.T) {
 		t.Errorf("sends %q", sends)
 	}
 }
+
+// A claude in a Tern block names its block in TERN_PANE: while Tern lists a claude in that pane it is Tern's
+// (claudebg.go claudeInPane), not also an outside session of an ordinary terminal.
+func TestClaudeInATernBlockIsTerns(t *testing.T) {
+	n, _, _ := herdrNode(t)
+	old := paneEnvOfPID
+	paneEnvOfPID = func(int) map[string]string { return map[string]string{ternPaneEnv: "42"} }
+	t.Cleanup(func() { paneEnvOfPID = old })
+	if got := n.enginePaneRefs(paneEnvOfPID(7)); !slices.Equal(got, []string{"tern:42"}) {
+		t.Fatalf("pane refs %v", got)
+	}
+	n.mu.Lock()
+	n.hostAgents = map[string][]host.Agent{host.Tern: {{Agent: "claude", PaneID: "tern:42"}}}
+	n.mu.Unlock()
+	if !n.claudeInPane(claudeProc{pid: 7, Entrypoint: "cli"}) {
+		t.Error("a claude in a block Tern lists is not Tern's")
+	}
+}
