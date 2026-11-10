@@ -99,14 +99,18 @@ struct IPhoneControlTests {
 
     @Test func toolsReadAsSteps() {
         let steps: JSONValue = .object(["steps": .array([
-            .object(["action": .string("tap"), "target": .number(3)]),
+            .object(["action": .string("tap"), "target": .object(["n": .number(3)])]),
             .object(["action": .string("type"), "text": .string("hello")]),
             .object(["action": .string("swipe"), "direction": .string("up")]),
-            .object(["action": .string("press"), "button": .string("home")]),
+            .object(["action": .string("button"), "button": .string("home")]),
+            .object(["action": .string("tap"), "target": .object(["x": .number(119.6), "y": .number(640)])]),
+            .object(["action": .string("long_press"), "target": .object(["label": .string("Pay")])]),
         ])])
         let line = IPhoneSteps.describe(steps) ?? ""
-        #expect(line.components(separatedBy: " → ").count == 4)
-        #expect(line.contains("3") && line.contains("hello"))
+        let parts = line.components(separatedBy: " → ")
+        #expect(parts.count == 6)
+        #expect(parts[0].contains("3") && parts[1].contains("hello") && parts[3] == IPhoneSteps.step(.object(["action": .string("button"), "button": .string("home")])))
+        #expect(parts[4].contains("(120, 640)") && parts[5].contains("“Pay”"))
         #expect(IPhoneSteps.describe(.object([:])) == nil)
         #expect(ToolPresentation.symbol("mcp__persona__iphone_do") == Theme.Icon.phoneControl)
         #expect(ToolPresentation.symbol("phone_contacts_search") != Theme.Icon.phoneControl, "the phone's own data tools stay as they are")
