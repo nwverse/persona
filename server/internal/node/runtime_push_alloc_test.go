@@ -13,7 +13,7 @@ import (
 )
 
 // runtimePushBudget is what a push of 300 sessions may allocate (TestRuntimeSessionsPushAllocatesOneList).
-const runtimePushBudget = 683_000 // 663,316 measured (678,510 with -race)
+const runtimePushBudget = 686_000 // 666,020 measured; not checked with -race, whose instrumentation allocates
 
 // runtimePush is a runtime.sessions push of rows sessions as the runtime SDK sends them (the fleet soak's machines: a
 // title, a directory, a status, the last 200 characters said, a model), and a host with that runtime connected and no
@@ -57,12 +57,15 @@ func BenchmarkRuntimeSessionsPush(b *testing.B) {
 	}
 }
 
-// A push of 300 sessions is decoded into one slice the size of the last list and kept in it (#2826 follow-up): it was
+// A push of 300 sessions is decoded into one slice the size of the last list and kept in it (#2950, after #2826): it was
 // the rows grown from nil while decoding, then copied by normalizeRuntimeSessions, 2,238,500 bytes. The bound is the
 // cost measured with the change, plus 3%.
 func TestRuntimeSessionsPushAllocatesOneList(t *testing.T) {
 	rh, h, params := runtimePush(t, 300)
 	rh.event(h, "runtime.sessions", params)
+	if raceEnabled {
+		t.Skip("race instrumentation allocates")
+	}
 	if per := bytesPerRun(20, func() { rh.event(h, "runtime.sessions", params) }); per > runtimePushBudget {
 		t.Errorf("a push of 300 sessions allocates %.0f bytes, want at most %d", per, runtimePushBudget)
 	}
