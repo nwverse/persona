@@ -32,11 +32,16 @@ struct WorkNowTests {
         #expect(!now.tail, "a command gives way in the middle, as its row")
     }
 
-    @Test func claudesDescriptionOfACommandReadsAsASentence() throws {
+    /// Claude's description is already an imperative and the spinner says it runs: no "Running" before it.
+    @Test func claudesDescriptionOfACommandStandsAlone() throws {
         let now = try #require(WorkNow.of([call("a", "Bash", ["command": "go test ./server/...", "description": "Run hub tests"],
                                                 at: 1, running: true)]))
-        #expect(now.text == String(localized: "Running: \("Run hub tests") [Work Line]"))
-        #expect(now.tail)
+        #expect(now.text == "Run hub tests")
+        #expect(now.tail, "a sentence gives way at its end")
+        // An empty description is no description: the command, after "Running".
+        let bare = try #require(WorkNow.of([call("b", "Bash", ["command": "go test ./server/...", "description": ""], at: 1, running: true)]))
+        #expect(bare.text == String(localized: "Running \("go test ./server/...") [Work Line]"))
+        #expect(!bare.tail)
     }
 
     /// Calls made together all begin before any is answered: those still running are counted beside the newest.

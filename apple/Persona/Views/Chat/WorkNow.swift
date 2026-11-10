@@ -1,10 +1,10 @@
 import Foundation
 
 /// What a running work line says the agent is doing (#2987, the web's running bar): the newest call still running, in
-/// its running form with the subject its step row shows ("Running go test ./server/...", "Editing ChatView.swift"), "+N"
-/// for the calls running beside it; with none running, the latest step (a thought: its first line). Nil when no step is
-/// known (only notices or words so far, or work the hub folded away): the line says what it said before. A finished
-/// line never asks.
+/// its running form with the subject its step row shows ("Running go test ./server/...", "Editing ChatView.swift"; a
+/// command Claude described: its description alone, "Run the widget snapshot tests"), "+N" for the calls running beside
+/// it; with none running, the latest step (a thought: its first line). Nil when no step is known (only notices or words
+/// so far, or work the hub folded away): the line says what it said before. A finished line never asks.
 nonisolated struct WorkNow: Equatable, Sendable {
     /// The step it names.
     var id: String
@@ -108,8 +108,9 @@ nonisolated struct WorkNow: Equatable, Sendable {
         guard !subject.isEmpty else { return (ToolPresentation.verb(c.name), tail) }
         switch ToolPresentation.baseName(c.name) {
         case "Bash":
-            // Claude's own words for the command read as a sentence; the command itself as code.
-            if c.input["description"]?.string?.isEmpty == false { return (String(localized: "Running: \(subject) [Work Line]"), true) }
+            // Claude's own words for the command are already an imperative ("Run the widget snapshot tests") and the
+            // spinner says it runs: they stand alone, a sentence. The command itself reads as code after "Running".
+            if c.input["description"]?.string?.isEmpty == false { return (subject, true) }
             return (String(localized: "Running \(subject) [Work Line]"), tail)
         case "Read": return (String(localized: "Reading \(subject) [Work Line]"), tail)
         case "Edit", "MultiEdit", "NotebookEdit": return (String(localized: "Editing \(subject) [Work Line]"), tail)

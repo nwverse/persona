@@ -86324,29 +86324,6 @@
       },
       "extractionState": "manual"
     },
-    "Running: %@ [Work Line]": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Running: %1$@"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "実行中：%1$@"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在运行：%1$@"
-          }
-        }
-      },
-      "extractionState": "manual"
-    },
     "Saved before computer scopes existed: it still runs on every computer, work ones included, and each keeps a copy of the key. Changing anything here and saving makes the scope what you set.": {
       "extractionState": "manual",
       "localizations": {

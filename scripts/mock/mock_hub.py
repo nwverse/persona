@@ -3491,7 +3491,7 @@ if os.environ.get("MOCK_COMMENTS") == "1":
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
 # MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
-# step is still going, for the running work line that names it: `bash` a command Claude described ("Running: …"),
+# step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
 # `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once
 # ("Reading 3 files"), `parallel` a search with two reads beside it ("+2"), `thinking` a thought after the calls came back.
 # The thought is pushed MOCK_LIVE_STEP_PUSH seconds (default 3) after the chat's latest page went out: a page folds the
