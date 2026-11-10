@@ -133,6 +133,14 @@ A subagent that waits on its own background work gets an interim notification ("
 The apps find a task's card by `tool_use_id`, else by the id in the launch receipt, and the 2.1.319 receipt's first sentence says "including the agentId below": their pattern took "below" for the id. So the report stayed off the card, which kept the interim text as its result.
 The node now gives such a notification the call an earlier notification of the task named (`noteCall`), drops the interim text, and seeds both, with the reports handed back, into windows read from a file's end (`window.go`), so a cold open of a big file gives the same notices.
 
+## Apple subagent results (#3377)
+
+A background Agent launch receipt is not a completion result. Keep its progress card until authoritative terminal
+state arrives, then use the ordinary collapsed tool-result row. Preserve exact tool-use IDs; a shared subagent type
+or title cannot safely identify a report's call. Legacy notice detail and notice text are separate payloads: do not
+reuse a notice's text-truncation metadata for its report detail. When the hub changes peer input into tool results,
+bump the Apple chat cache so old peer cards are not retained. Run the shared result tests in both Apple app targets.
+
 ## Work opened in the App folded again by the same page (2026-11-07, #6038)
 
 As a chat opens, the latest page can arrive twice: once over HTTP (`loadInitial`, when the socket is not up yet) and once in the socket's subscribe backlog, both with `fold_work`. With "open all work" on, the first fold row fetched its steps (`AppModel.unfold`) before the second page came; that page carried the same fold, `dropFolded` took the steps out again and the fold came back under the same row id.

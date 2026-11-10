@@ -38,6 +38,19 @@ nonisolated enum SubagentCardStatus: Equatable, Sendable {
     }
 }
 
+nonisolated enum SubagentResult {
+    static func call(_ call: ToolCall, tasks: TaskIndex, agent: Subagent?) -> ToolCall? {
+        guard SubagentCardStatus.of(call, tasks: tasks, agent: agent) != .running else { return nil }
+        if let id = call.use.toolUseID, tasks.started.contains(id) {
+            guard let report = tasks.reports[id] else { return nil }
+            var finished = call
+            finished.result = report
+            return finished
+        }
+        return call.result == nil ? nil : call
+    }
+}
+
 /// What an open card shows of a subagent's own conversation: its latest few tool calls, oldest first, each with its
 /// result once it is in (the web's `RecentSteps`).
 nonisolated enum SubagentRecent {
@@ -167,6 +180,15 @@ struct SubagentCard: View {
     }
 
     var body: some View {
+        if let finished = SubagentResult.call(call, tasks: tasks, agent: agent) {
+            ToolCallRow(call: finished, autoExpand: false, grouped: true)
+                .accessibilityIdentifier("chat.subagent-result")
+        } else {
+            progressCard
+        }
+    }
+
+    private var progressCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 Haptics.tap()

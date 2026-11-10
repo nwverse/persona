@@ -174,6 +174,7 @@ nonisolated struct Turn: Identifiable, Hashable, Sendable {
 nonisolated struct TaskIndex: Equatable, Sendable {
     /// A call's notices, oldest first, by the call's tool_use_id.
     var notes: [String: [TaskNote]] = [:]
+    var reports: [String: Item] = [:]
     /// The call a notice came from (notice item id → tool_use_id).
     var calls: [String: String] = [:]
     /// Calls whose result says they went to the background (they may not have reported back yet).
@@ -217,6 +218,16 @@ nonisolated struct TaskIndex: Equatable, Sendable {
                 guard let n = it.task, let call = n.toolUseID ?? n.taskID.flatMap({ byTask[$0] }) else { continue }
                 x.notes[call, default: []].append(n)
                 x.calls[it.id] = call
+                if n.kind == "agent", n.status != "event", n.detail?.isEmpty == false {
+                    var report = it
+                    report.kind = .toolResult
+                    report.role = "user"
+                    report.toolUseID = call
+                    report.text = n.detail
+                    report.fullSize = nil
+                    report.isError = n.failed || n.status == "error"
+                    x.reports[call] = report
+                }
                 if x.descriptions[call] == nil, let use = uses[call] {
                     x.descriptions[call] = use.toolInput?["description"]?.string
                     x.startedAt[call] = use.ts
@@ -1381,9 +1392,9 @@ nonisolated enum ChatCache {
     /// v13: cached tails count user questions, not automatic supervision; discard the old shallow tails.
     /// v14: injected supervision levels and folded promotion are retained, including client evidence on replaced folds.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v14"
+    static let folder = "chats-v15"
     /// The folder before, removed on the first launch with this one.
-    private static let previous = "chats-v13"
+    private static let previous = "chats-v14"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
