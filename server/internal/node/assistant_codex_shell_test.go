@@ -26,6 +26,7 @@ func TestCodexShellZsh(t *testing.T) {
 		{name: "codex alias", rc: "alias codex='command codex --no-alt-screen'\n", launcher: "codex", flags: []string{"--no-alt-screen"}},
 		{name: "launcher alias", rc: "alias cx='command codex -m test-model'\n", launcher: "cx", flags: []string{"-m", "test-model"}},
 		{name: "launcher function", rc: "cx() { export LAUNCH_MARK=from-function; command codex -m 'model with spaces'; }\n", launcher: "cx", flags: []string{"-m", "model with spaces"}, mark: "from-function"},
+		{name: "codex function", rc: "codex() { export LAUNCH_MARK=from-codex-function; command codex -m 'model with spaces'; }\n", launcher: "codex", flags: []string{"-m", "model with spaces"}, mark: "from-codex-function"},
 		{name: "function with codex alias", rc: "alias codex='command codex --no-alt-screen'\ncx() { export LAUNCH_MARK=from-function; command codex -m test-model; }\n", launcher: "cx", flags: []string{"-m", "test-model"}, mark: "from-function"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
