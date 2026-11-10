@@ -332,6 +332,9 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		var p struct {
 			Sessions []proto.Session `json:"sessions"`
 		}
+		// Decoded into one slice the size of the last list (a few rows to spare), which normalizeRuntimeSessions keeps
+		// in place: not grown row by row from nil and then copied once more.
+		p.Sessions = make([]proto.Session, 0, h.listLen()+4)
 		if json.Unmarshal(params, &p) != nil {
 			return
 		}
@@ -345,7 +348,11 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 			}
 			moved = h.setTranscripts(ts)
 		}
-		rewatch := rh.reg.setSessions(h, normalizeRuntimeSessions(h, p.Sessions))
+		list := normalizeRuntimeSessions(h, p.Sessions)
+		if cap(list) > 2*len(list)+8 { // the list shrank: keep no array of the old size
+			list = append(make([]proto.Session, 0, len(list)), list...)
+		}
+		rewatch := rh.reg.setSessions(h, list)
 		if n == nil {
 			return
 		}
