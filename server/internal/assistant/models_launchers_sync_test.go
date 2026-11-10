@@ -1,8 +1,10 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -100,23 +102,50 @@ func TestOfflineMachinesLaunchersAreStale(t *testing.T) {
 	f.mu.Lock()
 	f.devices = []Device{{ID: "away", Name: "Away"}}
 	f.mu.Unlock()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		_, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
+	var raw string
+	waitFor(t, "the offline launcher refresh", func() bool {
+		_, raw = launcherCall(t, s, "GET", "/api/v1/launchers", "")
 		var res struct {
 			Launchers []LauncherView `json:"launchers"`
 			Sync      []LauncherSync `json:"sync"`
 		}
 		_ = json.Unmarshal([]byte(raw), &res)
 		i := slices.IndexFunc(res.Launchers, func(v LauncherView) bool { return v.Name == "kcc" })
-		if i >= 0 && slices.Equal(res.Launchers[i].Stale, []string{"away"}) && slices.Equal(res.Launchers[i].RCFiles, []string{"~/.zshrc"}) &&
-			len(res.Sync) == 1 && res.Sync[0].State == "offline" && res.Sync[0].SyncedAt != nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("offline refresh did not settle: %s", raw)
-		}
-		time.Sleep(10 * time.Millisecond)
+		return i >= 0 && slices.Equal(res.Launchers[i].Stale, []string{"away"}) && slices.Equal(res.Launchers[i].RCFiles, []string{"~/.zshrc"}) &&
+			len(res.Sync) == 1 && res.Sync[0].State == "offline" && res.Sync[0].SyncedAt != nil
+	})
+}
+
+// A restored snapshot still names an offline machine before its background refresh can answer (#3198).
+func TestRestoredLauncherListKeepsOfflineStale(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.mu.Lock()
+	f.devices = []Device{{ID: "away", Name: "Away", Online: true, Reachable: true}}
+	f.zshrc = map[string][]proto.Launcher{"away": {{Name: "kcc", BaseURL: "https://gw.example.com", Source: "zshrc"}}}
+	f.sessions["away"] = nil
+	f.mu.Unlock()
+	_ = s.zshrcLaunchers(t.Context(), true)
+	s.models.zshrcMu.Lock()
+	s.models.zshrc, s.models.zshrcSync = nil, nil
+	s.models.zshrcMu.Unlock()
+	f.mu.Lock()
+	f.devices = []Device{{ID: "away", Name: "Away"}}
+	f.mu.Unlock()
+
+	code, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
+	var res struct {
+		Launchers []LauncherView `json:"launchers"`
+		Sync      []LauncherSync `json:"sync"`
+	}
+	if code != http.StatusOK || json.Unmarshal([]byte(raw), &res) != nil {
+		t.Fatalf("%d %s", code, raw)
+	}
+	i := slices.IndexFunc(res.Launchers, func(v LauncherView) bool { return v.Name == "kcc" })
+	if i < 0 || !slices.Equal(res.Launchers[i].Stale, []string{"away"}) {
+		t.Fatalf("the restored row lost its offline mark: %s", raw)
+	}
+	if len(res.Sync) != 1 || res.Sync[0].State != "offline" || res.Sync[0].SyncedAt == nil {
+		t.Fatalf("the restored sync lost its offline state: %+v", res.Sync)
 	}
 }
 
@@ -151,8 +180,12 @@ func TestLauncherListAnswersLastSeenWhileRefreshRuns(t *testing.T) {
 	asyncCall := func() <-chan answer {
 		ch := make(chan answer, 1)
 		go func() {
-			code, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
-			ch <- answer{code, raw}
+			r := httptest.NewRequest("GET", "/api/v1/launchers", strings.NewReader(""))
+			ctx, cancel := context.WithCancel(r.Context())
+			recorder := httptest.NewRecorder()
+			s.ServeHTTP(recorder, r.WithContext(ctx))
+			cancel() // the background refresh must outlive the client request
+			ch <- answer{recorder.Code, recorder.Body.String()}
 		}()
 		return ch
 	}
@@ -179,12 +212,7 @@ func TestLauncherListAnswersLastSeenWhileRefreshRuns(t *testing.T) {
 		return calls
 	}
 	first := await(asyncCall())
-	for deadline := time.Now().Add(2 * time.Second); countCalls() < 4; {
-		if time.Now().After(deadline) {
-			t.Fatalf("the background refresh did not reach both nodes: %d calls", countCalls())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, "the background refresh to reach both nodes", func() bool { return countCalls() >= 4 })
 	second := await(asyncCall())
 	for _, a := range []answer{first, second} {
 		if a.code != http.StatusOK || !strings.Contains(a.raw, "before") || strings.Contains(a.raw, "after") {
@@ -196,15 +224,8 @@ func TestLauncherListAnswersLastSeenWhileRefreshRuns(t *testing.T) {
 	}
 
 	release()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	waitFor(t, "the refreshed launcher snapshot", func() bool {
 		code, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
-		if code == http.StatusOK && strings.Contains(raw, "after") {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the refreshed snapshot did not arrive: %d %s", code, raw)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return code == http.StatusOK && strings.Contains(raw, "after")
+	})
 }

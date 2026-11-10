@@ -179,9 +179,18 @@ func (s *Service) zshrcLaunchersLastSeen(ctx context.Context) ([]zshrcLaunchers,
 		}
 		states = map[string]LauncherSync{}
 		for _, d := range devices {
-			if m, ok := meta[d.ID]; ok {
-				states[d.ID] = launcherSyncMetadata(d, m)
+			m, hasMeta := meta[d.ID]
+			if !hasMeta && d.Online {
+				continue
 			}
+			state := LauncherSync{Machine: d.ID, Name: d.Name}
+			if hasMeta {
+				state = launcherSyncMetadata(d, m)
+			}
+			if !d.Online {
+				state.State = "offline"
+			}
+			states[d.ID] = state
 		}
 		st.zshrcMu.Lock()
 		if st.zshrc != nil {
