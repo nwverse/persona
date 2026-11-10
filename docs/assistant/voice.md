@@ -171,7 +171,7 @@ Phase one is done and this document follows the code; how it was split into issu
 
 **M. Disconnection**
 
-- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. Reconnecting plays a tone and shows "Reconnecting".
+- **Upstream drops**: reconnect at most 3 times, resetting after 60 seconds stable. An upstream that stays connected but takes no frame for 10 seconds counts as a drop. Reconnecting plays a tone and shows "Reconnecting".
 - **App-to-hub drops**: automatically retry 3 times after 1, 4, 10 seconds, with `resume` in `start`. Rounds finished during the gap are still spoken. After all three failures, show "Continue".
 
 ### 1.3 Errors
@@ -481,7 +481,7 @@ type voiceRun struct {
   - #5506: when the gate is already open (the user spoke earlier) but the App's audio had the user's voice after their last caption, the caption of the request that triggered the delegation is still on its way (it comes 0.1–0.4 s after the call): wait for it too, within the same `gateWait`, then build the message. Without it after `gateWait`, send what was captioned.
     #5790: not when the fast layer's reply that made the call ended (`response.completed`) without any audio: the tested service holds that caption until the call's result (lessons "Late captions on replies that only call a tool"), so it cannot come in time and waiting only delayed the message by the full 2.5 s. With the gate open the message goes as soon as that reply ends; a closed gate is unchanged. Upstreams that do not say when replies start and end wait as before.
   - Agent messages do not request "keep replies brief".
-  - Still `<persona-context>`: attributed blocks have not migrated (`../protocol/protocol.md` ("Rename")).
+  - Still `<persona-context>`: attributed blocks have not migrated (`../protocol/protocol.md` ("Tags in messages")).
 - **Timeout**:
   - Hub send wait: normally 90 seconds; session `offline` or `Starting`, 5 minutes.
   - Extension waits another 30 seconds.
@@ -584,7 +584,7 @@ Titles, goals, progress, recent turns, card questions, and Agent titles go insid
    - Threshold basis: tested model keeps speaking for `嗯嗯` (mm-hmm), 0.43 seconds, but stops for `等一下` (wait), 0.64 seconds, and `对对对` (yes, yes, yes), 0.70 seconds. Do not use the model's own 0.8-second stopping delay as threshold: it would miss short interruptions the model honors, while most abandoned audio is already in the App (9–10× realtime).
      Residual echo and ambient noise on real devices make continuous energy more likely; confirm 0.5 seconds on hardware;
    - protocol 1: upstream interruption sends `clear`, without an energy rule; ignore `incomplete` replacing an already `completed` reply (#4719, same as protocol 2).
-8. **Heartbeat** (#3503, both protocols): a working run (not `held`, not another-channel round) with `heartbeatAfter` (2 minutes) of call silence gets `progress.md`, "Still working, elapsed time":
+8. **Heartbeat** (#3503, both protocols): a working run (not `held`, not another-channel round) with `heartbeatAfter` (2 minutes) of call silence gets `progress.md`:
    "Sound" includes model playback not finished, voiced App audio, user captions or typed text, and this run's last announcement;
    speak only `activity` category ("Running tests / reading", no commands or paths) and time since assignment (observed runs since session became working), never Agent text, and do not close the user-speech gate.
    #3503 real-service run: a task took 2.5 minutes; at 2 minutes the model said "Still running, over two minutes, no result yet", without reading any command arguments.
@@ -725,7 +725,7 @@ How #3505 does it (`suspend.go`; constants from lessons "Recommended constants",
 
 ### 4.10 Reconnect and resume
 
-- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
+- **Upstream drops**: existing `lost()`, at most 3 attempts, reset after 60 seconds stable. Every write to the upstream waits at most `upWriteTimeout` (10 s); on that deadline the WebSocket closes itself, `readUpstream` fails and `lost()` runs, so an upstream that stops reading cannot hold the call (or the app hanging up) forever. New instructions include refreshed snapshot, last 40 utterances, pending runs; old delegations invalid. Pausing and waking are not drops (4.9).
   #3502: both protocols reset if this session survives 60 seconds (`stableAfter`); three failed attempts or three consecutive drops send fatal `upstream_failed`; protocol 2 App receives `link{reconnecting}` / `link{live}`.
   If Agent-written snapshot parts (title, goal, progress, recent turns, card questions, Agent titles) differ from the prior session (more text during disconnect), the new session has read Agent content: close user-speech gate on coming online, rejecting delegation as `unprompted` until user speaks again. Unchanged snapshot does not close it, allowing the user's pre-disconnect utterance.
 - **App-extension drops** (network switch; forwarded WS closed by hub redeploy; manager restart also restarts extension):
@@ -1125,6 +1125,7 @@ struct VoiceDeps { var api: () -> APIClient?                 // Refetch each con
   - **Before the microphone** (#5029): nothing reads `AVAudioEngine.inputNode` until `VoiceCapture.plan` says there is an input. Reading it sets the I/O unit up, and an input that cannot start makes that setup wait on an RPC that times out and aborts the app (nothing to catch). So, with the session active: recording permission (else `permissionDenied`), `isInputAvailable` (else `audioFailed`); a route change that leaves no input ends the call as `audioFailed` too.
   - **Simulator**: the session reports the Mac's microphone whether or not the Mac lets the simulator use it, so `VoiceInputProbe` first starts a short AudioQueue recording on its own queue (an AudioQueue that cannot start waits in `AudioQueueStart` instead of aborting) and the call waits up to 3 s. Started: plain capture, never VoiceProcessing (it does not run there: it turns on, then the engine will not start with it, and each extra I/O unit is one more setup that can time out). Not started: the call ends as `audioFailed` ("Something went wrong with the microphone or speaker", Retry); a probe still waiting is not started again until it comes back. On a device, VoiceProcessing first and plain capture if it fails, logged once.
   - No local interruption detection, always follow extension `clear`: same route as user captions, local detection would not be faster.
+  - **Audio route** (#3015, `VoiceRoute` in PersonaKit, `VoiceRouteTests`): the session is `.playAndRecord` / `.voiceChat` with `.defaultToSpeaker`, `.allowBluetoothHFP` and `.allowBluetoothA2DP` (no AirPlay: too much delay for a conversation). A connected device plays the voice and its own microphone records (Bluetooth hands-free, a wired headset, CarPlay, USB); a device that can only listen (A2DP, LE) plays with the phone's microphone, unless the same device offers hands-free, which wins. With nothing connected, the loudspeaker, never the earpiece (`overrideOutputAudioPort(.speaker)` when the route lands there). Decided at the start, again once the engine runs, on every route change in the first 2 s (a hands-free microphone comes up late), and later only when a device arrives or leaves (`routeChangeNotification` `newDeviceAvailable` / `oldDeviceUnavailable`): other changes (a pick in Control Center, the call's own preferred input or override) are left as they are, and a microphone asked for once and not taken is not asked for again until a device comes or goes. A route change that stops the engine rebuilds the tap; if the engine will not start again, a new engine (voice processing, plain capture if it will not run); only when that fails does the call end (`audioFailed`). The call's preferred input and override are cleared when it ends. Route changes are logged as port kinds only (`voice: route after …`), never device names.
 - **Coordinate with #1931** (do not change that PR): before #3507, comment in #1951 with this document:
   1. **Names**: independent phone `Voice*`, not `DuplexVoice*`, `InputPump`, `PCM16`, `VoicePlugin*`, `APIClient.voicePlugins()`.
   2. **Call ownership**: `VoiceCalls` with surface. **Background-ending rules apply only to `surface == .phone`**; CarPlay ends only its own call.

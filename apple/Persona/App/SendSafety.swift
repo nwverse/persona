@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Sending into a terminal safely (docs/protocol/protocol.md「发消息」): the node refuses a message — nothing typed — when the
+// Sending into a terminal safely (docs/protocol/protocol.md「Sending messages」): the node refuses a message — nothing typed — when the
 // computer's Claude input box holds a draft or a dialog has the keyboard. Each pending message carries its id as
 // client_msg_id, so a retry after a lost response is not typed twice. A refused one goes again under a new id: the
 // hub answers an id it refused with that refusal, without asking the computer again (#6425).
@@ -39,7 +39,7 @@ extension AppModel {
         }
         let socket = socket(key.group)
         do {
-            // The message's id is its op id too (docs/protocol/protocol.md「操作回执」): however often it arrives, the hub
+            // The message's id is its op id too (docs/protocol/protocol.md「Operation receipts」): however often it arrives, the hub
             // types it once. Through a short drop (a hub restart) it keeps trying with that id instead of going to
             // the outbox's clock; once the drop's grace is over the outbox takes it (flushOutbox).
             let launcher = assistantLaunchers[key], model = assistantModels[key]
@@ -118,16 +118,37 @@ extension AppModel {
         }
     }
 
-    nonisolated static func marks(_ drafts: [SessionKey: String], _ contexts: [SessionKey: [ContextRef]]) -> Set<SessionKey> {
-        Set(drafts.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.keys)
-            .union(contexts.filter { !$0.value.isEmpty }.keys)
+    private static let commentsName = "composer-comments"
+
+    static func savedComments() -> [SessionKey: [MessageComment]] {
+        let list = StateCache.load(commentsName, as: [SavedComments].self) ?? []
+        return Dictionary(list.map { ($0.key, $0.comments) }, uniquingKeysWith: { a, _ in a })
     }
 
-    /// `draftMarks` from the drafts and quotes, set only when it differs.
+    func saveComments() {
+        commentWriter.run { [weak self] in
+            guard let self else { return }
+            StateCache.save(Self.commentsName, self.composerComments.filter { !$0.value.isEmpty }.map { SavedComments(key: $0.key, comments: $0.value) })
+        }
+    }
+
+    nonisolated static func marks(_ drafts: [SessionKey: String], _ contexts: [SessionKey: [ContextRef]],
+                                  _ comments: [SessionKey: [MessageComment]] = [:]) -> Set<SessionKey> {
+        Set(drafts.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.keys)
+            .union(contexts.filter { !$0.value.isEmpty }.keys)
+            .union(comments.filter { !$0.value.isEmpty }.keys)
+    }
+
+    /// `draftMarks` from the drafts, quotes and comments, set only when it differs.
     func markDrafts() {
-        let now = Self.marks(drafts, composerContexts)
+        let now = Self.marks(drafts, composerContexts, composerComments)
         if now != draftMarks { draftMarks = now }
     }
+}
+
+private nonisolated struct SavedComments: Codable, Sendable {
+    var key: SessionKey
+    var comments: [MessageComment]
 }
 
 private nonisolated struct SavedContexts: Codable, Sendable {

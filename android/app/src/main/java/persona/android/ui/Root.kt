@@ -65,8 +65,10 @@ import persona.feature.assistant.assistantEntries
 import persona.feature.chat.*
 import persona.feature.inbox.InboxItemPages
 import persona.feature.inbox.InboxItemExtensionScreen
+import persona.feature.inbox.InboxItemKey
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LocalInboxItemPages
+import persona.feature.inbox.ManagerLinks
 import persona.feature.inbox.InboxTriage
 import persona.feature.inbox.InboxTriageSetup
 import persona.feature.inbox.LocalInboxTriageSetup
@@ -242,6 +244,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val sidebarOperations = rememberCoroutineScope()
     val sidebarState = rememberSaveableStateHolder()
     var settingsOpened by rememberSaveable { mutableStateOf(false) }
+    // The sidebar's column beside the Assistant page in a regular window; its avatar hides it and shows it again.
+    val sidebarColumnShown = rememberSaveable { mutableStateOf(true) }
     val settingsSheetStack = rememberNavBackStack(SettingsRoute)
     fun showAssistantHome() {
         while (assistantStack.size > 1) assistantStack.removeAt(assistantStack.lastIndex)
@@ -261,7 +265,10 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
     val todos by (session.tasks?.todos ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsStateWithLifecycle()
     val todosSupported by (session.tasks?.todosSupported ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsStateWithLifecycle()
-    val uncompletedTodosCount = remember(todos) { todos.count { !it.isDone && !it.quiet } }
+    // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.
+    val currentAssistant = persona.core.designsystem.currentAssistant()
+    val counts = remember(currentAssistant, sessions, preferences.mutes) { ShellCounts(currentAssistant, sessions, preferences.mutes) }
+    val uncompletedTodosCount = remember(todos, counts) { counts.todos(todos) }
     fun kind(key: SessionKey): ConversationKind? = when {
         key == assistant.mainSession || assistant.conversations.any { it.key == key } -> ConversationKind.Assistant
         else -> sessions.firstOrNull { it.key == key }?.let { if (it.assistant) ConversationKind.Assistant else ConversationKind.Agent }
@@ -412,28 +419,31 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val decorators = AppTab.entries.associateWith { tab -> key(tab) {
         listOf(rememberSaveableStateHolderNavEntryDecorator<NavKey>(), rememberViewModelStoreNavEntryDecorator<NavKey>())
     } }
-    val assistantRequests = pending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
-    val agentRequests = pending - assistantRequests.toSet()
-    // A quiet task's request (#1731) is told in the main conversation, not counted on the tab.
-    val agentNeeds = agentRequests.count { request ->
-        val key = SessionKey(request.machineId, request.sessionId)
-        val session = sessions.firstOrNull { it.key == key }
-        val space = session?.spaceName?.let { "${key.machineId}/$it" }
-        session?.quiet != true && !preferences.mutes.mutes(key.path, space)
-    }
+    // The current assistant's cards (ShellCounts): the tab badges and "Needs you now" count them.
+    val shownPending = pending.filter(counts::owned)
+    val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
+    val agentRequests = shownPending - assistantRequests.toSet()
+    val agentNeeds = agentRequests.count(counts::countsCard)
+    // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
+    // (each once), counted here, and its inbox's "Needs you" from the roster.
+    val managerRoster = persona.core.designsystem.LocalManagerRoster.current
+    val waiting = remember(managerRoster, pending, counts) { counts.waiting(managerRoster, pending) }
+    val othersWaiting = currentAssistant.othersWaiting(waiting)
     // Only when what the count reads changed: the shell recomposes on every push, and the whole list is built to count
     // one group. Of the sessions it reads only which space each is in (for mutes), not their state or activity.
     val inboxSpaces = inbox.sessions.map { it.id to it.spacePreferenceKey }
-    val inboxNeeds = remember(inbox.records, inbox.interactions, inboxSpaces, inbox.mutes) {
+    val shownRecords = remember(inbox.records, currentAssistant) { ShellCounts.records(currentAssistant, inbox.records) }
+    val shownInteractions = remember(inbox.interactions, currentAssistant) { ShellCounts.interactions(currentAssistant, inbox.interactions) }
+    val inboxNeeds = remember(shownRecords, shownInteractions, inboxSpaces, inbox.mutes) {
         // Rows the AI twin is on are Persona's: the same count as the inbox page's "Needs you" (#4848).
         needsYouCount(
-            buildInboxList(inbox.records.map { it.item }, inbox.interactions, inbox.sessions, inbox.mutes), inbox.records)
+            buildInboxList(shownRecords.map { it.item }, shownInteractions, inbox.sessions, inbox.mutes), shownRecords)
     }
     val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size)
     // "Needs you now" on the Persona home: the agents waiting (not Persona's own, not muted), then the inbox's "Needs you".
-    val needsYou = remember(agentRequests, sessions, preferences.mutes, inbox.records) {
+    val needsYou = remember(agentRequests, sessions, preferences.mutes, shownRecords) {
         persona.feature.assistant.needsYou(agentRequests, sessions, preferences.mutes,
-            inbox.records.map { persona.feature.assistant.NeedsYouMessage(it.item, lark = it.feedId != null,
+            shownRecords.map { persona.feature.assistant.NeedsYouMessage(it.item, lark = it.feedId != null,
                 working = it.agentWorking) })
     }
     // Voice chat is offered while the hub runs a voice extension: asked each time the Persona tab shows while connected.
@@ -445,7 +455,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         // Each page shows the connection state in its own title, so the shell adds no banner above it.
         val style = PersonaTheme.style
         val connected = connection == ConnectionState.Online
-        val working = sessions.any { it.agentState == AgentState.Working }
+        val working = sessions.any { it.agentState == AgentState.Working && currentAssistant.ownsOn(it.machineId, it.manager) }
         val ambience = when {
             !connected && connection != ConnectionState.Connecting && connection != ConnectionState.Updating -> Ambience.Alert
             agentNeeds + inboxNeeds > 0 -> Ambience.NeedsYou
@@ -470,11 +480,15 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         val windowLayout = WindowLayout(expanded = expanded, tabletop = adaptive.windowPosture.isTabletop && hinge != null,
             hingeTop = hinge?.bounds?.top ?: 0f, hingeBottom = hinge?.bounds?.bottom ?: 0f)
         val windowWidth = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
-        // Lists sit beside their details when expanded, and on medium widths with room for both (a tablet in portrait).
+        val windowHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+        // A regular window (an open foldable, a tablet) is laid out as an open iPhone Duo or an iPad: the shared sidebar
+        // is a column beside the Assistant page, and Settings shows its list beside the page it opens (RegularWindow.kt).
+        val regular = isRegularWindow(windowWidth.value, windowHeight.value)
+        // Lists sit beside their details in a regular window and when expanded; also on a wide phone on its side.
         // Panes share the window's one background; between them only a little space, no second surface or rule.
         // The scaffold must not move focus into the pane it shows (its default): focus entered the list pane's first
         // focusable, the search field, and with a hardware keyboard Agents and Inbox opened with the input method up.
-        val directive = (if (!expanded && windowWidth >= 760.dp) calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(adaptive)
+        val directive = (if (!expanded && listsBesideDetails(windowWidth.value, windowHeight.value)) calculatePaneScaffoldDirectiveWithTwoPanesOnMediumWidth(adaptive)
             else calculatePaneScaffoldDirective(adaptive)).let {
                 PaneScaffoldDirective(
                     maxHorizontalPartitions = it.maxHorizontalPartitions,
@@ -500,6 +514,65 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             PaneHinge((hinge.bounds.left - paneAreaLeft) / paneDensity, (hinge.bounds.right - paneAreaLeft) / paneDensity, hinge.isSeparating)
         }
         val rootKeys: Set<Any> = remember { listOf<NavKey>(AssistantRoute, AgentsRoute).map { NavEntry(it) {}.contentKey }.toSet() }
+        val assistantRootKey: Any = remember { NavEntry<NavKey>(AssistantRoute) {}.contentKey }
+        // The one shared sidebar, as the drawer or as the column beside the Assistant page. The two never share a key:
+        // on Agents in a regular window the drawer opens while the Assistant page (kept composed) still holds its column.
+        val sharedSidebar: @Composable (String) -> Unit = { stateKey ->
+            sidebarState.SaveableStateProvider(stateKey) {
+                AssistantSidebarContent(assistant, session.assistant, pins, sidebar.active, sidebarOperations, session.demo != null,
+                    onOpen = { key ->
+                        sidebar.opened.value = false
+                        selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
+                    },
+                    onAction = { action -> sidebar.opened.value = false; showAssistantHome(); sidebar.action = action },
+                    onSettings = {
+                        sidebar.opened.value = false
+                        settingsSheetStack.clear()
+                        settingsSheetStack.add(SettingsRoute)
+                        settingsOpened = true
+                    },
+                    onInbox = { sidebarDestination(InboxRoute) },
+                    onKnowledge = { sidebarDestination(KnowledgeRoute) },
+                    onTodos = { sidebarDestination(TodosRoute) }, todoCount = uncompletedTodosCount, showTodos = todosSupported,
+                    inboxCount = inboxNeeds, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
+                    pages = sidebarPages,
+                    onPage = { key ->
+                        if (key == "machines") sidebarDestination(MachinesRoute)
+                        else extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
+                            sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
+                        }
+                    },
+                    onTogglePin = { key -> session.preferences.togglePin(key.path) },
+                    onRetired = { key -> sidebar.retired = sidebar.retired + key },
+                    // The current assistant at the sidebar's head; its roster opens under it.
+                    switcher = { head, trailing, fallback ->
+                        persona.feature.settings.AssistantSwitcher(services.managers.takeUnless { services.demo }, waiting,
+                            hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating,
+                            onManage = {
+                                sidebar.opened.value = false
+                                settingsSheetStack.clear()
+                                settingsSheetStack.add(SettingsRoute)
+                                settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
+                                settingsOpened = true
+                            }, headModifier = head, trailing = trailing, fallback = fallback)
+                    })
+            }
+        }
+        // What the decorator below reads: it is remembered across compositions, these change with the window.
+        val currentSidebar = rememberUpdatedState(sharedSidebar)
+        val currentRegular = rememberUpdatedState(regular)
+        val currentOthersWaiting = rememberUpdatedState(othersWaiting)
+        val currentHinges = rememberUpdatedState(paneHinges)
+        // A regular window shows the sidebar as a column beside the Assistant page (inside its root page, so the pages
+        // opened over it, Inbox's list and detail among them, still have the whole width): the avatar hides and shows
+        // it, as the open iPhone Duo's sidebar button does. Folded, it is the drawer again; the page stays as it was.
+        val besideAssistant: @Composable (@Composable () -> Unit) -> Unit = { page ->
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val split = sidebarSplit(maxWidth.value, currentHinges.value)
+                JSidebarColumn(if (currentRegular.value) ({ currentSidebar.value("shared-sidebar-column") }) else null,
+                    width = split.sidebar.dp, pageStart = split.page.dp, shown = sidebarColumnShown.value) { page() }
+            }
+        }
         // Only primary roots carry the shared top switcher. Secondary pages keep their own Back control.
         val chrome = remember(style, items, selected) {
             NavEntryDecorator<NavKey> { entry ->
@@ -507,17 +580,32 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                 val webSheets = remember { mutableIntStateOf(0) }
                 val level = LocalGlassLevel.current
                 val primary = entry.contentKey in rootKeys
-                CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
-                    LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
-                    LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
-                    LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
-                        onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
-                            JPersonaButton(sidebar.personaState, stringResource(R.string.app_sidebar), {
-                                sidebar.opened.value = true
-                            })
-                        }) else null) {
-                    entry.Content()
+                val assistantRoot = entry.contentKey == assistantRootKey
+                val page: @Composable () -> Unit = {
+                    CompositionLocalProvider(LocalGlassSource provides glass, LocalWebSheets provides webSheets,
+                        LocalGlassLevel provides if (webSheets.intValue > 0) GlassLevel.Solid else level,
+                        LocalRootLeading provides null, LocalRootBack provides if (primary) null else navigator::back,
+                        LocalHomeChrome provides if (primary) HomeChrome(items, selected.name,
+                            onSelect = { navigator.selectTab(AppTab.valueOf(it)) }, leading = {
+                                Box {
+                                    // The dot is spoken too: that something waits at another assistant.
+                                    val sidebarLabel = stringResource(R.string.app_sidebar).let { label ->
+                                        if (!currentOthersWaiting.value) label
+                                        else stringResource(persona.core.designsystem.R.string.designsystem_manager_spoken, label,
+                                            stringResource(persona.core.designsystem.R.string.designsystem_manager_others_waiting))
+                                    }
+                                    JPersonaButton(sidebar.personaState, sidebarLabel, {
+                                        if (assistantRoot && currentRegular.value) sidebarColumnShown.value = !sidebarColumnShown.value
+                                        else sidebar.opened.value = true
+                                    })
+                                    // Something waits at another assistant: the switcher's badges say where.
+                                    if (currentOthersWaiting.value) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd).padding(Tokens.Space.xs))
+                                }
+                            }) else null) {
+                        entry.Content()
+                    }
                 }
+                if (assistantRoot) besideAssistant(page) else page()
             }
         }
         val provider = entryProvider<NavKey> {
@@ -605,35 +693,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
             sides.getRight(LocalDensity.current, LocalLayoutDirection.current) > 0
         CompositionLocalProvider(LocalAmbience provides ambience, LocalWindowLayout provides windowLayout, LocalInboxItemPages provides inboxItemPages,
             LocalInboxTriageSetup provides triageSetup, LocalAssistantSidebarHost provides sidebar) {
-          JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = {
-                sidebarState.SaveableStateProvider("shared-sidebar") {
-                    AssistantSidebarContent(assistant, session.assistant, pins, sidebar.active, sidebarOperations, session.demo != null,
-                        onOpen = { key ->
-                            sidebar.opened.value = false
-                            selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
-                        },
-                        onAction = { action -> sidebar.opened.value = false; showAssistantHome(); sidebar.action = action },
-                        onSettings = {
-                            sidebar.opened.value = false
-                            settingsSheetStack.clear()
-                            settingsSheetStack.add(SettingsRoute)
-                            settingsOpened = true
-                        },
-                        onInbox = { sidebarDestination(InboxRoute) },
-                        onKnowledge = { sidebarDestination(KnowledgeRoute) },
-                        onTodos = { sidebarDestination(TodosRoute) }, todoCount = uncompletedTodosCount, showTodos = todosSupported,
-                        inboxCount = inboxNeeds, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
-                        pages = sidebarPages,
-                        onPage = { key ->
-                            if (key == "machines") sidebarDestination(MachinesRoute)
-                            else extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
-                                sidebarDestination(ExtensionUiRoute(page.extension, page.id, page.title.ifBlank { page.id }))
-                            }
-                        },
-                        onTogglePin = { key -> session.preferences.togglePin(key.path) },
-                        onRetired = { key -> sidebar.retired = sidebar.retired + key })
-                }
-          }) {
+          JShellDrawer(sidebar.opened.value, onDismiss = { sidebar.opened.value = false }, drawer = { sharedSidebar("shared-sidebar") }) {
           Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
             // One background for the window. Pages paint the same light at the same place (PageBackdrop), so in wide
             // windows the rail, the panes and the room between them read as one surface; cards are what separate them.
@@ -675,6 +735,13 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
           }
           }
           BackHandler(sidebar.opened.value) { sidebar.opened.value = false }
+          // Unfolded with the drawer open over the Assistant page: the sidebar it showed becomes the column beside it.
+          LaunchedEffect(regular) {
+              if (regular && selected == AppTab.Persona && sidebar.opened.value) {
+                  sidebar.opened.value = false
+                  sidebarColumnShown.value = true
+              }
+          }
           if (settingsOpened) {
               val settingsNavigator = remember(navigator, settingsSheetStack) {
                   SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
@@ -692,9 +759,26 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                       assistantEntries(settingsNavigator)
                       settingsDetailEntries(settingsNavigator, services)
                   }
-                  NavDisplay(backStack = settingsSheetStack, onBack = settingsNavigator::back,
-                      entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator()),
-                      entryProvider = settingsEntries)
+                  // In a regular window the list of settings stays beside the page it opens, as on an open iPhone Duo
+                  // (its divider is not kept: the sheet starts from the usual split each time). Elsewhere one page.
+                  var sheetLeft by remember { mutableFloatStateOf(0f) }
+                  BoxWithConstraints(Modifier.fillMaxSize().onGloballyPositioned { sheetLeft = it.positionInWindow().x }) {
+                      val sheetHinges = adaptive.windowPosture.hingeList.filter { it.isVertical }.map { hinge ->
+                          PaneHinge((hinge.bounds.left - sheetLeft) / paneDensity, (hinge.bounds.right - sheetLeft) / paneDensity, hinge.isSeparating)
+                      }
+                      val settingsDetail = detailOf(settingsSheetStack)
+                      val settingsListDetail = rememberShellListDetail(null, if (regular) directive else directive.onePane(),
+                          maxWidth, sheetHinges, detailOpen = settingsDetail != null, store = null, collapsible = false)
+                      CompositionLocalProvider(LocalDetailKey provides settingsDetail) {
+                          NavDisplay(backStack = settingsSheetStack, onBack = settingsNavigator::back,
+                              entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator(), rememberViewModelStoreNavEntryDecorator()),
+                              sceneStrategies = listOf(settingsListDetail),
+                              entryProvider = { key ->
+                                  val entry = settingsEntries(key)
+                                  NavEntry(key, entry.contentKey, entry.metadata + paneMetadata(key)) { entry.Content() }
+                              })
+                      }
+                  }
               }
           }
         }
@@ -730,6 +814,19 @@ private fun paneMetadata(key: NavKey): Map<String, Any> = when (key) {
     })
     else -> if (isDetailDestination(key)) ListDetailSceneStrategy.detailPane() else emptyMap()
 }
+
+/** The same directive with one pane across (a copy would lose that the scaffold never moves focus). */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+private fun PaneScaffoldDirective.onePane() = PaneScaffoldDirective(
+    maxHorizontalPartitions = 1,
+    horizontalPartitionSpacerSize = horizontalPartitionSpacerSize,
+    maxVerticalPartitions = maxVerticalPartitions,
+    verticalPartitionSpacerSize = verticalPartitionSpacerSize,
+    defaultPanePreferredWidth = defaultPanePreferredWidth,
+    defaultPanePreferredHeight = defaultPanePreferredHeight,
+    excludedBounds = excludedBounds,
+    shouldAutoFocusCurrentDestination = shouldAutoFocusCurrentDestination,
+)
 
 /** The rail's key for an extension's page: never one of the tabs' names. */
 private fun extensionRailKey(extension: String, ui: String) = "extension:$extension/$ui"
@@ -793,24 +890,27 @@ private fun InboxItemUi(route: InboxItemUiRoute, inbox: InboxRepository, slots: 
     val feedback = LocalAppFeedback.current
     val missing = stringResource(R.string.app_inbox_item_missing)
     val record = snapshot.records.firstOrNull { it.item.id == route.itemId }
-    // The extension draws the item again when it changes: new messages joined the event, it was done or reopened.
-    val revision = record?.let { listOf(it.item.version, it.item.updatedAt, it.count, it.item.doneAt) }
-    val body = rememberInboxItemBody(slots, route, revision, onSource = { id ->
-        inboxSourcePage(id, records)?.let(navigator::navigate) ?: feedback?.notice(missing)
-    })
-    val fallback = body.fallback
-    val drawn = fallback == null && !body.loading
-    LaunchedEffect(drawn) { if (drawn) failures.remove(route.itemId) }
-    val own by rememberUpdatedState(record?.let(::inboxItemPage))
-    LaunchedEffect(fallback, own != null) {
-        val page = own ?: return@LaunchedEffect
-        if (fallback is InboxItemFallback.Notice) failures[route.itemId] = fallback.message
-        if (fallback != null) replace(route, page)
-    }
-    when {
-        fallback == null -> InboxItemExtensionScreen(inbox, route, navigator, body.title, body.loading, body.refreshing, body.refresh, body.items)
-        record == null -> UnavailablePage(missing, navigator)
-        else -> Box(Modifier.fillMaxSize())
+    // Its links, the extension's buttons' too, open as the item's manager's (a Feishu document, a Moments post).
+    ManagerLinks(record?.manager) {
+        // The extension draws the item again when it changes: new messages joined the event, it was done or reopened.
+        val revision = record?.let { listOf(it.item.version, it.item.updatedAt, it.count, it.item.doneAt) }
+        val body = rememberInboxItemBody(slots, route, revision, record?.manager, InboxItemKey.hubId(route.itemId), onSource = { id ->
+            inboxSourcePage(id, records)?.let(navigator::navigate) ?: feedback?.notice(missing)
+        })
+        val fallback = body.fallback
+        val drawn = fallback == null && !body.loading
+        LaunchedEffect(drawn) { if (drawn) failures.remove(route.itemId) }
+        val own by rememberUpdatedState(record?.let(::inboxItemPage))
+        LaunchedEffect(fallback, own != null) {
+            val page = own ?: return@LaunchedEffect
+            if (fallback is InboxItemFallback.Notice) failures[route.itemId] = fallback.message
+            if (fallback != null) replace(route, page)
+        }
+        when {
+            fallback == null -> InboxItemExtensionScreen(inbox, route, navigator, body.title, body.loading, body.refreshing, body.refresh, body.items)
+            record == null -> UnavailablePage(missing, navigator)
+            else -> Box(Modifier.fillMaxSize())
+        }
     }
 }
 

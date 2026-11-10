@@ -1,6 +1,6 @@
 import Foundation
 
-/// An image the agent looked at in a turn (docs/protocol/protocol.md「这一轮看过的图片」), for the strip before its answer:
+/// An image the agent looked at in a turn (docs/protocol/protocol.md「Images viewed this turn」), for the strip before its answer:
 /// one a tool's result carried, or a picture file Read opened whose result carried none (only `path`).
 nonisolated struct ViewedImage: Identifiable, Hashable, Sendable {
     enum Source: String, Sendable { case read, screenshot, browser, mcp, tool }

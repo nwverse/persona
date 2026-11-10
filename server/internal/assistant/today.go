@@ -13,7 +13,7 @@ import (
 )
 
 // The "Today" card at the top of the day in an assistant conversation, and the kinds of tasks the user lets start
-// without asking (docs/assistant/unified-entry.md "The shape of a chat", decision 1).
+// without asking (docs/assistant/unified-entry.md "Chat structure", decision 1).
 
 // todayBody is what the "Today" card shows: built from what the assistant can read already, no model in between.
 type todayBody struct {
@@ -137,7 +137,7 @@ func (s *Service) ensureToday(ctx context.Context, conversation string) (FeedIte
 			switch taskState(t, s.taskAgents(ctx, t)) {
 			case "needs_you", "interrupted":
 				body.Waiting = append(body.Waiting, todayTask{ID: t.ID, Title: t.Title})
-			case "working":
+			case "working", "waiting": // waiting on its background work or a wake-up is still under way (#3274)
 				body.Working++
 			}
 		}

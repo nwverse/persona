@@ -9,7 +9,7 @@
 package rpc
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +30,8 @@ type message struct {
 	Params json.RawMessage `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  *Error          `json:"error,omitempty"`
+	// line is the whole line, written already (Marshaled params); nothing else is set.
+	line []byte
 }
 
 type Error struct {
@@ -128,12 +130,11 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 		}
 		p.mu.Unlock()
 	}
-	sc := bufio.NewScanner(r)
 	maximum := 64 * 1024 * 1024
 	if p.Limits.FrameBytes > 0 {
 		maximum = p.Limits.FrameBytes
 	}
-	sc.Buffer(make([]byte, min(64*1024, maximum)), maximum)
+	sc := newLineReader(r, maximum) // a bufio.Scanner that gives back what a long line grew (linereader.go)
 	for sc.Scan() {
 		var m message
 		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
@@ -231,12 +232,24 @@ func (p *Peer) write(m message) error {
 	return p.writeContext(context.Background(), m)
 }
 
+// encodeLine is json.Marshal(m) and its newline, encoded into one buffer: the same bytes and errors without copying
+// the line once more to append the newline.
+func encodeLine(m message) ([]byte, error) {
+	if m.line != nil {
+		return m.line, nil
+	}
+	var b bytes.Buffer
+	if err := json.NewEncoder(&b).Encode(m); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
 func (p *Peer) writeContext(ctx context.Context, m message) error {
-	b, err := json.Marshal(m)
+	b, err := encodeLine(m)
 	if err != nil {
 		return err
 	}
-	b = append(b, '\n')
 	if p.Limits.FrameBytes > 0 && len(b) > p.Limits.FrameBytes {
 		return errFrameBudget
 	}
@@ -312,6 +325,18 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 
 // Notify sends a one-way event.
 func (p *Peer) Notify(event string, params any) error {
+	if raw, ok := params.(Marshaled); ok {
+		if line, ok := marshaledLine(event, raw); ok {
+			return p.write(message{line: line})
+		}
+		params = json.RawMessage(raw)
+	}
+	// Bytes already encoded go into the envelope as they are: its Marshal checks, compacts and escapes them as this
+	// one would, with the same errors, so the line is the same without encoding them twice (a computer's session list
+	// each time it changes). An empty one is what json.Marshal says it is (an error).
+	if raw, ok := params.(json.RawMessage); ok && len(raw) > 0 {
+		return p.write(message{Event: event, Params: raw})
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err

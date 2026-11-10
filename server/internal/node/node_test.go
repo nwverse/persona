@@ -239,6 +239,13 @@ func TestThemePickerNotShown(t *testing.T) {
 
 // A first-run screen the node cannot complete by itself is named at once rather than after the whole timeout.
 func TestFirstRunScreenAwaitingThePerson(t *testing.T) {
+	bypass := "WARNING: Claude Code running in Bypass Permissions mode\n❯ No, exit\n  Yes, I accept\nEnter to confirm · Esc to cancel"
+	if got := firstRunScreen(bypass); !strings.Contains(got, "Bypass Permissions") || !strings.Contains(got, "default") {
+		t.Fatalf("bypass confirmation must name the cause and the normal-mode remedy: %q", got)
+	}
+	if keys := firstRunKeys(bypass); keys != nil {
+		t.Fatalf("bypass permission must not be accepted automatically: %v", keys)
+	}
 	login := strings.Join([]string{
 		"Welcome to Claude Code",
 		"Select login method:",
@@ -301,6 +308,9 @@ func TestShellQuote(t *testing.T) {
 		"$HOME":                   "'$HOME'",
 		"a;b":                     "'a;b'",
 		"a-b_c.d/e":               "a-b_c.d/e",
+		// a backslash outside the quotes, which fish would read as an escape inside them (#2867)
+		`C:\x`:  `'C:'\\'x'`,
+		`a\';#`: `'a'\\''\'';#'`,
 	}
 	for in, want := range cases {
 		if got := shellQuote(in); got != want {

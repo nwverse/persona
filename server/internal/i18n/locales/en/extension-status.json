@@ -59,7 +59,7 @@
   "protocol_version": "Protocol version is {current}; the hub requires {required}",
   "wrong_id": "the program says it is \"{current}\", not \"{required}\"",
   "wrong_version": "the program says it is version \"{current}\", not \"{required}\"",
-  "attached_version": "The program running on its own is version {current}; this manager approved {approved}. It is not used until you approve that version on the hub machine (personad extension upgrade {id} <its remote: source>)",
+  "attached_version": "The program running on its own is version {current}; this assistant approved {approved}. It is not used until you approve that version on the hub machine (personad extension upgrade {id} <its remote: source>)",
   "attached_package_version": "The program running on its own is version {current}; the installed package is {approved}. It is not used until they match: run version {approved}, or detach it (personad extension detach {id}), upgrade the package and attach it again",
   "attach_source": "Attaching takes the program's sockets: remote:rpc=<socket>,http=<socket>",
   "attach_not_installed": "Extension {id} is not an installed package (built-in extensions and those in manager.json cannot be attached)",
@@ -105,5 +105,7 @@
   "git_timeout": "Timed out",
   "market_warning": "The extension market has a warning",
   "sandbox_unavailable": "The sandbox is unavailable",
-  "settings_moved": "The settings changed while this was being checked. Nothing was saved; try again"
+  "settings_moved": "The settings changed while this was being checked. Nothing was saved; try again",
+  "translation_skipped": "{file} is left out: {err}; the manifest's own text is shown instead",
+  "entry_translation_skipped": "{id}: the index entry's l10n is left out: {err}; the manifest's own text is shown instead"
 }

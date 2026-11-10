@@ -1,7 +1,7 @@
 import AuthenticationServices
 import SwiftUI
 
-// Add Mail Account › Outlook (docs/extensions/mail.md「Outlook 接入方式」): Microsoft's sign-in for personal Outlook.com and work Microsoft
+// Add Mail Account › Outlook (docs/extensions/mail.md「Outlook: Sign In with Microsoft」): Microsoft's sign-in for personal Outlook.com and work Microsoft
 // 365 mailboxes, with a client ID the user registered in Microsoft Entra themselves (never built into the app): the
 // first time, the field for it with the steps; then Sign In with Microsoft, the same flow as Google's.
 

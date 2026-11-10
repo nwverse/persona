@@ -50,7 +50,7 @@ describe("service worker routes", () => {
 // public/manifest.webmanifest: what Chrome needs to install it, and every icon it names is there at its size.
 describe("manifest", () => {
   const manifest = JSON.parse(manifestText);
-  // relative to the manifest, so they hold under a sub-path too (docs/web/web.md "Sub-path")
+  // relative to the manifest, so they hold under a sub-path too (docs/web/web.md "Subpaths")
   const files: Record<string, string> = {
     "app-icon-192.png": icon192,
     "app-icon-512.png": icon512,

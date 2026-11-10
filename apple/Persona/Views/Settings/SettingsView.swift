@@ -11,7 +11,7 @@ struct SettingsView: View {
     @State private var showPair = false
     @State private var storage: Int64?
     @State private var plugins: [HubExtension]?
-    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI 插槽」).
+    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI slots」).
     @State private var pluginLink: LinkTarget?
     @StoredValue(TranslationPrefs.enabledKey) private var translating = false
     @StoredValue(TranslationPrefs.targetKey) private var translateTarget = TranslationPrefs.defaultTarget
@@ -75,7 +75,7 @@ struct SettingsView: View {
                 if !model.isDemo { ChecklistSettingsRow() }
 
                 #if os(iOS) || os(visionOS)
-                // The plugins' cards and pages (docs/extensions/extensions.md「UI 插槽」): at the top, where the main navigation's
+                // The plugins' cards and pages (docs/extensions/extensions.md「UI slots」): at the top, where the main navigation's
                 // entries are on an iPhone (the Mac has them in its sidebar).
                 ExtensionSlotsSettingsSection(link: $pluginLink)
                 #endif
@@ -128,6 +128,14 @@ struct SettingsView: View {
                         }
                         .settingsListRow(SettingsPage.connectors)
                         .accessibilityIdentifier("settings.connectors")
+                        #if os(iOS)
+                        // What the knowledge base reads and keeps of what the connectors bring (#2217).
+                        NavigationLink(value: SettingsPage.knowledgeSelection) {
+                            SettingsRow(title: String(localized: "Knowledge Selection"), symbol: Theme.Icon.knowledge, tint: Theme.accent)
+                        }
+                        .settingsListRow(SettingsPage.knowledgeSelection)
+                        .accessibilityIdentifier("settings-knowledge-selection")
+                        #endif
                     }
                     .bareListRow()
                 }
@@ -276,7 +284,7 @@ struct SettingsView: View {
             #endif
             .themedPage()
             .pageToolbar {
-                    // As a sheet over the shell (docs/apple/ios.md「新外壳」): ChatGPT's × to close it.
+                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ChatGPT's × to close it.
                     if shell != nil || inSheet {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
@@ -416,6 +424,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
+        else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
         else if let a = d.string(forKey: "openAppearance"), a != "chat" { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
@@ -489,6 +498,8 @@ enum SettingsPage: Hashable {
     case triage
     /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents.
     case layout
+    /// Settings › Knowledge Selection (docs/assistant/knowledge.md "Selection"): what the knowledge base reads and keeps.
+    case knowledgeSelection
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -499,17 +510,17 @@ enum SettingsPage: Hashable {
     /// the id; nil: the default's).
     case plugins
     case plugin(String, manager: String? = nil)
-    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「声明式 UI」), titled until its View says
+    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「Declarative UI」), titled until its View says
     /// otherwise; `manager`: the plugin's (nil: the default's).
     case pluginPage(plugin: String, ui: String, title: String, manager: String? = nil)
-    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「扩展市场」).
+    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
     case pluginMarkets
     /// Settings › Channels, and one channel by its id (docs/extensions/channels.md).
     case channels
     case channel(String)
-    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「Connecting to hub through SSH」).
     case sshTunnel(String)
     case inAppTunnel(String)
     /// Settings › hub › Local Proxy of one paired hub (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
@@ -552,8 +563,10 @@ private struct SettingsDestinations: ViewModifier {
         case .language: LanguageSettingsPage()
         #if os(iOS)
         case .layout: LayoutSettingsPage()
+        case .knowledgeSelection: KnowledgeSelectionView()
         #else
         case .layout: EmptyView()
+        case .knowledgeSelection: EmptyView()
         #endif
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
@@ -660,11 +673,12 @@ struct PhoneDataView: View {
     @State private var statuses: [PhoneDataSource: PhoneAuthStatus] = [:]
     @State private var enabled: [PhoneDataSource: Bool] = [:]
     @State private var asking: PhoneDataSource?
+    @StoredValue(ClipboardOffer.enabledKey) private var offerClipboard = false
 
     var body: some View {
         List {
             Section {
-                ForEach(PhoneDataSource.allCases) { s in
+                ForEach(PhoneDataSource.onThisDevice) { s in
                     HStack(spacing: Theme.Space.m) {
                         SourceIcon(source: s)
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -684,6 +698,19 @@ struct PhoneDataView: View {
             } footer: {
                 Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
             }
+            #if os(iOS)
+            // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
+            Section {
+                Toggle(isOn: $offerClipboard) {
+                    Text("Offer to Send What You Copied") // a switch's title: wraps at large sizes
+                }
+                .accessibilityIdentifier("clipboard-offer")
+            } header: {
+                Text("Clipboard")
+            } footer: {
+                Text("When you come back to Persona after copying something, offers to send it to a computer that shares its clipboard. The clipboard is read only when you tap Send.")
+            }
+            #endif
         }
         .themedPage()
         .navigationTitle(ConnectorText.device)
@@ -698,7 +725,7 @@ struct PhoneDataView: View {
     }
 
     private func refresh() {
-        for s in PhoneDataSource.allCases { statuses[s] = PhoneAuthorization.status(s) }
+        for s in PhoneDataSource.onThisDevice { statuses[s] = PhoneAuthorization.status(s) }
     }
 
     private func set(_ s: PhoneDataSource, _ on: Bool) async {
@@ -934,7 +961,7 @@ struct PairView: View {
     var start: Start = .scan
     @State private var url = ""
     @State private var token = ""
-    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「Connecting to hub through SSH」).
     @State private var ssh: SSHRoute?
     #if os(macOS)
     @State private var editingSSH = false

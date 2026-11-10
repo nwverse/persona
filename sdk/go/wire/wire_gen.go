@@ -450,7 +450,7 @@ type LookAvatar struct {
 	Dark *LookAvatarDark `json:"dark,omitempty"`
 }
 
-// LookPalette: an appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+// LookPalette: an appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
 type LookPalette struct {
 	Primary    string `json:"primary,omitempty"`
 	Secondary  string `json:"secondary,omitempty"`
@@ -486,8 +486,8 @@ type LookDot struct {
 	States LookDotStates `json:"states"`
 }
 
-// LookItem: A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona
-// package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+// LookItem: A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a
+// persona package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
 type LookItem struct {
 	ID              string      `json:"id"`
 	Name            string      `json:"name"`
@@ -2247,16 +2247,18 @@ type Review struct {
 	Discard     *Action          `json:"discard,omitempty"`
 }
 
-// Values of PersonaCardKind.
+// PersonaCardKind: ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days,
+// people).
 const (
 	PersonaCardKindStat       = "stat"
 	PersonaCardKindStackedBar = "stacked_bar"
 	PersonaCardKindLine       = "line"
 	PersonaCardKindBar        = "bar"
+	PersonaCardKindRing       = "ring"
 )
 
 // PersonaCardKinds are the values of PersonaCardKind, in order.
-var PersonaCardKinds = []string{"stat", "stacked_bar", "line", "bar"}
+var PersonaCardKinds = []string{"stat", "stacked_bar", "line", "bar", "ring"}
 
 // PersonaCard: the assistant's ```persona-card block (#886): one JSON object. Joins the components in #1850; this
 // form keeps drawing.
@@ -4375,6 +4377,8 @@ type KBDetail struct {
 	Links    []KBEntry            `json:"links,omitempty"`
 	Moments  []KBMomentRef        `json:"moments,omitempty"`
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
+	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
+	Minutes json.RawMessage `json:"minutes,omitempty"`
 }
 
 // KBMomentRef: A feed post linked to a project.

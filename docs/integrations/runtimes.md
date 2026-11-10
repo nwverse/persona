@@ -51,14 +51,16 @@ Optional (for each one present, the SDK declares the capability in `runtime.hell
 | `send({session_id, text, images, client_msg_id})` | Sending a message from the phone. **Dedup by `client_msg_id`**: the App resends on reconnect |
 | `interrupt` / `rename` / `close` / `start({cwd, prompt})` | Interrupt, rename, close, create from the phone (with `start` and a configured `launcher`, the new-session form gains a launcher field) |
 | `hasLocalClient()` | Whether this runtime's own UI is open (decides who gets permission requests first, see below) |
-| `modes({session_id, permission_mode, effort})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`) |
+| `modes({session_id, permission_mode, effort})` | Switching permission mode / reasoning effort from the phone (`caps.modes`; values are Persona's: `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`, `low` … `max`). The apps show the mode chips on its rows whose agent is `claude` or the runtime's own, never Paseo's catch-all `paseo` (`capabilities.modes`, `docs/protocol/protocol.md` "Codex sources and capabilities") |
 | `archive({session_id})` / `unarchive({session_id})` | The runtime's own reversible archive (`caps.archive`, declared only when both exist): when the user archives a session in Persona, it is archived in the runtime too, and restored with it. Archive an idle session without stopping or closing anything (Persona refuses busy sessions first) and keep it restorable; both must be idempotent (already archived / restored is success). A runtime whose archive also stops the session, or that has no way back, leaves them out: the archive is then Persona's alone (`docs/protocol/protocol.md`, "Agent session archives") |
 | `watchChanged(id, watching, {transcript})` | The phone starts / stops watching a session (when a new node connects or the runtime stops, all stop): for runtimes that only follow a session while someone is watching (Paseo subscribes to the timeline per session) |
 
 In `createRuntime`'s options, a runtime that runs several Agents can also pass `launchers: [{name, model, agent, models}]`: besides `launcher`, the new-session form then has these entries, one per provider,
 each with the Agent and models it starts; when they change later, call `rt.launchersChanged(list)`. `resume: true`: `start` accepts `{resume: <Claude session id>}` to take over a Claude session it doesn't have
 and keep that id (`caps.resume`, for runtimes acting as the engine to continue "Not running" sessions). `start` also receives the form's choices (`launcher`, `model`, `permission_mode`, `effort`,
-`workspace_id`); see `docs/protocol/protocol.md` ("Runtime ↔ node").
+`workspace_id`); see `docs/protocol/protocol.md` ("Runtime ↔ node"). `readonly: true` (`caps.readonly`): a `start` with `permission_mode: "plan"` (every
+read-only task, #3238) runs in a read-only mode before its first prompt, or throws `readonly_unsupported` — never falling back to a writable
+provider, and a takeover that cannot set the mode refuses too. Without it the node refuses plan starts for the runtime itself.
 
 Call the SDK when things happen:
 
@@ -94,13 +96,21 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
 - **seq**: each session has one monotonically increasing sequence number, starting at 1 (0 means "nothing yet"). An item's seq is the number of the record that produced it; one record can yield several items,
   with ids `<seq>#<index>`. DSH's event seq starts at 0, so it maps to seq + 1. **Ids are unique only within a session**: across sessions, and especially across two branches split from the same session,
   the same id is different content. Anything a client caches by id (render results, parse results) must key on the session too (#372).
-- **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Item continuity")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
+- **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Continuity of items")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
 - **Item kinds** follow what the App already has: `text` (user / assistant), `thinking`, `tool_use` (`tool_name`, `tool_input`, `tool_use_id`), `tool_result`
   (`tool_use_id`, `is_error`), `image` (`lazy: true` placeholder, data via `image`), `notice` (system: interrupt, error, compaction).
 - **Tool names match Claude's**: the App draws commands, diffs and files for `Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`,
   and parameter names are Claude's too (`command`, `file_path`, `old_string` / `new_string`, `pattern`). Unrecognized names are shown as is.
 - **Length**: in a page, at most 24 KB of text per item and 4 KB of tool output, cut with the SDK's `light(item)` (with the "truncated" note the App recognizes and `full_size`); the full text goes via `item`.
-  Long strings in tool input use `clipInput`.
+  Tool input objects use `clipInput`, which clips long strings at any depth, including arrays such as MultiEdit's `edits[]`,
+  while preserving keys and structure. For inputs over 24 KB it follows the hub's `clipJSON`: first keep at most 12 KB per string, then, if the
+  input still exceeds the 24 KB budget, share the remaining budget among strings longer than 256 bytes, accounting for
+  JSON escapes and the truncation note. Cuts respect UTF-8 boundaries and the second pass only cuts when the string becomes
+  strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes for a three-digit
+  original length); a longer or more heavily escaped tail may be cut. Each implementation measures its own wire encoding:
+  `JSON.stringify` leaves `<>&` and U+2028/U+2029 raw, whereas Go's `json.Marshal` escapes them, so their shares can differ.
+  Top-level arrays and other non-object inputs stay unchanged. This is still **not a total input size limit**: many short
+  values, large keys, or enough strings at the 256-byte floor can exceed 24 KB. Bounding those inputs remains open in #2907.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
 
 ## Interactions
@@ -170,7 +180,7 @@ with the same fields as Claude sessions (`Session.subagents` / `background` in `
 - At most 50 sub-Agents and 50 background tasks per row, text cut to 500 characters; invalid ids are dropped. A daemon's sub-Agent ids are prefixed the same way: `<daemon>.<session>@<id>`.
 - Controls such as messaging or renaming a sub-Agent: if the runtime doesn't support them, it returns `unsupported` (DSH doesn't: sub-Agents are managed by the parent session).
 
-DSH's approach is in `docs/integrations/dsh.md` ("Sub-Agents and background tasks").
+DSH's approach is in `docs/integrations/dsh.md` ("Subagents and background tasks").
 
 ## Auto-update (optional)
 
@@ -198,7 +208,7 @@ To avoid going to the computer and clicking every time, the plugin is split into
   `<store>/current/…` (`current` is a symlink to `<hash>`, replaced by rename via `installCurrent`). On an offer it fetches the package, installs it as the new `current`,
   and when idle asks the host to reload (pi uses a command the extension registers itself); the new version's host connects to node with the same process identity (`createRuntime`'s `instance`) and replaces the old one.
   A long-running standalone process (pi's companion process) exits after installing and is brought back up by launchd / systemd. `selfPackage(import.meta.url, name)` tells a module which package it's running from
-  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Auto-update").
+  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Automatic updates").
 - An implementation module that can be swapped exports `api` (`LOADER_API`, currently 1) and `start(host)`, returning `{stop, busy, fetchPackage}` (the methods of the same name on `createRuntime`).
   `host` holds the loader's `context` (for DSH, `{ctx, config}`) plus the `package` and `onUpdate` to pass to `createRuntime`. To add such a runtime: register its files in both lists,
   and change the entry point the host loads to `createLoader`.

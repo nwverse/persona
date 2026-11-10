@@ -5,6 +5,7 @@
     <string name="settings_ext_dep_disabled">先に有効化が必要</string>
     <string name="settings_ext_dep_old">バージョン不足（現在%1$s）</string>
     <string name="settings_ext_dep_unknown">状態不明。もう一度プレビューしてください</string>
+    <string name="settings_ext_dep_unknown_installed">状態不明。詳細を更新してください</string>
     <string name="settings_ext_sandbox_active">サンドボックス有効</string>
     <string name="settings_ext_sandbox_inactive">サンドボックスを要求済みですが、現在は無効です</string>
     <string name="settings_ext_sandbox_off">サンドボックス未使用</string>
@@ -130,6 +131,7 @@
     <string name="settings_ext_card_value">値</string>
     <string name="settings_ext_card_total">合計</string>
     <string name="settings_ext_card_other">その他</string>
+    <string name="settings_ext_card_remaining">残り</string>
     <string name="settings_ext_card_current">現在</string>
     <string name="settings_ext_not_chosen">未選択</string>
     <string name="settings_ext_search">検索</string>
@@ -154,7 +156,7 @@
     <string name="settings_ext_list_footer">拡張機能のインストール、アップグレード、アンインストールはハブのマシン上（personad extension）でのみ行えます。ここではオン/オフの切り替え、設定の変更、シークレットの入力ができます。</string>
     <string name="settings_ext_save">保存</string>
     <string name="settings_ext_saved_restart">保存しました。拡張機能が再起動します</string>
-    <string name="settings_ext_read_only">この拡張機能はマネージャーのmanager.jsonに書かれています。オン/オフと設定はそこで変更し、変更後にマネージャーを再起動してください。</string>
+    <string name="settings_ext_read_only">この拡張機能はアシスタントのmanager.jsonに書かれています。オン/オフと設定はそこで変更し、変更後にアシスタントを再起動してください。</string>
     <string name="settings_ext_enabled">有効</string>
     <string name="settings_ext_enabled_note">無効にすると実行が停止し、提供しているコネクタなども一緒にオフになります。設定とシークレットは保持されます。</string>
     <string name="settings_ext_unavailable">読み込めません</string>
@@ -287,6 +289,7 @@
     <string name="settings_ext_auto_upgrade_off_failed">自動アップグレードをオフにできませんでした：%1$s</string>
     <string name="settings_ext_upgrade_waiting_idle">拡張機能がアイドルのときに自動で更新します</string>
     <string name="settings_ext_upgrade_available">後で自動で更新します</string>
+    <string name="settings_ext_upgrade_rename">拡張機能の ID が %1$s から %2$s に変わります。確認が必要です。設定とデータはそのまま保持されます。</string>
     <string name="settings_ext_upgrade_off">自動更新はオフです</string>
     <string name="settings_ext_upgrade_skipped">前回の更新後に起動しなかったため%1$sに戻しました。このバージョンには自動更新しません</string>
     <string name="settings_ext_upgrade_skipped_user">このバージョンから%1$sにロールバックしたため、このバージョンには自動更新しません</string>
@@ -323,6 +326,9 @@
     <string name="settings_ext_cua_ready">Cua使用可能</string>
     <string name="settings_ext_cua_installed">Cuaインストール済み</string>
     <string name="settings_ext_machine_not_found">マシンが見つかりません</string>
+    <string name="settings_ext_machine_missing">%1$s（このマシンはありません）</string>
+    <string name="settings_ext_launcher_missing">%1$s（このランチャーはありません）</string>
+    <string name="settings_ext_launchers_loading">ランチャーを読み込み中…</string>
     <string name="settings_ext_no_mac">このハブにはまだ Mac がありません。</string>
     <string name="settings_ext_no_machine">このハブにはまだマシンがありません。</string>
     <string name="settings_ext_turn_on_title">「%1$s」をオンにしますか？</string>

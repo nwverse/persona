@@ -12,7 +12,11 @@ import { useExtensionSlot } from "../lib/extension-slots";
 import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, navigate, type Route } from "../lib/router";
-import { useAgentSessions, useCounts } from "../lib/sessions";
+import { useAgentSessions } from "../lib/sessions";
+import { scoped, useScope, useScopedCounts, useScopedTodos } from "../lib/current-assistant";
+import { triageTodos } from "../lib/todo-triage";
+import { makeSessionLookup } from "../lib/todos";
+import { useRestoredTodos } from "../lib/todo-restore";
 import { useLarkOn, useStore } from "../lib/store";
 import { connPhase } from "../lib/connection";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
@@ -62,15 +66,23 @@ export type NavPage = { k: string; to: Route; icon: IconName; label: string; sho
 /** The sidebar's pages ("Overview" … "Settings", the extensions' pages) and the connection, shared by the sidebar and its rail. */
 export function useNavPages() {
   const phase = connPhase(useStore((s) => s.conn), useStore((s) => s.link));
-  const machines = useStore((s) => s.machines);
-  // "Terminal" (docs/integrations/terminal.md "Standalone terminals") is there where the hub can list panes
+  // the counts on the pages are the current assistant's (docs/assistant/managers.md "Clients"); the other assistants' are in
+  // the switcher at the sidebar's head. Numbers, not the computers: a push of a computer's load or memory leaves them
+  // equal and doesn't draw the sidebar again.
+  const scope = useScope();
+  const online = useStore((s) => scoped(s.machines, scope).filter((m) => m.online).length);
+  const total = useStore((s) => scoped(s.machines, scope).length);
+  // "Terminal" (docs/integrations/terminal.md "Standalone terminal") is there where the hub can list panes
   const terminalPanes = useStore((s) => s.features.includes("terminal_panes"));
   const assistant = useStore((s) => s.assistant);
-  const todos = useStore((s) => s.todos);
+  const todos = useScopedTodos();
   const todosSupported = useStore((s) => s.todosSupported);
-  // Quiet tasks (#1731) are told about in the main conversation, not counted here.
-  const uncompletedTodosCount = useMemo(() => todos.filter((todo) => !todo.done_at && !todo.quiet).length, [todos]);
-  const counts = useCounts();
+  // The To-dos page's open count (#3156): not shelved, not finished; quiet tasks (#1731) are told about in the main
+  // conversation, not counted here.
+  const agentSessions = useAgentSessions();
+  const [restored] = useRestoredTodos();
+  const uncompletedTodosCount = useMemo(() => triageTodos(todos, makeSessionLookup(agentSessions), Date.now(), restored, { quiet: false }).open, [todos, agentSessions, restored]);
+  const counts = useScopedCounts();
   const inbox = useInboxBadge();
   const larkSwitch = useLarkHome();
   const lark = useLarkOn();
@@ -80,7 +92,6 @@ export function useNavPages() {
   // off unless turned on in Settings › General › Agent (#2475)
   const boardOn = useWorkspaceBoardSetting().enabled === true;
 
-  const online = machines.filter((m) => m.online).length;
   const main = assistant?.main ? assistant.conversations.find((c) => c.session_id === assistant.main) : undefined;
   const page: Record<(typeof NAV_PAGES)[number], NavPage | false> = {
     home: { k: "home", to: { name: "home" }, icon: "home", label: t("sidebar.nav_home"), short: t("sidebar.nav_home_short"), badge: counts.badge || undefined, badgeTone: "attention" },
@@ -91,7 +102,7 @@ export function useNavPages() {
     todos: todosSupported !== false && { k: "todos", to: { name: "todos" }, icon: "todo", label: t("sidebar.nav_todos"), badge: uncompletedTodosCount || undefined },
     routines: { k: "routines", to: { name: "routines" }, icon: "clock", label: t("sidebar.nav_routines"), short: t("sidebar.nav_routines_short") },
     kb: { k: "kb", to: { name: "kb" }, icon: "book", label: t("sidebar.nav_kb"), short: t("sidebar.nav_kb_short") },
-    machines: { k: "machines", to: { name: "machines" }, icon: "machine", label: t("sidebar.nav_machines"), short: t("sidebar.nav_machines_short"), hint: machines.length ? `${online}/${machines.length}` : undefined },
+    machines: { k: "machines", to: { name: "machines" }, icon: "machine", label: t("sidebar.nav_machines"), short: t("sidebar.nav_machines_short"), hint: total ? `${online}/${total}` : undefined },
     terminal: terminalPanes && { k: "terminal", to: { name: "terminal" }, icon: "terminal", label: t("sidebar.nav_terminal") },
     settings: { k: "settings", to: { name: "settings" }, icon: "gear", label: t("sidebar.nav_settings") },
   };
@@ -109,7 +120,7 @@ export function useNavPages() {
   // as arranged in Settings › General › Sidebar pages: the list, and the pages that wait under More (docs/web/web.md "The sidebar's pages")
   const { shown: pages, more } = arrangePages(all, useSidebarPrefs());
 
-  return { phase, online, total: machines.length, main, pages, more, all };
+  return { phase, online, total, main, pages, more, all };
 }
 
 /** The pages under "More" as menu rows (the phone's grid, the rail): a choice opens the page, then `onNavigate`

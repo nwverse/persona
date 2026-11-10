@@ -31,13 +31,51 @@ func snippetOf(sections []imapclient.FetchBodySectionBuffer) string {
 	if len(body) == 0 {
 		return ""
 	}
+	// A full section means the list fetch cut the body at snippetBytes, possibly inside a character.
+	cut := len(body) >= snippetBytes
+	if cut {
+		body = dropSplitQPEscape(body)
+	}
 	raw := append(append([]byte{}, header...), body...)
 	text := textFromRaw(raw)
 	if text == "" {
 		text = textFromRaw(body) // no usable header: try the body alone
 	}
+	if cut {
+		text = dropSplitRune(text)
+	}
 	text = strings.Join(strings.Fields(text), " ")
 	return truncateRunes(text, snippetRunes)
+}
+
+// dropSplitQPEscape drops a quoted-printable escape cut after its first hex digit ("=E"), which the decoder would pass
+// through as the literal text "=E". In a body in another encoding those two bytes are only text at the cut.
+func dropSplitQPEscape(b []byte) []byte {
+	if n := len(b); n >= 2 && b[n-2] == '=' && strings.IndexByte("0123456789ABCDEFabcdef", b[n-1]) >= 0 {
+		return b[:n-2]
+	}
+	return b
+}
+
+// dropSplitRune drops what a byte cut leaves of the last character: the U+FFFD a charset decoder (GBK, Shift_JIS)
+// writes for a lead byte without its trail byte, the U+FFFD and ASCII digit (and U+FFFD) GB18030 writes for the first
+// two (three) bytes of a four-byte character, or the at most utf8.UTFMax-1 bytes of an incomplete UTF-8 sequence.
+func dropSplitRune(s string) string {
+	const bad = string(utf8.RuneError)
+	t, lone := strings.CutSuffix(s, bad)
+	if n := len(t) - 1; n >= len(bad) && '0' <= t[n] && t[n] <= '9' && strings.HasSuffix(t[:n], bad) {
+		return t[:n-len(bad)]
+	}
+	if lone {
+		return t
+	}
+	for range utf8.UTFMax - 1 {
+		if r, size := utf8.DecodeLastRuneInString(s); r != utf8.RuneError || size != 1 {
+			break
+		}
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // textFromRaw extracts readable text from a possibly truncated raw message.

@@ -13,9 +13,15 @@ struct PersonaApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                #if DEBUG && os(iOS)
+                .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
+                #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
+                    #if os(iOS)
+                    if ShortcutCallbacks.shared.handle(url) { return } // a shortcut Persona ran came back (#2283)
+                    #endif
                     if MetaGlasses.shared.handle(url) { return } // the Meta AI app's callback (docs/apple/meta-glasses.md)
                     #if os(iOS)
                     if let link = FleetLink.session(url) { // tapped the Live Activity
@@ -23,6 +29,7 @@ struct PersonaApp: App {
                         if let key = model.resolve(path: link.machine + "/" + link.session) { model.open(key) }
                         return
                     }
+                    if RecordingLink.matches(url) { MeetingRecorder.openRecordings(); return } // the recording's activity
                     #endif
                     if let link = ExtensionSystemLink(url: url) { model.openExtension(link); return }
                     if SentSettingsLink.matches(url) { model.openSentRecords(); return }
@@ -69,6 +76,8 @@ struct PersonaApp: App {
                 model.retryRegistry() // launched in the background before the first unlock: the pairing reads now
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
+                // Rolling recordings expire even when no segment arrives and the recording page stays closed.
+                RecordingRollingKeeper.shared.schedule()
                 LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces }
                 // The home screen icon in step with the Avatar and Light & Dark (a scheme from a launch argument, a switch the system
                 // cut short, the old App Icon setting); nothing happens when it already is, so no alert.
@@ -79,7 +88,13 @@ struct PersonaApp: App {
                     await WorkoutReports.shared.refresh(model: model)
                     #endif
                 }
+                #if os(iOS)
+                ClipboardOfferWatcher.shared.returned(model) // copied something elsewhere: offer to send it to a computer
+                #endif
             } else if new == .background {
+                #if os(iOS)
+                ClipboardOfferWatcher.shared.left()
+                #endif
                 // A suspended app's socket looks alive to the hub until it times out, and phone_* calls sent to it hang.
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
                 // again until the app is back (the network returning, a refresh ending: LiveConnection.suspended).
@@ -105,7 +120,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
-        // (several groups, docs/protocol/multi-hub.md「截图」).
+        // (several groups, docs/protocol/multi-hub.md「Tests」).
         if let s = UserDefaults.standard.string(forKey: "pairURL"), let cfg = ServerConfig(pairURL: s) {
             let more = ["pairURL2", "pairURL3"].compactMap { UserDefaults.standard.string(forKey: $0).flatMap(ServerConfig.init(pairURL:)) }
             AppModel.shared.adopt([cfg] + more)
@@ -136,10 +151,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         if d.bool(forKey: "openImagesFresh") { try? FileManager.default.removeItem(at: URL.cachesDirectory.appending(path: "chat-images")) }
         // `-openAgentsFresh YES`: the Agents list's saved look forgotten (AgentsListTests).
         if d.bool(forKey: "openAgentsFresh") {
-            for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key] { d.removeObject(forKey: k) }
+            for k in ["dev.machineFilter", HubFilter.key, "dev.grouping", "dev.sort", "dev.compact", "dev.folded", AgentRowStyle.key,
+                      "agents.list.width", "agents.list.closed"] { d.removeObject(forKey: k) }
+        }
+        // `-openSplitFresh YES`: the lists beside the pages at the system's width and open (SplitDividerTests, #2624).
+        if d.bool(forKey: "openSplitFresh") {
+            for list in ["agents.list", "assistant.list"] { d.removeObject(forKey: list + ".width"); d.removeObject(forKey: list + ".closed") }
         }
         // `-openRecapsFresh YES`: no away recap closed yet, so the newest shows open again (RecapInFlowTests).
         if d.bool(forKey: "openRecapsFresh") { d.removeObject(forKey: "closedRecaps") }
+        // `-openDraftsFresh YES`: nothing left typed in any chat's box from an earlier run (SelectTextTests read a copy by
+        // pasting it there; a long one left behind makes the box tall and moves the chat, #603).
+        if d.bool(forKey: "openDraftsFresh") { AppModel.shared.drafts = [:] }
         // `-openScreenFresh YES`: no Mac's Screen Sharing sign-in remembered, One-Tap Unlock off (ScreenPasswordTests, #1322).
         if d.bool(forKey: "openScreenFresh") {
             ScreenCredentials.forgetAll()
@@ -228,6 +251,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let automation = false
         #endif
         PhoneRecordingReceiver.shared.start()
+        #if DEBUG
+        RecordingSamples.showMeetingIfAsked() // `-showMeetingSample recording|paused|interrupted|minutes|pending`
+        #endif
         WatchSync.shared.activate()
         AppModel.shared.start()
         LiveActivityController.shared.start()
@@ -323,6 +349,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                             withCompletionHandler completionHandler: @escaping () -> Void) {
+        #if os(iOS)
+        // "Recording paused" (MeetingRecorder.notifyPaused): open Recordings; coming to the front resumes it.
+        if response.notification.request.content.userInfo[RecordingLink.notificationKey] != nil {
+            nonisolated(unsafe) let done = completionHandler
+            let opened = response.actionIdentifier != UNNotificationDismissActionIdentifier
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if opened { MeetingRecorder.openRecordings() }
+                    done()
+                }
+            }
+            return
+        }
+        #endif
         guard let info = PushCrypto.notificationInfo(response.notification.request.content.userInfo) else {
             completionHandler()
             return
@@ -358,7 +398,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     done()
                     return
                 }
-                // The group the push came from (docs/protocol/multi-hub.md「推送」): its hub settles the button, its session opens.
+                // The group the push came from (docs/protocol/multi-hub.md「Push and notifications」): its hub settles the button, its session opens.
                 let key = ref.flatMap(Self.sessionKey)
                 if let key, let reply = NotificationActions.replyText(action: action, text: text) {
                     // Reply on a finished turn: sent in the background, like a button (#3449).
@@ -383,7 +423,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     static func resolveFromNotification(_ id: String, group: String?, _ resolution: Resolution, action: String, done: @escaping () -> Void) {
         inBackground("resolve-interaction", done: done) {
             do {
-                try await HubStore.client(group: group).resolve(id, resolution)
+                try await AppModel.shared.outside(HubStore.client(group: group)) { try await $0.resolve(id, resolution) }
             } catch {
                 await NotificationActions.reportFailure(id: id, title: NotificationActions.failureTitle(action: action), error: error)
             }

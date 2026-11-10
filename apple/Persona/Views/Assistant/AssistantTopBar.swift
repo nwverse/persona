@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// The Persona tab's top bar (docs/apple/ios.md「Persona 顶栏和侧边栏」), floating over the conversation with a fog under it
+/// The Persona tab's top bar (docs/apple/ios.md「Persona top bar and sidebar」), floating over the conversation with a fog under it
 /// instead of a solid bar: Chat History (the sidebar) on the left, Persona's face and name in the middle, New Chat on the right.
 /// The face opens a menu: Knowledge, Details (the profile), the copy items (the working directory, a block of facts to
 /// paste to another agent, the session id), the launcher, the session info card, Interrupt. While the hub is out of reach
 /// the name pill shows the spinner and Waiting for Network / Connecting… / Updating….
 struct AssistantTopBar: View {
     @Environment(AppModel.self) private var model
-    /// In the shell (docs/apple/ios.md「新外壳」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
+    /// In the shell (docs/apple/ios.md「New shell」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
     @Environment(\.shell) private var shell
     /// The system's bars down the side (iPhone Duo): the shell's bar is the side rail there.
     @Environment(\.shellRailEdge) private var railEdge
@@ -15,6 +15,11 @@ struct AssistantTopBar: View {
     var key: SessionKey?
     /// The sidebar is a column beside the conversation (a wide display): the button shows or hides it.
     var sidebarIsColumn = false
+    /// The column is out. On a phone's tabs (iPhone Duo open) its own button folds it, at its top, so this one is only
+    /// there to bring it back (#2623).
+    var sidebarShown = false
+    /// A phone's tabs (iPhone Duo open): the Assistant | Agents switch in the face's place (#2623).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     var openSidebar: () -> Void
     var newConversation: () -> Void
     var openKnowledge: () -> Void
@@ -40,7 +45,10 @@ struct AssistantTopBar: View {
     static let height: CGFloat = 70
     #endif
     /// How far below the bar the fog fades out.
-    static let fade: CGFloat = 30
+    static let fade: CGFloat = 44
+    /// How far below the safe area's top the fog stays solid: just past the round buttons and the switch, so a line of
+    /// text is hidden under the controls and starts fading right below them.
+    static let fogSolid: CGFloat = height - Theme.Space.l
     /// What the page leaves free at its top for the bar: little while it is the side rail (iPhone Duo, `ShellSideRail`),
     /// where the column beside the content holds it.
     static func room(_ railEdge: HorizontalEdge?) -> CGFloat {
@@ -206,21 +214,28 @@ struct AssistantTopBar: View {
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, Theme.Space.xxs)
         .frame(height: Self.height, alignment: .top)
-        .background(alignment: .top) { BarFog(solid: Self.height - 6, fade: Self.fade) }
+        .background(alignment: .top) { BarFog(solid: Self.fogSolid, fade: Self.fade) }
         .connectionDetails($showLink)
         .modifier(ShellBarAtRest(page: 0)) // ShellMovingBar stands in while the strip slides
     }
 
     private var classicBar: some View {
-        HStack(alignment: .top) {
-            GlassEffectContainer {
-                Self.circle(sidebarIsColumn ? Theme.Icon.sidebar : Theme.Icon.sidebarMenu, label: String(localized: "Chat History [Shell Components 60636b]"), id: "assistant-sidebar-button") {
-                    Haptics.tap()
-                    openSidebar()
+        // On a phone's tabs the column's own button folds it, at its top: this one only brings it back, and is not there
+        // while the column is out. Left out, not faded: a glass button made see-through (or slid away) while the split
+        // moved its columns left the page taking no touches at all on iPhone Duo open (2026-11-10).
+        let sidebarButtonShown = !(pageTabSwitch && sidebarIsColumn && sidebarShown)
+        return HStack(alignment: .top) {
+            if sidebarButtonShown {
+                GlassEffectContainer {
+                    Self.circle(sidebarIsColumn ? Theme.Icon.sidebar : Theme.Icon.sidebarMenu, label: String(localized: "Chat History [Shell Components 60636b]"), id: "assistant-sidebar-button") {
+                        Haptics.tap()
+                        openSidebar()
+                    }
                 }
+                .transition(.identity)
             }
             Spacer(minLength: 8)
-            face
+            if !pageTabSwitch { face }
             Spacer(minLength: 8)
             GlassEffectContainer {
                 Self.circle(Theme.Icon.compose, label: String(localized: "New Chat [Quick Actions ea4b29]"), id: "assistant-new") {
@@ -237,13 +252,44 @@ struct AssistantTopBar: View {
         .padding(.leading, max(0, titleRowLeading - Theme.Space.l))
         #endif
         .padding(.top, Self.topInset)
+        #if os(iOS)
+        // Clear of the round buttons on both sides, whichever are there: over New Chat it took its taps in a narrow column.
+        .overlay(alignment: .top) {
+            if pageTabSwitch { pageSwitch.padding(.top, Self.topInset).padding(.horizontal, Self.sideRoom) }
+        }
+        #endif
         .frame(height: Self.height, alignment: .top)
         .background(alignment: .top) {
             // Solid down to the bar's bottom edge, fading out below it (fading under the pill let the messages show
             // through the name).
-            BarFog(solid: Self.height - 6, fade: Self.fade)
+            BarFog(solid: Self.fogSolid, fade: Self.fade)
         }
     }
+
+    #if os(iOS)
+    /// What the switch leaves free on each side of the bar: a round button and the bar's margin.
+    private static let sideRoom: CGFloat = Theme.Size.tapTarget + Theme.Space.l + Theme.Space.s
+
+    /// ChatGPT's Chat | Work at the top of the page, in the face's place, centered whatever the buttons beside it
+    /// (#2623): tapping Assistant while it is selected opens the face's menu, as in the shell. Beside it, what the face's
+    /// pill said while the hub is out of reach (under it, several managers' switcher covered it); a copy's confirmation
+    /// is a toast here (`copy`).
+    private var pageSwitch: some View {
+        @Bindable var model = model
+        let link = model.connection.shown
+        return HStack(spacing: Theme.Space.s) {
+            ViewThatFits(in: .horizontal) {
+                ShellSwitch(tab: $model.selectedTab) { menuItems(link) }
+                    .dynamicTypeSize(...Theme.Shell.topBarLargestTypeSize)
+                ShellSwitch(tab: $model.selectedTab) { menuItems(link) }
+                    .dynamicTypeSize(...Theme.Shell.compactSwitchLargestTypeSize)
+            }
+            if link != .online { ShellLinkPill(phase: link).transition(.opacity) }
+        }
+        .animation(Theme.Motion.standard, value: link)
+        .connectionDetails($showLink)
+    }
+    #endif
 
     /// The bar's round icon button; also the sidebar header's search button when the sidebar is the split's column.
     static func circle(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
@@ -265,23 +311,26 @@ struct AssistantTopBar: View {
     private var face: some View {
         ZStack(alignment: .bottom) {
             menu
-            if let hint {
-                HStack(spacing: Theme.Space.xs) {
-                    ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.positive)
-                    Text(hint).lineLimit(1)
-                }
-                .font(Theme.Font.labelStrong)
-                .padding(.horizontal, Theme.Space.m)
-                .scaledFrame(height: Theme.Size.icon)
-                .fixedSize()
-                .background(.regularMaterial, in: .capsule)
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
+            if let hint { hintPill(hint) }
         }
         .animation(Theme.Motion.standard, value: hint)
         .task(id: hint) { await clearHint() }
+    }
+
+    /// A copy's confirmation, in a pill of its own.
+    private func hintPill(_ hint: String) -> some View {
+        HStack(spacing: Theme.Space.xs) {
+            ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.positive)
+            Text(hint).lineLimit(1)
+        }
+        .font(Theme.Font.labelStrong)
+        .padding(.horizontal, Theme.Space.m)
+        .scaledFrame(height: Theme.Size.icon)
+        .fixedSize()
+        .background(.regularMaterial, in: .capsule)
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .allowsHitTesting(false)
+        .transition(.opacity)
     }
 
     /// A multi-line closure in the modifier chain slows the release build's type-check (docs/lessons/ios.md): a method instead.
@@ -410,22 +459,13 @@ struct AssistantTopBar: View {
         }
     }
 
-    private var launcher: String {
-        // The main conversation follows Settings › Assistant (the hub sends it there), side ones keep their own.
-        if let key, key == model.assistantMain, let l = model.assistantLaunchers[key] ?? model.assistantConfig?.launcher { return l }
-        if let key { return model.assistantLaunchers[key] ?? session?.launcher ?? model.assistantConfig?.launcher ?? "claude" }
-        return model.assistantConfig?.launcher ?? "claude"
-    }
+    private var launcher: String { AssistantCopyText.launcher(key, in: model) }
 
-    private var cwd: String {
-        if let c = session?.cwd, !c.isEmpty { return c }
-        if let c = model.assistantConfig?.cwd, !c.isEmpty { return c }
-        return "~/.persona/assistant"
-    }
+    private var cwd: String { AssistantCopyText.cwd(key, in: model) }
 
     @ViewBuilder private func menuItems(_ link: ConnectionStatus.Phase) -> some View {
         if model.isMultiHub, let current = model.hub?.group {
-            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「hub 级页面」); pick whose.
+            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「Terminology」); pick whose.
             Section("hub") {
                 Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
                     ForEach(model.groupIDs, id: \.self) { g in
@@ -538,23 +578,46 @@ struct AssistantTopBar: View {
         return [title, launcher, Fmt.model(pickedModel ?? session?.model)].compactMap { $0 }.joined(separator: " · ")
     }
 
-    private var infoText: String {
-        AssistantCopyText.info(title: session.map { $0.title.isEmpty || $0.title == "Claude Code" ? nil : $0.title } ?? nil,
-                               isMain: key != nil && key == model.assistantMain, sessionID: key?.sessionID,
-                               machine: model.machine(model.hubRef(machineID))?.name, machineID: machineID, cwd: cwd,
-                               launcher: launcher, model: Fmt.model(session?.model))
-    }
+    private var infoText: String { AssistantCopyText.info(key, in: model) }
 
     private func copy(_ text: String, _ done: String) {
         UIPasteboard.general.string = text
         Haptics.success()
-        hint = done
+        // The face's pill is not there on a phone's tabs (the switch has its place): a toast says it, as the main
+        // conversation's row does.
+        if pageTabSwitch { model.toast = Toast(done, style: .success) } else { hint = done }
         AccessibilityNotification.Announcement(done).post()
     }
 }
 
 /// What Copy Info puts on the clipboard: enough for another agent (or the user at a terminal) to find this conversation.
+/// The face's menu copies it, and on iPhone Duo open the main conversation's row (#2623).
 nonisolated enum AssistantCopyText {
+    /// The conversation's launcher (the next message uses it) or, with none (the new-conversation page), the default one.
+    @MainActor static func launcher(_ key: SessionKey?, in model: AppModel) -> String {
+        // The main conversation follows Settings › Assistant (the hub sends it there), side ones keep their own.
+        if let key, key == model.assistantMain, let l = model.assistantLaunchers[key] ?? model.assistantConfig?.launcher { return l }
+        if let key { return model.assistantLaunchers[key] ?? model.session(key)?.launcher ?? model.assistantConfig?.launcher ?? "claude" }
+        return model.assistantConfig?.launcher ?? "claude"
+    }
+
+    /// Where the conversation runs.
+    @MainActor static func cwd(_ key: SessionKey?, in model: AppModel) -> String {
+        if let c = key.flatMap({ model.session($0) })?.cwd, !c.isEmpty { return c }
+        if let c = model.assistantConfig?.cwd, !c.isEmpty { return c }
+        return "~/.persona/assistant"
+    }
+
+    /// Copy Info's text for the conversation.
+    @MainActor static func info(_ key: SessionKey?, in model: AppModel) -> String {
+        let session = key.flatMap { model.session($0) }
+        let machineID = model.assistantMachineID(key)
+        return info(title: session.map { $0.title.isEmpty || $0.title == "Claude Code" ? nil : $0.title } ?? nil,
+                    isMain: key != nil && key == model.assistantMain, sessionID: key?.sessionID,
+                    machine: model.machine(model.hubRef(machineID))?.name, machineID: machineID, cwd: cwd(key, in: model),
+                    launcher: launcher(key, in: model), model: Fmt.model(session?.model))
+    }
+
     static func info(title: String?, isMain: Bool, sessionID: String?, machine: String?, machineID: String, cwd: String,
                      launcher: String, model: String?) -> String {
         var lines: [String] = []
@@ -591,7 +654,7 @@ extension AppModel {
         key?.machineID ?? assistantConfig?.machineID ?? hubMachineID
     }
 
-    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「状态」): Offline when the hub or
+    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「States」): Offline when the hub or
     /// Persona's machine is out of reach, Waiting for you when the conversation waits on the user, Thinking / Working while a turn
     /// runs (thinking until it writes or calls a tool), else Idle. Read only by the face's own view (`TopBarDot`,
     /// `ShellPersonaButton`): every hub push changes what it reads. `inFront`: the page's `tabIsActive`; behind another
@@ -631,20 +694,36 @@ struct BarFog: View {
 }
 
 /// The fog under a floating bar: the page's own color, blurred, solid for `solidHeight` and then fading out over
-/// `fadeHeight` (the content scrolls under it and shows through only below the bar).
+/// `fadeHeight` (the content scrolls under it and shows through only below the bar). Both layers fade along an eased
+/// curve, so the end of the solid part leaves no line across the text; the blur fades out over the first half only, so
+/// a line half under the fog dims rather than shows a smeared copy of itself (#2909).
 struct TopFog: View {
     var solidHeight: CGFloat
     var fadeHeight: CGFloat
 
     var body: some View {
-        let solid = solidHeight / max(solidHeight + fadeHeight, 1)
+        let total = max(solidHeight + fadeHeight, 1)
+        let solid = solidHeight / total
+        let fade = fadeHeight / total
         ZStack {
             Rectangle().fill(.regularMaterial)
+                .mask(Self.easedMask(from: solid, over: fade / 2))
             Theme.pageBackground.opacity(0.82)
+                .mask(Self.easedMask(from: solid, over: fade))
         }
-        .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: solid),
-                                     .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// Opaque down to `start`, then out to clear over `length` (unit points) along a smoothstep curve: no kink where the
+    /// fade begins or ends for the eye to read as an edge.
+    private static func easedMask(from start: CGFloat, over length: CGFloat) -> LinearGradient {
+        let steps = 8
+        let stops = (0...steps).map { i -> Gradient.Stop in
+            let t = CGFloat(i) / CGFloat(steps)
+            let eased = t * t * (3 - 2 * t)
+            return .init(color: .black.opacity(1 - eased), location: min(1, start + length * t))
+        }
+        return LinearGradient(stops: [.init(color: .black, location: 0)] + stops, startPoint: .top, endPoint: .bottom)
     }
 }

@@ -40,6 +40,7 @@ vi.mock("../../assistant/Tasks", () => ({
   FeedLineView: () => null,
   QuickResultCard: () => null,
   RouteChip: () => null,
+  AssistantActionBar: ({ ownPending }: { ownPending?: import("react").ReactNode }) => ownPending,
   TaskDock: () => null,
   TaskQuestions: () => null,
 }));
@@ -51,6 +52,7 @@ const { ChatView } = await import("../ChatView");
 const { PersonaAssistant } = await import("../../PersonaAssistant");
 const { navigate, useRoute } = await import("../../../lib/router");
 const { resetOutboxClaimsForTests } = await import("../../../lib/outbox");
+const { resetStalePullsForTests } = await import("../useTranscript");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const files = import.meta.glob<{ cases: SyncCase[] }>("../../../../../spec/fixtures/sync/*.json", { eager: true, import: "default" });
@@ -78,6 +80,7 @@ afterEach(async () => {
   store.disconnect();
   store.reset();
   resetOutboxClaimsForTests();
+  resetStalePullsForTests();
   FakeSocket.hub = null;
   vi.unstubAllGlobals();
   vi.useRealTimers();

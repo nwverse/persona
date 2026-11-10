@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The shell's two pages side by side, Assistant on the left and Agents on the right like the switch over them
-/// (docs/apple/ios.md「新外壳」): a drag to the left on Assistant brings Agents in under the finger, a drag to the right on Agents
+/// (docs/apple/ios.md「New shell」): a drag to the left on Assistant brings Agents in under the finger, a drag to the right on Agents
 /// brings Assistant back, and the switch's pill follows. The whole strip reads drawer | Assistant | Agents: on Assistant a drag to the
 /// right still opens the drawer (`DrawerPan` decides which one a drag is).
 ///

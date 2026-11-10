@@ -1,5 +1,5 @@
 // Package devicewire is what the hub and the manager that carries the user's computers say to each other over the
-// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects the computers"): the manager (internal/devices, in
+// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects to computers"): the manager (internal/devices, in
 // `personad assistant`) connects every computer — the local node, ssh, tailcat, Persona Link in both modes, the ones
 // reached through another hub of the mesh — and holds what is known of each; the hub never dials or accepts a
 // computer. It hands the manager hub.json's machines as defaults, relays the apps' calls and streams to it, and keeps
@@ -203,7 +203,7 @@ type LinkEndpoint struct {
 	Kind string `json:"kind"`
 }
 
-// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Several ways"): whether this hub leaves its computers to
+// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Multiple paths to one computer"): whether this hub leaves its computers to
 // the center, and the members' computers the center reaches through them.
 type Mesh struct {
 	// Member: this hub is a member; its computers are connected by the center (through it), not from here.
@@ -377,6 +377,23 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
 	"PUT /api/v1/machines/{mid}/claude-live-replies",
+	// Sharing the machine's clipboard with the phone (#3064, internal/devices clipboard.go).
+	"GET /api/v1/machines/{mid}/clipboard",
+	"PUT /api/v1/machines/{mid}/clipboard",
+	"GET /api/v1/machines/{mid}/clipboard/settings",
+	"PUT /api/v1/machines/{mid}/clipboard/settings",
+	// The file transfer switch (#3065, internal/devices transfer_settings.go).
+	"GET /api/v1/machines/{mid}/file-transfer/settings",
+	"PUT /api/v1/machines/{mid}/file-transfer/settings",
+}
+
+// TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),
+// relayed the same way: a POST to the manager of its source computer (from.machine in the body), GET and DELETE to the
+// one the request names (?manager=, as the transfer's events say), else the default.
+var TransferRoutes = []string{
+	"POST /api/v1/files/transfer",
+	"GET /api/v1/files/transfer/{id}",
+	"DELETE /api/v1/files/transfer/{id}",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every

@@ -1,6 +1,6 @@
 # Lessons: collaboration and process: multiple Agents changing the repo at once, commits, migration numbers, scripts
 
-Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md` ("Lessons"); index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
+Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
 - Remote-tracking refs and `FETCH_HEAD` are shared across worktrees (#2705). Another task's fetch can advance
   `origin/main` between inspection and local commit consolidation, turning an older tree into apparent reversions
@@ -38,12 +38,16 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   To retry the rejected one with the same commit without changing the number: first check with `asc_testflight.py status` whether that number is already VALID and the same commit; if so, continue with `wait` / `external`.
 - Multiple agents merging into `main` at once: on a merge or rebase conflict, do not overwrite others' changes with your own old copy of the whole file (on 2026-10-25 one rebase reverted the light-blue bubbles and the notification navigation fix entirely);
   resolve only the conflict hunks, and before pushing check `git diff origin/main...HEAD --stat` for files that are not yours. Before building for TestFlight, confirm `main` is the fixed version.
+- When both sides of a merge add a test at the end of the same file, the conflict block ends inside the braces they share: the lines after `>>>>>>>` close only one of the two functions, so taking ours then theirs leaves the first test unclosed (2026-11-10: a Kotlin test file lost its `}` this way, and only the Android lane's compile caught it). Read the lines right after the block before choosing, and compile every platform whose files the merge touched.
 - Multiple agents changing the same repo in parallel (6 workers on the Lark workplace, see `docs/extensions/feishu.md`): each gets its own worktree + its own cloned simulator; new types get a domain prefix
   (`FeishuSearchXxx`…, otherwise names collide on `main` and the build fails); on merge or rebase conflicts, files outside your own directory always take the `origin/main` version; before pushing check
   that `git diff origin/main --stat` contains only your files (14fe469 once overwrote half the repo with an old copy; 941d067 restored it); when the main working tree has someone else's uncommitted changes,
   do your fix in `git worktree add --detach /tmp/x origin/main`.
 - Database migration numbers are split into ranges per lane (00x1…); before picking a number, check `server/internal/db/migrations/` in every worktree and `schema_migrations` in the `persona_test` database:
   another lane's unmerged migration may already hold the number (2026-10-30, 0051 collided; switched to 0061).
+- Open PRs hold numbers too (`gh pr list --state open --json number,files`), and while a PR waits others merge: #1852's
+  migration went 0443 → 0451 → 0453 in a day. Check the number again right before merging. A data fix that merges under a
+  number databases already recorded never runs there, so keep the code that copes with the old rows as a backstop.
 - A migration already on the default branch is frozen (`scripts/ci/migration_freeze.py`, also from `scripts/check-fast.sh`): editing, deleting or renaming it fails. A comment-only or whitespace-only change passes. Repair an applied migration by adding a new one.
 - On 2026-11-01 `ios/` was renamed to `apple/` (the iOS, watch and macOS Apps and shared code are in the same XcodeGen project): when rebasing an old branch / worktree,
   files newly created under `ios/` must be moved to `apple/` by hand (git follows the rename for changes to existing files).

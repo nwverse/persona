@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Settings › Extensions: every plugin of the hub's (built in, from hub.json, installed on the hub's machine), its state, and
-/// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「安装」): with `personad plugin` on
+/// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「Install, upgrade, roll back, uninstall」): with `personad plugin` on
 /// its machine or in its admin UI (/admin); the footer says how.
 struct ExtensionsView: View {
     @State private var page = ExtensionsModel()
@@ -9,7 +9,7 @@ struct ExtensionsView: View {
 
     var body: some View {
         SettingsForm {
-            // Extension Market (docs/extensions/extensions.md「扩展市场」): only with a hub that has markets; first,
+            // Extension Market (docs/extensions/extensions.md「Extension marketplace」): only with a hub that has markets; first,
             // above the installed ones (#5017).
             if page.markets {
                 Section {
@@ -23,7 +23,7 @@ struct ExtensionsView: View {
                 }
             }
             #if os(macOS)
-            // The plugins' overview cards (docs/extensions/extensions.md「UI 插槽」): the Mac has no Overview, they lead the installed ones (their
+            // The plugins' overview cards (docs/extensions/extensions.md「UI slots」): the Mac has no Overview, they lead the installed ones (their
             // pages are in the sidebar). The iPhone has them on Settings itself.
             ExtensionCardsSection(link: $cardLink)
             #endif
@@ -179,6 +179,9 @@ struct ExtensionDetailView: View {
 
     @State private var signIn: ExtensionSignInModel
     private var authStore: ExtensionAuthStore { .shared }
+    /// Its updates and the managers: the page's, not a row's (`ExtensionSettingsPageWork`, #2988).
+    @State private var lifecycle: ExtensionSettingsLifecycle
+    @State private var roster: ManagerRoster?
 
     /// `manager`: another manager's copy (docs/assistant/managers.md "Grouping"): everything the page reads and changes is
     /// that manager's, and so are the pages and connectors it opens. nil: the default manager's.
@@ -186,6 +189,7 @@ struct ExtensionDetailView: View {
         _page = State(initialValue: ExtensionModel(id: id, manager: manager))
         _signIn = State(initialValue: ExtensionSignInModel(id: id, manager: manager))
         _connectorInbox = State(initialValue: ExtensionConnectorsModel(manager: manager))
+        _lifecycle = State(initialValue: ExtensionSettingsLifecycle(id: id, manager: manager))
     }
 
     /// Its sign-in, with a hub that has them (#4507): the latest of the page's and the pushes'.
@@ -210,7 +214,8 @@ struct ExtensionDetailView: View {
         SettingsForm {
             header
             if let d = page.detail {
-                ExtensionSettingsView(page: page, detail: d, hasConfiguration: hasConfiguration(d)) {
+                ExtensionSettingsView(page: page, lifecycle: lifecycle, roster: roster, detail: d,
+                                      hasConfiguration: hasConfiguration(d)) {
                     configuration(d)
                 } advancedInformation: {
                     contributions(d)
@@ -219,6 +224,7 @@ struct ExtensionDetailView: View {
                 }
             }
         }
+        .modifier(ExtensionSettingsPageWork(page: page, lifecycle: lifecycle, roster: $roster))
         .themedPage()
         .detailTitle(page.detail?.plugin.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
@@ -350,7 +356,7 @@ struct ExtensionDetailView: View {
         }
     }
 
-    /// The pages it draws (docs/extensions/extensions.md「声明式 UI」), a row each.
+    /// The pages it draws (docs/extensions/extensions.md「Declarative UI」), a row each.
     @ViewBuilder private func pages(_ d: HubExtensionDetail) -> some View {
         // The extension's own sign-in page is for apps without the Sign In section.
         let ui = auth?.page.map { page in d.ui.filter { $0.id != page } } ?? d.ui
@@ -547,6 +553,8 @@ private struct ExtensionFieldRow: View {
     var path: [String]
     @Bindable var page: ExtensionModel
     var templates: [ExtensionTextTemplate]
+    /// A switch with x-confirm waiting on its alert before it is turned on.
+    @State private var asking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
@@ -576,9 +584,17 @@ private struct ExtensionFieldRow: View {
     @ViewBuilder private var control: some View {
         switch field.type {
         case "boolean":
-            Toggle(isOn: Binding(get: { page.value(path)?.bool ?? field.default?.bool ?? false },
-                                 set: { page.set(.bool($0), at: path) })) {
+            // With x-confirm, turning it on asks first, in the machine switches' alert (#3215); Turn On only edits the draft.
+            Toggle(isOn: Binding(get: { page.value(path)?.bool ?? field.default?.bool ?? false }, set: { on in
+                if on, let ask = field.confirm, !ask.isEmpty { asking = true } else { page.set(.bool(on), at: path) }
+            })) {
                 Text(title).lineLimit(2)
+            }
+            .alert("Turn On “\(field.label)”?", isPresented: $asking) {
+                Button("Cancel", role: .cancel) {}
+                Button(String(localized: "action.turnOn", defaultValue: "Turn On")) { page.set(.bool(true), at: path) }
+            } message: {
+                Text(field.confirm ?? "")
             }
         case "array":
             if field.items?.format == "machine" {

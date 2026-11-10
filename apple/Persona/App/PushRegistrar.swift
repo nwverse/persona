@@ -35,7 +35,7 @@ final class PushRegistrar {
 
     /// Registers with every group: at its first hub, the one that issued the credential (docs/archive/operations/plan-hub-mesh.md 2.6: the
     /// group's other hubs pass their pushes to it, one push per device), each group sealing to a key of its own
-    /// (docs/protocol/multi-hub.md「推送」).
+    /// (docs/protocol/multi-hub.md「Push and notifications」).
     func didRegister(token: Data) {
         let hex = token.map { String(format: "%02x", $0) }.joined()
         let registry = HubStore.load()

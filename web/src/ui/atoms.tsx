@@ -247,8 +247,10 @@ export function Kbd({ children }: { children: React.ReactNode }) {
  *  a fade. `lazy`: the children mount when it opens and stay while it closes, so they go down with the height instead of
  *  vanishing, then unmount (a long trace costs nothing while folded). Once closed, the content is inert. A chat list holds
  *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
- *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed. */
-export function Collapse({ open, children, className = "", clipClassName = "", lazy = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean }) {
+ *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed.
+ *  `min-w-0`: the grid's implicit column's `auto` minimum is the item's content-based minimum, so one child that cannot
+ *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262). */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean }) {
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
@@ -285,7 +287,7 @@ export function Collapse({ open, children, className = "", clipClassName = "", l
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className={`min-h-0 overflow-hidden [contain:layout_paint] ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 min-w-0 ${unclipped && shown && !moving ? "" : "overflow-hidden [contain:layout_paint]"} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
     </div>
   );
 }
@@ -730,6 +732,8 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
   const accel = accelLabel(it);
   const detailId = `${useId()}-detail`;
   const label = rowLabel(it, asking ? it.key : null);
+  const detail = asking && it.confirmDetail ? it.confirmDetail : it.detail;
+  const tag = it.tag && <span className="ml-1.5 inline-block rounded-[5px] bg-ai-tint px-1.5 align-[1px] text-[10.5px] leading-[1.5] font-medium whitespace-nowrap text-ai">{it.tag}</span>;
   return (
     <button
       ref={refCb}
@@ -740,28 +744,32 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       aria-haspopup={it.children ? "menu" : undefined}
       aria-keyshortcuts={it.accel}
       aria-checked={it.radio ? Boolean(it.checked) : undefined}
-      aria-describedby={it.detail ? detailId : undefined}
+      aria-describedby={detail ? detailId : undefined}
       onMouseEnter={onHover}
       onClick={onChoose}
       className={cx(
         "relative z-10 flex w-full items-center gap-2 rounded-[6px] px-2 pointer-coarse:min-h-11 text-left text-[12.5px] disabled:opacity-40",
-        it.wrap || it.detail ? "min-h-8 py-1.5" : "h-8",
+        it.wrap || detail ? "min-h-8 py-1.5" : "h-8",
         it.danger ? "text-red" : "text-ink",
         asking && "bg-red-tint font-medium",
+        it.dim && "opacity-55",
       )}
     >
       {it.state && <StatusMark state={it.state} />}
+      {it.lead}
       {it.icon && <Icon name={it.icon} size={14} className={it.danger ? "" : "text-ink-3"} />}
-      {it.detail ? (
+      {detail ? (
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
-          <span className="block break-words">{label}</span>
-          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{it.detail}</span>
+          <span className="block break-words">{label}{tag}</span>
+          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{detail}</span>
         </span>
       ) : (
-        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}</span>
+        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
       )}
       {it.state && <StatePill state={it.state} />}
+      {!working && !!it.badge && <span data-menu-badge aria-hidden={it.badgeLabel ? true : undefined} className="flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold whitespace-nowrap text-attention tabular-nums">{it.badge > 99 ? "99+" : it.badge}</span>}
+      {!working && !!it.badge && it.badgeLabel && <span className="sr-only">{it.badgeLabel}</span>}
       {working ? <Spinner size={12} /> : it.hint && <span className="shrink-0 text-[11px] text-ink-3">{it.hint}</span>}
       {it.checked !== undefined && <Icon name="check" size={13} stroke={2.5} className={cx("shrink-0", it.checked ? "text-ink" : "invisible")} />}
       {accel && !working && <span aria-hidden className={cx("w-3.5 shrink-0 text-center text-[11px]", it.danger ? "" : "text-ink-3")}>{accel}</span>}

@@ -254,9 +254,13 @@ func TestExtensionTokensMayNotSendTerminalControls(t *testing.T) {
 			t.Fatalf("%s: %d %v, want 403 %s", c.name, code, out, codeTerminalControls)
 		}
 		all := audits()
-		if len(all) != len(routes)+i+1 || !strings.Contains(all[len(routes)+i], `"path":"`+strings.Split(c.path, "?")[0]+`"`) ||
-			strings.Contains(all[len(routes)+i], `\u001b`) {
+		if len(all) != len(routes)+i+1 {
 			t.Fatalf("%s: the audits %q", c.name, all)
+		}
+		if l := all[len(routes)+i]; !strings.Contains(l, `"path":"`+strings.Split(c.path, "?")[0]+`"`) ||
+			strings.ContainsFunc(l, isTerminalControl) || strings.Contains(l, `\u001b`) || strings.Contains(l, `\u009b`) ||
+			strings.Contains(l, `\u007f`) {
+			t.Fatalf("%s: the audit %s", c.name, l)
 		}
 	}
 	// Not JSON: refused here, even where the route would read the first value and leave the rest.

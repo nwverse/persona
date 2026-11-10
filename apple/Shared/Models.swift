@@ -25,14 +25,25 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     /// The hub is installing its own build there (Redeploy); deployError: why the last try did not work.
     var deploying: Bool?
     var deployError: String?
+    /// The hub's own answer on updating the node from here (newer hubs): whether it can (`can_deploy`), why not
+    /// (`deploy_reason`, in the request's language), and the stage of a deploy that is running (`deploy_phase`:
+    /// waiting_idle, transferring, restarting or confirming). nil from older hubs.
+    var canDeploy: Bool? = nil
+    var deployReason: String? = nil
+    var deployPhase: String? = nil
     /// OS and hardware (docs/server/machines.md); nil from hubs before machine monitoring, or a machine never connected.
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
     var engines: [DetectedEngine] = []
+    /// The set of engine hosts the computer runs (docs/integrations/engines.md "Host sets"); nil from a hub before sets.
+    /// `[]` is no terminal engine: `engine` still says herdr then, for older clients.
+    var engineHosts: [String]? = nil
     /// Operating it through Cua Driver; nil while the hub's plugin cua is off or it is not a Mac.
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
     var browser: MachineBrowser? = nil
+    /// Sharing its clipboard with the phone (#3064); nil from hubs before it.
+    var clipboard: MachineClipboard? = nil
     /// Hub mesh (docs/archive/operations/plan-hub-mesh.md 2.6): the hub that owns the computer in its group, its name, the computer's own
     /// id across hubs, and how the hub reaches it. nil from hubs before the mesh.
     var hubID: String? = nil
@@ -55,10 +66,12 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, route, trust, manager
+        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, clipboard, route, trust, manager
+        case engineHosts = "engine_hosts"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
+        case canDeploy = "can_deploy", deployReason = "deploy_reason", deployPhase = "deploy_phase"
         case hubID = "hub_id", hubName = "hub_name", machineUID = "machine_uid", hubGroup = "app_hub_group",
              groupLabel = "app_group_label"
     }
@@ -94,11 +107,16 @@ extension Machine {
         nodeVersion = try c.decodeIfPresent(String.self, forKey: .nodeVersion)
         deploying = try c.decodeIfPresent(Bool.self, forKey: .deploying)
         deployError = try c.decodeIfPresent(String.self, forKey: .deployError)
+        canDeploy = try c.decodeIfPresent(Bool.self, forKey: .canDeploy)
+        deployReason = try c.decodeIfPresent(String.self, forKey: .deployReason)
+        deployPhase = try c.decodeIfPresent(String.self, forKey: .deployPhase)
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
+        engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
+        clipboard = try? c.decodeIfPresent(MachineClipboard.self, forKey: .clipboard)
         hubID = try? c.decodeIfPresent(String.self, forKey: .hubID)
         hubName = try? c.decodeIfPresent(String.self, forKey: .hubName)
         machineUID = try? c.decodeIfPresent(String.self, forKey: .machineUID)
@@ -187,7 +205,12 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let orca = Self(rawValue: "orca")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo]
+    /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
+    static let cindy = Self(rawValue: "cindy")
+    /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
+    /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
+    static let noEngine = Self(rawValue: "none")
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -196,6 +219,8 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
         case .paseo: "Paseo"
+        case .cindy: "Cindy"
+        case .noEngine: String(localized: "No Terminal Engine")
         default: rawValue
         }
     }
@@ -206,6 +231,8 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
         case .paseo: String(localized: "Agents in Paseo")
+        case .cindy: String(localized: "Agents in Cindy")
+        case .noEngine: String(localized: "Sessions of the desktop apps only")
         default: nil
         }
     }
@@ -395,8 +422,8 @@ nonisolated struct MachineDisplay: Codable, Hashable, Sendable {
     var frame: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
-/// One install or grant the node runs for the machine page (docs/extensions/computer-use.md「一键安装」).
-/// An app the user always allowed the assistant to operate on a Mac (docs/extensions/computer-use.md「锁屏、防睡眠、按 App 批准」c).
+/// One install or grant the node runs for the machine page (docs/extensions/computer-use.md「One-tap installation」).
+/// An app the user always allowed the assistant to operate on a Mac (docs/extensions/computer-use.md「Locking, preventing sleep and per-App approval」c).
 nonisolated struct ComputerApp: Codable, Hashable, Sendable, Identifiable {
     var bundleID: String
     var name: String
@@ -419,16 +446,18 @@ nonisolated struct ComputerJob: Codable, Hashable, Sendable {
 }
 
 extension Machine {
-    var engineName: String { engines.first { $0.id == engine.rawValue }?.name ?? engine.name }
+    var engineName: String {
+        engineHosts?.isEmpty == true ? MachineEngine.noEngine.name : engines.first { $0.id == engine.rawValue }?.name ?? engine.name
+    }
 }
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
     var name: String
     var baseURL: String?
     var model: String?
-    /// "codex" for plain codex or an alias running it (docs/integrations/codex.md「从手机新建」); nil: Claude Code.
+    /// "codex" for plain codex or an alias running it (docs/integrations/codex.md「Starting from the phone」); nil: Claude Code.
     var agent: String? = nil
-    /// An agent runtime's launcher that can run the Persona assistant (DSH's, docs/integrations/runtimes.md「助手」).
+    /// An agent runtime's launcher that can run the Persona assistant (DSH's, docs/integrations/runtimes.md「Assistant」).
     var assistant: Bool? = nil
     /// How its last check or start went on the computer the list is for (`GET …/machines/{id}/launchers`,
     /// docs/server/launcher-health.md); nil: never checked, a failure too old to count, or an older hub.
@@ -485,7 +514,7 @@ extension Launcher {
 }
 
 /// What a launcher's agent offers in its own /model menu (`GET /api/v1/machines/{id}/launchers/{name}/models`,
-/// docs/assistant/model-config.md「新建 Agent 选模型」): Claude Code's aliases and its gateway's models, or Codex's model/list.
+/// docs/assistant/model-config.md「Choosing a model for a new Agent」): Claude Code's aliases and its gateway's models, or Codex's model/list.
 nonisolated struct LauncherModels: Codable, Hashable, Sendable {
     /// What the launcher runs: claude, codex, traex, a runtime's.
     var agent: String
@@ -591,6 +620,7 @@ nonisolated enum SessionStatus: String, Codable, Sendable {
 }
 
 /// New sources opt in to every operation; a partial capability object never grants missing permissions.
+/// `modes` alone is optional: an older hub omits it and the client keeps its agent-based fallback.
 nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var read = false
     var send = false
@@ -598,8 +628,9 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
     var approve = false
     var terminal = false
     var attach = false
+    var modes: Bool?
 
-    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach }
+    enum CodingKeys: String, CodingKey { case read, send, interrupt, approve, terminal, attach, modes }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -609,6 +640,7 @@ nonisolated struct SessionCapabilities: Codable, Hashable, Sendable {
         approve = try c.decodeIfPresent(Bool.self, forKey: .approve) ?? false
         terminal = try c.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
         attach = try c.decodeIfPresent(Bool.self, forKey: .attach) ?? false
+        modes = try c.decodeIfPresent(Bool.self, forKey: .modes)
     }
 }
 
@@ -634,7 +666,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var attached: Bool? = nil
     /// Branch to New Chat works for it (a Claude Code conversation the node can copy, #2137); older nodes never say so.
     var canFork: Bool? = nil
-    /// How Persona reaches a Codex in a terminal (docs/integrations/codex.md「守护进程上的会话」): "app_server" (joined on its shared
+    /// How Persona reaches a Codex in a terminal (docs/integrations/codex.md「Sessions on the daemon」): "app_server" (joined on its shared
     /// app-server) or "terminal" (its screen and session record); the note says why it is the terminal.
     var codexRoute: String? = nil
     var codexRouteNote: String? = nil
@@ -730,6 +762,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// hub's `background_waiting`, #6045): set only with `state` working, never while a subagent or workflow runs. False
     /// from older hubs. The rule is `waitsInBackground`.
     var backgroundWaiting: Bool = false
+    /// Its turn has ended while background commands, subagents, Monitors or workflows it started still run (the hub's
+    /// `background_working`, #2935): set only with `state` working. False from older hubs. A task counts it as waiting
+    /// (`waitsToBeWoken`, #3274).
+    var backgroundWorking: Bool = false
     /// What it is doing when its latest step is a tool call no words came after (「在跑测试」「在读 tasks.go」), and since
     /// when; nil once it writes again. The hub's `activity` / `activity_at` (docs/protocol/protocol.md); older hubs send neither.
     var activity: String? = nil
@@ -758,7 +794,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var attentionReason: String? = nil
     /// Its host stopped its turn on an error it will not retry by itself (a botmux notice), until a message goes in.
     var failureReason: String? = nil
-    /// How the assistant's last turn failed (docs/protocol/protocol.md「错误体」, #3531): the words, their kind, and a code when it
+    /// How the assistant's last turn failed (docs/protocol/protocol.md「Error body」, #3531): the words, their kind, and a code when it
     /// is the model's set-up to fix (not_logged_in / auth_failed / model_route / rate_limited). Nil when it answered and
     /// from older hubs.
     var turnError: String? = nil
@@ -766,7 +802,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var turnErrorCode: String? = nil
     /// Where it lives outside Persona (a botmux session's Feishu topic): Open in Lark.
     var externalURL: String? = nil
-    /// The channels messages came into it from, newest first ("wechat", "feishu"; docs/extensions/channels.md「来源标记」): the
+    /// The channels messages came into it from, newest first ("wechat", "feishu"; docs/extensions/channels.md「Source markers」): the
     /// sidebar draws the latest one's mark. Nil from hubs without channels.
     var channels: [String]? = nil
     /// Who started an assistant conversation (#3266): "user" for the user's own, else what opened it ("inbox": the Inbox's
@@ -796,6 +832,20 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
     var waitsInBackground: Bool { state == .working && backgroundWaiting }
+    /// Its turn ended, yet something brings it back, so its task waits rather than stopped (#3274; the hub's agentWaits):
+    /// only its background work runs and will report back, or the hub waits out another agent, a deploy / CI / a time,
+    /// or a moment's model failure for it and wakes it (work blocked on anything but the user).
+    var waitsToBeWoken: Bool {
+        if state == .working { return backgroundWorking || backgroundWaiting }
+        guard state != .needsYou, state != .unread, let work, work.phase == "blocked" else { return false }
+        return work.on == "agent" || work.on == "external" || work.on == "transient"
+    }
+    /// What it waits for, in its own words, while it waits to be woken.
+    var waitLine: String? {
+        guard waitsToBeWoken, let work, work.phase == "blocked" else { return nil }
+        let line = (work.line ?? work.wait ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.isEmpty ? nil : line
+    }
     /// The state counts and the quick filters go by: one that only waits in the background is counted with the quiet
     /// ones, not as Working (#6045).
     var countedState: AgentState { waitsInBackground ? .idle : state }
@@ -874,9 +924,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Claude Code (or an older hub that does not name the agent): what the Claude-only controls (modes, /clear,
     /// /model) are for. Any other agent — named or not yet known to this app — does not get them.
     var isClaude: Bool { !isCodex && (agent == nil || agent == "" || agent == "claude") }
-    /// Its queue can be sent now and reordered (#6088): a Claude Code in a terminal pane, whose own send-now ("ctrl+x
-    /// ctrl+s to send now") the node presses. Other agents refuse it (`send_now_unsupported`).
+    /// Its queue can be sent now and reordered (#6088): a Claude Code in a terminal pane, whose own send-now ("ctrl+enter
+    /// to send now" or "ctrl+x ctrl+s to send now", #2467) the node presses. Other agents refuse it
+    /// (`send_now_unsupported`).
     var steersQueue: Bool { isClaude && !assistant && !hasSource && paneID != nil && canSend }
+    /// A declared modes capability wins, including a runtime such as Orca or agy; an older hub that omits it keeps the old rule.
+    /// As on the web, a non-assistant must be live, while an assistant can apply its modes to the next run even while offline.
+    var canChangeModes: Bool { canSend && (assistant || status.isLive) && (capabilities?.modes ?? (assistant || isClaude)) }
     /// Only the thinking effort changes from the phone, among `efforts` (the hub says so by listing them): a Codex
     /// thread driven through its app-server. Claude Code and the assistant change both, the rest neither.
     var setsEffortOnly: Bool { canSend && !assistant && !isClaude && !(efforts ?? []).isEmpty }
@@ -915,7 +969,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              assistantSpace = "space",
              spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
-             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
+             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
              starting, startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
@@ -999,6 +1053,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         asks = (try? c.decodeIfPresent(String.self, forKey: .asks)).flatMap { $0 } // an odd one never drops the session
         awaitsReply = (try? c.decodeIfPresent(Bool.self, forKey: .awaitsReply)).flatMap { $0 } ?? false
         backgroundWaiting = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundWaiting)).flatMap { $0 } ?? false
+        backgroundWorking = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundWorking)).flatMap { $0 } ?? false
         activity = try c.decodeIfPresent(String.self, forKey: .activity)
         activityAt = try c.decodeIfPresent(Date.self, forKey: .activityAt)
         pendingInteractions = try c.decodeIfPresent(Int.self, forKey: .pendingInteractions) ?? 0
@@ -1055,7 +1110,7 @@ nonisolated struct WorkState: Codable, Hashable, Sendable {
     }
 }
 
-/// The session triage's switches (`GET / PUT /api/v1/agents/triage`, docs/assistant/agent-work.md「开关」): the triage itself, then
+/// The session triage's switches (`GET / PUT /api/v1/agents/triage`, docs/assistant/agent-work.md「Switches」): the triage itself, then
 /// what it may do, each only while it is on. A switch the hub leaves out is off, apart from `replyReminder`.
 nonisolated struct TriageSwitches: Codable, Hashable, Sendable {
     var enabled = false
@@ -1323,7 +1378,7 @@ nonisolated struct BackgroundTask: Codable, Identifiable, Hashable, Sendable {
 
 nonisolated extension Session {
     /// The same apart from what ticks on every step of a working agent: `rev` (the transcript grew) and `updatedAt`.
-    /// Views that show neither take a push of only those as no change (docs/apple/ios-state.md「第 2 步」).
+    /// Views that show neither take a push of only those as no change (docs/apple/ios-state.md「Step 2」).
     static func sameApartFromTicks(_ a: Session?, _ b: Session?) -> Bool {
         guard var a, var b else { return a == nil && b == nil }
         a.rev = nil
@@ -1335,7 +1390,7 @@ nonisolated extension Session {
 
     /// The same as far as views about this one session show it (`AppModel.session(_:)`: its chat, its top bar, its
     /// menus): apart from the ticks and the last line and step, which only the lists and the task cards show
-    /// (docs/apple/ios-state.md「第 3 步」).
+    /// (docs/apple/ios-state.md「Step 3」).
     static func sameForItsPage(_ a: Session?, _ b: Session?) -> Bool {
         sameApartFromTicks(a.map(\.withoutLine), b.map(\.withoutLine))
     }
@@ -1560,7 +1615,7 @@ nonisolated enum ItemKind: String, Codable, Sendable {
     }
 }
 
-/// A run of the agent's work a page left out (`Item.fold`; docs/protocol/protocol.md「折叠的工作」): its counts for the folded
+/// A run of the agent's work a page left out (`Item.fold`; docs/protocol/protocol.md「Folded work」): its counts for the folded
 /// work line, and its range for fetching it when the line is opened.
 nonisolated struct Fold: Codable, Hashable, Sendable {
     var items: Int
@@ -1569,10 +1624,10 @@ nonisolated struct Fold: Codable, Hashable, Sendable {
     var until: Date?
     var throughSeq: Int
     var throughID: String
-    /// The images the run's calls looked at (docs/protocol/protocol.md「这一轮看过的图片」): its turn shows them before the answer
+    /// The images the run's calls looked at (docs/protocol/protocol.md「Images viewed this turn」): its turn shows them before the answer
     /// while the run stays folded.
     var images: [FoldImage]? = nil
-    /// The task lists the run's calls left (docs/protocol/protocol.md「折叠的工作」 `fold.tasks`), in order: the chat's plan
+    /// The task lists the run's calls left (docs/protocol/protocol.md「Folded work」 `fold.tasks`), in order: the chat's plan
     /// while its TodoWrite is folded away (`ChatPlan.latest`, #5602).
     var tasks: [FoldTasks]? = nil
     /// The hub proved this supervision round is user-visible, even while its visibility tools are folded away.
@@ -1738,7 +1793,7 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     /// kind == .notice: the context was compacted here (the hub's `compact`, or recognized by the app,
     /// `ChatStore.compactions`). Drawn as a divider across the chat (`CompactDivider`).
     var compact: Compaction?
-    /// User text Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md「Persona 注入的消息」):
+    /// User text Persona typed in for the model (a task's notice, a scheduled run…; docs/protocol/protocol.md「Messages injected by Persona」):
     /// drawn as one line, not a bubble. Set by the hub; nil from older hubs, which `Injected.of` reads off the text.
     var injected: Injected? = nil
     /// Client-retained evidence of user-visible supervision. Survives overlap replacing a promoted work fold and is
@@ -1833,7 +1888,7 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     /// password card counts even without its field, so no path allows it without a password, and so does an MCP form or
     /// link, answered only on its card.
     var requiresInput: Bool { !(fields ?? []).isEmpty || isSecretRun || kind == .elicitation }
-    /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「提问和审批」).
+    /// Who asks when it is not Claude Code: "codex" / "traex" (a card read off a Codex TUI, docs/integrations/codex.md「Questions and approvals」).
     var agent: String?
     /// Why the agent asks for this permission, in its words.
     var reason: String?

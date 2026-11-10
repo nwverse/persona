@@ -19,8 +19,9 @@ import (
 // An ask_user nobody answers becomes a to-do (#1617, docs/assistant/todos.md "Questions nobody answered"). When a card of
 // the assistant's ask_user expires unanswered (only then: not a dismiss, not "replied in the chat", not the conversation
 // stopping), the assistant opens a to-do for it: the question its title, the options and when and where it was asked its
-// notes, the asking conversation its origin, no Agent. It waits for the owner's call in the to-do list, the live snapshot
-// and the next briefing's "Can wait" rows (later.go). The first decision the owner records on it (the apps' decision
+// notes, no Agent and no origin: it is no task of the asking conversation (an origin is what makes a to-do one, for the
+// hub and the apps alike, #1852, #1909); that conversation is in its record. It waits for the owner's call in the to-do
+// list, the live snapshot and the next briefing's "Can wait" rows (later.go). The first decision the owner records on it (the apps' decision
 // form, or a reply in the topic it is bound to) goes back to the asking conversation as a new message, and the to-do
 // closes; closing it (or deleting it) without one tells the conversation, once, that the question was dropped.
 //
@@ -61,6 +62,14 @@ type askTodo struct {
 	ClaimedAt  time.Time `json:"claimed_at,omitzero"`
 	AnsweredAt time.Time `json:"answered_at,omitzero"`
 	DroppedAt  time.Time `json:"dropped_at,omitzero"`
+	// Deadline, Reversible and Recommends are the question's deadline, whether it can be undone, and each question's
+	// recommended option (#3127, decision_deadline.go); DueAt is when the deadline was handled (taken by default:
+	// ByDefault, or the owner reminded). Zero: no deadline.
+	Deadline   time.Time `json:"deadline,omitzero"`
+	Reversible bool      `json:"reversible,omitempty"`
+	Recommends []string  `json:"recommends,omitempty"`
+	DueAt      time.Time `json:"due_at,omitzero"`
+	ByDefault  bool      `json:"by_default,omitempty"`
 }
 
 // held: an answer of a's is being sent.
@@ -132,6 +141,9 @@ func (s *Service) askExpired(ctx context.Context, ix proto.Interaction) (Todo, e
 		questions = append(questions, strings.TrimSpace(q.Question))
 	}
 	rec := askTodo{TodoID: id, Interaction: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID, Questions: questions, AskedAt: ix.CreatedAt}
+	if d, ok := askDeadlineOf(ix); ok {
+		rec.Deadline, rec.Reversible, rec.Recommends = d.At, d.Reversible, d.Recommends
+	}
 	if err := s.keepAskTodo(ctx, rec); err != nil {
 		return Todo{}, fmt.Errorf("keep its record: %w", err) // a to-do whose answer could go nowhere after a restart is not made
 	}
@@ -139,10 +151,10 @@ func (s *Service) askExpired(ctx context.Context, ix proto.Interaction) (Todo, e
 		return t, nil
 	}
 	title := clip(oneLine(questions[0]), askTitleRunes)
-	t, err := s.newTodoAs(ctx, id, title, s.askTodoNotes(ctx, ix), ix.SessionID, "", false)
+	t, err := s.newTodoAs(ctx, id, title, s.askTodoNotes(ctx, ix), "", "", false) // no origin: it is no task
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == "23505" { // another assistant on the store made it a moment ago
-		return Todo{ID: id, Title: title, Origin: ix.SessionID}, nil
+		return Todo{ID: id, Title: title}, nil
 	}
 	if err != nil {
 		return Todo{}, err
@@ -337,6 +349,20 @@ func renderAskAnswer(a askTodo, loc *time.Location, choices []askChoice, thread,
 	}
 	for _, c := range choices {
 		m.Choices = append(m.Choices, prompts.AskTodoChoice{Question: contextText(c.Question), Choice: contextText(c.Choice), Reason: contextText(c.Reason)})
+	}
+	return prompts.RenderAskTodoAnswer(m)
+}
+
+// renderAskDefault is the message to the conversation that asked a when nobody decided by its deadline and its
+// recommended options were taken by default (#3127).
+func renderAskDefault(a askTodo, loc *time.Location, choices []askChoice) string {
+	m := prompts.AskTodoAnswer{When: a.AskedAt.In(loc).Format("01-02 15:04"), TodoID: a.TodoID, Defaulted: true,
+		Deadline: a.Deadline.In(loc).Format("01-02 15:04"), Several: len(a.Questions) > 1}
+	for _, q := range a.Questions {
+		m.Questions = append(m.Questions, contextText(q))
+	}
+	for _, c := range choices {
+		m.Choices = append(m.Choices, prompts.AskTodoChoice{Question: contextText(c.Question), Choice: contextText(c.Choice)})
 	}
 	return prompts.RenderAskTodoAnswer(m)
 }

@@ -226,6 +226,21 @@ func TestPairPrintsTheLinkForTheMac(t *testing.T) {
 	}
 }
 
+// A hello starts fleetClientsChanged in the background, so test clients use the same lock as connections.
+func addTestClient(h *Hub, clients ...*client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range clients {
+		h.clients[c] = struct{}{}
+	}
+}
+
+func removeTestClient(h *Hub, c *client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.clients, c)
+}
+
 // newTestHub builds a Hub with no machines, no clients and push disabled, so interaction logic can be exercised offline.
 func newTestHub(t *testing.T) *Hub {
 	t.Helper()
@@ -332,7 +347,7 @@ func TestPhoneToolsDeviceRouting(t *testing.T) {
 	defer cancel()
 	iphone := &client{hub: h, device: "credential-ios", role: roleFull, out: make(chan []byte, 8)}
 	android := &client{hub: h, device: "credential-android", role: roleFull, out: make(chan []byte, 8)}
-	h.clients[iphone], h.clients[android] = struct{}{}, struct{}{}
+	addTestClient(h, iphone, android)
 	// Existing iOS omits both new fields; Android supplies its own device ID.
 	h.onClientMessage(ctx, iphone, []byte(`{"type":"register_phone","tools":[{"name":"phone_reminders_list"},{"name":"phone_device_info","description":"Detailed device information"}]}`))
 	h.onClientMessage(ctx, android, []byte(`{"type":"register_phone","device_id":"android-device","platform":"android","simulator":true,"tools":[{"name":"phone_notifications_list"},{"name":"phone_device_info","description":"Info"}]}`))
@@ -421,7 +436,7 @@ func TestCallPhoneWaitsForApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	phone := &client{hub: h, device: "credential-ios", role: roleFull, out: make(chan []byte, 8)}
-	h.clients[phone] = struct{}{}
+	addTestClient(h, phone)
 	h.onClientMessage(ctx, phone, []byte(`{"type":"register_phone","tools":[{"name":"phone_reminders_create"},{"name":"phone_device_info"}]}`))
 
 	if r := h.callPhone(ctx, "phone_device_info", json.RawMessage(`{}`)); !r.IsError || !strings.Contains(textOf(r), "Timed out waiting for the iPhone") {
@@ -457,5 +472,27 @@ func TestCallPhoneWaitsForApproval(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("the late approval did not reach the agent")
+	}
+}
+
+// Every phone tool that waits for the user (an approval card, or a system sheet the user finishes) gets the long wait;
+// a plain read or a tool that only opens another app does not (#2276–#2286).
+func TestPhoneToolsThatWaitForTheUser(t *testing.T) {
+	for _, name := range []string{
+		"phone_calendar_update_event", "phone_calendar_delete_event", "phone_alarm_create", "phone_timer_start",
+		"phone_alarm_cancel", "phone_messages_compose", "phone_call_start", "phone_shortcuts_register",
+		"phone_home_control", "phone_home_run_scene", "phone_contacts_create", "phone_contacts_update",
+	} {
+		if !phoneConfirmedTools[name] {
+			t.Errorf("%s waits for the user on the phone but gets the short wait", name)
+		}
+	}
+	for _, name := range []string{
+		"phone_maps_search_nearby", "phone_maps_navigate", "phone_media_play", "phone_media_control", "phone_media_open",
+		"phone_shortcuts_run", "phone_shortcuts_list", "phone_alarms_list", "phone_home_list",
+	} {
+		if phoneConfirmedTools[name] {
+			t.Errorf("%s asks nobody, it should not wait 30 minutes", name)
+		}
 	}
 }

@@ -42,7 +42,7 @@ This is a reference contract, not a claim of identical platform rasterization. A
 | Android 13 and later, transparency "Auto" | Refractive glass (Haze 2's glass, `GlassLevel.Liquid`) |
 | Android 12 | Blurred glass (`GlassLevel.Frosted`) |
 | Transparency set to "Reduce transparency", or the phone is in battery saver | Opaque panels (`GlassLevel.Solid`) |
-| Sustained dropped frames while scrolling (`GlassFrameMonitor`: over 30% of 240 frames exceed 1.5× the frame budget) | Drops one level for this run: refractive → blurred → opaque |
+| Sustained dropped frames while scrolling (`GlassFrameMonitor`: over 60% slow frames after at least 120 frames, or over 30% of 240 frames exceeding 1.5× the frame budget) | Drops one level for this run: refractive → blurred → opaque |
 | Terminal page (always) | Opaque panels: the terminal changes every frame (every redraw by the program, every scrolled line), and glass over it would have to recompute the blur of the top bar, key bar and edges every frame (2026-11-01) |
 
 Only pieces floating over scrolling content (top bar, input field, decision panel) use refraction or blur; cards inside the page are a translucent fill plus a gradient stroke with no live blur, so scrolling costs nothing extra.
@@ -98,9 +98,10 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 | `JChangingText` | Values that change on redraw: numbers count to the new value, other text fades in (numbers in extension Views, row values) |
 | `JStatusDot` / `JStatusMark` / `StatusLabel` / `StatusLine` / `PendingBadge` | State: small dot, the mark before a session row (glowing in Glass, spinner and check mark in Brief, square in Board), status text, the status line in a chat |
 | `JAvatar` | People, groups, sources; a corner badge marks Lark / mail |
+| `JManagerAvatar`, `JAssistantSwitcherHeader`, `JAssistantSwitcherRow` | The sidebar's assistant switcher: an assistant's monogram on its colour (`managerHue`) with its presence dot (`managerPresenceColor`), the head with the current one, a roster row (faded as a whole when offline) |
 | `JSwipeActions` | Left/right swipe actions on rows (Inbox: swipe right for done, left to hand to Persona) |
 | `JCodeBlock` | Commands and code |
-| `JSheet` / `JActionSheet` / `JMenu` / `JDialog` | Bottom sheet, long-press action sheet (instead of long dropdowns), small anchored menu, confirmation dialog |
+| `JSheet` / `JActionSheet` / `JMenu` / `JDialog` | Bottom sheet, long-press action sheet (instead of long dropdowns), small anchored menu (its `content` slot goes above the actions: the assistant switcher's roster), confirmation dialog |
 | `JActivityBar` | The line under the chat top bar for "what the Agent keeps working on" (goal bar, `docs/integrations/agent-goal.md`): icon + one line of text + trailing state, colors from a set of `StatusColors`; all styles use a neutral surface; the icon, trailing text and thin Board line carry state; tap to open details |
 | `DecisionCard` | "Things for you to decide" in lists |
 | `DecisionDock` | Pending requests in a chat, replacing the input field |
@@ -132,7 +133,7 @@ when chart labels and series count are unchanged, bars / lines move to the new v
 4. Always use the padding provided by `JPage` as the scroll container's contentPadding, not just padding on the outer container (otherwise content in Glass does not slide under the overlays).
 5. Groups use `JGroupItem(GroupPosition.of(i, n))` or row components with a `position` argument, one row per lazy item; do not wrap many rows in one item (long lists will stutter).
 6. "Things for you to decide": `DecisionCard` in lists, `DecisionDock` in chats, `DecisionOption` for options (`recommended = true` for the recommended one), `DecisionButtons` for buttons, `DecisionAdvice` for Persona's suggestion.
-7. Use `JActionSheet` for long-press menus, `JMenu` for anchored menus with two or three items. Full-screen pages use `JFullScreen`, bottom action bars use `JBottomBar`; do not float text buttons directly over content.
+7. Use `JActionSheet` for long-press menus, `JMenu` for anchored menus with two or three items; its `content` slot takes a short list whose rows are more than labels, above the actions (the assistant switcher's roster). Full-screen pages use `JFullScreen`, bottom action bars use `JBottomBar`; do not float text buttons directly over content.
 8. Do not join metadata strings with "·": pass machines, directories, Agent types, loops and background work as component parameters (`machine`, `folder`, `agent`, `facts`).
 9. No `if (PersonaTheme.style == …)` in pages. Style-dependent behavior belongs in components; if a component lacks a parameter, say so in the report and have the design system owner add it.
 10. Button text stays on one line; shorten it or use an icon when space is tight (project rule).
@@ -162,7 +163,7 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 - Idle spaces (all their sessions are Seen) no longer go into a separate "Idle spaces" group: they stay under their computer, after active spaces, collapsed by default, with the name in `callout` and `ink2` and "N sessions" on the right; search expands them automatically.
 - When viewing only one computer (its chip is selected), the tree does not draw that computer's header (the title and chip already identify it); spaces move to the first level.
 - By repository (#2252, the default if grouping has never been chosen, matching iOS #2161; web also has this grouping): computer → repository → worktree → session, using the same components. Repositories and worktrees both use `AgentSpaceHeader`, distinguished by a leading small icon (`icon`: folder for repository, house for the main worktree, fork for other worktrees) and one extra indentation level; repositories with only the main worktree omit the worktree level and hang sessions directly under the repository. Inactive repositories behave like idle spaces: placed last, collapsed by default, labeled "N sessions"; inactive worktrees also collapse but keep their position (main worktree first, others by name). TalkBack reads the level: arrows say "expand / collapse repository (main worktree, worktree)", icons read the level name, and headers include "expanded / collapsed" (`kind` in `AgentSpaceHeader`). The computer header's second line says "N repositories, M sessions". Flattening still uses `agentTreeEntries`: a worktree group's `under` points to its repository, and collapsing a repository skips its worktrees.
-- Several Agents in one herdr tab (#2515, only when grouped by machine): beneath the space comes a tab row (`AgentTabRow`, drawn like a session row: the most urgent Agent's state mark, tab name + its title, state text and latest line, trailing "N agents" + collapse / expand arrow). Each Agent appears below, indented one level; a `JTag` "Lead" follows the initiator's title, and panes it branches off indent one more level, with a thin line descending from the lead's state mark (`AgentRow(branch = true)`; in Board it descends from the center of the strip's color block). When collapsed, the tab row represents the group. Details in `docs/android/android.md` ("Several Agents in the same tab").
+- Several Agents in one herdr tab (#2515, only when grouped by machine): beneath the space comes a tab row (`AgentTabRow`, drawn like a session row: the most urgent Agent's state mark, tab name + its title, state text and latest line, trailing "N agents" + collapse / expand arrow). Each Agent appears below, indented one level; a `JTag` "Lead" follows the initiator's title, and panes it branches off indent one more level, with a thin line descending from the lead's state mark (`AgentRow(branch = true)`; in Board it descends from the center of the strip's color block). When collapsed, the tab row represents the group. Details in `docs/android/android.md` ("Session controls, session origin and capabilities").
 - At the top of the page, in order: search field, computer chips (All machines + each computer: online dot at the device icon's corner, name, count, horizontally scrollable; tapping the selected computer again returns to all), quick filters. A chip's count is how many sessions the list would show when selected (following scope, search and quick filters).
 - Machine monitoring: "Machine monitor" in the "List settings" panel opens the machine list; the gauge button in a computer header opens that computer's details.
 
@@ -172,6 +173,7 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 
 - Only Assistant and Agents are primary destinations, selected above the page through `HomeNavigation` in all three styles (#2589).
   The avatar opens one shared history sidebar from either page; its bottom gear opens Settings. Inbox, To-dos, Computers and extension pages are secondary sidebar destinations.
+  In a regular window the same sidebar is a column beside the Assistant page instead of a drawer (section 3.1).
 - Each tab has its own back stack and badge. Visited tabs stay composed: switching away only stops placement (no drawing or touch), and disables back handling for that tab
   (`rememberNavigationEventDispatcherOwner(enabled = false)`). Switching back leaves the page exactly as it was, with no recreation, reload, empty-state flash or spinner.
 - The top switcher belongs only to the two primary roots (`NavEntryDecorator`). Secondary pages cover it and carry Back instead.
@@ -198,30 +200,51 @@ Components live in `Agents.kt` in `core:designsystem` (`MachineChip`, `AgentTree
 
 Layout depends only on the window, not the device model: the shell uses material3-adaptive's `currentWindowAdaptiveInfo()` (WindowSizeClass plus posture from Jetpack WindowManager's FoldingFeature)
 to calculate a `WindowLayout` for the design system; pages do not measure their own width. Split-screen, freeform windows, rotation, folding and unfolding only recompose
-(`MainActivity` declares `configChanges`, without recreating the Activity); the current tab, open session, scroll position and input draft survive.
+(`MainActivity` declares `configChanges`, without recreating the Activity); the current tab, open session, open settings page, scroll position and input draft survive.
 
-| Width | Navigation | List and detail |
+An open foldable and a tablet match the open iPhone Duo and the iPad (`docs/apple/ios.md`, "iPhone Duo" and "iPad"; #2951). The Duo splits on its
+inner screen, about 669 × 951 pt, and stays compact on its outer one, about 466 × 678 pt. Android calls a window **regular** when it is at least
+WindowSizeClass medium both ways, **600dp wide and 480dp tall** (`isRegularWindow`, `app/…/navigation/RegularWindow.kt`). That covers an open foldable and a tablet either way up,
+and the Duo's inner screen; a phone, folded or not, is narrower than 600dp upright and lower than 480dp on its side, so it keeps the compact layout in both orientations.
+
+| Window | Navigation | List and detail |
 | --- | --- | --- |
-| compact (phone, folded foldable) | Assistant / Agents at the top, shared sidebar | One pane |
-| medium (portrait tablet, unfolded portrait foldable) | The same top switcher and sidebar | Two panes at width ≥ 760dp, otherwise one |
-| expanded (landscape tablet, unfolded landscape foldable) | The same top switcher and sidebar | Two panes |
+| compact (phone, folded foldable; a phone on its side too) | Assistant / Agents at the top; the shared sidebar is a drawer | One pane; a phone on its side at least 760dp wide has two, as before |
+| regular (≥ 600dp wide and ≥ 480dp tall: open foldable, tablet) | The same top switcher; the shared sidebar is a column beside the Assistant page | Two panes: Agents, Inbox and Settings |
 
-- Window width changes the list-detail presentation, never the primary navigation destinations. The old expanded rail is removed.
+- Window width changes the list-detail presentation and where the sidebar sits, never the primary navigation destinations: Assistant and Agents stay the only two,
+  Settings still opens from the sidebar, and there is no rail and no layout setting (`docs/SUPER_RULES.md`, rule 3). The old expanded rail is removed.
+- **Sidebar column** (`JSidebarColumn`, `besideAssistant` in `Root.kt`): in a regular window the shared sidebar stands to the left of the Assistant page, as the open Duo's and the iPad's
+  sidebar column does, and the Assistant page draws no list of its own. The avatar at the page's top left hides and shows it (it slides; the page widens), like the Duo's sidebar button;
+  it starts shown and keeps that choice through rotation and folding (`rememberSaveable`). Its width is a list's (`sidebarSplit`: 38% of the window, 280–380dp, at most the phone drawer's width), on the same surface as the drawer
+  with a hairline toward the page. It lives inside the Assistant root page, so a page opened over the Assistant page (Inbox, To-dos, Computers, an extension page, the knowledge base) slides in over
+  the column and keeps the whole width: Inbox keeps its own list beside its detail, which a third column would not leave room for on a foldable. On Agents the left column is the Agents list,
+  as in the Duo's Agents tab; the avatar there still opens the sidebar as the drawer, so Settings stays one sidebar away from both pages. Folding turns the column back into the drawer (closed)
+  and unfolding back into the column; unfolding with the drawer open over the Assistant page shows the column instead. The drawer and the column keep separate saveable state (`shared-sidebar`, `shared-sidebar-column`):
+  the Assistant page stays composed behind Agents, so both can be composed at once.
 - Two panes use Navigation 3's list-detail scene (`rememberListDetailSceneStrategy`); the shell centrally assigns list and detail roles (`paneMetadata` in `Root.kt`):
   Agents' "computer → space → session" tree | chat (terminal takeover also in the right pane); Inbox list | Lark conversation / email; settings categories | settings subpage (all settings subpages therefore use navigation).
-  Persona's main chat does not split. An unselected right pane shows a placeholder.
+  Persona's main chat does not split. An unselected right pane shows a placeholder. A detail with no list under it (Computers or an extension page opened from the sidebar over the Assistant page)
+  is a page of its own: the scene finds one pane to show and leaves it to the single-pane scene.
+- **Settings** opens in its sheet (`JSettingsSheet`, which fills the window), and in a regular window the sheet holds its own list-detail scene:
+  the list of settings with Close on the left, the opened page on the right, its row marked; the divider can be dragged but is not kept. On a phone it is one stack, as before.
+- Agents and Inbox split in every regular window, from 600dp, where they used to wait for 760dp (an open foldable upright was one pane). A phone on its side at least 760dp wide keeps its two panes.
 - Panes share the shell's single background layer (section 3), without separate backing panels.
-  Only an 8dp gap (`horizontalPartitionSpacerSize`) separates panes, with no divider line or second backing layer; right-pane placeholders and the wide-screen Persona chat list draw the same background.
+  Only an 8dp gap (`horizontalPartitionSpacerSize`) separates panes, with no divider line or second backing layer; right-pane placeholders draw the same background.
 - In two-pane mode, the item currently displayed on the right is highlighted in its card on the left (`LocalDetailKey` + the component's `selected`), calculated by the shell from the route (`detailOf`). Left-pane taps, deep links, notifications, debug entries and back all stay synchronized; switching between one and two panes uses the same back stack and retains selection.
   Back in two-pane mode first closes the right detail, returning to "list + placeholder"; another back returns to Persona. The list-detail scene must use `PopUntilContentChange`:
   the default `PopUntilScaffoldValueChange` waits for the pane layout to change, but after closing details the placeholder remains and the layout is unchanged, so it empties the entire back stack and one back exits the App (fixed 2026-11-01).
-- The divider between panes is draggable (`PaneDivider`, `app/…/ui/PaneDividers.kt`): the left pane tracks the finger, gives a light haptic when crossing a flat fold, and snaps within 28dp on release; minimum widths are 280dp left and 320dp right; before any drag the left is about 38% (320–420dp, leaving 400dp on the right if possible); each tab remembers a width ratio; dragging all the way left hides the Agents list while something is open beside it. A separating fold fixes the split with no handle. Details in `docs/android/android.md` ("Large-screen two-pane layout").
+- The divider between panes is draggable (`PaneDivider`, `app/…/ui/PaneDividers.kt`): the left pane tracks the finger, gives a light haptic when crossing a flat fold, and snaps within 28dp on release; minimum widths are 280dp left and 320dp right; before any drag the left is about 38% (320–420dp, leaving 400dp on the right if possible); each tab remembers a width ratio; dragging all the way left hides the Agents list while something is open beside it. A separating fold fixes the split with no handle. Details in `docs/android/android.md` ("Wide two panes").
 - The Agents space page is detail (`SpaceRoute`): on wide screens it opens to the list's right rather than covering both panes.
 - In landscape, the shell leaves space for left/right safe areas (camera cutout, side navigation bar); the background still fills the window.
-- Reading width: `pagePadding` includes `LocalReadingInset`; content in wide panes is centered and capped at `ReadingWidth` (760dp), for chats, long articles and lists alike;
-  bottom overlays such as input fields and key bars share that limit. Images and tables lay out within the content width.
-- Foldable book posture (vertical half-fold): the hinge separates panes, and content and buttons do not sit over it (the list-detail scene handles it through `HingePolicy`).
-- Tabletop posture (horizontal half-fold): pages with bottom overlays (chat, terminal) place content above the hinge and the input field / key bar below (`PageFrame`).
+- Reading width: `pagePadding` includes `LocalReadingInset`; content in wide panes is centered and capped at `ReadingWidth` (760dp), for chats, the Assistant home, long articles and lists alike;
+  bottom overlays such as input fields and key bars share that limit. Images and tables lay out within the content width. This is the Duo's 760pt readable width.
+- Foldable book posture (vertical half-fold): the hinge separates panes, and content and buttons do not sit over it (the list-detail scene handles it through `HingePolicy`);
+  the sidebar column ends at the fold and the Assistant page starts past it (`sidebarSplit`), as the half-folded Duo keeps both columns clear of its crease.
+- Tabletop posture (horizontal half-fold): pages with bottom overlays (chat, terminal) place content above the hinge and the input field / key bar below (`PageFrame`); the sidebar column runs the full height.
+- Not taken from iOS, because Android has no matching system behavior: the Duo's vertical side bars and the shell's side rail (`ShellSideRail`; the system moves iOS bars to the screen's edge on the outer screen and inner landscape,
+  Android never does), the cross-fade between pages under those bars, and the iPad's page-sized Settings card (`presentationSizing(.page)`): Android's sheet spans the window like the Duo's.
+  The Agents page gets no sidebar column: the Duo's Agents tab has none either, and on an open foldable a third column would take the room the Agents list and its chat need.
 - Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch.
 - Glass blurs a larger area on large screens (each pane's top bar and scroll edges); performance has not been measured.
 

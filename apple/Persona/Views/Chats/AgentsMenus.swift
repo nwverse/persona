@@ -66,7 +66,7 @@ struct AgentsListMenu: View {
     @StoredValue("dev.compact") private var compact = false
     #endif
 
-    /// The shell (docs/apple/ios.md「新外壳」) shows these inside its Work switch's menu: the items, without a button of their own.
+    /// The shell (docs/apple/ios.md「New shell」) shows these inside its Work switch's menu: the items, without a button of their own.
     var inline = false
 
     var body: some View {
@@ -98,7 +98,13 @@ struct AgentsListMenu: View {
             }
             #if os(iOS)
             Picker("Display", selection: display.binding) {
-                ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
+                Section {
+                    ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
+                } header: {
+                    // By Repository draws its tree, one line per agent, whatever is picked here (#3182): said as the
+                    // section's title, not an item that does nothing (docs/lessons/ios.md).
+                    if shownGrouping == .repo { Text("By Repository keeps one line per agent") }
+                }
             }
             #else
             // The Mac and Apple Vision Pro keep their rows (#2530): cards or Compact List.
@@ -118,7 +124,7 @@ struct AgentsListMenu: View {
                 }
             }
             if model.isMultiHub {
-                // Several groups of hubs (docs/protocol/multi-hub.md「按组筛选」): one group's agents only.
+                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only.
                 Picker("hub", selection: Binding(get: { hubFilter }, set: { hubFilter = $0; machineFilter = "" })) {
                     Label("All Hubs", systemImage: Theme.Icon.hubGroup).tag("")
                     ForEach(model.groupIDs, id: \.self) { g in

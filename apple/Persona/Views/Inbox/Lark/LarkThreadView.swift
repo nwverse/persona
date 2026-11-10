@@ -9,6 +9,7 @@ struct LarkThreadView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.larkAccount) private var account
     @Environment(\.larkManager) private var manager
+    @Environment(\.larkGroup) private var group
     var root: LarkMessage
     var isGroup = true
     var feedID: String? = nil
@@ -16,7 +17,7 @@ struct LarkThreadView: View {
     var focusBox = false
     var pinTarget: LarkChatPinTarget? = nil
     var pinAPI: APIClient? = nil
-    private var api: APIClient? { pinAPI ?? model.api?.manager(manager).lark(account) }
+    private var api: APIClient? { pinAPI ?? model.larkAPI(group: group, manager: manager, account: account) }
     /// Opened from a topic group's card: Topic Details, From <the group> (the Lark gateway's topic page).
     var chatName: String? = nil
     @State private var person: LarkPersonRef?
@@ -159,12 +160,12 @@ struct LarkThreadView: View {
             .onChange(of: copies) { _, now in adopted = LarkChatRows.adopting(now, into: adopted) }
             .onAppear {
                 guard text.isEmpty else { return }
-                let draft = LarkDrafts.shared[.thread(root.id)]
+                let draft = LarkDrafts.shared[.thread(root.id, manager: manager)]
                 text = draft.text
                 mentions = draft.mentions ?? []
             }
             .onChange(of: LarkDraft(text: text, mentions: mentions.isEmpty ? nil : mentions)) { _, draft in
-                LarkDrafts.shared.set(draft, for: .thread(root.id))
+                LarkDrafts.shared.set(draft, for: .thread(root.id, manager: manager))
             }
             .onDisappear { LarkDrafts.shared.flush() }
             .environment(\.larkReply, LarkReplyHandler(inThread: true) { _ in boxFocused = true })

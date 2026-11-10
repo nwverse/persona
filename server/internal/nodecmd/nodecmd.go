@@ -44,7 +44,7 @@ const Usage = `  personad hook             Claude Code hook entry (reads hook JS
                            one (the office skill): personad office --help
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md「从手机新建」)`
+                           message as its last argument, no shell in between (docs/integrations/codex.md「Starting from the phone」)`
 
 // SysmonUsage is `sysmon`'s line in the usage text.
 const SysmonUsage = `  personad sysmon [n]       print this machine's system info and 1 + n metric samples (n default 3, at most 8640,
@@ -116,6 +116,9 @@ func runNode(ctx context.Context, args []string, b Build) error {
 				exitNodeUsage(err)
 			}
 			osproc.SealInherited() // as the node on stdin / stdout does, below
+			// runResident replaces itself on a restart or update (syscall.Exec): what the previous image started (the
+			// update watchdog, the herdr server, bridges) is this one's child now, and only this reaps it.
+			osproc.ReapInherited()
 			capProcs()
 			return runResident(ctx, b, supervised)
 		case "tailcat":
@@ -147,6 +150,9 @@ func runNode(ctx context.Context, args []string, b Build) error {
 		}
 		return err
 	}
+	// Serving itself, it starts children: whatever a parent that exec'd into it left is reaped first, as the resident
+	// node does above. A relay starts none, so it skips the scan.
+	osproc.ReapInherited()
 	n, err := node.New(b.Version)
 	if err != nil {
 		return err

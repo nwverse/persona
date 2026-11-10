@@ -2,7 +2,7 @@ import Foundation
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930): a plan the assistant handed the user,
 // the todos it opened (one per task), and the items the hub inserted into the conversation (its feed). The hub's
-// shapes are in docs/protocol/protocol.md「任务和对话动态」.
+// shapes are in docs/protocol/protocol.md「Tasks and the chat feed」.
 
 /// One task of a plan, as the assistant proposed it (and the user may have edited it).
 nonisolated struct PlanTask: Codable, Hashable, Sendable {
@@ -221,7 +221,7 @@ nonisolated struct AnsweredItem: Hashable, Sendable {
     var answer: String
 }
 
-/// The Today card's content (docs/protocol/protocol.md「任务和对话动态」, kind `today`), built by the hub.
+/// The Today card's content (docs/protocol/protocol.md「Tasks and the chat feed」, kind `today`), built by the hub.
 nonisolated struct TodayBody: Codable, Hashable, Sendable {
     nonisolated struct TaskRef: Codable, Hashable, Sendable { var id: String; var title: String }
     nonisolated struct Meeting: Codable, Hashable, Sendable { var start: Date; var end: Date; var title: String }
@@ -296,12 +296,14 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var doneAt: Date?
     var createdAt: Date?
     var updatedAt: Date?
+    /// When it was last reopened (by the user, or by the hub when its agent got more work); nil from older hubs.
+    var reopenedAt: Date?
     var origin: String?
     var planID: String?
     /// The task's agent did not start, and why: the hub ended the todo there (it is done, #1077).
     var startError: String?
     /// "auto" when the hub marked the task done because its work was judged finished, with why (#1092,
-    /// docs/assistant/todos.md「自动完成」); nil when the user did.
+    /// docs/assistant/todos.md「Automatic completion」); nil when the user did.
     var doneBy: String?
     var doneReason: String?
     var agents: [Agent]
@@ -318,6 +320,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// The main conversation supervises it (#3124, `Supervision.swift`): what done means, its reviews, its agent's
     /// latest report. Nil for a todo that is not supervised, from an older hub, or when it does not decode.
     var supervision: TaskSupervision?
+    /// The current owner decision or verification round; malformed asks never hide the task.
+    var ask: TodoAsk?
     /// When it is due (#1683, docs/assistant/todos.md "Due date, reminder, priority"): a moment, or a day ("yyyy-MM-dd",
     /// due by its end in the user's time zone); at most one. Nil from a hub without them.
     var dueAt: Date?
@@ -327,10 +331,12 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var remindedAt: Date?
     /// "high" or "low"; nil is normal.
     var priority: String?
+    /// Where its finished work stands (`delivery`, docs/assistant/todos.md "Delivery"); nil from a hub without it.
+    var delivery: TodoDelivery?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority
-        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", planID = "plan_id", startError = "start_error",
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery
+        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
              remindAt = "remind_at", remindedAt = "reminded_at"
     }
@@ -339,7 +345,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
          origin: String? = nil, planID: String? = nil, startError: String? = nil, doneBy: String? = nil, doneReason: String? = nil,
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
-         remindedAt: Date? = nil, priority: String? = nil) {
+         remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
+         delivery: TodoDelivery? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -362,6 +369,9 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.remindAt = remindAt
         self.remindedAt = remindedAt
         self.priority = priority
+        self.ask = ask
+        self.reopenedAt = reopenedAt
+        self.delivery = delivery
     }
 
     init(from decoder: Decoder) throws {
@@ -391,13 +401,45 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         remindAt = (try? c.decodeIfPresent(Date.self, forKey: .remindAt)) ?? nil
         remindedAt = (try? c.decodeIfPresent(Date.self, forKey: .remindedAt)) ?? nil
         priority = (try? c.decodeIfPresent(String.self, forKey: .priority)) ?? nil
+        ask = (try? c.decodeIfPresent(TodoAsk.self, forKey: .ask)) ?? nil
+        // New (#3206): absent from older hubs; one that does not decode is as if there were none.
+        reopenedAt = (try? c.decodeIfPresent(Date.self, forKey: .reopenedAt)) ?? nil
+        delivery = (try? c.decodeIfPresent(TodoDelivery.self, forKey: .delivery)) ?? nil
     }
 
+    /// An ended task cannot keep an old decision card alive.
+    var openAsk: TodoAsk? { doneAt == nil && ask?.askedAt.isEmpty == false ? ask : nil }
     var activeAgents: [Agent] { agents.filter(\.isActive) }
     /// The hub ended it because its agent did not start.
     var failedToStart: Bool { !(startError ?? "").isEmpty }
     /// The hub marked it done because its task's work was judged finished; reopening undoes it.
     var autoDone: Bool { doneAt != nil && doneBy == "auto" }
+}
+
+/// Where a task's finished work stands (`delivery`): `live`, `pr`, `merged`, `off` or `none`, what holds it and who
+/// can unhold it. Kept as the hub sent it; a state this build does not know is just not one of those.
+nonisolated struct TodoDelivery: Codable, Hashable, Sendable {
+    var state: String
+    var gate: String?
+    var unblock: String?
+    var at: Date?
+
+    enum CodingKeys: String, CodingKey { case state, gate, unblock, at }
+
+    init(state: String, gate: String? = nil, unblock: String? = nil, at: Date? = nil) {
+        self.state = state
+        self.gate = gate
+        self.unblock = unblock
+        self.at = at
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
+        gate = (try? c.decodeIfPresent(String.self, forKey: .gate)) ?? nil
+        unblock = (try? c.decodeIfPresent(String.self, forKey: .unblock)) ?? nil
+        at = (try? c.decodeIfPresent(Date.self, forKey: .at)) ?? nil
+    }
 }
 
 /// The agents of quiet tasks (#1731, `TodoItem.quiet`): the main conversation tells the user about them, so the island,
@@ -512,26 +554,38 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
     }
 }
 
-/// Where a task is, from its todo and its agents' states (docs/assistant/todos.md「状态计算规则」, the hub's taskState).
+/// Where a task is, from its todo and its agents' states (docs/assistant/todos.md「State calculation rules」, the hub's taskState).
 nonisolated enum TaskState: String, Sendable, CaseIterable {
-    case needsYou, working, unread, followup, notStarted, done, failed
+    /// `waiting`: its agents ended their turn, yet something brings one back, its background work or the hub's wake-up
+    /// (`Session.waitsToBeWoken`, #3274); only a task nothing brings back is `followup`.
+    case needsYou, working, unread, waiting, followup, notStarted, done, failed
 
-    init(todo: TodoItem, agents: [AgentState]) {
+    /// `agents`: the states of the agents that do not wait to be woken; `waiting`: whether one does.
+    init(todo: TodoItem, agents: [AgentState], waiting: Bool = false) {
         if todo.failedToStart { self = .failed; return }
         if todo.doneAt != nil { self = .done; return }
+        if todo.openAsk != nil { self = .needsYou; return }
         let has = Set(agents)
         if has.contains(.needsYou) { self = .needsYou }
         else if has.contains(.unread) { self = .unread }
         else if has.contains(.working) { self = .working }
+        else if waiting { self = .waiting }
         else if !agents.isEmpty { self = .followup }
         else { self = .notStarted }
+    }
+
+    /// From the task's agents as the app has them: one that waits to be woken makes it waiting, not stopped (#3274).
+    init(todo: TodoItem, sessions: [Session]) {
+        let waits = sessions.filter(\.waitsToBeWoken)
+        let others = sessions.filter { !$0.waitsToBeWoken }.map(\.state)
+        self.init(todo: todo, agents: others, waiting: !waits.isEmpty)
     }
 
     /// The agent state whose tone and mark the task borrows.
     var agentState: AgentState {
         switch self {
         case .needsYou: .needsYou
-        case .working, .notStarted: .working
+        case .working, .waiting, .notStarted: .working
         case .unread, .done: .unread
         case .followup, .failed: .idle
         }
@@ -541,7 +595,7 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
     var priority: Int {
         switch self {
         case .needsYou: 0
-        case .working, .notStarted: 1
+        case .working, .waiting, .notStarted: 1
         case .unread: 2
         case .followup: 3
         case .done, .failed: 4
@@ -553,10 +607,10 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
 
     /// Nothing of the task runs (it ended, stopped, or its agent never started; `notStarted` stays when the hub never
     /// said how the start went): the user may take it out of the conversation.
-    var isRemovable: Bool { self != .working && self != .needsYou }
+    var isRemovable: Bool { self != .working && self != .waiting && self != .needsYou }
 }
 
-/// What a task's card says its agent is on now (docs/assistant/unified-entry.md「任务卡片的进度」): its latest words, or — while it
+/// What a task's card says its agent is on now (docs/assistant/unified-entry.md「Task cards」): its latest words, or — while it
 /// only runs tools (reads code, runs tests, waits for CI) and its words stay put for minutes — the step it is on and
 /// since when. New words win again as soon as they come (the hub drops the step then).
 nonisolated enum TaskNow: Equatable, Sendable {

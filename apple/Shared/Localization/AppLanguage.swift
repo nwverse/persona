@@ -1,6 +1,6 @@
 import Foundation
 
-// The interface language (docs/protocol/i18n.md「选哪种语言」, docs/apple/ios.md「界面语言」): zh-Hans, en or ja.
+// The interface language (docs/protocol/i18n.md「Choosing a language」, docs/apple/ios.md「Interface language」): zh-Hans, en or ja.
 //
 // Settings › Appearance › Language picks Match System (default) or one of the three. The choice is applied the way iOS's own per-app
 // language setting applies it: `AppleLanguages` in the app's defaults, read by Foundation when the process starts.
@@ -158,7 +158,7 @@ nonisolated final class LanguageStore: @unchecked Sendable {
 }
 
 extension Locale {
-    /// The locale for formatting dates and numbers (docs/protocol/i18n.md「日期、数字、排序」): the system's when its language
+    /// The locale for formatting dates and numbers (docs/protocol/i18n.md「Dates, numbers, and sorting」): the system's when its language
     /// is the interface language (keeps regional habits, en-GB's day order), else the interface language's.
     nonisolated static var interface: Locale {
         let ui = LanguageStore.shared.launched

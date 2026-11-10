@@ -181,6 +181,21 @@ func TestCodexAnswerAsync(t *testing.T) {
 	}
 }
 
+// The reply's JSON escapes C0 controls but not DEL or C1 ones, and U+009B alone is a CSI to some terminals.
+func TestCodexAnswerAsyncControls(t *testing.T) {
+	n, f, path := codexNode(t, proto.StatusIdle, cxAsyncCall, cxAsyncOut)
+	f.setScreen(cxPane, cxEmpty)
+	sent := codexTUI(t, f, path)
+	err := n.codexAnswer(context.Background(), cxID, onlyCard(t, n).ix.ID, proto.Resolution{Answers: map[string]string{"Which color should the banner be?": "Green\u009b201~\u009bZ\x7f"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := transcript.CodexReplyMessage([]transcript.CodexReply{{QuestionItemID: transcript.QuestionItemID("call_a1", 0), Question: "Which color should the banner be?", Answer: "Green<U+009B>201~<U+009B>Z<U+007F>"}})
+	if len(*sent) != 1 || (*sent)[0] != want {
+		t.Errorf("sent %q, want %q", *sent, want)
+	}
+}
+
 // The states the computer may be in when the answer comes: a draft refuses; the pager and the question pane step aside.
 func TestCodexAnswerAsyncStates(t *testing.T) {
 	answer := proto.Resolution{Answers: map[string]string{"Which color should the banner be?": "Red"}}
@@ -241,6 +256,7 @@ func TestCodexAnswerApproval(t *testing.T) {
 		{"always", proto.Resolution{Allow: &yes, Always: true}, "2", ""},
 		{"deny", proto.Resolution{Allow: &no}, "3", ""},
 		{"deny with a reason", proto.Resolution{Allow: &no, Message: "use wget instead"}, "3", "use wget instead"},
+		{"deny with a reason with controls", proto.Resolution{Allow: &no, Message: "use wget\x1b[201~\x1b[Z\x15 instead"}, "3", "use wget<ESC>[201~<ESC>[Z<U+0015> instead"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			n, f, path := codexNode(t, proto.StatusBlocked)
@@ -325,7 +341,7 @@ func TestCodexAnswerOverlay(t *testing.T) {
 		t.Errorf("card %+v", card.ix)
 	}
 	err := n.codexAnswer(context.Background(), cxID, card.ix.ID, proto.Resolution{Answers: map[string]string{
-		"Which color should the banner be?": "Blue", "How tall should it be?": "Medium",
+		"Which color should the banner be?": "Blue", "How tall should it be?": "Medium\x15",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +349,7 @@ func TestCodexAnswerOverlay(t *testing.T) {
 	assertTrace(t, f.trace("pane.send_text", "pane.send_keys"), []string{
 		call("pane.send_keys", map[string]any{"pane_id": cxPane, "keys": []string{"2"}}),
 		call("pane.send_keys", map[string]any{"pane_id": cxPane, "keys": []string{"down", "down", "tab"}}),
-		call("pane.send_text", map[string]any{"pane_id": cxPane, "text": pasteStart + "Medium" + pasteEnd}),
+		call("pane.send_text", map[string]any{"pane_id": cxPane, "text": pasteStart + "Medium<U+0015>" + pasteEnd}),
 		call("pane.send_keys", map[string]any{"pane_id": cxPane, "keys": []string{"enter"}}),
 	})
 }

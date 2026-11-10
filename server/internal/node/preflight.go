@@ -409,6 +409,19 @@ func launchedVia(getenv func(string) string) string {
 	return ""
 }
 
+// fullDiskAccessProgram is the program TCC holds this node's reads to when it was started under launchd (via): the
+// program of the agent it runs under (label, its XPC_SERVICE_NAME; launchdProgram), which is the node itself under
+// the node's own agent and the built-in manager's program under the manager's agent; exe otherwise, or when the agent's
+// plist says none.
+func fullDiskAccessProgram(via, home, label, exe string) string {
+	if via == "launchd" {
+		if p := launchdProgram(home, label); p != "" {
+			return p
+		}
+	}
+	return exe
+}
+
 // fullDiskAccessFor is, in the user's words, the program to give Full Disk Access to.
 func fullDiskAccessFor(via, exe string) string {
 	switch via {
@@ -416,7 +429,7 @@ func fullDiskAccessFor(via, exe string) string {
 		if exe == "" {
 			exe = "personad"
 		}
-		return exe + "（常驻 node，由 launchd 启动）"
+		return exe + "（启动 node 的 launchd 服务运行的程序）"
 	case "ssh":
 		return "sshd-keygen-wrapper（node 经 ssh 启动）"
 	}
@@ -437,6 +450,7 @@ func protectedFolderOf(path, home string) string {
 type preflightEnv struct {
 	goos, home string
 	via, exe   string // launchedVia, os.Executable
+	fda        string // the program to give Full Disk Access to (fullDiskAccessProgram); exe when ""
 	// stall: a read taking this long is blocked; start: how long the child has to say its first line (its exec, its
 	// runtime coming up).
 	stall, start time.Duration
@@ -456,8 +470,9 @@ func thisPreflightEnv(home string) preflightEnv {
 	if p, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = p
 	}
-	env := preflightEnv{goos: runtime.GOOS, home: home, via: launchedVia(os.Getenv), exe: exe, stall: preflightStall,
-		start: preflightStart}
+	via := launchedVia(os.Getenv)
+	env := preflightEnv{goos: runtime.GOOS, home: home, via: via, exe: exe, stall: preflightStall, start: preflightStart,
+		fda: fullDiskAccessProgram(via, home, os.Getenv("XPC_SERVICE_NAME"), exe)}
 	env.child, env.childEnv = preflightChildCmd(exe)
 	return env
 }
@@ -563,7 +578,7 @@ func preflightCheck(o preflightOutcome, items []preflightItem, env preflightEnv)
 		c.Hint = "检查这个路径的权限，或者它所在的挂载（网络盘、FUSE）是否还有响应；或者把目录挪到别处"
 		if onVolume != "" { // macOS asks before a program reads a network or removable volume, too
 			c.Hint += "。macOS 读外接盘、网络盘也要授权：挂载正常的话，在「系统设置 › 隐私与安全性 › 完全磁盘访问权限」里加上并打开 " +
-				fullDiskAccessFor(env.via, env.exe)
+				fullDiskAccessFor(env.via, cmp.Or(env.fda, env.exe))
 		}
 		return c
 	}
@@ -576,7 +591,7 @@ func preflightCheck(o preflightOutcome, items []preflightItem, env preflightEnv)
 		it = blockedPath(problems[tcc])
 	}
 	c.Hint = "macOS 的隐私保护挡住了" + it + "。两条出路：在「系统设置 › 隐私与安全性 › 完全磁盘访问权限」里加上并打开 " +
-		fullDiskAccessFor(env.via, env.exe) + "；或者把它挪出" + folder
+		fullDiskAccessFor(env.via, cmp.Or(env.fda, env.exe)) + "；或者把它挪出" + folder
 	return c
 }
 

@@ -17,8 +17,10 @@ spec/
     terminal/         终端
     wire/             协议解码
     injected/         hub 注入给模型的消息怎么认
+    comments/         comment blocks a message leads with (web and iOS)
     sync/             chat sync scenarios: hub state, frames with faults, what each device shows
     attention/        Persona Link's "Needs you" summary against the web badge
+    entries/          the Assistant's two composer entries, Needs you and In progress
     tokens/           设计 token 的校验夹具（如该领域提供）
   tokens/             设计 token 的来源文件，见 D7
 ```
@@ -34,7 +36,9 @@ spec/
 | terminal | 见各自 [README](fixtures/terminal/README.md) |
 | wire | 见各自 [README](fixtures/wire/README.md) |
 | injected | 见各自 [README](fixtures/injected/README.md)：hub 注入给模型的消息（任务通知、定时任务……）怎么认 |
+| comments | [README](fixtures/comments/README.md): the `> Comment N` / `Code comment N` / `Element comment N` blocks a message leads with, written and read back by the web app and the iOS app (#151) |
 | attention | [README](fixtures/attention/README.md): Persona Link's "Needs you" summary counts what the web app's badge counts, checked by Go and the web app |
+| entries | [README](fixtures/entries/README.md): which of the Assistant's two composer entries (Needs you, In progress) each task, Agent, plan and message card goes to, checked by the web app and Android (#3387) |
 | sync | [README](fixtures/sync/README.md): stories of one chat on one or more devices (sends, cards, reconnects, hub restarts, wakes, long chats) with faults, checked at every step by Go, the clients and the end-to-end runs (#1073) |
 | tokens | 见各自 [README](tokens/README.md)；校验夹具如放在 `fixtures/tokens/`，结构由该领域 README 说明 |
 

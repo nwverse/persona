@@ -1,6 +1,6 @@
 import Foundation
 
-/// Demo Mode (docs/apple/ios.md「体验模式」): a made-up hub inside the app, for someone without one (App Review, a friend
+/// Demo Mode (docs/apple/ios.md「Demo mode」): a made-up hub inside the app, for someone without one (App Review, a friend
 /// with the TestFlight link). It sits under the data layer, so no page knows: `APIClient.request` and `LiveConnection`
 /// hand the demo config's traffic to it, and it answers with the hub's JSON. The data is scripts/mock/mock_hub.py's, written
 /// to Resources/Demo.json by scripts/mock/make_demo_data.py, with times moved to now. Nothing leaves the phone: what would
@@ -35,6 +35,8 @@ final class DemoHub {
     private var blockedClaudeDirs: [String: [JSONValue]] = [:]
     /// Settings › Claude Code › Live Replies, by machine (on unless turned off, as on a hub).
     private var liveReplies: [String: Bool] = [:]
+    /// Settings › Knowledge Selection: what was saved in the demo (nil: the hub's defaults).
+    private var kbSelection: JSONValue?
     private var memory: [JSONValue] = []
     private var prefs: JSONValue = .object([:])
     private var pins: JSONValue = .object([:])
@@ -125,10 +127,10 @@ final class DemoHub {
              "resets_at": .string(iso(now.addingTimeInterval(left)))]
         }
         let accounts: [JSONValue] = [
-            ["id": "claude-demo", "provider": "claude", "name": "Claude", "plan": "Max", "local": true,
+            ["id": "claude-demo", "provider": "claude", "name": "Claude", "plan": "Max", "local": true, "machines": ["MacBook"],
              "sampled_at": .string(iso(now.addingTimeInterval(-20))),
              "windows": .array([win("5h", 300, 72, 80 * 60), win("7d", 10080, 38, (2 * 24 + 6) * 3600)])],
-            ["id": "codex-demo", "provider": "codex", "name": "Codex Pro", "plan": "pro", "local": true,
+            ["id": "codex-demo", "provider": "codex", "name": "Codex Pro", "plan": "pro", "local": true, "machines": ["MacBook"],
              "sampled_at": .string(iso(now.addingTimeInterval(-240))),
              "windows": .array([win("5h", 300, 18, 3 * 3600), win("7d", 10080, 64, (3 * 24 + 2) * 3600)])],
         ]
@@ -230,6 +232,7 @@ final class DemoHub {
         case ["lark", "flags"]: return ["conversations": .array([]), "messages": .array([])]
         case ["lark", "emojis"]: return ["emojis": .object([:])]
         case ["kb-search"]: return DemoKnowledgeSearch.answer(q["q"] ?? "", kb: data["kb"])
+        case ["kb", "selection"]: return kbSelection ?? Self.defaultKBSelection()
         case ["lark", "reactions", "quick"]: return ["keys": .array([])]
         default: break
         }
@@ -297,6 +300,25 @@ final class DemoHub {
             return it
         default: throw notFound()
         }
+    }
+
+    /// The selection a hub starts with (the hub's `kb.Defaults`): mentions, the owner's own messages and direct chats
+    /// stored, every document rule on, no per-item settings.
+    private static func defaultKBSelection() -> JSONValue {
+        func rules(_ names: [String], on: Set<String>) -> JSONValue {
+            .object(Dictionary(uniqueKeysWithValues: names.map { ($0, JSONValue.object(["on": .bool(on.contains($0))])) }))
+        }
+        func order(_ levels: [[String]]) -> JSONValue { .array(levels.map { level in .array(level.map { .string($0) }) }) }
+        let messages = KBSelection.Part.messages.ruleNames
+        let docs = KBSelection.Part.docs.ruleNames
+        let messageLevels = [["mentions", "mine"]] + messages.dropFirst(2).map { [$0] }
+        return .object([
+            "version": .number(1),
+            "messages": .object(["order": order(messageLevels), "rules": rules(messages, on: ["mentions", "mine", "dm"])]),
+            "docs": .object(["order": order([["mentions", "comment_mentions"], ["authored"], ["viewed"]]), "rules": rules(docs, on: Set(docs))]),
+            "items": .array([]),
+            "history": .object([:]),
+        ])
     }
 
     private func sessionGet(_ k: SessionKey, _ what: String, _ q: [String: String]) throws -> JSONValue {
@@ -518,6 +540,9 @@ final class DemoHub {
             broadcast(["type": "machines", "machines": .array(machines)])
             return machines[i]
         case ("machines", 3) where p[2] == "reconnect": return ["ok": true]
+        case ("kb", 2) where p[1] == "selection" && method == "PUT":
+            kbSelection = body
+            return body
         case ("kb", _): return ["ok": true]
         default: throw refuse()
         }

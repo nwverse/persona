@@ -131,14 +131,14 @@ Health answers are mostly a set of numbers, and a chart is faster to read than t
 | --- | --- | --- |
 | Per-day trends over the last 7 days (or longer): steps, sleep, weight, resting heart rate | `line` | Steps over the last 7 days |
 | Calories per meal (comparing a few items, calories burned per workout) | `bar` | Calories per meal today |
-| Daily calorie breakdown (how much each part takes of one total) | `stacked_bar` | Today's calories: breakfast / lunch / dinner / remaining |
+| Daily calorie breakdown (how much each part takes of one total) | `ring` (#3069; a `stacked_bar` card draws one bar and reads poorly for one day) | Today's calories: breakfast / lunch / dinner / remaining |
 | A single key metric | `stat` | Steps today |
 | Details (each food, each item on a lab report) | Markdown table | |
 
-- **Instructions**: in the Health space's CLAUDE.md (`server/internal/prompts/assistant/health_claude_md.md`, "Charts by default when discussing numbers"): pick per the table above, put the conclusion and key numbers in the text with the card after it, at most three cards at a time, and do not fill days with no data with 0.
-  `TestHealthClaudeMDTeachesCharts` checks that all four card types have examples and that every example is a card all clients can draw.
+- **Instructions**: in the Health space's CLAUDE.md (`server/internal/prompts/assistant/health_claude_md.md`, "讲数字默认配图表"): pick per the table above, put the conclusion and key numbers in the text with the card after it, at most three cards at a time, and do not fill days with no data with 0.
+  `TestHealthClaudeMDTeachesCharts` checks that all four card types (`line`, `bar`, `ring`, `stat`) have examples, that none is a `stacked_bar`, and that every example is a card all clients can draw.
 - **Web**: a health chat is the assistant's chat page (`ChatView`); code blocks are drawn as charts via `ui/AssistantCard.tsx` as before, with no separate implementation. What each client draws is governed by the cases in `schema/extension/examples/persona-card/` (web: `lib/assistant-view.test.ts`).
-- **Lark**: cards cannot draw charts, and the JSON in a code block is not an answer either, so before sending, the bot rewrites each `persona-card` as a line or two of numbers (`stat` as one bold number, `line` / `bar` as a ▁▃█ sparkline plus the individual numbers, `stacked_bar` as a small two-column table); see `docs/extensions/bots.md` ("Cards").
+- **Lark**: cards cannot draw charts, and the JSON in a code block is not an answer either, so before sending, the bot rewrites each `persona-card` as a line or two of numbers (`stat` as one bold number, `line` / `bar` as a ▁▃█ sparkline plus the individual numbers, `stacked_bar` / `ring` as a small two-column table); see `docs/extensions/bots.md` ("Cards").
 
 To see it: in the default mock hub (`python3 scripts/mock/mock_hub.py`, numbers are made up), the Health space's three chats "Sleep this week", "Step goal" and "What I ate today" all have charts.
 
@@ -154,7 +154,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   (`proto.UploadDestHealth`). node stores it in the health directory's `reports/` (`originalname-YYYYMMDD-HHMMSS.ext`, 0700 / 0600, never expires; the computer's manager's health space: `health-<id>/` for another manager than the built-in one, `docs/assistant/managers.md` ("Directories on a computer"). Reports uploaded before the computer moved to another manager stay in the previous manager's space there: the new owner does not list them, and they show again if the computer moves back), and the path is inserted into the input box and sent with the message.
   Images are still sent as images (Claude looks at them directly) and are not saved to disk. The main chat cannot read `reports/`: it is inside the health directory denied by #3282.
 - **Record**: the health chat reads the original and writes a same-named `.md` next to it: report date (the exam date printed on the report), institution, type, a table of "Item | Result | Unit | Reference range | Abnormal",
-  values copied as in the original and "illegible" where unreadable, ending with the doctor's conclusions and advice. Photos sent directly in the chat get a record the same way. The procedure is in the health CLAUDE.md ("Data").
+  values copied as in the original and "illegible" where unreadable, ending with the doctor's conclusions and advice. Photos sent directly in the chat get a record the same way. The procedure is in the health CLAUDE.md (`server/internal/prompts/assistant/health_claude_md.md`, "数据").
 - **Compare**: when asked about "the past few years" or "compared with last year", it reads all records under `reports/`, merges the same item ("triglycerides" and "TG") and compares by date, drawn as a `line` card; originals without a record get one first.
 - **No approval every time**: the health chat's `--allowedTools` includes `Edit(//<health dir>/reports/**)` (`healthReportRules` in `node/healthdeny.go`), so writing records does not pop a confirmation on the phone;
   everywhere else in the health directory still asks according to the chat's permission mode. Claude Code matches only `Read` and `Edit` rules by path; `Edit(path)` covers every file-modifying tool, and `Write(path)` never matches,
@@ -215,7 +215,12 @@ measurements are omitted; route coordinates are not uploaded. Pace charts requir
 measured splits and are not generated from the aggregate-only payload.
 
 The device atomically stores its HealthKit cursor with a bounded upload outbox.
-Failed uploads are retried on the next foreground visit. The assistant stores a
+Failed uploads are retried on the next foreground visit, except a report the hub
+rejects as invalid (HTTP 400, 413 or 422): the same data gets the same answer, so
+the device drops it and keeps going, and Settings → Health says some workouts were
+skipped. Without that, one bad report would hold back every later workout. The hub
+accepts end times up to a day past its own clock, so ordinary clock drift between
+the phone and the hub is never a rejection. The assistant stores a
 workout UUID receipt in PostgreSQL so retries, restarts, and deletion of an old task
 do not recreate it. Turning the switch off clears the local pending uploads; already
 accepted reports may still complete. Re-enabling starts a new consent window.

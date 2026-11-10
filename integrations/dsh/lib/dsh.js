@@ -57,7 +57,7 @@ const LEARN_EVERY = 5 * 60_000 // ms: read a parent's subagent catalog again at 
 const STARTED_SUBAGENT = /^started subagent (\S+)/ // DSH's subagent tool result: the child it started
 
 /**
- * A subagent's id as Persona sees it, "<parent>@<child>" (docs/integrations/runtimes.md "Subagents"), split; undefined for another id.
+ * A subagent's id as Persona sees it, "<parent>@<child>" (docs/integrations/runtimes.md "Sub-Agents and background tasks"), split; undefined for another id.
  * @param {string} id
  */
 export function splitChild(id) {
@@ -87,7 +87,7 @@ export function createDshRuntime(deps, options = {}) {
   const known = new Map() // session id -> { lastSeq (DSH), lastText, running }
   const calls = new Map() // session id -> Map(callId -> { name, args }): recent tool calls, for approval cards
   const texts = new Map() // session id -> the assistant text being generated
-  // Subagents (DSH's child sessions: subagent tool, workflows) and background jobs (docs/integrations/dsh.md "Subagents and background jobs").
+  // Subagents (DSH's child sessions: subagent tool, workflows) and background jobs (docs/integrations/dsh.md "Subagents and background tasks").
   const parents = new Map() // child session id -> its parent session id
   const children = new Map() // child session id -> { label, callId, createdAt }
   const learned = new Map() // parent session id -> when its catalog was last read
