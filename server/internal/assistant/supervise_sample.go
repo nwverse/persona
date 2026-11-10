@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"hash/fnv"
+	"slices"
 	"strings"
 	"time"
 )
@@ -56,17 +57,37 @@ func (c *taskAutoCheck) passed() bool {
 }
 
 // autoCheckOf is the judge's checks matched to criteria: one per criterion in order, the criterion as the ledger has
-// it. Fewer checks than criteria leave the missing ones unchecked (not met).
+// it. A check counts only when the judge gave exactly one per criterion and copied each criterion where it belongs;
+// otherwise every criterion is left unchecked (not met): a list that is off by one must not pass.
 func autoCheckOf(criteria []string, got []autoCheckItem, delivery string) *taskAutoCheck {
 	c := &taskAutoCheck{Delivery: delivery}
+	aligned := len(got) == len(criteria)
+	for i := 0; aligned && i < len(got); i++ {
+		aligned = sameCriterion(got[i].Criterion, criteria[i])
+	}
 	for i, crit := range criteria {
 		x := autoCheckItem{ReviewCheck: ReviewCheck{Criterion: crit}}
-		if i < len(got) {
+		if aligned {
 			x.Checkable, x.Met, x.Evidence = got[i].Checkable, got[i].Met, clip(oneLine(got[i].Evidence), 300)
 		}
 		c.Checks = append(c.Checks, x)
 	}
 	return c
+}
+
+// sameCriterion: the judge copied criterion want as got (spacing aside).
+func sameCriterion(got, want string) bool {
+	return strings.Join(strings.Fields(got), " ") == strings.Join(strings.Fields(want), " ")
+}
+
+// judgeMayClose: the judge may close supervised task t now: its first round, never reviewed, never reopened. A rework
+// round waits for the review the supervisor was promised (with what it asked beyond done_when), and a task someone
+// reopened was reopened for a reason the criteria do not hold.
+func judgeMayClose(t Todo, v *Supervision) bool {
+	if t.DoneAt != nil || t.ReopenedAt != nil || v == nil || v.state(t) != "" || v.Round > 0 {
+		return false
+	}
+	return !slices.ContainsFunc(v.Reviews, func(r TaskReview) bool { return r.Verdict == reviewAccepted || r.Verdict == reviewCancelled })
 }
 
 // spotCheck is spotChecked; a variable for the tests.
@@ -96,8 +117,9 @@ func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c 
 	}
 	note := cmp.Or(clip(oneLine(reason), 80), "判官核对全过、已上线") // i18n-ignore: the review's note, as the supervisor's are
 	if _, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-		if st := v.state(t); st != "" && st != reviewRework {
-			return false // reviewed or waiting on the user meanwhile
+		cur, ok := s.todoNow(t.ID) // as it is now: the supervisor may have reviewed it since the judge was asked
+		if !ok || !judgeMayClose(cur, v) {
+			return false
 		}
 		v.State = reviewAccepted
 		v.Reviews = append(v.Reviews, TaskReview{At: time.Now().UTC(), Verdict: reviewAccepted, By: reviewerJudge, Checks: checks, Note: note})
@@ -114,6 +136,17 @@ func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c 
 	closed, err := s.reviewDoneTodo(ctx, t.ID, "判官核对通过："+note, true) // i18n-ignore: done_reason, as a review's
 	if err != nil {
 		s.logf("task %s: judge close: %v", t.ID, err)
+		// Not closed: the judge's acceptance comes off the ledger again, and the task waits for review as before.
+		if _, _, uerr := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+			n := len(v.Reviews)
+			if v.State != reviewAccepted || n == 0 || v.Reviews[n-1].By != reviewerJudge {
+				return false
+			}
+			v.Reviews, v.State = v.Reviews[:n-1], ""
+			return true
+		}); uerr != nil {
+			s.logf("task %s: judge close: undo: %v", t.ID, uerr)
+		}
 		return false
 	}
 	b := &s.supervise
@@ -123,13 +156,18 @@ func (s *Service) judgeClose(ctx context.Context, t Todo, key, reason string, c 
 		delete(b.pending, t.ID+"|"+k)
 	}
 	b.mu.Unlock()
-	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, reviewFeedBody{Title: t.Title, Verdict: reviewAccepted, Note: note, Checks: checks})
 	if closed {
 		s.dropTaskReport(t.ID)
-		if cur, ok := s.todoNow(t.ID); ok {
+	}
+	// The feed and the conclusion card post over the network: not under the completion lock superviseJudged holds.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, reviewFeedBody{Title: t.Title, Verdict: reviewAccepted, Note: note, Checks: checks})
+		if cur, ok := s.todoNow(t.ID); ok && closed {
 			s.askConclusion(ctx, cur, conclusionInput{Outcome: outcomeDone, Reason: reason, Note: note, Checks: checks})
 		}
-	}
+	}()
 	s.logf("task %s: closed by the judge, its check passed (%d criteria, live; work %s)", t.ID, len(checks), key)
 	return true
 }

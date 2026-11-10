@@ -344,7 +344,8 @@ effective from the next judgment and next dispatched task. When on:
 - **Passed and not sampled**: the judge closes it as `task_review accepted` would: the ledger records an accepted review `by: "judge"` with the checks, the to-do closes (`done_reason` starts with 判官核对通过), the outcome goes to the project timeline, and the owner gets the usual conclusion card. The main conversation gets no supervision message for it.
 - **Passed and sampled**: whether a task is sampled is a hash of the to-do id and the stretch of work, so the same work always gets the same answer; about `review_sample_percent` percent are. A sampled one waits for `task_review` as before, its supervision message starting with 抽查 so the main conversation knows the judge's check already passed.
 - **Failed the check**: waits for `task_review` as before.
-- When the independent review (`supervise_autoreview.go`) is on, it still runs first and its result waits for `task_review`; the judge's check does not close such tasks.
+- **Never closed by the judge**: a rework round (the supervisor was promised the next review, and asked for more than `done_when` says), a task that was reopened or was ever accepted or cancelled before, and a task the supervisor reviewed while the judge was deciding. `live` counts only when the judge itself says so, never on the Agent's delivery line alone; checks that do not come one per criterion with each criterion copied in its place count as not met.
+- When the independent review (`supervise_autoreview.go`) starts for a task, it runs first and its result waits for `task_review`; the judge's check does not close it.
 
 ## Close Agents for completed tasks
 

@@ -147,8 +147,8 @@ func TestJudgeAsksForChecksOnlyWhenSampling(t *testing.T) {
 		t.Fatal("the judge was not asked for the checks")
 	}
 	ac := c.AutoCheck
-	if ac == nil || ac.Delivery != deliveryLive || len(ac.Checks) != 2 || ac.Checks[0].Criterion != "PR merged" || !ac.Checks[0].Met ||
-		ac.Checks[1].Met || ac.passed() {
+	if ac == nil || ac.Delivery != deliveryLive || len(ac.Checks) != 2 || ac.Checks[0].Criterion != "PR merged" || ac.Checks[0].Met ||
+		ac.Checks[1].Met || ac.passed() { // one check for two criteria: none counts
 		t.Fatalf("auto check %+v", ac)
 	}
 	if c.Delivery != nil || c.Verdict != verdictDone {
@@ -195,4 +195,69 @@ func TestReviewSamplePercentSetting(t *testing.T) {
 
 func TestGoldenTaskDoneChecks(t *testing.T) {
 	golden(t, "task_done.checks", prompts.RenderTaskDone(prompts.TaskDone{Owner: "User", Checks: true}))
+}
+
+// A rework round waits for the review the supervisor was promised, however well it passes the judge's check.
+func TestJudgeLeavesAReworkRoundToTheSupervisor(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	sampleAt(t, s, 0)
+	finishTurn(t, s, f, judgeWithChecks("live", true, false))
+	waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "rework", "note": "截图没贴，另外把按钮文案改短"})
+	finishTurn(t, s, f, judgeWithChecks("live", true, true))
+	waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	if todoNow(s, todo.ID).DoneAt != nil {
+		t.Fatal("the judge closed a rework round")
+	}
+}
+
+// A task reopened after the judge closed it is not closed by the judge again: it was reopened for a reason.
+func TestJudgeLeavesAReopenedTaskToTheSupervisor(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	sampleAt(t, s, 0)
+	finishTurn(t, s, f, judgeWithChecks("live", true, true))
+	waitFor(t, "closed by the judge", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+	if err := s.reopenTodo(context.Background(), todo.ID); err != nil {
+		t.Fatal(err)
+	}
+	finishTurn(t, s, f, judgeWithChecks("live", true, true))
+	waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	if todoNow(s, todo.ID).DoneAt != nil {
+		t.Fatal("the judge closed a reopened task again")
+	}
+}
+
+// Checks that are not one per criterion, each copied in its place, count as not met.
+func TestMisalignedChecksDoNotPass(t *testing.T) {
+	criteria := []string{"PR merged", "deployed"}
+	ok := func(c string) autoCheckItem {
+		return autoCheckItem{ReviewCheck: ReviewCheck{Criterion: c, Met: true, Evidence: "e"}, Checkable: true}
+	}
+	for name, got := range map[string][]autoCheckItem{
+		"one more":  {ok("something else"), ok("PR merged"), ok("deployed")},
+		"one less":  {ok("PR merged")},
+		"swapped":   {ok("deployed"), ok("PR merged")},
+		"rephrased": {ok("the PR is merged"), ok("deployed")},
+	} {
+		if autoCheckOf(criteria, got, deliveryLive).passed() {
+			t.Errorf("%s: passed", name)
+		}
+	}
+	if !autoCheckOf(criteria, []autoCheckItem{ok(" PR  merged"), ok("deployed")}, deliveryLive).passed() {
+		t.Error("the same criteria, spacing aside, do not pass")
+	}
+}
+
+// Live counts only on the judge's own word: the agent's delivery line alone does not let it close.
+func TestAutoCheckLiveIsTheJudgesOwn(t *testing.T) {
+	in := taskDoneInput{Title: "t", Criteria: []string{"PR merged"}, Checks: true,
+		Replies: []prompts.TaskDoneReply{doneReply("done\n交付：已上线并实测；卡点：无；谁来解：无")}}
+	m := &cannedJSON{answer: `{"verdict":"done","reason":"ok","checks":[{"criterion":"PR merged","checkable":true,"met":true,"evidence":"e"}]}`}
+	c, err := judgeTaskDoneWith(context.Background(), m, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AutoCheck.passed() {
+		t.Fatalf("passed on the agent's line alone: %+v", c.AutoCheck)
+	}
 }

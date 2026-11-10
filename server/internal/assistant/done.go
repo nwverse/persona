@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -314,6 +315,9 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 	c.WouldClose = c.Verdict == verdictDone
 	if in.Checks {
 		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
+		if !strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryLive) {
+			d.State = cmp.Or(strings.ToLower(strings.TrimSpace(out.Delivery)), deliveryNone) // live only on the judge's own word, never the agent's line alone
+		}
 		c.AutoCheck = autoCheckOf(in.Criteria, out.Checks, d.State)
 	}
 	if in.Delivery {
