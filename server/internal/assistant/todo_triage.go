@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -306,8 +307,15 @@ func triageDueBy(t Todo, loc *time.Location) (time.Time, bool) {
 	return day.AddDate(0, 0, 1).Add(-time.Second), true
 }
 
-// triageShelvable: a task (an agent was linked, or a conversation handed it out) with no due date ahead.
+// triageShelvable: a task (an agent was linked, or a conversation handed it out) with no due date ahead. An open concern
+// never is (docs/assistant/todos.md "Concerns", #3582): it waits for the secretary's report, however long, and sits in
+// Working while an agent of it runs, else in Other open (triageTodo keeps it out of Done too). The clients get the same
+// rule with W1 / I1 / A1, and the shared fixtures follow then; so does whether a concern may share a row with a related
+// to-do (triageTodos still merges it like any to-do).
 func triageShelvable(t Todo, now time.Time, loc *time.Location) bool {
+	if t.Kind == db.KindConcern {
+		return false
+	}
 	if due, ok := triageDueBy(t, loc); ok && !due.Before(now) {
 		return false
 	}
@@ -324,11 +332,16 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 	ask := triageOpenAsk(t.Ask)
 	at := func(section, rule string) todoTriage { return todoTriage{Section: section, Rule: rule, Last: last} }
 	review := triageReviewState(t.Todo)
+	// An open concern closes only with the secretary's report: nothing else files it with the finished ones.
+	concern := t.Kind == db.KindConcern && t.DoneAt == nil
 
 	switch {
 	case status == "failed":
 		if now.Sub(last) < triageShelveAfter {
 			return at(triageWaiting, ruleFailedStart)
+		}
+		if concern {
+			return at(triageOther, ruleRest)
 		}
 		return at(triageDone, ruleFailedStart)
 	case status == "needs_you" || status == "interrupted":
@@ -339,9 +352,9 @@ func triageTodo(t listedTodo, look triageLookup, now, restoredAt time.Time, loc 
 		return at(triageWorking, ruleAgentRunning)
 	case t.DoneAt != nil:
 		return at(cond(recent(*t.DoneAt), triageJustDone, triageDone), ruleClosed)
-	case acceptanceStands(t.Todo):
+	case !concern && acceptanceStands(t.Todo):
 		return at(cond(recent(triageLatestReview(t.Supervision).At), triageJustDone, triageDone), ruleAccepted)
-	case t.Delivery != nil && t.Delivery.State == deliveryLive:
+	case !concern && t.Delivery != nil && t.Delivery.State == deliveryLive:
 		return at(cond(recent(cmp.Or(t.Delivery.At, last)), triageJustDone, triageDone), ruleDeployed)
 	case status == "unread" || review == reviewPending || ask != nil && (ask.Outcome == "" || ask.Outcome == outcomeDone):
 		return at(triageJustDone, ruleFinishedUnseen)
