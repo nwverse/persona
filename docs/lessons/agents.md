@@ -614,29 +614,28 @@ Closing is not durable merely because the card vanished: persist the interaction
   a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed later, in a prompt. Control
   characters in that text are keys to the terminal, and the program in it acts on them as on the user's own, which can
   change what the agent may do.
-- So the hub refuses terminal control characters (Unicode `Cc` but newline, carriage return and tab) from callers whose
-  grant is narrower than the user's, extension tokens, on the routes that type a caller's text into a terminal or keep
-  it for a prompt (`server/internal/hub/terminal_controls.go`). Check kept text as it comes in, while the caller is
-  still known. A new route that types or keeps a caller's text needs the same wrapper.
-- Newline, carriage return and tab pass because those routes deliver text as text, where a line break stays a line
-  break. A path that types text as raw keys would make them Enter and Tab, and needs a stricter rule.
-- Check every string of the body as JSON decodes it, keys included, not one named field: Go's `encoding/json` matches
-  a struct's field names without regard to case, so a check of `p["text"]` misses a body that spells it `"Text"`, and
-  a handler that decodes only the first value of a body leaves the rest to whatever reads it next. Check the decoded
-  path and query too: a route can keep text from them (a knowledge-base entry is named from its id).
-- The hub's refusal covers only extension tokens; channel messages and the apps reach a prompt without one. So the
-  computer also makes those characters inert in every text it prompts an agent with (`inertControls`,
-  `server/internal/node/hosts.go`): an ESC becomes `<ESC>` and any other becomes `<U+XXXX>`, for every host and
-  caller. That covers each paste (`hostPrompt`, the fallback paste, Codex answers) and a compatible CLI's first
-  message, which is shell-quoted onto a command line that may be typed into a shell: there `^U` erases the line,
-  quotes or not, and a carriage return then runs what follows. A shell's line editor acts on more than controls
-  inside quotes: a tab completes the quoted word, closes the quote and leaves the rest to the shell (bash, zsh), and
-  csh ends the command at a line break. So that first message also gets its tabs as spaces, and its line breaks as
-  spaces unless a sh-family shell sources it from a start file (`typedArg`, `server/internal/node/start_agent.go`):
-  Orca types the line itself and does not say which shell it opened, so the user's login shell is only a guess there.
-  Match what the agent shows or its transcript records against that inert text, not the text as sent; a runtime is
-  sent the text itself, so the echo tie accepts either.
-  Keys sent as keys (`session.keys`) are the one way left to press a control key, on purpose.
+- So the computer makes those characters inert in every text it prompts an agent with (`inertControls`,
+  `server/internal/node/hosts.go`): an ESC becomes `<ESC>` and any other (Unicode `Cc` but newline, carriage return
+  and tab) becomes `<U+XXXX>`, for every host and caller, whatever route the text came by. That covers each paste
+  (`hostPrompt`, the fallback paste, Codex answers) and a compatible CLI's first message, which is shell-quoted onto a
+  command line that may be typed into a shell: there `^U` erases the line, quotes or not, and a carriage return then
+  runs what follows. A shell's line editor acts on more than controls inside quotes: a tab completes the quoted word,
+  closes the quote and leaves the rest to the shell (bash, zsh), and csh ends the command at a line break. So that
+  first message also gets its tabs as spaces, and its line breaks as spaces unless a sh-family shell sources it from a
+  start file (`typedArg`, `server/internal/node/start_agent.go`): Orca types the line itself and does not say which
+  shell it opened, so the user's login shell is only a guess there. Match what the agent shows or its transcript
+  records against that inert text, not the text as sent; a runtime is sent the text itself, so the echo tie accepts
+  either.
+- Make them inert where text goes into the terminal, not where it comes in. The hub used to refuse them from extension
+  tokens route by route (#2819): every route that typed or kept a caller's text needed the check, it missed the
+  channels and the apps, and checking a body meant reading every string as JSON decodes it, keys included (Go's
+  `encoding/json` matches field names without regard to case), every value of it, and the path and query too. The
+  computer's one place covers them all, so the refusal went.
+- Newline, carriage return and tab pass because a paste delivers text as text, where a line break stays a line break.
+  A path that types text as raw keys would make them Enter and Tab, and needs a stricter rule.
+- Keys sent as keys (`session.keys`) are the one way left to press a control key, on purpose. An extension reaches
+  them only by answering a terminal card, which needs `agents.permission_mode` in a chat it opened, and that answer
+  can press any key anyway.
 
 ## Profile acceptance must include launcher defaults
 
