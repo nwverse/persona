@@ -476,6 +476,7 @@ nonisolated enum Theme {
     /// Small / Standard / Large and the system's text size (up to 1.6 ×, `Theme.sizeScale`); the lines stay as they are, in a
     /// plain `.frame`. Nothing on a page writes a size as a number (`TokenRatchetTests`).
     enum Size {
+        static let nonvisualProbe: CGFloat = 0
         // Lines, rules and bars: do not scale.
         static let hairline: CGFloat = 0.5
         /// The width of the small window's source layer (VNC's picture in picture, #1839): a normal size, behind the
