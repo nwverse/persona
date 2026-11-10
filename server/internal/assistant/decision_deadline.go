@@ -32,6 +32,10 @@ const (
 // decisionSweepEvery is how often deadlines are looked at (acceptLoop). A variable for the tests.
 var decisionSweepEvery = time.Minute
 
+// askInlineSlack is how early before its deadline an ask_user card may end and still be answered with its default by
+// the tool itself (the card is set to end at the deadline). A variable for the tests.
+var askInlineSlack = 5 * time.Second
+
 // parseDeadline reads a tool's deadline: a duration from now ("2h", "90m") or an RFC 3339 time. "" is none.
 func parseDeadline(raw string, now time.Time) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
@@ -80,6 +84,18 @@ func (s *Service) sweepDecisionDeadlines(now time.Time) {
 	s.sweepAskDeadlines(now)
 }
 
+// goSweepDecisionDeadlines runs sweepDecisionDeadlines off acceptLoop (a send to an agent being resumed can take
+// minutes), one sweep at a time: a tick that finds one still running is skipped.
+func (s *Service) goSweepDecisionDeadlines(now time.Time) {
+	if !s.deadlineSweeping.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer s.deadlineSweeping.Store(false)
+		s.sweepDecisionDeadlines(now)
+	}()
+}
+
 // taskDeadlineDue: decision a waits past its deadline and was not handled yet.
 func taskDeadlineDue(a *acceptAsk, now time.Time) bool {
 	return a != nil && decideAsk(a) && !a.AskedAt.IsZero() && a.AcceptedAt.IsZero() && !a.Deadline.IsZero() && a.DueAt.IsZero() &&
@@ -114,7 +130,11 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 			took, err := s.acceptTryAs(ctx, id, "", true)
 			switch {
 			case err != nil:
-				s.logf("task %s: deadline passed, the recommendation was not taken: %v (tried again)", id, err)
+				// Not retried (acceptTryAs keeps the deadline handled): the owner decides instead.
+				s.logf("task %s: deadline passed, the recommendation did not reach the agent: %v; the owner is reminded", id, err)
+				if cur, ok := s.askCopy(id); ok {
+					s.remindOverdue(ctx, id, cur)
+				}
 			case took:
 				s.logf("task %s: deadline passed unanswered: recommendation taken by default", id)
 			}
@@ -137,6 +157,18 @@ func (s *Service) sweepTaskDeadlines(now time.Time) {
 		b.mu.Unlock()
 		s.logf("task %s: deadline passed on a decision that cannot be undone: reminded, not taken", id)
 		s.remindOverdue(ctx, id, cp)
+	}
+}
+
+// deadlineAnswered marks the deadline of task id's decision asked at handled, because the owner answered it with a
+// choice of their own: no default is taken at the deadline, whether or not that answer reaches the agent.
+func (s *Service) deadlineAnswered(ctx context.Context, id string, asked time.Time) {
+	b := &s.accept
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if a := b.asks[id]; a != nil && a.AskedAt.Equal(asked) && !a.Deadline.IsZero() && a.DueAt.IsZero() {
+		a.DueAt = time.Now().UTC()
+		s.saveAcceptLocked(ctx)
 	}
 }
 
@@ -225,10 +257,13 @@ func askDeadlineOf(ix proto.Interaction) (askDeadline, bool) {
 	return d, true
 }
 
-// askTodoDeadlineDue: question a's to-do is past its deadline, unanswered and not handled yet.
+// askTodoDeadlineDue: question a's to-do is past its deadline, unanswered and not handled yet, or its default was
+// being sent when the assistant stopped (ByDefault, not answered, no claim held any more).
 func askTodoDeadlineDue(a askTodo, now time.Time) bool {
-	return !a.Deadline.IsZero() && a.DueAt.IsZero() && a.AnsweredAt.IsZero() && a.DroppedAt.IsZero() && !a.held(now) &&
-		!now.Before(a.Deadline)
+	if a.Deadline.IsZero() || !a.AnsweredAt.IsZero() || !a.DroppedAt.IsZero() || a.held(now) || now.Before(a.Deadline) {
+		return false
+	}
+	return a.DueAt.IsZero() || a.ByDefault
 }
 
 // sweepAskDeadlines handles the questions' to-dos past their deadline (askTodoDue): a question whose deadline came
@@ -244,7 +279,8 @@ func (s *Service) sweepAskDeadlines(now time.Time) {
 	}
 	var due []string
 	for _, a := range b.list {
-		if askTodoDeadlineDue(a, now) {
+		// A sweep's period after the deadline: until then ask_user, if it still waits, answers it itself (askExpiredResult).
+		if askTodoDeadlineDue(a, now) && !now.Before(a.Deadline.Add(decisionSweepEvery)) {
 			due = append(due, a.TodoID)
 		}
 	}
@@ -274,7 +310,9 @@ func (s *Service) askTodoDue(ctx context.Context, id string, inline bool, now ti
 		return nil
 	}
 	prev := b.list[i]
-	b.list[i].DueAt = now.UTC()
+	if prev.DueAt.IsZero() {
+		b.list[i].DueAt = now.UTC()
+	}
 	if prev.Reversible {
 		b.list[i].ClaimedAt, b.list[i].ByDefault = now.UTC(), true // claimed: an answer of the owner's now is not sent too
 	}
@@ -303,37 +341,55 @@ func (s *Service) askTodoDue(ctx context.Context, id string, inline bool, now ti
 			choices = append(choices, askChoice{Question: q, Choice: a.Recommends[j], Reason: reason})
 		}
 	}
-	if st := s.todoDB(); st != nil {
-		for _, c := range choices {
-			at := decisionNow()
-			// The hub's call at the deadline, not the owner's (an agent's source): not handed to askTodoDecided again.
-			if ok, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id, Question: decisionText(c.Question),
-				Choice: decisionText(c.Choice), Reason: reason, Source: db.DecisionAgent, CreatedAt: at}); err != nil {
-				s.logf("ask_user to-do %s: default decision: %v", id, err)
-			} else if ok {
-				s.decisionsChanged(ctx, id, at)
+	// The decisions are written once the default went (inline: it goes as the tool's answer), so a send that fails or
+	// is cut off leaves none behind.
+	record := func(ctx context.Context) {
+		if st := s.todoDB(); st != nil {
+			for _, c := range choices {
+				at := decisionNow()
+				// The hub's call at the deadline, not the owner's (an agent's source): not handed to askTodoDecided again.
+				if ok, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id, Question: decisionText(c.Question),
+					Choice: decisionText(c.Choice), Reason: reason, Source: db.DecisionAgent, CreatedAt: at}); err != nil {
+					s.logf("ask_user to-do %s: default decision: %v", id, err)
+				} else if ok {
+					s.decisionsChanged(ctx, id, at)
+				}
 			}
 		}
-	}
-	if inline {
 		s.settleAskClaim(ctx, id, true)
 		s.closeAskTodo(ctx, id)
 		s.logf("ask_user to-do %s: deadline passed unanswered: recommended options taken by default", id)
+	}
+	if inline {
+		record(ctx)
 		return choices
 	}
 	go func() { // the send may wait on the node
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		if err := s.tellAsker(ctx, a, cmp.Or(t.Title, id), renderAskDefault(a, s.location(ctx), choices)); err != nil {
-			s.logf("ask_user to-do %s: the default goes nowhere: %v", id, err)
-			s.settleAskClaim(ctx, id, false)
+			// Not taken after all, and not tried again: the owner decides instead.
+			s.logf("ask_user to-do %s: the default goes nowhere: %v; the owner is reminded", id, err)
+			s.askDefaultFailed(ctx, id)
+			s.push(ctx, Notification{Subtitle: "Persona", DeviceID: s.settings(ctx).MachineID,
+				Title: i18n.T(l, "assistant-ask_todo.overdue_title"), Body: clip(oneLine(t.Title), 120)})
 			return
 		}
-		s.settleAskClaim(ctx, id, true)
-		s.closeAskTodo(ctx, id)
-		s.logf("ask_user to-do %s: deadline passed unanswered: recommended options taken by default", id)
+		record(ctx)
 	}()
 	return choices
+}
+
+// askDefaultFailed: question to-do id's default could not be sent: it is no default any more (its deadline stays
+// handled) and the claim is given back, so the owner's own decision still goes.
+func (s *Service) askDefaultFailed(ctx context.Context, id string) {
+	b := &s.askTodos
+	b.mu.Lock()
+	if i := slices.IndexFunc(b.list, func(a askTodo) bool { return a.TodoID == id }); i >= 0 {
+		b.list[i].ByDefault = false
+	}
+	b.mu.Unlock()
+	s.settleAskClaim(ctx, id, false)
 }
 
 // askExpiredResult is ask_user's answer once its card expired unanswered and became question to-do t. Past a reversible
@@ -346,7 +402,7 @@ func (s *Service) askExpiredResult(ctx context.Context, ix proto.Interaction, t 
 		return prompts.RenderQuestionMovedToTodo(moved)
 	}
 	now, loc := time.Now(), s.location(ctx)
-	if now.Add(decisionSweepEvery).Before(d.At) { // the card's wait ended first: the sweep takes it at the deadline
+	if now.Add(askInlineSlack).Before(d.At) { // the card's wait ended first: the sweep takes it at the deadline
 		if d.Reversible {
 			moved.DefaultAt = d.At.In(loc).Format("01-02 15:04")
 		}

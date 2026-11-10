@@ -608,7 +608,9 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		return "", fmt.Errorf("questions are required")
 	}
 	var da askDeadlineArgs
-	_ = json.Unmarshal(args, &da)
+	if err := json.Unmarshal(args, &da); err != nil {
+		return "", fmt.Errorf("arguments: %v", err) // a deadline or reversible of the wrong type is no deadline to ignore
+	}
 	now := time.Now()
 	deadline, err := readAskDeadline(da, now)
 	if err != nil {

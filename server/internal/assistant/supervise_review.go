@@ -185,7 +185,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		case deadline.IsZero():
 		case *a.Reversible:
 			pushed = fmt.Sprintf(" If the user has not answered by %s, the hub takes the recommendation by default (it goes to the agent and is "+
-				"recorded on the to-do as taken at the deadline).", deadline.In(s.location(ctx)).Format(toolTimeLayout))
+				"recorded on the to-do as taken at the deadline). Their answer on the card, the push or the to-do ends that; if they answer you "+
+				"anywhere else (in this chat), review the task with their decision (task_review) before then, or the recommendation is still taken.",
+				deadline.In(s.location(ctx)).Format(toolTimeLayout))
 		default:
 			pushed = fmt.Sprintf(" It cannot be undone: at the deadline (%s) the user is only reminded again, nothing is taken.",
 				deadline.In(s.location(ctx)).Format(toolTimeLayout))

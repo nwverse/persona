@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -72,8 +71,11 @@ func (s *Service) pushDecision(ctx context.Context, id string) bool {
 	l := s.lang(ctx)
 	n := Notification{ID: "ntf_" + randomHex(8), Kind: assistantwire.NotifyDecide, Subtitle: "Persona", DeviceID: here, SessionID: t.Origin,
 		Title: i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)}),
-		Body:  strings.TrimSpace(verdictText(l, &a) + "\n" + recommendText(l, &a) + "\n" + deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now())),
+		Body:  verdictText(l, &a) + "\n" + recommendText(l, &a),
 		Todo:  &assistantwire.NotifyTodo{ID: id, AskedAt: a.AskedAt, Recommend: a.Recommend}}
+	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" {
+		n.Body += "\n" + d
+	}
 	if err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 		s.logf("task %s: decision push: %v", id, err)
 		return false

@@ -402,6 +402,9 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	case ask.Conclusion:
 		msg = i18n.T(l, "assistant-reports.verdict_to_agent", i18n.Args{"feedback": text})
 	}
+	if decideAsk(&ask) {
+		s.deadlineAnswered(ctx, id, ask.AskedAt) // the owner answered: no default at its deadline, even if the send fails
+	}
 	if st := s.todoDB(); st != nil {
 		at := decisionNow()
 		if ok, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
@@ -499,7 +502,9 @@ func (s *Service) acceptTryAs(ctx context.Context, id, card string, byDefault bo
 			// Not taken after all: the owner can take it again, and is told why it did not go.
 			b.mu.Lock()
 			if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
-				a.AcceptedAt, a.ByDefault, a.DueAt = time.Time{}, false, time.Time{}
+				// A default that did not go is not tried again (it may have reached the agent after all): its deadline stays
+				// handled (DueAt) and the sweep reminds the owner instead.
+				a.AcceptedAt, a.ByDefault = time.Time{}, false
 				s.saveAcceptLocked(ctx)
 			}
 			b.mu.Unlock()
@@ -535,7 +540,7 @@ func (s *Service) acceptLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-due.C:
-			s.sweepDecisionDeadlines(time.Now())
+			s.goSweepDecisionDeadlines(time.Now())
 		case <-tick.C:
 			now := time.Now()
 			s.retryAcceptance(now)

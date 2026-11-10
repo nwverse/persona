@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -259,6 +261,9 @@ func (e *askTodoEnv) expireWith(args string) (proto.Interaction, string) {
 // A reversible question whose card waits until its deadline answers itself with the recommended option when it ends
 // unanswered: the tool returns it, saying it was taken by default; its to-do is closed, and nothing else is told.
 func TestAskUserTakesTheDefaultAtItsDeadline(t *testing.T) {
+	old := askInlineSlack
+	askInlineSlack = 2 * time.Minute // the card is expired at once, a minute before its 1m deadline
+	t.Cleanup(func() { askInlineSlack = old })
 	e := newAskTodoEnv(t, nil)
 	ix, text := e.expireWith(strings.Replace(strings.Replace(askDeadlineArgsJSON, "%s", "1m", 1), "%s", "true", 1))
 	if d := ix.ExpiresAt.Sub(ix.CreatedAt); d > time.Minute+time.Second {
@@ -341,6 +346,9 @@ func TestAskTodoDefaultIsADecision(t *testing.T) {
 // A question that cannot be undone is never answered by default: past its deadline it stays an open to-do, the tool
 // says nothing was taken, and the owner is pushed one reminder.
 func TestIrreversibleAskUserIsOnlyReminded(t *testing.T) {
+	old := askInlineSlack
+	askInlineSlack = 2 * time.Minute // the card is expired at once, a minute before its 1m deadline
+	t.Cleanup(func() { askInlineSlack = old })
 	e := newAskTodoEnv(t, nil)
 	pushes := func() int { e.f.mu.Lock(); defer e.f.mu.Unlock(); return len(e.f.pushes) }
 	before := pushes()
@@ -410,4 +418,115 @@ func TestGoldenDecisionDeadline(t *testing.T) {
 		TodoID: "todo_ask_0a1b2c", Choices: []prompts.AskTodoChoice{{Question: "Merge the release PR now?", Choice: "Merge"}}}))
 	golden(t, "ask_todo.answer_default", renderAskDefault(askTodo{TodoID: "todo_ask_0a1b2c", Questions: []string{"Merge the release PR now?"},
 		AskedAt: at, Deadline: at.Add(6 * time.Hour)}, time.UTC, []askChoice{{Question: "Merge the release PR now?", Choice: "Merge"}}))
+}
+
+// The owner answering the decision's card with a choice of their own ends its deadline, even when that answer did not
+// reach the agent: the recommendation they turned down is never taken by default afterwards.
+func TestOwnersOwnAnswerEndsTheDeadline(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("send fails %v", fail), func(t *testing.T) {
+			s, f, todo, _, _ := conclusionService(t, false)
+			waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+			reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%",
+				"deadline": "2h", "reversible": true})
+			a := askOf(s, todo.ID)
+			if fail {
+				f.mu.Lock()
+				f.failSend = errors.New("node down")
+				f.mu.Unlock()
+			}
+			if !s.acceptReply(context.Background(), "om_mine", "直接全量", false, a.MessageID) {
+				t.Fatal("the reply was not taken as the decision's")
+			}
+			f.mu.Lock()
+			f.failSend = nil
+			f.mu.Unlock()
+			sent := len(sentToAgent(f))
+			s.accept.mu.Lock()
+			if cur := s.accept.asks[todo.ID]; cur != nil {
+				cur.Deadline = time.Now().Add(-time.Minute)
+			}
+			s.accept.mu.Unlock()
+			s.sweepDecisionDeadlines(time.Now())
+			for _, m := range sentToAgent(f)[sent:] {
+				if strings.Contains(m, "先灰度 10%") {
+					t.Fatalf("the recommendation the owner turned down was taken: %q", m)
+				}
+			}
+		})
+	}
+}
+
+// A default that does not reach the agent is not retried every minute (it may have reached it after all): the owner is
+// reminded instead and can still take it.
+func TestFailedDefaultRemindsInsteadOfRetrying(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "先灰度还是直接全量", "recommend": "先灰度 10%",
+		"deadline": "2h", "reversible": true})
+	pastDeadline(t, s, todo.ID)
+	pushes := deadlinePushes(f, todo.ID)
+	f.mu.Lock()
+	f.failSend = errors.New("node down")
+	f.mu.Unlock()
+	s.sweepDecisionDeadlines(time.Now())
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	a := askOf(s, todo.ID)
+	if !a.AcceptedAt.IsZero() || a.ByDefault || a.DueAt.IsZero() {
+		t.Fatalf("ask after a failed default: %+v", a)
+	}
+	if n := deadlinePushes(f, todo.ID); n != pushes+1 {
+		t.Fatalf("%d reminders, want 1", n-pushes)
+	}
+	sent := len(sentToAgent(f))
+	s.sweepDecisionDeadlines(time.Now().Add(time.Hour))
+	if got := sentToAgent(f)[sent:]; len(got) != 0 {
+		t.Fatalf("retried: %q", got)
+	}
+}
+
+// A question's default cut off before it went (the assistant stopped after claiming it) goes on the next sweep.
+func TestInterruptedAskDefaultResumes(t *testing.T) {
+	e := newAskTodoEnv(t, nil)
+	e.expireWith(strings.Replace(strings.Replace(askDeadlineArgsJSON, "%s", "6h", 1), "%s", "true", 1))
+	todo := e.onlyAskTodo()
+	b := &e.s.askTodos
+	b.mu.Lock()
+	for i := range b.list {
+		if b.list[i].TodoID == todo.ID {
+			b.list[i].DueAt, b.list[i].ByDefault = time.Now(), true // claimed long ago, never sent
+		}
+	}
+	b.mu.Unlock()
+	e.s.sweepDecisionDeadlines(time.Now().Add(7 * time.Hour))
+	waitFor(t, "the to-do closed", func() bool { cur := e.get(todo.ID); return cur != nil && cur.DoneAt != nil })
+	if got := e.told("c1x1x1"); len(got) != 1 || !strings.Contains(got[0], "按你推荐的默认选项") {
+		t.Fatalf("told %q", got)
+	}
+}
+
+// A deadline or reversible of the wrong type is refused, not taken as no deadline.
+func TestAskUserDeadlineOfTheWrongType(t *testing.T) {
+	e := newAskTodoEnv(t, nil)
+	args := `{"deadline":3600,"reversible":true,"questions":[{"question":"Q","recommend":"A","options":[{"label":"A"},{"label":"B"}]}]}`
+	if _, err := e.s.toolAskUser(context.Background(), "server", "c1x1x1", json.RawMessage(args)); err == nil {
+		t.Fatal("a numeric deadline was accepted")
+	}
+}
+
+// Without a deadline the question's card, its arguments and its options are exactly what was asked.
+func TestAskUserWithoutDeadlineCardUnchanged(t *testing.T) {
+	e := newAskTodoEnv(t, nil)
+	ix, _ := e.expire()
+	if got := ix.ExpiresAt.Sub(ix.CreatedAt); got != askUserWait {
+		t.Fatalf("card waits %v, want %v", got, askUserWait)
+	}
+	if string(ix.ToolInput) != askTodoArgs {
+		t.Fatalf("arguments rewritten: %s", ix.ToolInput)
+	}
+	if ix.Questions[0].Options[0].Description != "CI is green" || ix.Questions[0].Options[1].Description != "until the review is in" {
+		t.Fatalf("options %+v", ix.Questions[0].Options)
+	}
 }
