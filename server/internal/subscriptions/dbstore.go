@@ -19,6 +19,8 @@ type DB interface {
 	SubscriptionSeen(ctx context.Context, id string, uids []string) (map[string]bool, error)
 	CommitSubscriptionRun(ctx context.Context, id string, merge func(data []byte, revision int64) ([]byte, error),
 		seen []db.SubscriptionSeenRow, items []db.SubscriptionItemRow, now time.Time) error
+	SubscriptionItems(ctx context.Context, id string, q db.SubscriptionItemsQuery) ([]db.SubscriptionItemRow, error)
+	PruneSubscriptionItems(ctx context.Context, id string, before time.Time) error
 }
 
 // DBStore is the Store in the manager's database.
@@ -42,12 +44,15 @@ type keptRun struct {
 	SnapshotHash    string     `json:"snapshot_hash,omitempty"`
 	RunState        string     `json:"run_state,omitempty"`
 	Runs            []Run      `json:"runs,omitempty"`
+	InboxFrom       *time.Time `json:"inbox_from,omitempty"`
+	InboxCatchup    *time.Time `json:"inbox_catchup,omitempty"`
+	KBFrom          *time.Time `json:"kb_from,omitempty"`
 }
 
 func encode(s Subscription) ([]byte, error) {
 	return json.Marshal(kept{Subscription: s, Keep: keptRun{Tool: s.Tool, ToolFingerprint: s.ToolFingerprint, SourceMin: s.SourceMin,
 		MaxCallsPerHour: s.MaxCallsPerHour, SinceAt: s.SinceAt, ShapeMisses: s.ShapeMisses, SnapshotHash: s.SnapshotHash,
-		RunState: s.RunState, Runs: s.Runs}})
+		RunState: s.RunState, Runs: s.Runs, InboxFrom: s.InboxFrom, InboxCatchup: s.InboxCatchup, KBFrom: s.KBFrom}})
 }
 
 func decode(data []byte) (Subscription, error) {
@@ -58,6 +63,7 @@ func decode(data []byte) (Subscription, error) {
 	s := k.Subscription
 	s.Tool, s.ToolFingerprint, s.SourceMin, s.MaxCallsPerHour = k.Keep.Tool, k.Keep.ToolFingerprint, k.Keep.SourceMin, k.Keep.MaxCallsPerHour
 	s.SinceAt, s.ShapeMisses, s.SnapshotHash, s.RunState, s.Runs = k.Keep.SinceAt, k.Keep.ShapeMisses, k.Keep.SnapshotHash, k.Keep.RunState, k.Keep.Runs
+	s.InboxFrom, s.InboxCatchup, s.KBFrom = k.Keep.InboxFrom, k.Keep.InboxCatchup, k.Keep.KBFrom
 	return s, nil
 }
 
@@ -154,4 +160,25 @@ func (d *DBStore) CommitRun(ctx context.Context, c RunCommit) error {
 		applyRun(&cur, c.Sub, revision == c.Revision)
 		return encode(cur)
 	}, seen, items, c.Now)
+}
+
+func (d *DBStore) HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error) {
+	rows, err := d.db.SubscriptionItems(ctx, id, db.SubscriptionItemsQuery{After: q.After, Since: q.Since, Limit: q.Limit, Newest: q.Newest})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Held, 0, len(rows))
+	for _, r := range rows {
+		var it Item
+		if err := json.Unmarshal(r.Data, &it); err != nil {
+			continue // a row this build cannot read is left out
+		}
+		it.SubscriptionID, it.UID = id, r.UID
+		out = append(out, Held{Seq: r.Seq, Stored: r.CreatedAt, Item: it})
+	}
+	return out, nil
+}
+
+func (d *DBStore) PruneItems(ctx context.Context, id string, before time.Time) error {
+	return d.db.PruneSubscriptionItems(ctx, id, before)
 }

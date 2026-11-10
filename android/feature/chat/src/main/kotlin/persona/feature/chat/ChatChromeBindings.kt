@@ -46,6 +46,7 @@ data class ChatChromeBindings(
     val assistantManagement: persona.core.contracts.api.AssistantManagement? = null,
     val inboxTrays: persona.core.contracts.api.AssistantInboxTrays? = null,
     val inboxScope: String? = null,
+    val agentShares: (() -> persona.core.contracts.api.AgentShares)? = null,
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

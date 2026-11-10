@@ -594,6 +594,7 @@ with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / 
   **Push** asks first in every client (#1883, like the Git panel's Push; Pull and Fetch don't change the remote and run at once). It requires branch/upstream and pending commits (otherwise the `nothing_to_push` outcome), explicit `refs/heads/<branch>:<upstream branch>` without `+`, preventing force push even if `remote.<name>.push = +…` is configured. A remote that rejects a branch behind it is `push_rejected` (pull first; git's words in `detail`).
   All timeout after 60 seconds, don't prompt for passwords (`GIT_TERMINAL_PROMPT=0`, askpass `false`), retain only last 2 KB output.
 - **iOS / Mac** (#3098): Agent-row long-press menus add Split, Git, Close Tab; space ⋯ adds Run Agent Here…, Git, same routes (`docs/apple/ios.md`, "Information architecture"). No standalone terminal; shell pane chosen in Run Agent Here… sheet.
+- **Apple errors** (#3586): an uncoded node refusal reaches the hub as 502 `internal`. `APIClient.nodeAction` marks that call so the existing sheet / toast keeps the node's actionable reason; other `internal` 5xx responses stay generic instead of exposing private exceptions.
 - **Measured** (herdr 0.9.5, local temporary tab): `go test -tags herdrlive -run TestLiveMenuActions ./internal/herdr/` (`HERDR_LIVE_WORKSPACE=<workspace id>`) creates/renames tab, splits twice, closes pane/tab, matching fake herdr node tests.
 - **Tests**: `node/panes_actions_test.go` (fake herdr close/rename/split calls, rejection doesn't touch herdr, run in shell pane, rejection/failure preserves pane; real Git fetch/pull/push, force-push config ineffective, reject nonrepo/dirty/detached HEAD),
   `hub/panes_test.go` (every route denies `answer`/extension tokens before node receives it, forwards only named fields, absent from `answer` allowlist, route scopes `-`).
@@ -734,6 +735,7 @@ hub → browser: `herdr_state {id, state: "open", cols, rows}`, `herdr_data {id,
 - **Inactive**: retained but hidden terminals (`inert`) and fading-out views release computer clients (don't occupy four slots or compete for layout), reconnect when shown.
 - **Automatic Single pane fallback**: view ends **before ever connecting** (`unsupported`, `forbidden`, `too_many`, immediate client exit… except offline). Show "Full view couldn't open: reason. Switched to Single pane" and switch;
   remember machine unsupported for this page's lifetime, other terminals on it use Single pane immediately (manually selecting Full view retries).
+- **Terminals of other hosts** (#2449): Full view is herdr's own client, so a terminal of any other host (a botmux session, in botmux's own tmux) is never in it. Its panel opens as Single pane with no switch (`inHerdrClient`, from the session's `pane_id` or the `pane:` address).
 - **First-use hint**: once on first connection: "Full view is herdr's own client. Operations here lay out the computer's panes at this panel's size; operating on the computer changes them back." (`persona.terminal.fullHint`).
 
 ### Two clients on one session

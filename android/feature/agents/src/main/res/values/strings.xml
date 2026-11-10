@@ -153,13 +153,12 @@
     <string name="agents_repo_repository">Repository</string>
     <string name="agents_repo_main_checkout">Main worktree</string>
     <string name="agents_repo_worktree">Worktree</string>
-    <string name="agents_card_question">Has a question for you</string>
-    <string name="agents_card_question_by">%1$s has a question for you</string>
-    <string name="agents_card_permission">Wants to use %1$s</string>
-    <string name="agents_card_permission_by">%1$s wants to use %2$s</string>
-    <string name="agents_card_tool">a tool</string>
-    <string name="agents_card_plan">A plan needs your approval</string>
-    <string name="agents_card_screen">A dialog in the terminal needs you</string>
+    <string name="agents_card_question">Claude has a question</string>
+    <string name="agents_card_question_by">%1$s has a question</string>
+    <string name="agents_card_permission">Needs your permission</string>
+    <string name="agents_card_permission_by">%1$s needs your permission</string>
+    <string name="agents_card_plan">Plan awaiting approval</string>
+    <string name="agents_card_screen">Terminal needs you</string>
     <string name="agents_card_other">Needs you</string>
     <string name="agents_card_open_session">Open the session to see the request</string>
     <string name="agents_space_index">Space %1$d</string>
@@ -248,9 +247,12 @@
     <string name="agents_dialog_delete">Delete</string>
     <string name="agents_dialog_rename_space">Rename space</string>
     <string name="agents_dialog_rename_space_text">This also renames the workspace in herdr.</string>
+    <string name="agents_dialog_rename_space_text_tern">Also renames this session in Tern.</string>
     <string name="agents_dialog_rename_text">The tab name syncs to herdr; the session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
+    <string name="agents_dialog_rename_text_tern">The tab name syncs to Tern; the session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="agents_dialog_save">Save</string>
     <string name="agents_dialog_tab_name">Tab name (herdr tab)</string>
+    <string name="agents_dialog_tab_name_tern">Tab name (Tern tab)</string>
     <string name="agents_dialog_space_name">Space name</string>
     <string name="agents_dialog_session_name">Session name</string>
     <string name="agents_space_actions">Space actions</string>
@@ -519,7 +521,29 @@
     <string name="agents_todos_section_pr">PR to merge</string>
     <string name="agents_todos_section_other">Other open</string>
     <string name="agents_todos_section_shelved">Shelved</string>
-    <string name="agents_todos_summary">%1$d open · %2$d shelved · %3$d done</string>
+    <string name="agents_todos_filter_button">Filter and sort</string>
+    <string name="agents_todos_filter_show">Show</string>
+    <string name="agents_todos_sort_by">Sort by</string>
+    <string name="agents_todos_filter_all">All</string>
+    <string name="agents_todos_filter_no_due">No due date</string>
+    <string name="agents_todos_filter_today">Today</string>
+    <string name="agents_todos_filter_week">This week</string>
+    <string name="agents_todos_filter_month">This month</string>
+    <string name="agents_todos_sort_recent">Recent activity</string>
+    <string name="agents_todos_sort_due">Due date</string>
+    <string name="agents_todos_sort_priority">Priority</string>
+    <string name="agents_todos_filter_clear">Clear the %1$s filter</string>
+    <string name="agents_todos_filter_hidden_waiting">%1$d more waiting on you, not in %2$s</string>
+    <string name="agents_todos_filter_show_all">Show all</string>
+    <string name="agents_todos_filter_empty_today">Nothing due today</string>
+    <string name="agents_todos_filter_empty_week">Nothing due this week</string>
+    <string name="agents_todos_filter_empty_month">Nothing due this month</string>
+    <string name="agents_todos_filter_empty_no_due">Every to-do has a due date</string>
+    <string name="agents_todos_filter_empty_hint">Try another filter.</string>
+    <plurals name="agents_todos_filter_count">
+        <item quantity="one">%d to-do</item>
+        <item quantity="other">%d to-dos</item>
+    </plurals>
     <string name="agents_todo_restore">Restore</string>
     <string name="agents_todo_pr_moved">%1$s · moved %2$s</string>
     <string name="agents_todo_pr">PR</string>
@@ -527,5 +551,30 @@
     <plurals name="agents_todos_related">
         <item quantity="one">1 related</item>
         <item quantity="other">%1$d related</item>
+    </plurals>
+    <!-- The to-dos' month (#2046) -->
+    <string name="agents_todos_view_list">List</string>
+    <string name="agents_todos_view_calendar">Calendar</string>
+    <string name="agents_todo_calendar_options">Calendar options</string>
+    <string name="agents_todo_calendar_show_done">Show done</string>
+    <string name="agents_todo_calendar_today">Today</string>
+    <string name="agents_todo_calendar_previous">Previous month</string>
+    <string name="agents_todo_calendar_next">Next month</string>
+    <string name="agents_todo_calendar_more">+%1$d</string>
+    <string name="agents_todo_calendar_see_list">See list</string>
+    <string name="agents_todo_calendar_nothing_due">Nothing is due this day</string>
+    <string name="agents_todo_calendar_all_day">All day</string>
+    <string name="agents_todo_calendar_reminder">Reminder set</string>
+    <string name="agents_todo_calendar_moved">Moved to %1$s</string>
+    <string name="agents_todo_calendar_undo">Undo</string>
+    <string name="agents_todo_calendar_move_failed">Couldn\'t change the due date: %1$s</string>
+    <string name="agents_todo_calendar_change_due">Change Due Date</string>
+    <string name="agents_todo_calendar_change_due_action">Change Due Date…</string>
+    <string name="agents_todo_calendar_change_due_of">Change Due Date: %1$s…</string>
+    <string name="agents_todo_calendar_date">Date</string>
+    <string name="agents_todo_calendar_time">Time</string>
+    <plurals name="agents_todo_calendar_undated">
+        <item quantity="one">1 without a due date</item>
+        <item quantity="other">%1$d without a due date</item>
     </plurals>
 </resources>

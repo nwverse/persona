@@ -62,9 +62,33 @@ func TestSubscriptionsRevisionLeaseAndRun(t *testing.T) {
 	if err := d.CommitSubscriptionRun(ctx, "sub_a", merge, seen[:1], nil, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	seqs, kept, err := d.SubscriptionItems(ctx, "sub_a", 0, 10)
-	if err != nil || len(kept) != 2 || kept[0].UID != "n1" || seqs[0] >= seqs[1] {
-		t.Fatalf("items: %v %+v %v", seqs, kept, err)
+	kept, err := d.SubscriptionItems(ctx, "sub_a", SubscriptionItemsQuery{Limit: 10})
+	if err != nil || len(kept) != 2 || kept[0].UID != "n1" || kept[0].Seq >= kept[1].Seq || !kept[0].CreatedAt.Equal(now) {
+		t.Fatalf("items: %+v %v", kept, err)
+	}
+	// The cursor and the window pick: after the first one; the newest one; none stored since later.
+	if after, _ := d.SubscriptionItems(ctx, "sub_a", SubscriptionItemsQuery{After: kept[0].Seq, Limit: 10}); len(after) != 1 || after[0].UID != "n2" {
+		t.Fatalf("after the first: %+v", after)
+	}
+	if newest, _ := d.SubscriptionItems(ctx, "sub_a", SubscriptionItemsQuery{Limit: 1, Newest: true}); len(newest) != 1 || newest[0].UID != "n2" {
+		t.Fatalf("the newest: %+v", newest)
+	}
+	if later, _ := d.SubscriptionItems(ctx, "sub_a", SubscriptionItemsQuery{Since: now.Add(time.Second), Limit: 10}); len(later) != 0 {
+		t.Fatalf("stored since later: %+v", later)
+	}
+	// A third run's item stays when the older ones are pruned; the keys stay too.
+	if err := d.CommitSubscriptionRun(ctx, "sub_a", merge, []SubscriptionSeenRow{{UID: "n3", ContentHash: "h3"}},
+		[]SubscriptionItemRow{{UID: "n3", Data: []byte(`{"title":"Three"}`)}}, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.PruneSubscriptionItems(ctx, "sub_a", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := d.SubscriptionItems(ctx, "sub_a", SubscriptionItemsQuery{Limit: 10}); len(left) != 1 || left[0].UID != "n3" {
+		t.Fatalf("after pruning: %+v", left)
+	}
+	if known, _ := d.SubscriptionSeen(ctx, "sub_a", []string{"n1"}); !known["n1"] {
+		t.Fatal("pruning items took their keys")
 	}
 	// A run that fails to merge keeps nothing.
 	bad := func([]byte, int64) ([]byte, error) { return nil, fmt.Errorf("no") }
@@ -77,7 +101,7 @@ func TestSubscriptionsRevisionLeaseAndRun(t *testing.T) {
 	if err := d.DeleteSubscription(ctx, "sub_a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, kept, _ := d.SubscriptionItems(ctx, "sub_a", 0, 10); len(kept) != 0 {
+	if kept, _ := d.SubscriptionItems(ctx, "sub_a", SubscriptionItemsQuery{Limit: 10}); len(kept) != 0 {
 		t.Fatal("deleting kept the items")
 	}
 	if known, _ := d.SubscriptionSeen(ctx, "sub_a", []string{"n1"}); known["n1"] {

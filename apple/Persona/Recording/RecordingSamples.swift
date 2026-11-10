@@ -30,8 +30,9 @@ enum RecordingSamples {
     static let pastMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
 
     /// `-showMeetingSample recording|paused|interrupted`: a meeting 12:34 into its recording, as the recording page and its
-    /// Live Activity show it (no microphone); `minutes` / `pending`: a finished meeting whose page opens (its minutes from
-    /// the hub, or still being written). Both recordings are made up.
+    /// Live Activity show it (no microphone); `listening|taking-part|answered`: the same with Persona attending (#2981);
+    /// `minutes` / `pending`: a finished meeting whose page opens (its minutes from the hub, or still being written). Both
+    /// recordings are made up.
     static func showMeetingIfAsked() {
         #if os(iOS)
         guard let mode = UserDefaults.standard.string(forKey: "showMeetingSample") else {
@@ -68,8 +69,27 @@ enum RecordingSamples {
             RecordingSentence(start: 1, end: 9, text: "好，我们开始，今天先看录音入口的进展。"),
         ])]
         live.marks = [65, 300]
+        // `listening` / `taking-part` / `answered`: Persona attends (#2981), listening in, taking part, or taking part with two
+        // answers given. The main chat attends (no session named); the made-up meeting's upload tells the hub, as a real one
+        // would, and its lines go to the hub's live log, the last one just before the tap (12:34).
+        if ["listening", "taking-part", "answered"].contains(mode) {
+            live.attendance = RecordingAttendance(role: mode == "listening" ? .listener : .participant, session: nil, sessionTitle: "Persona")
+            live.segments.append(RecordingSegment(index: 1, start: 720, duration: 30, sentences: [
+                RecordingSentence(start: 741, end: 748, text: "上周定的长录音测试谁负责？"),
+            ]))
+        }
         try? RecordingLibrary.shared.save(live)
         RecordingCapture.shared.showSample(liveMeeting, elapsed: 754, paused: mode == "paused", interrupted: mode == "interrupted")
+        if mode == "answered" {
+            let first = MeetingAsk.Exchange(recordingID: liveMeeting, at: 612, question: "Mac 上的录音现在谁在跟？", typed: true,
+                                            state: .answered("还没有定负责人。上次周会把它列为待定问题，计划下周同一时间再对。"),
+                                            sources: ["产品周会 · 2026-11-03 14:00–15:00"])
+            let second = MeetingAsk.Exchange(recordingID: liveMeeting, at: 731, question: "上周定的长录音测试谁负责？", typed: false,
+                                             state: .answered("上周的周会定了：录音入口只做一步开始，默认用中文转写。长录音的真机测试由张三负责，周五前完成。"),
+                                             sources: ["产品周会 · 2026-11-03 14:00–15:00"])
+            MeetingAsk.shared.showSample([first, second])
+            MeetingSpeaker.shared.showSample(second.id)
+        }
         #endif
     }
 }

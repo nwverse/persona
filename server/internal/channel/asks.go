@@ -325,6 +325,9 @@ func Answered(l i18n.Lang, r proto.Resolution) string {
 }
 
 func toolName(l i18n.Lang, ix proto.Interaction) string {
+	if ix.ToolTitle != "" { // the manager's own tools, by their name for people
+		return ix.ToolTitle
+	}
 	if ix.ToolName != "" {
 		return ix.ToolName
 	}

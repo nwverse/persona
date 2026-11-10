@@ -70,6 +70,11 @@ type briefFacts struct {
 	// Asks are the asks of the tasks to verify (by task id): their verdict line and a decision's recommended option, the
 	// same as their cards say (conclusion.go).
 	Asks map[string]acceptAsk
+	// Leaders: one line per current leader (direction_progress.go briefLeaders), for the model only.
+	Leaders []prompts.BriefLeader
+	// Briefs, BriefsDone: the pieces of work handed out that need the owner or changed since the last briefing, and
+	// those that ended since, from their briefs (task_brief_digest.go), for the model only.
+	Briefs, BriefsDone []prompts.BriefTask
 }
 
 // briefFactsAt works out the facts for a run that starts at now. self is the routine that is running: its own earlier
@@ -115,6 +120,7 @@ func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) 
 	}
 	f.FailedTotal = total
 	f.Progress, f.ProgressTotal = s.briefProgress(ctx, waiting)
+	f.Leaders = s.briefLeaders(ctx, now)
 	return f
 }
 
@@ -179,6 +185,9 @@ func (s *Service) briefStart(ctx context.Context, t Task, now time.Time) string 
 		}
 	}
 	run := &briefRun{facts: s.briefFactsAt(ctx, now, t.ID), label: t.label()}
+	// What the briefs say since the last briefing, told once: only a real run moves the mark, not a look at the facts.
+	run.facts.Briefs, run.facts.BriefsDone = s.briefDigest(ctx, now, s.briefDigestSince(ctx, now), run.facts.loc)
+	s.briefDigestTold(ctx, now)
 	b := &s.brief
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -350,7 +359,8 @@ func (f *briefFacts) modelText() string {
 	for _, x := range f.Failed {
 		b.Failed = append(b.Failed, prompts.BriefFailed{Title: clip(oneLine(x.Title), 60), Why: x.Why, Run: x.Kind == "routine", Skipped: x.Skipped})
 	}
-	b.ProgressTotal = f.ProgressTotal
+	b.ProgressTotal, b.Leaders = f.ProgressTotal, f.Leaders
+	b.Briefs, b.BriefsDone = f.Briefs, f.BriefsDone
 	for _, p := range f.Progress {
 		b.Progress = append(b.Progress, prompts.BriefProgress{Title: clip(oneLine(p.Title), 60), Stage: p.Stage})
 	}
