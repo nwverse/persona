@@ -39,23 +39,26 @@ func (n *Node) launcherCheck(ctx context.Context, name string) proto.LauncherChe
 			agent = d.Agent
 		}
 	}
-	if agent == "claude" {
-		// The headless probe below answers before Claude Code's first-run setup is finished, while an interactive
-		// start then stops on the first-run screens: fail with the cause instead of marking the launcher healthy
-		// (claudeonboarding.go). Unknown verdicts do not block; the real probe runs.
-		if ready, known := n.claudeOnboardingReady(ctx); known && !ready {
-			return proto.LauncherCheck{Agent: agent, Error: claudeOnboardingNotReadyMsg}
-		}
-	}
 	dir, err := os.MkdirTemp("", launcherCheckDir)
 	if err != nil {
 		return proto.LauncherCheck{Error: err.Error()}
 	}
 	defer os.RemoveAll(dir)
+	prompt := prompts.RenderLauncherCheck()
+	if _, managed := n.managedLauncher(name); !managed {
+		if _, runtime := n.runtimeLauncherModels(name); runtime {
+			if result, handled := n.runtimeLauncherCheck(ctx, name, dir, prompt); handled {
+				return result
+			}
+		}
+	}
 	if agent == "claude" {
+		// The runtime may own authentication independently. This onboarding guard applies to the shell probe only.
+		if ready, known := n.claudeOnboardingReady(ctx); known && !ready {
+			return proto.LauncherCheck{Agent: agent, Error: claudeOnboardingNotReadyMsg}
+		}
 		defer n.removeCheckProject(dir)
 	}
-	prompt := prompts.RenderLauncherCheck()
 	// The flag that keeps the run off the disk goes between before and after: a transcript per check, a hundred a day on
 	// each computer, filled the newest offline sessions the list keeps and pushed the user's own Agents out (#2959).
 	before, noSave, after := ` -p `+shellQuote(prompt)+` --output-format json --max-turns 1`, "--no-session-persistence", ""

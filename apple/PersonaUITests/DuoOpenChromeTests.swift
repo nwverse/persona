@@ -87,6 +87,26 @@ final class DuoOpenChromeTests: XCTestCase {
         shot("main-menu")
     }
 
+    /// Settings covers the window, as ChatGPT's account page does there, not a sheet over half of it (#3701): one column
+    /// across, its × at the top right, which closes it.
+    @MainActor func testSettingsCoversTheWindowAndCloses() {
+        let settings = element("sidebar-settings")
+        XCTAssertTrue(settings.waitForExistence(timeout: 20), "no Settings at the sidebar's foot:\n\(app.debugDescription)")
+        settings.tap()
+        let close = app.buttons["settings-close"].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 10), "Settings has no ×:\n\(app.debugDescription)")
+        shot("settings")
+        let window = app.windows.firstMatch.frame, list = element("settings-list")
+        XCTAssertTrue(list.exists, "no settings list:\n\(app.debugDescription)")
+        XCTAssertGreaterThan(list.frame.width, window.width * 0.8, "Settings does not cover the window: \(list.frame) in \(window)")
+        XCTAssertGreaterThan(close.frame.midX, window.width * 0.85, "the × is not at the window's right: \(close.frame) in \(window)")
+        // In the system's side column under the clock where it has one, as ChatGPT's account page has its ×.
+        XCTAssertLessThan(close.frame.minY, window.minY + window.height / 4, "the × is not at the top: \(close.frame) in \(window)")
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5), "the × did not close Settings")
+        XCTAssertTrue(settings.waitForExistence(timeout: 5) && settings.isHittable, "the page did not come back")
+    }
+
     /// The switch takes the page to Agents, whose page column has it too, and back.
     @MainActor func testTheSwitchGoesToAgentsAndBack() {
         let agents = element("shell-agents")
