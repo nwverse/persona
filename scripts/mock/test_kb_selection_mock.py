@@ -8,7 +8,10 @@ import tempfile
 import time
 import unittest
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
+
+# The mock is on loopback: a proxy from the environment must not get in the way.
+urlopen = build_opener(ProxyHandler({})).open
 
 
 class KBSelectionMockTests(unittest.TestCase):
