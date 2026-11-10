@@ -926,5 +926,66 @@ extension AttachPanel {
         quiet.disablesAnimations = true
         withTransaction(quiet) { shown = true }
     }
+
+    /// What the iPhone's 「+」 does on a tap (`ShellComposerBar.openAttach`), in a conversation and a new one alike; nil on
+    /// the iPad, whose + is the menu. The keyboard goes down first and the panel follows a moment later, the two moving
+    /// together (Telegram's).
+    func opener(focused: FocusState<Bool>.Binding) -> ((CGRect) -> Void)? {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return nil }
+        return { frame in
+            guard focused.wrappedValue else { self.open(from: frame); return }
+            focused.wrappedValue = false
+            Task {
+                try? await Task.sleep(for: Theme.Attach.afterKeyboard)
+                self.open(from: frame)
+            }
+        }
+    }
+}
+
+extension AttachMoreSection {
+    /// The rows every composer's + offers besides photos and files, in their order (#3225, #3805): the calls and the
+    /// camera, then Mention. A row whose action is nil is not there (no call before a conversation exists, no camera).
+    static func common(voice: (() -> Void)?, camera: (() -> Void)?, glasses: (() -> Void)?, mention: @escaping () -> Void) -> [AttachMoreSection] {
+        var capture: [AttachMoreRow] = []
+        if let voice { capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel, action: voice)) }
+        if let camera { capture.append(AttachMoreRow(id: "composer-menu-camera", title: String(localized: "Take Photo [Chat View 6e3a10]"), symbol: Theme.Icon.camera, action: camera)) }
+        if let glasses { capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses, action: glasses)) }
+        var sections: [AttachMoreSection] = []
+        if !capture.isEmpty { sections.append(AttachMoreSection(id: "capture", title: nil, rows: capture)) }
+        sections.append(AttachMoreSection(id: "mention", title: nil, rows: [
+            AttachMoreRow(id: "composer-menu-mention", title: String(localized: "Mention a File or Session"), symbol: Theme.Icon.mention, action: mention),
+        ]))
+        return sections
+    }
+
+    /// The prompts the hub's extensions declare, folded into a submenu in the menu; nil when there are none.
+    static func prompts(_ prompts: [ExtensionTextTemplate], fill: @escaping (ExtensionTextTemplate) -> Void) -> AttachMoreSection? {
+        guard !prompts.isEmpty else { return nil }
+        return AttachMoreSection(id: "prompts", title: String(localized: "Extension Prompts"), rows: prompts.map { prompt in
+            AttachMoreRow(id: "extension-prompt-\(prompt.id)", title: prompt.title, symbol: Theme.Icon.insert) { fill(prompt) }
+        }, symbol: Theme.Icon.plugins)
+    }
+}
+
+extension ComposerAttachments {
+    /// What was picked in the panel, into the box: pictures as its photos (at most `MessagePhotos.limit`), videos
+    /// uploaded to `machine` as files; a toast says how many could not be read.
+    func addPicked(_ ids: [String], machine: MachineRef, model: AppModel) async {
+        var failed = 0
+        for id in ids {
+            guard let asset = AttachLibrary.asset(id) else { failed += 1; continue }
+            if asset.mediaType == .video {
+                guard let url = await AttachLibrary.movie(asset) else { failed += 1; continue }
+                videos.start(staged: url, machine: machine, model: model)
+            } else {
+                guard let picture = await AttachLibrary.picture(asset) else { failed += 1; continue }
+                MessagePhotos.add(picture, to: &images, model: model)
+            }
+        }
+        if failed > 0 {
+            model.toast = Toast(String(localized: "Couldn't read \(failed) photos (they may still be downloading from iCloud) [Chat View 5712c0]"), style: .error)
+        }
+    }
 }
 #endif

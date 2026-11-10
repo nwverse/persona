@@ -1,17 +1,22 @@
 import XCTest
 
-/// The composer's + (#3225). On the iPhone a tap opens the photo / file panel and touch and hold opens a menu of what the
-/// panel's More tab lists, in the same order: Voice Chat, Take Photo, Mention a File or Session, an Agent's Quick
-/// Commands in a submenu, then extension prompts. The iPad's + is that menu, with Photos and Files first. Against
+/// The composer's + (#3225), in a conversation and in a new one (#3805). On the iPhone a tap opens the photo / file panel
+/// and touch and hold opens a menu of what the panel's More tab lists, in the same order: Voice Chat, Take Photo,
+/// Mention a File or Session, an Agent's Quick Commands in a submenu, then extension prompts. A new conversation has the
+/// same, less what needs a conversation (Voice Chat). The iPad's + is that menu, with Photos and Files first. Against
 /// scripts/mock/mock_hub.py (PERSONA_MOCK_HUB); `-showCameraRows YES` lists Take Photo, since the simulator has no camera.
-/// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps screenshots, in light and dark (`-ui.scheme`).
+/// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps screenshots, in light and dark (`-ui.scheme`) and in the BeautifulUI style too.
 final class AttachMenuTests: XCTestCase {
     private var hub = ""
     private static let persona = ["-tab", "assistant", "-app.tab", "assistant"]
+    private static let new = persona + ["-newAssistant", "YES"]
     private static let agent = ["-openSession", "macbook/a1f3c2d4-0000-4000-8000-000000000002"] // weather › tests: working, Claude in herdr
     private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private var shots: Bool { ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil }
     /// Both looks when screenshots are kept; light alone otherwise.
-    private var schemes: [String] { ProcessInfo.processInfo.environment["PERSONA_SHOTS"] == nil ? ["light"] : ["light", "dark"] }
+    private var schemes: [String] { shots ? ["light", "dark"] : ["light"] }
+    /// The default style, and BeautifulUI's when screenshots are kept (its components, the same composer in the shell).
+    private var styles: [String] { shots ? ["glass", "beautiful"] : ["glass"] }
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -21,25 +26,38 @@ final class AttachMenuTests: XCTestCase {
 
     /// Persona's conversation: the calls, the camera and Mention, no Quick Commands; Mention types "@" and opens the list.
     @MainActor func testPersonaMenu() {
-        for scheme in schemes {
-            let app = launch(Self.persona, scheme: scheme)
-            openMenu(app)
-            for id in ["composer-menu-voice", "composer-menu-camera", "composer-menu-mention"] {
-                XCTAssertTrue(item(app, id).waitForExistence(timeout: 5), "no \(id) in the menu:\n\(app.debugDescription)")
+        for style in styles {
+            for scheme in schemes {
+                let app = launch(Self.persona, scheme: scheme, style: style)
+                openMenu(app)
+                for id in ["composer-menu-voice", "composer-menu-camera", "composer-menu-mention"] {
+                    XCTAssertTrue(item(app, id).waitForExistence(timeout: 5), "no \(id) in the menu:\n\(app.debugDescription)")
+                }
+                XCTAssertFalse(commands(app).exists, "Quick Commands in Persona's conversation")
+                photosAndFiles(app)
+                shot("attach-menu-persona", scheme, style)
+                mention(app)
+                app.terminate()
             }
-            XCTAssertFalse(commands(app).exists, "Quick Commands in Persona's conversation")
-            if isPad {
-                XCTAssertTrue(app.buttons["照片"].exists && app.buttons["文件"].exists, "the iPad's menu lost Photos or Files")
-            } else {
-                XCTAssertFalse(app.buttons["照片"].exists, "Photos in the touch-and-hold menu: the panel's job")
+        }
+    }
+
+    /// A new conversation (#3805): a conversation's menu, less Voice Chat; Mention types "@" and opens the list.
+    @MainActor func testNewConversationMenu() {
+        for style in styles {
+            for scheme in schemes {
+                let app = launch(Self.new, scheme: scheme, style: style)
+                openMenu(app)
+                for id in ["composer-menu-camera", "composer-menu-mention"] {
+                    XCTAssertTrue(item(app, id).waitForExistence(timeout: 5), "no \(id) in the menu:\n\(app.debugDescription)")
+                }
+                XCTAssertFalse(item(app, "composer-menu-voice").exists, "Voice Chat before the conversation exists")
+                XCTAssertFalse(commands(app).exists, "Quick Commands in a new conversation")
+                photosAndFiles(app)
+                shot("attach-menu-new", scheme, style)
+                mention(app)
+                app.terminate()
             }
-            shot("attach-menu-persona", scheme)
-            item(app, "composer-menu-mention").tap()
-            let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
-            XCTAssertTrue(app.descendants(matching: .any)["mention-menu"].firstMatch.waitForExistence(timeout: 5),
-                          "Mention did not open the @ list:\n\(app.debugDescription)")
-            XCTAssertTrue((field.value as? String)?.hasSuffix("@") == true, "Mention did not type @: \(String(describing: field.value))")
-            app.terminate()
         }
     }
 
@@ -63,23 +81,27 @@ final class AttachMenuTests: XCTestCase {
         }
     }
 
-    /// The iPhone's tap is unchanged: the panel, whose More tab lists the menu's rows (an Agent's commands under them).
-    @MainActor func testATapStillOpensThePanel() throws {
+    /// The iPhone's tap is unchanged in a conversation and now the same in a new one: the panel, whose More tab lists the
+    /// menu's rows (an Agent's commands under them).
+    @MainActor func testATapOpensThePanel() throws {
         guard !isPad else { throw XCTSkip("the iPad's + is the menu") }
+        var pages = [("persona", Self.persona, "glass"), ("agent", Self.agent, "glass"), ("new", Self.new, "glass")]
+        if shots { pages += [("persona", Self.persona, "beautiful"), ("new", Self.new, "beautiful")] }
         for scheme in schemes {
-            for (name, args) in [("persona", Self.persona), ("agent", Self.agent)] {
-                let app = launch(args, scheme: scheme)
+            for (name, args, style) in pages {
+                let app = launch(args, scheme: scheme, style: style)
                 let plus = plusButton(app)
                 sleep(2)
                 plus.tap()
                 let more = app.buttons["attach-tab-more"]
-                XCTAssertTrue(more.waitForExistence(timeout: 5), "a tap did not open the panel:\n\(app.debugDescription)")
+                XCTAssertTrue(more.waitForExistence(timeout: 5), "a tap did not open the panel (\(name)):\n\(app.debugDescription)")
                 more.tap()
-                for id in ["composer-menu-voice", "composer-menu-camera", "composer-menu-mention"] {
-                    XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "no \(id) in More:\n\(app.debugDescription)")
+                for id in ["composer-menu-camera", "composer-menu-mention"] {
+                    XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 5), "no \(id) in More (\(name)):\n\(app.debugDescription)")
                 }
-                XCTAssertEqual(app.buttons["attach-clear"].exists, name == "agent", "the commands in More")
-                shot("attach-panel-more-\(name)", scheme)
+                XCTAssertEqual(app.buttons["composer-menu-voice"].exists, name != "new", "Voice Chat in More (\(name))")
+                XCTAssertEqual(app.buttons["attach-clear"].exists, name == "agent", "the commands in More (\(name))")
+                shot("attach-panel-more-\(name)", scheme, style)
                 app.terminate()
             }
         }
@@ -87,7 +109,7 @@ final class AttachMenuTests: XCTestCase {
 
     /// The largest accessibility text size: the menu and the Quick Commands submenu still read (screenshots only).
     @MainActor func testTheMenuAtTheLargestTextSize() throws {
-        guard ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil else { throw XCTSkip("screenshots only") }
+        guard shots else { throw XCTSkip("screenshots only") }
         let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         let app = launch(Self.persona + largest, scheme: "light")
         openMenu(app)
@@ -103,6 +125,27 @@ final class AttachMenuTests: XCTestCase {
         agent.terminate()
     }
 
+    /// Photos and Files are the panel's on the iPhone, the menu's first on the iPad.
+    @MainActor private func photosAndFiles(_ app: XCUIApplication) {
+        if isPad {
+            XCTAssertTrue(app.buttons["照片"].exists && app.buttons["文件"].exists, "the iPad's menu lost Photos or Files")
+        } else {
+            XCTAssertFalse(app.buttons["照片"].exists, "Photos in the touch-and-hold menu: the panel's job")
+        }
+    }
+
+    /// The menu's Mention: "@" typed at the caret and the @ list open.
+    @MainActor private func mention(_ app: XCUIApplication) {
+        item(app, "composer-menu-mention").tap()
+        let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+        XCTAssertTrue(app.descendants(matching: .any)["mention-menu"].firstMatch.waitForExistence(timeout: 5),
+                      "Mention did not open the @ list:\n\(app.debugDescription)")
+        XCTAssertTrue((field.value as? String)?.hasSuffix("@") == true, "Mention did not type @: \(String(describing: field.value))")
+        // The conversation keeps its draft: the "@" goes again, or the next screenshots show it.
+        let typed = (field.value as? String)?.count ?? 0
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: typed))
+    }
+
     @MainActor private func plusButton(_ app: XCUIApplication) -> XCUIElement {
         let plus = app.descendants(matching: .any).matching(identifier: "shell-composer-add").firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 40), "no + button:\n\(app.debugDescription)")
@@ -112,7 +155,7 @@ final class AttachMenuTests: XCTestCase {
     /// The iPad's + opens its menu on a tap, the iPhone's on touch and hold.
     @MainActor private func openMenu(_ app: XCUIApplication) {
         let plus = plusButton(app)
-        sleep(2) // the conversation settles
+        sleep(2) // the page settles
         if isPad { plus.tap() } else { plus.press(forDuration: 1.0) }
     }
 
@@ -125,23 +168,25 @@ final class AttachMenuTests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ OR label == %@", "attach-menu-commands", "快捷指令")).firstMatch
     }
 
-    @MainActor private func launch(_ extra: [String], scheme: String) -> XCUIApplication {
+    /// Always with a style: the app writes the style it launched with back to its settings on a fresh install.
+    @MainActor private func launch(_ extra: [String], scheme: String, style: String = "glass") -> XCUIApplication {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-showCameraRows", "YES", "-ui.scheme", scheme] + extra
+        app.launchArguments = ["-pairURL", pair, "-showCameraRows", "YES", "-ui.scheme", scheme, "-ui.style", style] + extra
         app.launchPinned()
         return app
     }
 
     /// The whole screen: a menu is drawn in a window of its own.
-    @MainActor private func shot(_ name: String, _ scheme: String) {
+    @MainActor private func shot(_ name: String, _ scheme: String, _ style: String = "glass") {
         sleep(1)
         let s = XCUIScreen.main.screenshot()
+        let file = name + (isPad ? "-ipad" : "") + (style == "glass" ? "" : "-" + style) + "-" + scheme
         let a = XCTAttachment(screenshot: s)
-        a.name = name + "-" + scheme
+        a.name = file
         a.lifetime = .keepAlways
         add(a)
         guard let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] else { return }
-        try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + (isPad ? "-ipad" : "") + "-" + scheme + ".png"))
+        try? s.pngRepresentation.write(to: URL(fileURLWithPath: dir).appendingPathComponent(file + ".png"))
     }
 }
