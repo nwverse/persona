@@ -12,6 +12,7 @@ import persona.core.contracts.api.ExtensionDetail
 import persona.core.contracts.api.ExtensionField
 import persona.core.contracts.api.ExtensionHasDependents
 import persona.core.contracts.api.ExtensionManagement
+import persona.core.contracts.api.unpinned
 import persona.core.contracts.api.ExtensionNodeState
 import persona.core.contracts.api.ExtensionPermission
 import persona.core.contracts.api.ExtensionUpgrade
@@ -326,9 +327,9 @@ internal data class ExtensionListState(
 internal object ExtensionChanges {
     private val changes = MutableSharedFlow<ExtensionManagement>(extraBufferCapacity = 8)
 
-    fun changed(api: ExtensionManagement) { changes.tryEmit(api) }
+    fun changed(api: ExtensionManagement) { changes.tryEmit(api.unpinned) }
 
-    fun of(api: ExtensionManagement): Flow<Unit> = changes.filter { it === api }.map { }
+    fun of(api: ExtensionManagement): Flow<Unit> = changes.filter { it === api.unpinned }.map { }
 }
 
 /**
