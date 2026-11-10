@@ -374,11 +374,11 @@ func (s *inboxMemStore) PutInboxItem(_ context.Context, id string, data []byte, 
 	return nil
 }
 
-func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time) ([][]byte, error) {
+func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time, each func(raw []byte) error) error {
 	s.imu.Lock()
-	defer s.imu.Unlock()
 	if s.fail != nil {
-		return nil, s.fail
+		s.imu.Unlock()
+		return s.fail
 	}
 	var out [][]byte
 	for id, raw := range s.rows {
@@ -386,7 +386,13 @@ func (s *inboxMemStore) InboxItems(_ context.Context, doneSince time.Time) ([][]
 			out = append(out, raw)
 		}
 	}
-	return out, nil
+	s.imu.Unlock()
+	for _, raw := range out {
+		if err := each(raw); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *inboxMemStore) DeleteInboxSource(_ context.Context, source string, ids []string) ([]string, error) {

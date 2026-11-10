@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,16 @@ func inboxRows(n int, now time.Time) []InboxRow {
 	return rows
 }
 
+// inboxData is what InboxItems hands over, each row copied (raw is the driver's buffer, valid only during the call).
+func inboxData(d *DB, doneSince time.Time) ([][]byte, error) {
+	var out [][]byte
+	err := d.InboxItems(context.Background(), doneSince, func(raw []byte) error {
+		out = append(out, bytes.Clone(raw))
+		return nil
+	})
+	return out, err
+}
+
 // PutInboxItems stores new items and updates those it has, as PutInboxItem does, and stores none when one fails.
 func TestPutInboxItems(t *testing.T) {
 	d, ctx := open(t), context.Background()
@@ -38,7 +49,7 @@ func TestPutInboxItems(t *testing.T) {
 	if err := d.PutInboxItems(ctx, rows); err != nil {
 		t.Fatal(err)
 	}
-	got, err := d.InboxItems(ctx, now.Add(-time.Hour))
+	got, err := inboxData(d, now.Add(-time.Hour))
 	if err != nil || len(got) != 3 {
 		t.Fatalf("rows = %d, %v", len(got), err)
 	}
@@ -51,7 +62,7 @@ func TestPutInboxItems(t *testing.T) {
 	if err := d.PutInboxItems(ctx, bad); err == nil {
 		t.Fatal("a row that is not JSON was stored")
 	}
-	if got, _ := d.InboxItems(ctx, now.Add(-time.Hour)); len(got) != 3 {
+	if got, _ := inboxData(d, now.Add(-time.Hour)); len(got) != 3 {
 		t.Fatalf("rows after a failed batch = %d, want the batch stored whole or not at all", len(got))
 	}
 	if err := d.PutInboxItems(ctx, nil); err != nil {
@@ -94,9 +105,11 @@ func TestInboxHistoryKeptThenPurged(t *testing.T) {
 	if err := d.PutInboxItem(ctx, "open", []byte(`{"id":"open"}`), now.Add(-200*day), nil); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := d.InboxItems(ctx, now.Add(-8*day))
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("loaded %d rows (%v), want the open one and the one done a day ago", len(rows), err)
+	// The open ones and those done since, in no particular order.
+	rows, err := inboxData(d, now.Add(-8*day))
+	slices.SortFunc(rows, bytes.Compare)
+	if err != nil || len(rows) != 2 || string(rows[0]) != `{"id":"d1"}` || string(rows[1]) != `{"id":"open"}` {
+		t.Fatalf("loaded %q (%v), want the open one and the one done a day ago", rows, err)
 	}
 	count := func() (n int) {
 		if err := d.pool.QueryRow(ctx, `SELECT count(*) FROM inbox_items`).Scan(&n); err != nil {

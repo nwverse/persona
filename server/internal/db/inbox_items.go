@@ -75,14 +75,22 @@ func (d *DB) PurgeInboxItems(ctx context.Context, doneBefore time.Time) (int64, 
 // the start read a Sort node over every row.
 const inboxItemsSQL = `SELECT data FROM inbox_items WHERE done_at IS NULL OR done_at >= $1`
 
-// InboxItems returns the open items and those done since doneSince, in no particular order; older done items stay
-// stored (as history, DoneInboxItems) until PurgeInboxItems.
-func (d *DB) InboxItems(ctx context.Context, doneSince time.Time) ([][]byte, error) {
+// InboxItems hands each open item, and each one done since doneSince, to each, in no particular order; older done
+// items stay stored (as history, DoneInboxItems) until PurgeInboxItems. raw is the row's data in the driver's read
+// buffer, valid only during that call: each copies what it keeps (json.Unmarshal does), so the rows are never all
+// held as bytes at once. An error from each stops the read and is returned.
+func (d *DB) InboxItems(ctx context.Context, doneSince time.Time, each func(raw []byte) error) error {
 	rows, err := d.pool.Query(ctx, inboxItemsSQL, doneSince)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return pgx.CollectRows(rows, pgx.RowTo[[]byte])
+	defer rows.Close()
+	for rows.Next() {
+		if err := each(rows.RawValues()[0]); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // DoneInboxItemsByID returns the done items stored under ids (the history, whether the manager holds them or not); an

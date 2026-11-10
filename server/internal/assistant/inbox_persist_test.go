@@ -43,8 +43,8 @@ func (s *inboxOrderStore) PutInboxItem(ctx context.Context, id string, data []by
 	return nil
 }
 
-func (s *inboxOrderStore) InboxItems(ctx context.Context, doneSince time.Time) ([][]byte, error) {
-	return s.inboxMemStore.InboxItems(ctx, doneSince)
+func (s *inboxOrderStore) InboxItems(ctx context.Context, doneSince time.Time, each func(raw []byte) error) error {
+	return s.inboxMemStore.InboxItems(ctx, doneSince, each)
 }
 
 func (s *inboxOrderStore) DeleteInboxSource(ctx context.Context, source string, ids []string) ([]string, error) {
