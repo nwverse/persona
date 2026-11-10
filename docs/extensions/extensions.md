@@ -2438,8 +2438,10 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
   out while none; the hub files a new direction under the project most of its tasks are filed under); `ended: true`
   once it left `assistant.leaders` (nothing is deleted; made a leader again, it is sent without `ended`). Sent once per
   change: what was last told is kept in the hub's store, so a restart or a replay of the same state sends nothing.
-- **`leader.report {id, leader, kind, todo, text, link?, at}`**: written by the hub from the task's ledger, never by a
-  model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner) or `stuck` (in Waiting
+- **`leader.report {id, leader, kind, todo, plan?, text, link?, at}`**: written by the hub from the task's ledger, never by a
+  model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner, or a plan of the
+  leader's waits for the owner's Start: then `plan` is the plan's id and `todo` is `""`, as a plan has no to-do until
+  it starts; #3608) or `stuck` (in Waiting
   on you, or stopped unfinished, for 24 hours; at most once per 24 hours). `id` names the report and is never sent
   twice; `text` is at most 300 characters in the owner's language; `link` the task's PR when it has one. Progress is
   never reported.

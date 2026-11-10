@@ -4590,17 +4590,19 @@ type LeaderChangedEvent struct {
 }
 
 // LeaderReportEvent: event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it),
-// needs the owner's decision (decision: its review says needs_user), or is stuck (stuck: in Waiting on you or stopped
-// unfinished for 24 hours, told at most once per 24 hours). Written by the hub from the task's ledger, never by a
-// model; progress is never reported. id names the report (never sent twice; key on it to be safe), leader the leader
-// conversation's id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it), text at most 300
-// characters in the owner's language, link the task's PR or delivery link when it has one, at when what it reports
-// happened.
+// needs the owner's decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's
+// Start), or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours).
+// Written by the hub from the task's ledger, never by a model; progress is never reported. id names the report (never
+// sent twice; key on it to be safe), leader the leader conversation's id, todo the task's to-do id (GET /api/v1/todos
+// with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the waiting plan's id (only on a
+// decision about a plan), text at most 300 characters in the owner's language, link the task's PR or delivery link
+// when it has one, at when what it reports happened.
 type LeaderReportEvent struct {
 	ID     string    `json:"id"`
 	Leader string    `json:"leader"`
 	Kind   string    `json:"kind"`
 	Todo   string    `json:"todo"`
+	Plan   string    `json:"plan,omitempty"`
 	Text   string    `json:"text"`
 	Link   string    `json:"link,omitempty"`
 	At     time.Time `json:"at"`

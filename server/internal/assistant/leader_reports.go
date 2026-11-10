@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 //
 //   - reached its goal: its latest review accepted it;
 //   - needs the owner's decision: its latest review says needs_user;
+//   - needs the owner's decision on a plan: a plan the leader handed out, or the main conversation handed to it
+//     (task_plan supervisor), waits for the owner's Start (#3608; told once per plan, with its id and no to-do);
 //   - is stuck: by the To-dos SOP (todo_triage.go) it sits in Waiting on you, or stopped unfinished (PR to merge, Other
 //     open, Shelved), and nothing of it moved for leaderStuckAfter.
 //
@@ -145,7 +148,8 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		}
 	}
 	s.todos.mu.RUnlock()
-	if len(tasks) == 0 {
+	plans := s.leaderPlans(ctx, cfg.Main, leads, now)
+	if len(tasks) == 0 && len(plans) == 0 {
 		return
 	}
 	slices.SortFunc(tasks, func(a, b Todo) int { return a.CreatedAt.Compare(b.CreatedAt) })
@@ -196,6 +200,22 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section), now))
 		}
 	}
+	for _, lp := range plans {
+		p := lp.plan
+		key := "plan|" + p.ID
+		if _, done := told.Reviews[key]; done || p.CreatedAt.Before(told.Since) {
+			continue
+		}
+		told.Reviews[key] = now
+		titles := make([]string, 0, len(p.Tasks))
+		for _, t := range p.Tasks {
+			titles = append(titles, clip(oneLine(t.Title), 60))
+		}
+		sum := sha256.Sum256([]byte(key))
+		out = append(out, assistantwire.LeaderReportEvent{ID: "lrep_" + hex.EncodeToString(sum[:8]), Leader: lp.lead,
+			Kind: assistantwire.LeaderDecision, Plan: p.ID, At: p.CreatedAt.UTC(), Text: clip(i18n.T(l, "assistant-reports.leader_plan_waiting",
+				i18n.Args{"tasks": strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep"))}), assistantwire.LeaderReportTextMost)})
+	}
 	// Forget what can no longer be told again: reviews past keeping, stuck marks of to-dos gone or no longer stuck long.
 	for k, at := range told.Reviews {
 		if now.Sub(at) > leaderReportsKeep {
@@ -218,6 +238,45 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	for _, r := range out {
 		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
 	}
+}
+
+// leaderPlan is a plan waiting for the owner's Start and the leader it is of.
+type leaderPlan struct {
+	plan *TaskPlan
+	lead string
+}
+
+// leaderPlans are the plans of the last 7 days still waiting for the owner's Start that are a current leader's: in a
+// leader's own conversation, or in the main conversation with a leader as their tasks' supervisor (task_plan
+// supervisor). A conversation whose feed cannot be read is left out this time.
+func (s *Service) leaderPlans(ctx context.Context, main string, leads []string, now time.Time) []leaderPlan {
+	var out []leaderPlan
+	seen := map[string]bool{}
+	for _, conv := range append(slices.Clone(leads), main) {
+		if conv == "" {
+			continue
+		}
+		items, plans, err := s.feed(ctx, conv, now.Add(-7*24*time.Hour))
+		if err != nil {
+			continue
+		}
+		for _, it := range items {
+			p := plans[it.Ref]
+			if it.Kind != feedPlan || p == nil || p.State != planOpen || seen[p.ID] || len(p.Tasks) == 0 {
+				continue
+			}
+			lead := conv
+			if conv == main {
+				lead = p.Tasks[0].Supervisor
+			}
+			if !slices.Contains(leads, lead) {
+				continue
+			}
+			seen[p.ID] = true
+			out = append(out, leaderPlan{plan: p, lead: lead})
+		}
+	}
+	return out
 }
 
 // leaderSessions finds the sessions of the tasks' agents as the apps get them, asking each machine once; reached says,
