@@ -123,29 +123,65 @@ func (s *Scrubber) Message(v string) string {
 	return s.Text(v)
 }
 
-// replaceFold replaces every case-insensitive match of old (lowercase) in s.
+// replaceFold replaces every case-insensitive match of old (lowercase, as strings.ToLower gives it) in s. The match
+// runs on the lowercase of s. A rune whose lowercase has another byte length (U+0130, the Kelvin sign) shifts the
+// lowercase against s, so outside ASCII every lowercase byte keeps where its rune starts in s.
 func replaceFold(s, old, repl string) string {
 	if old == "" {
 		return s
 	}
 	lower := strings.ToLower(s)
-	if !strings.Contains(lower, old) || len(lower) != len(s) {
-		if len(lower) != len(s) { // case mapping changed lengths: match exactly only
-			return strings.ReplaceAll(s, old, repl)
-		}
+	if !strings.Contains(lower, old) {
 		return s
 	}
+	var from []int // from[j] is where the rune of lower[j] starts in s; nil for ASCII, where both line up byte for byte
+	if !isASCII(s) {
+		lower, from = foldMap(s)
+	}
+	at := func(j int) int { // where lower[j:] starts in s
+		if from == nil {
+			return j
+		}
+		return from[j]
+	}
 	var b strings.Builder
+	done, next := 0, 0 // done: s is written up to here; next: lower is searched from here
 	for {
-		i := strings.Index(lower, old)
+		i := strings.Index(lower[next:], old)
 		if i < 0 {
-			b.WriteString(s)
+			b.WriteString(s[done:])
 			return b.String()
 		}
-		b.WriteString(s[:i])
+		i += next
+		b.WriteString(s[done:at(i)])
 		b.WriteString(repl)
-		s, lower = s[i+len(old):], lower[i+len(old):]
+		next = i + len(old)
+		done = at(next)
 	}
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// foldMap lowercases s rune by rune as strings.ToLower does, and keeps from[j], the offset in s of the rune that gave
+// lower[j] (from[len(lower)] is len(s)).
+func foldMap(s string) (lower string, from []int) {
+	var b strings.Builder
+	b.Grow(len(s))
+	from = make([]int, 0, len(s)+1)
+	for i, r := range s { // an invalid byte comes as utf8.RuneError and is written as U+FFFD, as strings.ToLower does
+		n, _ := b.WriteRune(unicode.ToLower(r))
+		for range n {
+			from = append(from, i)
+		}
+	}
+	return b.String(), append(from, len(s))
 }
 
 // Report scrubs and trims r in place: every string a person or a machine could be told by; ids, enums and numbers

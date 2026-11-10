@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 )
@@ -46,6 +47,25 @@ func TestScrubText(t *testing.T) {
 		if got := s.Text(c.in); got != c.want {
 			t.Errorf("Text(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+	// A rune whose lowercase has another byte length (U+0130, the Kelvin sign) must not stop mixed-case names from
+	// being hidden, nor shift where they are cut out.
+	mac := NewScrubber("Alices-MacBook-Pro")
+	for in, want := range map[string]string{
+		"on Alices-MacBook-Pro":                       "on <machine>",
+		"\u0130stanbul on Alices-MacBook-Pro":         "\u0130stanbul on <machine>",
+		"5 \u212A on ALICES-MACBOOK-PRO.local":        "5 \u212A on <machine>.local",
+		"\u023A Alices-MacBook-Pro \u0130 x":          "\u023A <machine> \u0130 x", // one grows, one shrinks: same total length
+		"\u212A\u0130\u0130 alices-macbook-pro x":     "\u212A\u0130\u0130 <machine> x",
+		"\u212Bngstr\u00F6m Alices-MacBook-Pro\u0130": "\u212Bngstr\u00F6m <machine>\u0130",
+	} {
+		got := mac.Text(in)
+		if got != want || !utf8.ValidString(got) {
+			t.Errorf("Text(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := NewScrubber("kiln-box").Text("on \u212Ailn-Box"); got != "on <machine>" { // the Kelvin sign folds to k
+		t.Errorf("Kelvin sign: %q", got)
 	}
 	if got := s.Message(`send "the user's words" and 「日本語」 'it''s' failed`); strings.Contains(got, "words") || strings.Contains(got, "日本語") {
 		t.Errorf("quoted spans stay: %q", got)
