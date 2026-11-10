@@ -860,7 +860,11 @@ async fn terminate<P: Processes>(
         for _ in 0..KILL_CHECKS {
             p.pause(KILL_SETTLE).await;
             if !p.list().await?.iter().any(|x| x.pid == pid) {
-                return Ok(json!({"terminated": true, "pid": pid}));
+                let how = match how {
+                    Kill::KillPid => "kill",
+                    Kill::Signal => "signal",
+                };
+                return Ok(json!({"terminated": true, "pid": pid, "how": how}));
             }
         }
     }
@@ -1299,7 +1303,7 @@ mod tests {
         let mut p = procs(Some(Kill::KillPid));
         assert_eq!(
             terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap(),
-            json!({"terminated": true, "pid": 12411})
+            json!({"terminated": true, "pid": 12411, "how": "kill"})
         );
         assert_eq!(
             p.kills,
@@ -1309,8 +1313,8 @@ mod tests {
 
         let mut p = procs(Some(Kill::Signal));
         assert_eq!(
-            terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap()["terminated"],
-            true
+            terminate(&mut p, &by_bundle, Some(SETTINGS)).await.unwrap(),
+            json!({"terminated": true, "pid": 12411, "how": "signal"})
         );
         assert_eq!(p.kills, [(12411, Kill::KillPid), (12411, Kill::Signal)]);
 

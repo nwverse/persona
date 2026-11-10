@@ -265,7 +265,8 @@ Durations are capped at 10 seconds.
 
 ### `terminate_app`
 
-`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true, "pid": 412 }`, or `{ "terminated": false }` when it was not running.
+`{ "bundle_id": "…" }` or `{ "pid": 412 }` → `{ "terminated": true, "pid": 412, "how": "kill" | "signal" }` (`how`: which request
+ended it), or `{ "terminated": false }` when it was not running.
 Through the instruments service, which needs the developer disk image: its process list finds the app's main executable (never an
 extension inside the bundle, never a process that isn't an app), then `killPid:`, and if the process is still listed after about
 1.5 seconds, `sendSignal:toPid:` with SIGKILL. `true` only once the phone no longer lists the process; if it survives both,
@@ -407,13 +408,13 @@ phone has run against one only where the table says so:
 | `screenshot` | checked on that iPhone: PNG about 1 s; JPEG (the phone refuses it, so the bridge converts) about 4 s in `call`. Landscape rotation not verified |
 | `launch_app` | checked on that iPhone |
 | `list_apps` | checked on that iPhone through the installation service: 121 user apps, 329 in all, under a second (CoreDevice's list never answered there) |
-| `terminate_app` | on that iPhone `killPid:` with the pid as a plain integer was accepted but ended nothing, and the bridge reported success. Now the pid goes as an archived number, `sendSignal:toPid:` follows, and success needs the process gone from the list: not yet rechecked |
-| Input gate (display stream), touch coordinates and rotation, keys, buttons | **not available below iOS 27**: on that iPhone (iOS 18.7.3) the phone refused the display stream with CoreDevice error 9021; now `unsupported` up front. Not verified on iOS 27 |
+| `terminate_app` | checked on that iPhone: Settings (pid 12411) ended in 3 s, a second call answered `terminated: false`, the screenshot showed the home screen, and the next launch got a new pid (12460). Which request ended it (`how`) was not recorded then. Before the fix, `killPid:` with the pid as a plain integer was accepted but ended nothing while the bridge reported success |
+| Input gate (display stream), touch coordinates and rotation, keys, buttons | **Not verified on any real iPhone. Below iOS 27 it is not available**: that iPhone (iOS 18.7.3) itself refused the display stream with CoreDevice error 9021 ("Remote control requires iOS 27.0 or later"), so input answers `unsupported` up front there. **On iOS 27 or later, input over this route has never been tried on a real device** |
 | `usb-list` | checked on a real iPhone (iPhone13,4, iOS 18.7.3, trusting the computer): it lists the phone with its name |
 | `pair` over USB (consent prompt, `altIRK`) | not verified on a real device yet. First try on that iPhone: it already trusted the computer and answered the pairing request with pairing data straight away instead of asking its user, so the library asked the bridge for the PIN, got an empty one and panicked (exit code 101). The bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error |
 | `match` against a real advertisement | not verified on a real device; unit-tested against the library's tag function |
 | `ax_tree` | `unsupported` |
-| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | checked on that iPhone: mounted in 3.3 s, then `already: true`; `device_info` showed `ddi_mounted: true` and the developer services. Which ticket it used was not shown at the time |
+| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | checked on that iPhone: mounted in 3.3 s, then `already: true`; `device_info` showed `ddi_mounted: true` and the developer services. The ticket's source (the phone's own or Apple's signing server) was not recorded: no `--force` remount was run |
 | Simulator backend: pair, `device_info`, `screenshot`, apps, `ax_tree` (with a system alert), tap, `keys` (ASCII and Chinese), swipe, `button home`, `serve`, runner cleanup after exit and after `kill -9` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
 ## Open questions
