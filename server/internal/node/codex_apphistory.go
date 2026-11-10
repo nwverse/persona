@@ -42,8 +42,12 @@ const codexAppHistoryWait = 30 * time.Second
 // codexAppHistoryLockWait bounds the wait for another writer of a chat's transcript (a variable: tests shorten it).
 var codexAppHistoryLockWait = codexAppHistoryWait
 
-// codexAppHistoryRetry: after a failed write, the chat is not tried again for this long unless the App changes it.
+// After a failed write the chat is not tried again for codexAppHistoryRetry while nothing changed, and for
+// codexAppHistoryRetrySoon when only the history database did (the App writes it all the time it works; a database this
+// code cannot read must not cost a query a second). A change of the chat (updated_at_ms) is tried at once.
 const codexAppHistoryRetry = 5 * time.Minute
+
+var codexAppHistoryRetrySoon = 10 * time.Second // a variable: tests shorten it
 
 var codexAppHistoryFailed = struct {
 	sync.Mutex
@@ -51,7 +55,8 @@ var codexAppHistoryFailed = struct {
 }{byPath: map[string]codexHistoryFailure{}}
 
 type codexHistoryFailure struct {
-	updated int64 // the chat's updated_at_ms it failed at
+	updated int64  // the chat's updated_at_ms it failed at
+	history string // and the history database's files
 	at      time.Time
 }
 
@@ -133,7 +138,7 @@ func (n *Node) codexAppHistoryPath(src codexSource, pass *codexListPass) string 
 // codexAppHistoryChat: session id is an App chat with no rollout, whose transcript comes from the App's database.
 func (n *Node) codexAppHistoryChat(id string) (codexSource, codexAppThread, bool) {
 	src, ok := n.codexSource(id)
-	if !ok {
+	if !ok || n.codexBlocked(id) || n.ownedAssistantSource(id) { // as findTranscriptPath: no transcript of these here
 		return codexSource{}, codexAppThread{}, false
 	}
 	src = withoutGoneRollout(src, nil)
@@ -181,7 +186,7 @@ func (n *Node) refreshCodexAppHistory(id string) {
 	codexAppHistoryFailed.Lock()
 	f, failed := codexAppHistoryFailed.byPath[p]
 	codexAppHistoryFailed.Unlock()
-	if failed && f.updated == t.UpdatedAtMs && time.Since(f.at) < codexAppHistoryRetry {
+	if failed && f.updated == t.UpdatedAtMs && (time.Since(f.at) < codexAppHistoryRetrySoon || f.history == history && time.Since(f.at) < codexAppHistoryRetry) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), codexAppHistoryWait)
@@ -198,7 +203,7 @@ func (n *Node) refreshCodexAppHistory(id string) {
 	}
 	codexAppHistoryFailed.Lock()
 	if err != nil {
-		codexAppHistoryFailed.byPath[p] = codexHistoryFailure{t.UpdatedAtMs, time.Now()}
+		codexAppHistoryFailed.byPath[p] = codexHistoryFailure{t.UpdatedAtMs, history, time.Now()}
 	} else {
 		delete(codexAppHistoryFailed.byPath, p)
 	}
@@ -211,12 +216,12 @@ func (n *Node) refreshCodexAppHistory(id string) {
 }
 
 // lockCodexAppHistory takes the lock at path, waiting up to codexAppHistoryLockWait for another writer (of this process
-// or another) to finish.
+// or another) to finish; any other error (the file cannot be made, the file system has no locks) is returned at once.
 func lockCodexAppHistory(path string) (func(), error) {
 	deadline := time.Now().Add(codexAppHistoryLockWait)
 	for {
 		release, err := link.LockFile(path, false)
-		if err == nil || time.Now().After(deadline) {
+		if err == nil || !errors.Is(err, link.ErrLocked) || time.Now().After(deadline) {
 			return release, err
 		}
 		time.Sleep(50 * time.Millisecond)

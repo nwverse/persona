@@ -708,3 +708,53 @@ func TestAWatchedCodexAppChatWhoseRolloutGoes(t *testing.T) {
 		return slices.ContainsFunc(hub.got(), func(it proto.Item) bool { return it.Text == "after the rollout went" })
 	})
 }
+
+// After a failed read the chat is tried again soon once the history database changes, at once when the chat does; a lock
+// that cannot be taken for another reason than another writer is not waited for.
+func TestCodexAppChatHistoryFailureBackoffAndLockErrors(t *testing.T) {
+	defer func(soon, wait time.Duration) { codexAppHistoryRetrySoon, codexAppHistoryLockWait = soon, wait }(codexAppHistoryRetrySoon, codexAppHistoryLockWait)
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Alpha chat", time.Now(), 0))
+	db := filepath.Join(home, "thread_history_1.sqlite")
+	if out, err := exec.Command(sqlite3WithJSON(t), db, "CREATE TABLE thread_turns (thread_id TEXT, turn_id TEXT);").CombinedOutput(); err != nil {
+		t.Fatalf("sqlite3: %v: %s", err, out)
+	}
+	if _, s := readChat(t, n, appChat); s != "" {
+		t.Fatalf("read with another schema: %s", s)
+	}
+	// The App writes its rows (the history database changes, the chat does not): tried again once the short wait is over.
+	os.Remove(db)
+	writeCodexHistory(t, home, []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{userItem("u0", "rows now")}}})
+	if _, s := readChat(t, n, appChat); s != "" {
+		t.Fatalf("tried again at once: %s", s)
+	}
+	codexAppHistoryRetrySoon = 0
+	id, s := readChat(t, n, appChat)
+	if !strings.Contains(s, "rows now") {
+		t.Fatalf("after the short wait = %s", s)
+	}
+
+	// The directory cannot take the lock file: given up at once, not after the wait for another writer.
+	p := n.transcriptPath(id)
+	dir := filepath.Dir(p)
+	for _, name := range []string{filepath.Base(p) + ".lock"} {
+		os.Remove(filepath.Join(dir, name))
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	if f, err := os.Create(filepath.Join(dir, "probe")); err == nil { // root, or a system without these modes
+		f.Close()
+		t.Skip("the directory stays writable here")
+	}
+	codexAppHistoryLockWait = 3 * time.Second
+	writeCodexApp(t, home, project, "DELETE FROM threads;"+codexAppRow(appChat, "", project, "Alpha chat", time.Now().Add(time.Minute), 0))
+	start := time.Now()
+	n.file(id)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("waited %v on a lock that cannot be taken", d)
+	}
+}
