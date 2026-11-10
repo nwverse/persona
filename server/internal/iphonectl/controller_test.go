@@ -164,7 +164,7 @@ func TestEveryInputGoesToTheBridgeAsWritten(t *testing.T) {
 	}
 	var inputs []string
 	for _, c := range h.f.calls() {
-		if c != "ax_tree" && c != "device_info" {
+		if c != "ax_tree" && c != "device_info" && c != "screenshot" {
 			inputs = append(inputs, c)
 		}
 	}
@@ -189,8 +189,15 @@ func TestTypingIntoAField(t *testing.T) {
 	if !strings.Contains(resp.Text, `1. type 5 characters into "Title" → text field "Title" at (195,120): sent`) {
 		t.Fatalf("%s", resp.Text)
 	}
-	h.f.fail("keys", &Error{Code: CodeUnsupported, Message: "non-ASCII text"})
+	// Text the keyboard input can't type is refused before anything, the focusing tap included.
+	taps := h.f.count("tap")
 	_, r = h.do(`{"steps":[{"action":"type","text":"héllo","target":{"label":"Title"}}]}`)
+	if st := r.Steps[0]; st.Delivery != DeliveryNotSent || !strings.Contains(st.Detail, `printable ASCII, tab and newline, and the text has "é"; nothing was typed`) ||
+		h.f.count("tap") != taps {
+		t.Fatalf("%+v", st)
+	}
+	h.f.fail("keys", &Error{Code: CodeUnsupported, Message: "keyboard service"})
+	_, r = h.do(`{"steps":[{"action":"type","text":"hello","target":{"label":"Title"}}]}`)
 	if st := r.Steps[0]; st.Delivery != DeliveryUnknown || !strings.Contains(st.Detail, "the field was tapped, the text was not sent: the phone did not take it: unsupported") {
 		t.Fatalf("%+v", st)
 	}
@@ -466,5 +473,35 @@ func TestASecureFieldsValueGoesNowhere(t *testing.T) {
 	resp, _ := h.look()
 	if strings.Contains(resp.Text, "hunter22") || strings.Contains(string(resp.Output), "hunter22") || !strings.Contains(resp.Text, "= (hidden)") {
 		t.Fatalf("%s\n%s", resp.Text, resp.Output)
+	}
+}
+
+func TestEachInputSaysWhetherTheScreenChanged(t *testing.T) {
+	h := newHarness(t, Options{}, notes())
+	resp, r := h.do(`{"steps":[{"action":"button","button":"home"}]}`)
+	if st := r.Steps[0]; st.Delivery != DeliverySent || st.Effect != EffectChanged {
+		t.Fatalf("%s", resp.Text)
+	}
+	if !strings.Contains(resp.Text, "1. button home: sent, screen changed") || strings.Contains(strings.ToLower(resp.Text), "confirmed") {
+		t.Fatalf("%s", resp.Text)
+	}
+	h.f.inert = true
+	resp, r = h.do(`{"steps":[{"action":"tap","target":{"label":"Back"}}]}`)
+	if st := r.Steps[0]; st.Effect != EffectUnchanged || !strings.Contains(resp.Text, "sent, no visible change") {
+		t.Fatalf("%s", resp.Text)
+	}
+	// A screen that only differs by noise (the clock in the status bar) is no change.
+	a, b := signature(Image{Data: screenPNG(0)}), signature(Image{Data: screenPNG(0)})
+	b[0], b[1], b[2], b[3] = 255, 255, 255, 255
+	if differs(a, b) {
+		t.Fatal("the status bar counts as a change")
+	}
+	if !differs(a, signature(Image{Data: screenPNG(1)})) {
+		t.Fatal("another screen counts as no change")
+	}
+	h.f.info.Capabilities = map[string]bool{"screenshot": false}
+	_, r = h.do(`{"steps":[{"action":"button","button":"home"}]}`)
+	if st := r.Steps[0]; st.Delivery != DeliverySent || st.Effect != EffectUnknown {
+		t.Fatalf("%+v", st)
 	}
 }

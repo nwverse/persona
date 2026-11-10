@@ -23,6 +23,8 @@ type Limits struct {
 	// Stuck is how long an input still out past its limit holds back the next ones; after it the bridge call counts
 	// as dead.
 	Stuck time.Duration
+	// Settle is how long after an input the screen is let settle before the screenshot that checks its effect.
+	Settle time.Duration
 }
 
 // DefaultLimits are the limits a zero Limits field falls back to.
@@ -33,6 +35,7 @@ var DefaultLimits = Limits{
 	Busy:      10 * time.Second,
 	Pending:   15 * time.Minute,
 	Stuck:     2 * time.Minute,
+	Settle:    400 * time.Millisecond,
 }
 
 func (l Limits) withDefaults() Limits {
@@ -49,6 +52,7 @@ func (l Limits) withDefaults() Limits {
 		Busy:      or(l.Busy, DefaultLimits.Busy),
 		Pending:   or(l.Pending, DefaultLimits.Pending),
 		Stuck:     or(l.Stuck, DefaultLimits.Stuck),
+		Settle:    or(l.Settle, DefaultLimits.Settle),
 	}
 }
 

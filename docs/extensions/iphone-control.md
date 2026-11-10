@@ -38,12 +38,12 @@ Steps (`args.steps`, one JSON array, unknown fields rejected):
 
 | `action` | Fields | Bridge |
 | --- | --- | --- |
-| `tap` | `target`, `count` (2: double tap) | `tap` at the target's center |
+| `tap` | `target`, `count` (1–3; 2: double tap) | `tap` at the target's center |
 | `long_press` | `target`, `ms` (default 800) | `long_press` |
 | `drag` | `target`, `to`, `ms` (default 500), `hold_ms` | `drag` |
 | `swipe` | `target` (default the screen's center), `to` or `direction` + `distance` (points, default half the screen), `ms` (default 300) | `swipe` from / to |
 | `type` | `text`, `target` (tapped first, then 400 ms for the keyboard) | `keys {text}` |
-| `key` | `key` (return, backspace, tab, escape, space), `repeat` | `keys {key}` |
+| `key` | `key` (return, backspace, delete, tab, escape, space, up, down, left, right), `repeat` | `keys {key}` |
 | `button` | `button` (home, lock, volume_up, volume_down), `ms` | `button` |
 | `launch`, `terminate` | `app` (bundle id) | `launch_app`, `terminate_app` |
 | `wait` | `ms` (up to 10 s) | — |
@@ -52,6 +52,44 @@ A target is one of `{"n": 4}` (an element number), `{"label": "Send", "role": "b
 spacing, else containing it; ambiguous labels are refused with the matching numbers) or `{"x": 120, "y": 640}` (points;
 checked against the innermost element under it, so the approval rules see what it hits). Input goes out with fixed
 timings: the same steps always send the same input.
+
+## Without an element tree
+
+The bridge's v1 has no `ax_tree` (`capabilities.ax_tree` false, [iphone-bridge.md](iphone-bridge.md)), so the
+assistant works from screenshots:
+
+- look says the elements can't be read, gives the screen's size in points, attaches the screenshot and says how its
+  pixels map to points (`point_width / width`).
+- Steps take points (`{"x": 120, "y": 640}`); a step that names an element by number or label is `not_sent`.
+- **Fail-closed**: the rules can't see what anything hits, so **every** input (tap, long press, drag, swipe, type, key,
+  button, launch, terminate; not a wait) waits for the owner with kind `unchecked`, each on its own: one answer never
+  covers the steps after it, whose screen nobody has seen yet. The summary carries the point (`at`), the text, key,
+  button or app, and the response carries the screenshot the owner is asked against.
+- On resume the screen is photographed again; if it no longer matches the one the owner saw (see "Effect of an input"),
+  the step is `not_sent`.
+- After the steps a screenshot is always attached, since there are no elements to list.
+
+The same happens when `ax_tree` answers `unsupported` although the capability said otherwise.
+
+## Effect of an input
+
+The bridge answers an input once it wrote it to the phone; the phone does not confirm it. So `sent` means "written to
+the phone", never "confirmed", and every input that was sent (or may have been) is followed by a check of the screen:
+
+- `Settle` (400 ms) after the input, a screenshot, compared with the one from just before the input;
+- the comparison is on a 24 × 48 grid of average brightness, leaving out the top rows (the status bar: clock,
+  battery), with a change of more than 10 levels in at least 3 cells counting as changed, so JPEG noise doesn't;
+- the step's `effect` is `screen_changed`, `no_visible_change`, or `not_checked` (no screenshot capability, no
+  time left, or a screenshot that couldn't be read) with the reason in its detail.
+
+The do's line for the step reads `sent, screen changed` or `sent, no visible change`; a tap with no visible change
+usually missed. The screenshot after the last input is the one attached to the result.
+
+## Typing
+
+The bridge types text as key presses on a US layout: only printable ASCII, tab and newline. A type step with any other
+character (Chinese, accented letters, emoji) is `not_sent` before anything, its focusing tap included, and says which
+character and that sending the same text again fails the same way.
 
 ## Element numbers
 
@@ -89,7 +127,7 @@ Only facts, in English, the same as the other tools' results:
   give a screenshot but no elements still gets a look.
 - **do**: one line per step, what it was (`tap [4] → button "Send"`), where a touch landed, its **delivery** and how
   long it took, then the screen after it:
-  - `sent`: the phone took the input;
+  - `sent`: the bridge wrote the input to the phone (which doesn't confirm it; see the step's effect);
   - `not_sent`: it certainly did not reach the phone: not attempted, refused, waiting for approval, or the bridge
     failed before sending (`bad_request`, `pairing_missing`, `pairing_rejected`, `unreachable`, `wrong_device`,
     `tunnel_failed`, `developer_mode_off`, `ddi_not_mounted`, `service_unavailable`, `locked`, `app_not_found`,
@@ -124,6 +162,7 @@ Every call answers. A bridge that never returns, a phone that went to sleep or a
 | `Call` | 90 s | a whole look or do |
 | `Busy` | 10 s | waiting for the call before on the same phone (calls on a phone run one at a time, whichever conversation) |
 | `Pending` | 15 min | how long a step waits for the owner's approval |
+| `Settle` | 400 ms | after an input, before the screenshot that checks its effect |
 | `Stuck` | 2 min | how long an input still out past its limit holds back the next ones (after it the bridge call counts as dead) |
 
 - At a limit the core stops waiting; the bridge call keeps its context (which has ended) and its late answer is
@@ -174,13 +213,14 @@ list of the do's steps from there; one answer covers the do, though a step the r
 | --- | --- |
 | `step` | 1-based, within the do the model asked for |
 | `action` | the step's action (`tap`, `type`, `key`…) |
-| `needs` | `payment`, `delete`, `send_message`, `password`, `confirm` |
+| `needs` | `payment`, `delete`, `send_message`, `password`, `confirm`, `unchecked` |
 | `app` | `bundle_id` and `name` of the app in front |
 | `target` | `n`, `role`, `label` of the element acted on |
 | `text`, `text_len` | what a type step will type and its length; for a password only `text_len` |
 | `key`, `button`, `launch_app` | for those steps |
 | `evidence` | the facts the rules found (`button "Pay"`, `app Wallet (com.apple.Passbook)`) |
-| `steps` | with `confirm`: the do's steps from there (`action`, `target`, `text_len`, `key`, `button`, `app`) |
+| `at` | where the touch lands, when it is a point |
+| `steps` | with `confirm`: the do's steps from there (`action`, `target` or `at`, `text_len`, `key`, `button`, `app`) |
 
 **The automation never approves itself**:
 

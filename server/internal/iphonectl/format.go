@@ -138,6 +138,10 @@ func (r LookResult) Text() string {
 	}
 	if s := screenshotLine(r.image); s != "" {
 		lines = append(lines, s)
+		if d, img := r.Device, r.image; r.Screen == nil && d != nil && d.Size.known() && img.Width > 0 && img.Height > 0 {
+			lines = append(lines, fmt.Sprintf("Points = screenshot pixels × %s (x: %s pt over %d px, y: %s pt over %d px).",
+				strconv.FormatFloat(d.Size.W/float64(img.Width), 'f', 4, 64), num(d.Size.W), img.Width, num(d.Size.H), img.Height))
+		}
 	}
 	if r.Screen == nil {
 		lines = append(lines, "Took "+round(r.Elapsed)+".")
@@ -221,6 +225,11 @@ func describeStep(st Step) string {
 	return st.Action
 }
 
+// effectWords say a step's effect in its line. "sent" only means the bridge wrote the input to the phone, which
+// doesn't confirm it; the screen is the evidence.
+var effectWords = map[Effect]string{EffectChanged: "screen changed", EffectUnchanged: "no visible change",
+	EffectUnknown: "screen not checked"}
+
 // Text is the do for the model.
 func (r DoResult) Text() string {
 	if r.Note != "" {
@@ -236,6 +245,9 @@ func (r DoResult) Text() string {
 			l += fmt.Sprintf(" at (%s,%s)", num(s.At.X), num(s.At.Y))
 		}
 		l += ": " + string(s.Delivery)
+		if w := effectWords[s.Effect]; w != "" {
+			l += ", " + w
+		}
 		if s.Elapsed > 0 {
 			l += ", " + round(s.Elapsed)
 		}

@@ -1,9 +1,13 @@
 package iphonectl
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +26,9 @@ type fakeBridge struct {
 	errs    map[string][]error // returned in turn, one per call
 	release chan struct{}      // closed at the end of a test, so hanging calls end
 	started chan string        // when set, hears each op as it starts
+	// screen is what the screenshots show: it changes with every input unless inert.
+	screen int
+	inert  bool
 }
 
 func newFake(t *testing.T, screens ...Tree) *fakeBridge {
@@ -101,7 +108,34 @@ func (f *fakeBridge) DeviceInfo(ctx context.Context, _ string) (DeviceInfo, erro
 
 func (f *fakeBridge) Screenshot(ctx context.Context, _ string) (Image, error) {
 	err := f.op(ctx, "screenshot", "screenshot")
-	return Image{Mime: "image/jpeg", Data: []byte{0xff, 0xd8}, Width: 4, Height: 8}, err
+	f.mu.Lock()
+	n := f.screen
+	f.mu.Unlock()
+	return Image{Mime: "image/png", Data: screenPNG(n), Width: 4, Height: 8}, err
+}
+
+// screenPNG is a screen that looks different for every n.
+func screenPNG(n int) []byte {
+	m := image.NewGray(image.Rect(0, 0, 48, 96))
+	for y := 0; y < 96; y++ {
+		for x := 0; x < 48; x++ {
+			m.SetGray(x, y, color.Gray{Y: uint8((x*7 + y*3 + n*40) % 256)})
+		}
+	}
+	var b bytes.Buffer
+	_ = png.Encode(&b, m)
+	return b.Bytes()
+}
+
+// input notes an input reaching the screen.
+func (f *fakeBridge) input(ctx context.Context, name, entry string) error {
+	err := f.op(ctx, name, entry)
+	f.mu.Lock()
+	if !f.inert && err == nil {
+		f.screen++
+	}
+	f.mu.Unlock()
+	return err
 }
 
 func (f *fakeBridge) AXTree(ctx context.Context, _ string) (Tree, error) {
@@ -125,39 +159,39 @@ func (f *fakeBridge) ListApps(ctx context.Context, _ string) ([]AppInfo, error) 
 }
 
 func (f *fakeBridge) Tap(ctx context.Context, _ string, p Point, count int) error {
-	return f.op(ctx, "tap", fmt.Sprintf("tap %s,%s ×%d", num(p.X), num(p.Y), count))
+	return f.input(ctx, "tap", fmt.Sprintf("tap %s,%s ×%d", num(p.X), num(p.Y), count))
 }
 
 func (f *fakeBridge) LongPress(ctx context.Context, _ string, p Point, d time.Duration) error {
-	return f.op(ctx, "long_press", fmt.Sprintf("long_press %s,%s %s", num(p.X), num(p.Y), d))
+	return f.input(ctx, "long_press", fmt.Sprintf("long_press %s,%s %s", num(p.X), num(p.Y), d))
 }
 
 func (f *fakeBridge) Drag(ctx context.Context, _ string, a, b Point, d, hold time.Duration) error {
-	return f.op(ctx, "drag", fmt.Sprintf("drag %s,%s → %s,%s %s %s", num(a.X), num(a.Y), num(b.X), num(b.Y), d, hold))
+	return f.input(ctx, "drag", fmt.Sprintf("drag %s,%s → %s,%s %s %s", num(a.X), num(a.Y), num(b.X), num(b.Y), d, hold))
 }
 
 func (f *fakeBridge) Swipe(ctx context.Context, _ string, a, b Point, d time.Duration) error {
-	return f.op(ctx, "swipe", fmt.Sprintf("swipe %s,%s → %s,%s %s", num(a.X), num(a.Y), num(b.X), num(b.Y), d))
+	return f.input(ctx, "swipe", fmt.Sprintf("swipe %s,%s → %s,%s %s", num(a.X), num(a.Y), num(b.X), num(b.Y), d))
 }
 
 func (f *fakeBridge) Keys(ctx context.Context, _ string, text string) error {
-	return f.op(ctx, "keys", "keys "+text)
+	return f.input(ctx, "keys", "keys "+text)
 }
 
 func (f *fakeBridge) Key(ctx context.Context, _ string, key string, repeat int) error {
-	return f.op(ctx, "key", fmt.Sprintf("key %s ×%d", key, repeat))
+	return f.input(ctx, "key", fmt.Sprintf("key %s ×%d", key, repeat))
 }
 
 func (f *fakeBridge) Button(ctx context.Context, _ string, name string, d time.Duration) error {
-	return f.op(ctx, "button", "button "+name)
+	return f.input(ctx, "button", "button "+name)
 }
 
 func (f *fakeBridge) LaunchApp(ctx context.Context, _ string, bundleID string) error {
-	return f.op(ctx, "launch_app", "launch_app "+bundleID)
+	return f.input(ctx, "launch_app", "launch_app "+bundleID)
 }
 
 func (f *fakeBridge) TerminateApp(ctx context.Context, _ string, bundleID string) error {
-	return f.op(ctx, "terminate_app", "terminate_app "+bundleID)
+	return f.input(ctx, "terminate_app", "terminate_app "+bundleID)
 }
 
 // Screens used across tests: placeholder apps and labels only.
@@ -203,7 +237,7 @@ func notes() Tree { return tree(exampleApp, notesElements()...) }
 
 // fastLimits make limits tests can wait out.
 var fastLimits = Limits{Primitive: 60 * time.Millisecond, Action: 150 * time.Millisecond, Call: 500 * time.Millisecond,
-	Busy: 30 * time.Millisecond, Pending: time.Minute}
+	Busy: 30 * time.Millisecond, Pending: time.Minute, Settle: time.Millisecond}
 
 var testRules = Rules{SelfApps: []string{selfApp.BundleID}}
 

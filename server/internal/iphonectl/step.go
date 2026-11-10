@@ -173,9 +173,16 @@ func fingerprint(st Step, tg resolved, scr *Screen, needs []Sensitivity) string 
 	return strings.Join([]string{st.Action, app, part(tg.target), part(tg.to), focused, strings.Join(ns, ",")}, "\x00")
 }
 
-// step runs one step, or stops it for the owner's approval. approved is the fingerprint the owner approved for this
-// step ("" for none).
-func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, approved string) (r StepResult, w *waiting) {
+// resumed is what the owner approved for a step: its fingerprint ("" for none) and, without an element tree, the
+// screen they were shown.
+type resumed struct {
+	print string
+	shot  sig
+}
+
+// step runs one step, or stops it for the owner's approval.
+func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, resume resumed) (r StepResult, w *waiting) {
+	approved := resume.print
 	start := time.Now()
 	r = StepResult{Step: i + 1, Action: st.Action, What: describeStep(st)}
 	defer func() { r.Elapsed = time.Since(start) }()
@@ -188,6 +195,12 @@ func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, approve
 		deadline = end
 	}
 
+	if st.Action == ActType {
+		if bad, ok := untypable(st.Text); !ok {
+			return fail(DeliveryNotSent, fmt.Sprintf("not attempted: the phone's keyboard input types only printable ASCII, "+
+				"tab and newline, and the text has %q; nothing was typed. Sending the same text again fails the same way", bad))
+		}
+	}
 	if input(st.Action) {
 		if cl.infoStale {
 			info, err := read(ctx, deadline, c.limits.Primitive, func(ctx context.Context) (DeviceInfo, error) {
@@ -216,24 +229,50 @@ func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, approve
 
 	var scr *Screen
 	var tg resolved
-	if needsScreen(st) {
+	if needsScreen(st) && !cl.noTree {
 		var err error
-		if scr, err = c.current(ctx, cl, deadline); err != nil {
+		if scr, err = c.current(ctx, cl, deadline); code(err) == CodeUnsupported {
+			cl.noTree = true
+		} else if err != nil {
 			return fail(DeliveryNotSent, "not attempted: the screen could not be read first: "+err.Error())
 		}
+	}
+	switch {
+	case cl.noTree && (st.Target.named() || st.To.named()):
+		return fail(DeliveryNotSent, "not attempted: this phone can't give its elements, so a step can't name one; "+
+			"use a point (x, y) from the screenshot")
+	case cl.noTree:
+		// Points only, checked against the screen's size from device_info.
+		var err error
+		if tg, err = resolve(cl, &Screen{Size: cl.info.Size}, st); err != nil {
+			return fail(DeliveryNotSent, "not attempted: "+err.Error())
+		}
+	case scr != nil:
+		var err error
 		if tg, err = resolve(cl, scr, st); err != nil {
 			return fail(DeliveryNotSent, "not attempted: "+err.Error())
 		}
 		r.Target = ref(tg.target)
 	}
 
-	v := c.rules.Check(st, touchOf(st, tg, scr), scr)
+	sized := scr
+	if sized == nil {
+		sized = &Screen{Size: cl.info.Size}
+	}
+	v := c.rules.Check(st, touchOf(st, tg, sized), scr)
 	if v.Refused != "" {
 		return fail(DeliveryNotSent, "refused: "+v.Refused)
 	}
 	needs := v.Needs
-	if cl.confirm && !cl.confirmed && input(st.Action) {
-		needs = append(slices.Clone(needs), Confirm)
+	if !cl.confirmed && input(st.Action) {
+		if cl.confirm {
+			needs = append(slices.Clone(needs), Confirm)
+		}
+	}
+	// Without an element tree the rules can't see what any input hits: every one waits for the owner, each on its
+	// own (fail-closed; one answer never covers the steps after it, whose screen nobody has seen yet).
+	if cl.noTree && input(st.Action) {
+		needs = append(slices.Clone(needs), Unchecked)
 	}
 	// A resumed step is compared with what the owner approved even when the rules find nothing now: a password
 	// approved for one field must not go to another that happens to need no approval.
@@ -243,16 +282,28 @@ func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, approve
 		case approved == "":
 			r.Needs, r.Waiting = needs, true
 			a := newApproval(i, st, tg.target, scr, Verdict{Needs: needs, Evidence: v.Evidence})
+			a.At = tg.at
 			if slices.Contains(needs, Confirm) {
 				for _, rest := range cl.remaining {
 					a.Steps = append(a.Steps, summary(rest))
 				}
 			}
+			w := &waiting{approval: a, print: print}
+			if cl.noTree {
+				// The owner is shown the screen as it is now; the step goes only if it is still that screen.
+				w.shot = c.before(ctx, cl, deadline)
+			}
 			r.Delivery = DeliveryNotSent
 			r.Detail = "waits for the owner's approval (" + joinNeeds(needs) + "); nothing of it was sent"
-			return r, &waiting{approval: a, print: print}
+			return r, w
 		case approved != print:
 			return fail(DeliveryNotSent, "not sent: the screen changed since the owner approved this step; look again")
+		case cl.noTree:
+			now := c.before(ctx, cl, deadline)
+			if resume.shot == nil || now == nil || differs(resume.shot, now) {
+				return fail(DeliveryNotSent, "not sent: the screen changed since the owner approved this step (or could not "+
+					"be compared); look again")
+			}
 		}
 		r.Approved = true
 		if slices.Contains(needs, Confirm) {
@@ -270,11 +321,45 @@ func joinNeeds(needs []Sensitivity) string {
 	return strings.Join(s, ", ")
 }
 
-// act sends the step's input.
+// act sends the step's input and, when it was sent (or may have been), checks the screen for its effect.
 func (c *Controller) act(ctx context.Context, cl *call, st Step, scr *Screen, tg resolved, deadline time.Time, r StepResult) StepResult {
+	if !input(st.Action) {
+		return c.deliver(ctx, cl, st, scr, tg, deadline, r)
+	}
+	before := c.before(ctx, cl, deadline)
+	r = c.deliver(ctx, cl, st, scr, tg, deadline, r)
+	if r.Delivery == DeliveryNotSent {
+		// Nothing reached the phone (a type step whose focusing tap went out is reported unknown).
+		return r
+	}
+	cl.dirty = true
+	effect, note := c.effect(ctx, cl, before, deadline)
+	r.Effect = effect
+	if note != "" {
+		if r.Detail != "" {
+			r.Detail += "; "
+		}
+		r.Detail += note
+	}
+	return r
+}
+
+// untypable is the first character the bridge's keyboard input can't type: it types printable ASCII, tab and
+// newline only, and refuses the whole text otherwise.
+func untypable(text string) (string, bool) {
+	for _, r := range text {
+		if r != '\t' && r != '\n' && (r < 0x20 || r > 0x7e) {
+			return string(r), false
+		}
+	}
+	return "", true
+}
+
+// deliver sends the step's input.
+func (c *Controller) deliver(ctx context.Context, cl *call, st Step, scr *Screen, tg resolved, deadline time.Time, r StepResult) StepResult {
 	dev := cl.device
-	var size Size
-	if scr != nil {
+	size := cl.info.Size
+	if scr != nil && scr.Size.known() {
 		size = scr.Size
 	}
 	at := func(e *Numbered, p *Point) Point {

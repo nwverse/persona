@@ -175,7 +175,7 @@ func TestStepValidation(t *testing.T) {
 		{`[{"action":"swipe","target":{"n":3},"to":{"n":8},"ms":600000}]`, "ms is 0 to 5000"},
 		{`[{"action":"swipe","to":{"n":8},"ms":-1}]`, "ms is 0 to 5000"},
 		{`[{"action":"drag","target":{"n":1}}]`, "needs to"},
-		{`[{"action":"tap","target":{"n":1},"count":3}]`, "count"},
+		{`[{"action":"tap","target":{"n":1},"count":4}]`, "count"},
 		{`[{"action":"key","key":"enter"}]`, "key is"},
 		{`[{"action":"button","button":"power"}]`, "button is"},
 		{`[{"action":"tap","target":{"n":1,"label":"x"}}]`, "one of"},

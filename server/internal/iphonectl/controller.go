@@ -134,6 +134,7 @@ type pending struct {
 	print      string // the waiting step on the screen it was checked on
 	confirm    bool   // the owner's confirm setting the do stopped under
 	confirmed  bool   // the owner had already confirmed the do (Confirm)
+	shot       sig    // without an element tree: the screen the owner saw when asked
 	screenshot bool
 	expires    time.Time
 }

@@ -18,6 +18,9 @@ const (
 	Password    Sensitivity = "password"
 	// Confirm is the owner's setting to be asked before any input, not a property of the step.
 	Confirm Sensitivity = "confirm"
+	// Unchecked: the phone gives no element tree, so the rules can't see what an input hits; the owner approves
+	// every input, each on its own.
+	Unchecked Sensitivity = "unchecked"
 )
 
 // Rules say which steps need the owner's approval and which are never done.
@@ -338,15 +341,18 @@ type Approval struct {
 	Button    string   `json:"button,omitempty"`
 	LaunchApp string   `json:"launch_app,omitempty"` // launch, terminate
 	Evidence  []string `json:"evidence,omitempty"`
-	// Steps are this step and the ones after it, when the owner asked to confirm every do (Confirm): one answer
-	// covers them, though a step the rules mark is still asked about on its own.
+	// Steps are this step and the ones after it, with Confirm: one answer covers them, though a step the rules mark
+	// is still asked about on its own (and, without an element tree, every input is).
 	Steps []StepSummary `json:"steps,omitempty"`
+	// At is where a touch lands, when there are no elements to name it by (Unchecked).
+	At *Point `json:"at,omitempty"`
 }
 
 // StepSummary is a step as data, for an approval card.
 type StepSummary struct {
 	Action  string      `json:"action"`
 	Target  *ElementRef `json:"target,omitempty"`
+	At      *Point      `json:"at,omitempty"` // a target given as a point
 	TextLen int         `json:"text_len,omitempty"`
 	Key     string      `json:"key,omitempty"`
 	Button  string      `json:"button,omitempty"`
@@ -374,7 +380,11 @@ func summary(st Step) StepSummary {
 		s.TextLen = utf8.RuneCountInString(st.Text)
 	}
 	if t := st.Target; t != nil {
-		s.Target = &ElementRef{N: t.N, Role: t.Role, Label: t.Label}
+		if p, ok := t.point(); ok {
+			s.At = &p
+		} else {
+			s.Target = &ElementRef{N: t.N, Role: t.Role, Label: t.Label}
+		}
 	}
 	return s
 }

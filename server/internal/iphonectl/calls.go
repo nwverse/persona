@@ -39,8 +39,14 @@ func (c *Controller) look(ctx context.Context, b Bridge, device, sessionID strin
 		res.Device = &info
 	}
 	before := s.screen
-	if scr, err := c.readScreen(ctx, b, device, p, s, info, deadline); err != nil {
-		res.Notes = append(res.Notes, "elements not read: "+err.Error())
+	if !info.can("ax_tree") {
+		res.Notes = append(res.Notes, noTreeNote(info))
+	} else if scr, err := c.readScreen(ctx, b, device, p, s, info, deadline); err != nil {
+		if code(err) == CodeUnsupported {
+			res.Notes = append(res.Notes, noTreeNote(info))
+		} else {
+			res.Notes = append(res.Notes, "elements not read: "+err.Error())
+		}
 	} else {
 		res.Screen, res.Changes = scr, diff(before, scr)
 	}
@@ -61,6 +67,19 @@ func (c *Controller) look(ctx context.Context, b Bridge, device, sessionID strin
 	}
 	p.set(func() { s.last = last })
 	return res
+}
+
+// noTreeNote says why a phone gives no elements and what works instead.
+func noTreeNote(info DeviceInfo) string {
+	why := info.Notes["ax_tree"]
+	if why == "" {
+		why = CodeUnsupported
+	}
+	note := "elements not read: this phone can't give its elements (" + why + "), so act on points (x, y) read off the screenshot"
+	if info.Size.known() {
+		note += fmt.Sprintf(", in points of a %s×%s screen", num(info.Size.W), num(info.Size.H))
+	}
+	return note
 }
 
 // readScreen reads the elements and numbers them against the session's latest read.
@@ -91,6 +110,9 @@ type StepResult struct {
 	Target   *ElementRef `json:"target,omitempty"`
 	At       *Point      `json:"at,omitempty"` // where a touch landed
 	Delivery Delivery    `json:"delivery"`
+	// Effect is what the screen shows after an input that was sent: the phone does not confirm input, so this is
+	// how a step is known to have done something.
+	Effect Effect `json:"effect,omitempty"`
 	// Detail is why a step was not sent or is unknown, and any fact the delivery alone doesn't say.
 	Detail string `json:"detail,omitempty"`
 	// Waiting: the step waits for the owner's approval; nothing of it was sent.
@@ -136,6 +158,8 @@ type run struct {
 	approved string
 	// confirmed: the owner already confirmed this do (Confirm) before it stopped again.
 	confirmed bool
+	// approvedShot is the screen the owner saw when asked, without an element tree.
+	approvedShot sig
 	// resume is the approval id of the pending do to run instead.
 	resume string
 }
@@ -156,9 +180,13 @@ type call struct {
 	stale     bool          // the phone may have changed since the latest read
 	info      DeviceInfo
 	infoStale bool   // a button was pressed: the phone may have locked or unlocked
+	noTree    bool   // the phone gives no element tree: steps act on points, unchecked
 	confirmed bool   // the owner confirmed the rest of this do
 	confirm   bool   // ask the owner before any input
 	remaining []Step // the current step and those after it
+	lastImg   *Image // the call's latest screenshot
+	lastSig   sig    // and its signature
+	dirty     bool   // an input was sent after lastImg
 	bridge    Bridge
 	device    string
 	phone     *phone
@@ -169,6 +197,7 @@ type call struct {
 type waiting struct {
 	approval Approval
 	print    string
+	shot     sig
 }
 
 func (c *Controller) do(ctx context.Context, b Bridge, device, sessionID string, r run) DoResult {
@@ -202,7 +231,7 @@ func (c *Controller) do(ctx context.Context, b Bridge, device, sessionID string,
 				round(c.limits.Pending)), Elapsed: time.Since(start)}
 		}
 		r = run{steps: w.steps, offset: w.offset, view: w.view, screenshot: w.screenshot, confirm: w.confirm,
-			approved: w.print, confirmed: w.confirmed}
+			approved: w.print, approvedShot: w.shot, confirmed: w.confirmed}
 	} else {
 		// A new do replaces whatever waited for approval: its id no longer resumes anything.
 		p.set(func() { s.pending = nil })
@@ -225,7 +254,7 @@ func (c *Controller) do(ctx context.Context, b Bridge, device, sessionID string,
 	info, err := read(ctx, cl.deadline, c.limits.Primitive, func(ctx context.Context) (DeviceInfo, error) {
 		return b.DeviceInfo(ctx, device)
 	})
-	cl.info = info
+	cl.info, cl.noTree = info, !info.can("ax_tree")
 	if err != nil {
 		notSent(0, "not attempted: the phone could not be reached: "+err.Error())
 		res.Elapsed = time.Since(start)
@@ -243,15 +272,16 @@ func (c *Controller) do(ctx context.Context, b Bridge, device, sessionID string,
 			break
 		}
 		cl.remaining = r.steps[i:]
-		approved := ""
+		var approved resumed
 		if i == 0 {
-			approved = r.approved
+			approved = resumed{print: r.approved, shot: r.approvedShot}
 		}
 		sr, wait := c.step(ctx, cl, r.offset+i, st, approved)
 		res.Steps = append(res.Steps, sr)
 		if wait != nil {
 			w := &pending{id: newID(), steps: r.steps[i:], offset: r.offset + i, view: cl.view, print: wait.print,
-				confirm: cl.confirm, confirmed: cl.confirmed, screenshot: r.screenshot, expires: time.Now().Add(c.limits.Pending)}
+				shot: wait.shot, confirm: cl.confirm, confirmed: cl.confirmed, screenshot: r.screenshot,
+				expires: time.Now().Add(c.limits.Pending)}
 			p.set(func() { s.pending = w })
 			res.approval, res.approvalID = &wait.approval, w.id
 			notSent(i+1, fmt.Sprintf("not attempted: step %d waits for the owner's approval", r.offset+i+1))
@@ -263,16 +293,25 @@ func (c *Controller) do(ctx context.Context, b Bridge, device, sessionID string,
 		}
 	}
 	if left := time.Until(cl.deadline); left > 0 {
-		scr, err := c.readScreen(ctx, b, device, p, s, cl.info, cl.deadline)
-		switch {
-		case err != nil:
-			res.ReadError = "screen not read after the steps: " + err.Error()
-		case base != nil && scr.Numbering == base.Numbering:
-			res.Screen, res.Changes = scr, diff(base, scr)
-		default:
-			res.Screen, res.Changes = scr, Diff{Replaced: true}
+		if cl.noTree {
+			// No elements to list: the screenshot is what shows the steps' effect.
+			r.screenshot, res.ReadError = true, noTreeNote(cl.info)
+		} else {
+			scr, err := c.readScreen(ctx, b, device, p, s, cl.info, cl.deadline)
+			switch {
+			case err != nil:
+				res.ReadError = "screen not read after the steps: " + err.Error()
+			case base != nil && scr.Numbering == base.Numbering:
+				res.Screen, res.Changes = scr, diff(base, scr)
+			default:
+				res.Screen, res.Changes = scr, Diff{Replaced: true}
+			}
 		}
-		if r.screenshot && time.Until(cl.deadline) > 0 {
+		switch {
+		case (r.screenshot || res.approval != nil && cl.noTree) && cl.lastImg != nil && !cl.dirty:
+			// The screenshot after the last input (or the one the owner is asked about) is the screen now.
+			res.image = cl.lastImg
+		case r.screenshot && time.Until(cl.deadline) > 0:
 			img, err := read(ctx, cl.deadline, c.limits.Primitive, func(ctx context.Context) (Image, error) {
 				return b.Screenshot(ctx, device)
 			})

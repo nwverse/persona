@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,6 +25,9 @@ const (
 	ActTerminate = "terminate"
 	ActWait      = "wait"
 )
+
+// keys are the keyboard keys the bridge can press.
+var keys = []string{"return", "backspace", "delete", "tab", "escape", "space", "up", "down", "left", "right"}
 
 var actions = []string{ActTap, ActLongPress, ActDrag, ActSwipe, ActType, ActKey, ActButton, ActLaunch, ActTerminate, ActWait}
 
@@ -68,6 +72,9 @@ func (t *Target) point() (Point, bool) {
 
 // byNumber says the target is an element number, which only means something under the numbering it was read in.
 func (t *Target) byNumber() bool { return t != nil && t.N > 0 }
+
+// named says the target is an element (by number or label), which needs the element tree.
+func (t *Target) named() bool { return t != nil && (t.N > 0 || t.Label != "") }
 
 // Bounds on a do, and the fixed timings the input is sent with: the same steps always send the same input.
 const (
@@ -132,8 +139,8 @@ func (s Step) validate() error {
 	}
 	switch s.Action {
 	case ActTap:
-		if s.Count < 0 || s.Count > 2 {
-			return errors.New("count is 1, or 2 for a double tap")
+		if s.Count < 0 || s.Count > 3 {
+			return errors.New("count is 1 to 3 (2 for a double tap)")
 		}
 		return target(s.Target, "a target")
 	case ActLongPress:
@@ -180,10 +187,8 @@ func (s Step) validate() error {
 			return s.Target.validate()
 		}
 	case ActKey:
-		switch s.Key {
-		case "return", "backspace", "tab", "escape", "space":
-		default:
-			return errors.New("key is return, backspace, tab, escape or space")
+		if !slices.Contains(keys, s.Key) {
+			return errors.New("key is " + strings.Join(keys, ", "))
 		}
 		if s.Repeat < 0 || s.Repeat > MaxRepeat {
 			return fmt.Errorf("repeat is 1 to %d", MaxRepeat)

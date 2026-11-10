@@ -25,7 +25,7 @@ type Bridge interface {
 	Swipe(ctx context.Context, device string, from, to Point, d time.Duration) error
 	// Keys types text into what has the keyboard.
 	Keys(ctx context.Context, device, text string) error
-	// Key presses a key of the keyboard (return, backspace, tab, escape, space) repeat times.
+	// Key presses a key of the keyboard (return, backspace, delete, tab, escape, space, arrows) repeat times.
 	Key(ctx context.Context, device, key string, repeat int) error
 	// Button presses a hardware button (home, lock, volume_up, volume_down); d 0 presses briefly.
 	Button(ctx context.Context, device, name string, d time.Duration) error
