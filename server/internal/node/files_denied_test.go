@@ -3,6 +3,8 @@ package node
 import (
 	"errors"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,7 +36,7 @@ func TestExplainDeniedSaysWhoToAllow(t *testing.T) {
 	denied := &fs.PathError{Op: "open", Path: "/Users/me/Documents/a.md", Err: fs.ErrPermission}
 	for via, want := range map[string]string{
 		"ssh":     "sshd-keygen-wrapper",
-		"launchd": "加上 /Users/me/.persona/bin/personad 并打开它（Persona 的常驻 node 由 launchd 启动",
+		"launchd": "加上 /Users/me/.persona/bin/personad 并打开它（Persona 的 node 由 launchd 服务启动，macOS 按这个服务运行的程序给权限",
 		"":        "运行 Persona node 的终端或 App",
 	} {
 		err := explainDeniedFor("/Users/me/Documents/a.md", "/Users/me", via, "/Users/me/.persona/bin/personad", denied)
@@ -50,5 +52,59 @@ func TestExplainDeniedSaysWhoToAllow(t *testing.T) {
 	}
 	if err := explainDeniedFor("/Users/me/code/a.md", "/Users/me", "launchd", "/x", denied); err != denied {
 		t.Errorf("outside the protected folders: %v", err)
+	}
+}
+
+// Under launchd, TCC holds the node to the program of the agent it runs under (#5944): its own agent's (persona-node
+// or personad), or the built-in manager's agent's for the node of the hub's computer, which that manager starts.
+func TestFullDiskAccessNamesTheAgentsProgram(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(label, body string) {
+		t.Helper()
+		plist := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>` + label + `</string>
+` + body + `
+</dict></plist>
+`
+		if err := os.WriteFile(filepath.Join(dir, label+".plist"), []byte(plist), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exe := "/Users/me/.persona/bin/persona-node"
+	write("com.persona.manager.assistant", `  <key>ProgramArguments</key><array><string>/Users/me/.persona/bin/persona-manager</string><string>assistant</string></array>`)
+	write("com.persona.node", `  <key>ProgramArguments</key>
+  <array>
+    <string>~/.persona/bin/persona-node</string>
+    <string>node</string>
+  </array>`)
+	write("com.example.program", `  <key>Program</key><string>/opt/a&amp;b/personad</string>
+  <key>ProgramArguments</key><array><string>ignored</string></array>`)
+	write("com.example.none", `  <key>RunAtLoad</key><true/>`)
+	for _, c := range []struct{ via, label, want string }{
+		{"launchd", "com.persona.manager.assistant", "/Users/me/.persona/bin/persona-manager"},
+		{"launchd", "com.persona.node", filepath.Join(home, ".persona", "bin", "persona-node")},
+		{"launchd", "com.example.program", "/opt/a&b/personad"},
+		{"launchd", "com.example.none", exe},
+		{"launchd", "com.example.missing", exe},
+		{"launchd", "../com.persona.node", exe},
+		{"launchd", "", exe},
+		{"ssh", "com.persona.manager.assistant", exe},
+		{"", "com.persona.manager.assistant", exe},
+	} {
+		if got := fullDiskAccessProgram(c.via, home, c.label, exe); got != c.want {
+			t.Errorf("%s %q: %q, want %q", c.via, c.label, got, c.want)
+		}
+	}
+	denied := &fs.PathError{Op: "open", Path: "/Users/me/Documents/a.md", Err: fs.ErrPermission}
+	err := explainDeniedFor("/Users/me/Documents/a.md", "/Users/me", "launchd",
+		fullDiskAccessProgram("launchd", home, "com.persona.manager.assistant", exe), denied)
+	if !strings.Contains(err.Error(), "加上 /Users/me/.persona/bin/persona-manager 并打开它") {
+		t.Errorf("manager's node: %v", err)
 	}
 }

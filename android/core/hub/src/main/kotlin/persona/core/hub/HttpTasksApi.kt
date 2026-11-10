@@ -128,6 +128,10 @@ class HttpTasksApi internal constructor(
         JsonCodec.decodeFromJsonElement(call(path("todos", todoId, "retry"), "POST", JsonObject(emptyMap()))["todo"]
             ?: error("no todo in the answer"))
 
+    override suspend fun acceptTask(todoId: String, askedAt: String) {
+        call(path("todos", todoId, "accept"), "POST", buildJsonObject { put("asked_at", askedAt) })
+    }
+
     override suspend fun removeTask(todoId: String) {
         call(path("todos", todoId), "DELETE")
     }
