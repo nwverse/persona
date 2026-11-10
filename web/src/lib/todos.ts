@@ -1,5 +1,5 @@
 import { formatDate, t } from "../i18n";
-import { noteItemManager } from "./manager-choice";
+import { currentHeaders, noteItemManager } from "./manager-choice";
 import { acceptanceStands, reviewState, type Supervision } from "./supervision";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
@@ -72,7 +72,9 @@ export interface Todo {
   /** How far the work got (`plan` / `develop` / `review` / `merge` / `deploy` / `verify`, #2776); unset on hubs that
    * don't send it, and unknown values draw nothing (lib/todo-stage.ts). */
   stage?: string;
-  /** The pull request the work is in, when the hub knows one (#2776). */
+  /** "code" uses the six stages; "general" hides them. Unset or unknown kinds keep the existing stage behavior. */
+  stage_kind?: string;
+  /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
   /** How far its finished work went out; short of live, where it is held and who can unhold it (docs/assistant/todos.md "Delivery"). */
   delivery?: TodoDelivery;
@@ -648,8 +650,10 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
 
 /** A new to-do; `due` makes it due at a moment or on a day (one made on the calendar, #2029). */
 export async function createTodo(title: string, notes?: string, due?: { due_at?: string; due_date?: string }): Promise<Todo> {
+  // a to-do made here is the current assistant's (the list shows only its own)
   const r = await api<{ todo: Todo }>("/todos", {
     method: "POST",
+    headers: currentHeaders(),
     json: { title: title.trim(), notes: notes?.trim() || undefined, ...due },
   });
   return r.todo;

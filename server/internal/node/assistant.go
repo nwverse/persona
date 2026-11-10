@@ -104,6 +104,7 @@ type assistantProc struct {
 	runtime       string   // proto.AssistantRuntimeAgentSDK when it runs on the bridge (assistant_sdk.go), "" on the CLI
 	fallback      string   // why it runs on the CLI though asked to run on the Agent SDK
 	sdkVersion    string   // the bridge's SDK version (its ready line)
+	claudeVersion string   // the Claude Code its system/init named (claude_code_version), "" before it
 
 	// declaredWindow: the window the launcher declares (assistantCompaction.declared), 0 for none; replyModel: the
 	// model of the conversation's last reply. compactIdleAt follows the window Claude Code reports for it (followWindow).
@@ -204,12 +205,43 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
+	if id != "" {
+		defer n.typing.lock(id)()
+	}
+	recovery, restart := assistantRecoveryOf(ctx)
+	if recovery != nil {
+		n.mu.Lock()
+		valid := n.recoveries[id] == recovery
+		p := n.procs[id]
+		n.mu.Unlock()
+		if !valid {
+			return "", errAssistantRecoveryCancelled
+		}
+		if restart {
+			if p == nil {
+				return "", errAssistantRecoveryTasks
+			}
+			if p.agent == "codex" && p.cx != nil {
+				p.cx.syncTasks() // a successful explicit empty list is the only proof that a restart kills no background work
+			}
+			p.mu.Lock()
+			safe := p.tasksObserved && len(p.tasks) == 0
+			p.mu.Unlock()
+			if !safe {
+				return "", errAssistantRecoveryTasks
+			}
+			n.stopAssistantProcess(id)
+		}
+	} else {
+		n.cancelAssistantRecovery(id)
+	}
 	if err := validModes(mode, effort); err != nil {
 		return "", err
 	}
 	resume := id != ""
 	st, _ := n.state.get(id)
 	isMain := executionOption(options).IsMain
+	interject := executionOption(options).Interject // this message, not the conversation (assistant_interject.go)
 	if len(options) == 0 {
 		isMain = st.IsMain
 	}
@@ -346,7 +378,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			}
 			p.mu.Unlock()
 		} else {
-			n.stopAssistant(id) // model switch, dead process, bypassPermissions (start-only) or new instructions: resume in a fresh one
+			n.stopAssistantProcess(id) // model switch, dead process, bypassPermissions (start-only) or new instructions: resume in a fresh one
 			n.rememberTasks(id, nil)
 			p = nil
 		}
@@ -373,6 +405,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		n.state.put(id, st)
 	}
 
+	n.noteAssistantRecoveryProcess(ctx, p)
 	live, commit := n.turnContext(id, <-snapc)
 	if p.agent == "codex" {
 		p.mu.Lock()
@@ -392,9 +425,13 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return id, nil
 	}
 
+	interject = interject && !fresh && p.interjects()
 	content := []map[string]any{}
 	if live != "" {
 		content = append(content, map[string]any{"type": "text", "text": live})
+	}
+	if interject {
+		content = append(content, interjectNote())
 	}
 	for _, img := range images {
 		content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": img.Mime, "data": img.Data}})
@@ -424,7 +461,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		switch {
 		case werr != nil && !fresh:
-			n.stopAssistant(id)
+			n.stopAssistantProcess(id)
 			return "", fmt.Errorf("send to claude: %w", werr)
 		case werr != nil:
 			werr = p.startFailure() // it is gone already: say why, not that the pipe is closed (#2581)
@@ -432,9 +469,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			werr = p.awaitStart(assistantStartWait)
 		}
 		if werr == nil {
+			if interject {
+				n.backgroundForeground(p)
+			}
 			break
 		}
-		n.stopAssistant(id)
+		n.stopAssistantProcess(id)
 		if !p.missingCommand() || attempt > assistantStartRetries {
 			return "", p.startRefusal(werr)
 		}
@@ -499,6 +539,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Subtype  string                   `json:"subtype"`
 			Tasks    json.RawMessage          `json:"tasks"`
 			Tools    []string                 `json:"tools"`
+			Version  string                   `json:"claude_code_version"`
 			Response assistantControlResponse `json:"response"`
 			Event    struct {
 				Type  string `json:"type"`
@@ -530,6 +571,11 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		switch ev.Type {
 		case "system":
 			if ev.Subtype == "init" {
+				if ev.Version != "" {
+					p.mu.Lock()
+					p.claudeVersion = ev.Version
+					p.mu.Unlock()
+				}
 				n.toolsAtStart(p.id, ev.Tools)
 				continue
 			}
@@ -629,13 +675,19 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.emitDelta(p.id, text)
 			}
 		case "result":
+			recovering := n.recoverAssistantResult(p, ev.IsError, ev.Result)
+			if !recovering {
+				n.clearAssistantRecovery(p)
+			}
 			p.mu.Lock()
 			manual := p.manual
 			p.manual = false
 			window := reportedWindow(ev.ModelUsage, p.replyModel)
 			changed, idleAt := p.followWindow(window), p.compactIdleAt
 			p.compacting = false
-			p.busy = false
+			if !recovering {
+				p.busy = false
+			}
 			p.lastActive = time.Now()
 			p.partial.Reset()
 			p.mu.Unlock()
@@ -649,8 +701,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.refresh(p.id, f)
 			}
 			n.emitDelta(p.id, "")
-			n.notifySessions()
-			go n.checkTurnUsage(p, ev.IsError && promptTooLong(ev.Result))
+			if !recovering {
+				n.notifySessions()
+				go n.checkTurnUsage(p, ev.IsError && promptTooLong(ev.Result))
+			}
 		}
 	}
 	stopUnreadAssistant(p.ownerOr(started).logger, p, short(p.id), sc.Err())
@@ -735,12 +789,21 @@ func (n *Node) assistantSessions() []proto.Session {
 	for _, p := range n.procs {
 		procs = append(procs, p)
 	}
+	recovering := make(map[string]bool, len(n.recoveries))
+	for id, r := range n.recoveries {
+		recovering[id] = true
+		if _, running := n.procs[id]; !running && r.running && r.proc != nil {
+			// A model switch has already stopped the old process and not registered its replacement yet. Keep the turn
+			// working: an offline row here can fail and rerun a scheduled task while its fallback is still starting.
+			procs = append(procs, r.proc)
+		}
+	}
 	n.mu.Unlock()
 	var out []proto.Session
 	for _, p := range procs {
 		p.mu.Lock()
-		busy := p.busy
-		status := proto.StatusDone // finished turn; the hub turns it into idle once seen
+		busy := p.busy || recovering[p.id] // a registered replacement is still starting until its recovery message is sent
+		status := proto.StatusDone         // finished turn; the hub turns it into idle once seen
 		if busy {
 			status = proto.StatusWorking
 		}
@@ -760,6 +823,9 @@ func (n *Node) assistantSessions() []proto.Session {
 				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(m.lastText), st.Size()
 				s.PermissionMode, s.Effort = n.currentModes(p.id, m)
 				setContext(&s, m)
+				// Background shells outlive the turn, as in a pane's session: a channel run (Lark) waits for the turn
+				// they start, and a list shows them (channel.Background).
+				n.setBackground(&s, m)
 				s.ModelFallback = m.modelFallback
 				untitled(&s, m)
 				if !busy {

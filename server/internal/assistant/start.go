@@ -738,6 +738,9 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any) error {
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine
+	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
+		p["interject_background"] = true
+	}
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine || s.isTaskConversation(ctx, machine, sid)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {

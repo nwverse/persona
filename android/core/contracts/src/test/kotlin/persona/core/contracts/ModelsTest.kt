@@ -43,14 +43,14 @@ class ModelsTest {
         val history = JsonCodec.decodeFromString<Session>(
             """{"machine_id":"m","session_id":"opaque","source_kind":"codex_history","source_thread_id":"thread",""" +
                 """"source_instance_id":"instance","parent_thread_id":"parent","read_only_reason":"外部进程正在使用此会话",""" +
-                """"capabilities":{"read":true,"future":true},"attached":true,"agent_label":"DSH"}""",
+                """"capabilities":{"read":true,"modes":false,"future":true},"attached":true,"agent_label":"DSH"}""",
         )
         assertEquals("codex_history", (history.sourceKind).zhAny())
         assertEquals("thread", (history.sourceThreadId).zhAny())
         assertEquals("instance", (history.sourceInstanceId).zhAny())
         assertEquals("parent", (history.parentThreadId).zhAny())
         assertEquals("外部进程正在使用此会话", (history.readOnlyReason).zhAny())
-        assertEquals(SessionCapabilities(read = true), history.capabilities)
+        assertEquals(SessionCapabilities(read = true, modes = false), history.capabilities)
         assertTrue(history.attached)
         assertEquals(history, JsonCodec.decodeFromString<Session>(JsonCodec.encodeToString(history)))
         // A malformed capability drops only that field (D5), never the session.

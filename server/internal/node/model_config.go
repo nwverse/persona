@@ -22,6 +22,9 @@ type modelExecution struct {
 	Runtime   string `json:",omitempty"`
 	IsMain    bool   `json:",omitempty"`
 	ConfigDir string `json:",omitempty"` // assistant's explicit profile, retained across process restarts
+	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
+	// background (assistant_interject.go). Per message, never part of the fingerprint.
+	Interject bool `json:"-"`
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is
