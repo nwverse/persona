@@ -2,8 +2,8 @@
 
 How the To-dos page decides where each to-do shows (#3156). The page's default list is by **status section**; the older
 grouping by folder stays available as a secondary view (List › Status | Folder). The code follows this document:
-`web/src/lib/todo-triage.ts` (`triage`, `triageTodos`), with tests in `web/src/lib/todo-triage.test.ts`. A change to
-the rules changes both in the same PR.
+`web/src/lib/todo-triage.ts` (`triage`, `triageTodos`), with tests in `web/src/lib/todo-triage.test.ts`, and its
+native copies (see "Clients"). A change to the rules changes all of them in the same PR.
 
 ## Principle: real signals only
 
@@ -114,5 +114,16 @@ A task the user reopens by hand also keeps the accepted verdict until the next r
 
 ## Clients
 
-The web follows this document. iOS, Mac and Android still show the earlier list (`docs/assistant/todos.md`,
-"Interaction design across clients"); bringing them to the same sections is #3206.
+Every client follows this document with its own copy of the rules, each with the same test cases (#3206):
+
+| Client | Rules | Tests | Page |
+| :--- | :--- | :--- | :--- |
+| Web | `web/src/lib/todo-triage.ts` | `web/src/lib/todo-triage.test.ts` | `web/src/views/Todos.tsx` |
+| iOS / Mac | `apple/Shared/TodoTriage.swift` (`TodoTriageLogic`) | `apple/PersonaTests/TodoTriageTests.swift` | `apple/Persona/Views/Todos/TodosView.swift`, `apple/Mac/Todos/MacTodosPage.swift` |
+| Android | `android/core/domain/src/main/kotlin/persona/core/domain/tasks/TodoTriage.kt` | `android/core/domain/src/test/kotlin/persona/core/domain/tasks/TodoTriageTest.kt` | `android/feature/agents/src/main/kotlin/persona/feature/agents/TodosScreen.kt` |
+
+A change to the rules changes all three in the same PR. Native differences: iOS / Mac keep restores in the device's
+`UserDefaults` (`todos.restored`) and Android in its local preferences, as the web keeps them per browser; the iOS list
+has no Status | Folder switch (it had no folder view), and the Mac shows a merged row's members as a disclosure under the
+lead. Moving the classification to the hub, so the clients only draw the section it sends, would remove the copies; it
+is not done yet.

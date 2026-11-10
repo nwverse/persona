@@ -527,7 +527,7 @@ private nonisolated struct InlineRepair {
 
         var closers = code?.closer ?? ""
         // Innermost first, only the last line's, each only when it is the one opener of its kind (two `**` openers
-        // are a `**注意：**后文` that cmark does not pair either), and only when text follows it. Never `_` (as the web):
+        // around separate phrases are not paired by cmark either), and only when text follows it. Never `_` (as the web):
         // in a coding reply it is far more often `src/_app.tsx` or `_private` than emphasis, and closing it set the rest
         // of the line in italics until the line ended. It is still read, so what it pairs with stays paired.
         for o in openers.reversed() where o.c != "_" {
