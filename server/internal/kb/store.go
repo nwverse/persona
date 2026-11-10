@@ -206,7 +206,8 @@ type Store struct {
 	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
-	// reads the chat again under it and changes only the fields it owns. (A person's edits, edit.go, are not under it.)
+	// reads the chat again under it and changes only the fields it owns. Hand edits (Apply, unlink) take it through
+	// editChat (edit.go).
 	chatMu    sync.Mutex
 	observeMu sync.RWMutex
 	changed   func(Change)

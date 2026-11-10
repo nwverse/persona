@@ -221,8 +221,9 @@ message does not update its old text or attachments. Sources that need to archiv
 
 Ingestion installs `.ingest.json` before replacing any affected day file. It holds complete intended day contents (preserving all original bytes), receipts and chat
 metadata, including both counters. Each file is replaced through a temporary file, flushed and renamed. Recovery repeats those replacements and removes the intent
-only after all succeed. A writable `NewStore` finishes pending intents before returning; `Ingest`, history, compression and archive metadata updates also recover
-before reading counters. Until recovery succeeds, other writes to that chat refuse to overwrite the pending snapshots, timezone conversion waits, and cleanup
+only after all succeed. A writable `NewStore` finishes pending intents before returning; `Ingest`, history, compression, archive metadata updates and hand edits
+of a chat (`kb_update`, the app) also recover before reading counters. A hand edit reads the chat again under the same chat lock and changes only the fields the user
+set, so it never writes back older counters, cursor or last-message time over an ingest that ran meanwhile. Until recovery succeeds, other writes to that chat refuse to overwrite the pending snapshots, timezone conversion waits, and cleanup
 keeps the files. A read-only open refuses an unfinished intent because it cannot repair it. Remove the filesystem obstruction and retry the operation or reopen
 the writable store; retain the intent for recovery. The directory has one owning writer, with concurrent callers serialized by the Store's locks. Operations needing
 both persistence locks acquire metadata before message files, matching project commit's frozen-input check when it reads the timeline.

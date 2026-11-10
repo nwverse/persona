@@ -137,6 +137,27 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) (err 
 	return err
 }
 
+// editChat applies a hand edit to chat id under chatMu, like the pipeline's writers: it finishes an interrupted ingest,
+// reads the chat again and lets edit change only the user's fields, so the messages, pending count, cursor and last
+// message time an ingest, a history import or compression wrote meanwhile stay. It returns the chat as written (false:
+// no such chat). edit must not take chatMu or ingestMu; write linked entities after editChat returns.
+func (s *Store) editChat(id string, edit func(c *Chat)) (*Chat, bool, error) {
+	s.chatMu.Lock()
+	defer s.chatMu.Unlock()
+	if err := s.recoverIngest(id); err != nil {
+		return nil, false, err
+	}
+	c, ok := s.Chat(id)
+	if !ok {
+		return nil, false, nil
+	}
+	edit(c)
+	if err := s.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
+		return nil, true, err
+	}
+	return c, true, nil
+}
+
 // protectedEntity merges fields held by a person or extension into a pipeline write.
 func protectedEntity(v any, t *Tagging, current map[string]json.RawMessage, manual bool) map[string]json.RawMessage {
 	incoming := entityMap(v)
@@ -258,12 +279,11 @@ func (e *Engine) unlink(kind, id string, u Update) error {
 			}
 		}
 		for _, cid := range u.RemoveChats {
-			if c, ok := e.Store.Chat(cid); ok {
+			if _, _, err := e.Store.editChat(cid, func(c *Chat) {
 				c.Projects = removeStrings(c.Projects, []string{id})
 				lock(&c.Tagging, "projects")
-				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
-					return err
-				}
+			}); err != nil {
+				return err
 			}
 		}
 	}
@@ -281,12 +301,11 @@ func (e *Engine) unlink(kind, id string, u Update) error {
 	}
 	if kind == KindPerson {
 		for _, cid := range u.RemoveChats {
-			if c, ok := e.Store.Chat(cid); ok {
+			if _, _, err := e.Store.editChat(cid, func(c *Chat) {
 				c.People = removeStrings(c.People, []string{id})
 				lock(&c.Tagging, "people")
-				if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
-					return err
-				}
+			}); err != nil {
+				return err
 			}
 		}
 	}
