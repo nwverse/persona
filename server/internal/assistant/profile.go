@@ -67,6 +67,9 @@ type Settings struct {
 	StartRequestedTasks *bool `json:"start_requested_tasks,omitempty"`
 	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
 	RecordingDays *int `json:"recording_days,omitempty"`
+	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
+	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
+	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
 	// DoneNeedsDelivery: a finished task closes only once its work is live and checked; stopped at a PR, merged or
 	// off by default it stays open with where it is held, and its agent is told so with its prompt (#3306,
 	// delivery.go). nil is off (the default).
@@ -231,6 +234,17 @@ func (s *Service) recordingDays(ctx context.Context) int {
 	return kb.DefaultRecordingDays
 }
 
+// meetingRoles are the values of meeting_attendance_default, off (the default) first.
+var meetingRoles = []string{kb.AttendanceOff, kb.AttendanceListener, kb.AttendanceParticipant}
+
+// meetingAttendanceDefault is the role a meeting recording pre-selects (meeting_attendance_default, off by default).
+func (s *Service) meetingAttendanceDefault(ctx context.Context) string {
+	if v := s.settings(ctx).MeetingAttendanceDefault; v != nil && slices.Contains(meetingRoles, *v) {
+		return *v
+	}
+	return kb.AttendanceOff
+}
+
 // settingsLastGood is savedSettings, except that a transient read failure serves the settings read last when there
 // are any. Callers whose default would be destructive use it: the recording retention falling back to 14 days for one
 // locked-database round would make the next KB prune delete recordings the user kept for longer (#4008). Callers for
@@ -350,6 +364,8 @@ type assistantView struct {
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
+	// MeetingAttendanceDefault is in effect (off until changed).
+	MeetingAttendanceDefault string `json:"meeting_attendance_default"`
 	// IdleCloseHours is in effect (0: off).
 	IdleCloseHours int `json:"idle_close_hours"`
 	// ReviewSamplePercent is in effect (100: every finished task waits for task_review).
@@ -369,7 +385,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v := s.settings(ctx)
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
-		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
+		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx), MeetingAttendanceDefault: s.meetingAttendanceDefault(ctx),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
 		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground}

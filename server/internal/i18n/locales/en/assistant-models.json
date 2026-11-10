@@ -18,6 +18,7 @@
   "name_assistant_title": "Chat titles",
   "name_agent_title": "Agent tab names",
   "name_todo_title": "Todo titles",
+  "name_meeting_answer": "Answers in attended meetings",
   "name_schedule": "Scheduled tasks",
   "group_default": "Default models",
   "group_agents": "Agents",

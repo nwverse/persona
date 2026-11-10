@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
@@ -156,6 +157,11 @@ type Service struct {
 	acceptSweepHook func(id string)
 	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
 	sessionsSeen func(DeviceSessions)
+
+	// asks are the questions of attended meetings being answered (meeting_ask.go); meetingModel stands in for the
+	// meeting.answer model in tests (nil: the configured one).
+	asks         meetingAsks
+	meetingModel kb.Model
 }
 
 var _ Handler = (*Service)(nil)

@@ -122,6 +122,7 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     summary.md              # Model summary after transcription completes
     minutes.json            # Meeting minutes (meeting-minutes.md): structured, each item at a transcript time
     minutes.md              # The same minutes as Markdown with clock times; searched
+    live.json               # An attended meeting's live sentences and questions (meeting-minutes.md "Attending a meeting"); never searched or shown
   recordings/.deleted.json  # Deleted recording UUIDs (tombstones); late uploads within retention return 410
   cursors/<connector>.json  # A connector's archive cursor (bookkeeping, not searched)
   select/<chat id>.json     # The selection's mine-rule context of a chat between daily batches (not searched)
