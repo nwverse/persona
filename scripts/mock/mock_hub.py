@@ -1424,6 +1424,16 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+MOCK_LEADERS = []
+if os.environ.get("MOCK_LEADERS") == "1":
+    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+        c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
+        c["origin"] = "user"
+        ASSISTANT.append(c)
+        MOCK_LEADERS.append(c["session_id"])
+
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
 def health_sess(sid, title, minutes, last):
@@ -1719,6 +1729,8 @@ def assistant_state(space="", archived=False):
         out["notes"] = cfg["notes"]
     if cfg["main"]:
         out["main"] = cfg["main"]
+    if MOCK_LEADERS and not space:
+        out["leaders"] = MOCK_LEADERS
     return out
 
 
