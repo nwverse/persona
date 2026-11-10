@@ -1496,6 +1496,22 @@ A connector that folds several notifications into one thread (GitHub CI failures
   any row the appender leaves to encoding/json, so the bytes and the errors stay its. Compare against `json.Marshal`
   for nil, empty, HTML characters, U+2028 and invalid UTF-8 (`TestSessionsChangedBytesAreJSONMarshal`).
 
+## The push before the list: decoded from nil, copied, read three times, checked again (2026-11-10, #2950)
+
+- `json.Unmarshal` into a nil slice grows it by doubling, so a decoded list of 1,520-byte rows costs about twice its
+  size before anything copies it. Decode a runtime's push into a slice sized from that connection's last list and
+  normalize it in place (`out := list[:0]`, then `clear` the tail). Give every push an array of its own rather than
+  decoding into the last one: rows already handed out are read under their own lock, and json leaves fields of a
+  reused element that the input does not mention as they were. A list that shrank keeps no array of the old size.
+- Reading two side fields with two more `json.Unmarshal` calls parses the whole push twice more. Read them in one
+  pass, but keep the separate reads as the fallback: a field of the wrong type fails a combined decode, while each
+  single read only failed for its own field (`TestRuntimeRowExtrasReadsAsEachAlone`).
+- Bytes known to be `json.Marshal`'s output still go through the envelope's checks, compaction and escaping as a
+  `json.RawMessage`, copied twice into buffers that grow. Mark them (`rpc.Marshaled`) and write the line by hand only
+  when nothing in it can need escaping: a plain ASCII event name, non-empty params. Compare the line with
+  `json.Marshal`'s for HTML characters, U+2028, control characters and invalid UTF-8 (`TestNotifyMarshaledIsTheSameLine`).
+  Give the type a `MarshalJSON`, or a `[]byte` passed anywhere else is written as base64.
+
 ## Transport source is not pane origin (#994)
 
 A `runtime` session can be an Orca native desktop chat, a CLI in a terminal pane, a botmux topic or an unhosted runtime. Classify pane/host origins from the metadata, with desktop markers taking precedence, and keep transport filtering separate. New query keys need an independent advertised capability because an old hub may silently ignore them and return the wrong membership. Count the full matching index revision, and bind the origin to frozen cursors and delta membership even when the transport and timestamp never change.
@@ -1596,6 +1612,10 @@ When server tests read a shared fixture outside `server/`, include it in `script
 relative path and create its remote parent directory. The inbox list tests read `scripts/mock/inbox_events.json`;
 copying only the Go module left them failing on the test machine. Extend the fake remote launcher test to read the
 staged fixture from the package directory, check refreshed contents, and reject a missing source before Go starts.
+
+## A node error without a code reads as "the hub is down" (2026-11-10, #1888)
+
+A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` has no code, so `apierr.Call` treats it as `internal` and the hub answers 502 with the generic `rpc-errors.failed` summary; the real reason survives only in `detail`, which no client shows. Web words every 502 as "the hub can't respond right now", iOS and Android show "The request could not be completed": a dirty worktree or a missing upstream looked like a broken hub. A refusal the user can act on goes out as `refusal(code, english message, data)`, its code goes into `rpcFailureKeys` with a summary in every `rpc-errors` locale (name `{reason}` there to keep git's or the program's own words), and the hub then answers a 409 in the client's language. Success texts follow the same rule: answer a code (`outcome`) the clients put into their own strings, and keep an English `message` for older clients.
 
 ## Hot paths: a list encoded whole for each of its readers, a handler built for each request (2026-11-10, #2997)
 

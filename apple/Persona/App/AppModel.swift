@@ -442,7 +442,7 @@ final class AppModel {
     nonisolated static func prepare(_ event: ServerEvent) {
         switch event {
         // The block being written (the finished ones are memoized as they finish).
-        case .delta(_, let text): _ = MarkdownMemo.content(StreamChunks.split(text).tail + " ▍")
+        case .delta(_, let text): _ = StreamTail.content(StreamChunks.split(AssistantCardText.replacingCards(text)).tail)
         case .interaction(let interaction):
             if let plan = interaction.plan { _ = MarkdownMemo.content(plan) }
         default: break
@@ -3009,10 +3009,14 @@ final class AppModel {
     /// Kept across launches with the text (#4578): a quote is the larger part of a reply.
     var composerContexts: [SessionKey: [ContextRef]] = AppModel.savedContexts() { didSet { saveContexts(); markDrafts() } }
     @ObservationIgnored let contextWriter = Debouncer()
+    /// Comments waiting to lead a chat's next message as `> ` blocks (code, a page's element, picked words;
+    /// `MessageComments`, #151), kept across launches as the quotes are.
+    var composerComments: [SessionKey: [MessageComment]] = AppModel.savedComments() { didSet { saveComments(); markDrafts() } }
+    @ObservationIgnored let commentWriter = Debouncer()
     /// The chats with something unsent (text or quotes): the Agents rows' Draft (#4578). Apart from `drafts`, which
     /// changes on every key: this changes only when a chat gains or loses a draft, so the rows do not draw again as
     /// one is typed.
-    var draftMarks: Set<SessionKey> = AppModel.marks(AppModel.savedDrafts(), AppModel.savedContexts())
+    var draftMarks: Set<SessionKey> = AppModel.marks(AppModel.savedDrafts(), AppModel.savedContexts(), AppModel.savedComments())
     /// A chat asked for its composer's keyboard (a message just quoted, #1058); the composer takes it and clears it.
     var composerFocus: SessionKey?
 

@@ -269,6 +269,7 @@ Supported algorithms (swift-nio-ssh): key exchange `curve25519-sha256`, `ecdh-sh
 ### Security notes
 
 - **Tunnel terminates at the SSH server**: hub sees the SSH server as source (loopback if colocated, otherwise its LAN address), **treated as LAN**: main token, plaintext HTTP, full health fields available ([source classification](#来源判断与反向代理)).
+  **Except a hub in Docker on the SSH server** reached through a published port (`127.0.0.1:18660`): docker-proxy hands the tunnel's connections to the container from its gateway, which counts as public, so every request through the tunnel (always plaintext) gets `403 tls_required`. Publish the hub's ports on `127.0.0.1` only and add the gateway to `security.trusted_cidrs` ([docker.md](docker.md) ("SSH tunnel to a hub on the same host")).
 - Acceptable after SSH authentication: only holders of this device key allowed by the server can reach hub; SSH is encrypted and the app pins the host key. But **the server-side key must be restricted with `permitopen` to hub's port**. An unrestricted key can jump to any LAN address or open a shell. The app-provided authorized_keys line includes restrictions; do not paste only "Copy public key."
 - Plaintext HTTP exists only on device loopback (inside app / local machine) and SSH-server-to-hub hop (loopback stays on server; LAN target uses LAN, same as direct LAN access).
 - Lost device: remove its `persona-<device-name>` line from server authorized_keys and revoke hub credentials in **Settings › Devices**.
@@ -283,6 +284,7 @@ Supported algorithms (swift-nio-ssh): key exchange `curve25519-sha256`, `ecdh-sh
 | SSH server rejected this device's public key | Correct user's authorized_keys, permissions (`StrictModes`), Warpgate public key for this user |
 | SSH server cannot forward to hub (administratively prohibited) | `permitopen` address differs from target, or server prohibits TCP forwarding |
 | SSH server cannot forward to hub (connect failed) | Wrong target from SSH server's perspective, or hub not listening there |
+| Test connection and save succeeds, then every request fails with `TLS is required for public requests` (`403 tls_required`) | The hub runs in Docker on the SSH server and sees the tunnel from its container gateway (the hub logs `api: plaintext from <gateway>, this container's gateway`): see "Security notes" above |
 | SSH handshake failed (no common algorithm) | RSA-only host key or chacha20-only server; add Ed25519 host key and enable AES-GCM |
 
 ## Connecting to hub through an in-app tunnel

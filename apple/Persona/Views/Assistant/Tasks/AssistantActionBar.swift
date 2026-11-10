@@ -218,16 +218,21 @@ struct AssistantActionBar: View {
         switch row {
         case .task(let id, let state):
             if let todo = store.todos[id] {
-                Button {
-                    open = nil
-                    store.detailTask = id
-                } label: {
-                    line(title: todo.title, detail: state.label, waiting: state == .needsYou) {
-                        TaskMark(state: state)
+                if let ask = todo.openAsk {
+                    BriefAcceptRow(row: ask.row(for: todo), group: AppModel.shared.hub?.group ?? "")
+                        .padding(.horizontal, Theme.Space.m)
+                } else {
+                    Button {
+                        open = nil
+                        store.detailTask = id
+                    } label: {
+                        line(title: todo.title, detail: state.label, waiting: state == .needsYou) {
+                            TaskMark(state: state)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("action-tray.task")
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("action-tray.task")
             }
         case .agent(let agent):
             Button {

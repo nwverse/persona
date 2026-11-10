@@ -10,7 +10,7 @@ import Foundation
 /// (the system stops a recording without one). Before the microphone has ever been allowed it opens the app to ask.
 struct StartMeetingRecordingIntent: AudioRecordingIntent {
     nonisolated static let title: LocalizedStringResource = "Record a Meeting"
-    nonisolated static let description = IntentDescription("Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on your iPhone; its transcript goes to Knowledge.")
+    nonisolated static let description = IntentDescription("Starts recording a meeting in Persona, named after the calendar event happening now. The audio stays on this device; its transcript goes to Knowledge.")
     nonisolated static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
 
     nonisolated init() {}

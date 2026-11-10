@@ -47,7 +47,7 @@ beforeEach(() => {
   commits = 0;
   act(() =>
     root.render(
-      <Profiler id="view" onRender={(_i, ph) => { commits++; console.log("COMMIT", ph); }}>
+      <Profiler id="view" onRender={() => void commits++}>
         <ViewSections view={view} {...INERT} />
       </Profiler>,
     ),
@@ -64,7 +64,7 @@ const list = () => host.querySelector<HTMLElement>('[role="list"]')!;
 const geometry = (el: HTMLElement, g: { scrollLeft: number; clientWidth: number; scrollWidth: number }) => {
   for (const [k, v] of Object.entries(g)) Object.defineProperty(el, k, { configurable: true, get: () => v });
 };
-const scroll = () => (console.log("SCROLL"), 0) || act(() => void list().dispatchEvent(new Event("scroll")));
+const scroll = () => act(() => void list().dispatchEvent(new Event("scroll")));
 const resize = () => {
   for (const r of resized) act(r);
 };

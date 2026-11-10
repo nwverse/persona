@@ -1249,7 +1249,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       answered={answered}
       delegated={delegated}
       offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
-      narrow={compactDock}
+      // in the assistant's Pending tray (AssistantActionBar) the tray is the box that scrolls: a second scroll box of
+      // their own left the card's sticky answer row at its bottom, out of sight below the tray's fold
+      narrow={compactDock && (!assistant || voiceState === "live")}
       short={short}
       keyboard={keyboard}
       onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
