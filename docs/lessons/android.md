@@ -523,3 +523,7 @@ Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where 
 - Stopping a closed chat's sync at once makes every tab switch a cold open, and a message sent from a chat the user then left never sees its echo. Release a closed chat after a delay, keep the most recently closed idle entries, and keep syncing chats the outbox still waits on.
 - A capsule started on Main must move catalog transformations off Main explicitly; conflate alone only removes queued inputs, not main-thread work.
 - Full adb meminfo can invoke app-side Explicit GC and amplify the stall being measured. Compare natural GC with meminfo --local and exclude profiling/dumpheap intervals from acceptance readings.
+
+## Wait for local listener shutdown before reusing its port
+
+On the JVM, closing a server socket with a blocked accept can defer the actual descriptor close until that I/O exits. A preferred-port restart immediately after close can then collide with its own old listener and choose a fallback. Register the accept worker under the same lifecycle lock as close, close the socket first, then wait for the worker with a bounded deadline. Preserve interruption and report a shutdown deadline without adding a new exception to synchronous close callers; keep independently occupied-port fallback distinct from listener shutdown.
