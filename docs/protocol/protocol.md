@@ -621,13 +621,13 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "queued":true,                                       // user text only: a message typed while working, absorbed mid-turn
  "client_msg_id":"…",                                 // this item comes from a message the App sent with this client_msg_id (text, image, or the notice /compact turns into),
                                                       // recognized by the node, see "Matching pending messages"; old hubs / nodes omit it
- "wake":true,                                         // notice only: Claude was idle when a background task finished, and this notification started a new turn
+ "wake":true,                                         // a notice or agent tool result started a new turn after Claude was idle
  "injected":{"kind":"task_notice","state":"done",…},   // user text only: this is a message Persona sent to the model (task notification, scheduled task, wake-up…), not written by the user; added by the hub when sending, see "Messages Persona injects"
  "source":{"kind":"conversation|patrol|followup|supervision|meeting","conversation_id":"…","title":"…"}, // optional input provenance, independent of role; id/title optional, see "Message source"
  "from":"peer name",                                  // optional native peer sender; a display name, not necessarily a conversation id
  "compact":{"trigger":"manual|auto","pre_tokens":151467}, // notice only: the context was compacted here (Claude Code's compact_boundary); the App draws a divider and folds the following "已从压缩的上下文继续" ("continued from compacted context") and the idle-compaction note into it
- "task":{"kind":"shell|monitor|agent|workflow|task",     // notice only: a background task notification (command, Monitor event / end, subagent, workflow); text is a one-line summary
-         "status":"completed|failed|killed|stopped|event|ended|waiting","title":"description or the command's first line",
+ "task":{"kind":"shell|monitor|agent|workflow|task",     // task notices; also agent tool results associated with their launching call
+         "status":"running|completed|failed|killed|stopped|event|ended|waiting","title":"description or the command's first line",
          "task_id":"…","tool_use_id":"toolu_…","exit_code":0,"output_file":"…", // tool_use_id: the call that started the task, also when the notification names only the task (an earlier one of the task named it)
          "detail":"the Monitor event / the subagent's result / the whole command (entities decoded)"},
  "fold":{"items":1294,"tools":647,"thoughts":110,     // kind=fold only (only when the request carries fold_work): a folded stretch of work, see "Folded work"; may carry tasks, images
@@ -661,6 +661,38 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 {"cancel":true}                                                             // question with can_cancel:true: discard without an answer
 {"answers":{"…":"…"},"answered_by":"assistant"}                               // answered by the assistant (#1602): question only; App replies don't carry answered_by
 ```
+
+### Subagent deliveries as tool results
+
+Claude Code subagent launch receipts, peer reports (including `SendMessage` to the parent), handbacks and task
+notifications use the existing `tool_result` kind when the parser knows their launching `Agent` or `Task` call.
+Both the item and its `task` carry that call's `tool_use_id`; `task.kind` is `agent`. The association comes from the
+runtime's agent ID and launch record, or a notification's explicit call ID, never the sender's display name.
+Unrelated cross-session messages retain their existing `user` text and `from` provenance. Unknown associations are
+not invented.
+
+- `task.status: running` marks a launch receipt or an interim report. `waiting` also remains nonterminal. These
+  results do not end the running subagent or count as a user question. Completed, failed, killed and stopped results
+  are terminal. Unknown statuses must not be inferred as completed.
+- Each delivery retains its original item ID and sequence. There can be several results for one call: clients keep
+  an ordered result list rather than replacing earlier reports with the latest item. Render them only under the
+  original call, collapsed by default and manually expandable, not as independent messages in the parent chat.
+  Running subagents keep their existing work/progress presentation.
+- `text` is the report body, capped for pages with the normal `full_size` marker. `task.detail` is a bounded 4 KB
+  compatibility preview. Use `text` first and the existing item full-text endpoint for manual full inspection.
+  Launch receipts are not reports. A status-only notification, including the pointer after an already delivered
+  handback, has no `text` or `task.detail`; its status still participates in the call's lifecycle.
+- `wake` marks a task notification or associated peer report delivered as a user line while the parent was idle,
+  including hidden `isMeta` peer lines. Queued-command attachments absorbed mid-turn do not carry it. It starts a
+  new parent turn without becoming a user-authored message. Cold windows reconstruct earlier launch associations
+  and delivery status before parsing their tail; incremental reads append results, never rewrite the old receipt.
+
+Apple integration (#3377): decode `task` on `tool_result` as well as on legacy notices, accept `running`, retain all
+results per call and use only terminal evidence to stop the work bar. Handle `wake` independently of item kind.
+Keep the existing full-text reader for each result. Older nodes still send agent notices, so continue associating
+those by their explicit call/task IDs without guessing from `from`. The Claude transcript history token includes
+an opaque parser-version component; the existing history-change reset discards cached standalone peer cards when
+an updated node is first read. Clients must not parse this token or require a new feature flag.
 
 ### Answering a question from its notification
 
@@ -2429,7 +2461,7 @@ Extensions can also call six public knowledge base methods through their own RPC
 This does not bring back the assistant's old `app.call kb.*` tool chain. Fields, paging and permissions are in the [extensions doc](../extensions/extensions.md#知识库-rpc1908).
 The assistant uses `app.call connectors.owner {}` to get minimal metadata about the owner's own sources, `{sources:[{source,handles:[{kind,value}]}]}`; currently the hub provides the configured email addresses, and returns no account credentials.
 The assistant's dedicated one-way events `kb.changed {kind,id,what}` and `kb.forgotten {source}` are sent only by the current assistant connection; the hub turns them into `event.kb.*` only for extension subscribers granted `kb.read`, and doesn't broadcast them to the App.
-`todo.changed` and `todo.decision` ([todos.md](../assistant/todos.md) "Telling the extensions") go the same way: typed one-way events from the assistant, turned into `event.todo.*` only for subscribers granted `todos.read`, not broadcast to the App.
+`todo.changed` and `todo.decision` ([todos.md](../assistant/todos.md) "Telling the extensions") go the same way: typed one-way events from the assistant, turned into `event.todo.*` only for subscribers granted `todos.read`, not broadcast to the App. `leader.changed` and `leader.report` ([extensions.md](../extensions/extensions.md) "Leader events") go that way too, for subscribers granted `leaders.read`.
 
 - Assistant → hub: `device.call`, `app.call` → the result as is; `notify.request {notification}` → `{ok:true}` (a notification `id` the hub took from that manager within two hours, recorded in its database, is not delivered again); `manager.outbox {items:[{id, at, notification | message}]}` → `{done:[id…]}`: what the manager kept while the hub was away, oldest first, sent after it reported its state on the connection, each id delivered once per manager and only about its own machines, sessions and cards (an older hub answers `unknown_method`; `docs/operations/hub-restart.md` ("The manager while the hub is away")); `manager.snapshot` → `{ok,seq}` (the snapshot carries `profile`: the parts of the assistant's settings the hub's own features need; the hub keeps the last one); one-way event `ws.broadcast` (see below).
   Added 2026-11-04: `device.call` hands the node `assistant.prepare`, `assistant.warm`, `assistant.memory`, `assistant.compact`, `assistant.handoff`, `launchers.list`, `launchers.probe` (`devices.list` gained `kind`, `data_dir`), and `assistant.start`, which the hub answered itself, was removed;
