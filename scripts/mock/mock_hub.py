@@ -5898,6 +5898,84 @@ def wechat_connector():
     return c
 
 
+# Settings › Knowledge selection (docs/assistant/knowledge.md "Selection"): the hub's defaults until a PUT replaces them.
+KB_SELECTION_MESSAGES = ["mentions", "mine", "dm", "group", "bot", "official", "muted", "collapsed", "done"]
+KB_SELECTION_DOCS = ["mentions", "comment_mentions", "authored", "viewed"]
+KB_SELECTION = {"doc": None}
+
+
+def kb_selection_defaults():
+    messages = {n: {"on": n in ("mentions", "mine", "dm"), "days": None, "attachment_days": None} for n in KB_SELECTION_MESSAGES}
+    messages["mentions"]["include_all"] = True
+    messages["mine"]["context"] = 50
+    return {"version": 1,
+            "messages": {"order": [["mentions", "mine"]] + [[n] for n in KB_SELECTION_MESSAGES[2:]], "rules": messages},
+            "docs": {"order": [["mentions", "comment_mentions"], ["authored"], ["viewed"]],
+                     "rules": {n: {"on": True, "days": None} for n in KB_SELECTION_DOCS}},
+            "items": [], "history": {}}
+
+
+def kb_selection_problem(doc):
+    """Why the hub would refuse the document (kb.Selection.Validate); None when it would take it."""
+    def days(d):
+        return d is None or (isinstance(d, int) and not isinstance(d, bool) and 1 <= d <= 36500)
+    if not isinstance(doc, dict) or set(doc) - {"version", "messages", "docs", "items", "history"} or doc.get("version") != 1:
+        return "version or fields"
+    for part, names, fields in (("messages", KB_SELECTION_MESSAGES, {"on", "days", "attachment_days", "include_all", "context"}),
+                                ("docs", KB_SELECTION_DOCS, {"on", "days"})):
+        rules = doc.get(part) or {}
+        order = rules.get("order") or []
+        if sorted(n for level in order for n in level) != sorted(names) or any(not level for level in order):
+            return part + ".order"
+        if sorted(rules.get("rules") or {}) != sorted(names):
+            return part + ".rules"
+        for name, rule in rules["rules"].items():
+            if set(rule) - fields or not isinstance(rule.get("on", False), bool):
+                return "%s.%s" % (part, name)
+            if not days(rule.get("days")) or not days(rule.get("attachment_days")):
+                return "%s.%s days" % (part, name)
+            if rule.get("include_all") is not None and name != "mentions":
+                return "%s.%s include_all" % (part, name)
+            context = rule.get("context")
+            if context is not None and (name != "mine" or isinstance(context, bool) or
+                                        not isinstance(context, int) or not 0 <= context <= 200):
+                return "%s.%s context" % (part, name)
+    seen = set()
+    for item in doc.get("items") or []:
+        key = (item.get("source"), item.get("kind"), item.get("id"))
+        if set(item) - {"source", "kind", "id", "name", "read", "store", "days"} or not key[0] or not key[2] or key[1] not in ("chat", "doc"):
+            return "items"
+        if key in seen or (item.get("store") and not item.get("read")) or not days(item.get("days")):
+            return "items"
+        seen.add(key)
+    for source, history in (doc.get("history") or {}).items():
+        if not source or set(history) - {"back_days"} or not days(history.get("back_days")):
+            return "history"
+    return None
+
+
+def kb_selection_route(h, method, p, raw):
+    """GET / PUT /api/v1/kb/selection; True when it answered. MOCK_KB_SELECTION=missing: a hub from before it (404),
+    future: a document with a field no client knows yet, fail: the save is refused."""
+    if p != "/api/v1/kb/selection":
+        return False
+    mode = os.environ.get("MOCK_KB_SELECTION", "")
+    if mode == "missing":
+        return h.send_json({"code": "not_found", "error": "unknown kind"}, 404) or True
+    if method == "PUT":
+        if is_read_only(h):
+            return h.send_json({"error": "read-only device"}, 403) or True
+        if mode == "fail":
+            return h.send_json({"error": "知识库暂时写不进去"}, 503) or True
+        doc = json.loads(raw or b"{}")
+        problem = kb_selection_problem(doc)
+        if problem:
+            return h.send_json({"code": "invalid", "error": "selection: " + problem}, 400) or True
+        KB_SELECTION["doc"] = doc
+    doc = KB_SELECTION["doc"] or kb_selection_defaults()
+    return h.send_json(dict(doc, later={"added": True}) if mode == "future" else doc) or True
+
+
 def triage_route(h, method, p, raw):
     """Settings › Session triage (GET / PUT /api/v1/agents/triage); True when it answered."""
     if p != "/api/v1/agents/triage":
@@ -8508,7 +8586,8 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
 # MOCK_CARDS=1: the main conversation ends with a health answer drawn as cards (#886, ```persona-card): a stacked bar
-# with a rest, a stat with a note, a line and bars, and a block the app cannot read (stays a code block).
+# with a rest, a stat with a note, a line and bars, a ring, a type the app does not know (shown in words, #3397) and a block the
+# app cannot read (stays a code block).
 if os.environ.get("MOCK_CARDS") == "1":
     _card = lambda d: "```persona-card\n" + json.dumps(d, ensure_ascii=False) + "\n```"
     _days = ["10/28", "10/29", "10/30", "10/31", "11/1", "11/2", "11/3"]
@@ -8525,7 +8604,13 @@ if os.environ.get("MOCK_CARDS") == "1":
                    "points": [{"label": d, "value": v} for d, v in zip(_days, [6.5, 7.2, 5.8, 7.9, 6.1, 8.4, 7.0])]}),
             _card({"type": "bar", "title": "近 7 天活动能量", "unit": "千卡",
                    "points": [{"label": d, "value": v} for d, v in zip(_days, [420, 380, 510, 460, 120, 530, 272])]}),
-            _card({"type": "pie", "segments": [{"label": "a", "value": 1}]}),
+            _card({"type": "ring", "title": "今日热量", "unit": "kcal", "total": {"value": 2250},
+                   "segments": [{"label": "早餐", "value": 555, "note": "已吃"}, {"label": "午餐", "value": 900},
+                                {"label": "晚餐", "value": 750}], "note": "还能吃 45 kcal"}),
+            _card({"type": "sunburst", "title": "本周饮食", "unit": "kcal", "total": {"value": 14200},
+                   "segments": [{"label": "主食", "value": 6100}, {"label": "蛋白质", "value": 4300}, {"label": "蔬果", "value": 2600}],
+                   "rest": {"label": "零食", "value": 1200}}),
+            "```persona-card\n{\"type\": \"stat\", \"title\": \"步\n```",
         ])),
     ]
 # The health space's conversations (docs/assistant/health.md "Charts", #3140): the numbers in each answer come with the charts its
@@ -14050,6 +14135,7 @@ VOICE_VOICES = {
 }
 # What --help lists after the options.
 MOCK_HELP = [
+    "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
@@ -14999,6 +15085,7 @@ class H(BaseHTTPRequestHandler):
         if telegram_area(self, "GET", p, b""): return
         if plugin_connector_area(self, "GET", p, b""): return
         if triage_route(self, "GET", p, b""): return
+        if kb_selection_route(self, "GET", p, b""): return
         if wechat_area(self, "GET", p, b""): return
         if github_thread_area(self, "GET", p, b""): return
         if github_area(self, "GET", p, b""): return
@@ -15236,8 +15323,11 @@ class H(BaseHTTPRequestHandler):
                                        "prev": days[i - 1] if i else "", "next": days[i + 1] if i + 1 < len(days) else ""})
             e = next((e for e in KB.get(kind, []) if e["id"] == parts[1]), None)
             if e is None: return self.send_json({"error": "not found"}, 404)
-            # Like the hub's Detail, meta is always there (the entry's own fields unless KB_DETAIL has more).
-            d = dict({"kind": kind, "id": e["id"], "path": "/home/me/.persona/data/%s/%s" % (kind, e["id"]), "meta": e,
+            # Like the hub's Detail, meta is always there (the entry's own fields unless KB_DETAIL has more). A chat's
+            # and a document's say where it came from (source and the source's id), which a per-item selection names.
+            meta = dict(e, source="lark", source_id=e["id"], kind=e.get("extra") or "group") if kind == "chats" else \
+                dict(e, source="lark") if kind == "docs" else e
+            d = dict({"kind": kind, "id": e["id"], "path": "/home/me/.persona/data/%s/%s" % (kind, e["id"]), "meta": meta,
                       "summary": e.get("one_line")}, **KB_DETAIL.get((kind, e["id"]), {}))
             out = {"detail": d}
             word = (q.get("q") or [""])[0]
@@ -15529,6 +15619,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(s)
         if telegram_area(self, self.command, p, self.last_body): return
         if triage_route(self, self.command, p, self.last_body): return
+        if kb_selection_route(self, self.command, p, self.last_body): return
         if wechat_area(self, self.command, p, self.last_body): return
         if github_thread_area(self, self.command, p, self.last_body): return
         if github_area(self, self.command, p, self.last_body): return
