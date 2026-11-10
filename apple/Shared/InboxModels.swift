@@ -377,6 +377,16 @@ nonisolated struct InboxTriageStatus: Codable, Hashable, Sendable {
         var state: String
         var reason: String?
         var waiting: Int
+        /// timeout | rate_limited | login_refused | failed: this round could not read the source, so its items may be old.
+        var readError: String? = nil
+        /// The failed read in the hub's words; older hubs may omit it.
+        var readReason: String? = nil
+
+        private enum CodingKeys: String, CodingKey {
+            case source, name, state, reason, waiting
+            case readError = "read_error"
+            case readReason = "read_reason"
+        }
     }
 }
 

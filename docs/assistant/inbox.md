@@ -153,7 +153,7 @@ a summary up to 40 characters, and a short reason:
     fixing, while the server's exact answer stays in mail settings. An account deleted during the round is not named. A round without mail (a poll) keeps the entries;
     the next mail round replaces them, and they go with mail itself. Mixed versions: a sender from before this change (an older hub or extension manager) has no
     `mail.failed`, so the account is left out as before and nothing is named here; an Inbox from before this change ignores the field and reads the round as before.
-  Apps use it for the waiting-for-triage banner below, and Android and web show sources with a `read_error` in a quiet neutral notice under it, one line per source, "name: `read_reason`" (#1849; mock `MOCK_INBOX_UNREAD`).
+  Apps use it for the waiting-for-triage banner below, and iOS / iPadOS, Android and web show sources with a `read_error` in a quiet neutral notice under it, one line per source, "name: `read_reason`" (#1849; mock `MOCK_INBOX_UNREAD`). All three use the same fallback words when `read_reason` is absent, and the notice clears with the next good read.
 - **Waiting-for-triage banner** (#1773, consistent on web, iOS / Mac, Android): if `triage.state` is not `ok` and `waiting > 0`, show a non-dismissible caution-colored (orange) banner at the top of the Inbox list, below search / filters and above the first section.
   It follows list refresh (Inbox pushes, reconnect, pull-to-refresh), disappearing on recovery to `ok`. Older hubs without `triage` show none.
   - Text: with exactly one waiting source (`waiting > 0` in `sources`, with `name`), "{waiting} {name} messages waiting for triage: {reason}"; otherwise "{waiting} messages waiting for triage: {reason}."

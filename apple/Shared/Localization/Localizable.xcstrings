@@ -73868,6 +73868,29 @@
       },
       "extractionState" : "manual"
     },
+    "Not read this round; the list may be incomplete" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not read this round; the list may be incomplete"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今回は読み取れませんでした。一覧が不完全な可能性があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这一轮没读到，列表可能不全"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Not Running [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {

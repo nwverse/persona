@@ -230,6 +230,13 @@ struct InboxPage: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
+            // Sources not read this round keep their earlier items: say so even when triage is otherwise ok (#1849).
+            if let unread = InboxTriageText.unread(store.triage) {
+                InboxUnreadNotice(text: unread)
+                    .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.page, bottom: Theme.Space.s, trailing: Theme.Space.page))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+            }
             if let error = store.error, store.items.isEmpty {
                 Label(error, systemImage: Theme.Icon.error).font(Theme.Font.caption).foregroundStyle(Theme.danger)
                     .themedRow()
