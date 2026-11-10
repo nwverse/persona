@@ -488,7 +488,8 @@ func extOf(media, typ string) string {
 	return ""
 }
 
-// notePerson links the sender and the chat both ways.
+// notePerson links the sender and the chat both ways. The person is read again and written under personMu
+// (updatePerson), so another writer's chats, projects or tags are kept.
 func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 	if m.Mine {
 		if e.MineObserved != nil {
@@ -504,46 +505,50 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		return
 	}
 	pid := PersonID(source, m.SenderID)
-	p, ok := e.Store.Person(pid)
-	if !ok {
-		p = &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
+	linked := false
+	create := func() *Person {
+		return &Person{ID: pid, Source: source, SourceID: m.SenderID, Name: m.SenderName, Connector: c.Connector}
 	}
-	if p.Connector != "" && p.Connector != c.Connector {
-		return
-	}
-	attributed := false
-	if p.Connector == "" && c.Connector != "" {
-		known := len(p.Chats) > 0
-		for _, id := range p.Chats {
-			if id == c.ID {
-				continue
+	p, written, err := e.Store.updatePerson(pid, false, create, func(p *Person) bool {
+		if p.Connector != "" && p.Connector != c.Connector {
+			return false
+		}
+		linked = true
+		attributed := false
+		if p.Connector == "" && c.Connector != "" {
+			known := len(p.Chats) > 0
+			for _, id := range p.Chats {
+				if id == c.ID {
+					continue
+				}
+				other, exists := e.Store.Chat(id)
+				if !exists || other.Connector != c.Connector {
+					known = false
+					break
+				}
 			}
-			other, exists := e.Store.Chat(id)
-			if !exists || other.Connector != c.Connector {
-				known = false
-				break
+			if known {
+				p.Connector = c.Connector
+				attributed = true
 			}
 		}
-		if known {
-			p.Connector = c.Connector
-			attributed = true
+		if m.SenderName != "" {
+			p.Name = m.SenderName
 		}
-	}
-	if m.SenderName != "" {
-		p.Name = m.SenderName
-	}
-	before, seen := len(p.Chats), p.LastSeen
-	p.Chats = addUnique(p.Chats, c.ID)
-	if m.At.After(p.LastSeen) {
-		p.LastSeen = m.At
-	}
-	c.People = addUnique(c.People, pid)
-	e.addHandles(pid, m.SenderHandles)
-	// Only write when something a reader cares about changed (not on every message of a busy group).
-	if !ok || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour {
-		if err := e.Store.PutPerson(p); err == nil {
-			e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
+		before, seen := len(p.Chats), p.LastSeen
+		p.Chats = addUnique(p.Chats, c.ID)
+		if m.At.After(p.LastSeen) {
+			p.LastSeen = m.At
 		}
+		e.addHandles(pid, m.SenderHandles)
+		// Only write when something a reader cares about changed (not on every message of a busy group).
+		return !p.persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
+	})
+	if linked {
+		c.People = addUnique(c.People, pid)
+	}
+	if written && err == nil {
+		e.index(KindPerson, p.ID, p.Name, p.Tagging, p.Note, p.LastSeen)
 	}
 }
 
