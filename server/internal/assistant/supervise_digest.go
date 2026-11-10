@@ -74,21 +74,41 @@ func (s *Service) sendDigest(ctx context.Context) {
 	web := s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	var order []string
+	gone := map[string]bool{} // leaders whose conversation is not there: their signals go to the main one
 	for _, g := range list {
 		to := s.digestTo(here, g)
+		if to != here.Main {
+			if _, seen := gone[to]; !seen {
+				c, ok := s.session(ctx, here.MachineID, to)
+				gone[to] = !ok || !c.Assistant
+			}
+			if gone[to] {
+				to = here.Main
+			}
+		}
 		if _, ok := groups[to]; !ok {
 			order = append(order, to)
 		}
 		groups[to] = append(groups[to], g)
 	}
+	delivered := false
 	for _, to := range order {
-		s.deliverDigest(ctx, here, to, groups[to], web, now, prev)
+		delivered = s.deliverDigest(ctx, here, to, groups[to], web, now, prev) || delivered
+	}
+	if delivered && len(order) > 1 {
+		// One message went out: what another left undone (put the last message back to prev) does not undo it.
+		b.mu.Lock()
+		if b.last.Before(now) {
+			b.last = now
+		}
+		b.mu.Unlock()
 	}
 }
 
 // deliverDigest puts the signals list into conversation to (the main conversation or a leader) as one supervision
-// message; now is when sendDigest marked it as the last message and prev the last message before.
-func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, list []superviseSignal, web string, now, prev time.Time) {
+// message; now is when sendDigest marked it as the last message and prev the last message before. True when it went in
+// or was queued.
+func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, list []superviseSignal, web string, now, prev time.Time) bool {
 	b := &s.supervise
 	var entries []prompts.SuperviseEntry
 	var kept []superviseSignal
@@ -99,13 +119,13 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		}
 	}
 	if len(entries) == 0 {
-		return
+		return false
 	}
 	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
 	if err != nil {
 		s.logf("supervise: deduplication unavailable; retrying: %v", err)
 		s.restoreDigest(kept, now, prev)
-		return
+		return false
 	}
 	if len(entries) == 0 {
 		b.mu.Lock()
@@ -113,7 +133,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			b.last = prev
 		}
 		b.mu.Unlock()
-		return
+		return false
 	}
 	accepted := false
 	defer func() {
@@ -145,7 +165,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			b.setQueuedLocked(to, all)
 			b.mu.Unlock()
 			s.publish(ctx)
-			return
+			return true
 		}
 	}
 	msg.Text = render(entries)
@@ -157,14 +177,14 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	c, ok := s.session(ctx, here.MachineID, to)
 	if !ok || c.Status == proto.StatusWorking || c.Starting || s.queuedFor(to) > 0 {
 		if !s.queueDigest(to, msg, kept, now, prev) {
-			return
+			return false
 		}
 		accepted = true
 		s.publish(ctx)
 		if ok && c.Status != proto.StatusWorking && !c.Starting {
 			s.drainRelays(here.MachineID, []proto.Session{c})
 		}
-		return
+		return true
 	}
 	if err := s.deliverRelay(ctx, here.MachineID, to, msg); err != nil {
 		s.logf("supervise: %v; queued", err)
@@ -172,12 +192,13 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			accepted = true
 			s.publish(ctx)
 		}
-		return
+		return accepted
 	}
 	accepted = true
 	b.mu.Lock()
 	b.setQueuedLocked(to, nil)
 	b.mu.Unlock()
+	return true
 }
 
 // setQueuedLocked keeps list as the signals of the supervision message still queued for conversation to (none: nil);

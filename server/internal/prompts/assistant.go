@@ -408,6 +408,10 @@ type AskTodoAnswer struct {
 	Thread    bool
 	Dropped   bool
 	Several   bool // more than one question was asked
+	// Defaulted: nobody decided by the question's deadline (Deadline, MM-DD HH:MM) and it could be undone, so its
+	// recommended options were taken by default (#3127).
+	Defaulted bool
+	Deadline  string
 }
 
 // AskTodoChoice is one call of the user's: the question as they wrote it ("" for a reply in the topic), the choice, why.

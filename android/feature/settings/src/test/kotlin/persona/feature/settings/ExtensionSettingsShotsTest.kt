@@ -110,6 +110,54 @@ class ExtensionSettingsShotsTest {
     @Test fun configuredWeatherInEveryStyle() = show(weather)
     @Test fun installedPackInEveryStyle() = show(pack)
 
+    /** A boolean with x-confirm asks before it is turned on (every style, light and dark); the yes edits the draft for Save, off is not asked. */
+    @Test fun aBooleanWithConfirmAsksBeforeTurningOn() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var current = ExtensionDetail(HubExtension("example-chat", "Example Chat", "channels", "running", source = "installed", enabled = true, version = "1.0.0"),
+            form = listOf(ExtensionField("agent", "boolean", title = "Reply as me", confirm = "Replies the assistant writes go out under your name.")))
+        val configs = mutableListOf<JsonObject>()
+        val api = object : ExtensionApiStub() {
+            override suspend fun extension(id: String) = current
+            override suspend fun setConfig(id: String, config: JsonObject): ExtensionDetail { configs += config; current = current.copy(config = config); return current }
+        }
+        rule.setContent {
+            PersonaTheme(style = style, darkTheme = dark, reduceMotion = true) {
+                Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) { ExtensionPage(api, "example-chat", onBack = {}) }
+            }
+        }
+        rule.waitUntil { rule.onAllNodesWithText("Reply as me").fetchSemanticsNodes().isNotEmpty() }
+        val dir = File("build/extension-settings-shots").also { it.mkdirs() }
+        // A dialog is a window of its own: each style opens it anew; Cancel leaves the switch off.
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            rule.runOnIdle { style = s; dark = d }
+            rule.waitForIdle()
+            rule.onNodeWithText("Reply as me").performScrollTo().performClick()
+            rule.waitForIdle()
+            val image = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+            File(dir, "confirm-boolean-${s.key}-${if (d) "dark" else "light"}.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            rule.onNodeWithText("Replies the assistant writes go out under your name.").assertExists()
+            rule.onNodeWithText("取消").performClick()
+            rule.waitForIdle()
+            rule.onNode(isDialog()).assertDoesNotExist()
+            rule.onNode(hasText("Reply as me") and isToggleable()).assertIsOff()
+        }
+        rule.runOnIdle { style = AppStyle.Glass; dark = false }
+        rule.onNodeWithText("Reply as me").performScrollTo().performClick()
+        rule.onNodeWithText("打开").performClick()
+        rule.onNode(hasText("Reply as me") and isToggleable()).assertIsOn()
+        // Turning it off again is not asked.
+        rule.onNodeWithText("Reply as me").performClick()
+        rule.onNode(isDialog()).assertDoesNotExist()
+        rule.onNode(hasText("Reply as me") and isToggleable()).assertIsOff()
+        rule.onNodeWithText("Reply as me").performClick()
+        rule.onNodeWithText("打开").performClick()
+        assertEquals(0, configs.size)
+        rule.onNodeWithText("保存").performScrollTo().performClick()
+        rule.waitUntil { configs.isNotEmpty() }
+        assertEquals(buildJsonObject { put("agent", true) }, configs.single())
+    }
+
     @Test fun lifecycleWritesAndChecksDoNotSubmitDirtyConfiguration() {
         var current = notes
         var configs = 0

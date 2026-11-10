@@ -76,6 +76,9 @@ func (s *Service) workerRefusal(ctx context.Context, machine, self string) error
 	if self == "" || s.supervises(ctx, self) {
 		return nil
 	}
+	if s.devs != nil {
+		machine = s.devs.Canonical(machine) // as the task's agents are kept
+	}
 	t, ok := s.taskOf(ctx, machine, self)
 	if !ok {
 		return nil
@@ -122,7 +125,7 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 		return nil, errors.New("at most 20 leader conversations")
 	}
 	before := cfg.Leaders
-	if slices.Equal(list, before) || len(list) == 0 && len(before) == 0 {
+	if slices.Equal(list, before) || len(list) == 0 && len(before) == 0 { // nil and [] are both none
 		return &ownChange{summary: "assistant.leaders did not change"}, nil
 	}
 	if s.store() == nil {
@@ -149,7 +152,8 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 var cancelStopWait, cancelStopPoll = 30 * time.Second, 500 * time.Millisecond
 
 // stopTaskAgents stops what task t's agents still ask of the user once t is cancelled: each agent on it is closed on
-// its computer (session.close: its tab and process go, its transcript stays and the next message resumes it), its
+// its computer (session.close: its tab and process go, its transcript stays, and where its engine can resume it a
+// message does), its
 // cards still waiting end, and it is archived (reversible, nothing deleted). It runs in the background: closing can
 // take a while and the review is answered first.
 func (s *Service) stopTaskAgents(ctx context.Context, t Todo) {
@@ -170,15 +174,23 @@ func (s *Service) stopTaskAgents(ctx context.Context, t Todo) {
 	}()
 }
 
-// stopCancelledAgent closes, ends the cards of and archives one agent of cancelled task id.
+// stopCancelledAgent closes, ends the cards of and archives one agent of cancelled task id; one that works for another
+// open task now, an assistant conversation (the user's to stop) or a session its machine does not list is left alone.
 func (s *Service) stopCancelledAgent(ctx context.Context, id, machine, session string) {
-	cctx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
-	c, ok := s.session(cctx, machine, session)
-	cancel()
-	if ok && c.Assistant {
-		return // a conversation is the user's to stop
+	s.todos.mu.RLock()
+	other, linked := s.todos.activeBySession[[2]string{machine, session}]
+	s.todos.mu.RUnlock()
+	if linked && other != id {
+		s.logf("task %s cancelled: agent %s/%s works for %s now, left alone", id, machine, short(session), other)
+		return
 	}
-	if ok && c.Status != proto.StatusOffline {
+	c, err := s.agentArchiveTarget(ctx, machine, session) // refuses an assistant conversation and an unknown session
+	if err != nil {
+		s.logf("task %s cancelled: agent %s/%s left alone: %v", id, machine, short(session), err)
+		return
+	}
+	machine = c.MachineID
+	if c.Status != proto.StatusOffline {
 		cctx, cancel := context.WithTimeout(ctx, agentArchiveCloseTimeout)
 		if err := s.call(cctx, machine, "session.close", map[string]any{"session_id": session}, nil); err != nil {
 			s.logf("task %s cancelled: close agent %s/%s: %v", id, machine, short(session), err)

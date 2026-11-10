@@ -381,3 +381,44 @@ func TestSetLeaders(t *testing.T) {
 		t.Fatalf("get: %s", got)
 	}
 }
+
+// A leader whose conversation is gone (archived, deleted) does not swallow its tasks' signals: they go to the main one.
+func TestDigestFallsBackWhenLeaderGone(t *testing.T) {
+	s, f, todo := newLeaderService(t)
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, "做完了", 0)
+	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
+	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, todo.ID) {
+		t.Fatalf("message:\n%s", n)
+	}
+	if got := f.noticesTo("lead1"); len(got) != 0 {
+		t.Fatalf("told the gone leader: %q", got)
+	}
+}
+
+// An agent that works for another open task by now is not closed or archived when the old task is cancelled.
+func TestCancelLeavesAnotherTasksAgent(t *testing.T) {
+	ft, row := closeTestService(t, nil)
+	ft.f.setSessions("mac", row)
+	var closed []string
+	ft.f.answerNode("session.close", func(_ string, raw json.RawMessage) (any, error) {
+		closed = append(closed, string(raw))
+		return map[string]any{"ok": true}, nil
+	})
+	s, ctx := ft.s, context.Background()
+	todo, err := s.createTodo(ctx, "新任务", "做", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(ctx, todo.ID, "mac", row.SessionID, "open", "/code", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	s.stopCancelledAgent(ctx, "todo_old", "mac", row.SessionID)
+	ft.f.mu.Lock()
+	n := len(closed)
+	ft.f.mu.Unlock()
+	if n != 0 || archivedIDs(t, s)[row.SessionID] {
+		t.Fatalf("another task's agent was closed (%d) or archived", n)
+	}
+}
