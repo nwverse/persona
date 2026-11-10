@@ -328,6 +328,47 @@ done
 	}
 }
 
+func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
+	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	shortStartRetries(t, 300*time.Millisecond)
+	claude := filepath.Join(os.Getenv("HOME"), "bin", "claude")
+	moved := claude + ".installing"
+	if err := os.Rename(claude, moved); err != nil {
+		t.Fatal(err)
+	}
+	back := make(chan error, 1)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		back <- os.Rename(moved, claude)
+	}()
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	const id = "11111111-2222-3333-4444-555555555555"
+	cwd := t.TempDir()
+	old := keptProc(t, n, id, "claude")
+	old.launcher, old.cwd, old.tasksObserved = "claude", cwd, true
+	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}, running: true}
+	n.recoveries = map[string]*assistantTurnRecovery{id: r}
+	_, err := n.assistantSend(withAssistantRecovery(context.Background(), r, true), id, cwd, "claude", "retry", nil, "", "")
+	if err := <-back; err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatalf("the launcher's internal startup retry failed: %v", err)
+	}
+	n.mu.Lock()
+	current, recovery := n.procs[id], n.recoveries[id]
+	n.mu.Unlock()
+	if current == nil || !current.alive() {
+		t.Fatal("the launcher retry did not leave a live process")
+	}
+	if recovery != r {
+		n.stopAssistant(id)
+		t.Fatal("the failed starter's exit watcher finalized the recovery before its replacement was delivered")
+	}
+	n.stopAssistant(id)
+}
+
 func TestAssistantProcessExitClearsItsRecovery(t *testing.T) {
 	f := sdkTest(t)
 	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"

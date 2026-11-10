@@ -391,7 +391,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 			return
 		}
 		if recovery != nil {
-			n.finishAssistantRecovery(p, recovery)
+			n.finishAssistantRecoveryOnExit(p, recovery)
 			return
 		}
 		n.emitDelta(id, "")

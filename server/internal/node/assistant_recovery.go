@@ -366,6 +366,19 @@ func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, 
 	n.finishAssistantRecovery(currentProc, r)
 }
 
+// finishAssistantRecoveryOnExit waits for an in-flight send before treating a process exit as final. A failed starter
+// may be replaced by assistantSend's own missing-command retry; its old exit event must not clear the replacement's recovery.
+func (n *Node) finishAssistantRecoveryOnExit(p *assistantProc, r *assistantTurnRecovery) {
+	defer n.typing.lock(p.id)()
+	n.mu.Lock()
+	current := n.procs[p.id]
+	valid := n.recoveries[p.id] == r
+	n.mu.Unlock()
+	if valid && current == nil {
+		n.finishAssistantRecovery(p, r)
+	}
+}
+
 // finishAssistantRecovery publishes the exhausted or undeliverable recovery's final idle state. Its transcript keeps
 // the original upstream error; the scheduled-run watcher can fail only now, not between two recovery attempts.
 func (n *Node) finishAssistantRecovery(p *assistantProc, r *assistantTurnRecovery) {

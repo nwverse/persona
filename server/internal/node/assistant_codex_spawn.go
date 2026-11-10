@@ -153,7 +153,7 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 			return
 		}
 		if recovery != nil {
-			n.finishAssistantRecovery(p, recovery)
+			n.finishAssistantRecoveryOnExit(p, recovery)
 			return
 		}
 		n.emitDelta(p.id, "")
