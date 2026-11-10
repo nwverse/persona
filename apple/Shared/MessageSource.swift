@@ -17,6 +17,8 @@ nonisolated struct MessageSource: Hashable, Sendable {
         case "patrol": return String(localized: "Patrol [Message Source]")
         case "followup": return String(localized: "Follow-up [Message Source]")
         case "supervision": return String(localized: "Supervision [Message Source]")
+        // A batch from a recorded meeting the session attends (#2981); its title is the meeting's name when it has one.
+        case "meeting": return String(localized: "Meeting [Message Source]")
         default: return String(localized: "System [Message Source]")
         }
     }
