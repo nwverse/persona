@@ -28,8 +28,9 @@ nonisolated enum IPhoneSteps {
             default: return String(localized: "Swipe")
             }
         case "type":
-            let text = ComputerSteps.short(step["text"]?.string ?? "")
-            return String(localized: "Type “\(text)”")
+            // Only its length, as on the approval card: the text may be a password.
+            let count = (step["text"]?.string ?? "").count
+            return String(localized: "Type \(count) characters", comment: "An iPhone step: type text; only its length is shown")
         case "key":
             let k = ComputerSteps.key(step["key"]?.string ?? "")
             return String(localized: "Press \(k)", comment: "A computer tool step: press a key or shortcut")

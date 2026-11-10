@@ -124,11 +124,21 @@ struct IPhoneControlTests {
         let line = IPhoneSteps.describe(steps) ?? ""
         let parts = line.components(separatedBy: " → ")
         #expect(parts.count == 6)
-        #expect(parts[0].contains("3") && parts[1].contains("hello") && parts[3] == IPhoneSteps.step(.object(["action": .string("button"), "button": .string("home")])))
+        #expect(!line.contains("hello"), "typed text is never shown, it may be a password")
+        #expect(parts[0].contains("3") && parts[1].contains("5") && parts[3] == IPhoneSteps.step(.object(["action": .string("button"), "button": .string("home")])))
         #expect(parts[4].contains("(120, 640)") && parts[5].contains("“Pay”"))
         #expect(IPhoneSteps.describe(.object([:])) == nil)
         #expect(ToolPresentation.symbol("mcp__persona__iphone_do") == Theme.Icon.phoneControl)
         #expect(ToolPresentation.symbol("phone_contacts_search") != Theme.Icon.phoneControl, "the phone's own data tools stay as they are")
+    }
+
+    /// The consent names the iPhone it matched, in the section and in the dialog, so a twin is noticed.
+    @Test func theConsentNamesTheIPhone() throws {
+        let all = try decoded().devices
+        let me = IPhoneIdentity.match(all, model: "iPhone14,5", ios: "18.6", picked: nil)
+        #expect(IPhoneConsentText.confirmTitle(me).contains("Other iPhone"))
+        #expect(IPhoneConsentText.detail(all[1]).contains("Other iPhone"))
+        #expect(!IPhoneConsentText.confirmTitle(.none).contains("Other iPhone"))
     }
 
     @Test func aDeviceSaysWhatIsLeft() {
