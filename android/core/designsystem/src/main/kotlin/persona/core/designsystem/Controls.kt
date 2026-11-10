@@ -454,8 +454,27 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
 }
 
 /**
+ * The filter chip's measurements, shared by every control that must read as one of these short capsules (the old All /
+ * task chips above the composer, and now the Assistant's Pending / Progress / Agents entries).
+ */
+object JChipTokens {
+    /** A tappable chip's minimum height. */
+    val height = 36.dp
+    /** A quiet (not tappable) chip's minimum height. */
+    val quietHeight = 28.dp
+    val horizontalPadding = 12.dp
+    val border = 1.dp
+    val dotSize = 8.dp
+    val dotGap = 6.dp
+    val iconSize = 15.dp
+    val iconGap = 5.dp
+    val countGap = 5.dp
+}
+
+/**
  * A filter or a fact. With [onClick] it toggles; without, it is a quiet label. [onLongClick] (with [onClick]) is a long
- * press for more (a menu of other ways to use it); the chip looks the same.
+ * press for more (a menu of other ways to use it); the chip looks the same. [dot] is a plain colored mark in the place
+ * of a [status] dot, for a category rather than a state.
  */
 @Composable
 fun JChip(
@@ -469,6 +488,7 @@ fun JChip(
     /** Greyed text (not selected): what it stands for is not reachable now, like an offline manager. */
     muted: Boolean = false,
     onLongClick: (() -> Unit)? = null,
+    dot: Color? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -480,21 +500,22 @@ fun JChip(
     }
     val ink = if (muted && (!selected || style == AppStyle.Board)) palette.ink3 else plainInk
     Row(
-        modifier.heightIn(min = if (onClick != null) 36.dp else 28.dp).clip(shape).background(fill).border(1.dp, border, shape)
+        modifier.heightIn(min = if (onClick != null) JChipTokens.height else JChipTokens.quietHeight).clip(shape).background(fill).border(JChipTokens.border, border, shape)
             .then(when {
                 onClick != null && onLongClick != null ->
                     Modifier.combinedClickable(role = Role.Checkbox, onClick = onClick, onLongClick = onLongClick).semantics { this.selected = selected }
                 onClick != null -> Modifier.clickable(role = Role.Checkbox, onClick = onClick).semantics { this.selected = selected }
                 else -> Modifier
             })
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = JChipTokens.horizontalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        status?.let { JStatusDot(it, size = 8.dp); Spacer(Modifier.width(6.dp)) }
-        icon?.let { JIcon(it, null, size = 15.dp, tint = ink); Spacer(Modifier.width(5.dp)) }
+        status?.let { JStatusDot(it, size = JChipTokens.dotSize); Spacer(Modifier.width(JChipTokens.dotGap)) }
+        if (status == null) dot?.let { Box(Modifier.size(JChipTokens.dotSize).clip(CircleShape).background(it)); Spacer(Modifier.width(JChipTokens.dotGap)) }
+        icon?.let { JIcon(it, null, size = JChipTokens.iconSize, tint = ink); Spacer(Modifier.width(JChipTokens.iconGap)) }
         Text(text, style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         count?.let {
-            Spacer(Modifier.width(5.dp))
+            Spacer(Modifier.width(JChipTokens.countGap))
             Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3)
         }
     }

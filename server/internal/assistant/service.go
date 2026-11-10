@@ -262,6 +262,16 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
+		// The node reads a missing is_main as false, and is_main is part of what a process runs: a relay into the main
+		// conversation (deliverRelay) without it started that conversation, or restarted it when idle, on the ordinary
+		// compaction limits (#3028). Only this manager knows which conversation is main; what a sender set stands.
+		if _, set := p["is_main"]; !set {
+			id, _ := p["session_id"].(string)
+			cfg := s.settings(ctx)
+			p["is_main"] = id != "" && cfg.Main == id && cfg.MachineID == device
+		}
+	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
