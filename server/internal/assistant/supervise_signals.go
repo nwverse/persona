@@ -329,7 +329,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
 	s.askTick(now) // cards held past their time go up a rung (ask_route.go)
 	routed := s.routedSessions()
-	for _, t := range s.todosOf(ctx, "*") {
+	tasks := s.todosOf(ctx, "*")
+	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
+	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
@@ -346,6 +348,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if g, ok := s.undecidableSignal(ctx, t, now); ok { // waits for the owner with nothing to answer (decision.go)
 			s.signal(g)
 		}
+		s.briefClock(ctx, t, now) // past its brief's clock with no end (task_brief_scope.go)
 	}
 	b := &s.supervise
 	b.mu.Lock()

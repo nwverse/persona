@@ -121,7 +121,7 @@ export interface TodoAsk {
   /** Where the task came from and where it stands, as one line the hub wrote in the request's language; `from` and
    *  `stands` are its parts. */
   background?: string;
-  from?: { conversation?: string; title?: string; at?: string; message?: string; by_assistant?: boolean };
+  from?: { conversation?: string; title?: string; main?: boolean; at?: string; message?: string; by_assistant?: boolean; started_by?: string };
   stands?: string;
   /** `default` "taken": the recommendation is taken at `deadline` when nobody answers; "never": it never is. */
   deadline?: string;

@@ -146,6 +146,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	render := func(list []prompts.SuperviseEntry) string {
 		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Escalated: escalatedIn(list),
 			LeaderStuck: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
+			Overdue:     slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
 			Decisions: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool {
 				return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
 			}),
@@ -313,6 +314,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if st != reviewNeedsUser && len(g.Cards) == 0 { // a leader's escalated cards are told as they were
 			return prompts.SuperviseEntry{}, false // decided meanwhile
 		}
+	case sigOverdue:
+		if b, ok := s.briefOfTodo(t.ID); !ok || b.Overdue == nil || st == reviewNeedsUser {
+			return prompts.SuperviseEntry{}, false // re-scoped, or with the owner, meanwhile
+		}
 	case sigOrphaned:
 		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
 			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
@@ -338,6 +343,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if a := v.AutoReview; g.Kind == sigReview && a != nil && a.Round == v.Round && (a.State == autoClean || a.State == autoBlocking || a.State == autoFailed) {
 		e.Review = &prompts.SuperviseReviewed{State: a.State, Count: a.Count, Blocking: a.Blocking, Findings: a.Findings, Error: a.Error}
 	}
+	s.briefEntry(ctx, t.ID, &e) // what was asked, in the owner's words (task_brief_digest.go)
 	if g.Kind == sigEscalated {
 		e.Recommend = g.Ask // the leader's recommendation (escalate)
 		e.Asks = g.Cards
@@ -409,7 +415,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigOverdue: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:

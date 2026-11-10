@@ -135,7 +135,8 @@ func readDecision(why, reason, recommend, cost string, options []DecisionOption)
 }
 
 // askFrom is where a decision's task came from, as the hub knows it: the conversation that opened it (Main: the main
-// conversation; Title its name, "" when it has none), when, and the first message the owner sent it. ByAssistant: the
+// conversation; Title its name, "" when it has none), when, and the owner's message that led to it (the one its brief
+// froze, else the first one they typed to the task). ByAssistant: the
 // to-do records no message of the owner's, so it is told as started by the assistant, not guessed.
 type askFrom struct {
 	Conversation string    `json:"conversation,omitempty"`
@@ -144,6 +145,8 @@ type askFrom struct {
 	At           time.Time `json:"at"`
 	Message      string    `json:"message,omitempty"`
 	ByAssistant  bool      `json:"by_assistant,omitempty"`
+	// StartedBy: who started it when the task's brief says so and it was not the owner (assistant, leader, routine, hub).
+	StartedBy string `json:"started_by,omitempty"`
 }
 
 // decisionBackground is what the hub adds to task t's decision: where it came from, and where it stands (its latest
@@ -156,6 +159,19 @@ func (s *Service) decisionBackground(ctx context.Context, t Todo) (*askFrom, str
 	} else if c, ok := s.session(ctx, here.MachineID, t.Origin); ok && t.Origin != "" {
 		if name := conversationName(c, ""); name != "" && strings.TrimSpace(c.Title) == name {
 			from.Title = clip(oneLine(name), 60)
+		}
+	}
+	// The task's brief (task_brief.go) froze the owner's message that led to the work when it was handed out: that is
+	// where it came from. A brief without one says who started it instead; only one that does not know (a brief
+	// reconstructed for an older task) leaves it to the chat's own record below.
+	if brief, ok := s.briefOfTodo(t.ID); ok {
+		switch {
+		case brief.Request != nil && strings.TrimSpace(brief.Request.Text) != "":
+			from.Message, from.At, from.ByAssistant = clip(oneLine(brief.Request.Text), 200), brief.Request.At, false
+			return from, s.decisionStands(t)
+		case brief.StartedBy != briefByUnknown && brief.StartedBy != briefByOwner && brief.StartedBy != "":
+			from.StartedBy = brief.StartedBy
+			return from, s.decisionStands(t)
 		}
 	}
 	// The first thing the owner typed to this task: a routed item that is neither Persona's (from) nor an answer the hub
@@ -182,6 +198,11 @@ func (s *Service) decisionBackground(ctx context.Context, t Todo) (*askFrom, str
 			}
 		}
 	}
+	return from, s.decisionStands(t)
+}
+
+// decisionStands is where task t stands: its latest agent's closeout when it wrote one, else its work line.
+func (s *Service) decisionStands(t Todo) string {
 	stands := ""
 	if ag := lastAgent(t); ag.SessionID != "" {
 		if e, ok := s.workEntry([2]string{ag.MachineID, ag.SessionID}); ok {
@@ -191,7 +212,7 @@ func (s *Service) decisionBackground(ctx context.Context, t Todo) (*askFrom, str
 			}
 		}
 	}
-	return from, clip(oneLine(stands), 200)
+	return clip(oneLine(stands), 200)
 }
 
 // backgroundText is a decision's one line of background: where its task came from, when, and where it stands. "" for
@@ -413,6 +434,21 @@ func (s *Service) followUpsHeld(machine, session string) bool {
 	defer s.todos.mu.RUnlock()
 	t := s.todos.todos[s.todos.activeBySession[[2]string{machine, session}]]
 	return t != nil && ownerHeld(t.Supervision)
+}
+
+// releaseHold ends the hold "This isn't what I asked for" put on task id's agent, when its supervisor sent the agent
+// on without reviewing the task again.
+func (s *Service) releaseHold(ctx context.Context, id string) {
+	if _, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
+		n := len(v.Reviews)
+		if n == 0 || v.Reviews[n-1].OwnerResponse != respondNotAsked || v.Reviews[n-1].HoldReleased {
+			return false
+		}
+		v.Reviews[n-1].HoldReleased = true
+		return true
+	}); err != nil {
+		s.logf("task %s: supervision: %v", id, err)
+	}
 }
 
 // ownerHeld: ledger v's latest review was answered not_what_i_asked and nothing released it since.

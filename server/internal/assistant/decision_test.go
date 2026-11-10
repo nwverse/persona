@@ -263,6 +263,40 @@ func TestDecisionBackgroundDoesNotGuess(t *testing.T) {
 	}
 }
 
+// A task with a brief (#3822) comes from what its brief froze at dispatch: the owner's message and its time, or who
+// started the work when it was not them; what was routed to the task later does not change that.
+func TestDecisionBackgroundReadsTheBrief(t *testing.T) {
+	asked := time.Date(2026, 11, 5, 8, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		rec         briefRecord
+		message, by string
+		assistant   bool
+	}{
+		{briefRecord{StartedBy: briefByOwner, Goal: "修登录崩溃", Request: &BriefRequest{Text: "iPad 横屏登录会崩，\n修一下", At: asked}}, "iPad 横屏登录会崩， 修一下", "", false},
+		{briefRecord{StartedBy: briefByRoutine, Goal: "修登录崩溃", Reason: "晨间巡检发现崩溃"}, "", briefByRoutine, true},
+	} {
+		s, _, todo := newSupervisedService(t)
+		ctx := context.Background()
+		// The brief the task was handed out with, as if that turn had followed this message or this routine.
+		s.tbriefs.mu.Lock()
+		tb := s.tbriefs.briefs[s.tbriefs.links[todo.ID].Brief]
+		if tb == nil {
+			s.tbriefs.mu.Unlock()
+			t.Fatal("the task has no brief")
+		}
+		tb.rec.StartedBy, tb.rec.Request, tb.rec.Reason = tc.rec.StartedBy, tc.rec.Request, tc.rec.Reason
+		s.tbriefs.mu.Unlock()
+		if _, err := s.appendFeed(ctx, "conv1", feedRouted, todo.ID, map[string]string{"text": "顺手把图标也换了"}); err != nil {
+			t.Fatal(err)
+		}
+		from, _ := s.decisionBackground(ctx, todoNow(s, todo.ID))
+		if from.Message != tc.message || from.StartedBy != tc.by || from.ByAssistant != tc.assistant ||
+			tc.message != "" && !from.At.Equal(asked) {
+			t.Fatalf("%s: from %+v", tc.rec.StartedBy, from)
+		}
+	}
+}
+
 // The live bug of #3804: a task waited for the owner (needs_user) and its to-do carried no ask. A decision was the
 // task's ask until anything asked the owner to verify the same task: a turn of its agent that said "deployed", or a
 // held deploy landing. That round replaced the decision and, the task being no big feature, was passed at once by the

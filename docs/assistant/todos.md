@@ -138,6 +138,20 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).
 
+### 6. task_briefs and task_brief_todos tables
+A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
+- `task_briefs`: `id` (text, PK), `brief` (jsonb, written once: the owner's message, who started it, goal, `done_when`,
+  `expect_minutes`, `out_of_bounds`), `state` (jsonb: the log of scope changes and overdue marks, the result),
+  `created_at`, `updated_at`. Nothing rewrites `brief`; `done_when` in effect is the brief's as its logged scope changes
+  left it, and a supervised task's `todo_supervision.done_when` carries the same list.
+- `task_brief_todos`: `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE), `brief_id` (FK → `task_briefs(id)`),
+  `continues` (the to-do it took the work over from), `reason`, `linked_at`. A brief's rows in `linked_at` order are its
+  lineage.
+
+`GET /api/v1/todos` carries both on a to-do that has a brief: `brief` (the record, its `log`, `criteria` and
+`expect_minutes_now` in effect, `clock_at`, `due_at`, `overdue_at`, `result`) and `lineage`. A task from before briefs
+gets a reconstructed one lazily.
+
 Link/release semantics:
 - When an Agent is linked to a new to-do and is active on another, the same transaction marks the original association `released` (records `released_at`); the old to-do shows it as "Previously involved".
 - If an Agent previously involved in this to-do is manually linked back, clear `released_at`/`dismissed_at`, and refresh `linked_at` and snapshot information.
@@ -333,6 +347,14 @@ Normal receipts are written before judgment for both supervised and unsupervised
 Nonempty `skip` means automatic flow would not judge this to-do (`not_a_task` manual, `done` completed, `reopened` no new work after reopen), but API still returns model verdict for inspection.
 With **Delivery** enabled (next section), response also has `delivery`; `verdict` may be hub's own `undelivered`.
 
+### Judged against the brief (#3822)
+
+The judge's input names the task's brief (`docs/assistant/unified-entry.md`, "Briefs") when it has one: the owner's
+message that led to the work, verbatim with its day, and the criteria as logged scope changes left them, with the
+dropped ones listed as no longer required. A take-over's notes are a hand-over prompt; the request and the criteria
+are what the work is judged against. When the judge closes a task itself (spot-check reviews), the brief's `result`
+records each criterion as it did for the supervisor's review.
+
 ## Delivery
 
 (#3306, lessons in `docs/lessons/delivery.md`) A code-change task is "done" only when live and tested, not when a PR is opened or merged. Judging only whether an Agent says finished leaves many tasks at "PR opened", "merged but off by default" or "not deployed" while showing Done.
@@ -501,7 +523,7 @@ Something the owner raises in the main conversation and wants an answer to is a 
 (#3804, `assistant/decision.go`.) A supervised task reviewed `needs_user` used to reach the owner as a title and "waiting for your decision", often for a task they had not started themselves. Now only a decision reaches them, it stands on its own, and it never rots.
 
 - **A decision or nothing**: `task_review` with `needs_user` is refused unless it carries `why_owner` (`irreversible`, `visible_to_others`, `priority`, `acceptance` or `only_owner_knows`: why only the owner can decide), `reason` (one sentence: what is to be decided), `recommend`, `options` (2 to 4 of `{label, leads_to}`, the recommended one first; the hub moves it first if the review did not) and `cost_of_waiting` (one sentence). The refusal names everything missing and says what to do when nothing needs the owner: decide it and send the Agent on, send the work back, or close the task. A task that only waits for something is not a decision. A third `rework` is refused the same way unless it carries these fields, in which case it becomes the decision. The ledger's review keeps the fields (`supervision.reviews[]`).
-- **Self-contained**: the hub, not the model, adds where the task came from and where it stands, read when the decision is asked. `from`: the origin conversation (`main` for the main chat, else its `title` when it has a name of its own), the to-do's creation time, and the first message the owner typed to the task (the first `routed` chat-activity entry with neither `from` nor `relay`, from before the task's first review); a to-do with no such message is `by_assistant` and reads "Started by the assistant on <date>", never a guess. `stands`: the latest Agent's closeout when it wrote one (what it did, else what is missing, what it waits for, what it verified), else its work line. Both are on the to-do's `ask`, in the decision push and on the Lark card, next to each option with what it leads to and the cost of waiting.
+- **Self-contained**: the hub, not the model, adds where the task came from and where it stands, read when the decision is asked. `from`: the origin conversation (`main` for the main chat, else its `title` when it has a name of its own), the to-do's creation time, and the owner's message that led to the work: the one the task's brief froze at dispatch (`request`, with its time; `docs/assistant/unified-entry.md` "Briefs"), else, for a task whose brief does not know, the first message the owner typed to the task (the first `routed` chat-activity entry with neither `from` nor `relay`, from before the task's first review). A to-do with no such message is `by_assistant` (with `started_by` when its brief says who: `assistant`, `leader`, `routine`, `hub`) and reads "Started by the assistant on <date>", never a guess. `stands`: the latest Agent's closeout when it wrote one (what it did, else what is missing, what it waits for, what it verified), else its work line. Both are on the to-do's `ask`, in the decision push and on the Lark card, next to each option with what it leads to and the cost of waiting.
 - **A default and a date**: a decision whose `why_owner` is not `irreversible` or `visible_to_others` gets a 24-hour deadline with `reversible: true` unless the review sets its own, and "Decision deadlines" below then takes the recommendation. `irreversible` and `visible_to_others` are never taken by default (a review that says `reversible: true` for one is refused); after the recheck below they are raised to the owner again once a day (the decision push, and the card when there was one).
 - **Old decisions are checked first**: a decision that has waited 24 hours goes back to its supervisor once as supervision signal `recheck`, with the decision as it was asked: confirm the facts still hold and re-issue it, or close it. The daily raise to the owner waits an hour for that. Kept on the ask (`recheck_at`, `raised_at`), so a restart does not repeat it.
 - **The backlog**: an open task in `needs_user` with nothing the owner can answer (no ask, or one that recommends nothing) goes back to its supervisor once as signal `undecidable`: restate it as a decision, or close it. Kept on the review (`restate_at`). It waits ten minutes after the review or after an answer, so an ask being written or an answer on its way to the Agent is not mistaken for one.
