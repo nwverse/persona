@@ -160,6 +160,8 @@
     <string name="inbox_handoff_who">交给谁</string>
     <string name="inbox_handoff_main_chat">主对话</string>
     <string name="inbox_handoff_no_agents">没有在线的 Agent；可以先交给 Persona。</string>
+    <string name="inbox_handoff_last_time">上次</string>
+    <string name="inbox_handoff_last_gone">上次交给的 Agent 已经结束，这次默认交给 Persona。</string>
     <string name="inbox_handoff_mark_done">同时标为已处理</string>
     <string name="inbox_handoff_sending">正在交过去…</string>
     <string name="inbox_hand_to_persona">交给 Persona</string>

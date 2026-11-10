@@ -105,7 +105,7 @@ business state. The focused fixed suite passed 57 tests before the final hardeni
 The full Web lane initially exposed one old Inbox expectation for raw manager text;
 that expectation was updated while retaining its no-send/no-navigation assertions.
 
-Final checks after upstream integration (Node 24 for the Web lane):
+Original delivery checks after upstream integration (Node 24 for the Web lane):
 
 | Command | Result |
 | --- | --- |
@@ -118,7 +118,23 @@ Final checks after upstream integration (Node 24 for the Web lane):
 | `python3 scripts/test/test_doc_paths.py` / `python3 scripts/test/test_doc_go_paths.py` / `python3 scripts/test/test_doc_wire.py` | 12 / 3 / 13 tests passed |
 | `python3 scripts/privacy_check.py` and staged scan | Clean |
 
-These checks do not replace the required remaining gates:
+### Follow-up synchronization — 2026-11-10
+
+The general comment on PR #2614 reported no findings on head `7096810`; it did
+not request a code change or constitute formal approval. Upstream `8212b6fb3`
+was merged without rebasing or force-pushing. The only textual conflicts were
+concurrent additions to `Localizable.xcstrings`: all 6,104 upstream entries and
+this PR's 12 entries were retained, while upstream removals stayed removed.
+The automatically merged API routing, Inbox hand-off and recording-sync changes
+were inspected against the new base.
+
+`scripts/ci/web.sh` with Node 24 passed again after the final synchronization:
+install, lint, typecheck, 7,555 tests passed / 1 skipped, production build and
+privacy. Apple catalog completeness, Android translations, and the documentation
+path / Go-path / section / wire suites passed (12 / 3 / 3 / 13 tests).
+
+Web is the primary validation for this review. Remaining validation gaps are
+disclosed rather than treated as a blocker to marking the PR ready for review:
 
 - Apple compilation, `PersonaTests`, `RecordingSyncTests`, Inbox model tests,
   PersonaKit tests and light/dark simulator screenshots: unavailable on this Linux
