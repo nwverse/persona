@@ -28,6 +28,7 @@
   "footer": "在飞书里私聊这个机器人，就是在和 Persona 说话。机器人只回应配对过的你，群里不回应。",
   "larkcli_row": "以我的身份读取（lark-cli）",
   "larkcli_footer": "以我的身份读取（lark-cli）会收集提到你的消息和你的单聊。",
+  "larkcli_dialog_footer": "用你自己的飞书登录，读取提到你的消息和你的单聊；机器人是你和 Persona 对话的入口。",
   "status_unreadable": "读不到状态",
   "error_with": "{what}：{error}",
   "test_sent": "已发一条测试消息到飞书",

@@ -38,7 +38,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   // Lark (the Lark gateway through /api/v1/lark/…) only on a hub that has it (feature `lark`); "Lark bot" is the hub's own.
   const lark = useLarkOn();
-  const [larkcli, setLarkcli] = useState<HubConnector | null>(null);
+  const [larkcli, setLarkcli] = useState<HubConnector | null | undefined>();
   // "feishu-bot" is not a hub connector: FeishuBot reads it and opens its own dialog.
   // `<id>@<manager>`: another manager's connector, opened from its extension's page (docs/assistant/managers.md "Clients")
   if (open === SENT_SUB) return (

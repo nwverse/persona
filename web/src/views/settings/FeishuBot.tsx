@@ -5,7 +5,7 @@
 import { ChannelLink } from "./Channels";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { connectorSummary, connectorTone, type HubConnector } from "../../lib/connectors";
+import { connectorSummary, connectorTone, listConnectors, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
 import { ago } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -82,7 +82,7 @@ export function FeishuBot({ onChannel, larkcli, onOpen }: { onChannel?: (id: str
         {larkcli && <LarkCliRow connector={larkcli} onOpen={onOpen} />}
       </Group>
       {onChannel && <ChannelLink id="feishu" onOpen={onChannel} />}
-      {open && <FeishuBotDialog bot={bot} onClose={() => setOpen(false)} />}
+      {open && <FeishuBotDialog bot={bot} larkcli={larkcli} onClose={() => setOpen(false)} onOpen={onOpen} />}
     </>
   );
 }
@@ -106,8 +106,9 @@ function LarkCliRow({ connector, onOpen }: { connector: HubConnector; onOpen?: (
   );
 }
 
-function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onClose: () => void }) {
+function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<typeof useBot>; larkcli?: HubConnector | null; onClose: () => void; onOpen?: (id: string) => void }) {
   const { status, setStatus, loading, error, setError, load } = bot;
+  const [dialogLarkcli, setDialogLarkcli] = useState<HubConnector | null | undefined>(larkcli);
   const [form, setForm] = useState<BotCredentials>(() => (status ? credentialsOf(status) : { appID: "", appSecret: "", domain: "feishu" }));
   const [saving, setSaving] = useState(false);
   const [confirmUnpair, setConfirmUnpair] = useState(false);
@@ -119,14 +120,43 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
   // Read at answer time, not when the request (or the pairing poll) started: typing meanwhile must count.
   const changedRef = useRef(changed);
   changedRef.current = changed;
+  // Whether the user has typed in the credentials. Until then the form follows the hub: a dialog opened by URL before the
+  // status arrived starts empty, and an empty form differs from the saved credentials without anything being typed.
+  const editedRef = useRef(false);
+  const edit = (next: BotCredentials) => {
+    editedRef.current = true;
+    setForm(next);
+  };
+
+  useEffect(() => {
+    if (larkcli !== undefined) {
+      setDialogLarkcli(larkcli);
+      return;
+    }
+    setDialogLarkcli(undefined);
+    let active = true;
+    void listConnectors()
+      .then((all) => {
+        if (active) setDialogLarkcli(all.find((connector) => connector.id === "larkcli") ?? null);
+      })
+      .catch(() => {
+        if (active) setDialogLarkcli(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [larkcli]);
 
   // A newer status: fill the form unless something is being typed (replace: the answer to saving the credentials).
   const adopt = (s: FeishuBotStatus, replace = false) => {
-    if (replace || !changedRef.current) setForm(credentialsOf(s));
+    if (replace || !editedRef.current || !changedRef.current) {
+      editedRef.current = false;
+      setForm(credentialsOf(s));
+    }
     setStatus(s);
   };
   useEffect(() => {
-    if (status && !changed) setForm(credentialsOf(status));
+    if (status && (!editedRef.current || !changed)) setForm(credentialsOf(status));
     // only when the hub's credentials change, not on each keystroke
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status?.app_id, status?.domain]);
@@ -199,13 +229,13 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
 
       <Group title={t("settings-feishubot.credentials")} footer={status?.from_config ? t("settings-feishubot.credentials_from_config") : t("settings-feishubot.credentials_secret_note")}>
         <Row label="App ID">
-          <input value={form.appID} onChange={(e) => setForm({ ...form, appID: e.target.value })} placeholder={t("settings-feishubot.required")} aria-label="App ID" autoComplete="off" spellCheck={false} className={cx(controlClass, "w-[240px] font-mono")} />
+          <input value={form.appID} onChange={(e) => edit({ ...form, appID: e.target.value })} placeholder={t("settings-feishubot.required")} aria-label="App ID" autoComplete="off" spellCheck={false} className={cx(controlClass, "w-[240px] font-mono")} />
         </Row>
         <Row label="App Secret">
           <input
             type="password"
             value={form.appSecret}
-            onChange={(e) => setForm({ ...form, appSecret: e.target.value })}
+            onChange={(e) => edit({ ...form, appSecret: e.target.value })}
             placeholder={status?.has_secret ? t("settings-feishubot.secret_saved") : t("settings-feishubot.required")}
             aria-label="App Secret"
             autoComplete="new-password"
@@ -213,7 +243,7 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
           />
         </Row>
         <Row label={t("settings-feishubot.platform")}>
-          <select value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} aria-label={t("settings-feishubot.platform")} className={cx(controlClass, "w-[240px]")}>
+          <select value={form.domain} onChange={(e) => edit({ ...form, domain: e.target.value })} aria-label={t("settings-feishubot.platform")} className={cx(controlClass, "w-[240px]")}>
             <option value="feishu">{t("settings-feishubot.platform_feishu")}</option>
             <option value="lark">Lark</option>
             {form.domain !== "feishu" && form.domain !== "lark" && <option value={form.domain}>{form.domain}</option>}
@@ -227,8 +257,7 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
       </Group>
 
       {status?.has_secret && (
-        <>
-          <Group
+        <Group
             title={t("settings-feishubot.pairing")}
             footer={status.owner || pairing ? undefined : status.enabled ? t("settings-feishubot.pair_hint") : t("settings-feishubot.pair_enable_first")}
           >
@@ -274,8 +303,16 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
               </div>
             )}
           </Group>
+      )}
 
-          <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
+      {dialogLarkcli && (
+        <Group title={t("settings-feishubot.larkcli_row")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
+          <LarkCliRow connector={dialogLarkcli} onOpen={(id) => { onClose(); onOpen?.(id); }} />
+        </Group>
+      )}
+
+      {status?.has_secret && (
+        <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
             {FEATURES.map((f) => {
               // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either.
               const off = (f.key === "all_cards" && !features.cards) || (f.key === "only_conclusions" && features.reports === false);
@@ -310,8 +347,7 @@ function FeishuBotDialog({ bot, onClose }: { bot: ReturnType<typeof useBot>; onC
                 ))}
               </select>
             </div>
-          </Group>
-        </>
+        </Group>
       )}
 
       {agents.length > 0 && (
