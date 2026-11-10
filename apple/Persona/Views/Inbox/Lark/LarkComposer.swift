@@ -22,6 +22,7 @@ struct LarkComposer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.larkAccount) private var larkAccount
     @Environment(\.larkManager) private var larkManager
+    @Environment(\.larkGroup) private var larkGroup
     var placeholder: String
     @Binding var text: String
     var focused: FocusState<Bool>.Binding
@@ -151,7 +152,7 @@ struct LarkComposer: View {
             let found: [LarkMember]
             if let findPeople {
                 found = try await findPeople(query)
-            } else if let feed = mentionFeed, let api = model.api?.manager(larkManager).lark(larkAccount) {
+            } else if let feed = mentionFeed, let api = model.larkAPI(group: larkGroup, manager: larkManager, account: larkAccount) {
                 found = try await api.larkMembers(feed, query: query).members
             } else {
                 return
