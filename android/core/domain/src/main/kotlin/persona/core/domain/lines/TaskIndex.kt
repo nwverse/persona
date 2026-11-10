@@ -73,6 +73,9 @@ data class TaskIndex(
         /** A subagent's id only after "agentId:", as the node reads it: Claude Code 2.1.319's receipt opens with "including
          *  the agentId below", and "below" taken for the id left its notice without its call (#6381). */
         private val launched = Regex("(?:(?:running in background with ID|Monitor started \\(task|moved to the background \\(ID):?|agentId:)\\s*([A-Za-z0-9_-]+)")
+        /** What every [launched] match contains, one of them word for word: most results (files, shell output) have
+         *  none, and looking for these is much cheaper than running the pattern over them. */
+        private val launchMarks = listOf("running in background with ID", "Monitor started (task", "moved to the background (ID", "agentId:")
 
         fun build(items: List<LineItem>): TaskIndex {
             val notes = mutableMapOf<String, MutableList<TaskNote>>()
@@ -95,6 +98,7 @@ data class TaskIndex(
                     "tool_result" -> {
                         val call = it.item.toolUseId ?: continue
                         val text = it.text ?: continue
+                        if (launchMarks.none { it in text }) continue
                         val match = launched.find(text) ?: continue
                         byTask[match.groupValues[1]] = call
                         started += call

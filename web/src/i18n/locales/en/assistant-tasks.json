@@ -1,4 +1,11 @@
 {
+  "tray_pending": "Pending",
+  "tray_progress": "Progress",
+  "tray_agents": "Agents",
+  "tray_empty_pending": "Nothing waiting for you",
+  "dispatch_hint": "Dispatched {count} · View in Progress",
+  "progress_count": "{value}/{total}",
+  "progress_pr": "PR #{number}",
   "receipt_review_followup": "Persona follows up",
   "report_progress": "Progress update · {title}",
   "removed": "Removed \"{title}\"",

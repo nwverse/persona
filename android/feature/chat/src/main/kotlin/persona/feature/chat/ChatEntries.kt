@@ -36,6 +36,7 @@ interface ChatServices {
     fun interactions(): InteractionCenter
     fun sessions(): SessionsRepository
     fun chatWiring(): ChatWiringSource
+    fun inboxTrays(): AssistantInboxTrays
 }
 
 /** Every service in a binding belongs to the same pairing generation. */
@@ -154,6 +155,11 @@ fun ChatDestination(
     val wiring by remember(services, session) { services.chatWiring().bindingsFor(session) }.collectAsStateWithLifecycle()
     if (wiring == null) { androidx.compose.material3.CircularProgressIndicator(); return }
     val metadata by services.sessions().sessions.collectAsStateWithLifecycle()
+    val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
+    val managerId = metadata.firstOrNull { it.key == session }?.manager ?: managerChoice.shown
+    val assistantManagement = remember(wiring?.assistantManagement, managerId) {
+        wiring?.assistantManagement?.forManager(managerId)
+    }
     val style = renderStyle ?: if (route.kind == persona.core.navigation.ConversationKind.Assistant ||
         metadata.any { it.key == session && it.assistant }) ChatRenderStyle.Assistant else ChatRenderStyle.Agent
     val editor = rememberChatDraftEditor(if (historyReadOnly) null else wiring, session)
@@ -169,7 +175,9 @@ fun ChatDestination(
             onOpenAssistant = { navigator.navigate(conversationRoute(it, assistant = true)) },
             onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
             files = wiring?.files, ports = wiring?.ports, onHandToPersona = handToPersona,
-            tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly }),
+            tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly },
+            assistantManagement = assistantManagement,
+            inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path),
         renderStyle = style,
         embedded = embedded, showTopBar = showTopBar,
         historyReadOnly = historyReadOnly, historyFooter = historyFooter, historySession = historySession,

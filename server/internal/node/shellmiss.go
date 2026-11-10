@@ -319,7 +319,7 @@ func (p *startProbe) verdict(screen string, shellBack func() bool) (refused erro
 // not the launcher's as the login shell has it (the hub words it so, and launcher health keeps it apart).
 const startMissWhere = "terminal"
 
-// refusal is the coded start refusal of m (docs/protocol/protocol.md "Errors"): the hub says it in the user's language
+// refusal is the coded start refusal of m (docs/protocol/protocol.md "Error body"): the hub says it in the user's language
 // with the launcher, the shell that could not run it and the shell the launchers are listed in (apierr.explain). A
 // launcher the node does not list either is plain launcher_missing: gone from the login shell too, not the terminal's.
 func (p *startProbe) refusal(code string, m shellMiss) error {

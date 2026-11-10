@@ -11,8 +11,9 @@ import androidx.datastore.tink.AeadSerializer
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.BinaryKeysetWriter
 import com.google.crypto.tink.KeysetHandle
-import com.google.crypto.tink.aead.AeadConfig
 import com.google.crypto.tink.aead.AeadKeyTemplates
+import com.google.crypto.tink.aead.AeadWrapper
+import com.google.crypto.tink.aead.AesGcmKeyManager
 import com.google.crypto.tink.integration.android.AndroidKeystoreKmsClient
 import java.io.File
 import java.io.InputStream
@@ -89,7 +90,7 @@ internal class EncryptedCredentials(context: Context) {
 
     @Suppress("DEPRECATION")
     private fun createAead(): Aead {
-        AeadConfig.register()
+        registerPairingAead()
         val keyset = AtomicFile(File(root, "keyset.enc"))
         val uri = ProtocolCompatibility.pairingMasterKeyUris.first()
         val handle = if (keyset.baseFile.exists() || File(root, "keyset.enc.bak").exists()) {
@@ -111,6 +112,16 @@ internal class EncryptedCredentials(context: Context) {
         }
         return handle.getPrimitive(Aead::class.java)
     }
+}
+
+/**
+ * The AEAD key managers the pairing keyset needs: it has only ever been generated as AES256_GCM, so AES-GCM and the
+ * AEAD wrapper, not all of `AeadConfig` (every AEAD key type, about 50 ms more on the start-up path). The master key
+ * from the Android Keystore is not looked up through this registry.
+ */
+internal fun registerPairingAead() {
+    AesGcmKeyManager.register(true)
+    AeadWrapper.register()
 }
 
 internal class VersionedSerializer<T>(

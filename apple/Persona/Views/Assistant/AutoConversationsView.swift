@@ -7,7 +7,7 @@ struct AutoConversationsRoute: Identifiable, Hashable {
     var id: String { source ?? "" }
 }
 
-/// All Chats (#3264, docs/protocol/protocol.md「侧边栏」): the assistant's conversations, newest first, filtered along the top by
+/// All Chats (#3264, docs/protocol/protocol.md「Sidebar」): the assistant's conversations, newest first, filtered along the top by
 /// who opened them: All, Mine (the user's own), then each source of Auto Chats that has any. The sidebar's Auto Chats opens
 /// it on a source. A tap opens one; a swipe or a long press archives it, as in the sidebar.
 struct AutoConversationsView: View {

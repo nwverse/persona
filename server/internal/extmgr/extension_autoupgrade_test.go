@@ -813,6 +813,15 @@ func TestPrintUpgrades(t *testing.T) {
 			t.Fatalf("no %q in:\n%s", want, out)
 		}
 	}
+	// A rename: the command names the ID its market lists it under, and the line says the ID changes (#2511).
+	b.Reset()
+	printUpgrades(&b, upgradesView{Auto: true, Upgrades: []ExtensionUpgrade{{ID: "old-name", Market: "m1", From: "1.0.0", To: "1.1.0",
+		State: upgradeNeedsConsent, RenameFrom: "old-name", RenameTo: "new-name"}}})
+	out = b.String()
+	if !strings.Contains(out, "market:m1/new-name") || strings.Contains(out, "market:m1/old-name") ||
+		!strings.Contains(out, i18n.T(i18n.Default, "extension-identity.confirmation", i18n.Args{"from": "old-name", "to": "new-name"})) {
+		t.Fatalf("rename hint:\n%s", out)
+	}
 	b.Reset()
 	printUpgrades(&b, upgradesView{})
 	if !strings.Contains(b.String(), "都是最新的") {

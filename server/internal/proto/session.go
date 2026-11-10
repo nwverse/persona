@@ -86,7 +86,7 @@ type Session struct {
 	TabID       string `json:"tab_id,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"`
 	AgentName   string `json:"agent_name,omitempty"`
-	// CodexRoute: how Persona reaches a Codex in a terminal (docs/integrations/codex.md "Sessions on a daemon") — "app_server" (joined on
+	// CodexRoute: how Persona reaches a Codex in a terminal (docs/integrations/codex.md "Sessions on the daemon") — "app_server" (joined on
 	// the shared app-server: questions, approvals and messages go through its protocol) or "terminal" (its rollout and
 	// screen, keys and typing); CodexRouteNote says why when it is the terminal.
 	CodexRoute     string `json:"codex_route,omitempty"`
@@ -225,7 +225,7 @@ type Session struct {
 	// (Codex: a rollout's task_complete.error, an app-server's failed turn, #2185); otherwise the hub reads it off the
 	// last words, as Claude Code writes them ("API Error: …"). The hub keeps it only while the agent is stopped: empty
 	// while it works or when the turn ended normally. The task it works for is interrupted, not done
-	// (docs/assistant/todos.md "How the state is computed", #1516).
+	// (docs/assistant/todos.md "State calculation rules", #1516).
 	TurnError string `json:"turn_error,omitempty"`
 	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
 	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
@@ -272,7 +272,7 @@ type Session struct {
 	Suggestion string `json:"suggestion,omitempty"`
 	// StartError: the start failed (shown in the chat for a while). StartErrorCode is the start's coded refusal
 	// when it was one (claude_missing, launcher_missing…: the code a synchronous start is answered 409 with), with
-	// StartErrorArgs, the refusal's details (launcher, where, missing, pane_shell…, docs/protocol/protocol.md "Errors"):
+	// StartErrorArgs, the refusal's details (launcher, where, missing, pane_shell…, docs/protocol/protocol.md "Error body"):
 	// the hub writes StartError as the sentence for that code in the user's language, and a client offers its remedy.
 	StartError     string            `json:"start_error,omitempty"`
 	StartErrorCode string            `json:"start_error_code,omitempty"`
@@ -298,7 +298,7 @@ type Session struct {
 	// Node.js 22+, no bridge package, no claude); "" when it runs as asked.
 	RuntimeFallback string `json:"runtime_fallback,omitempty"`
 	// Chat, Topic, Dispatched: a botmux session's Feishu chat, its topic's root message and the topics it dispatched
-	// (`botmux dispatch`), for the todos to follow (docs/assistant/todos.md "Following botmux"); stripped by hub like SpawnFrom.
+	// (`botmux dispatch`), for the todos to follow (docs/assistant/todos.md "botmux following"); stripped by hub like SpawnFrom.
 	Chat       string   `json:"chat,omitempty"`
 	Topic      string   `json:"topic,omitempty"`
 	Dispatched []string `json:"dispatched,omitempty"`
@@ -346,6 +346,10 @@ const (
 	// CodeStartLineRejected: the new tab's shell did not take the typed start line, twice (a startup prompt ate its first
 	// characters, #2570). Nothing ran; the tab is closed.
 	CodeStartLineRejected = "start_line_rejected"
+	// CodeDirectoryUntypable: the start's directory has a control character in its name, which a shell's line editor
+	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
+	// the request, not the launcher's fault.
+	CodeDirectoryUntypable = "directory_untypable"
 )
 
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).

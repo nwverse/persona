@@ -1,6 +1,6 @@
 import XCTest
 
-/// Launching into a conversation makes it, and only it, appear once (docs/apple/shell.md「启动」). The ovis lane saw a
+/// Launching into a conversation makes it, and only it, appear once (docs/apple/shell.md「Launch」). The ovis lane saw a
 /// conversation's `onAppear` run several times at launch (2026-11-02): the one opened appeared once, but the shell had
 /// built Assistant behind Agents and its conversation appeared too, unseen: subscribed, marked seen, and the DEBUG switches
 /// that hang off `onAppear` ran twice. `probe.chat`'s `appeared` and the shell's trace count them.

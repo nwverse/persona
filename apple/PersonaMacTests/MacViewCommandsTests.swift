@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// View › Text Size ⌘+ ⌘- ⌘0 and Go › Previous / Next Agent ⌘[ ⌘] (docs/apple/mac.md「菜单和快捷键」).
+/// View › Text Size ⌘+ ⌘- ⌘0 and Go › Previous / Next Agent ⌘[ ⌘] (docs/apple/mac.md「Menus and shortcuts」).
 @MainActor
 struct MacViewCommandsTests {
     @Test func textSizeSteps() {

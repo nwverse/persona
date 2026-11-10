@@ -1,7 +1,7 @@
 import Foundation
 
 /// The arithmetic of filing many inbox items at once (Clear All, Mark All Seen / Clear All, and Undo), kept apart from
-/// `InboxStore` so it can be tested without a hub (docs/assistant/inbox.md「全部清理」).
+/// `InboxStore` so it can be tested without a hub (docs/assistant/inbox.md「Clean up all」).
 nonisolated enum InboxBulk {
     /// How items are filed at once (`POST /api/v1/inbox/bulk`'s `action`, and the `done_by` shown meanwhile):
     /// `done` for the Done request (sections, Mac's multi-select, Undo), `dismiss` for Clear All — the view-wide
@@ -15,7 +15,7 @@ nonisolated enum InboxBulk {
     }
 
     /// From this many items on, the clean-up asks first (fewer are done at once, with Undo after); the web's and
-    /// Android's threshold too (docs/assistant/inbox.md「全部清理」).
+    /// Android's threshold too (docs/assistant/inbox.md「Clean up all」).
     static let confirmFrom = 10
 
     static func needsConfirm(_ count: Int) -> Bool { count >= confirmFrom }

@@ -99,7 +99,7 @@ func TestWebAppFallsBackToTheEmbeddedCopy(t *testing.T) {
 	}
 }
 
-// Behind a reverse proxy that serves the hub under a sub-path (docs/web/web.md "Sub-path"), index.html's <base> says where.
+// Behind a reverse proxy that serves the hub under a sub-path (docs/web/web.md "Subpaths"), index.html's <base> says where.
 func TestWebAppWritesTheProxyPrefixIntoBase(t *testing.T) {
 	dir := t.TempDir()
 	index := `<head><base href="/" /><script src="./assets/a-1.js"></script></head>app`

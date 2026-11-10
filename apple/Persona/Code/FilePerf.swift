@@ -4,7 +4,7 @@ import QuartzCore
 import AppKit
 #endif
 
-/// How long opening a file takes and how smoothly it scrolls (docs/apple/ios.md「文件查看器」's measurements). DEBUG
+/// How long opening a file takes and how smoothly it scrolls (docs/apple/ios.md「File viewer」's measurements). DEBUG
 /// builds with `-showFilePerf YES` append lines to Caches/file-perf.log:
 /// `big.json fetched 210 ms (2.0 MB)`, `… shown 260 ms`, `… colored 900 ms`, and while a file is open, a line a second
 /// with the frames drawn and the longest frame (`frames 59 · longest 21 ms`). Otherwise nothing.

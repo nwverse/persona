@@ -622,7 +622,7 @@ struct AssistantTaskEditor: View {
         #endif
     }
 
-    /// Where runs go (docs/assistant/assistant.md「定时任务」): the conversation it came from (Continue in Original Chat), else the task's own
+    /// Where runs go (docs/assistant/assistant.md「Scheduled tasks」): the conversation it came from (Continue in Original Chat), else the task's own
     /// one, which the first run starts and the next ones continue; New Chat Next Time lets the next run start over.
     private var conversationSection: some View {
         Section {
@@ -663,7 +663,7 @@ struct AssistantTaskEditor: View {
         }
     }
 
-    /// Push When Done (docs/assistant/assistant.md「跑完推送」): every run's answer is pushed, or only what a run sends with notify_user.
+    /// Push When Done (docs/assistant/assistant.md「Push after running」): every run's answer is pushed, or only what a run sends with notify_user.
     private var pushSection: some View {
         Section {
             SegmentedChoice(String(localized: "Push When Done"), [(value: "", label: String(localized: "Every Run")), (value: APIClient.ScheduledTask.pushAsked, label: String(localized: "Only Its Alerts"))],

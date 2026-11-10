@@ -553,7 +553,11 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "views": views, "view_actions": actions, "view_blocks": blocks})
+		cards, cardErr := s.taskCards(r.Context(), items, plans)
+		if cardErr != nil {
+			s.logf("feed: task card projection: %v", cardErr)
+		}
+		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

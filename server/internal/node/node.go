@@ -121,6 +121,7 @@ type Node struct {
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
 	sent      sentList                   // the last sessions.changed as written, not written twice (sessions_sent.go)
+	listRows  atomic.Int32               // rows the last sessionList gathered before its keep pass: the next one's size
 	lastRevs  map[string]int64           // session id -> rev as last pushed (sessions.changed or sessions.revs)
 	metas     map[string]quickMeta       // transcript path -> cached meta; deleted ones leave it (meta_prune.go)
 	goneDirs  map[string]time.Time       // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
@@ -1337,7 +1338,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"commits": list}, err
 	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
-	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Moving skills out of the binary")
+	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Skills move out of the binary")
 		cwd := p.Cwd
 		if cwd == "" {
 			cwd = n.assistantDirOf(".persona/assistant")
@@ -1630,14 +1631,24 @@ func writeAtomic(path string, r io.Reader) error {
 	return err
 }
 
+// shellQuote makes s one word that reads back as s in the shells a node runs commands in or types them into: the sh
+// family and fish. Safe characters stay bare; anything else is single-quoted, with each quote and each backslash put
+// outside the quotes, backslash-escaped. Inside single quotes fish still takes \' and \\ as escapes, so a backslash
+// before a quote used to keep the quotes open there and run the rest of a first message as commands (#2867); outside
+// quotes every one of these shells reads \' and \\ alike.
 func shellQuote(s string) string {
 	if s != "" && strings.IndexFunc(s, func(r rune) bool {
 		return !(r == '/' || r == '.' || r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
 	}) < 0 {
 		return s
 	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return "'" + shellQuoteEscapes.Replace(s) + "'"
 }
+
+// shellQuoteEscapes closes shellQuote's quotes around each quote and backslash in the text (one pass, so the
+// replacements are not escaped again): anyShellQuote's scheme (devices/deploy.go) for the sh family and fish, with
+// csh's `!` left as it is.
+var shellQuoteEscapes = strings.NewReplacer(`'`, `'\''`, `\`, `'\\'`)
 
 // herdrVersion is the herdr host's version ("" without one): node.info's herdr_version.
 func (n *Node) herdrVersion(ctx context.Context) string {

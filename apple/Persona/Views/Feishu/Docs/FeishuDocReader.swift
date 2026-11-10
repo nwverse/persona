@@ -244,7 +244,7 @@ struct FeishuDocReader: View {
             HStack(spacing: Theme.Space.s) {
                 if let owner = model.info?.owner ?? treeOwner {
                     Button {
-                        if let id = owner.id { open?(.profile(LarkPersonRef(id: id, name: owner.name, avatar: owner.avatarUrl))) }
+                        if let id = owner.id { open?(.profile(LarkPersonRef(id: id, name: owner.name, avatar: owner.avatarUrl), manager: manager)) }
                     } label: {
                         HStack(spacing: Theme.Space.sm) {
                             LarkAvatarImage(name: owner.name, url: owner.avatarUrl.map(media), size: 22)
@@ -405,7 +405,7 @@ struct FeishuDocReader: View {
     private func handle(_ link: URL) -> OpenURLAction.Result {
         if link.scheme == feishuDocsUserScheme, let id = link.host() {
             let name = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "name" }?.value ?? ""
-            open?(.profile(LarkPersonRef(id: id, name: name)))
+            open?(.profile(LarkPersonRef(id: id, name: name), manager: manager))
             return .handled
         }
         if link.scheme == nil, link.path.hasPrefix("/messenger/") { return .discarded }

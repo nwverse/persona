@@ -34,7 +34,7 @@ SHA256 = {
 RELEASES = "https://github.com/rorkai/App-Store-Connect-CLI/releases/download"
 # Credential sources asc would otherwise mix with ours (its stored profiles, an inline key).
 FOREIGN = ("ASC_PROFILE", "ASC_BYPASS_KEYCHAIN", "ASC_CONFIG_PATH", "ASC_PRIVATE_KEY", "ASC_PRIVATE_KEY_B64")
-SETUP = "See docs/operations/release.md「用 asc 发版」."
+SETUP = "See docs/operations/release.md「Releasing with asc」."
 
 
 def target() -> str:
