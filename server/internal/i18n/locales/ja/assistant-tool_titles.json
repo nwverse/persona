@@ -1,0 +1,18 @@
+{
+  "computer_run": "コンピュータの操作",
+  "computer_state": "コンピュータの閲覧",
+  "browser_run": "ブラウザのスクリプト",
+  "iphone_do": "iPhone の操作",
+  "extension_ui": "拡張機能の操作",
+  "persona_settings": "Persona の設定変更",
+  "agent_send": "エージェントへのメッセージ",
+  "agent_start": "新しいエージェント",
+  "task_plan": "タスク計画",
+  "agent_interrupt": "エージェントの中断",
+  "agent_archive": "エージェントのアーカイブ",
+  "todo_create": "新しい ToDo",
+  "todo_update": "ToDo の変更",
+  "todo_complete": "タスクの完了",
+  "todo_reopen": "タスクの再開",
+  "todo_delete": "ToDo の削除"
+}
