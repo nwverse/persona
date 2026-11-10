@@ -4,9 +4,32 @@ Snapshot commit `738ba824c`, date 2026-11-10. All line numbers refer to that com
 
 **Before you add or change UI or an interaction** on any client, read the principles below and the parts of this document your change touches, and run the "UI change self-check" at the end. The PR description names the rules it followed and gives a reason for every deviation (`CLAUDE.md`, "Design spec for UI changes").
 
+## Reading route
+
+This table only points the way. Values and rules live in the sections it names, each in one place. Read the principles first, then the rows for what you are building.
+
+| You are building | Reuse first (Apple) | Rules |
+| --- | --- | --- |
+| A list of sessions or pending requests (Agents, Inbox, the Assistant home) | the Agents row styles, `StatusDot`, `AgentStateBadge` | principles 6 to 9; 3.4, "The work-item row" and "List controls" |
+| A pending request: a question, a plan, a tool approval | the session's pending area | 4.8 |
+| A page title or a session's details | `.pageTitle`, `.detailTitle` | principle 9, 5.6 |
+| A button or a row of buttons | `.themedButton` | 1.2 rule 3, 3.7, principle 10 |
+| A chip, a badge or a count | `Chip`, `FilterChip`, `CountBadge` | 3.8, principle 7 |
+| A card or another surface | `.surface` | 3.3 |
+| A page, a grouped page or a row | `.themedPage()`, `.themedGroupedPage()`, `.themedRow()`, `SettingsForm` | 3.4 |
+| A sheet | system sheets with detents | 3.6 |
+| An empty, loading or failed state | `EmptyStateView`, `Loadable` | 3.9, 3.10 |
+| A confirmation or an Undo | the ladder in 4.4 | 4.4 |
+| Words: labels, errors, notifications | the string catalogs | 5 |
+| A color, font, spacing, radius, size or animation | the tokens in section 2 | 1.2 rule 1, 2 |
+| An icon or a brand mark | `ThemedIcon`, `IconTile`, `BrandMark` | 2.8 |
+| A field for a secret | `SecretField` | 1.2 rule 4 |
+| A new setting | Settings, showing its current value | principles 2 and 3 |
+| Any UI change | the UI change self-check | 1.4 |
+
 ## Product design principles
 
-Five principles decide product questions before any visual rule applies. Each one comes with a check that a reviewer can run on a PR. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
+Ten principles decide product questions before any visual rule applies. Principles 1 to 5 cover defaults, disclosure, control, consistency, and keeping model and product apart; principles 6 to 10 cover how primary screens are structured. Each one comes with a check that a reviewer can run on a PR. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
 ### Principle 1: Defaults first
 
@@ -58,6 +81,51 @@ Speed, model choice, how Persona presents itself and which features are on are f
 
 Check: the PR names which of the four dimensions it touches, and switching any other dimension leaves its behavior unchanged.
 
+### Principle 6: Attention first, location last
+
+A screen answers three questions in this order: what needs me, how is it going, and where does it run. Lists sort and group by the first question, because the user opens them to act.
+
+- The Agents list opens on attention sections: Needs You, Working, Unread, and Earlier, which starts folded. The same default holds on iOS, Android and web.
+- Computer, repository, worktree and tab appear as a secondary line, or as a grouping the user picks from the list's ⋯ menu, such as By Repository or By Machine.
+- Nobody has to pick a computer or a repository to see their own work.
+
+Check: on a fresh install, the first screen of a list shows what needs the user before anything about where it runs.
+
+### Principle 7: One home per thing
+
+Every pending request and every session has one home page. Anywhere else it appears is an entry to that home, so there is never a question of which copy is current.
+
+- Entries use the same row (section 3.4) and the same number. Handling the thing in any place clears every entry at once.
+- An entry point for an existing thing reuses that row. It has no card design and no count of its own.
+
+Check: the PR names the home of each thing it shows, and every number it shows equals the home's number.
+
+### Principle 8: Results first, process folded
+
+Super rule 2 holds beyond the chat: a row shows what is wanted from the user, or the latest result. How the work went stays inside the session.
+
+Check: no row on a primary screen shows tool calls, paths or progress steps.
+
+### Principle 9: Plain words on primary screens
+
+Primary screens (list rows, top-bar titles, the Assistant home and notifications) use the session's title and the state words in section 5.6. This is principles 1 and 2 applied to Agent work.
+
+- Never on a primary screen: space, tab, pane, worktree, Primary, branch, engine names (herdr, Orca, Paseo), model IDs, session IDs and paths.
+- These words belong in details (the session's info sheet, opened from its title), tool views (terminal, files, changes), settings, and groupings the user picks, such as By Repository.
+- Search fields use the same plain words, for example "Search sessions and messages".
+
+Check: the PR's primary-screen strings contain none of the words above.
+
+### Principle 10: Quiet screens; color is for attention
+
+Color marks what needs attention and everything else stays neutral, so attention is easy to find.
+
+- Containers are neutral, with at most one large tinted area per screen.
+- A group of actions has at most one solid primary button. A recommended choice has an outline and a "Recommended" tag.
+- Red means failure or a destructive action, and nothing else. A state is a small mark plus its word.
+
+Check: in the PR's screenshots, every group of actions has at most one solid button, and red appears only for failure or destruction.
+
 ## 1. Purpose, scope and sources of truth
 
 This is the project-level design specification. It describes what the code uses today. Apple (iOS first, then watchOS, macOS, visionOS) is the reference implementation. Web and Android are checked against it. Where the code and an older doc disagree, the code wins and the disagreement is listed in section 8.
@@ -81,11 +149,12 @@ Relationship to other docs:
 - `docs/android/android-design.md` covers Android styles, glass levels and page-writing rules.
 - `docs/web/web.md` covers web layout and conventions.
 - `docs/SUPER_RULES.md` holds the three product rules cited in section 4. Changes there need administrator approval.
+- `docs/design/DECISIONS.md` is the history of these rules: what was decided, when, and what it replaced. It holds no rules; where it and this document differ, this document wins.
 
 ### 1.2 Rules
 
 1. UI code uses only tokens: font level, `Theme.Space`, `Theme.Radius`, `Theme.Size` with `scaledFrame`, `Theme.Motion`, role colors, `Theme.Icon`. A plain `frame` is for lines of 4 pt or less.
-2. Never restyle an existing screen directly. A new look is a new `AppStyle` or `ThemeColor`.
+2. Never restyle an existing screen directly. A new look is a new `AppStyle` or `ThemeColor`. A change that brings a screen in line with principles 6 to 10 is not a new look: it may change the screen's default, ships with a release note, and keeps the previous look reachable (principle 1). It is a large change (section 1.4).
 3. Button text never wraps (decided 2026-11-10). A button label stays on one line at every text size. When a label would be truncated, work through these in order: (a) shorten the copy, in every language; (b) ask whether a button is the right control here, since long or user-supplied text is content and belongs in a row, a list or the body, and a set of actions that doesn't fit goes into a menu; (c) at accessibility text sizes (`dynamicTypeSize.isAccessibilitySize`) stack the whole button group vertically, primary action first, each label still on one line. `minimumScaleFactor` is a last resort for small overflows such as long translations, never the fix for a label that is too long. HIG-003 and HIG-012 in `docs/design/HIG_AUDIT.md` are tracked against this rule.
 4. Use `SecretField`, not `SecureField`, for tokens and keys.
 5. Never write `glassEffect` or `.glass` directly. Go through `.surface` and `.themedButton`.
@@ -104,6 +173,14 @@ Relationship to other docs:
 | `scripts/app/android_token_baseline.py` | Hard-coded counts in `android/feature` only. It does not scan the design system module. |
 
 Not enforced anywhere: hit-area size, accessibility labels, shadows (inline literals), `.font(.system(size:))` in some Lark and Feishu views, numeric `listRowInsets`, `Spacer(minLength:)` and `lineWidth`.
+
+### 1.4 Who looks at a UI change
+
+Every UI change attaches light and dark screenshots (UI change self-check). Who looks at them depends on the size of the change, because the mistakes in a large change are the kind that an Agent checking its own work tends to miss.
+
+- **Large**: a person looks at the screenshots before merge, the issue's author or a maintainer. The Agent that made the change does not count. A change is large when it changes a default (a grouping, a style, what a primary screen shows first), a page's structure or navigation, what a primary screen contains, how a pending request looks or works, or a rule in this document.
+- **Small**: the Agent that made the change may check its own screenshots. A change is small when it brings a screen back in line with this document, changes copy within section 5, fixes tokens or spacing, or builds a secondary page from existing components.
+- The PR says which one it is, and why. When unsure, it is large.
 
 ## 2. Design tokens
 
@@ -352,6 +429,31 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Web rows: 32 px desktop, 44 px touch. Android rows: min 56 dp.
 - Status sections (web To-dos, #3156): a list grouped by what the user should do next uses folding section titles in a fixed order (urgent first, then the rest folded), one row per piece of work with related items behind an "N related" disclosure, and stale items folded under Shelved with a one-tap Restore instead of being hidden or deleted. Rules in `docs/assistant/todo-status-sop.md`. Why not the folder groups: they say where work lives, not who has to act.
 
+#### The work-item row
+
+Sessions and pending requests use one row in the Agents list, the Inbox, the Assistant home and history. Every Agents row style (Avatar, Two Lines, State Cards, Compact List) shows the same content:
+
+- Leading: one source mark, the Agent's brand or a contact's avatar. The row's one state sits on its corner, chosen by the order in section 5.6.
+- Line 1: the session's title, with the time on the right, localized ("6 min ago").
+- Line 2: when the session needs the user, what it waits for ("Approve plan: support HEIC", or the question itself); otherwise its latest line, in the secondary color. For a failed run, what failed, in red.
+- Line 3, optional: computer · project, leaving out what the grouping already shows.
+- Never in a row: model IDs, branches, Primary tags, session IDs or engine badges. One badge at most.
+- Answers in the row: a question's choices, and a tool approval whose full command is shown and whose action is low-risk (Deny, Allow Once). Plans, high-risk actions and Always Allow for This Session open the session, where the context is.
+- By Repository shows a tree instead: computer, repository, worktree, then session. It is an expert view the user picks, so it may show worktrees and branches.
+
+#### List controls
+
+A list has four kinds of control, each in its own place, so that narrowing a list never looks like leaving it.
+
+| Control | What it decides | Where it lives |
+| --- | --- | --- |
+| Scope | which computers or hub | a menu by the title |
+| Filter | which states or sources show | one row of chips at most |
+| Grouping and display | how rows are grouped, sorted and drawn | the ⋯ menu |
+| Navigation entry, such as personal Agents | opens another page | a row or the sidebar, never chip-shaped |
+
+A list outside its default grouping says so in a line at its top, with Back to Default.
+
 ### 3.5 Navigation
 
 - Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:19,258,294`). Re-tapping the selected segment opens its menu.
@@ -454,6 +556,18 @@ Links open inside the app in a card that fills the screen. Dragged down to 0.6 i
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
+### 4.8 Pending requests
+
+Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and waiting for a reply.
+
+- **Home**: the bottom of the session page. A request that blocks the Agent takes the composer's place and says why ("Answer this so Claude can continue"); a non-blocking one sits above the composer. Several read "1 of 3", one open at a time; any can be folded to answer later.
+- **One queue**: the Needs You section at the top of the Agents list. The Inbox's Agent section, the Assistant home and the composer's Pending tray are entries to the same data (principle 7).
+- **One count, per session**: a row is a session, so the number equals the rows. A session with several requests shows "1 of 2" on its page and "1 more" in its row.
+- **Card text**: the title names the thing and what happens next ("Approve plan: support HEIC", "Allow: run the unit tests"), not who is asking. The body gives only what the decision needs: the command, the plan's summary, the question and its choices. Commands render formatted, never as raw JSON.
+- **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
+- **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
+- **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
+
 ## 5. Content
 
 ### 5.1 Voice and tone
@@ -492,11 +606,28 @@ No HTTP codes, key algorithms, CLI flags or raw error text in the primary line. 
 | Computer | the user's own machine; "Machine" only for list and monitoring entries |
 | Node | never in user-facing English |
 | Agent | lowercase mid-sentence; "Agents" for the tab |
+| Session | what an Agent runs, titled by what it is doing. Not "task", which names the work Persona hands out |
 | Persona | the product and the main assistant |
 | Lark | in en and ja, except where Feishu is a separate option |
 | sign in / sign-in | verb / noun |
 
 Full glossary: `docs/protocol/i18n.md`. Languages: en, zh-Hans, ja. Apple strings live in `apple/Shared/Localization/Localizable.xcstrings`; hub strings in the server locale files. Keys with a bracketed suffix are translator-context tags; the English value strips them. Japanese uses no space between Japanese and Latin text (the catalogs do not follow this yet; DS-29). Do not concatenate sentences.
+
+### 5.6 Objects, titles and state words
+
+| Object | Called | Home | Title |
+| --- | --- | --- | --- |
+| Assistant conversation | conversation | the Assistant page | its title, generated or renamed |
+| Agent session | session | the session page | what it is doing, from the user's first message or a rename; never the repository or tab |
+| Pending request | Needs You | its session's pending area | the thing wanted, such as "Approve plan: support HEIC" |
+| Inbox item | message, mail | the Inbox | the sender or group, and a summary |
+| Computer | computer | the Machines page | the user's name for it |
+
+- One set of state words on every screen and platform (`StateName`): Needs You, Working, Unread, Seen and Not Running.
+- Needs You covers every session that waits on the user: a pending request, or a last message that asks the user something.
+- A failed run has no state of its own. It shows its state like any other run, and its row's line 2 says what failed, in red.
+- A row shows one state, the first of Needs You, Working and Unread; otherwise it shows the time.
+- The Agents list's attention sections gather the states: Needs You; Working, including waiting in the background or for a loop; Unread; and Earlier, which holds Seen.
 
 ## 6. Dark mode, Dynamic Type, accessibility baseline
 
@@ -614,14 +745,19 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] User control: every new behavior-changing setting is visible, changeable and reversible. If Persona or an Agent can change it, the PR names the explanation, the confirmation and the rollback (principle 3).
 - [ ] Consistency: lists the existing components and patterns reused. Anything new has its reason written down and an update to this document (principle 4).
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
+- [ ] Attention first: a list opens on what needs the user; location is a secondary line or a grouping the user picks (principle 6).
+- [ ] One home: names the home of each thing shown; entries reuse its row and number (principle 7).
+- [ ] Plain words: no engine words, model IDs or paths on primary screens (principle 9).
+- [ ] Quiet screens: one solid button per group of actions; red only for failure or destruction (principle 10).
 
 **Rules**
 
 - [ ] Only tokens and design-system components: no literal sizes, colors, fonts, SF Symbol names, `glassEffect` or lookalike components. The token ratchets did not go up (sections 1.2, 1.3).
-- [ ] Existing styles and theme colors look pixel-identical; a new look is a new `AppStyle` or `ThemeColor` (section 1.2).
+- [ ] Existing styles and theme colors look pixel-identical, except for a change that brings a screen in line with principles 6 to 10 (section 1.2).
 - [ ] Hit areas at least 44 x 44 pt (Android 48 dp); every control has a spoken label; gesture-only actions also have a visible control or an accessibility action (section 6.3).
 - [ ] Destructive actions: confirmed if irreversible, offer Undo if reversible (section 4.4).
 - [ ] Motion respects Reduce Motion; new loops are listed in `apple/PersonaTests/ContinuousMotionTests.swift` (sections 2.7, 6.3).
 - [ ] New copy follows section 5 and ships in `en`, `zh-Hans` and `ja`.
 - [ ] Screenshots of each changed screen in light and dark, at the default and at the largest accessibility text size, are attached or linked (iOS, plus watch, Android and web when touched).
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.
+- [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
