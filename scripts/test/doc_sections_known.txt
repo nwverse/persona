@@ -1,7 +1,6 @@
 # Quoted section names test_doc_sections.py lets stand for now: source<TAB>doc as written<TAB>name.
 # Lines other open work was editing when the names were fixed, and names inside UI strings, which change with the copy.
 # Fix a name, then delete its line; the test fails on a line that no longer misses.
-CLAUDE.md	docs/apple/ios.md	Logic-layer choice
 apple/Persona/App/AppModel.swift	docs/operations/hub-update.md	App 里
 apple/Persona/App/AppModel.swift	docs/operations/hub-update.md	兼容
 apple/Persona/Persona/Persona.swift	docs/apple/persona.md	App 图标
@@ -31,8 +30,6 @@ docs/operations/admin.md	mesh.md	One computer, multiple routes
 docs/operations/docker.md	docs/operations/hub-update.md	Taking skills out of the binary
 docs/operations/release.md	docs/operations/hub-update.md	Preventing rollback
 docs/operations/release.md	docs/operations/link.md	Installing the node service
-docs/operations/testing.md	docs/apple/ios.md	Attachments in New Agent
-docs/operations/testing.md	docs/apple/ios.md	MCP forms and links
 docs/operations/testing.md	docs/protocol/protocol.md	Item continuity
 docs/operations/testing.md	docs/protocol/protocol.md	Sending video
 docs/protocol/protocol.md	channels.md	6. Endpoints

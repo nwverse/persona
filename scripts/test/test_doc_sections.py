@@ -5,10 +5,13 @@ docs/apple/mac.md「Main window」. Headings get renamed, merged and translated,
 looking for a section that is not there. test_doc_paths.py checks that the file exists; this checks the name.
 
 A reference is a path ending in .md followed by "Name", “Name”, ("Name") or 「Name」; the path may be backticked or
-the target of a Markdown link. The name resolves when it matches a heading, a **bold** label or an <a id> anchor of
-the doc, after dropping leading section numbers (3.2, 1b., IV ·, E.), backticks and a trailing parenthetical, and
-ignoring the kind of quotes and dashes, case and extra spaces. A shorter name may stand for a longer target if it ends
-at a word boundary. Files under docs/archive are never scanned but stay valid targets.
+the target of a Markdown link. A quoted "Name" starts with a capital letter, a digit, a backtick or a Chinese
+character: lower-case text in quotes is prose. The name resolves when it matches a heading, a **bold** label or an
+<a id> anchor of the doc, after dropping leading section numbers (3.2, 1b., IV ·, E.), backticks and a trailing
+parenthetical, and ignoring the kind of quotes and dashes, case and extra spaces. A shorter name may stand for a longer
+target if it ends at a word boundary. It also resolves when it is the whole opening phrase of a list item, up to " ("
+or the end of the first sentence: the lessons files name each entry that way. Files under docs/archive are never
+scanned but stay valid targets.
 
 The sources are the docs test_doc_paths.py checks plus the tracked files under SOURCE_DIRS, except translation
 catalogs (their text follows the UI strings it translates) and the released files pinned by hash. Names that drifted
@@ -38,7 +41,8 @@ NOT_SOURCES = re.compile(r"\.xcstrings$|/res/values[^/]*/|^server/internal/i18n/
 
 # What follows the path: "Name", ("Name") or “Name”, after a closing backtick or a Markdown link's target, or 「Name」.
 # The regex starts at the literal .md so it skips most text quickly; the path is read backwards from there.
-REFERENCE = re.compile(r"\.md(?:(?:`|\]\([^)\s]*\))?\)?,? \(?[\"“]([A-Z0-9`][^\"”\n]{2,89})[\"”]"
+REFERENCE = re.compile(r"\.md(?:(?:`|\]\([^)\s]*\))?\)?,? \(?[\"“]"
+                       r"([A-Z0-9`][^\"”\n]{2,89}|[\u3400-\u9fff][^\"”\n]{1,89})[\"”]"
                        r"|`?[ \t]*[「（(]?[ \t]*「([^」\n]{1,60})」)")
 PATH_CHAR = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-")
 
@@ -47,6 +51,10 @@ HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$", re.M)
 FENCE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1", re.M | re.S)
 BOLD = re.compile(r"\*\*([^*\n]{2,160})\*\*")
 ANCHOR = re.compile(r"<a\s+(?:id|name)=\"([^\"]+)\"")
+# A list item's opening phrase ends at " (" or with its first sentence. docs/lessons has few headings and names each
+# entry that way: "- `opacity(0)` cannot hide a button inside a glass container (2026-11-05, #1337). The ...".
+LIST_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]+(.+)", re.M)
+LEAD_END = re.compile(r" \(|[.。](?:\s|$)")
 # Quotes inside a name are written either way: a heading's "open" becomes 'open' inside a "…" reference.
 PUNCTUATION = str.maketrans("‘’“”\"–—", "'''''--")
 
@@ -78,13 +86,18 @@ def normalize(name):
 
 
 def targets(text):
-    names = HEADING.findall(FENCE.sub("", text)) + BOLD.findall(text) + ANCHOR.findall(text)
-    return {normalize(name) for name in names} - {""}
+    """The headings, **bold** labels and <a id> anchors, and apart from them the list items' opening phrases."""
+    unfenced = FENCE.sub("", text)
+    names = HEADING.findall(unfenced) + BOLD.findall(text) + ANCHOR.findall(text)
+    leads = (LEAD_END.split(item, 1)[0] for item in LIST_ITEM.findall(unfenced))
+    return {normalize(name) for name in names} - {""}, {normalize(lead) for lead in leads} - {""}
 
 
-def resolves(name, names):
-    """An exact match, or the start of a target up to a word boundary."""
-    return name in names or any(
+def resolves(name, names, leads=frozenset()):
+    """An exact match, the start of a target up to a word boundary, or a whole opening phrase of a list item.
+
+    List items are many and their phrases long, so a mere start of one does not count."""
+    return name in names or name in leads or any(
         t.startswith(name) and not (t[len(name)].isalnum() and name[-1].isalnum())
         for t in names if len(t) > len(name))
 
@@ -111,7 +124,7 @@ class Docs:
         """None when no such doc is tracked, else whether the name resolves in one of the docs the path can mean."""
         if (written, name) not in self.answers:
             paths = self.candidates(written)
-            self.answers[written, name] = any(resolves(name, self.names(p)) for p in paths) if paths else None
+            self.answers[written, name] = any(resolves(name, *self.names(p)) for p in paths) if paths else None
         return self.answers[written, name]
 
 
@@ -184,7 +197,8 @@ class DocSectionTests(unittest.TestCase):
 
     def test_reference_forms_and_the_known_list(self):
         doc = "\n".join(["# Sample guide", "## 2. Pairing and tokens (QR (v2))", "**Hold to talk**: the button",
-                         '<a id="wire-names"></a>', "## Hub’s address", ""])
+                         '<a id="wire-names"></a>', "## Hub’s address",
+                         "- Panel kept the old look (2026-11-03, #956). Rebuild it.", ""])
         cases = [  # (source line, reported as a miss)
             ('docs/sample-guide.md "Pairing and tokens"', False),
             ('`docs/sample-guide.md` ("Pairing (old (nested) name)")', False),  # a prefix at a word boundary
@@ -195,6 +209,9 @@ class DocSectionTests(unittest.TestCase):
             ('docs/sample-guide.md "Pair"', True),  # not at a word boundary
             ('docs/sample-guide.md "lower case is prose, not a name"', False),
             ('docs/no-such-guide.md "Gone"', False),  # test_doc_paths.py reports a missing file
+            ('docs/sample-guide.md, "Panel kept the old look"', False),  # a list item's opening phrase
+            ('docs/sample-guide.md "Panel kept"', True),  # only the whole phrase of a list item counts
+            ('docs/sample-guide.md "旧的配对"', True),  # a Chinese name in quotes is checked too
         ]
         with tempfile.TemporaryDirectory(prefix="doc-sections-") as directory:
             root = Path(directory)
@@ -207,7 +224,9 @@ class DocSectionTests(unittest.TestCase):
             misses = unresolved(root, [f"case{number}.go" for number in range(len(cases))], ["docs/sample-guide.md"])
             known = {("case5.go", "docs/sample-guide.md", "配对"), ("case0.go", "docs/sample-guide.md", "Gone")}
             new, stale = compare(misses, known)
-            self.assertEqual([("case6.go", 1, "docs/sample-guide.md", "Pair")], new)
+            self.assertEqual([("case6.go", 1, "docs/sample-guide.md", "Pair"),
+                              ("case10.go", 1, "docs/sample-guide.md", "Panel kept"),
+                              ("case11.go", 1, "docs/sample-guide.md", "旧的配对")], new)
             self.assertEqual([("case0.go", "docs/sample-guide.md", "Gone")], stale)
 
     def test_known_list_is_sorted_and_unique(self):
