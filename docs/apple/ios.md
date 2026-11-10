@@ -73,10 +73,10 @@ Chat page:
   so opening is already current; scope active Agents + sessions used within 24 hours (at most 40, newest first, concurrency 3).
   Retained chats without a subscription owner keep their store and covered sequence unchanged until their next visible subscription replays `since_seq`.
   Eligibility is rechecked when queued work starts; a visible catch-up cannot apply after the last owner leaves or the store is replaced.
-  Currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `rev` moved after the
-  chat's last items came, or its `updated_at` is newer than the open chat's newest line, and no items came for 4 seconds), the chat fetches
+  Currently viewed chats rely on their subscriptions without duplicate fetches. When a subscription stops (the session's `rev` moved since the
+  chat's newest read was sent, or its `updated_at` is newer than the open chat's newest line, and no items came for 4 seconds), the chat fetches
   after its `covered` and merges silently: at most every 10 seconds, once per `updated_at` (`AgentSyncPacing.catchUpAt`, the rule of the
-  web's `web/src/lib/stale-page.ts`). The `rev` catches the last line of a burst whose push was lost, which `updated_at` cannot (#1179). Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
+  web's `web/src/lib/stale-page.ts`). The `rev` catches the last line of a burst whose push was lost, which `updated_at` cannot (#1179); a push never settles a moved rev, only a read sent after the move (a subscription or a catch-up, `AgentSyncPacing.RevReads`, #3191). Working Agents fetch at most once per minute (`AgentSync.workingGap`; each fetch decodes and rewrites the entire disk cache),
   immediately at turn end / Needs you (most likely to open); 19-minute real-hub replay: 45 calls/minute → 9 (2026-11-02 battery investigation). Lark (`LarkSync`): hub forwards gateway live events (`lark`), refreshing Inbox Lark chats and open chats
   (polling fallback only: list 90 seconds, chat 60); changed Inbox chats fetch the newest page into `lark-chat-<id>` cache; on hub connection catch up latest 20;
   unread chats open from cache if it reaches the first unread message.
