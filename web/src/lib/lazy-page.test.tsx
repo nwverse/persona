@@ -1,4 +1,6 @@
-// Carried over from #1974 (by @tzh476): lazy pages preload when the browser is idle, and a failed load is asked again.
+// @vitest-environment jsdom
+// Carried over from #1974 (by @tzh476): the idle pages preload when the browser is idle, the others as a link to them
+// is reached, and a failed load is asked again.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Suspense } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -7,11 +9,13 @@ import { lazyPage, preloadPages } from "./lazy-page";
 describe("lazyPage", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("preloads once the browser is idle, and asks again for a chunk that failed", async () => {
+  it("preloads only the idle pages once the browser is idle, and asks again for a chunk that failed", async () => {
     vi.useFakeTimers();
     const Page = () => <p>page</p>;
     const load = vi.fn<() => Promise<typeof Page>>().mockRejectedValueOnce(new TypeError("Failed to fetch dynamically imported module")).mockResolvedValue(Page);
-    const Lazy = lazyPage(load);
+    const other = vi.fn(() => Promise.resolve(Page));
+    const Lazy = lazyPage(load, { idle: true });
+    lazyPage(other, { routes: ["routines"] });
     preloadPages({}); // no requestIdleCallback (Safari): a timer
     expect(load).not.toHaveBeenCalled();
     await vi.runAllTimersAsync();
@@ -22,8 +26,34 @@ describe("lazyPage", () => {
     preloadPages({});
     await vi.runAllTimersAsync();
     expect(load).toHaveBeenCalledTimes(2); // the loaded one not
+    expect(other).not.toHaveBeenCalled(); // a page with a route waits for a link to it
     // loaded: drawn at once, not through the fallback
     expect(renderToStaticMarkup(<Suspense fallback={<p>loading</p>}><Lazy /></Suspense>)).toBe("<p>page</p>");
+  });
+
+  it("loads a route's page once as the pointer, the focus or a finger reaches a link to it, and not with Data Saver", () => {
+    const settings = vi.fn(() => Promise.resolve(() => null));
+    const kb = vi.fn(() => Promise.resolve(() => null));
+    lazyPage(settings, { routes: ["settings"] });
+    lazyPage(kb, { routes: ["kb"] });
+    document.body.innerHTML = `<a href="/settings"><span>Settings</span></a><a href="/persona">Persona</a><a href="https://example.com/settings">out</a><a href="/kb/notes">kb</a>`;
+    const [link, main, away, notes] = document.querySelectorAll("a");
+    const fire = (el: Element, type: string) => el.dispatchEvent(new Event(type, { bubbles: true }));
+    const saver = preloadPages({ document, navigator: { connection: { saveData: true } } });
+    fire(link.firstElementChild!, "pointerover");
+    expect(settings).not.toHaveBeenCalled();
+    saver();
+    const stop = preloadPages({ document });
+    fire(main, "pointerover"); // a page in the main bundle
+    fire(away, "focusin"); // another site
+    expect(settings).not.toHaveBeenCalled();
+    fire(link.firstElementChild!, "pointerover");
+    fire(link, "focusin");
+    fire(link, "touchstart");
+    expect(settings).toHaveBeenCalledTimes(1);
+    stop();
+    fire(notes, "pointerover"); // the listener is gone with the cancel
+    expect(kb).not.toHaveBeenCalled();
   });
 
   it("waits for idle where there is requestIdleCallback, can be cancelled, and skips Data Saver", () => {
