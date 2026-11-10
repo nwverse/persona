@@ -34,21 +34,35 @@ class InboxRepositoryTest {
             val hub = FakeHub()
             val repository = repository(transport, directory, backgroundScope, hub)
             repeat(5) { backgroundScope.launch { repository.snapshot.collect() } }
-            runCurrent()
-            repository.snapshot.first { it.refreshes > 0 }
-            val initial = transport.inboxCalls.get()
+            val initial = settledCalls(transport)
             assertTrue(initial > 0)
             advanceTimeBy(60_000); runCurrent()
             assertEquals("shell and capsule subscribers must not start fast full-list polling", initial, transport.inboxCalls.get())
             hub.events.emit(InboxEvent())
             runCurrent()
-            advanceTimeBy(1_001); runCurrent()
-            repository.snapshot.first { it.refreshes > initial }
-            assertEquals(initial + 1, transport.inboxCalls.get())
-            advanceTimeBy(300_000); runCurrent()
-            assertEquals("a slow poll still covers a missed event", initial + 2, transport.inboxCalls.get())
+            advanceTimeBy(1_001)
+            assertEquals(initial + 1, settledCalls(transport))
+            advanceTimeBy(300_000)
+            assertEquals("a slow poll still covers a missed event", initial + 2, settledCalls(transport))
         } finally { directory.deleteRecursively() }
     }
+
+    /**
+     * Refreshes cross real IO threads; waiting for them with a suspending `first` lets virtual time jump ahead to the
+     * slow poll. Wait in real time instead, until the hub stops being called.
+     */
+    private fun TestScope.settledCalls(transport: FakeTransport): Int {
+        val deadline = System.currentTimeMillis() + 5_000
+        var calls = -1
+        while (System.currentTimeMillis() < deadline) {
+            runCurrent(); Thread.sleep(50); runCurrent()
+            val now = transport.inboxCalls.get()
+            if (now == calls && now > 0) return now
+            calls = now
+        }
+        error("refreshes did not settle")
+    }
+
     @Test fun updatingWaitsForEveryLarkPageAndPreservesVerifiedWindowOnOnline() = runBlocking {
         val directory = Files.createTempDirectory("window-reconcile-test").toFile()
         val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
