@@ -253,24 +253,49 @@ func (s *Service) inboxChanged(ctx context.Context, items []assistantwire.InboxC
 	s.tellInboxNeedsYou()
 }
 
+// inboxTeller is tellInboxNeedsYou's state, under inboxBook.needsYouMu: a teller runs (telling), and the inbox changed
+// since it last counted (again).
+type inboxTeller struct{ telling, again bool }
+
 // tellInboxNeedsYou tells the hub how many open items are in "Needs you" (EventInboxNeedsYou), for the roster's
 // inbox_needs_you: after every change (inboxChanged), once what is stored was first read (inboxReady), and after each
-// handshake (BusHub.onHello). Nothing is told while the stored items are unread: the hub then shows no number. Counted
-// and told under one lock, so two changes at once reach the hub in the order they were counted.
+// handshake (BusHub.onHello). Nothing is told while the stored items are unread: the hub then shows no number.
+//
+// It never waits for the hub: one teller at a time counts and tells on its own goroutine, and a change that comes
+// while it does is counted and told by it afterwards. So a save's tail is not held up by a connection that stalls,
+// the counts reach the hub in the order they were counted, and the last one told is of the inbox as it is.
 func (s *Service) tellInboxNeedsYou() {
 	b := &s.inbox
 	if !b.loaded.Load() {
 		return
 	}
 	b.needsYouMu.Lock()
-	defer b.needsYouMu.Unlock()
-	n := 0
-	b.mu.Lock()
-	for _, it := range b.items {
-		if it.status() == StatusAction {
-			n++
-		}
+	if b.needsYou.telling {
+		b.needsYou.again = true
+		b.needsYouMu.Unlock()
+		return
 	}
-	b.mu.Unlock()
-	_ = s.hub.Tell(assistantwire.EventInboxNeedsYou, assistantwire.InboxNeedsYou{Count: n}) // an error: not connected, told at the handshake
+	b.needsYou.telling = true
+	b.needsYouMu.Unlock()
+	go func() {
+		for {
+			n := 0
+			b.mu.Lock()
+			for _, it := range b.items {
+				if it.status() == StatusAction {
+					n++
+				}
+			}
+			b.mu.Unlock()
+			_ = s.hub.Tell(assistantwire.EventInboxNeedsYou, assistantwire.InboxNeedsYou{Count: n}) // an error: not connected, told at the handshake
+			b.needsYouMu.Lock()
+			if !b.needsYou.again {
+				b.needsYou.telling = false
+				b.needsYouMu.Unlock()
+				return
+			}
+			b.needsYou.again = false
+			b.needsYouMu.Unlock()
+		}
+	}()
 }

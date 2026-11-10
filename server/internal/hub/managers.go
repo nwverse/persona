@@ -204,22 +204,39 @@ func (h *Hub) tellManagers() {
 // The inbox's "Needs you" count of each manager (docs/assistant/managers.md "What the hub keeps of each manager"): the
 // inbox is the manager's, so it counts and says the number (inbox.needs_you, after its handshake and on every change),
 // and the hub keeps the last one of the connection for the roster. A number that differs from the one before tells
-// the apps to read the roster again.
+// the apps to read the roster again, once for the numbers that change within inboxNeedsYouPushDelay: a round's items
+// triaged one by one move the count a step each, and the apps reload more than the roster on that push.
 func init() {
 	handleBusEvent(assistantwire.EventInboxNeedsYou, func(h *Hub, c *busConn, params json.RawMessage) {
-		var p assistantwire.InboxNeedsYou
-		if json.Unmarshal(params, &p) != nil || p.Count < 0 || c.ident.Role != bus.RoleManager {
+		var p struct {
+			Count *int `json:"count"` // absent is no count, not 0
+		}
+		if json.Unmarshal(params, &p) != nil || p.Count == nil || *p.Count < 0 || c.ident.Role != bus.RoleManager {
 			return
 		}
 		h.bus.mu.Lock()
-		same := c.inboxNeedsYou != nil && *c.inboxNeedsYou == p.Count
-		c.inboxNeedsYou = &p.Count
+		same := c.inboxNeedsYou != nil && *c.inboxNeedsYou == *p.Count
+		c.inboxNeedsYou = p.Count
+		push := !same && !h.bus.needsYouPush
+		if push {
+			h.bus.needsYouPush = true
+		}
+		delay := cmp.Or(h.bus.needsYouDelay, inboxNeedsYouPushDelay)
 		h.bus.mu.Unlock()
-		if !same {
-			h.tellManagers()
+		if push {
+			time.AfterFunc(delay, func() {
+				h.bus.mu.Lock()
+				h.bus.needsYouPush = false // before the push: a count that changes from here on gets its own
+				h.bus.mu.Unlock()
+				h.tellManagers()
+			})
 		}
 	})
 }
+
+// inboxNeedsYouPushDelay is how long after a manager's inbox count changed the apps are told: the changes within it
+// are one push, and the roster they then read has the newest numbers.
+const inboxNeedsYouPushDelay = time.Second
 
 // inboxNeedsYou is the count each connected manager reported on its connection, by id; none for one that has not.
 func (h *Hub) inboxNeedsYou() map[string]*int {

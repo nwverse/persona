@@ -132,12 +132,15 @@ class MockHubManagersTests(unittest.TestCase):
             _, answer = self.call("GET", "/api/v1/managers")
             return {m["id"]: m for m in answer["managers"]}
 
+        def needs_you(x):  # as the apps count: an open item under "Needs you" (the hub's status, else the tier)
+            status = x.get("status") or (x["tier"] if x.get("tier") in ("fyi", "noise") else "action")
+            return not x.get("done_at") and status == "action"
+
         def listed():
             _, answer = self.call("GET", "/api/v1/inbox?sources=all")
             counts = {}
             for x in answer["items"]:
-                status = x.get("status") or (x["tier"] if x.get("tier") in ("fyi", "noise") else "action")
-                if not x.get("done_at") and status == "action":
+                if needs_you(x):
                     counts[x["manager"]] = counts.get(x["manager"], 0) + 1
             return counts, answer["items"]
 
@@ -147,7 +150,7 @@ class MockHubManagersTests(unittest.TestCase):
         self.assertGreater(managers["assistant"]["inbox_needs_you"], 0)
         for mid in ("m-8b04d2", "m-c1e9f0"):  # offline, installing
             self.assertNotIn("inbox_needs_you", managers[mid], mid)
-        mine = next(x for x in items if x["manager"] == "assistant" and not x.get("done_at") and x.get("tier") == "action")
+        mine = next(x for x in items if x["manager"] == "assistant" and needs_you(x))
         body = json.dumps({"done": True, "items": [{"id": mine["id"]}]}).encode()
         status, _ = self.call("POST", "/api/v1/inbox/done", body)
         self.assertEqual(status, 200)

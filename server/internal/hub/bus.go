@@ -103,6 +103,10 @@ type busState struct {
 	saidOld map[string]bool
 	// rosterGen numbers the roster changes (busRosterChanged): an older list never goes out after a newer one.
 	rosterGen atomic.Uint64
+	// needsYouPush: a managers push for a changed inbox count is on its way (managers.go, inboxNeedsYouPushDelay);
+	// under mu. needsYouDelay is that delay for tests; zero is inboxNeedsYouPushDelay.
+	needsYouPush  bool
+	needsYouDelay time.Duration
 }
 
 // busConn is one service connection.

@@ -16598,7 +16598,9 @@ class H(BaseHTTPRequestHandler):
     _do_post = do_POST
 
     def do_POST(self):
-        """As the hub: a request that moved a manager's inbox_needs_you tells the apps to read the roster again."""
+        """As the hub: a request that moved a manager's inbox_needs_you tells the apps to read the roster again (at
+        once: the hub waits a second for the counts that change together). Only a request does here: an inbox the
+        mock changes on its own (/mock/… fixtures, timers) moves the roster's number without a push."""
         before = inbox_needs_you()
         try:
             return self._do_post()
