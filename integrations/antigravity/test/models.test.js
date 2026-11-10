@@ -38,7 +38,7 @@ async function fixture(t, options = {}) {
   runtime.start()
   await n.ready
   const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
-  if (options.noStart) return { n, home, catalog, calls }
+  if (options.noStart) return { n, home, catalog, calls, settings }
   const { session } = await n.peer.call('session.start', { cwd: home })
   const sessionId = session.session_id
   const row = () => n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === sessionId)
@@ -62,9 +62,9 @@ test('session controls confirm native state and preserve acknowledged fields on 
   const { n, sessionId, row, session } = await fixture(t)
   assert.equal(n.hello.caps.model, true)
   assert.equal(n.hello.caps.models, true)
-  assert.equal(session.model, entries[0].modelId)
+  assert.equal(session.model, entries[1].modelId)
   assert.equal(session.permission_mode, 'auto')
-  assert.equal(session.effort, 'medium')
+  assert.equal(session.effort, 'high')
   await until('empty owned session remains listed', () => row()?.status === 'idle')
   await n.peer.call('session.modes', { session_id: sessionId, model: entries[1].modelId, permission_mode: 'auto' })
   await until('native configuration', () => row()?.model === entries[1].modelId && row()?.permission_mode === 'auto')
@@ -92,7 +92,7 @@ test('availability checks use native ACP and deny tools without phone cards', as
   assert.equal(n.hello.caps.check, true)
   assert.equal(result.ok, true)
   assert.equal(result.answer, 'OK')
-  assert.equal(result.model, entries[0].modelId)
+  assert.equal(result.model, entries[1].modelId)
   assert.equal(n.asked.length, 0)
   assert.equal(calls().find((call) => call.method === 'session/set_mode')?.params?.modeId, 'default')
   assert.equal(calls().find((call) => call.id === 'check-permission')?.result?.outcome?.outcome, 'cancelled')
@@ -108,9 +108,34 @@ test('failed availability inference closes the check session and propagates the 
 })
 
 test('an availability timeout cancels its prompt and closes the session', async (t) => {
-  const { n, home, catalog, calls } = await fixture(t, { noStart: true, checkTimeoutMs: 200 })
+  // Warm the ACP process before measuring the prompt timeout.
+  const { n, home, catalog, calls } = await fixture(t, { checkTimeoutMs: 200 })
   catalog({ models: entries, holdPrompt: true })
   await assert.rejects(n.peer.call('launchers.check', { cwd: home, prompt: 'Reply with OK' }), /timed out/)
   assert.equal(calls().filter((call) => call.method === 'session/cancel').length, 1)
   assert.equal(calls().filter((call) => call.method === 'session/close').length, 1)
+})
+
+
+for (const model of [entries[1].name, entries[1].modelId]) {
+  test(`new sessions apply the configured default ${model}`, async (t) => {
+    const { n, home, settings, calls } = await fixture(t, { noStart: true })
+    settings({ model })
+    const result = await n.peer.call('session.start', { cwd: home })
+    assert.equal(result.session.model, entries[1].modelId)
+    assert.equal(calls().find((call) => call.method === 'session/set_model')?.params?.modelId, entries[1].modelId)
+  })
+}
+
+test('an explicit caller model overrides the configured default', async (t) => {
+  const { n, home } = await fixture(t, { noStart: true })
+  const result = await n.peer.call('session.start', { cwd: home, model: entries[2].modelId })
+  assert.equal(result.session.model, entries[2].modelId)
+  assert.equal(result.session.effort, 'low')
+})
+
+test('resuming a session does not replace its native model with the configured default', async (t) => {
+  const { n, calls } = await fixture(t, { noStart: true })
+  await n.peer.call('session.modes', { session_id: 'agy-11111111-2222-3333-4444-555555555555', permission_mode: 'default' })
+  assert.equal(calls().filter((call) => call.method === 'session/set_model').length, 0)
 })
