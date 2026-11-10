@@ -25,9 +25,9 @@ import (
 // end normally: the hub's finished push (quietTaskFinish in fleet_push.go, by the tasks of the last snapshot) and the
 // channels' mirror (quietTaskTurn) leave them out. A turn the user starts in that conversation is not pushed either:
 // the price of judging by the conversation, not by the turn — which, across queued messages, background turns and
-// compactions, the node can not tell for sure (three rounds of review on #2396). In a conversation it came from (a leader's patrol,
-// #3673), the input's persisted MessageSource.Push identifies its normal answer, not a conversation-wide hold that
-// a queued user message could release. Errors, cut-offs and a stuck turn are told as ever, and so is notify_user.
+// compactions, the node can not tell for sure (three rounds of review on #2396). In a conversation it came from (a
+// leader's patrol, #3673), the turn's own items decide (quietScheduledInput): the input's persisted MessageSource.Push,
+// and nothing of the user's absorbed after it. Errors, cut-offs and a stuck turn are told as ever, and so is notify_user.
 const (
 	pushEvery = ""
 	pushAsked = assistantwire.PushAsked
@@ -135,11 +135,11 @@ func (s *Service) quietTaskTurn(ctx context.Context, machine, session string) bo
 	return ok && assistantwire.QuietTaskFinish(sess, main)
 }
 
-// quietScheduledInput uses the input that actually started the latest turn. Queued user messages and background
-// notices do not replace it; when a queued user message starts its own turn it has no scheduled push mode. The mode
-// lives in the native transcript, so manager/node restarts do not require an in-memory conversation hold.
+// quietScheduledInput: sess's turn that just ended normally was started by an asked scheduled input and carries
+// nothing of the user's (quietTurnItems). The mode lives in the native transcript, so manager or node restarts need no
+// in-memory conversation hold. Only conversations an asked task posts into are read.
 func (s *Service) quietScheduledInput(ctx context.Context, machine string, sess proto.Session) bool {
-	if !sess.Assistant {
+	if !sess.Assistant || !s.askedTaskPostsInto(ctx, sess.SessionID) {
 		return false
 	}
 	main, known := s.knownMain(ctx)
@@ -147,24 +147,86 @@ func (s *Service) quietScheduledInput(ctx context.Context, machine string, sess 
 		return false
 	}
 	items, read := s.lastTurnItems(ctx, machine, sess.SessionID)
-	if !read {
+	if !read || !quietTurnItems(items) {
 		return false // an old or unavailable node cannot prove this answer belongs to a quiet input
 	}
+	// A completion callback may run after another turn started: the items read must be of the session the caller
+	// judges. Compared by revision, not by LastText, which the node collapses and cuts to a snippet.
+	current, ok := s.session(ctx, machine, sess.SessionID)
+	return ok && current.Status == sess.Status && current.Rev == sess.Rev && current.UpdatedAt.Equal(sess.UpdatedAt)
+}
+
+// askedTaskPostsInto: an asked task runs in session, as the conversation it came from or its own one.
+func (s *Service) askedTaskPostsInto(ctx context.Context, session string) bool {
+	if session == "" {
+		return false
+	}
+	sc, err := s.lockedSchedule(ctx)
+	if err != nil {
+		return false
+	}
+	defer sc.mu.Unlock()
+	for _, t := range sc.tasks {
+		if t.pushesOnlyAsked() && (t.SessionID == session || t.RunSessionID == session) {
+			return true
+		}
+	}
+	return false
+}
+
+// quietTurnItems: a turn's items (the node's last turn, from the input that started it) say its answer is only the
+// asked scheduled run's. The turn's input is its last user text that is neither queued nor a wake. After it:
+//   - user input absorbed mid-turn (queued text or image without a scheduled source) makes the answer the user's too;
+//   - a wake by a background task this turn did not start (one the user started earlier, a loop, a peer) is
+//     the user's result, not the patrol's. A wake by a task the turn launched stays the patrol's.
+func quietTurnItems(items []proto.Item) bool {
+	start := -1
 	for i := len(items) - 1; i >= 0; i-- {
+		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && !it.Queued && !it.Wake && strings.TrimSpace(it.Text) != "" {
+			start = i
+			break
+		}
+	}
+	if start < 0 || !askedScheduledSource(prompts.ItemSource(items[start])) {
+		return false
+	}
+	for i := start + 1; i < len(items); i++ {
 		it := items[i]
-		if it.Role != "user" || it.Kind != proto.KindText || it.Queued || it.Wake || strings.TrimSpace(it.Text) == "" {
+		switch {
+		case it.Wake:
+			if !launchedIn(items[start+1:i], it.Task) {
+				return false
+			}
+		case it.Role == "user" && it.Queued && (it.Kind == proto.KindImage || it.Kind == proto.KindText && strings.TrimSpace(it.Text) != ""):
+			if !askedScheduledSource(prompts.ItemSource(it)) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// askedScheduledSource: source is a scheduled run's that pushes only what it sends.
+func askedScheduledSource(source *proto.MessageSource) bool {
+	return source != nil && (source.Kind == proto.SourcePatrol || source.Kind == proto.SourceFollowup) && source.Push == pushAsked
+}
+
+// launchedIn: the background task note reports on was launched by a call among items (its call id, or its task id in
+// a call's result). No note (a loop firing, a peer's message) was launched by none of them.
+func launchedIn(items []proto.Item, note *proto.TaskNote) bool {
+	if note == nil || note.ToolUseID == "" && note.TaskID == "" {
+		return false
+	}
+	for _, it := range items {
+		if it.Kind != proto.KindToolUse && it.Kind != proto.KindToolResult {
 			continue
 		}
-		source := prompts.ItemSource(it)
-		if source == nil || (source.Kind != proto.SourcePatrol && source.Kind != proto.SourceFollowup) || source.Push != pushAsked {
-			return false
+		if note.ToolUseID != "" && it.ToolUseID == note.ToolUseID {
+			return true
 		}
-		// A completion callback may have waited while another turn started. Do not use that turn's input to hide
-		// this one; the reply and the session revision must still be the ones the caller is judging.
-		_, answer := turnExchange(items)
-		current, ok := s.session(ctx, machine, sess.SessionID)
-		return ok && current.Status == sess.Status && current.Rev == sess.Rev && current.UpdatedAt.Equal(sess.UpdatedAt) &&
-			current.LastText == sess.LastText && strings.TrimSpace(sess.LastText) == answer
+		if note.TaskID != "" && it.Kind == proto.KindToolResult && strings.Contains(it.Text, note.TaskID) {
+			return true
+		}
 	}
 	return false
 }

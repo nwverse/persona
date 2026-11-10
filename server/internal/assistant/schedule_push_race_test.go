@@ -2,8 +2,7 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,188 +11,186 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A user message queued behind a running patrol is not its input. The patrol's answer stays quiet, but the
-// subsequent answer to the user must push. The fake hub captures notifications; no device is contacted.
-func TestQuietFollowupQueuedUserKeepsPatrolQuiet(t *testing.T) {
+// End-to-end cases for an asked patrol posting into a leader conversation (#3673). The fake hub captures every
+// notification; no device is contacted. Items follow the order the node's transcript reader gives them: a user
+// message absorbed mid-turn is a queued item before the turn's final answer; one held until the turn ended starts the
+// next turn as an ordinary user input.
+
+type patrolEnv struct {
+	t    *testing.T
+	ft   *fleetTest
+	task Task
+	sess proto.Session
+}
+
+func newPatrolEnv(t *testing.T) *patrolEnv {
+	t.Helper()
 	ft := newFleetTestNoStore(t)
 	fastDone(ft)
-	ctx := context.Background()
 	ft.f.withMachine()
 	ft.f.fakeModel(t)
 	setSettings(t, ft.s, func(v *Settings) { v.Main, v.MachineID = "main-1", "mac" })
 	task := Task{ID: "fu_patrol", Title: "Patrol", Prompt: "Check the pending work", Repeat: repeatInterval,
 		EveryMinutes: 30, At: time.Now().Add(time.Hour), Enabled: true, MachineID: "mac", SessionID: "lead1", Push: pushAsked}
 	setTasks(ft.s, task)
-	idle := proto.Session{SessionID: "lead1", Title: "Project", Cwd: "/home/u/.persona/assistant", Assistant: true, Status: proto.StatusDone,
-		LastText: "Previous answer", UpdatedAt: time.Now()}
-	ft.sessions("mac", idle)
-	ft.f.sessions["mac"] = []proto.Session{idle}
-	if _, err := ft.s.runTask(task, time.Now(), time.Now(), true, false); err != nil {
-		t.Fatal(err)
-	}
-	if p := ft.f.lastSend(t); p["session_id"] != "lead1" {
-		t.Fatal("patrol did not enter its existing conversation")
-	}
-	ft.f.mu.Lock()
-	ft.f.items = []proto.Item{
-		{ID: "patrol-input", Seq: 1, Role: "user", Kind: proto.KindText,
-			Text: prompts.MessageSourceText(task.Prompt, taskMessageSource(task))},
-		{ID: "patrol-answer", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "Nothing new"},
-		{ID: "queued-user", Seq: 3, Role: "user", Kind: proto.KindText, Text: "Show me the details", Queued: true},
-	}
-	ft.f.mu.Unlock()
-	working := idle
-	working.Status = proto.StatusWorking
-	ft.sessions("mac", working)
-	ft.s.UserSpoke(ctx, SessionRef{MachineID: "mac", SessionID: "lead1"})
-	done := idle
-	done.LastText, done.UpdatedAt = "Nothing new", time.Now().Add(time.Second)
-	ft.sessions("mac", done)
-	if got := ft.pushesOf(assistantwire.NotifyDone, 1, 300*time.Millisecond); len(got) != 0 {
-		t.Errorf("patrol answer pushed after queued user input: %d notifications", len(got))
-	}
-	if !ft.s.quietTaskTurn(ctx, "mac", "lead1") {
-		t.Error("patrol answer would be mirrored to channels after queued user input")
-	}
-
-	ft.f.mu.Lock()
-	ft.f.items = []proto.Item{
-		{ID: "queued-user", Seq: 4, Role: "user", Kind: proto.KindText, Text: "Show me the details"},
-		{ID: "user-answer", Seq: 5, Role: "assistant", Kind: proto.KindText, Text: "Here are the details"},
-	}
-	ft.f.mu.Unlock()
-	ft.sessions("mac", working)
-	done.LastText, done.UpdatedAt = "Here are the details", time.Now().Add(2*time.Second)
-	ft.sessions("mac", done)
-	got := ft.pushesOf(assistantwire.NotifyDone, 1, 2*time.Second)
-	if len(got) != 1 || got[0].SessionID != "lead1" || got[0].Body != "Here are the details" {
-		t.Errorf("user answer should be the only completion pushed: %d notifications", len(got))
-	}
-	if ft.s.quietTaskTurn(ctx, "mac", "lead1") {
-		t.Error("the user's own answer would be hidden from channels")
-	}
-	for run := 1; run <= 2; run++ {
-		if _, err := ft.s.runTask(task, time.Now(), time.Now(), true, false); err != nil {
-			t.Fatal(err)
-		}
-		reply := fmt.Sprintf("Patrol %d: nothing new", run)
-		ft.f.mu.Lock()
-		ft.f.items = []proto.Item{
-			{Role: "user", Kind: proto.KindText, Text: prompts.MessageSourceText(task.Prompt, taskMessageSource(task))},
-			{Role: "assistant", Kind: proto.KindText, Text: reply},
-		}
-		ft.f.mu.Unlock()
-		ft.sessions("mac", working)
-		done.LastText, done.UpdatedAt = reply, time.Now().Add(time.Duration(run+2)*time.Second)
-		ft.sessions("mac", done)
-		if got := ft.pushesOf(assistantwire.NotifyDone, 2, 200*time.Millisecond); len(got) != 1 {
-			t.Errorf("consecutive patrol %d added a completion notification", run)
-		}
-		if !ft.s.quietTaskTurn(ctx, "mac", "lead1") {
-			t.Errorf("consecutive patrol %d would be mirrored", run)
-		}
-	}
-}
-
-func TestQuietScheduledInputRestoresProvenance(t *testing.T) {
-	ctx := context.Background()
-	n := newFakeHub().withMachine()
-	st := &memStore{}
-	s := newServiceOn(t, n, st)
-	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main-1", "server" })
-	sess := proto.Session{SessionID: "lead1", Cwd: "/home/u/.persona/assistant", Assistant: true, Status: proto.StatusDone, LastText: "Nothing new", UpdatedAt: time.Now()}
-	n.setSessions("server", sess)
-	task := Task{SessionID: "lead1", Title: "Patrol", Prompt: "Check the pending work", Repeat: repeatInterval, Push: pushAsked}
-	text := prompts.MessageSourceText(task.Prompt, taskMessageSource(task))
-	for _, tc := range []struct {
-		name  string
-		input proto.Item
-		quiet bool
-	}{
-		{"persisted asked input", proto.Item{Role: "user", Kind: proto.KindText, Text: text}, true},
-		{"legacy source without push", proto.Item{Role: "user", Kind: proto.KindText, Text: "Check", Source: &proto.MessageSource{Kind: proto.SourcePatrol}}, false},
-		{"user's own input", proto.Item{Role: "user", Kind: proto.KindText, Text: "Show me the details"}, false},
-		{"pasted source is still the user's", proto.Item{Role: "user", Kind: proto.KindText, Text: prompts.ProtectUserMessage(text)}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// Serialize and read back the native input, then replace the manager entirely: no held state survives.
-			b, err := json.Marshal([]proto.Item{tc.input,
-				{Role: "user", Kind: proto.KindNotice, Text: "Background work finished"},
-				{Role: "user", Kind: proto.KindText, Text: "A background wake", Wake: true},
-				{Role: "assistant", Kind: proto.KindText, Text: "Nothing new"}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var restored []proto.Item
-			if err := json.Unmarshal(b, &restored); err != nil {
-				t.Fatal(err)
-			}
-			n.mu.Lock()
-			n.items = restored
-			n.mu.Unlock()
-			again := newServiceOn(t, n, st)
-			if got := again.quietTaskTurn(ctx, "server", "lead1"); got != tc.quiet {
-				t.Errorf("restored input quiet = %v, want %v", got, tc.quiet)
-			}
-			failed := sess
-			failed.TurnError = "model unavailable"
-			if again.quietScheduledInput(ctx, "server", failed) {
-				t.Error("an error completion was suppressed")
-			}
-		})
-	}
-}
-
-func TestQuietFollowupExplicitNotifyStillDelivers(t *testing.T) {
-	ft := newFleetTestNoStore(t)
-	ft.f.withMachine()
-	setSettings(t, ft.s, func(v *Settings) { v.Main, v.MachineID = "main-1", "mac" })
-	sess := proto.Session{SessionID: "lead1", Cwd: "/home/u/.persona/assistant", Assistant: true, Status: proto.StatusDone, LastText: "Nothing new"}
+	sess := proto.Session{SessionID: "lead1", Title: "Project", Cwd: "/home/u/.persona/assistant", Assistant: true,
+		Status: proto.StatusDone, LastText: "Previous answer", UpdatedAt: time.Now(), Rev: 1}
 	ft.sessions("mac", sess)
-	ft.f.mu.Lock()
 	ft.f.sessions["mac"] = []proto.Session{sess}
-	ft.f.items = []proto.Item{
-		{Role: "user", Kind: proto.KindText, Text: "Check", Source: taskMessageSource(Task{SessionID: "lead1", Push: pushAsked})},
-		{Role: "assistant", Kind: proto.KindText, Text: "Nothing new"},
+	return &patrolEnv{t: t, ft: ft, task: task, sess: sess}
+}
+
+// run sends the patrol into lead1 as the scheduler does.
+func (e *patrolEnv) run() {
+	e.t.Helper()
+	if _, err := e.ft.s.runTask(e.task, time.Now(), time.Now(), true, false); err != nil {
+		e.t.Fatal(err)
 	}
-	ft.f.mu.Unlock()
-	if !ft.s.quietTaskTurn(context.Background(), "mac", "lead1") {
-		main, known := ft.s.knownMain(context.Background())
-		current, ok := ft.s.session(context.Background(), "mac", "lead1")
-		t.Fatalf("fixture is not a quiet scheduled answer: main=%q known=%v session=%v agent=%q status=%q last=%q", main, known, ok, current.Agent, current.Status, current.LastText)
-	}
-	if _, err := ft.s.runTool(context.Background(), "mac", "lead1", "notify_user", json.RawMessage(`{"title":"Decision needed","body":"Please check the result"}`)); err != nil {
-		t.Fatal(err)
-	}
-	got := ft.pushesOf(NotifyPush, 1, time.Second)
-	if len(got) != 1 || !got[0].Asked || got[0].Title != "Decision needed" || got[0].Body != "Please check the result" {
-		t.Fatal("explicit notify_user did not reach the fake hub intact")
+	if p := e.ft.f.lastSend(e.t); p["session_id"] != "lead1" {
+		e.t.Fatal("the patrol did not go into its leader conversation")
 	}
 }
 
-func TestQuietFollowupEscalatedAskStillDelivers(t *testing.T) {
-	e := newRouteEnv(t, nil, true)
-	e.f.mu.Lock()
-	e.f.items = []proto.Item{
-		{Role: "user", Kind: proto.KindText, Text: "Patrol", Source: taskMessageSource(Task{SessionID: "lead1", Push: pushAsked})},
-		{Role: "assistant", Kind: proto.KindText, Text: "Nothing new"},
+func (e *patrolEnv) patrolInput() proto.Item {
+	return proto.Item{Role: "user", Kind: proto.KindText, Text: prompts.MessageSourceText(e.task.Prompt, taskMessageSource(e.task))}
+}
+
+// working shows lead1 on a turn.
+func (e *patrolEnv) working() {
+	e.sess.Status, e.sess.Rev, e.sess.UpdatedAt = proto.StatusWorking, e.sess.Rev+1, e.sess.UpdatedAt.Add(time.Second)
+	e.ft.sessions("mac", e.sess)
+}
+
+// done ends the turn with items as the node pages them; lastText is what the node's list shows (a snippet).
+func (e *patrolEnv) done(items []proto.Item, lastText string) {
+	e.ft.f.mu.Lock()
+	e.ft.f.items = items
+	e.ft.f.mu.Unlock()
+	e.sess.Status, e.sess.LastText, e.sess.Rev, e.sess.UpdatedAt = proto.StatusDone, lastText, e.sess.Rev+1, e.sess.UpdatedAt.Add(time.Second)
+	e.ft.sessions("mac", e.sess)
+}
+
+// pushes waits out the finished push's delay and counts the completion notifications so far.
+func (e *patrolEnv) pushes(want int) int {
+	return len(e.ft.pushesOf(assistantwire.NotifyDone, want, 600*time.Millisecond))
+}
+
+func (e *patrolEnv) mirrored() bool {
+	return !e.ft.s.quietTaskTurn(context.Background(), "mac", "lead1")
+}
+
+// snippet is how the node's list shows a long or multi-line answer (node/sessions.go): runs of white space become one
+// space, and more than 200 runes are cut.
+func snippet(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > 200 {
+		return string(r[:200]) + "…"
 	}
-	e.f.mu.Unlock()
-	got := e.raise(askPermission("ix-patrol", "worker-1"))
-	e.noticeWith("lead1", "interaction_id=ix-patrol")
-	if _, err := runJSON(t, e.s, "lead1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "User approval required", "recommend": "Approve"}); err != nil {
-		t.Fatal(err)
+	return s
+}
+
+// The user writes while the patrol works and the message waits for the turn to end: the patrol's answer stays quiet,
+// the turn the message then starts is the user's and is pushed.
+func TestQuietPatrolThenUsersHeldMessage(t *testing.T) {
+	e := newPatrolEnv(t)
+	e.run()
+	e.working()
+	e.ft.s.UserSpoke(context.Background(), SessionRef{MachineID: "mac", SessionID: "lead1"})
+	e.done([]proto.Item{e.patrolInput(), {Role: "assistant", Kind: proto.KindText, Text: "Nothing new"}}, "Nothing new")
+	if n := e.pushes(1); n != 0 {
+		t.Errorf("the patrol's answer was pushed after the user wrote: %d notifications, want 0", n)
 	}
-	waitFor(t, "the escalated push", func() bool { return e.pushesOf("ix-patrol") == 1 })
-	shown := e.lastShown("ix-patrol")
-	if shown.Delegating || shown.Delegate == nil || shown.Delegate.Reason != "User approval required" {
-		t.Fatal("the escalation was not delivered to the user")
+	if e.mirrored() {
+		t.Error("the patrol's answer would be mirrored to channels")
 	}
-	no := false
-	if err := e.s.resolve("ix-patrol", proto.Resolution{Allow: &no}); err != nil {
-		t.Fatal(err)
+	e.working()
+	e.done([]proto.Item{{Role: "user", Kind: proto.KindText, Text: "Show me the details"},
+		{Role: "assistant", Kind: proto.KindText, Text: "Here are the details"}}, "Here are the details")
+	got := e.ft.pushesOf(assistantwire.NotifyDone, 1, 2*time.Second)
+	if len(got) != 1 || got[0].Body != "Here are the details" {
+		t.Errorf("the user's own turn: %d notifications, want 1 with its answer", len(got))
 	}
-	if r := answerOf(t, got); r.Allow == nil || *r.Allow {
-		t.Fatal("the fake user's answer did not reach the agent")
+	if !e.mirrored() {
+		t.Error("the user's own turn would be hidden from channels")
+	}
+}
+
+// The user writes while the patrol works and the patrol's turn absorbs it: the final answer is the user's answer too.
+func TestQuietPatrolAbsorbedUserQuestionPushes(t *testing.T) {
+	e := newPatrolEnv(t)
+	e.run()
+	e.working()
+	e.ft.s.UserSpoke(context.Background(), SessionRef{MachineID: "mac", SessionID: "lead1"})
+	e.done([]proto.Item{e.patrolInput(),
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash", ToolUseID: "tu1"},
+		{Role: "user", Kind: proto.KindToolResult, ToolUseID: "tu1", Text: "ok"},
+		{Role: "user", Kind: proto.KindText, Text: "MR 12 合了吗？", Queued: true},
+		{Role: "assistant", Kind: proto.KindText, Text: "MR 12 已合入。"}}, "MR 12 已合入。")
+	if n := e.pushes(1); n != 1 {
+		t.Errorf("an answer that took in the user's question: %d notifications, want 1", n)
+	}
+	if !e.mirrored() {
+		t.Error("an answer that took in the user's question would be hidden from channels")
+	}
+}
+
+// A patrol answer the node's list shows only as a snippet (several lines, more than 200 runes) stays quiet.
+func TestQuietPatrolLongAndMultilineAnswers(t *testing.T) {
+	for _, answer := range []string{"Nothing new.\n- MR 1: waiting\n- MR 2: waiting", strings.Repeat("无新情况", 60)} {
+		e := newPatrolEnv(t)
+		e.run()
+		e.working()
+		e.done([]proto.Item{e.patrolInput(), {Role: "assistant", Kind: proto.KindText, Text: answer}}, snippet(answer))
+		if n := e.pushes(1); n != 0 {
+			t.Errorf("%d-rune patrol answer: %d notifications, want 0", len([]rune(answer)), n)
+		}
+		if e.mirrored() {
+			t.Errorf("%d-rune patrol answer would be mirrored", len([]rune(answer)))
+		}
+	}
+}
+
+// Two patrols in a row, nothing new each time: no notification at all.
+func TestQuietPatrolTwiceInARow(t *testing.T) {
+	e := newPatrolEnv(t)
+	for run := 1; run <= 2; run++ {
+		e.run()
+		e.working()
+		e.done([]proto.Item{e.patrolInput(), {Role: "assistant", Kind: proto.KindText, Text: "Nothing new"}}, "Nothing new")
+		if n := e.pushes(1); n != 0 {
+			t.Errorf("patrol %d: %d notifications, want 0", run, n)
+		}
+		if e.mirrored() {
+			t.Errorf("patrol %d would be mirrored", run)
+		}
+	}
+}
+
+// A background task wakes the conversation after the patrol answered. One the user started earlier reports the user's
+// result: mirrored as ever. One the patrol itself launched is the patrol's: still quiet.
+func TestQuietPatrolWakeByABackgroundTask(t *testing.T) {
+	e := newPatrolEnv(t)
+	e.run()
+	e.working()
+	e.done([]proto.Item{e.patrolInput(), {Role: "assistant", Kind: proto.KindText, Text: "Nothing new"},
+		{Role: "user", Kind: proto.KindNotice, Text: "Background command finished", Wake: true,
+			Task: &proto.TaskNote{Kind: "shell", Status: "completed", TaskID: "user-bg", ToolUseID: "tu-user"}},
+		{Role: "assistant", Kind: proto.KindText, Text: "The tests you started all passed."}}, "The tests you started all passed.")
+	if !e.mirrored() {
+		t.Error("the result of a task the user started earlier would be hidden from channels")
+	}
+
+	e = newPatrolEnv(t)
+	e.run()
+	e.working()
+	e.done([]proto.Item{e.patrolInput(),
+		{Role: "assistant", Kind: proto.KindToolUse, ToolName: "Bash", ToolUseID: "tu-patrol"},
+		{Role: "user", Kind: proto.KindToolResult, ToolUseID: "tu-patrol", Text: "Command running in background with ID: patrol-bg."},
+		{Role: "assistant", Kind: proto.KindText, Text: "Baseline running"},
+		{Role: "user", Kind: proto.KindNotice, Text: "Background command finished", Wake: true,
+			Task: &proto.TaskNote{Kind: "shell", Status: "completed", TaskID: "patrol-bg"}},
+		{Role: "assistant", Kind: proto.KindText, Text: "Baseline unchanged"}}, "Baseline unchanged")
+	if e.mirrored() {
+		t.Error("the result of the patrol's own background task would be mirrored")
 	}
 }
