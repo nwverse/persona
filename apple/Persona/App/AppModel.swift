@@ -1058,6 +1058,22 @@ final class AppModel {
         }
     }
 
+    /// Settings › Meetings (#2981): the role every meeting recording starts with. Shown at once, put back if the hub says no.
+    func setMeetingAttendanceDefault(_ role: MeetingAttendance) async {
+        guard let api, var shown = assistantConfig else { return }
+        let was = shown.meetingAttendanceDefault
+        shown.meetingAttendanceDefault = role.rawValue
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(meetingAttendanceDefault: role.rawValue)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.meetingAttendanceDefault = was }
+            show(error)
+        }
+    }
+
     /// Routes a notification / deep link to the right tab; `latestAnswer` lands on the start of the agent's last answer.
     func open(_ key: SessionKey, latestAnswer: Bool = false) {
         if latestAnswer { latestAnswerFor = key }

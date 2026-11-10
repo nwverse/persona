@@ -507,7 +507,8 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         Self.log.notice("voice: route after \(why, privacy: .public): \(Self.describe(session.currentRoute), privacy: .public)\(plan == .keep ? "" : " (moved)", privacy: .public)")
     }
 
-    private static func snapshot(_ session: AVAudioSession) -> VoiceRoute.Snapshot {
+    /// The session as `VoiceRoute` sees it (also the meeting's spoken answers, `MeetingSpeaker`).
+    static func snapshot(_ session: AVAudioSession) -> VoiceRoute.Snapshot {
         let route = session.currentRoute
         return VoiceRoute.Snapshot(outputs: route.outputs.map(device), inputs: route.inputs.map(device),
                                    available: (session.availableInputs ?? []).map(device))

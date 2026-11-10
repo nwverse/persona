@@ -30,10 +30,21 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
     var kind: String
     /// Only when the device matched a calendar event.
     var calendar: CalendarHint?
+    /// A session the API names (`{machine_id, session_id}`).
+    struct SessionRef: Codable, Equatable, Sendable {
+        var machineID: String
+        var sessionID: String
+        enum CodingKeys: String, CodingKey { case machineID = "machine_id", sessionID = "session_id" }
+    }
+    /// Persona's part in the meeting (docs/assistant/meeting-minutes.md「Attendance fields」): only on a phone meeting
+    /// recording Persona was asked to attend, so every other upload is exactly as before. `off` once turned off.
+    var attendance: String?
+    /// The session that attends; left out for the main chat.
+    var attendingSession: SessionRef?
 
     enum CodingKeys: String, CodingKey {
-        case revision, duration, language, device, title, bookmarks, segments, complete, kind, calendar
-        case startedAt = "started_at", endedAt = "ended_at"
+        case revision, duration, language, device, title, bookmarks, segments, complete, kind, calendar, attendance
+        case startedAt = "started_at", endedAt = "ended_at", attendingSession = "attending_session"
     }
 
     init(_ entry: RecordingEntry) {
@@ -55,6 +66,21 @@ nonisolated struct RecordingUpload: Encodable, Sendable {
             calendar = CalendarHint(title: meeting.title, attendees: meeting.attendees.isEmpty ? nil : meeting.attendees,
                                     location: meeting.location)
         }
+        if let a = Self.attendance(entry) {
+            attendance = a.role.rawValue
+            if a.role.attends, let key = a.key { attendingSession = SessionRef(machineID: key.machineID, sessionID: key.sessionID) }
+        }
+    }
+
+    /// The attendance an upload of `entry` carries: a phone meeting's, once Persona was asked to attend it.
+    static func attendance(_ entry: RecordingEntry) -> RecordingAttendance? {
+        guard entry.isMeeting, entry.source == .phone else { return nil }
+        return entry.attendance
+    }
+
+    /// What the hub must have stored before live lines and questions go (`role|session`).
+    static func attendanceMark(_ entry: RecordingEntry) -> String? {
+        attendance(entry).map { "\($0.role.rawValue)|\($0.role.attends ? $0.session ?? "" : "")" }
     }
 }
 
@@ -94,6 +120,17 @@ final class RecordingSync {
 
     private(set) var store: Store
     private(set) var uploading: UUID?
+    /// The attendance each recording's last stored upload carried, as the hub said it took it (`attendanceMark`): live
+    /// lines and questions wait for it (docs/assistant/meeting-minutes.md「Live sentences」).
+    private(set) var attendanceStored: [UUID: String] = [:]
+    /// Why the hub stored a recording's attendance as off (`attendance_problem`), when it said.
+    private(set) var attendanceProblem: [UUID: String] = [:]
+    /// Called after an upload of an attending recording was stored: its live lines can go.
+    @ObservationIgnored var onAttendanceStored: ((UUID) -> Void)?
+    /// Every save of a recording, after this sync's own reaction to it (the live log of a meeting Persona attends).
+    @ObservationIgnored var onChange: ((UUID) -> Void)?
+    /// Uploaded first, without the save debounce: a recording whose attendance the hub doesn't have yet.
+    @ObservationIgnored private var urgent: Set<UUID> = []
     /// Configuration refusals need a foreground/manual retry, not a timer or another transcript save.
     private(set) var automaticRetryPaused = false
     private var lastProblem: String?
@@ -126,7 +163,10 @@ final class RecordingSync {
     func start() {
         guard !started else { return }
         started = true
-        library.didChange = { [weak self] _ in self?.kick() }
+        library.didChange = { [weak self] id in
+            self?.kick()
+            self?.onChange?(id)
+        }
         #if canImport(UIKit) && !os(watchOS)
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable _ in
             Task { @MainActor in RecordingSync.shared.kick(reconcile: true) }
@@ -144,9 +184,23 @@ final class RecordingSync {
         return Self.uploadable(entry) ? .pending : .waiting
     }
 
-    /// Text worth sending: at least one sentence (an empty transcript is noise in the knowledge base).
+    /// Text worth sending: at least one sentence (an empty transcript is noise in the knowledge base). A meeting Persona
+    /// attends goes before it has any, so the hub knows the role (the contract's first exception).
     nonisolated static func uploadable(_ entry: RecordingEntry) -> Bool {
-        entry.sentences.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if RecordingUpload.attendance(entry) != nil { return true }
+        return entry.sentences.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    /// The hub has stored the attendance `entry` carries now.
+    func attendanceSettled(_ entry: RecordingEntry) -> Bool {
+        guard let mark = RecordingUpload.attendanceMark(entry) else { return false }
+        return attendanceStored[entry.id] == mark
+    }
+
+    /// The attendance of `id` changed (started, turned on or off, another session): it goes now, ahead of the others.
+    func attendanceChanged(_ id: UUID) {
+        urgent.insert(id)
+        kick(now: true)
     }
 
     func isExpired(_ entry: RecordingEntry) -> Bool {
@@ -164,14 +218,14 @@ final class RecordingSync {
 
     /// Runs a pass soon (several saves in a row become one upload). `reconcile`: also ask the hub what it has, at most
     /// every ten minutes.
-    func kick(reconcile: Bool = false) {
+    func kick(reconcile: Bool = false, now immediately: Bool = false) {
         if reconcile, automaticRetryPaused { automaticRetryPaused = false; lastReconcile = nil }
         guard !automaticRetryPaused else { return }
         if reconcile, lastReconcile.map({ now().timeIntervalSince($0) > 600 }) ?? true { lastReconcile = nil }
         if backingOff { worker?.cancel(); worker = nil; backingOff = false }
         guard worker == nil else { again = true; return }
         worker = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
+            if !immediately { try? await Task.sleep(for: .seconds(1)) }
             guard !Task.isCancelled else { return }
             await self?.runPasses()
         }
@@ -218,6 +272,12 @@ final class RecordingSync {
             guard await reconcile(api) else { return }
             lastReconcile = now()
         }
+        // A meeting whose attendance the hub doesn't have yet goes first: its live lines and questions wait for it.
+        for id in urgent.sorted(by: { $0.uuidString < $1.uuidString }) {
+            urgent.remove(id)
+            guard let entry = library.entry(id), status(entry) == .pending else { continue }
+            guard await upload(entry, api) else { urgent.insert(id); return }
+        }
         for id in store.deletes.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await sendDelete(id, api) else { return }
         }
@@ -251,7 +311,10 @@ final class RecordingSync {
     }
 
     private func upload(_ entry: RecordingEntry, _ api: APIClient) async -> Bool {
-        struct Answer: Decodable { var revision: Int64?; var status: String? }
+        struct Answer: Decodable {
+            var revision: Int64?; var status: String?; var attendance: String?; var attendanceProblem: String?
+            enum CodingKeys: String, CodingKey { case revision, status, attendance, attendanceProblem = "attendance_problem" }
+        }
         uploading = entry.id
         defer { uploading = nil }
         let body = RecordingUpload(entry)
@@ -269,6 +332,7 @@ final class RecordingSync {
             }
             store.rejected[entry.id] = nil
             save()
+            if body.attendance != nil { attendanceAnswered(entry, sent: body, answer?.attendance, problem: answer?.attendanceProblem) }
             return true
         } catch let error as APIError where error.status == 410 {
             deletedOnHub(entry.id)
@@ -283,6 +347,28 @@ final class RecordingSync {
             note(error)
             return false
         }
+    }
+
+    /// What the hub said about the attendance an upload carried. A `200` without `attendance` is an older manager: it took
+    /// the transcript and nothing else, so the phone stops attending this meeting (the contract's rule).
+    private func attendanceAnswered(_ entry: RecordingEntry, sent body: RecordingUpload, _ took: String?, problem: String?) {
+        guard let took else {
+            if body.attendance != MeetingAttendance.off.rawValue {
+                library.change(entry.id) { e in
+                    guard var a = e.attendance else { return }
+                    a.set(.off, at: e.duration)
+                    a.stopped = .unsupported
+                    e.attendance = a
+                }
+            }
+            attendanceStored[entry.id] = nil
+            return
+        }
+        attendanceProblem[entry.id] = problem
+        guard let mark = RecordingUpload.attendanceMark(entry) else { return }
+        // Stored as asked, or as off (a problem): either way what the hub holds now.
+        attendanceStored[entry.id] = took == body.attendance ? mark : "\(took)|"
+        if took == body.attendance, took != MeetingAttendance.off.rawValue { onAttendanceStored?(entry.id) }
     }
 
     private func sendDelete(_ id: UUID, _ api: APIClient) async -> Bool {
@@ -323,6 +409,8 @@ final class RecordingSync {
     private func forget(_ id: UUID) {
         store.synced[id] = nil
         store.rejected[id] = nil
+        attendanceStored[id] = nil
+        attendanceProblem[id] = nil
     }
 
     private func note(_ error: Error) {

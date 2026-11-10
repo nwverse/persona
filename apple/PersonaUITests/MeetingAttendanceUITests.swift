@@ -1,0 +1,216 @@
+import XCTest
+
+/// Persona in a recorded meeting (#2981; contract docs/assistant/meeting-minutes.md「Attending a meeting」, the phone's side
+/// docs/apple/recording.md「Persona in meetings」), end to end against a mock hub (PERSONA_MOCK_HUB, fresh per run;
+/// `POST /mock/meeting_attendance` switches the hub's `meeting_attendance` and its default before each launch). A
+/// made-up meeting stands in for the microphone (`-showMeetingSample`): its upload carries the attendance, its lines go
+/// to `…/live`, and questions to `…/ask`, which the mock answers from made-up meeting material.
+/// PERSONA_SHOTS=<dir> saves the start choice, the session picker, listening in, a typed question, the answer to a tap,
+/// and Settings › Meetings (PERSONA_SHOTS_APPEARANCE names the appearance).
+final class MeetingAttendanceUITests: XCTestCase {
+    private let live = "00000000-0000-0000-0000-000000000002"
+
+    /// A hub without `meeting_attendance`: the Recordings page is as it was (no role, no session).
+    @MainActor func testAnOlderHubChangesNothing() throws {
+        let hub = try mockHub()
+        try attendance(hub, on: false)
+        let app = launch(hub, ["-openShellPage", "recordings"])
+        XCTAssertTrue(app.buttons["recording-meeting-start"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertFalse(app.segmentedControls["meeting-attendance-role"].exists, "no role from a hub that doesn't offer attending")
+        XCTAssertFalse(app.buttons["meeting-attendee"].exists)
+    }
+
+    /// The hub's default is off: the role shows, Off chosen, nobody attends, Meeting Recording still one tap.
+    @MainActor func testOffByDefault() throws {
+        let hub = try mockHub()
+        try attendance(hub, on: true, default: "off")
+        let app = launch(hub, ["-openShellPage", "recordings"])
+        let role = app.segmentedControls["meeting-attendance-role"]
+        XCTAssertTrue(role.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(waitFor { role.buttons["关"].isSelected }, app.debugDescription)
+        XCTAssertFalse(app.buttons["meeting-attendee"].exists, "no one attends while Persona is off")
+        XCTAssertTrue(app.buttons["recording-meeting-start"].isHittable)
+    }
+
+    /// The role comes from the hub's default and is changed for this one meeting; the main chat attends until another
+    /// session is picked.
+    @MainActor func testRoleAndAttendeeAtTheStart() throws {
+        let hub = try mockHub()
+        try attendance(hub, on: true, default: "listener")
+        let app = launch(hub, ["-openShellPage", "recordings"])
+        let role = app.segmentedControls["meeting-attendance-role"]
+        XCTAssertTrue(role.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(waitFor { role.buttons["旁听"].isSelected }, "the hub's default: \(app.debugDescription)")
+        let attendee = app.buttons["meeting-attendee"]
+        XCTAssertTrue(attendee.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(waitFor { attendee.label.contains("主对话") }, "the main chat attends until another is picked: \(attendee.label)")
+
+        role.buttons["参会"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "出声回答")).firstMatch.waitForExistence(timeout: 5),
+                      app.debugDescription)
+
+        attendee.tap()
+        let agent = app.buttons["meeting-attendee-agent"].firstMatch
+        XCTAssertTrue(agent.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["meeting-attendee-main"].exists, "the main chat can attend too")
+        try shot(app, "attendee-picker")
+        let picked = agent.label.components(separatedBy: ",").first ?? agent.label
+        agent.tap()
+        XCTAssertTrue(attendee.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(waitFor { attendee.label.contains(picked) }, "\(attendee.label) should name \(picked)")
+        XCTAssertTrue(role.buttons["参会"].isSelected, "picking who attends keeps the role picked for this meeting")
+        try shot(app, "start-choice")
+
+        role.buttons["关"].tap()
+        XCTAssertFalse(app.buttons["meeting-attendee"].waitForExistence(timeout: 2), "no one attends while Persona is off")
+    }
+
+    /// Listening in: the notice, the upload with the role and the meeting's lines reach the hub, and a typed question is
+    /// answered on screen by the hub.
+    @MainActor func testListeningInAnswersATypedQuestion() throws {
+        let hub = try mockHub()
+        try attendance(hub, on: true)
+        let app = launch(hub, ["-openShellPage", "recordings", "-showMeetingSample", "listening"])
+        let notice = app.descendants(matching: .any)["meeting-attending"].firstMatch
+        scrollTo(notice, in: app)
+        XCTAssertTrue(notice.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(notice.label.contains("旁听中"), notice.label)
+        XCTAssertTrue(waitFor(20) { (try? self.meeting(hub))?.role(self.live) == "listener" }, "the upload carried the role")
+        XCTAssertTrue(waitFor(20) { (try? self.meeting(hub))?.lines(self.live).count == 2 }, "the meeting's lines reached …/live")
+        try shot(app, "listening")
+
+        let type = app.buttons["meeting-ask-type"]
+        scrollTo(type, in: app)
+        type.tap()
+        let field = app.alerts.firstMatch.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.alerts.firstMatch.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "在屏幕上回答")).firstMatch.exists,
+                      app.debugDescription)
+        field.typeText("Mac 上的录音现在谁在跟？")
+        try shot(app, "ask-typed")
+        app.alerts.firstMatch.buttons["提问"].tap()
+        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "还没有定负责人")).firstMatch
+        scrollTo(answer, in: app)
+        XCTAssertTrue(answer.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertFalse(app.buttons["meeting-stop-speaking"].exists, "listening in, nothing is said aloud")
+        XCTAssertEqual(try meeting(hub).asks(live).first?["question_source"] as? String, "typed")
+        try shot(app, "answered-on-screen")
+    }
+
+    /// Taking part: one tap asks about what was just said; the hub hears the question from the live lines, and the answer
+    /// shows with what it drew on and is said aloud (Stop Speaking while it is).
+    @MainActor func testTakingPartATapAsksAboutWhatWasJustSaid() throws {
+        let hub = try mockHub()
+        try attendance(hub, on: true)
+        let app = launch(hub, ["-openShellPage", "recordings", "-showMeetingSample", "taking-part"])
+        let notice = app.descendants(matching: .any)["meeting-attending"].firstMatch
+        scrollTo(notice, in: app)
+        XCTAssertTrue(notice.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(notice.label.contains("参会中"), notice.label)
+        XCTAssertTrue(waitFor(20) { (try? self.meeting(hub))?.role(self.live) == "participant" }, "the upload carried the role")
+        let ask = app.buttons["meeting-ask"]
+        scrollTo(ask, in: app)
+        ask.tap()
+        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "周五前完成")).firstMatch
+        scrollTo(answer, in: app)
+        XCTAssertTrue(answer.waitForExistence(timeout: 25), app.debugDescription)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "上周定的长录音测试谁负责")).firstMatch.exists,
+                      "the question the hub heard replaces “What was just said”: \(app.debugDescription)")
+        XCTAssertTrue(app.descendants(matching: .any)["meeting-answer-sources"].firstMatch.exists, "what the answer drew on")
+        let asked = try XCTUnwrap(try meeting(hub).asks(live).first)
+        XCTAssertEqual(asked["question_source"] as? String, "heard")
+        XCTAssertEqual(asked["speak"] as? Bool, true)
+        try shot(app, "answered-aloud")
+    }
+
+    /// The answers so far with the newest being said (a made-up meeting, for the screenshot of it).
+    @MainActor func testAnswerBeingSaid() throws {
+        let hub = try mockHub()
+        try attendance(hub, on: true)
+        let app = launch(hub, ["-openShellPage", "recordings", "-showMeetingSample", "answered"])
+        let stop = app.buttons["meeting-stop-speaking"]
+        scrollTo(stop, in: app)
+        XCTAssertTrue(stop.waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "周五前完成")).firstMatch.exists, app.debugDescription)
+        try shot(app, "answer-being-said")
+    }
+
+    /// Settings › Meetings changes the hub's default (`PUT /api/v1/assistant`), and says what Persona may say.
+    @MainActor func testSettingsChangeTheHubsDefault() throws {
+        let hub = try mockHub()
+        try attendance(hub, on: true, default: "off")
+        let app = launch(hub, ["-tab", "settings", "-openMeetingSettings", "YES"])
+        XCTAssertTrue(app.staticTexts["当着别人的面"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "不会提私人聊天")).firstMatch.exists)
+        app.buttons["旁听"].firstMatch.tap()
+        XCTAssertTrue(waitFor(10) { (try? self.meeting(hub))?.defaultRole == "listener" }, "the hub's default changed")
+        try shot(app, "settings")
+    }
+
+    // MARK: Helpers
+
+    @MainActor private func launch(_ hub: String, _ args: [String]) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-pairURL", pair(hub), "-tab", "assistant"] + args
+        app.launchPinned()
+        return app
+    }
+
+    /// The mock hub's `meeting_attendance`, before the app launches (its next `hello` says it).
+    private func attendance(_ hub: String, on: Bool, default role: String? = nil) throws {
+        var body: [String: Any] = ["on": on]
+        if let role { body["default"] = role }
+        var request = URLRequest(url: URL(string: hub + "/mock/meeting_attendance")!)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let done = expectation(description: "attendance")
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        wait(for: [done], timeout: 5)
+    }
+
+    /// What the mock hub holds about meetings (`GET /mock/meeting`).
+    private struct Meeting {
+        var json: [String: Any]
+        func role(_ id: String) -> String? { ((json["attendance"] as? [String: Any])?[id] as? [String: Any])?["attendance"] as? String }
+        func lines(_ id: String) -> [[String: Any]] { (json["live"] as? [String: Any])?[id] as? [[String: Any]] ?? [] }
+        func asks(_ id: String) -> [[String: Any]] { (json["asks"] as? [String: Any])?[id] as? [[String: Any]] ?? [] }
+        var defaultRole: String? { json["default"] as? String }
+    }
+
+    private func meeting(_ hub: String) throws -> Meeting {
+        let data = try Data(contentsOf: URL(string: hub + "/mock/meeting")!)
+        return Meeting(json: try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:])
+    }
+
+    /// Brings `element` on screen in the Recordings list (the Persona section sits below the recording's controls).
+    @MainActor private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<5 where !(element.exists && element.isHittable) {
+            app.swipeUp()
+        }
+    }
+
+    private func waitFor(_ seconds: TimeInterval = 10, _ ok: () -> Bool) -> Bool {
+        let deadline = Date.now.addingTimeInterval(seconds)
+        while Date.now < deadline {
+            if ok() { return true }
+            usleep(250_000)
+        }
+        return ok()
+    }
+
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String) throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let dir = env["PERSONA_SHOTS"] else { return }
+        let appearance = env["PERSONA_SHOTS_APPEARANCE"] ?? "unknown"
+        try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/attendance-\(appearance)-\(name).png"))
+    }
+
+    private func mockHub() throws -> String {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] else { throw XCTSkip("需要独立 mock hub") }
+        return hub
+    }
+
+    private func pair(_ hub: String) -> String {
+        "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+    }
+}

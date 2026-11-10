@@ -1,6 +1,1295 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "About an earlier meeting, a project's progress or who owns a to-do. Persona answers on screen.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About an earlier meeting, a project's progress or who owns a to-do. Persona answers on screen."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "過去の会議、プロジェクトの進み具合、To-Do の担当者について聞けます。Persona は画面で答えます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可以问以前的会议、项目进展，或者某个待办归谁。Persona 在屏幕上回答。"
+          }
+        }
+      }
+    },
+    "About an earlier meeting, a project's progress or who owns a to-do. Persona answers out loud.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About an earlier meeting, a project's progress or who owns a to-do. Persona answers out loud."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "過去の会議、プロジェクトの進み具合、To-Do の担当者について聞けます。Persona は声で答えます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可以问以前的会议、项目进展，或者某个待办归谁。Persona 会出声回答。"
+          }
+        }
+      }
+    },
+    "An Agent also answers about the project it works on. Sessions on a work computer, and ones that never ask before they act, can't attend.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An Agent also answers about the project it works on. Sessions on a work computer, and ones that never ask before they act, can't attend."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent は担当しているプロジェクトについても答えます。仕事用コンピュータのセッションと、確認せずに実行するセッションは参加できません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 还能回答它所在项目的情况。工作电脑上的会话、从不先问就动手的会话不能参会。"
+          }
+        }
+      }
+    },
+    "Answers only from meeting material: earlier minutes, project progress and who owns a to-do.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answers only from meeting material: earlier minutes, project progress and who owns a to-do."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議に関わる内容だけで答えます：過去の議事録、プロジェクトの進み具合、To-Do の担当者。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只用会议相关的内容回答：以前的会议纪要、项目进展、待办归谁。"
+          }
+        }
+      }
+    },
+    "Ask Persona in the Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask Persona in the Meeting"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議で Persona に聞く"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在会议中问 Persona"
+          }
+        }
+      }
+    },
+    "Ask [Meeting Ask]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "聞く"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "提问"
+          }
+        }
+      }
+    },
+    "Ask about this meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask about this meeting"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会議について聞く"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "问问这场会议"
+          }
+        }
+      }
+    },
+    "Asks about what was just said": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Asks about what was just said"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今の発言について聞きます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "问刚才说的内容"
+          }
+        }
+      }
+    },
+    "Choose [Meeting Attendee]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择"
+          }
+        }
+      }
+    },
+    "Couldn't get an answer. Check the connection and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't get an answer. Check the connection and try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "答えを取得できませんでした。接続を確認してもう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没拿到回答。检查网络后再试。"
+          }
+        }
+      }
+    },
+    "Each meeting recording starts with this. To change it for one meeting, pick another on the Recordings page before you start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Each meeting recording starts with this. To change it for one meeting, pick another on the Recordings page before you start."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議の録音はこの設定で始まります。1 回だけ変えるときは、開始前に「録音」ページで選び直します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每次会议录音都按这里开始。只想改一场，开始前在「录音」页上另选。"
+          }
+        }
+      }
+    },
+    "In Front of Others": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Front of Others"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ほかの人の前で"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当着别人的面"
+          }
+        }
+      }
+    },
+    "Knowledge is read-only on the hub, so Persona can't answer now.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Knowledge is read-only on the hub, so Persona can't answer now."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub のナレッジが読み取り専用のため、Persona は今答えられません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 上的知识库是只读的，Persona 现在没法回答。"
+          }
+        }
+      }
+    },
+    "Listen [Meeting Role]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listen"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "聞くだけ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旁听"
+          }
+        }
+      }
+    },
+    "Meeting [Message Source]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会议"
+          }
+        }
+      }
+    },
+    "Meeting · Persona listening": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting · Persona listening"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議 · Persona が聞いています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会议 · Persona 旁听中"
+          }
+        }
+      }
+    },
+    "Meeting · Persona taking part": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting · Persona taking part"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議 · Persona が参加中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会议 · Persona 参会中"
+          }
+        }
+      }
+    },
+    "Never brings up private chats, mail, health or other personal data.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Never brings up private chats, mail, health or other personal data."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "個人的なチャット、メール、健康、その他の個人データには触れません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不会提私人聊天、邮件、健康或其他个人数据。"
+          }
+        }
+      }
+    },
+    "No Agents are running. Start one in Agents, or let the main chat attend.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Agents are running. Start one in Agents, or let the main chat attend."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "実行中の Agent はありません。Agents で開始するか、メインチャットを参加させてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有正在运行的 Agent。去 Agents 开一个，或者让主对话参会。"
+          }
+        }
+      }
+    },
+    "No model is set up to answer. Choose one in Settings › Model Settings, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No model is set up to answer. Choose one in Settings › Model Settings, then try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "答えるためのモデルが設定されていません。「設定 › モデル設定」で選んでからもう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有设置用来回答的模型。在「设置 › 模型配置」里选一个后再试。"
+          }
+        }
+      }
+    },
+    "Persona answers only from meeting material: earlier minutes, project progress and who owns a to-do. It never brings up private chats, mail or health.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona answers only from meeting material: earlier minutes, project progress and who owns a to-do. It never brings up private chats, mail or health."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona は会議に関わる内容だけで答えます：過去の議事録、プロジェクトの進み具合、To-Do の担当者。個人的なチャット、メール、健康には触れません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 只用会议相关的内容回答：以前的会议纪要、项目进展、待办归谁。不会提私人聊天、邮件或健康。"
+          }
+        }
+      }
+    },
+    "Persona can't follow this meeting right now.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona can't follow this meeting right now."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona は今この会議を追えません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 现在跟不了这场会议。"
+          }
+        }
+      }
+    },
+    "Persona couldn't answer in time. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona couldn't answer in time. Try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona は時間内に答えられませんでした。もう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 没能及时回答。再试一次。"
+          }
+        }
+      }
+    },
+    "Persona didn't hear a question just before the tap. Tap right after the question, or type it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona didn't hear a question just before the tap. Tap right after the question, or type it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "タップの直前に質問が聞こえませんでした。質問の直後にタップするか、入力してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 在你点之前没听到问题。问完马上点，或者打字提问。"
+          }
+        }
+      }
+    },
+    "Persona follows the meeting and answers out loud when you tap Ask Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona follows the meeting and answers out loud when you tap Ask Persona."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が会議を聞き、「Personaに聞く」をタップすると声で答えます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 跟着会议听，点「问 Persona」时出声回答。"
+          }
+        }
+      }
+    },
+    "Persona follows the meeting. Ask it from this phone; it answers on screen and never speaks.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona follows the meeting. Ask it from this phone; it answers on screen and never speaks."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が会議を聞きます。このスマートフォンから質問すると画面で答え、声には出しません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 跟着会议听。在这台手机上提问，它只在屏幕上回答，不出声。"
+          }
+        }
+      }
+    },
+    "Persona in Meetings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona in Meetings"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議での Persona"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会议里的 Persona"
+          }
+        }
+      }
+    },
+    "Persona in This Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona in This Meeting"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会議での Persona"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这场会议里的 Persona"
+          }
+        }
+      }
+    },
+    "Persona is listening": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona is listening"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が聞いています"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 旁听中"
+          }
+        }
+      }
+    },
+    "Persona is looking…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona is looking…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が調べています…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 正在查…"
+          }
+        }
+      }
+    },
+    "Persona is still answering two questions. Ask again once one is answered.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona is still answering two questions. Ask again once one is answered."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona はまだ 2 つの質問に答えています。どちらかが終わってから聞いてください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 还在回答两个问题。等其中一个答完再问。"
+          }
+        }
+      }
+    },
+    "Persona is taking part": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona is taking part"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が参加中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 参会中"
+          }
+        }
+      }
+    },
+    "Persona listening · %lld bookmarks": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Persona listening · %1$lld bookmark"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Persona listening · %1$lld bookmarks"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が聞いています · ブックマーク%1$lld件"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 旁听中 · %1$lld 个书签"
+          }
+        }
+      }
+    },
+    "Persona stays out of the meeting. The minutes come after it ends.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona stays out of the meeting. The minutes come after it ends."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona はこの会議に加わりません。議事録は会議のあとに作られます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 不参与这场会议，会后照常出纪要。"
+          }
+        }
+      }
+    },
+    "Persona taking part · %lld bookmarks": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Persona taking part · %1$lld bookmark"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Persona taking part · %1$lld bookmarks"
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が参加中 · ブックマーク%1$lld件"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 参会中 · %1$lld 个书签"
+          }
+        }
+      }
+    },
+    "Selected [Meeting Attendee]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选"
+          }
+        }
+      }
+    },
+    "Speaks only when you tap Ask Persona, and only when it takes part.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaks only when you tap Ask Persona, and only when it takes part."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "声に出すのは「Personaに聞く」をタップしたときだけで、参加しているときに限ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只在你点「问 Persona」时出声，而且只在参会时。"
+          }
+        }
+      }
+    },
+    "Stop Speaking": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop Speaking"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み上げを停止"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "停止播报"
+          }
+        }
+      }
+    },
+    "Take Part [Meeting Role]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Take Part"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参加"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参会"
+          }
+        }
+      }
+    },
+    "The hub didn't take Persona's part in this meeting. Choose the role again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub didn't take Persona's part in this meeting. Choose the role again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub はこの会議での Persona の役割を受け付けませんでした。もう一度選んでください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 没有接受 Persona 在这场会议里的角色。请重新选择。"
+          }
+        }
+      }
+    },
+    "The hub doesn't have Persona in this meeting yet. Try again in a moment.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub doesn't have Persona in this meeting yet. Try again in a moment."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub はまだこの会議に Persona を加えていません。少ししてからもう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 还没把 Persona 加进这场会议。稍后再试。"
+          }
+        }
+      }
+    },
+    "The hub holds Persona to these limits in a meeting, whatever it is asked.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub holds Persona to these limits in a meeting, whatever it is asked."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議中は何を聞かれても、hub が Persona にこの制限を守らせます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会议中不管被问什么，hub 都让 Persona 守住这些限制。"
+          }
+        }
+      }
+    },
+    "The hub restarted while answering. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub restarted while answering. Try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回答中に hub が再起動しました。もう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 在回答时重启了。再试一次。"
+          }
+        }
+      }
+    },
+    "The hub takes no more of this meeting's lines. Questions still work.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub takes no more of this meeting's lines. Questions still work."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub はこの会議の発言をこれ以上受け取りません。質問は引き続き使えます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 不再接收这场会议的句子了，提问照常可用。"
+          }
+        }
+      }
+    },
+    "The hub won't pass other people's words to this session. Questions still work.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The hub won't pass other people's words to this session. Questions still work."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub はほかの人の発言をこのセッションに渡しません。質問は引き続き使えます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 不会把别人的话转给这个会话，提问照常可用。"
+          }
+        }
+      }
+    },
+    "The main chat answers from earlier meetings, your projects and to-dos.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The main chat answers from earlier meetings, your projects and to-dos."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メインチャットは、過去の会議、プロジェクト、To-Do をもとに答えます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主对话根据以前的会议、你的项目和待办回答。"
+          }
+        }
+      }
+    },
+    "This hub can't answer during meetings yet. Update the hub, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This hub can't answer during meetings yet. Update the hub, then try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この hub はまだ会議中に答えられません。hub を更新してからもう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 hub 还不能在会议中回答。更新 hub 后再试。"
+          }
+        }
+      }
+    },
+    "This hub can't follow meetings, so Persona stopped attending this one.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This hub can't follow meetings, so Persona stopped attending this one."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この hub は会議を追えないため、Persona はこの会議への参加をやめました。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 hub 跟不了会议，Persona 已不再参加这场。"
+          }
+        }
+      }
+    },
+    "This meeting has reached 100 questions, the most it takes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This meeting has reached 100 questions, the most it takes."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この会議の質問は上限の 100 件に達しました。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这场会议已经问了 100 个问题，达到上限。"
+          }
+        }
+      }
+    },
+    "Turn Off Persona": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn Off Persona"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona をオフ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭 Persona"
+          }
+        }
+      }
+    },
+    "Turn Off Persona in the Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn Off Persona in the Meeting"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会議で Persona をオフにする"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在会议中关闭 Persona"
+          }
+        }
+      }
+    },
+    "Type [Meeting Ask]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "入力"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打字"
+          }
+        }
+      }
+    },
+    "What was just said": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What was just said"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今の発言"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刚才说的"
+          }
+        }
+      }
+    },
+    "Who Attends": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Who Attends"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参加者"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参会者"
+          }
+        }
+      }
+    },
+    "Who attends can't take messages now. Persona catches up once it can.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Who attends can't take messages now. Persona catches up once it can."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参加者は今メッセージを受け取れません。受け取れるようになったら Persona が追いつきます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "参会者现在收不了消息，能收时 Persona 会补上。"
+          }
+        }
+      }
+    },
     "%@ can't share its clipboard.": {
       "extractionState": "manual",
       "localizations": {

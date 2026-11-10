@@ -1707,6 +1707,8 @@ def assistant_state(space="", archived=False):
         out["notes"] = cfg["notes"]
     if cfg["main"]:
         out["main"] = cfg["main"]
+    if MEETING_ATTENDANCE["on"]:
+        out["meeting_attendance_default"] = cfg.get("meeting_attendance_default", "off")
     return out
 
 
@@ -2254,6 +2256,79 @@ RECORDING_DAYS = int(os.environ.get("MOCK_RECORDING_DAYS", "14"))
 # POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked").
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
 RECORDING_MINUTES_ASKED = []
+# Persona attending a meeting (#2981, docs/assistant/meeting-minutes.md "Attending a meeting"). MOCK_MEETING_ATTENDANCE=1, or
+# POST /mock/meeting_attendance {"on": true, "default": "listener", "pending": 1}, lists the `meeting_attendance` feature (in the
+# next hello), takes the upload's `attendance` / `attending_session`, and serves …/live and …/ask; off, the hub is an older one
+# that ignores them. `pending`: how many times an ask answers 202 before it is answered (the phone asks again with the same id).
+# GET /mock/meeting reads back the live logs, the asks and the stored attendance.
+MEETING_ATTENDANCE = {"on": os.environ.get("MOCK_MEETING_ATTENDANCE") == "1", "pending": 0}
+MEETING_LIVE = {}   # recording id → the live log, by position
+MEETING_ASKS = {}   # recording id → [ask], oldest first
+MEETING_ASK_ROUNDS = {}  # ask id → how many times it was asked
+MEETING_ROLES = ("off", "listener", "participant")
+
+
+def meeting_answer(question):
+    """A made-up answer from made-up meeting material: who owns the long-recording test, else what last week decided."""
+    if "Mac" in question:
+        return "还没有定负责人。上次周会把它列为待定问题，计划下周同一时间再对。"
+    return "上周的周会定了：录音入口只做一步开始，默认用中文转写。长录音的真机测试由张三负责，周五前完成。"
+
+
+def meeting_ask_route(h, method, p, rid):
+    """POST/GET /api/v1/recordings/{id}/live and POST …/ask, as the contract has them."""
+    if not MEETING_ATTENDANCE["on"]: return h.send_json({"error": "not found"}, 404) or True
+    if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
+    if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音", "code": "recording_not_found"}, 404) or True
+    stored = RECORDINGS[rid]
+    role = stored.get("attendance") or "off"
+    log = MEETING_LIVE.setdefault(rid, [])
+    session = stored.get("attending_session") or {"machine_id": ASSISTANT_CONFIG["machine_id"], "session_id": ASSISTANT_CONFIG["main"], "main": True}
+    if p.endswith("/live") and method == "GET":
+        out = {"attendance": role, "next": len(log), "fed": len(log), "asks": MEETING_ASKS.get(rid, [])}
+        if role != "off": out["attending_session"] = session
+        return h.send_json(out) or True
+    if p.endswith("/live") and method == "POST":
+        body = json.loads(h.last_body or b"{}")
+        start = body.get("from")
+        if not isinstance(start, int) or start < 0 or len(body.get("segments") or []) > 200:
+            return h.send_json({"error": "参数不对"}, 400) or True
+        if role == "off": return h.send_json({"error": "没有在参会", "code": "not_attending"}, 409) or True
+        if start > len(log): return h.send_json({"error": "中间缺了", "code": "live_gap", "next": len(log)}, 409) or True
+        for i, seg in enumerate(body.get("segments") or []):
+            if start + i >= len(log): log.append(seg)
+        return h.send_json({"next": len(log), "attendance": role, "attending_session": session, "fed": len(log)}) or True
+    if p.endswith("/ask") and method == "POST":
+        body = json.loads(h.last_body or b"{}")
+        qid = str(body.get("id") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", qid) \
+                or (body.get("question") is None and body.get("at") is None) or len(body.get("question") or "") > 1000:
+            return h.send_json({"error": "参数不对"}, 400) or True
+        asks = MEETING_ASKS.setdefault(rid, [])
+        ask = next((a for a in asks if a["id"] == qid), None)
+        if ask is None:
+            if role == "off": return h.send_json({"error": "没有在参会", "code": "not_attending"}, 409) or True
+            heard = body.get("question") is None
+            question = body.get("question")
+            if heard:
+                at = float(body.get("at") or 0)
+                near = [x["text"] for x in log if at - 45 <= float(x.get("end", 0)) <= at + 1]
+                question = near[-1] if near else ""
+            ask = {"id": qid, "question": question, "question_source": "heard" if heard else "typed", "state": "pending",
+                   "answer": "", "lang": stored.get("language") or "zh-CN", "speak": role == "participant", "sources": [],
+                   "asked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            if body.get("at") is not None: ask["at"] = body["at"]
+            if heard and not question:
+                ask.update({"state": "failed", "error": "nothing_heard"})
+            asks.append(ask)
+        MEETING_ASK_ROUNDS[qid] = MEETING_ASK_ROUNDS.get(qid, 0) + 1
+        if ask["state"] == "pending" and MEETING_ASK_ROUNDS[qid] > MEETING_ATTENDANCE["pending"]:
+            ask.update({"state": "answered", "answer": meeting_answer(ask["question"]),
+                        "sources": [{"kind": "recordings", "id": "00000000-0000-0000-0000-000000000003", "name": "产品周会",
+                                     "when": "2026-11-03 14:00–15:00"}],
+                        "answered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        return h.send_json({"ask": ask}, 200 if ask["state"] != "pending" else 202) or True
+    return h.send_json({"error": "method"}, 405) or True
 
 
 def recording_minutes(body):
@@ -2613,6 +2688,17 @@ def recordings_route(h, method, p):
     if p == "/mock/recordings" and method == "GET":
         return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
                             "minutes_asked": RECORDING_MINUTES_ASKED}) or True
+    if p == "/mock/meeting_attendance" and method == "POST":
+        body = json.loads(h.last_body or b"{}")
+        MEETING_ATTENDANCE["on"] = bool(body.get("on", True))
+        MEETING_ATTENDANCE["pending"] = int(body.get("pending", 0))
+        if body.get("default") in MEETING_ROLES: ASSISTANT_CONFIG["meeting_attendance_default"] = body["default"]
+        MEETING_LIVE.clear(); MEETING_ASKS.clear(); MEETING_ASK_ROUNDS.clear()
+        return h.send_json({**MEETING_ATTENDANCE, "default": ASSISTANT_CONFIG.get("meeting_attendance_default", "off")}) or True
+    if p == "/mock/meeting" and method == "GET":
+        return h.send_json({"live": MEETING_LIVE, "asks": MEETING_ASKS, "default": ASSISTANT_CONFIG.get("meeting_attendance_default", "off"),
+                            "attendance": {k: {"attendance": v.get("attendance"), "attending_session": v.get("attending_session")}
+                                           for k, v in RECORDINGS.items() if "attendance" in v}}) or True
     if not (p == "/api/v1/recordings" or p.startswith("/api/v1/recordings/")): return False
     if os.environ.get("MOCK_RECORDINGS_DOWN") == "1":
         return h.send_json({"error": "知识库暂时不可用", "code": "kb_unavailable"}, 503) or True
@@ -2623,6 +2709,8 @@ def recordings_route(h, method, p):
     rid = p.split("/")[4].lower()
     if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
+    if p.endswith("/live") or p.endswith("/ask"):
+        return meeting_ask_route(h, method, p, rid)
     if p.endswith("/minutes") and method == "POST":
         if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音"}, 404) or True
         if not RECORDINGS[rid].get("complete"): return h.send_json({"error": "转写还没完成"}, 409) or True
@@ -2646,6 +2734,19 @@ def recordings_route(h, method, p):
     have = RECORDINGS.get(rid)
     if have and have["revision"] > body["revision"]:
         return h.send_json({"id": rid, "revision": have["revision"], "status": "stale"}) or True
+    attendance = None
+    problem = None
+    if MEETING_ATTENDANCE["on"]:
+        attendance = body.get("attendance") or "off"
+        session = body.get("attending_session")
+        if attendance not in MEETING_ROLES: attendance, problem = "off", "unknown_role"
+        elif attendance != "off" and body.get("kind") != "meeting": attendance, problem = "off", "not_meeting"
+        elif isinstance(session, dict) and bool(session.get("machine_id")) != bool(session.get("session_id")):
+            attendance, problem = "off", "bad_session"
+        body["attendance"] = attendance
+        if attendance == "off" or not isinstance(session, dict) or not session.get("machine_id"): body.pop("attending_session", None)
+    else:
+        body.pop("attendance", None); body.pop("attending_session", None)
     RECORDINGS[rid] = body
     text = "\n".join("[%d:%02d] %s" % (int(x["start"]) // 60, int(x["start"]) % 60, x["text"]) for x in body.get("segments", []))
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
@@ -2658,7 +2759,11 @@ def recordings_route(h, method, p):
         detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
         if ready: detail["minutes"] = recording_minutes(body)
     KB_DETAIL[("recordings", rid)] = detail
-    return h.send_json({"id": rid, "revision": body["revision"], "status": "stored"}) or True
+    answer = {"id": rid, "revision": body["revision"], "status": "stored"}
+    if attendance is not None:
+        answer["attendance"] = attendance
+        if problem: answer["attendance_problem"] = problem
+    return h.send_json(answer) or True
 KB_DETAIL = {
     ("projects", "weather-app"): {"summary": "# 天气 App\n\n给自己用的天气 App 和桌面小组件。\n\n- **现在**：小组件按小时刷新\n- **下一步**：中号布局的降雨条",
                                   "log": ["- 2026-10-24 09:10 · 飞书 · 天气 App 项目群 · 定了小组件先做小号和中号",
@@ -14063,7 +14168,7 @@ _features_without_voice = features
 
 
 def features():
-    return _features_without_voice() + (["plugins"] if VOICE_MODE else [])
+    return _features_without_voice() + (["plugins"] if VOICE_MODE else []) + (["meeting_attendance"] if MEETING_ATTENDANCE["on"] else [])
 
 
 _model_configuration_without_voice = model_configuration
@@ -16447,6 +16552,10 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["main"] = "" if body["main"] == "-" else body["main"]
             if isinstance(body.get("main_tasks_quiet"), bool):
                 ASSISTANT_CONFIG["main_tasks_quiet"] = body["main_tasks_quiet"]
+            if "meeting_attendance_default" in body and MEETING_ATTENDANCE["on"]:
+                if body["meeting_attendance_default"] not in MEETING_ROLES:
+                    return self.send_json({"error": "meeting_attendance_default must be off, listener or participant"}, 400)
+                ASSISTANT_CONFIG["meeting_attendance_default"] = body["meeting_attendance_default"]
             return self.send_json(assistant_state())
         if "/health/reports/" in p and p.startswith("/api/v1/machines/") and self.command == "DELETE":
             name = unquote(p.rsplit("/", 1)[1])

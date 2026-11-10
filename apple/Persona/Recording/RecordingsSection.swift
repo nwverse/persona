@@ -8,9 +8,13 @@ import AVFoundation
 /// where each one is (recording, transcribing, synced), open one for its transcript. The text goes to the knowledge base
 /// by itself (`RecordingSync`); nothing is added to a composer.
 struct RecordingsSection: View {
+    #if os(iOS)
+    @Environment(AppModel.self) private var model
+    #endif
     @State private var library = RecordingLibrary.shared
     @State private var transcription = RecordingTranscription.shared
     @State private var sync = RecordingSync.shared
+    @State private var capture = RecordingCapture.shared
 
     var body: some View {
         Section {
@@ -18,6 +22,14 @@ struct RecordingsSection: View {
         } footer: {
             Text("Audio stays on this device; watch recordings come back here. After on-device transcription the text syncs to Knowledge automatically and is kept for the last \(sync.store.days) days, so the Assistant and agents can find it with a Knowledge search.")
         }
+        #if os(iOS)
+        // The meeting being recorded: Persona's part in it, and asking it (#2981). Only with a hub that offers attending,
+        // or a meeting already attended.
+        if capture.state != .idle, let entry = capture.recordingID.flatMap(library.entry), entry.isMeeting, entry.active,
+           entry.source == .phone, entry.attendance != nil || MeetingAttendees.offered(model) {
+            MeetingAttendanceSection(entry: entry)
+        }
+        #endif
         Section {
             if library.entries.isEmpty {
                 EmptyStateView(symbol: Theme.Icon.recording, title: String(localized: "No Recordings Yet"),
@@ -112,6 +124,10 @@ struct RecordingCaptureControls: View {
     /// The calendar's meeting on now (read again each minute while nothing records).
     @State private var meetingNow: RecordingMeeting?
     @State private var calendarAskable = false
+    @Environment(AppModel.self) private var model
+    /// Persona's part in the next meeting (#2981): the hub's default until one is picked here for it.
+    @State private var pickedRole: MeetingAttendance?
+    @State private var pickedAttendee: MeetingAttendees.Candidate?
     #endif
 
     var body: some View {
@@ -146,6 +162,10 @@ struct RecordingCaptureControls: View {
         if capture.state == .idle {
             #if os(iOS)
             meetingStart
+            if MeetingAttendees.offered(model) {
+                MeetingAttendanceStart(role: Binding(get: { pickedRole ?? MeetingAttendees.defaultRole(model) }, set: { pickedRole = $0 }),
+                                       attendee: attendee, pick: { pickedAttendee = $0 })
+            }
             #endif
             Picker("Recording Language", selection: $locale) {
                 Text("Chinese").tag("zh-CN")
@@ -177,7 +197,9 @@ struct RecordingCaptureControls: View {
     @ViewBuilder private var meetingStart: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             Button {
-                Task { await MeetingRecorder.shared.startMeeting(inForeground: true, openPage: false) }
+                let attendance = startAttendance
+                pickedRole = nil; pickedAttendee = nil
+                Task { await MeetingRecorder.shared.startMeeting(inForeground: true, openPage: false, attendance: attendance) }
             } label: {
                 Label("Meeting Recording", systemImage: Theme.Icon.recording)
                     .font(Theme.Font.bodyStrong)
@@ -206,6 +228,21 @@ struct RecordingCaptureControls: View {
             }
         }
         .padding(.vertical, Theme.Space.xs)
+    }
+
+    /// Who attends the next meeting: the one picked here, else the one picked last (or the main chat).
+    private var attendee: MeetingAttendees.Candidate? { pickedAttendee ?? MeetingAttendees.preferred(model) }
+
+    /// What Meeting Recording starts with: the role and session shown above it. A session picked here that can no longer
+    /// attend (its computer went offline meanwhile) gives way to the preferred one.
+    private var startAttendance: RecordingAttendance? {
+        guard MeetingAttendees.offered(model) else { return nil }
+        let role = pickedRole ?? MeetingAttendees.defaultRole(model)
+        guard role.attends else { return RecordingAttendance(role: .off) }
+        let all = MeetingAttendees.candidates(model)
+        let chosen = pickedAttendee.flatMap { p in all.first { $0.key == p.key } } ?? MeetingAttendees.preferred(model)
+        return RecordingAttendance(role: role, session: chosen.flatMap { $0.main ? nil : $0.key.path },
+                                   sessionTitle: chosen?.title ?? model.persona.name)
     }
 
     /// 14:00–15:00.
