@@ -4,7 +4,8 @@ import Foundation
 /// out and put in, and inside a line that was changed rather than rewritten, the words that changed. Claude's Edit,
 /// MultiEdit and Write carry the old and new text, not a patch; drawn as all of the old removed and all of the new
 /// added, a one-word change in a 30-line edit read as 60 changed lines, and every +N −N with it. The web compares the
-/// same items the same way (web/src/lib/compare.ts for lines, web/src/lib/code-review.ts for words).
+/// same items the same way (web/src/lib/compare.ts for lines, web/src/lib/code-review.ts for words), but for a newline
+/// at the very end, which it takes as one more, empty line (`split`).
 ///
 /// Lines are compared with the standard library's `difference(from:)`, a Myers diff, after the lines both texts start
 /// and end with are set aside. Devices on iOS 26.0–26.3 run the older version of it, whose memory grows with the
@@ -51,40 +52,8 @@ public nonisolated struct LineDiff: Sendable, Equatable {
     }
 
     init(old: String, new: String, maxChars: Int, maxChangedLines: Int, maxWordWork: Int = LineDiff.maxWordWork) {
-        let a = Self.split(old), b = Self.split(new)
-        var removed = [Bool](repeating: false, count: a.count), inserted = [Bool](repeating: false, count: b.count)
-        var capped = false
-        if old.utf16.count > maxChars || new.utf16.count > maxChars {
-            removed = [Bool](repeating: true, count: a.count)
-            inserted = [Bool](repeating: true, count: b.count)
-            capped = true
-        } else {
-            // Equal lines share a number, so the diff compares integers.
-            var ids: [String: Int] = [:]
-            func id(_ s: String) -> Int {
-                if let n = ids[s] { return n }
-                ids[s] = ids.count
-                return ids.count - 1
-            }
-            let x = a.map(id), y = b.map(id)
-            var head = 0
-            while head < x.count, head < y.count, x[head] == y[head] { head += 1 }
-            var tail = 0
-            while tail < x.count - head, tail < y.count - head, x[x.count - 1 - tail] == y[y.count - 1 - tail] { tail += 1 }
-            let midX = Array(x[head..<(x.count - tail)]), midY = Array(y[head..<(y.count - tail)])
-            if midX.isEmpty || midY.isEmpty || midX.count + midY.count > maxChangedLines {
-                for k in midX.indices { removed[head + k] = true }
-                for k in midY.indices { inserted[head + k] = true }
-                capped = !midX.isEmpty && !midY.isEmpty
-            } else {
-                for change in midY.difference(from: midX) {
-                    switch change {
-                    case .remove(let offset, _, _): removed[head + offset] = true
-                    case .insert(let offset, _, _): inserted[head + offset] = true
-                    }
-                }
-            }
-        }
+        let (a, b) = Self.split(old, new)
+        let (removed, inserted, capped) = Self.compare(a, b, old: old, new: new, maxChars: maxChars, maxChangedLines: maxChangedLines)
         // Both walked together: within a change the removed lines come first, then the added ones.
         var lines: [Line] = []
         lines.reserveCapacity(a.count + b.count)
@@ -98,11 +67,6 @@ public nonisolated struct LineDiff: Sendable, Equatable {
                 lines.append(Line(kind: .context, text: b[j], oldLine: i + 1, newLine: j + 1)); i += 1; j += 1
             }
         }
-        // The same lines from different texts: only the newline at the end differs, so the last line is what changed.
-        if !lines.isEmpty, !lines.contains(where: { $0.kind != .context }), old != new {
-            lines[lines.count - 1] = Line(kind: .del, text: a[a.count - 1], oldLine: a.count)
-            lines.append(Line(kind: .add, text: b[b.count - 1], newLine: b.count))
-        }
         if !capped { Self.markWords(&lines, budget: maxWordWork) }
         self.lines = lines
         adds = lines.reduce(0) { $0 + ($1.kind == .add ? 1 : 0) }
@@ -110,13 +74,56 @@ public nonisolated struct LineDiff: Sendable, Equatable {
         self.capped = capped
     }
 
-    /// A text's lines. The newline at the very end ends the last line rather than starting an empty one, so a file
-    /// written with one (a Write's content, nearly always) counts the lines it has, as git does.
-    static func split(_ text: String) -> [String] {
-        guard !text.isEmpty else { return [] }
-        var lines = text.components(separatedBy: "\n")
-        if text.utf8.last == UInt8(ascii: "\n") { lines.removeLast() }
-        return lines
+    /// Which lines of `a` were removed and which of `b` inserted; `capped` past the budgets.
+    private static func compare(_ a: [String], _ b: [String], old: String, new: String, maxChars: Int,
+                                maxChangedLines: Int) -> (removed: [Bool], inserted: [Bool], capped: Bool) {
+        guard old.utf16.count <= maxChars, new.utf16.count <= maxChars else {
+            return ([Bool](repeating: true, count: a.count), [Bool](repeating: true, count: b.count), true)
+        }
+        var removed = [Bool](repeating: false, count: a.count), inserted = [Bool](repeating: false, count: b.count)
+        // Equal lines share a number, so the diff compares integers.
+        var ids: [String: Int] = [:]
+        func id(_ s: String) -> Int {
+            if let n = ids[s] { return n }
+            ids[s] = ids.count
+            return ids.count - 1
+        }
+        let x = a.map(id), y = b.map(id)
+        var head = 0
+        while head < x.count, head < y.count, x[head] == y[head] { head += 1 }
+        var tail = 0
+        while tail < x.count - head, tail < y.count - head, x[x.count - 1 - tail] == y[y.count - 1 - tail] { tail += 1 }
+        let midX = Array(x[head..<(x.count - tail)]), midY = Array(y[head..<(y.count - tail)])
+        if midX.isEmpty || midY.isEmpty || midX.count + midY.count > maxChangedLines {
+            for k in midX.indices { removed[head + k] = true }
+            for k in midY.indices { inserted[head + k] = true }
+            return (removed, inserted, !midX.isEmpty && !midY.isEmpty)
+        }
+        for change in midY.difference(from: midX) {
+            switch change {
+            case .remove(let offset, _, _): removed[head + offset] = true
+            case .insert(let offset, _, _): inserted[head + offset] = true
+            }
+        }
+        return (removed, inserted, false)
+    }
+
+    /// Both texts' lines. A newline at the very end of both ends their last lines rather than starting an empty one,
+    /// and so does a newline at the end of either when the other is empty: a file written with one (a Write's content,
+    /// nearly always) counts the lines it has, as git does. An Edit's texts are pieces of a file, though: a newline at
+    /// the end of only one of them puts in or takes out a line break, and the empty line after it stays to show that
+    /// (`"x"` to `"x\n"` adds one). Split the same way, two texts have the same lines only when they are the same.
+    static func split(_ old: String, _ new: String) -> (old: [String], new: [String]) {
+        let newline = UInt8(ascii: "\n")
+        let oldEnds = old.utf8.last == newline, newEnds = new.utf8.last == newline
+        let ends = (oldEnds && newEnds) || old.isEmpty || new.isEmpty
+        func lines(_ text: String, _ endsWithNewline: Bool) -> [String] {
+            guard !text.isEmpty else { return [] }
+            var lines = text.components(separatedBy: "\n")
+            if ends, endsWithNewline { lines.removeLast() }
+            return lines
+        }
+        return (lines(old, oldEnds), lines(new, newEnds))
     }
 
     // MARK: Folding

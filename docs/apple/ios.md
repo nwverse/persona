@@ -50,6 +50,7 @@ Chat page:
   from any change fold into one "… N unchanged lines" row until Show All, and a removed line paired with the added one after it (first with first) marks its changed words on
   `Theme.Diff.addEmphasis` / `delEmphasis` (words as in the web's `code-review.ts`: ≤ 1,000 characters, ≤ 500 words, similar enough; Han and kana count one character per word).
   Every +N −N (header, tool chip, changed files) is that diff's. Past its budget (1,000 lines between the common start and end, 100,000 characters a side) the middle is all removed, then all added.
+  A newline ending both texts (or a Write's content) ends the last line, as git counts; ending only one of an Edit's texts (pieces of a file), it is a line break put in or taken out and shows as an empty line added or removed.
   Whole-file Git diffs still use `MonoTextView` for large-diff performance, same models and colors. Tool failures put Error above output instead of covering its first line.
 - Image viewer: every full-image entry in the App (chat images, sent images, images viewed this turn, tool results, Files images, notebook outputs, Markdown web images and diagrams,
   Lark messages / cards / Moments / documents, Inbox connector messages, Lark attachments) uses one `ImageViewer` (`ImageViewer.swift`, `ViewerImage` data:

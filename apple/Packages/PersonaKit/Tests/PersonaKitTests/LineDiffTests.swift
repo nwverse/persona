@@ -129,12 +129,33 @@ struct LineDiffTests {
         #expect(w.adds == 2 && w.dels == 0)
         #expect(LineDiff(old: "a\n", new: "a\nb\n").lines.map(\.kind) == [.context, .add])
         #expect(LineDiff(old: "", new: "\n").adds == 1) // one empty line
-        // Only the newline differs: the last line changed, no word in it did.
+        // Only the newline differs: one line break taken out, the line before it unchanged.
         let n = LineDiff(old: "}\n", new: "}")
-        #expect(rows(n) == ["-}", "+}"] && n.adds == 1 && n.dels == 1)
-        #expect(n.lines.allSatisfy { $0.changed.isEmpty })
+        #expect(rows(n) == [" }", "-"] && n.adds == 0 && n.dels == 1)
+        #expect(rows(LineDiff(old: "a", new: "a\n")) == [" a", "+"])
         // An edit's text that ends mid-line, given another line.
         #expect(rows(LineDiff(old: "x", new: "x\ny")) == [" x", "+y"])
+        // Deleting everything, newline and all: the lines it had.
+        #expect(rows(LineDiff(old: "a\nb\n", new: "")) == ["-a", "-b"])
+    }
+
+    @Test func aNewlineAtTheEndOfOneSideIsALineBreak() {
+        // An Edit's texts are pieces of a file: "x\na" followed by "\n…" became "y\na\n\n…", one more line.
+        let d = LineDiff(old: "x\na", new: "y\na\n")
+        #expect(rows(d) == ["-x", "+y", " a", "+"])
+        #expect(d.adds == 2 && d.dels == 1)
+        // A function put in after a closing brace: three lines, a blank one, the function, and the blank one its final
+        // newline makes before the file's next line.
+        let f = LineDiff(old: "}", new: "}\n\nfunc b() {}\n")
+        #expect(rows(f) == [" }", "+", "+func b() {}", "+"] && f.adds == 3)
+        // The other way round: the line break taken out.
+        let g = LineDiff(old: "x\na\n", new: "y\na")
+        #expect(rows(g) == ["-x", "+y", " a", "-"] && g.adds == 1 && g.dels == 2)
+        // However they are split, different texts never come out the same.
+        for (old, new) in [("a", "a\n"), ("a\n", "a"), ("", "\n"), ("\n", ""), ("a\n\n", "a\n"), ("\n", "\n\n")] {
+            let d = LineDiff(old: old, new: new)
+            #expect(d.adds + d.dels > 0, "\(old.debugDescription) → \(new.debugDescription)")
+        }
     }
 
     @Test func emptySides() {
