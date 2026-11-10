@@ -508,6 +508,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
 	}
+	switch method { // sharing the clipboard with the phone (clipshare.go)
+	case "clipboard.get":
+		return clipboardGet(ctx)
+	case "clipboard.set":
+		return clipboardSet(ctx, params)
+	}
 	var p struct {
 		Path             string        `json:"path"`
 		Paths            []string      `json:"paths"`
@@ -1553,6 +1559,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramIDs,
+		Clipboard:          clipboardSupport(),
 	}
 }
 
