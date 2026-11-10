@@ -515,7 +515,7 @@ which users saw as one action: clear this batch they do not need to handle now. 
 
 ## Grouping and selection (2026-11-10, #2059)
 
-The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Persona/Views/Inbox/InboxGroups.swift`); the Mac follows in #2575, Android in #2576.
+The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Persona/Views/Inbox/InboxGroups.swift`); Android follows in #2576. The native Mac app is frozen (`docs/apple/mac.md`), so its inbox keeps its list.
 
 - **Groups**: Needs you, FYI and Collapsed group by source (default) or by time, switched at the top of the list and kept on this device
   (web `localStorage` `inbox.grouping`, Apple `@StoredValue("inbox.grouping")`). Done always groups by when it was done. Working is never grouped.
