@@ -112,6 +112,8 @@ fun PairingScreen(
     }
     fun accept(link: String) {
         welcome = false; readiness = false; credentialsSaved = false; lastRequest = null; tries = 0; addressError = null; typed = false
+        // A token typed for another hub must never go to this one.
+        accessId = ""; accessSecret = ""; accessOpen = false
         try {
             val request = PairingInput.parse(link)
             metadata = request; address = request.url; token = request.token; failure = null
@@ -235,7 +237,11 @@ fun PairingScreen(
         val value = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
         if (value.isNullOrBlank()) notice = R.string.settings_pairing_notice_clipboard_empty else accept(value)
     }
-    fun edit() { credentialsSaved = false; lastRequest = null; confirm = null; failure = null; progress = emptyList(); manual = true; tries = 0; addressError = null }
+    fun edit() {
+        credentialsSaved = false; lastRequest = null; confirm = null; failure = null; progress = emptyList(); manual = true; tries = 0; addressError = null
+        // The address may change to another hub: its token starts empty.
+        accessId = ""; accessSecret = ""; accessOpen = false
+    }
     fun next() {
         if (address.isBlank() || token.isBlank()) return
         tries = 0
@@ -337,7 +343,7 @@ fun PairingScreen(
                 item {
                     PairingActions {
                         JButton(stringResource(R.string.settings_pairing_confirm), {
-                            confirm = null; connect(request.copy(access = HubAccess.of(accessId, accessSecret)))
+                            confirm = null; connect(request.copy(access = if (accessOpen) HubAccess.of(accessId, accessSecret) else null))
                         }, Modifier.fillMaxWidth())
                         JButton(stringResource(R.string.settings_pairing_edit_input), ::edit, Modifier.fillMaxWidth(), kind = JButtonKind.Secondary)
                     }

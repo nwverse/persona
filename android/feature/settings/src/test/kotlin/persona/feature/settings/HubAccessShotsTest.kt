@@ -140,6 +140,32 @@ class HubAccessShotsTest {
         rule.onAllNodes(hasSetTextAction())[0].assert(hasText(" ${token.clientId} "))
     }
 
+    /** A token typed for one hub never goes to another: a new link starts empty, and a closed section sends nothing. */
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi")
+    @Test fun theTokenStaysWithTheHubItWasTypedFor() {
+        val pairing = FakePairing(PairingException(PairingFailure.Timeout))
+        rule.setContent { PersonaTheme(reduceMotion = true) { PairingScreen(pairing, sessions, initialLink = link, onReady = {}, onDiagnostics = {}, skipWelcome = true) } }
+        rule.waitForIdle()
+        tap(R.string.settings_access_title)
+        rule.onAllNodes(hasSetTextAction())[0].performTextReplacement(token.clientId)
+        rule.onAllNodes(hasSetTextAction())[1].performTextReplacement(token.clientSecret)
+        // Another hub's link pasted into the form.
+        tap(R.string.settings_pairing_edit_input)
+        rule.onAllNodes(hasSetTextAction())[0].performTextReplacement("persona://pair?url=https%3A%2F%2Fother.example.com&token=mock")
+        rule.waitForIdle()
+        rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+        tap(R.string.settings_access_title)
+        rule.onAllNodes(hasSetTextAction())[0].assert(hasText(""))
+        rule.onAllNodes(hasSetTextAction())[0].performTextReplacement(token.clientId)
+        rule.onAllNodes(hasSetTextAction())[1].performTextReplacement(token.clientSecret)
+        // Typed, then folded away: what can't be seen isn't sent.
+        tap(R.string.settings_access_title)
+        tap(R.string.settings_pairing_confirm)
+        rule.waitUntil(5_000) { pairing.requests.isNotEmpty() }
+        assertEquals("https://other.example.com", pairing.requests.single().url.trimEnd('/'))
+        assertNull(pairing.requests.single().access)
+    }
+
     /** Settings saves a changed token and removes it. */
     @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi")
     @Test fun settingsSavesAndRemovesTheToken() {

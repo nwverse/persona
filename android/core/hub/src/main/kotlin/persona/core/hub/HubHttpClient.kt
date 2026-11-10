@@ -167,7 +167,7 @@ internal fun managerHeaderFor(url: HttpUrl, hubId: String?, method: String = "GE
  * or a 401 / 403 of Cloudflare's own that is not the hub's JSON and names Access. The hub never redirects and always
  * answers errors in JSON, so neither can be the hub's.
  */
-internal fun isCloudflareAccessBlock(response: Response): Boolean {
+fun isCloudflareAccessBlock(response: Response): Boolean {
     if (response.isRedirect) {
         val location = response.header("Location")?.let { response.request.url.resolve(it) } ?: return false
         return location.host.endsWith(".cloudflareaccess.com") || location.encodedPath.startsWith("/cdn-cgi/access/")
