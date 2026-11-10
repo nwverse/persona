@@ -184,8 +184,15 @@ type threadIndex struct {
 
 func (b *inboxBook) threads(key func(*InboxItem) (string, bool)) *threadIndex {
 	x := &threadIndex{key: key, by: map[string][]*InboxItem{}}
-	b.each(x.note)
+	b.each(x.file)
 	return x
+}
+
+// file files an item threads meets: each comes once, so it is not looked for first, as note does.
+func (x *threadIndex) file(it *InboxItem) {
+	if k, ok := x.key(it); ok {
+		x.by[k] = append(x.by[k], it)
+	}
 }
 
 // note files it under its thread: an item added, or one whose thread may have changed. An entry under a thread it
