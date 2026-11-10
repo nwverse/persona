@@ -195,9 +195,12 @@ fun JManagerAvatar(
                 Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.CircleShape).background(fill),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(managerInitial(manager.shownName), style = PersonaTheme.type.label.copy(
-                    fontSize = androidx.compose.ui.unit.TextUnit(size.value * HomeTokens.assistantInitialShare, androidx.compose.ui.unit.TextUnitType.Sp),
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = ink, maxLines = 1)
+                // Sized by the circle, not by the system's text size: the letter is part of the mark (at 200 % text it
+                // would outgrow the circle and cover the presence dot).
+                val initial = with(androidx.compose.ui.platform.LocalDensity.current) { (size * HomeTokens.assistantInitialShare).toSp() }
+                Text(managerInitial(manager.shownName), style = PersonaTheme.type.label.copy(fontSize = initial,
+                    lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+                    color = ink, maxLines = 1)
             }
         }
         if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
