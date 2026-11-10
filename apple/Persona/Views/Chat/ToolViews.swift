@@ -10,9 +10,10 @@ enum ToolPresentation {
     }
 
     static func symbol(_ name: String) -> String {
+        if ToolNaming.isOtherMCP(name) { return Theme.Icon.skills }
         let n = baseName(name)
-        if n.hasPrefix("phone_") { return "iphone" }
-        if n.hasPrefix("mail_") { return "envelope" }
+        if n.hasPrefix("phone_") { return Theme.Icon.phone }
+        if n.hasPrefix("mail_") { return Theme.Icon.mail }
         switch n {
         case "conversation_rename": return Theme.Icon.edit
         case "conversation_archive": return Theme.Icon.archive
@@ -21,64 +22,155 @@ enum ToolPresentation {
         case "computer_state", "computer_run": return Theme.Icon.machine
         case SecretRun.tool: return Theme.Icon.credentials
         case "browser_run", "browser_look": return Theme.Icon.web
-        case "Bash", "BashOutput", "KillShell", "KillBash": return Theme.Icon.terminal
-        case "Read": return Theme.Icon.document
+        case "Bash", "BashOutput", "PowerShell": return Theme.Icon.terminal
+        case "Read", "NotebookRead": return Theme.Icon.document
         case "Edit", "MultiEdit", "NotebookEdit": return Theme.Icon.editFile
         case "Write": return Theme.Icon.newFile
         case "Grep": return Theme.Icon.findText
         case "Glob", "LS": return Theme.Icon.findFiles
         case "WebFetch": return Theme.Icon.web
         case "WebSearch": return Theme.Icon.search
-        case "Task", "Agent": return Theme.Icon.subagent
-        case "TodoWrite", "TaskCreate", "TaskUpdate": return Theme.Icon.todo
+        case "Task", "Agent", "ListAgents", "SubagentHandback": return Theme.Icon.subagent
+        case "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet": return Theme.Icon.todo
+        case "TaskStop", "KillShell", "KillBash": return Theme.Icon.stopLoop
+        case "TaskOutput": return Theme.Icon.backgroundTask
+        case "SendMessage": return Theme.Icon.agentChat
+        case "ScheduleWakeup": return Theme.Icon.schedule
+        case "CronCreate", "CronList", "CronDelete", "RemoteTrigger": return Theme.Icon.recurring
+        case "LSP": return Theme.Icon.code
+        case "EnterWorktree", "ExitWorktree": return Theme.Icon.gitBranch
+        case "SendUserFile": return Theme.Icon.attachment
+        case "Artifact": return Theme.Icon.share
+        case "PushNotification": return Theme.Icon.notification
+        case "ReportFindings": return Theme.Icon.triage
+        case "SendFeedback": return Theme.Icon.compose
+        case "EndConversation": return Theme.Icon.end
         case "AskUserQuestion", "ask_user": return Theme.Icon.question
         case "ExitPlanMode", "EnterPlanMode": return Theme.Icon.plan
         case "ToolSearch": return Theme.Icon.unknownTool
-        case "Skill": return Theme.Icon.skills
-        case "Monitor": return "waveform.path.ecg"
+        case "Skill", "WaitForMcpServers", "ListMcpResourcesTool", "ReadMcpResourceTool": return Theme.Icon.skills
+        case "Monitor": return Theme.Icon.monitor
         case "Workflow": return Theme.Icon.workflow
         default: return name.hasPrefix("mcp__") ? Theme.Icon.skills : Theme.Icon.unknownTool
         }
     }
 
     static func verb(_ name: String) -> String {
-        let n = baseName(name)
         if let own = PersonaToolNames.verb(name) { return own }
+        // Another server's tool: "GitHub · Create issue", never its bare snake_case name (#2986).
+        if let mcp = ToolNaming.mcpLabel(name) { return mcp }
+        let n = baseName(name)
         if n.hasPrefix("phone_") { return "iPhone" }
         if n.hasPrefix("mail_") { return String(localized: "Mail [Assistant View 3d708e]") }
+        return knownVerb(n) ?? ToolNaming.humanize(n)
+    }
+
+    /// The verb the tables give a tool's own name; nil for one they don't know.
+    static func knownVerb(_ n: String) -> String? {
         switch n {
         // Persona managing its own conversations (docs/assistant/assistant.md「Managing its own conversations」).
-        case "conversations_list": return String(localized: "List Chats")
-        case "conversation_read": return String(localized: "Read Chat")
-        case "conversation_rename": return String(localized: "Rename Chat")
-        case "conversation_archive": return String(localized: "Archive Chat")
-        case "conversation_unarchive": return String(localized: "Unarchive")
-        case "conversation_new": return String(localized: "New Chat [Tool Views 3f0830]")
-        case "conversation_send": return String(localized: "Send to Chat")
+        case "conversations_list": String(localized: "List Chats")
+        case "conversation_read": String(localized: "Read Chat")
+        case "conversation_rename": String(localized: "Rename Chat")
+        case "conversation_archive": String(localized: "Archive Chat")
+        case "conversation_unarchive": String(localized: "Unarchive")
+        case "conversation_new": String(localized: "New Chat [Tool Views 3f0830]")
+        case "conversation_send": String(localized: "Send to Chat")
         // Operating a Mac through Cua Driver (docs/extensions/computer-use.md).
-        case "computer_state": return String(localized: "View Computer")
-        case "computer_run": return String(localized: "Control Computer")
-        case "browser_run": return String(localized: "Use Browser")
-        case "browser_look": return String(localized: "View Browser")
-        case "Bash": return String(localized: "Run")
-        case "Read": return String(localized: "Read [Tool Views 534cb3]")
-        case "Edit", "MultiEdit": return String(localized: "Edit [Message Menu 051836]")
-        case "Write": return String(localized: "Write")
-        case "Grep": return String(localized: "Search")
-        case "Glob", "LS": return String(localized: "Find")
-        case "WebFetch": return String(localized: "Open Web Page")
-        case "WebSearch": return String(localized: "Web Search")
-        case "Task", "Agent": return String(localized: "Subtask")
-        case "TodoWrite": return String(localized: "Update To-dos")
-        case "AskUserQuestion", "ask_user": return String(localized: "Question [Tool Views 387441]")
-        case "ExitPlanMode": return String(localized: "Submit Plan")
-        case "EnterPlanMode": return String(localized: "Enter Plan Mode")
-        case "ToolSearch": return String(localized: "Load Tools")
-        case "Skill": return String(localized: "Use Skill")
-        case "Monitor": return String(localized: "Monitor [Tool Views 22be42]")
-        case "Workflow": return String(localized: "Run Workflow [Tool Views]")
-        default: return n
+        case "computer_state": String(localized: "View Computer")
+        case "computer_run": String(localized: "Control Computer")
+        case "browser_run": String(localized: "Use Browser")
+        case "browser_look": String(localized: "View Browser")
+        case "Bash", "PowerShell": String(localized: "Run")
+        case "Read", "NotebookRead": String(localized: "Read [Tool Views 534cb3]")
+        case "Edit", "MultiEdit", "NotebookEdit": String(localized: "Edit [Message Menu 051836]")
+        case "Write": String(localized: "Write")
+        case "Grep": String(localized: "Search")
+        case "Glob", "LS": String(localized: "Find")
+        case "WebFetch": String(localized: "Open Web Page")
+        case "WebSearch": String(localized: "Web Search")
+        case "Task", "Agent": String(localized: "Subtask")
+        case "TodoWrite": String(localized: "Update To-dos")
+        // Claude Code's task list (TodoWrite's successor) and its background tasks.
+        case "TaskCreate": String(localized: "Add To-Do")
+        case "TaskUpdate": String(localized: "Update To-Do")
+        case "TaskList": String(localized: "List To-Dos")
+        case "TaskGet": String(localized: "Read To-Do")
+        case "TaskStop", "KillShell", "KillBash": String(localized: "Stop Task")
+        case "TaskOutput", "BashOutput": String(localized: "Read Output")
+        // Other agents and sessions (cross-session messaging, agent teams).
+        case "SendMessage": String(localized: "Message Agent")
+        case "ListAgents": String(localized: "List Agents")
+        case "SubagentHandback": String(localized: "Hand Back Report")
+        // Coming back later: a /loop's next round, prompts on a schedule here or in the cloud.
+        case "ScheduleWakeup": String(localized: "Schedule Wake-Up")
+        case "CronCreate": String(localized: "Schedule Task")
+        case "CronList": String(localized: "List Scheduled Tasks")
+        case "CronDelete": String(localized: "Delete Scheduled Task [Persona Tool Names 24bbfb]")
+        case "RemoteTrigger": String(localized: "Cloud Scheduled Task")
+        case "LSP": String(localized: "Look Up Code")
+        case "EnterWorktree": String(localized: "Enter Worktree")
+        case "ExitWorktree": String(localized: "Leave Worktree")
+        // What reaches the user: a file, a published page, a notification, a review's findings.
+        case "SendUserFile": String(localized: "Send File")
+        case "Artifact": String(localized: "Publish Artifact")
+        case "PushNotification": String(localized: "Notify You")
+        case "ReportFindings": String(localized: "Report Findings")
+        case "SendFeedback": String(localized: "Draft Feedback")
+        case "EndConversation": String(localized: "End Conversation")
+        case "AskUserQuestion", "ask_user": String(localized: "Question [Tool Views 387441]")
+        case "ExitPlanMode": String(localized: "Submit Plan")
+        case "EnterPlanMode": String(localized: "Enter Plan Mode")
+        case "ToolSearch": String(localized: "Load Tools")
+        case "WaitForMcpServers": String(localized: "Wait for MCP Servers")
+        case "ListMcpResourcesTool": String(localized: "List MCP Resources")
+        case "ReadMcpResourceTool": String(localized: "Read MCP Resource")
+        case "Skill": String(localized: "Use Skill")
+        case "Monitor": String(localized: "Monitor [Tool Views 22be42]")
+        case "Workflow": String(localized: "Run Workflow [Tool Views]")
+        default: nil
         }
+    }
+
+    /// The verb of this call: a few tools say what they did from their input (a to-do completed, a notebook cell
+    /// added, a language server asked for references); the rest as `verb(_:)`. A run's chips group by `verb(_:)`.
+    static func verb(_ call: ToolCall) -> String {
+        let i = call.input
+        let mode = { (key: String) in i[key]?.string ?? "" }
+        switch ToolNaming.tableName(call.name) {
+        case "TaskUpdate":
+            switch mode("status") {
+            case "in_progress": return String(localized: "Start To-Do")
+            case "completed": return String(localized: "Complete To-Do")
+            case "deleted": return String(localized: "Delete To-Do")
+            default: break
+            }
+        case "NotebookEdit":
+            switch mode("edit_mode") {
+            case "insert": return String(localized: "Add Cell")
+            case "delete": return String(localized: "Delete Cell")
+            default: return String(localized: "Edit Cell")
+            }
+        case "LSP":
+            switch mode("operation") {
+            case "goToDefinition": return String(localized: "Go to Definition")
+            case "goToImplementation": return String(localized: "Find Implementations")
+            case "findReferences": return String(localized: "Find References")
+            case "hover": return String(localized: "Inspect Symbol")
+            case "documentSymbol": return String(localized: "List Symbols")
+            case "workspaceSymbol": return String(localized: "Find Symbol")
+            case "prepareCallHierarchy", "incomingCalls", "outgoingCalls": return String(localized: "Call Hierarchy")
+            default: break
+            }
+        case "ScheduleWakeup":
+            if i["stop"]?.bool == true { return String(localized: "Stop Loop") }
+        case "ExitWorktree":
+            if mode("action") == "remove" { return String(localized: "Remove Worktree") }
+        case "Artifact":
+            if mode("action") == "list" { return String(localized: "List Artifacts") }
+        default: break
+        }
+        return verb(call.name)
     }
 
     /// Where a tool's subject gives way when it does not fit: a path keeps its file name (the middle goes), a Mac's
@@ -90,19 +182,21 @@ enum ToolPresentation {
     /// `machines`: who the computer tools' `machine` is (AppModel's when nil).
     static func subject(_ call: ToolCall, machines: [Machine]? = nil) -> String {
         let i = call.input
+        if ToolNaming.isOtherMCP(call.name) { return ToolNaming.subject(i) }
         let n = baseName(call.name)
         func s(_ k: String) -> String? { i[k]?.string.flatMap { $0.isEmpty ? nil : $0 } }
         func mac() -> String? { s("machine").map { ComputerSteps.machineName($0, in: machines ?? AppModel.shared.machines) } }
+        func file(_ k: String) -> String? { s(k).map(ToolNaming.lastPathComponent) }
         switch n {
-        case "Bash": return s("description") ?? firstLine(s("command") ?? "")
-        case "Read", "Edit", "MultiEdit", "Write", "NotebookEdit":
+        case "Bash", "PowerShell": return s("description") ?? firstLine(s("command") ?? "")
+        case "Read", "Edit", "MultiEdit", "Write", "NotebookEdit", "NotebookRead":
             return ((s("file_path") ?? s("notebook_path") ?? "") as NSString).lastPathComponent
         case "Grep": return s("pattern") ?? ""
         case "Glob": return s("pattern") ?? ""
         case "WebFetch": return URL(string: s("url") ?? "")?.host() ?? s("url") ?? ""
         case "WebSearch": return s("query") ?? ""
         case "Task", "Agent": return s("description") ?? ""
-        case "Monitor": return s("description") ?? firstLine(s("command") ?? "")
+        case "Monitor": return s("description") ?? s("command").map(firstLine) ?? i["ws"]?["url"]?.string ?? ""
         case SecretRun.tool: return SecretRunRequest(i)?.subject ?? ""
         // The node's name for its run: its `name`, the name in its script's meta, else its script file's (#3436).
         case "Workflow": return s("name") ?? workflowName(script: s("script")) ?? s("scriptPath").map(workflowScriptName) ?? ""
@@ -111,7 +205,10 @@ enum ToolPresentation {
         case "conversation_rename": return [s("kind"), s("topic")].compactMap { $0 }.joined(separator: " | ")
         case "conversation_new", "conversation_send": return firstLine(s("text") ?? "")
         case "conversation_read", "conversation_archive", "conversation_unarchive": return String((s("id") ?? "").prefix(8))
-        case "ToolSearch": return s("query") ?? ""
+        // "select:WebFetch,Monitor" loads those two by name.
+        case "ToolSearch":
+            let q = s("query") ?? ""
+            return q.hasPrefix("select:") ? q.dropFirst(7).split(separator: ",").joined(separator: ", ") : q
         case "computer_state": return [mac(), s("app") ?? String(localized: "Entire screen")].compactMap { $0 }.joined(separator: " · ")
         case "browser_look": return mac() ?? ""
         case "browser_run": return [mac(), s("script").map { firstLine($0.trimmingCharacters(in: .whitespacesAndNewlines)) }].compactMap { $0 }.joined(separator: " · ")
@@ -120,9 +217,49 @@ enum ToolPresentation {
         case "AskUserQuestion", "ask_user": return i["questions"]?.array?.first?["question"]?.string ?? ""
         case "ExitPlanMode": return PlanText.title(s("plan") ?? "")
         case "TodoWrite": return PlanProgress.summary(ChatPlan(callID: call.id, todos: ChatPlan.todos(i["todos"]?.array ?? [])))
+        // A task-list call names its to-do; an update without one, its number (the hub resolves them in folds).
+        case "TaskCreate": return s("subject") ?? firstLine(s("description") ?? "")
+        case "TaskUpdate": return s("subject") ?? s("activeForm") ?? s("taskId").map { "#" + $0 } ?? ""
+        case "TaskGet": return s("taskId").map { "#" + $0 } ?? ""
+        case "TaskList", "ListAgents", "CronList", "ExitWorktree": return ""
+        case "TaskStop", "KillShell", "KillBash", "TaskOutput", "BashOutput":
+            return s("task_id") ?? s("shell_id") ?? s("bash_id") ?? ""
+        // Who it went to and what about: Claude's own one-line summary, else the message's first line.
+        case "SendMessage":
+            let what = s("summary") ?? (s("message") ?? s("content")).map(firstLine) ?? i["message"]?["type"]?.string.map(ToolNaming.humanize)
+            return [s("to") ?? s("recipient"), what].compactMap { $0 }.joined(separator: " · ")
+        case "ScheduleWakeup":
+            if let why = s("reason") { return firstLine(why) }
+            let start = Date(timeIntervalSinceReferenceDate: 0)
+            return i["delaySeconds"]?.double.map { WorkLine.duration(from: start, to: start.addingTimeInterval($0)) } ?? ""
+        case "CronCreate": return [s("cron"), s("prompt").map(firstLine)].compactMap { $0 }.joined(separator: " · ")
+        case "CronDelete": return s("id") ?? ""
+        case "RemoteTrigger": return [s("action").map(ToolNaming.humanize), s("trigger_id")].compactMap { $0 }.joined(separator: " · ")
+        // Where it looked: the symbol searched for, else the file and line.
+        case "LSP":
+            if s("operation") == "workspaceSymbol", let q = s("query") { return q }
+            return [file("filePath"), s("line")].compactMap { $0 }.joined(separator: ":")
+        case "EnterWorktree": return s("name") ?? file("path") ?? ""
+        case "SendUserFile":
+            let listed = (i["files"] ?? i["file_paths"] ?? i["paths"])?.array ?? []
+            let paths = listed.compactMap { $0.string ?? $0["path"]?.string ?? $0["file_path"]?.string } + [s("file_path"), s("path")].compactMap { $0 }
+            if !paths.isEmpty { return paths.map(ToolNaming.lastPathComponent).joined(separator: ", ") }
+            return s("caption").map(firstLine) ?? ToolNaming.subject(i)
+        case "Artifact": return s("title") ?? file("file_path") ?? s("url") ?? ""
+        case "PushNotification": return firstLine(s("message") ?? "")
+        // One finding by what it says; several by how many.
+        case "ReportFindings":
+            let findings = i["findings"]?.array ?? []
+            if findings.count == 1 { return firstLine(findings[0]["short_summary"]?.string ?? findings[0]["summary"]?.string ?? "") }
+            return findings.isEmpty ? "" : String(localized: "\(findings.count) findings")
+        case "WaitForMcpServers":
+            let servers = (i["servers"] ?? i["server_names"])?.array?.compactMap(\.string) ?? []
+            return servers.isEmpty ? s("server") ?? "" : servers.joined(separator: ", ")
+        case "ListMcpResourcesTool": return s("server") ?? ""
+        case "ReadMcpResourceTool": return s("uri") ?? s("server") ?? ""
         default:
             if n.hasPrefix("phone_") || n.hasPrefix("mail_") { return n.split(separator: "_").dropFirst().joined(separator: " ") }
-            return i.object?.values.compactMap(\.string).first.map(firstLine) ?? ""
+            return ToolNaming.subject(i)
         }
     }
 
@@ -202,7 +339,8 @@ struct ToolGroupView: View {
     private func summary(_ calls: [ToolCall]) -> String {
         var counts: [String: Int] = [:]
         var order: [String] = []
-        for c in calls {
+        let work = calls.filter { !ToolNaming.isQuiet($0.name) }
+        for c in work.isEmpty ? calls : work {
             let v = ToolPresentation.verb(c.name)
             if counts[v] == nil { order.append(v) }
             counts[v, default: 0] += 1
@@ -249,11 +387,11 @@ enum ToolRunSummary {
     private enum Kind: Hashable { case read, search, edit, run, todo, other(String) }
 
     private static func kind(_ name: String) -> Kind {
-        switch ToolPresentation.baseName(name) {
+        switch ToolNaming.tableName(name) {
         case "Read", "NotebookRead": .read
-        case "Grep", "Glob", "LS", "WebSearch", "ToolSearch": .search
+        case "Grep", "Glob", "LS", "WebSearch": .search
         case "Edit", "MultiEdit", "Write", "NotebookEdit": .edit
-        case "Bash": .run
+        case "Bash", "PowerShell": .run
         case "TodoWrite": .todo
         default: .other(ToolPresentation.verb(name))
         }
@@ -262,7 +400,10 @@ enum ToolRunSummary {
     static func chips(_ calls: [ToolCall]) -> [ToolChipGroup.Chip] {
         var order: [Kind] = []
         var groups: [Kind: [ToolCall]] = [:]
-        for c in calls {
+        // Bookkeeping (loading tools, reading the to-do list) says nothing about the work: a chip only when it is all
+        // the run did. Opened, the run still lists every call.
+        let work = calls.filter { !ToolNaming.isQuiet($0.name) }
+        for c in work.isEmpty ? calls : work {
             let k = kind(c.name)
             if groups[k] == nil { order.append(k) }
             groups[k, default: []].append(c)
@@ -289,7 +430,8 @@ enum ToolRunSummary {
             return ToolChipGroup.Chip(symbol: Theme.Icon.todo, label: String(localized: "To-dos"), detail: ToolPresentation.subject(calls[calls.count - 1]),
                                       monospacedDetail: true, isError: error)
         case .other(let verb):
-            return ToolChipGroup.Chip(symbol: Theme.Icon.styled(ToolPresentation.symbol(first.name)), label: verb,
+            // One call says what it did, as its row does ("Complete To-Do"); several, what they share.
+            return ToolChipGroup.Chip(symbol: Theme.Icon.styled(ToolPresentation.symbol(first.name)), label: one ? ToolPresentation.verb(first) : verb,
                                       detail: one ? subject : String(localized: "\(calls.count) times"), monospacedDetail: one && ascii, isError: error)
         case .edit:
             var adds = 0, dels = 0
@@ -327,6 +469,9 @@ enum ToolRunSummary {
         case "Write":
             let d = ToolDiffMemo.edit(old: "", new: i["content"]?.string ?? "")
             return (d.adds, d.dels)
+        case "NotebookEdit":
+            // The call carries only the cell's new source: its lines count as added; a deleted cell's are unknown.
+            return (i["edit_mode"]?.string == "delete" ? 0 : ToolNaming.lineCount(i["new_source"]?.string ?? ""), 0)
         default:
             return (0, 0)
         }
@@ -431,7 +576,7 @@ struct ToolCallRow: View {
                             .foregroundStyle(tint)
                     }
                 }
-                Text(ToolPresentation.verb(call.name)).font(onTimeline ? Theme.Font.secondaryMedium : Theme.Font.secondaryStrong)
+                Text(ToolPresentation.verb(call)).font(onTimeline ? Theme.Font.secondaryMedium : Theme.Font.secondaryStrong)
                 Text(ToolPresentation.subject(call))
                     .font(Theme.Font.secondary)
                     .foregroundStyle(.secondary)
@@ -452,9 +597,12 @@ struct ToolCallRow: View {
         .buttonStyle(.plain)
     }
 
-    /// The row's head: BeautifulUI's tool row — kind icon (a chevron once open), the verb, the subject in a chip.
+    /// The row's head: BeautifulUI's tool row — kind icon (a chevron once open), the verb, the subject in a chip. A call
+    /// with nothing to name (Enter Plan Mode, List Agents) draws no empty box beside its verb.
     private var chipHeader: some View {
-        ToolChipRow(chip, isOpen: isOpen, isRunning: call.isRunning, action: tapped) {
+        let subject = ToolPresentation.subject(call)
+        return ToolChipRow(chip(subject), isOpen: isOpen, isRunning: call.isRunning, chipStyle: subject.isEmpty ? .plain : .boxed,
+                           action: tapped) {
             taskBadge
             if call.isError { ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(Theme.danger).font(Theme.Font.label) }
         }
@@ -476,12 +624,11 @@ struct ToolCallRow: View {
         }
     }
 
-    private var chip: BeautifulUI.ToolCall {
-        let subject = ToolPresentation.subject(call)
-        return BeautifulUI.ToolCall(
+    private func chip(_ subject: String) -> BeautifulUI.ToolCall {
+        BeautifulUI.ToolCall(
             id: call.id,
             .symbol(Theme.Icon.styled(ToolPresentation.symbol(call.name))),
-            label: ToolPresentation.verb(call.name),
+            label: ToolPresentation.verb(call),
             chip: subject,
             // Paths, patterns and commands in the code face; a description someone wrote (often Chinese) in the text face.
             monospacedChip: subject.unicodeScalars.allSatisfy(\.isASCII)
@@ -503,12 +650,12 @@ struct ToolDetail: View {
     }
 
     @ViewBuilder private var detail: some View {
-        let base = ToolPresentation.baseName(call.name)
+        let base = ToolNaming.tableName(call.name)
         let i = call.input
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             switch base {
-            case "Bash":
-                CodeBlock(text: "$ " + (i["command"]?.string ?? ""), maxLines: 12)
+            case "Bash", "PowerShell", "Monitor":
+                CodeBlock(text: ToolNaming.commandLine(call.name, i) ?? "", maxLines: 12)
             case "Edit":
                 // Codex: the patch as a unified diff; Claude: the old and new strings.
                 let diff = i["diff"]?.string.map(DiffView.init(unified:))
@@ -523,8 +670,18 @@ struct ToolDetail: View {
                 let diff = DiffView(old: "", new: i["content"]?.string ?? "")
                 diffHeader(i["file_path"]?.string, [diff])
                 diff
-            case "Read", "NotebookEdit":
+            case "Read", "NotebookRead":
                 path(i["file_path"]?.string ?? i["notebook_path"]?.string)
+            case "NotebookEdit":
+                path(i["notebook_path"]?.string ?? i["file_path"]?.string)
+                // Which cell, and what it holds now (a deleted cell has nothing new).
+                let cell = [i["cell_id"]?.string, i["cell_type"]?.string].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                if !cell.isEmpty { Text(cell).font(Theme.Font.code).foregroundStyle(.secondary).lineLimit(1) }
+                if i["edit_mode"]?.string != "delete", let source = i["new_source"]?.string, !source.isEmpty {
+                    CodeBlock(text: source, maxLines: 12)
+                }
+            case "ReportFindings":
+                FindingsList(findings: i["findings"]?.array ?? [])
             case "ExitPlanMode":
                 Markdown(MarkdownMemo.content(i["plan"]?.string ?? "")).markdownTheme(.persona)
                     #if os(macOS)
@@ -544,13 +701,13 @@ struct ToolDetail: View {
             case "Task", "Agent":
                 Text(i["prompt"]?.string ?? "").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(8)
             default:
-                if i != .object([:]) { CodeBlock(text: ToolTextMemo.input(call.use, scope: memoScope), maxLines: 14) }
+                if i != .object([:]) { ToolArgumentsDetail(item: call.use, scope: memoScope) }
             }
             // An answered ask_user shows the picks under its questions (AskUserDetail), not the text the model got; a
             // password run its commands' outcomes (SecretRunToolDetail).
             if let result = call.result, (base != "Edit" && base != "ask_user" && base != SecretRun.tool) || result.isError == true {
                 ResultBlock(text: result.cutText, isError: result.isError ?? false, cut: result.fullSize.map { (result.id, $0) })
-                if base == "Bash" { PortChips(text: result.cutText) } // a dev server saying where it listens
+                if base == "Bash" || base == "PowerShell" { PortChips(text: result.cutText) } // a dev server saying where it listens
             } else if call.isRunning {
                 HStack(spacing: Theme.Space.sm) {
                     ProgressView().controlSize(.mini)
@@ -607,9 +764,78 @@ struct ToolDetail: View {
     }
 }
 
+/// A tool no table knows (another server's MCP tool, a new one), its input as a key/value list (`ToolNaming.arguments`)
+/// rather than a JSON dump (#2986); the JSON itself under Raw Input, as a computer tool keeps it (`ComputerToolDetail`).
+struct ToolArgumentsDetail: View {
+    var item: Item
+    var scope: String
+    @State private var raw = false
+
+    var body: some View {
+        let arguments = ToolTextMemo.arguments(item, scope: scope)
+        if arguments.isEmpty {
+            CodeBlock(text: ToolTextMemo.input(item, scope: scope), maxLines: 14)
+        } else {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Theme.Space.m, verticalSpacing: Theme.Space.xs) {
+                    ForEach(arguments) { a in
+                        GridRow {
+                            Text(a.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                                .scaledFrame(maxWidth: Theme.Size.box120, alignment: .leading)
+                            Text(a.value).font(a.code ? Theme.Font.code : Theme.Font.caption)
+                                .lineLimit(a.lines)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("tool-arguments")
+                Button {
+                    withAnimation(Theme.Motion.state) { raw.toggle() }
+                } label: {
+                    Label(raw ? String(localized: "Hide Raw Input") : String(localized: "Raw Input"), systemImage: raw ? Theme.Icon.collapse : Theme.Icon.expand)
+                        .font(Theme.Font.label).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("tool-raw")
+                if raw { CodeBlock(text: ToolTextMemo.input(item, scope: scope), maxLines: 14) }
+            }
+        }
+    }
+}
+
+/// Claude Code's ReportFindings: each finding's place (a tap opens its file) and what it says.
+struct FindingsList: View {
+    var findings: [JSONValue]
+    @Environment(\.openFile) private var openFile
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            ForEach(Array(findings.enumerated()), id: \.offset) { _, f in
+                let file = f["file"]?.string ?? ""
+                let place = [ToolNaming.lastPathComponent(file), f["line"]?.string ?? ""].filter { !$0.isEmpty }.joined(separator: ":")
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    if let openFile, !file.isEmpty {
+                        Button { openFile(file) } label: {
+                            Text(place).font(Theme.Font.code).foregroundStyle(Theme.accent).lineLimit(1).truncationMode(.middle)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("View file \(ToolNaming.lastPathComponent(file))")
+                    } else if !place.isEmpty {
+                        Text(place).font(Theme.Font.code).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                    Text(f["summary"]?.string ?? "").font(Theme.Font.caption).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
 nonisolated enum ToolTextMemo {
     private static let inputs = TextMemo<String>(limit: 512)
     private static let lines = TextMemo<[String]>(limit: 256)
+    private static let argumentRows = TextMemo<[ToolNaming.Argument]>(limit: 512)
 
     /// The call's input as shown, once per call — keyed by its chat and id, as `RowMemo` is (ids repeat across chats).
     static func input(_ item: Item, scope: String) -> String {
@@ -618,14 +844,24 @@ nonisolated enum ToolTextMemo {
 
     static func codeLines(_ text: String) -> [String] { lines(text) { $0.components(separatedBy: "\n") } }
 
+    /// An unknown tool's input as its detail lists it (`ToolArgumentsDetail`), once per call, keyed as `input`.
+    static func arguments(_ item: Item, scope: String) -> [ToolNaming.Argument] {
+        argumentRows(RowMemo.key(scope, item.id)) { _ in ToolNaming.arguments(item.toolInput ?? .object([:])) }
+    }
+
     static func prewarm(_ item: Item, scope: String) {
         if item.kind == .toolResult { _ = codeLines(item.cutText); return }
         let input = item.toolInput ?? .object([:])
-        switch ToolPresentation.baseName(item.toolName ?? "") {
-        case "Bash": _ = codeLines("$ " + (input["command"]?.string ?? ""))
+        let name = item.toolName ?? ""
+        switch ToolNaming.tableName(name) {
+        case "Bash", "PowerShell", "Monitor": _ = codeLines(ToolNaming.commandLine(name, input) ?? "")
+        case "NotebookEdit": _ = codeLines(input["new_source"]?.string ?? "")
         case "ExitPlanMode": _ = MarkdownMemo.content(input["plan"]?.string ?? "")
-        case "Edit", "MultiEdit", "Write", "Read", "NotebookEdit", "AskUserQuestion", "ask_user", "Task", "Agent", SecretRun.tool: break
-        default: _ = codeLines(self.input(item, scope: scope))
+        case "Edit", "MultiEdit", "Write", "Read", "NotebookRead", "AskUserQuestion", "ask_user", "Task", "Agent", "ReportFindings",
+             SecretRun.tool: break
+        default:
+            // A computer tool shows its steps in words and its JSON under Raw Input; any other its arguments.
+            if ComputerSteps.isComputerTool(name) { _ = codeLines(self.input(item, scope: scope)) } else { _ = arguments(item, scope: scope) }
         }
     }
 }

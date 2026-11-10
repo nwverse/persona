@@ -943,6 +943,11 @@ producing "`ask_user` + empty gray box". After answering / collapsing the card, 
 Production interactions showed creation, push and answer 21 seconds later; app rendering was wrong. When adding assistant-only tools (`assistant/tools.go`),
 also give them Chinese display names / meaningful parameters in `ToolPresentation`; model-facing English results need user-readable details (`AskUserDetail` reads selected answers from results).
 
+Claude Code keeps adding tools (`TaskCreate` replaced `TodoWrite`, `SendMessage`, `Monitor`, `LSP`…), and a table that lags shows raw names (2026-11-10, #2986).
+Since then an unknown tool falls back to `ToolNaming` instead: another server's MCP tool reads "<Server> · <Tool>" in words, any other name is humanized,
+the subject is the most telling input field, and the detail is a key/value list with the JSON under Raw Input. Bookkeeping tools (`ToolNaming.quiet`)
+stay out of a run's chips. Check the [tools reference](https://code.claude.com/docs/en/tools-reference) when Claude Code ships a new tool.
+
 ## Trace "two pages share a component" from actual call sites (2026-11-04, #1079→#1091)
 
 #1079 requested Agent dictation / stop buttons matching assistant; only buttons were extracted, assuming both composers used `ShellComposerBar`.
