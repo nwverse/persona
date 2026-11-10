@@ -316,6 +316,20 @@ Undo changed after `since`, in original `at, id` order. The indexed `updated_at`
 column and retained `body.dismissal_updated_at` recover Undo after its dismissal
 fields have been removed; the original card's conversation position never moves.
 
+Clients opt into stable feed pagination with `GET /api/v1/assistant/conversations/{id}/feed?paginate=1&since=<RFC3339Nano>`
+(`since` is optional for a cold read). The response retains all existing fields and
+always adds `next_cursor`: an opaque string, or `""` when complete. Fetch subsequent
+pages from the same path with only `cursor=<URL-encoded next_cursor>`; a cursor
+implies pagination. Do not advance `since` using the last card's original `at`: a
+full page of older dismissal updates would repeat and starve new progress.
+The cursor preserves the initial `since`, freezes an upper bound `until`, and
+advances only the `(at, id)` position. Each page therefore returns older updates
+once while retaining new entries in original conversation order. Updates after
+`until` remain eligible for a later incremental traversal. An invalid cursor, one
+from another conversation, or `cursor` combined with `since` returns `400`.
+Legacy requests without `paginate=1` or a cursor retain their existing response;
+clients that receive no `next_cursor` from an older server can use legacy paging.
+
 Draft submission records `message_version` and an opaque `progress_version` based
 on the active task Agents' transcript revision, last output and tool activity. It
 never uses polling timestamps or the task's decision-update timestamp. Submitting

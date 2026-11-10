@@ -555,11 +555,29 @@ func (s *Service) taskRoutes() {
 			}
 			since = t
 		}
-		items, plans, err := s.feed(r.Context(), r.PathValue("id"), since)
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
+		query := r.URL.Query()
+		paginated := query.Get("paginate") == "1" || query.Has("cursor")
+		if query.Has("cursor") && (query.Get("cursor") == "" || query.Has("since")) {
+			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		var items []FeedItem
+		var nextCursor string
+		var err error
+		if paginated {
+			items, nextCursor, err = s.pagedFeed(r.Context(), r.PathValue("id"), since, query.Get("cursor"))
+		} else {
+			items, err = s.feedItems(r.Context(), r.PathValue("id"), since)
+		}
+		if err != nil {
+			status := http.StatusServiceUnavailable
+			if errors.Is(err, errFeedCursor) {
+				status = http.StatusBadRequest
+			}
+			apierr.Write(w, status, err)
+			return
+		}
+		plans := s.feedPlans(r.Context(), items)
 		if items == nil {
 			items = []FeedItem{}
 		}
@@ -582,7 +600,11 @@ func (s *Service) taskRoutes() {
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
+		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
+		if paginated {
+			out["next_cursor"] = nextCursor
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
