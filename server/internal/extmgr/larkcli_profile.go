@@ -153,7 +153,7 @@ func (h *Manager) validateLarkCLIProfile(ctx context.Context, choice string) err
 		return err
 	}
 	for _, profile := range profiles {
-		if profile.Name == choice {
+		if profile.Name == choice && choice != managedLarkCLIProfile {
 			return nil
 		}
 	}
@@ -232,6 +232,11 @@ func (h *Manager) larkCLIView(ctx context.Context, botAppID string) *larkCLIBotV
 	}
 	viewProfiles := make([]larkCLIProfileView, 0, len(profiles))
 	for _, p := range profiles {
+		// The managed profile is what "follow the bot's app" (choice "") uses: listing it again would offer the
+		// same thing twice under an internal name.
+		if p.Name == managedLarkCLIProfile {
+			continue
+		}
 		viewProfiles = append(viewProfiles, larkCLIProfileView{Name: p.Name, AppID: p.AppID, User: p.User, TokenStatus: p.TokenStatus})
 	}
 	return &larkCLIBotView{

@@ -141,7 +141,7 @@ func TestProfilesAreNonSecretSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profiles) != 2 || profiles[0].Name != "example" || profiles[0].AppID != "cli_example" || profiles[0].User != "Example User" || profiles[0].TokenStatus != "valid" {
+	if len(profiles) != 3 || profiles[0].Name != "example" || profiles[0].AppID != "cli_example" || profiles[0].User != "Example User" || profiles[0].TokenStatus != "valid" {
 		t.Fatalf("profiles = %+v", profiles)
 	}
 	if profiles[1].Name != "other" || profiles[1].User != "" {
