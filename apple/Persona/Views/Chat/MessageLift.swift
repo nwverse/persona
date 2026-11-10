@@ -198,7 +198,7 @@ private struct LiftedMessage: View {
                 .allowsHitTesting(selecting)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         }
-        #if os(iOS) || os(visionOS)
+        #if os(iOS)
         .gesture(LiftPress(enabled: !selecting) { menu.selectInPlace(at: $0) })
         #endif
         .scrollDisabled(!cut)
