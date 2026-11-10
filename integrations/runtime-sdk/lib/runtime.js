@@ -59,6 +59,8 @@ export function defaultSocketPath() {
  *   archives in Persona is archived here as well; already archived answers as done.
  * @property {(params: {session_id: string}) => Promise<void>} [unarchive] - restores what archive archived (already
  *   restored answers as done).
+ * @property {(params: {launcher: string, cwd: string, prompt: string}) => Promise<object>} [check] -
+ *   launcher availability in the runtime's authentication context (caps.check), returning the launcher-check shape.
  * @property {(params: {launcher?: string, refresh?: boolean}) => Promise<{agent: string, models: object[]}>} [models] -
  *   live native model discovery (caps.models), without inference. Rejections reach the picker.
  * @property {(params: {session_id: string, permission_mode?: string, effort?: string, model?: string}) => Promise<void>} [modes] - the
@@ -226,6 +228,7 @@ export function createRuntime(driver, options) {
     if (typeof driver.modes === 'function') caps.modes = true
     if (typeof driver.modes === 'function' && options.modelSwitch === true) caps.model = true
     if (typeof driver.models === 'function') caps.models = true
+    if (typeof driver.check === 'function') caps.check = true
     // Its own archive, both ways: an archive Persona could not undo is not offered.
     if (typeof driver.archive === 'function' && typeof driver.unarchive === 'function') caps.archive = true
     if (options.resume === true && caps.start) caps.resume = true
@@ -744,6 +747,8 @@ export function createRuntime(driver, options) {
         await (method === 'session.archive' ? driver.archive : driver.unarchive)(params)
         schedulePush()
         return { ok: true }
+      case 'launchers.check':
+        return need(driver.check, 'check')(params)
       case 'launchers.models':
         return need(driver.models, 'models')(params)
       case 'session.modes':

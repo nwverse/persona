@@ -284,12 +284,20 @@ with ACP support; `--agy-bin`, `--agy-dir` and `--socket` override the executabl
 Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
 five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
 (`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
-default. An unavailable catalog returns the native error instead of advertising a built-in model list.
+default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
+settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
+their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
 
 Idle sessions can switch model, thinking level and permission mode through ACP. Native configuration updates determine
 the displayed model and effort. Each accepted field is published even if another field fails, and failures reach the caller.
 `auto` keeps native safe-operation approval, while Persona's explicit full bypass answers permission requests automatically.
 External session models stay unspecified until native metadata is available. Session discovery does not resume them.
+
+Availability checks use optional `check({launcher, cwd, prompt})` (`caps.check`) through the companion's authenticated
+ACP client. They run the existing one-word probe, cancel tool permission requests, and close their temporary session
+on success, failure or timeout. Completed probe workspaces stay out of the user inventory after companion restarts.
+The runtime bounds native calls to a 75-second budget, followed by bounded session cleanup. Older runtimes keep the
+node's shell check. Shell and managed launchers keep their own execution context.
 
 Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
 

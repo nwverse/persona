@@ -386,7 +386,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         composeDraft = MailDraft(accountId = "")
                     })
                 }
-                JIconButton(PhIcons.FunnelSimple, stringResource(R.string.inbox_filter), { showFilters = true }, badge = source.isNotEmpty() || kind.isNotEmpty())
+                // The dot is color only: TalkBack hears the active filter in the description (#3729).
+                val filtered = source.isNotEmpty() || kind.isNotEmpty()
+                JIconButton(PhIcons.FunnelSimple, stringResource(if (filtered) R.string.inbox_filter_on else R.string.inbox_filter),
+                    { showFilters = true }, badge = filtered)
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { showMore = true })
             }),
         ) {

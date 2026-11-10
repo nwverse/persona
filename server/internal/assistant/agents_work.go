@@ -654,7 +654,7 @@ func (s *Service) workReport(ctx context.Context) *WorkReport {
 	}
 	s.work.mu.Lock()
 	for _, e := range s.work.entries {
-		if e.Work.Phase == "" {
+		if !workShown(&e.Work) {
 			continue // unsure: nothing shown
 		}
 		if !r.On && !transientPending(e.Work) {
