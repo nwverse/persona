@@ -235,6 +235,18 @@ lines, and in the user's own color and alignment they read as something the user
   (dismiss the sheet, switch to Agents, and open this Agent with the normal tab bar).
 - If a task has multiple Agents, add ⌄ beside the title. Tapping the title lists the task's Agents for switching (plus "Session Info"; web does the same, #3333).
 - Without an Agent (starting or failed to start), there is no chat page; the sheet uses its own header: state, task name, ⋯, Close.
+- **What a dispatch opens (#3700, #3711, contract in #3718)**: one dispatched task reads "Dispatched: <title> · Open";
+  several tasks show their count and one link per title in plan order. These links name only that dispatch's tasks,
+  never the whole In Progress tray. The ids are already on the client: a standalone `task` feed item's `ref` is the
+  to-do; a started plan's `tasks[].todo_id` identify its tasks. Live to-do titles override plan titles. Plan tasks
+  without a to-do keep their title without a link, and their per-task feed items do not add duplicate links.
+  Apple renders this with `DispatchedTaskLinks` and `DispatchedTasks`: on iPhone a live lead Agent is pushed using
+  `TasksStore.expand`, and Back returns to the same Assistant conversation without switching to Agents. On Mac the
+  task's own detail hosts the Agent chat; while no Agent is available, the task detail shows its starting/failure state.
+  Open plans keep Start / Edit / Don't Start. No new hub field or setting is needed. Dispatch links have no full task
+  card instruction list, so Persona's routed hand-offs remain separate folded feed lines instead of being hidden.
+  Tests: `DispatchedTasksTests`, `TaskSheetExpandTests`, `DispatchedTaskCardTests`; synthetic hub:
+  `apple/PersonaUITests/Fixtures/dispatch_hub.py` (`PERSONA_MOCK_HUB`, screenshots with `PERSONA_SHOTS`).
 
 ### Task board
 

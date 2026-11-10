@@ -72,6 +72,18 @@ final class TasksStore {
         fullAgent = key
     }
 
+    /// A dispatch link opens only its task. On iPhone its Agent is pushed on the Assistant stack; elsewhere, or
+    /// before an Agent is available, the task's own detail hosts the chat/starting state. Never open In Progress.
+    func openDispatchedTask(_ id: String, agent: SessionKey?, pushAgent: Bool) {
+        if pushAgent, let agent {
+            expand(agent)
+        } else {
+            fullAgent = nil
+            detailAgent = nil
+            detailTask = id
+        }
+    }
+
     // MARK: Loading
 
     func reloadTodos(api: APIClient? = nil) {

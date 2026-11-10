@@ -1,0 +1,60 @@
+import SwiftUI
+
+/// One dispatch, one set of task links. A plan names only its own tasks, each independently openable. Titles come
+/// from the live to-do when loaded; a failed plan slot without a to-do stays plain text, with no invented target.
+struct DispatchedTaskLinks: View {
+    var tasks: [DispatchedTasks.Entry]
+    private var store: TasksStore { .shared }
+
+    var body: some View {
+        if !tasks.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                if tasks.count > 1 {
+                    Text("Dispatched \(tasks.count)")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(tasks) { task in
+                    if let id = task.todoID {
+                        Button { open(id) } label: {
+                            HStack(spacing: Theme.Space.s) {
+                                Text(tasks.count == 1 ? String(localized: "Dispatched: \(task.title)") : task.title)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text("Open [Dispatched Task]")
+                                    .foregroundStyle(Theme.accent)
+                                    .lineLimit(1)
+                                    .fixedSize()
+                                ThemedIcon(Theme.Icon.disclosure)
+                                    .foregroundStyle(.tertiary)
+                                    .accessibilityHidden(true)
+                            }
+                            .font(Theme.Font.captionStrong)
+                            .padding(.horizontal, Theme.Space.m)
+                            .scaledFrame(minHeight: Theme.Size.tapTarget)
+                            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("dispatch.task.\(id)")
+                    } else {
+                        Text(task.title)
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("dispatch.unstarted")
+                    }
+                }
+            }
+        }
+    }
+
+    private func open(_ id: String) {
+        Haptics.tap()
+        let agent = store.todos[id].flatMap { store.leadSession($0)?.key }
+        #if os(iOS)
+        store.openDispatchedTask(id, agent: agent, pushAgent: true)
+        #else
+        store.openDispatchedTask(id, agent: agent, pushAgent: false)
+        #endif
+    }
+}

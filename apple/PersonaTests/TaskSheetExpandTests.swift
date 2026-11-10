@@ -29,6 +29,35 @@ struct TaskSheetExpandTests {
         #expect(tasks.fullAgent == key)
     }
 
+    @Test func dispatchPushesOnlyItsResolvedAgent() {
+        let tasks = store()
+        let key = SessionKey(group: "hub", machineID: "computer", sessionID: "dispatched")
+        tasks.detailTask = "unrelated"
+        tasks.detailAgent = SessionKey(machineID: "other", sessionID: "other")
+        tasks.openDispatchedTask("new", agent: key, pushAgent: true)
+        #expect(tasks.fullAgent == key)
+        #expect(tasks.detailTask == nil)
+        #expect(tasks.detailAgent == nil)
+        #expect(tasks.showBoard == false)
+    }
+
+    @Test func dispatchWithoutAnAgentOpensOnlyItsTaskDetail() {
+        let tasks = store()
+        tasks.expand(SessionKey(machineID: "old", sessionID: "old"))
+        tasks.openDispatchedTask("starting", agent: nil, pushAgent: true)
+        #expect(tasks.fullAgent == nil)
+        #expect(tasks.detailTask == "starting")
+        #expect(tasks.detailAgent == nil)
+    }
+
+    @Test func macDispatchDetailRetainsTheTodoIdentity() {
+        let tasks = store()
+        tasks.openDispatchedTask("new", agent: SessionKey(machineID: "computer", sessionID: "agent"), pushAgent: false)
+        #expect(tasks.detailTask == "new")
+        #expect(tasks.fullAgent == nil)
+        #expect(tasks.detailAgent == nil)
+    }
+
     @Test func forgettingDropsAPendingPush() {
         let tasks = store()
         tasks.expand(SessionKey(machineID: "box", sessionID: "agent-3"))
