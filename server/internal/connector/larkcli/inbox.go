@@ -815,6 +815,13 @@ func messageTime(message adapter.Message) time.Time {
 	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return t.UTC()
 	}
+	// lark-cli 1.0.99 prints message times as local wall-clock minutes ("2006-01-02 15:04") in the time zone of the
+	// machine running it, which is the hub's. Without this the Inbox cursor never moved past its first two minutes.
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return t.UTC()
+		}
+	}
 	if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
 		if len(value) >= 13 {
 			return time.UnixMilli(n).UTC()

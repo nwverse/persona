@@ -73,7 +73,17 @@ func (s *Service) settleConnector(ctx context.Context, id string) []*InboxItem {
 // applyConnector turns a connector's things into items, under b.mu: one open item per thread gathers its later
 // moves until it is done; a move after that starts a new item; a thing that is over closes its open item.
 func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThing, now time.Time) []*InboxItem {
-	var changed []*InboxItem
+	var changed, renamed []*InboxItem
+	if name != "" {
+		// A connector renamed (a new localized name, say) renames its items too, not only the ones that move next.
+		for _, it := range b.items {
+			if it.Source == id && it.Connector != nil && it.AccountName != name {
+				b.roundWrite(it)
+				it.AccountName = name
+				renamed = append(renamed, it)
+			}
+		}
+	}
 	index := b.threads(func(it *InboxItem) (string, bool) {
 		if it.Source != id || it.Connector == nil {
 			return "", false
@@ -144,6 +154,11 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		b.roundNew(it)
 		index.note(it)
 		changed = append(changed, it)
+	}
+	for _, it := range renamed {
+		if !containsItem(changed, it) {
+			changed = append(changed, it)
+		}
 	}
 	return changed
 }
