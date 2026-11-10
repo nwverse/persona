@@ -124,6 +124,9 @@ and not shelved: Waiting on you, Working, PR to merge, Other open, and Just fini
 is not a closed to-do; only a review or the user closes it). **Done** counts closed, accepted and deployed ones. The
 sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before; the page lists and counts them. A task whose agent never started (rule 1) counts as open while it waits on the owner.
 
+Android's list (#3712) shows no such line: each section's title carries its count, the to-dos listed under it (a merged
+row's related ones included), so the counts follow a search and the list's filter (#3740).
+
 ## Shelving
 
 A to-do is shelvable when it is a task (an agent was ever linked, or a conversation handed it out) and has no due date
