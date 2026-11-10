@@ -36,6 +36,7 @@ type fake struct {
 	gen     func(subscriptions.GenerateRequest) (subscriptions.Generated, error)
 	release chan struct{}
 	genAsks []subscriptions.GenerateRequest
+	deleteErr error
 }
 
 func (f *fake) Features() subscriptions.Features {
@@ -148,6 +149,9 @@ func (f *fake) RunNow(_ context.Context, id string, _ subscriptions.Actor) (subs
 }
 
 func (f *fake) Delete(_ context.Context, id string, _ bool, _ subscriptions.Actor) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, id)
 	delete(f.subs, id)
 	return nil
@@ -466,6 +470,17 @@ func TestConflict(t *testing.T) {
 	res := handle(t, f, env(i18n.En, true), state{P: pageFallback, ID: "sub_outlook"}, "fallback", map[string]string{"tier": "action"})
 	if res.View == nil || !strings.Contains(res.Toast, "changed elsewhere") {
 		t.Fatalf("conflict: %+v", res)
+	}
+}
+
+// Deleting the stored content while the assistant is away (#2039): the subscription is off, nothing is deleted yet,
+// and the toast says to try again.
+func TestDeleteWhileTheAssistantIsAway(t *testing.T) {
+	f := newFake()
+	f.deleteErr = &subscriptions.Error{Status: http.StatusServiceUnavailable, Code: "assistant_offline"}
+	res := handle(t, f, env(i18n.En, true), state{P: pageSource, ID: "sub_outlook"}, "delete", nil)
+	if res.Pop || res.View == nil || !strings.Contains(res.Toast, "assistant is away") {
+		t.Fatalf("a delete the assistant could not finish: %+v", res)
 	}
 }
 

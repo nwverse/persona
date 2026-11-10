@@ -114,6 +114,7 @@
   "plain.snapshot": "{every}用「{source}」的只读工具「{tool}」存一份快照；内容没变就不存。",
   "plain.weak_dedup": "结果里没有 ID，按内容去重：内容改了会当成新的一条。",
   "problem.annotation": "上游标注说它会改动",
+  "problem.assistant_offline": "已关闭，但助手暂时不在，已存内容还没删掉，过一会儿再试",
   "problem.bad_args": "参数不符合工具说明",
   "problem.bad_recipe": "订阅方式的格式不对",
   "problem.bad_request": "请求不对",

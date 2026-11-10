@@ -126,9 +126,12 @@ class OutboxMessageSender(
         }
     }
 
-    /** Sessions holding a message that may have been delivered but is not yet seen in their transcript. */
+    /**
+     * Sessions holding a delivered message not yet seen in their transcript. Only Sent: it settles within the grace and
+     * busy wait, while undecided states can last until the user acts and would keep their chats syncing.
+     */
     val awaitingTranscript: Flow<Set<SessionKey>> = store.entries
-        .map { entries -> entries.filter { it.state in reconcilable }.mapTo(mutableSetOf()) { it.session } }
+        .map { entries -> entries.filter { it.state == OutboxState.Sent }.mapTo(mutableSetOf()) { it.session } }
         .distinctUntilChanged()
 
     /** Tells the outbox which sessions are at work (the pairing's session list). */
@@ -323,7 +326,12 @@ class OutboxMessageSender(
                 catch (_: Exception) { null }
                 when (evidence) {
                     MessageEvidence.Shown -> store.transition(entry.clientMessageId, reconcilable, OutboxState.Shown)
-                    is MessageEvidence.Receipt -> settle(entry.clientMessageId, uncertain, evidence.result)
+                    is MessageEvidence.Receipt -> {
+                        // A late success can settle manual review; an unknown receipt must keep that choice visible.
+                        val from = if (evidence.result == MessageTransportResult.Accepted)
+                            uncertain + OutboxState.NeedsConfirmation else uncertain
+                        settle(entry.clientMessageId, from, evidence.result)
+                    }
                     null -> store.transition(entry.clientMessageId, setOf(OutboxState.Verifying), OutboxState.Unknown)
                 }
             }
