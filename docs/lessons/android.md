@@ -3,7 +3,7 @@
 ## Snapshot subscriptions are not page visibility
 
 The shell, badges and floating capsule can collect a repository snapshot without its page being visible. Do not use subscriber
-counts to activate a full-list network poller when the hub already pushes invalidations and refreshes on reconnect. Likewise,
+counts to activate a fast full-list network poller when the hub already pushes invalidations and refreshes on reconnect; a slow poll is enough to back up a missed event. Likewise,
 session-list metadata updates should not prefetch every recent chat's message bodies. Keep message synchronization tied to
 observers and reuse immutable transcript projections across metadata-only events; background allocation can make the UI
 thread wait for garbage collection even when parsing itself runs on an IO dispatcher.
@@ -503,6 +503,7 @@ Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where 
 ## Hidden tabs and unread windows still own work
 
 - A composed but unplaced tab still inherits the activity lifecycle: lifecycle-aware collectors and pollers keep running after switching away. Give each primary tab its own lifecycle capped at CREATED while hidden; keep composition for navigation and scroll restoration.
-- Three unread chat windows can still hold tens of thousands of messages if older snapshots contain full histories. Body prefetch defaults off; loading a list or a capsule badge is not permission to retain histories. Skip oversized window snapshots before reading/decoding them, preserving the file and server history cursors.
+- Three unread chat windows can still hold tens of thousands of messages if older snapshots contain full histories. Skip oversized window snapshots before reading/decoding them, preserving the file and server history cursors, and trim new snapshots under the same limit so a fresh cache is never one the reader skips.
+- Stopping a closed chat's sync at once makes every tab switch a cold open, and a message sent from a chat the user then left never sees its echo. Release a closed chat after a delay, keep the most recently closed idle entries, and keep syncing chats the outbox still waits on.
 - A capsule started on Main must move catalog transformations off Main explicitly; conflate alone only removes queued inputs, not main-thread work.
 - Full adb meminfo can invoke app-side Explicit GC and amplify the stall being measured. Compare natural GC with meminfo --local and exclude profiling/dumpheap intervals from acceptance readings.

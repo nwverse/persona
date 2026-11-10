@@ -49,9 +49,10 @@ class ListSnapshotStore(private val directory: File) {
 internal fun snapshotHash(value: String): String = MessageDigest.getInstance("SHA-256")
     .digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
 
-internal suspend inline fun <reified T> ListSnapshotStore?.restore(key: String): T? {
+/** A file over [maxBytes] is skipped before it is read, and left as it is. */
+internal suspend inline fun <reified T> ListSnapshotStore?.restore(key: String, maxBytes: Long = Long.MAX_VALUE): T? {
     var result: T? = null
-    quietly { this?.read(key)?.let { result = JsonCodec.decodeFromString<T>(it) } }
+    quietly { this?.read(key, maxBytes)?.let { result = JsonCodec.decodeFromString<T>(it) } }
     return result
 }
 

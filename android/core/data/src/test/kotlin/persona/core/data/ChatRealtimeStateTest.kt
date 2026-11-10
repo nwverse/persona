@@ -35,6 +35,14 @@ class ChatRealtimeStateTest {
         assertEquals(transcript, state.items(transcript))
     }
 
+    @Test fun aToolCallForAnotherSessionKeepsTheProjection() {
+        val state = ChatRealtimeState(key)
+        val transcript = listOf(Item("tool#0", 1, role = "assistant", kind = "tool_use", toolUseId = "mine"))
+        val first = state.items(transcript)
+        assertFalse(state.tool(ToolCallEvent("elsewhere", "example_tool"), transcript))
+        assertSame(first, state.items(transcript))
+    }
+
     @Test
     fun `a streamed reply the hub cut matches its transcript item once`() {
         val state = ChatRealtimeState(key)

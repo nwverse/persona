@@ -128,7 +128,7 @@ data class InboxReadResult(
 )
 
 /**
- * Legacy opt-in prefetch count. The app leaves body prefetch disabled; each window fetches and parses whole
+ * Unread conversations whose message windows load ahead of being opened. Each window fetches and parses whole
  * message pages (cards through jsoup); 24 of them at once ran a real Feishu inbox out of a 192 MB heap within
  * seconds of launch (2026-11-06). Others load when the app or the capsule opens them.
  */
@@ -143,8 +143,6 @@ class InboxConversations(
     val scope: String,
     private val owner: CoroutineScope,
     private val composers: ReplyComposers,
-    /** Body prefetch is opt-in: unread metadata does not require retained message histories. */
-    private val prefetchWindows: Int = 0,
 ) {
     private val mutable = MutableStateFlow(InboxConversationList())
     val state: StateFlow<InboxConversationList> = mutable.asStateFlow()
@@ -166,7 +164,7 @@ class InboxConversations(
         owner.launch {
             repository.snapshot.map { snapshot -> buildInboxConversations(scope, snapshot).rows
                 .filter { it.section != InboxConversationSection.Done && it.section != InboxConversationSection.Read }
-                .take(prefetchWindows).map { it.key }.toSet() }
+                .take(PREFETCHED_WINDOWS).map { it.key }.toSet() }
                 .distinctUntilChanged().collectLatest { keys ->
                     synchronized(active) { prefetched = keys }
                     windows.update { it.filterKeys { key -> key in keys || synchronized(active) { key in active } } }

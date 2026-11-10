@@ -18,6 +18,15 @@ import java.nio.file.Files
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class InboxRepositoryTest {
+    /** Real-dispatcher tests: wait until the startup refreshes stop reaching the hub, rather than for a fixed time. */
+    private suspend fun FakeTransport.quiet(window: Long) = withTimeout(5_000) {
+        while (true) {
+            val calls = inboxCalls.get()
+            delay(window)
+            if (inboxCalls.get() == calls) break
+        }
+    }
+
     @Test fun persistentSnapshotSubscribersDoNotPollAHubButInboxEventsStillRefresh() = runTest {
         val directory = Files.createTempDirectory("inbox-no-poll-test").toFile()
         try {
@@ -30,12 +39,14 @@ class InboxRepositoryTest {
             val initial = transport.inboxCalls.get()
             assertTrue(initial > 0)
             advanceTimeBy(60_000); runCurrent()
-            assertEquals("shell and capsule subscribers must not start full-list polling", initial, transport.inboxCalls.get())
+            assertEquals("shell and capsule subscribers must not start fast full-list polling", initial, transport.inboxCalls.get())
             hub.events.emit(InboxEvent())
             runCurrent()
             advanceTimeBy(1_001); runCurrent()
             repository.snapshot.first { it.refreshes > initial }
             assertEquals(initial + 1, transport.inboxCalls.get())
+            advanceTimeBy(300_000); runCurrent()
+            assertEquals("a slow poll still covers a missed event", initial + 2, transport.inboxCalls.get())
         } finally { directory.deleteRecursively() }
     }
     @Test fun updatingWaitsForEveryLarkPageAndPreservesVerifiedWindowOnOnline() = runBlocking {
@@ -378,6 +389,41 @@ class InboxRepositoryTest {
             assertFalse(incomplete.verified)
             assertEquals("最新消息", (incomplete.messages.single().parts.single() as LarkPart.Text).text)
             assertEquals(LarkWindowSyncState.Incomplete, repository.syncStates.value["feed"])
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun aWindowOfLargeMessagesIsSavedSmallEnoughToRestore() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-large-window-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val snapshots = ListSnapshotStore(directory.resolve("snapshots"))
+        try {
+            val transport = FakeTransport()
+            val repository = repository(transport, directory, owner, FakeHub(), snapshots)
+            val text = "消".repeat(15_000)
+            transport.onMessages = { _, _, _ -> page(*(1..20).map { row("m$it", it * 10L, text) }.toTypedArray()) }
+            val observed = MutableStateFlow(LarkConversation())
+            owner.launch { repository.conversation("feed", null).collect { observed.value = it } }
+            awaitState(observed) { it.verified && it.messages.size == 20 }
+            val key = "${transport.scope}:lark:feed:null"
+            val saved = withTimeout(5_000) {
+                var saved: JsonObject? = null
+                while (saved == null) { saved = snapshots.restore<JsonObject>(key, WINDOW_SNAPSHOT_MAX_BYTES); if (saved == null) delay(5) }
+                saved
+            }
+            val ids = saved.array("messages").map { it.jsonObject["id"]!!.jsonPrimitive.content }
+            assertTrue("trimmed from the oldest side, was ${ids.size}", ids.size in 1..19)
+            assertEquals("m20", ids.last())
+            assertTrue(saved.flag("has_older"))
+            val restoredOwner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            try {
+                val offline = FakeHub().apply { state.value = ConnectionState.WaitingForNetwork }
+                val restored = repository(transport, directory, restoredOwner, offline, snapshots)
+                val cached = withTimeout(5_000) { restored.conversation("feed", null).first { it.messages.isNotEmpty() } }
+                assertEquals(ids, cached.messages.map { it.id })
+            } finally { restoredOwner.coroutineContext[Job]!!.cancelAndJoin() }
         } finally {
             owner.coroutineContext[Job]!!.cancelAndJoin()
             directory.deleteRecursively()
@@ -1305,8 +1351,7 @@ class InboxRepositoryTest {
             assertEquals(1, repository.snapshot.value.records.size)
             val loading = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
             owner.launch { repository.snapshot.collect { loading += it.loading } }
-            // Snapshot observation no longer starts another full-list refresh on an event-driven hub.
-            delay(100)
+            transport.quiet(window)
             loading.clear()
             suspend fun settled(): Int { delay(window * 4); return transport.inboxCalls.get() }
             val before = settled()
@@ -1357,7 +1402,7 @@ class InboxRepositoryTest {
             repository.refresh()
             val seen = java.util.Collections.synchronizedList(mutableListOf<InboxSnapshot>())
             owner.launch { repository.snapshot.collect { seen += it } }
-            delay(100)
+            transport.quiet(200)
             seen.clear()
 
             repeat(2) {

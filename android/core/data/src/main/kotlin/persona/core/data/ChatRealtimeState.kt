@@ -47,10 +47,10 @@ internal class ChatRealtimeState(private val key: SessionKey) {
      * Calls have no session identity and may precede their transcript row: then the row picks them up when it arrives.
      */
     fun tool(event: ToolCallEvent, transcript: List<Item>): Boolean {
-        invalidate()
         tools[event.callId] = event
         if (tools.size > 128) tools.remove(tools.keys.first())
-        return transcript.any { it.kind == "tool_use" && it.toolUseId == event.callId }
+        // Without its row nothing shown changes; the row arrives in a new transcript list, which misses the cache.
+        return transcript.any { it.kind == "tool_use" && it.toolUseId == event.callId }.also { if (it) invalidate() }
     }
 
     fun reset() {

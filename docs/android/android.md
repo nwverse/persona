@@ -404,20 +404,23 @@ The budgets don't cover the outbox, drafts or persistent preferences. Inline Lar
 
 ## Inbox and assistant response memory
 
-Chat message bodies synchronize only while their repository flow has an observer. Session-list metadata still updates unread
-counts and status for other chats; reopening verifies the latest folded page before resuming. Four idle chat entries retain
-warm navigation, and active observers remain protected. The continuity reducer reuses its sorted item list until the
+Chat message bodies synchronize only while their repository flow has an observer, for 60 seconds after it closes (the chat
+stays subscribed, so switching tabs and back reopens it warm), and while the outbox waits to see a message sent from it in its
+transcript. Session-list metadata still updates unread counts and status for other chats; reopening after the release verifies
+the latest folded page before resuming. Four other idle chat entries retain warm navigation, keeping the most recently closed;
+active observers remain protected. The continuity reducer reuses its sorted item list until the
 transcript changes; duration metadata and realtime display rows also reuse unchanged inputs instead of rebuilding per
 session-list event. Item aliases and live overlays invalidate the display projection whenever they change.
 
 An inbox with a hub connection refreshes on inbox invalidations and reconnect, plus explicit page reads. Snapshot subscribers
-include the shell and capsule, so their count does not start a second full-list poller. Transports without a hub event stream
-retain the legacy polling fallback.
+include the shell and capsule, so their count only starts a slow five-minute poll that backs up missed events. Transports
+without a hub event stream keep the 15-second polling fallback.
 
-Unopened inbox conversations no longer prefetch message bodies by default. A first open can therefore wait for its normal
-network read. Window snapshots larger than 512 KiB are skipped before reading or decoding; their files are preserved, but
-they cannot provide offline first paint. The latest page and older-history cursors remain available online. Rolling back
-this change restores the previous prefetch and cache-restore policies without a cache migration or data deletion.
+The top three unread conversations still prefetch their windows (bulk "read FYI" and exact unread counts need them). Window
+snapshots are trimmed from their oldest messages to stay under 512 KiB when saved, and files larger than that (old versions
+cached whole histories) are skipped before reading or decoding; such files are preserved but cannot provide offline first
+paint. The latest page and older-history cursors remain available online. Rolling back this change restores the previous
+cache-restore policy without a cache migration or data deletion.
 
 Inbox/assistant JSON requests stream into the decoder on `Dispatchers.IO`, without first retaining a complete byte array and string. A process-wide permit covers request through decoding, so simultaneous repositories and pairing scopes cannot accumulate buffered responses while waiting to parse. Waiting callers are cancellable; decoding checks both coroutine cancellation and the current pairing before reading chunks and before returning a result.
 
@@ -1780,7 +1783,7 @@ Native TYPE_APPLICATION_OVERLAY, independent of status-bar Live Updates, support
 - Tracks the turn observed Working while online, including completion after a NeedsYou wait; first fresh snapshot after reconnect is only a baseline, never guesses unseen runs. Independent of system long-task notification filters.
 - Independent session drafts through the existing persistent outbox / group routing. Transcripts are observed only while expanded. A message the hub refused reads "Not sent. Open the chat" under it, never the hub's code; the chat says why and offers **Retry** (#2821).
 - Stay on screen: an optional accessibility service (`CapsuleKeeperService`, Settings › Floating capsule › Stay on screen) that reads no window content and handles no events. The system binds it and rebinds it after the process dies, which an overlay alone does not survive on phones that clear background apps on lock; on connect and each unlock it asks for the resident connection. A force-stop turns any accessibility service off; some systems also turn it off when the app updates itself, so after an update (and on start) the app turns it back on when `WRITE_SECURE_SETTINGS` was granted once over adb, or posts a notification that opens the accessibility settings.
-- Performance with the process resident: session events write the first-paint snapshot at most every 10 s; the capsule catalog and inbox rows rebuild from the latest inputs only; unopened Feishu windows are not prefetched, oversized historical window snapshots are left untouched and skipped before decoding, and closed chat bodies stop synchronizing. Hidden primary tabs keep their navigation and scroll state under a CREATED lifecycle so page collectors and timers stop; the capsule catalog computes on Dispatchers.Default. With any accessibility service on, Compose diffs the semantics tree on every recomposition, so the Agents page redraws at most every 300 ms.
+- Performance with the process resident: session events write the first-paint snapshot at most every 10 s; the capsule catalog and inbox rows rebuild from the latest inputs only; at most three unread Feishu windows are prefetched and only four idle windows stay in memory, oversized historical window snapshots are left untouched and skipped before decoding, and closed chat bodies stop synchronizing a minute after closing. Hidden primary tabs keep their navigation and scroll state under a CREATED lifecycle so page collectors and timers stop; the capsule catalog computes on Dispatchers.Default. With any accessibility service on, Compose diffs the semantics tree on every recomposition, so the Agents page redraws at most every 300 ms.
 
 Code `android/platform/capsule/` window/permissions/policy/public CapsuleContentSource;
 `android/app/src/main/java/persona/android/capsule/` connects sessions/messages/pairing; Settings only FloatingCapsuleSettings.
