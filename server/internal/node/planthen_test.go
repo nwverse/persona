@@ -52,16 +52,10 @@ func TestPlanThenAfterTerminalMovesToTheRecordedMode(t *testing.T) {
 	cycleModes(t, f, "w1:p1", "auto")
 	f.reset()
 	n.planThenAfterTerminal(sidA)
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if mode, _ := n.modesOf(sidA); mode == "acceptEdits" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("not moved to the recorded mode; trace %v", f.trace())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitWithin(t, 3*time.Second, "the recorded mode", func() bool {
+		mode, _ := n.modesOf(sidA)
+		return mode == "acceptEdits"
+	})
 	if got := strings.Join(f.trace(), "\n"); !strings.Contains(got, sendKeys("w1:p1", "shift+tab")) {
 		t.Fatalf("no key pressed: %v", f.trace())
 	}
@@ -81,7 +75,10 @@ func TestPlanThenAfterTerminalLeavesAlone(t *testing.T) {
 	f.reset()
 	n.planThenAfterTerminal(sidA)
 	n.planThenAfterTerminal(sidB)
-	time.Sleep(planThenWatch + 200*time.Millisecond)
+	// Observe the full watch window before asserting that no key was sent.
+	timer := time.NewTimer(planThenWatch + 200*time.Millisecond)
+	defer timer.Stop()
+	<-timer.C
 	for _, c := range f.trace() {
 		if strings.Contains(c, "shift+tab") {
 			t.Fatalf("a key was pressed: %v", f.trace())
