@@ -234,6 +234,15 @@ struct ChatView: View {
     private var linkManager: String? {
         model.linkManager(session?.manager ?? itemManager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
     }
+    /// A listed default-manager session has a nil owner; it must not inherit the page's current selection.
+    private var feedManager: String? {
+        if let session { return session.manager ?? model.managerRosters[key.group]?.defaultID }
+        return linkManager ?? model.managerRosters[key.group]?.defaultID
+    }
+    nonisolated private struct FeedScope: Hashable {
+        var key: SessionKey
+        var manager: String?
+    }
     /// The latest state of the subagent being viewed (the list refreshes with the session).
     private var viewedAgent: Subagent? {
         viewing.flatMap { v in (session?.subagents?.first { $0.id == v.id } ?? v).shown(in: model.chat(key).tasks, sessionWorks: sessionWorks) }
@@ -590,13 +599,6 @@ struct ChatView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        // The assistant's tasks (docs/assistant/unified-entry.md): a task's detail rises like a link; All is the board.
-        // In regular width (iPad) it fills the detail column instead, as an agent opened from the Agents list (#2816).
-        .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
-                                                 set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
-            if let id = TasksStore.shared.detailTask { TaskDetailSheet(todoID: id) }
-            else if let key = TasksStore.shared.detailAgent { TaskDetailSheet(agent: key) }
-        }
         .sheet(isPresented: Binding(get: { style == .assistant && TasksStore.shared.showBoard },
                                     set: { TasksStore.shared.showBoard = $0 }),
                onDismiss: {
@@ -629,6 +631,20 @@ struct ChatView: View {
             }
         }
         #endif
+        // A task's own detail also has a presenter on Mac: assigning detailTask must not be a dead link. iPhone
+        // dispatch links push a live Agent directly; this is the starting/no-Agent fallback and the normal task detail.
+        .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
+                                                 set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
+            Group {
+                if let id = TasksStore.shared.detailTask {
+                    TaskDetailSheet(todoID: id, initialAgent: TasksStore.shared.detailTaskAgent).id(id)
+                }
+                else if let key = TasksStore.shared.detailAgent { TaskDetailSheet(agent: key) }
+            }
+            #if os(macOS)
+            .macSheet()
+            #endif
+        }
     }
 
     private var chatActivity: some View {
@@ -639,9 +655,9 @@ struct ChatView: View {
         .task(id: "\(key.machineID)/\(key.sessionID)|\(session?.cwd ?? "")") { await loadGit() }
         // A Workflow call the hub folded into a turn's work (#3436): that fold is fetched, so the run's card comes out.
         .task(id: workflowFolds.map(\.id)) { await unfoldWorkflowCalls(workflowFolds) }
-        .task(id: key) {
+        .task(id: FeedScope(key: key, manager: feedManager)) {
             guard style == .assistant else { return }
-            TasksStore.shared.load(key.sessionID)
+            TasksStore.shared.load(key.sessionID, api: model.api(key.group)?.manager(feedManager))
             if key == model.assistantMain { TasksStore.shared.loadToday(key.sessionID) }
             #if DEBUG
             // `-showTaskDetail <todo id>` / `-showTaskBoard YES`: a task's detail or the board, for screenshots.
@@ -885,8 +901,9 @@ struct ChatView: View {
         }
         var lines = lineBuilder.build(Self.debugTrim(blocks), live: key.live, streaming: key.streaming)
         if style == .assistant { // docs/assistant/unified-entry.md: the hub's items, quick results, a line for each day
-            // The hand-offs the task cards take in are drawn there, not among the lines (#1542).
-            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, SentToAgents.shown(feed))))
+            // Dispatch links have no instruction list. Keep Persona's hand-offs as their own folded lines instead
+            // of hiding them as though a full task card still rendered them (#3711).
+            lines = ChatLines.daySections(ChatLines.quickResults(ChatLines.mergeFeed(lines, feed)))
         }
         lines = ChatLines.sourceRuns(lines)
         scratch.lines = lines
@@ -1871,7 +1888,13 @@ struct ChatView: View {
             }
             // It may get as short as the cards make it while the keyboard is up (its margins set no minimum of their own).
             .frame(minHeight: .zero)
-            ChatRegion(name: "ChatFooter.body") { footer }
+            // A stack of its own, laid out before the list (which may get as short as nothing): with an attachment over the
+            // shell's composer (a photo, a quote) the footer kept its height while the draft grew, and the field held a line
+            // and a half of it, cut at its top (#3703, the open iPhone Duo on its side with the keyboard up). Priority on
+            // the region alone did not do it. Not the classic composer's island, which takes what it is offered until it
+            // has measured itself.
+            ChatRegion(name: "ChatFooter.body") { VStack(spacing: 0) { footer } }
+                .layoutPriority(usesShellComposer ? 1 : 0)
                 // What the footer takes of the page: the pending cards grow into the rest while the keyboard is up.
                 // Exact, like the cards' own height inside it (`PendingCards.shown`): the cards take one from the other for
                 // what the footer holds besides them, which must not move with their own height (#1580).
@@ -2211,7 +2234,7 @@ struct ChatView: View {
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
-                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
+                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantDisplayName : next.title) : next.displayTitle) {
                         openNext(next)
                     }
                 }
@@ -2233,7 +2256,7 @@ struct ChatView: View {
                 if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
+                Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantDisplayName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
                          onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) })
                     // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                     // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -2335,7 +2358,7 @@ struct ChatView: View {
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
             // the message a line lower, then pushed it up when the turn began (#1911).
             if frozen == nil, startingTurn(pending) {
-                TypingIndicator(text: String(localized: "\(style == .assistant ? model.persona.name : (session?.agentLabel ?? "Claude")) is getting ready…"))
+                TypingIndicator(text: String(localized: "\(style == .assistant ? model.assistantDisplayName : (session?.agentLabel ?? "Claude")) is getting ready…"))
                     .flippedBack()
                     .id("starting-turn")
             }
@@ -2894,6 +2917,9 @@ struct ChatView: View {
             .tint(Color.primary) // a title, not a button: the menu's accent tint would color it blue
             .accessibilityLabel("\(title), \(host.agents.count) agents, tap to switch")
             .accessibilityIdentifier("chat.title")
+            #if DEBUG
+            .modifier(UITestSessionProof(session: key.path))
+            #endif
             .connectionDetails($showLink)
         } else {
             infoTitleButton
@@ -2945,6 +2971,9 @@ struct ChatView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(link != .online ? String(localized: "\(title), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true)), view connection details") : String(localized: "\(title), view session info"))
         .accessibilityIdentifier("chat.title")
+        #if DEBUG
+        .modifier(UITestSessionProof(session: key.path))
+        #endif
         .connectionDetails($showLink)
     }
 
@@ -4468,7 +4497,7 @@ struct Composer: View, Equatable {
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
-                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
+                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantDisplayName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
@@ -5023,6 +5052,8 @@ struct SlashMenu: View {
             list
         }
         .scrollBounceBehavior(.basedOnSize)
+        // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
+        .fixedSize(horizontal: false, vertical: rowHeight == 0)
         .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(rows.count), Self.visibleRows) : nil)
         .padding(.vertical, Theme.Space.xs)
         .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -5139,6 +5170,8 @@ struct QueueStrip: View {
                 rows
             }
             .scrollBounceBehavior(.basedOnSize)
+            // Its rows' own height until one is measured, not what it is offered: the footer is laid out first (#3703).
+            .fixedSize(horizontal: false, vertical: rowHeight == 0)
             .frame(height: rowHeight > 0 ? rowHeight * min(CGFloat(queued.count), Self.visibleRows) : nil)
             .padding(.top, Theme.Space.sm)
         } label: {

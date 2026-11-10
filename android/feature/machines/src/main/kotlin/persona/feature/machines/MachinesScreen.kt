@@ -104,7 +104,9 @@ internal fun MachinesScreen(
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
             usageWindows(healthState.usage, java.time.Instant.ofEpochSecond(state.now))
-            if (!state.loading && ids.isEmpty()) item("empty") {
+            // An offline assistant with no computer the hub still keeps: out of reach, not a first run (no Add).
+            if (!state.loading && ids.isEmpty() && assistant.offline != null) item("offline") { JAssistantOffline(assistant) }
+            else if (!state.loading && ids.isEmpty()) item("empty") {
                 JEmptyState(stringResource(if (state.failure == null) R.string.machines_empty_title else R.string.machines_empty_unavailable),
                     stringResource(R.string.machines_empty_body), icon = PhIcons.Desktop,
                     // How to add one (docs/assistant/onboarding.md 4.5), until the phone adds computers itself.

@@ -67,6 +67,9 @@ type Settings struct {
 	StartRequestedTasks *bool `json:"start_requested_tasks,omitempty"`
 	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
 	RecordingDays *int `json:"recording_days,omitempty"`
+	// MinutesDays: how many days a meeting's minutes stay once its transcript went with RecordingDays (#3780,
+	// kb/recording_trim.go); nil or 0 means forever. Finite windows are never fewer than RecordingDays (kb.MinutesDaysFor).
+	MinutesDays *int `json:"minutes_days,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -234,10 +237,34 @@ const (
 
 // recordingDays is how many days recordings stay in the knowledge base (recording_days, 14 by default).
 func (s *Service) recordingDays(ctx context.Context) int {
-	if d := s.settings(ctx).RecordingDays; d != nil && *d >= minRecordingDays && *d <= maxRecordingDays {
+	return recordingDaysOf(s.settings(ctx))
+}
+
+func recordingDaysOf(v Settings) int {
+	if d := v.RecordingDays; d != nil && *d >= minRecordingDays && *d <= maxRecordingDays {
 		return *d
 	}
 	return kb.DefaultRecordingDays
+}
+
+// Bounds of minutes_days.
+const (
+	minMinutesDays = 0
+	maxMinutesDays = 3650
+)
+
+// minutesDaysSetting is minutes_days as saved, 0 when unset or out of bounds (kb.MinutesDaysFor: the default).
+func minutesDaysSetting(v Settings) int {
+	if d := v.MinutesDays; d != nil && *d >= minMinutesDays && *d <= maxMinutesDays {
+		return *d
+	}
+	return 0
+}
+
+// minutesDays is the effective minutes_days: 0 means forever (the default); otherwise never fewer than recording_days.
+func (s *Service) minutesDays(ctx context.Context) int {
+	v := s.settings(ctx)
+	return kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v))
 }
 
 // meetingRoles are the values of meeting_attendance_default, off (the default) first.
@@ -280,6 +307,19 @@ func (s *Service) recordingDaysNow() int {
 		return kb.DefaultRecordingDays
 	}
 	return *v.RecordingDays
+}
+
+// minutesDaysNow is minutes_days as saved for the knowledge base's engine (0: forever by default), read like
+// recordingDaysNow: a transient failure keeps the value read last, so it never deletes minutes the user kept for
+// longer. The engine raises only positive values to recording_days (kb.Engine.MinutesDays).
+func (s *Service) minutesDaysNow() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	v, ok := s.settingsLastGood(ctx)
+	if !ok {
+		return 0
+	}
+	return minutesDaysSetting(v)
 }
 
 // launcherNow is the launcher new conversations start with: Model configuration › Main chat's, else the assistant's own.
@@ -370,6 +410,8 @@ type assistantView struct {
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
+	// MinutesDays is in effect: 0 means forever (the default); otherwise never fewer than RecordingDays.
+	MinutesDays int `json:"minutes_days"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault string `json:"meeting_attendance_default"`
 	// IdleCloseHours is in effect (0: off).
@@ -395,8 +437,9 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v := s.settings(ctx)
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
-		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx), MeetingAttendanceDefault: s.meetingAttendanceDefault(ctx),
-		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
+		MeetingAttendanceDefault: s.meetingAttendanceDefault(ctx),
+		DoneNeedsDelivery:        v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
 		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground,
