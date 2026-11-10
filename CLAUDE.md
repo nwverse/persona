@@ -10,7 +10,7 @@ The PR must link the approved issue. No Agent or delegated task may bypass this 
 Persona is a self-hosted personal SuperAgent. A Go server, `personad`, runs as the **hub** on an always-on machine and holds all state;
 the clients (iPhone, Apple Watch, Mac, Vision Pro, Android and the web) talk only to the hub. Each of your computers runs a **node**
 (connected to the hub through Persona Link), where coding Agents (Claude Code, Codex, pi, opencode and other runtimes) run in an engine
-(herdr, Orca or Paseo); any client can watch them live, answer their questions and approve plans and tools.
+(herdr, Orca, Tern or Paseo); any client can watch them live, answer their questions and approve plans and tools.
 The assistant's main chat (the **Persona** tab) hands work to those Agents and draws on the knowledge base (`~/.persona/data`), the Inbox,
 mail, phone data tools and extensions (connectors, channels, voice). Overview: `README.md`, `docs/server/architecture.md`.
 
