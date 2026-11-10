@@ -782,7 +782,7 @@ function onMessage(msg: Record<string, unknown>) {
       agentsChanged(Array.isArray(msg.session_ids) ? (msg.session_ids as string[]) : []);
       break;
     case "todos":
-      void refreshTodos();
+      todosPushed();
       break;
     case "delta":
       sessionListeners.get(key(msg.machine_id as string, msg.session_id as string))?.forEach((l) => l.delta?.(msg.text as string));
@@ -1196,6 +1196,27 @@ export function dropTodo(id: string) {
   set({ todos: state.todos.filter((t) => t.id !== id) });
 }
 
+// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts: the hub sends one per write,
+// and a supervised task's report, stage and links land within the same second. Every GET /todos is the whole list (tens
+// of KB on a busy hub), so pushes read it one at a time: one that lands while such a read is out asks for one more read
+// after it, however many land meanwhile. What this page itself just changed still reads at once (refreshTodos).
+let pushedRead = false;
+let pushedAgain = false;
+
+export function todosPushed() {
+  if (pushedRead) {
+    pushedAgain = true;
+    return;
+  }
+  pushedRead = true;
+  void refreshTodos().finally(() => {
+    pushedRead = false;
+    if (!pushedAgain) return;
+    pushedAgain = false;
+    todosPushed();
+  });
+}
+
 export async function refreshTodos() {
   const asked = todosAsked.ask();
   try {
@@ -1238,9 +1259,10 @@ const assistantByManager = new Map<string, AssistantInfo>();
 /** The assistant page asked for: "" the default's (no header goes, whichever manager the default turns out to be),
  *  else the manager picked on it. */
 const pageOf = () => chosenManager() ?? "";
-/** Where the page's answer is kept: under its manager once the roster's default is known; "" before (the default's,
- *  whose id is not known yet), moved under the default's id when it is. */
-const cacheKey = () => (defaultKnown() ? shownManager() : "");
+/** Where the page's answer is kept: under its manager, the one picked (kept across reloads, so it may be there before
+ *  the roster is read) or the default once the roster said which that is; "" before (the default's, whose id is not
+ *  known yet), moved under the default's id when it is. */
+const cacheKey = () => chosenManager() ?? (defaultKnown() ? defaultManager() : "");
 
 // The manager whose page is drawn (null: the default's, before the roster said which that is).
 let drawnPage = { page: pageOf(), manager: null as string | null };
@@ -1382,6 +1404,7 @@ export function reset() {
   endedHere.clear();
   // a /todos or /assistant answer still on its way belongs to the old login
   todosAsked.forget();
+  pushedAgain = false; // the next login reads its own list
   assistantAsked.forget();
   assistantByManager.clear();
   // and so do the pins and mutes of a refresh() or a failed save still on its way
