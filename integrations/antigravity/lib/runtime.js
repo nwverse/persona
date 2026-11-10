@@ -537,9 +537,13 @@ export function createAgyRuntime(options = {}) {
       void acp.ensureStarted().catch((err) => log(`agy warm start error: ${err.message}`))
       return rt.start()
     },
+    /** Resolves once agy is gone. */
     stop: () => {
       rt.stop()
-      acp.stop()
+      // A turn's transcript poll would otherwise keep running; acp.stop() fails the prompts themselves.
+      for (const turn of activeTurns.values()) clearInterval(turn.pollTimer)
+      activeTurns.clear()
+      return acp.stop()
     },
   }
 }
