@@ -169,13 +169,21 @@
   },
   {
     "name": "ask_user",
-    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this instead. The user can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message.",
+    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this instead. The user can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message. With a deadline (each question then recommends one of its options): if nobody answers by it and you marked it reversible, the recommended options are taken by default and recorded on the question's to-do; one that cannot be undone is only reminded again and keeps waiting.",
     "input_schema": {
       "type": "object",
       "required": [
         "questions"
       ],
       "properties": {
+        "deadline": {
+          "type": "string",
+          "description": "optional: until when the questions wait, a duration (\"30m\", \"4h\") or an RFC 3339 time, 1 minute to 30 days ahead; needs reversible and a recommend on every question"
+        },
+        "reversible": {
+          "type": "boolean",
+          "description": "with deadline: whether going ahead with the recommended options can be undone later. false for deleting, sending anything to other people, spending money or changing production: those are never taken by default"
+        },
         "questions": {
           "type": "array",
           "minItems": 1,
@@ -196,6 +204,10 @@
               },
               "multiSelect": {
                 "type": "boolean"
+              },
+              "recommend": {
+                "type": "string",
+                "description": "the label of the option you recommend; required with deadline"
               },
               "options": {
                 "type": "array",
@@ -1652,7 +1664,7 @@
   },
   {
     "name": "task_review",
-    "description": "Review a task you handed out from this conversation (its todo id), after you checked its work yourself: each done_when criterion with its evidence (a PR link and that it merged, CI, a screenshot, what the live system answers) or what is missing. accepted closes the task (its agent is closed once it stays still); rework sends what is missing back to the same agent (resumed if it was closed) — at most 2 rounds, a third goes to the user instead; needs_user marks it waiting for the user's decision (its conclusion card asks them; without one, ask them yourself: ask_user, or notify_user if they are away, as the answer says); cancelled ends it (a duplicate, no longer wanted). From a conversation other than the main one, on a task it does not supervise, only accepted and cancelled apply: send what is missing to its agent with agent_send. Use it on every task a 督办 message says waits for review; don't accept on the agent's word alone. On a supervised task, accepted and needs_user send the user one conclusion card in Lark: the verdict (done, cannot be done, or needs your decision), reason (one sentence), link (one), and for needs_user your recommend, which the user takes by answering \"OK\"; so give outcome, reason and link with accepted, and reason and recommend with needs_user, and don't push the same result again.",
+    "description": "Review a task you handed out from this conversation (its todo id), after you checked its work yourself: each done_when criterion with its evidence (a PR link and that it merged, CI, a screenshot, what the live system answers) or what is missing. accepted closes the task (its agent is closed once it stays still); rework sends what is missing back to the same agent (resumed if it was closed) — at most 2 rounds, a third goes to the user instead; needs_user marks it waiting for the user's decision (its conclusion card asks them; without one, ask them yourself: ask_user, or notify_user if they are away, as the answer says); cancelled ends it (a duplicate, no longer wanted). From a conversation other than the main one, on a task it does not supervise, only accepted and cancelled apply: send what is missing to its agent with agent_send. Use it on every task a 督办 message says waits for review; don't accept on the agent's word alone. On a supervised task, accepted and needs_user send the user one conclusion card in Lark: the verdict (done, cannot be done, or needs your decision), reason (one sentence), link (one), and for needs_user your recommend, which the user takes by answering \"OK\"; so give outcome, reason and link with accepted, and reason and recommend with needs_user, and don't push the same result again. A needs_user decision may carry a deadline: when it passes unanswered, a reversible one takes your recommend by default (recorded on the to-do as taken at the deadline), and one that cannot be undone is only reminded again; without a deadline it waits as before.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1720,6 +1732,14 @@
         "recommend": {
           "type": "string",
           "description": "needs_user: the option you recommend, in a line; the user's \"OK\" takes it and it goes to the task's agent"
+        },
+        "deadline": {
+          "type": "string",
+          "description": "needs_user, optional: until when the decision waits, a duration (\"4h\", \"90m\") or an RFC 3339 time, 1 minute to 30 days ahead; needs recommend and reversible"
+        },
+        "reversible": {
+          "type": "boolean",
+          "description": "with deadline: whether taking recommend can be undone later. false for deleting, sending anything to other people, spending money or changing production: those are never taken by default"
         }
       }
     }

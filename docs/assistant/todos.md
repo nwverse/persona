@@ -334,6 +334,19 @@ effective from the next judgment and next dispatched task. When on:
 - **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten).
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
 
+## Spot-check reviews
+
+(#3128, `assistant/supervise_sample.go`.) Every finished supervised task waits for the main conversation's `task_review`; with many tasks that makes the main conversation the bottleneck. The assistant setting `review_sample_percent` (0–100) lets the done judge close the tasks it can verify and sends only a share of them to the main conversation.
+
+- **Default 100**: nothing changes. The judge is not asked for anything more and every finished task waits for `task_review`.
+- **Turning it on**: tell the assistant (`assistant.review_sample_percent` in `persona_settings`, confirmation card on the phone), or `PUT /api/v1/assistant` with `{"review_sample_percent": 20}`; `GET /api/v1/assistant` reports the share in effect. It applies from the next judgment.
+- **The judge's check**: below 100, the "Automatic completion" model of a supervised task with `done_when` also returns `checks` (per criterion, in order: `checkable`, `met`, `evidence`) and `delivery` (as in "Delivery", whether or not `done_needs_delivery` is on; it is not written to the to-do unless that setting is on). The hub matches the checks to the ledger's criteria by position. A task **passes** when every criterion is checkable (a command's output, CI, a link, a live reading — not a matter of taste or something only the user can confirm), met, with evidence, and the delivery is `live`. A task without `done_when` never passes.
+- **Passed and not sampled**: the judge closes it as `task_review accepted` would: the ledger records an accepted review `by: "judge"` with the checks, the to-do closes (`done_reason` starts with 判官核对通过), the outcome goes to the project timeline, and the owner gets the usual conclusion card. The main conversation gets no supervision message for it.
+- **Passed and sampled**: whether a task is sampled is a hash of the to-do id and the stretch of work, so the same work always gets the same answer; about `review_sample_percent` percent are. A sampled one waits for `task_review` as before, its supervision message starting with 抽查 so the main conversation knows the judge's check already passed.
+- **Failed the check**: waits for `task_review` as before.
+- **Never closed by the judge**: a rework round (the supervisor was promised the next review, and asked for more than `done_when` says), a task that was reopened or was ever accepted or cancelled before, and a task the supervisor reviewed while the judge was deciding. `live` counts only when the judge itself says so, never on the Agent's delivery line alone; checks that do not come one per criterion with each criterion copied in its place count as not met.
+- When the independent review (`supervise_autoreview.go`) starts for a task, it runs first and its result waits for `task_review`; the judge's check does not close it.
+
 ## Close Agents for completed tasks
 
 Completing a to-do stops Persona's automatic follow-ups for its linked Agents, including when a turn ends after
@@ -422,6 +435,17 @@ The costliest long-task mistake is an Agent forgetting a decision already made: 
 - **The supervisor** is told what went out. With a Lark card, as before (don't ask again), plus that a push with OK went too. With the bot off it still asks the owner as before (the hub taking a push says neither that a device got it nor that its app shows OK), and is told that OK on the push may take the recommendation first.
 - **Clients**: the web shows the ask on the to-do's row, its page, the main chat's task card and the task panel, with the one button that takes it (`docs/web/web.md`, "Waiting for you"); a stopped to-do with an open ask sorts with Awaiting review. The iOS / Mac / Watch part (the to-do row and detail, the `TODO_DECIDE` action) and Android are not built yet.
 - Not done here: the push is not withdrawn when the decision is taken elsewhere (an OK on it then answers 409, "already handled"); the watch's answer-only credential can neither read `/api/v1/todos` nor call the accept route.
+
+## Decision deadlines
+
+(#3127, `assistant/decision_deadline.go`.) A decision that waits for the owner can carry a recommended default and a deadline, so work does not stop just because nobody answered. Without a deadline nothing changes.
+
+- **Who sets it**: `task_review` with `needs_user` (`deadline`, `reversible`, with its `recommend`) and `ask_user` (`deadline`, `reversible`, and a `recommend` on every question naming one of its options). `deadline` is a duration (`4h`) or an RFC 3339 time, 1 minute to 30 days ahead; a deadline without `reversible`, or without a recommendation, is refused. `reversible: false` is for what cannot be undone: deleting, sending anything to other people, spending money and production changes.
+- **Where it is kept**: a task's on its decision in the acceptance book (`acceptAsk.deadline`, `reversible`, `due_at`, `by_default`); a question's in its arguments (as a time) and, once it became a to-do, on its record (`assistant.ask_todos`). The card waits no longer than the deadline. The Lark card and the decision push add a line with the deadline and what it does; on the phone card the recommended option's description says so.
+- **At the deadline** (`acceptLoop` looks every minute):
+  - **Reversible**: the recommendation is taken the way the owner's OK takes it. A task's goes to its Agent (the message says it was taken by default and can still change) and the task stops waiting for the user; a question still waiting gets the recommended options as the tool's answer, and one that became a to-do earlier has them sent to the asking conversation as a new message and closes. Either way a decision is recorded on the to-do: the question, the option, the reason "taken by default: no answer by MM-DD HH:MM", with `source = "agent"` because it is not the owner's own call.
+  - **Not reversible**: nothing is taken. The owner is reminded once (the decision push again, and the Lark card again when there was one; a question's to-do gets a push), and it keeps waiting; the owner can still answer at any time.
+- An answer from the owner before the deadline wins as before; a deadline that passes while the hub is down is handled on the next sweep.
 
 ## Chat thread
 

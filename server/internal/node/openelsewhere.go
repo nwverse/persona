@@ -58,7 +58,7 @@ type claudeProc struct {
 	// Tmux is the pane Claude Code says it runs in ("orc:@11.%11", its session:window.pane), "" for one that is not in
 	// tmux: the approval in such a pane can be answered from the app (#2562).
 	Tmux string `json:"tmux"`
-	dir                 string // the sessions directory the file is in (its key file is next to it)
+	dir  string // the sessions directory the file is in (its key file is next to it)
 }
 
 // liveClaudes reads the sessions/<pid>.json of every claude still running, in every config directory, once per pid.

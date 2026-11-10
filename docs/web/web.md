@@ -24,6 +24,14 @@ retains planning, permission/question and owner-acceptance flows; `Todo.ask` use
 individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
 TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
 
+Progress lists and counts **every open task** of the conversation (#3162): working, waiting for the user, finished but
+unseen, stopped between rounds (`follow_up`, where supervised tasks spend most of their time) and plan tasks still waiting
+for Start — not only the ones with a running agent. What needs the user sorts first (`todoRank`, a plan task waiting for
+Start right after), each row leads with its status mark (`TaskMark`), and closed tasks (done, accepted, cancelled, failed to
+start) fold under one **Closed N** line. While a plan waits for Start a fourth entry, **To start N**, sits after Pending:
+its tray is the plan cards themselves (Start, Edit, Don't start), so a plan is not lost in the chat; Pending no longer
+lists or counts those plans. Tapping a plan task in Progress opens To start.
+
 The three entries are the dock's old **All** / task capsules (#2999): `DOCK_CAPSULE` in `web/src/views/assistant/Tasks.tsx`
 gives "All", the task pills and the entries one height (2 rem, 32 px at the default size), full capsule radius, 12 px side
 padding and the 12.5 px type. Each entry is content-wide at the leading edge with an 8 px tone dot, its label and a count;
@@ -83,6 +91,7 @@ The browser check opens Overview, permission/plan cards, green/orange/AI workflo
   `python3 scripts/test/web_sidebar_e2e.py <web URL> [--shots <dir>]`; usage is at the top of the script. `--shots` also takes light / dark / narrow-screen screenshots.
   Personal agents sidebar visibility (#2934): with `MOCK_SESSIONS_LIST=1`, run `node web/e2e/personal-agents-visibility.mjs <web URL> --cdp <Chrome CDP URL> --shots <directory>`.
   It checks cold loading, missing/disabled/no-account setup, empty sessions and live appearance without a reload in light and dark using synthetic responses; the shared browser and pages stay open.
+  End-to-end check of a waiting card taller than its box (#3112: a Feishu permission card with a very long command, an ask_user card with eight options; it keeps its full height, its Allow / Send stays on screen, the wheel or a finger scrolls it to its last line, which can be picked; 1440×900, 1280×720, 390×844, light / dark, Chromium and WebKit): start the mock hub with `MOCK_ASK_LONG=perm` (the main chat's tray), `=1` (ask_user) or `=agent` (an agent's chat; `--path /s/<machine>/<session>` or `--path 'panel:<agent title>'` for the side panel) and `npx vite`, then run `python3 scripts/test/web_card_scroll_e2e.py <web URL> [--browser chromium|webkit|all] [--theme light|dark|both] [--path …] [--shots <dir>]`.
   End-to-end check of draft marks on sidebar rows (#5568: an Agent, a Persona chat and the main row show "Draft: <words>" once you leave them, not while you type, after a reload, not for whitespace, gone after clearing or sending; wide / phone width × light / dark): start the mock hub and `npx vite`, then run `python3 scripts/test/web_draft_rows_e2e.py <web URL> [--shots <dir>]`.
   End-to-end check of the settings entries (#2196: channels before connectors, old extension links still work, channels and connectors link to each other, narrow screen goes back to Settings): start the mock hub with `MOCK_CHANNELS=1 MOCK_EXTENSIONS=1`,
   run `python3 scripts/test/web_settings_entries_e2e.py <web URL> [--shots <dir>] [--cdp <Chrome CDP address>]`; it checks wide / narrow × light / dark, including 640 px and 320 px widths, sidebar geometry, independent scrolling in short windows, Tab/Enter activation, and category restoration after refresh (#2197). With `--cdp`, it leaves the shared browser and other tabs open.

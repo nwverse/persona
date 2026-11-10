@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## A clipping fold left a tall card's buttons out of sight (2026-11-10, #3112)
+
+- **A sticky footer sticks in its nearest clipping ancestor, not the box that scrolls**: #2026 made a waiting card `shrink-0` with an `overflow-clip` root and a `sticky -bottom-1` footer, which works where the cards sit straight in the dock. On a phone and in a side panel (an agent's or task's chat over the main one, `compactDock`) PendingCards puts the open cards in a `Collapse`, whose clip box was `overflow-hidden`: a scroll container of its own, so the footer stuck inside it and stayed at the card's natural bottom, below `data-chat-cards`. A Feishu permission card with a long `python3 -c …` command showed half of its "Always allow covers…" line and no Allow / Deny. Open folds are `unclipped` now. Look for every `overflow-hidden` between a sticky element and the scroller you mean.
+- **Check every place a card is drawn**: the main chat's tray, an agent's own page, the side panel and a phone each wrap the cards differently; the fix for one passed while another stayed broken. `scripts/test/web_card_scroll_e2e.py --path` covers each one against the mock hub's `MOCK_ASK_LONG`.
+- **Drive real gestures**: in headless Chromium CDP `Input.synthesizeScrollGesture` scrolled nothing even where a finger does; use `Input.dispatchTouchEvent` start / move / end, start the swipe off a box that scrolls by itself (a command block), and aim the wheel at the card, not the window's middle (a side panel is off to the right).
+
 ## A completed task's omitted ask must clear the partial store merge (#3038)
 
 `putTodo` merges partial records. A completed to-do response omits `ask`, so passing it directly leaves the old decision card in the attention tray until another list read. Explicitly clear the returned optional ask when applying completion, invalidate earlier list reads with `todosAsked.forget()`, then refresh the list. Regress a delayed pre-completion read followed by a failed refresh: an accepted write must not roll back. Admit completion and recommendation acceptance through one synchronous guard: disabling buttons after a React render does not block mixed actions in the same event batch. Regress successful completion with JSON-omitted optional fields, not an object containing `ask: undefined`. Offer direct completion only on the live Pending row, never a historical briefing snapshot that may describe an earlier run.
@@ -759,3 +765,11 @@ A write under an op id can be repeated only unchanged: the hub replays the answe
 constant inside `TaskDock`, so nothing pointed the new code at it. Shared look lives in one exported class
 (`DOCK_CAPSULE`) used by every chip that should match; tests assert the classes are shared and the e2e measures the rendered
 height against 2 rem in a real browser.
+
+## A progress count must follow "not closed", not "an agent is running" (#3162)
+
+The old dock's pills and iOS's Progress count kept a task only while its agent was working, waiting or unseen. A
+supervised task spends most of its life stopped between rounds (`follow_up`: the agent's turn ended and was seen, the task
+is not done), so the owner saw one task out of four and asked what the others were doing. The #2920 Progress tray went the
+other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
+`start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.
