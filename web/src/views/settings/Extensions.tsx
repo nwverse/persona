@@ -12,7 +12,7 @@ import { operations, operationsListed, opOf, watchOperations } from "../../lib/e
 import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
-  changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
+  asksFirst, changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
   placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
   channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxEgress, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
@@ -927,19 +927,7 @@ function FieldRow(props: FieldProps) {
     </>
   );
 
-  if (f.type === "boolean") {
-    const v = valueAt(draft, path);
-    const on = typeof v === "boolean" ? v : f.default === true;
-    return (
-      <div className="px-4 py-2.5" data-field={key}>
-        <div className="flex items-center gap-3">
-          <span className="min-w-0 flex-1 text-[13px] text-ink">{title}</span>
-          <Switch on={on} onChange={(x) => onEdit(path, x)} label={fieldLabel(f)} />
-        </div>
-        {below}
-      </div>
-    );
-  }
+  if (f.type === "boolean") return <BooleanField field={f} path={path} draft={draft} onEdit={onEdit} title={title} below={below} />;
 
   return (
     <div className="px-4 py-2.5" data-field={key}>
@@ -949,6 +937,42 @@ function FieldRow(props: FieldProps) {
       <Control {...props} id={id} invalid={!!err} />
       {below}
     </div>
+  );
+}
+
+/** A boolean's switch, beside its title; with x-confirm, turning it on asks the field's sentence first (turning off is not asked). */
+function BooleanField({ field: f, path, draft, onEdit, title, below }: Pick<FieldProps, "field" | "path" | "draft" | "onEdit"> & { title: string; below: React.ReactNode }) {
+  const [asking, setAsking] = useState(false);
+  const v = valueAt(draft, path);
+  const on = typeof v === "boolean" ? v : f.default === true;
+  return (
+    <div className="px-4 py-2.5" data-field={path.join(".")}>
+      <div className="flex items-center gap-3">
+        <span className="min-w-0 flex-1 text-[13px] text-ink">{title}</span>
+        <Switch on={on} onChange={(x) => (asksFirst(f, x) ? setAsking(true) : onEdit(path, x))} label={fieldLabel(f)} />
+      </div>
+      {below}
+      <TurnOnDialog name={asking ? fieldLabel(f) : null} sentence={f.confirm} onCancel={() => setAsking(false)} onConfirm={() => { onEdit(path, true); setAsking(false); }} />
+    </div>
+  );
+}
+
+/** x-confirm's dialog before something named is turned on: the field's sentence, Cancel and Turn On. Closed while name is null. */
+function TurnOnDialog({ name, sentence, onCancel, onConfirm }: { name: string | null; sentence?: string; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <Dialog
+      open={name !== null}
+      onClose={onCancel}
+      title={name !== null ? t("settings-extensions.turn_on_title", { name }) : undefined}
+      footer={
+        <>
+          <Button tone="quiet" onClick={onCancel}>{t("common.cancel")}</Button>
+          <Button tone="primary" onClick={onConfirm}>{t("settings-extensions.turn_on")}</Button>
+        </>
+      }
+    >
+      <p className="text-[13px] leading-relaxed text-ink-2">{sentence}</p>
+    </Dialog>
   );
 }
 
@@ -1087,7 +1111,7 @@ function MachineSwitches({ field: f, path, draft, onSaveNow, computers, nodes, i
     if (on) next.push(mid);
     onSaveNow(path, next.length ? next : undefined);
   };
-  const flip = (mid: string, name: string, on: boolean) => (on && f.confirm ? setAsking({ id: mid, name }) : save(mid, on));
+  const flip = (mid: string, name: string, on: boolean) => (asksFirst(f, on) ? setAsking({ id: mid, name }) : save(mid, on));
   // The field picking where the plugin's program runs: a machine switched on says how the program is there.
   const status = (m: (typeof machines)[number]) =>
     nodes && items.includes(m.id) ? `${m.online ? t("settings-extensions.online") : t("settings-extensions.offline")} · ${nodeProgramStatus(nodes.find((n) => n.machine_id === m.id))}` : machineStatus(m, computers);
@@ -1104,19 +1128,7 @@ function MachineSwitches({ field: f, path, draft, onSaveNow, computers, nodes, i
           <Switch on={items.includes(r.id)} onChange={(on) => flip(r.id, r.name, on)} label={r.name} />
         </div>
       ))}
-      <Dialog
-        open={!!asking}
-        onClose={() => setAsking(null)}
-        title={asking ? t("settings-extensions.turn_on_title", { name: asking.name }) : undefined}
-        footer={
-          <>
-            <Button tone="quiet" onClick={() => setAsking(null)}>{t("common.cancel")}</Button>
-            <Button tone="primary" onClick={() => { if (asking) save(asking.id, true); setAsking(null); }}>{t("settings-extensions.turn_on")}</Button>
-          </>
-        }
-      >
-        <p className="text-[13px] leading-relaxed text-ink-2">{f.confirm}</p>
-      </Dialog>
+      <TurnOnDialog name={asking?.name ?? null} sentence={f.confirm} onCancel={() => setAsking(null)} onConfirm={() => { if (asking) save(asking.id, true); setAsking(null); }} />
     </div>
   );
 }

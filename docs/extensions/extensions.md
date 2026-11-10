@@ -246,7 +246,7 @@ and the API returns the ordered `form.fields`). Anything outside the subset can'
 | --- | --- | --- |
 | `string` | `title`, `description`, `default`, `enum` (with labels: `oneOf: [{"const", "title"}]`), `format` (`uri` / `email` / `hostname` / `machine` / `launcher`), `x-os` (only with `machine`: a list of `darwin` / `linux` / `windows`), `pattern`, `minLength`, `maxLength` | Text field; with `enum`, a picker; with `format: machine` or `launcher`, a picker of the hub's machines or launchers (below) |
 | `integer`, `number` | Descriptive keywords, `enum`, `minimum`, `maximum` | Number field; the App adds a stepper to an `integer`, held to `minimum` / `maximum` |
-| `boolean` | Descriptive keywords | Toggle |
+| `boolean` | Descriptive keywords | Toggle; with `x-confirm` (one sentence), turning it on first asks that sentence in the same dialog as a machine's toggle (below), titled with the field's title; Cancel leaves it off, Turn On sets it for Save; turning off doesn't ask (web and Android; the App doesn't ask yet) |
 | `array` | `items` must be `string` (may have `enum`), `minItems`, `maxItems`, `uniqueItems` | Editable list; with `enum` in `items`, multi-select; with `format: machine` in `items`, one toggle per machine (below) |
 | `object` | Top level only, containing only the scalars and arrays above; may have its own `required` | A group |
 

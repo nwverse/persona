@@ -411,9 +411,13 @@ private fun ExtensionFieldBlock(
         when {
             field.type == "boolean" -> {
                 val on = (state.value(path) as? JsonPrimitive)?.booleanOrNull ?: (field.fallback as? JsonPrimitive)?.booleanOrNull ?: false
+                // x-confirm asks before it is turned on (turning off is not asked); the yes only edits the draft, saved with Save.
+                var asking by remember(path) { mutableStateOf(false) }
                 JGroupItem(GroupPosition.Single) {
-                    JSwitchRow(title, on, { model.edit(path, JsonPrimitive(it)) }, subtitle = description, enabled = enabled)
+                    JSwitchRow(title, on, { if (field.asksFirst(it)) asking = true else model.edit(path, JsonPrimitive(it)) }, subtitle = description, enabled = enabled)
                 }
+                if (asking) JDialog({ asking = false }, title = stringResource(R.string.settings_ext_turn_on_title, field.label), text = field.confirm,
+                    confirm = stringResource(R.string.settings_ext_turn_on) to { asking = false; model.edit(path, JsonPrimitive(true)) })
             }
             field.type == "array" && field.items?.machines == true -> MachineSwitches(field, title, path, state, model, machines)
             field.type == "array" -> ExtensionListField(field, title, path, state, model, enabled)
@@ -489,7 +493,7 @@ private fun MachineSwitches(field: ExtensionField, title: String, path: List<Str
             val status = if (row.known) ExtensionText.machineStatus(res, row.online, nodes.firstOrNull { it.machineId == row.id }, picksProgram, on, row.computer, computers)
                 else stringResource(R.string.settings_ext_machine_not_found)
             JGroupItem(GroupPosition.of(index, rows.size)) {
-                JSwitchRow(row.name, on, { next -> if (next && !field.confirm.isNullOrBlank()) asking = row else save(row.id, next) },
+                JSwitchRow(row.name, on, { next -> if (field.asksFirst(next)) asking = row else save(row.id, next) },
                     subtitle = status, leadingIcon = PhIcons.Desktop, enabled = !state.busy && !state.saving)
             }
         }
