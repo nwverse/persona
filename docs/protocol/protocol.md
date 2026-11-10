@@ -3518,8 +3518,8 @@ On reading back, web only recognizes blocks after the first block whose first li
 | `source.kind` | Meaning | Optional fields |
 | --- | --- | --- |
 | `conversation` | Input from `conversation_send` or `conversation_new` | `conversation_id` is the sending session's stable id; `title` is its title at send time |
-| `patrol` | A repeating scheduled run, including daily routines and interval patrols | `title` is the scheduled task title; `conversation_id` is the originating conversation when recorded |
-| `followup` | A one-shot scheduled follow-up, wake, or usage-limit continuation | `title` and originating `conversation_id` when recorded |
+| `patrol` | A repeating scheduled run, including daily routines and interval patrols | `title` is the scheduled task title; `conversation_id` is the originating conversation when recorded; `push: "asked"` marks a run whose normal completion stays quiet |
+| `followup` | A one-shot scheduled follow-up, wake, or usage-limit continuation | `title` and originating `conversation_id` when recorded; `push: "asked"` as for `patrol` |
 | `supervision` | A supervision dispatch | Existing `injected.level` and turn-folding behavior still apply |
 | `meeting` | A batch from a recorded meeting this session attends: live sentences, questions and answers since the last batch, the end of the meeting (#2981, [meeting-minutes.md](../assistant/meeting-minutes.md) "Feeding the attending session") | `title` is the meeting's name; no `conversation_id` |
 

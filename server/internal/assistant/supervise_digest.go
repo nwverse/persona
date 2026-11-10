@@ -426,8 +426,8 @@ func (s *Service) holdPushes(ctx context.Context, id string) {
 	s.publish(ctx)
 }
 
-// holdPushesParam marks an assistant.send whose turn holds the conversation's pushes (holdPushes): a supervision
-// message, or a quiet task's run in a conversation it came from (runTask). Any other send releases them (call).
+// holdPushesParam marks an assistant.send whose supervision turn holds the conversation's pushes (holdPushes).
+// Any other send releases them (call); scheduled inputs carry their own persisted push mode.
 const holdPushesParam = "hold_pushes"
 
 // releasePushes: someone else speaks in conversation id: its turns are pushed as ever.

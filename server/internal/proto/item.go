@@ -187,6 +187,9 @@ type MessageSource struct {
 	Kind           string `json:"kind"`
 	ConversationID string `json:"conversation_id,omitempty"`
 	Title          string `json:"title,omitempty"`
+	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
+	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
+	Push string `json:"push,omitempty"`
 }
 
 const (

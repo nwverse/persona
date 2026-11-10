@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // A scheduled task's "Push when done" (#2396, docs/assistant/assistant.md "Push after running"): each run is a turn in a conversation, and the
@@ -23,9 +27,8 @@ import (
 // channels' mirror (quietTaskTurn) leave them out. A turn the user starts in that conversation is not pushed either:
 // the price of judging by the conversation, not by the turn — which, across queued messages, background turns and
 // compactions, the node can not tell for sure (three rounds of review on #2396). In a conversation it came from (a
-// leader's patrol, #3673), the run holds that conversation's pushes as a supervision message does (holdPushes) until
-// the user or anything else speaks there: the conversation stays the user's. Errors, cut-offs and a stuck turn are
-// told as ever, and so is what the run sends with notify_user.
+// leader's patrol, #3673), the turn's own items decide (quietScheduledInput): the input's persisted MessageSource.Push,
+// and nothing of the user's absorbed after it. Errors, cut-offs and a stuck turn are told as ever, and so is notify_user.
 const (
 	pushEvery = ""
 	pushAsked = assistantwire.PushAsked
@@ -83,7 +86,7 @@ func pushIn(raw map[string]json.RawMessage) (push string, has bool, err error) {
 
 // ownConversationIfQuiet: a task that pushes only what its runs send does not go on in the main conversation, or one
 // that may be it (mayBeMain): the main one is never quiet, so the task runs in its own. Another conversation it came
-// from it keeps: its runs there hold that conversation's pushes (runTask), not the conversation's own turns.
+// from it keeps: its input's persisted push mode identifies its normal answer, not the conversation's own turns.
 func ownConversationIfQuiet(t *Task, mayBeMain func(string) bool) {
 	if t.pushesOnlyAsked() && t.SessionID != "" && mayBeMain(t.SessionID) {
 		t.SessionID = ""
@@ -119,6 +122,10 @@ func (s *Service) quietTaskTurn(ctx context.Context, machine, session string) bo
 		sess, ok := s.session(ctx, machine, session)
 		return ok && assistantwire.SupervisedFinish(sess, true)
 	}
+	sess, ok := s.session(ctx, machine, session)
+	if ok && s.quietScheduledInput(ctx, machine, sess) {
+		return true
+	}
 	if !s.quietConversation(ctx, session) {
 		return false
 	}
@@ -126,8 +133,111 @@ func (s *Service) quietTaskTurn(ctx context.Context, machine, session string) bo
 	if !known {
 		return false // which conversation is the main one is not known: mirrored as ever
 	}
-	sess, ok := s.session(ctx, machine, session)
 	return ok && assistantwire.QuietTaskFinish(sess, main)
+}
+
+// quietScheduledInput: sess's turn that just ended normally was started by an asked scheduled input and carries
+// nothing of the user's (quietTurnItems). The mode lives in the native transcript, so manager or node restarts need no
+// in-memory conversation hold. Only conversations an asked task posts into are read.
+func (s *Service) quietScheduledInput(ctx context.Context, machine string, sess proto.Session) bool {
+	if !sess.Assistant || !s.askedTaskPostsInto(ctx, sess.SessionID) {
+		return false
+	}
+	main, known := s.knownMain(ctx)
+	if !known || !assistantwire.QuietTaskFinish(sess, main) {
+		return false
+	}
+	items, read := s.lastTurnItems(ctx, machine, sess.SessionID)
+	if !read || !quietTurnItems(items) {
+		return false // an old or unavailable node cannot prove this answer belongs to a quiet input
+	}
+	// A completion callback may run after another turn started: the items read must be of the session the caller
+	// judges. Compared by revision, not by LastText, which the node collapses and cuts to a snippet.
+	current, ok := s.session(ctx, machine, sess.SessionID)
+	return ok && current.Status == sess.Status && current.Rev == sess.Rev && current.UpdatedAt.Equal(sess.UpdatedAt)
+}
+
+// askedTaskPostsInto: an asked task runs in session, as the conversation it came from or its own one.
+func (s *Service) askedTaskPostsInto(ctx context.Context, session string) bool {
+	if session == "" {
+		return false
+	}
+	sc, err := s.lockedSchedule(ctx)
+	if err != nil {
+		return false
+	}
+	defer sc.mu.Unlock()
+	for _, t := range sc.tasks {
+		if t.pushesOnlyAsked() && (t.SessionID == session || t.RunSessionID == session) {
+			return true
+		}
+	}
+	return false
+}
+
+// quietTurnItems: a turn's items (the node's last turn, from the input that started it) say its answer is only the
+// asked scheduled run's. The turn's input is its last user text that is neither queued nor a wake, and the run has
+// answered after it (a patrol input written but not yet answered leaves the answer above it, the previous turn's).
+// After the input:
+//   - user input absorbed mid-turn (queued text or image without a scheduled source) makes the answer the user's too;
+//   - a wake by a background task this turn did not start (one the user started earlier, a loop, a peer) is
+//     the user's result, not the patrol's. A wake by a task the turn launched stays the patrol's.
+func quietTurnItems(items []proto.Item) bool {
+	start := -1
+	for i := len(items) - 1; i >= 0; i-- {
+		if it := items[i]; it.Role == "user" && it.Kind == proto.KindText && !it.Queued && !it.Wake && strings.TrimSpace(it.Text) != "" {
+			start = i
+			break
+		}
+	}
+	if start < 0 || !askedScheduledSource(prompts.ItemSource(items[start])) {
+		return false
+	}
+	answered := false
+	for i := start + 1; i < len(items); i++ {
+		it := items[i]
+		switch {
+		case it.Wake:
+			if !launchedIn(items[start+1:i], it.Task) {
+				return false
+			}
+		case it.Role == "user" && it.Queued && (it.Kind == proto.KindImage || it.Kind == proto.KindText && strings.TrimSpace(it.Text) != ""):
+			if !askedScheduledSource(prompts.ItemSource(it)) {
+				return false
+			}
+		case it.Role == "assistant" && it.Kind == proto.KindText && strings.TrimSpace(it.Text) != "":
+			answered = true
+		}
+	}
+	return answered
+}
+
+// askedScheduledSource: source is a scheduled run's that pushes only what it sends.
+func askedScheduledSource(source *proto.MessageSource) bool {
+	return source != nil && (source.Kind == proto.SourcePatrol || source.Kind == proto.SourceFollowup) && source.Push == pushAsked
+}
+
+// launchedIn: the background task note reports on was launched by a call among items. A note with its call's id is
+// matched by that id alone: another call's result may mention the task (a status check of the user's task). A note
+// without one falls back to its task id, matched whole against the id a call's result says that call started
+// (transcript.LaunchedBackgroundID). No note (a loop firing, a peer's message) was launched by none of them.
+func launchedIn(items []proto.Item, note *proto.TaskNote) bool {
+	if note == nil {
+		return false
+	}
+	for _, it := range items {
+		switch {
+		case note.ToolUseID != "":
+			if (it.Kind == proto.KindToolUse || it.Kind == proto.KindToolResult) && it.ToolUseID == note.ToolUseID {
+				return true
+			}
+		case note.TaskID != "":
+			if it.Kind == proto.KindToolResult && transcript.LaunchedBackgroundID(it.Text) == note.TaskID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // knownMain is the main conversation's id, and whether the settings could be read to say: a read that failed is not
