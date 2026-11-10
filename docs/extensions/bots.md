@@ -40,6 +40,11 @@ The two complement each other and have separate switches.
   header has `type` (event / card), `message_id`, `sum` / `seq` (fragments of large messages, reassembled before processing); every data frame must be answered with the same frame, its payload replaced with
   `{"code":200,"data":<base64 JSON>}`; for card callbacks the data is the toast / new card to show, and if Lark gets no answer **within 3 seconds** it retries. Receiving nothing for two ping intervals means the connection is dead, and it reconnects.
 - The same event may be redelivered: messages are processed only once per message_id (`seen` in `bots.feishu.state`, keeping the latest 300).
+  Card presses are not deduplicated on the hub side, which hands every delivery to the assistant: each press that does something once guards itself there —
+  an answer goes through its one-use owner action (a second answer to the same card finds it answered, `interactions.resolve`), and a press that starts work
+  takes a slot per pressed card and button (`pressOnce`, `feishu_card_actions.go`: the `/start` card's **Start** for a minute, the list card's **Start new agent**
+  for ten seconds), so a double tap, Lark's redelivery and the hub's resend of a call it gave up on all act once. A press whose work failed frees its slot and
+  says why, so pressing again retries it rather than being answered with the same "Starting…".
 
 ## Pairing and permissions
 

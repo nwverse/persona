@@ -102,11 +102,14 @@ import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark } from "../../ui/AgentMark";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
 import { t } from "../../i18n";
+import { lazyOverlay } from "../LazyOverlay";
 
 // The terminal view (TerminalPanel and its stream / cell parsing) loads on demand: most visits only read the chat, so it
 // stays out of the main chunk. A page that can switch to it fetches it in the background (loadTerminal below), so the
 // first switch does not slide in an empty layer.
 const loadTerminal = () => import("../session/TerminalPanel");
+// Sharing settings load on their first open, outside the first screen (docs/web/web.md "First screen").
+const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
 
 const NO_FEED: FeedItem[] = [];
@@ -1739,6 +1742,7 @@ export const Header = memo(function Header({
     }
   };
   const [linkTodoOpen, setLinkTodoOpen] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const state = session ? stateOf(session) : "unknown";
   // Awaiting Reply (#5096): seen, but it asked you something you have not answered
   const awaiting = session ? awaitsReply(session, mutes) : false;
@@ -1796,6 +1800,7 @@ export const Header = memo(function Header({
         // phone width: "Same space" leaves the header row to the title (#3576) and opens from ⋯ instead
         ...(phone && others.length > 0 ? [spaceAgentsItem(others, () => tabs.openAt(menu.anchor))] : []),
         ...assistantItems,
+        ...(!assistant && !main ? [{ key: "share", label: t("chat-chatview.share"), icon: "link" as const, onSelect: () => setSharingOpen(true) }] : []),
         ...(session.todo
           ? [
               {
@@ -1967,6 +1972,7 @@ export const Header = memo(function Header({
       {session && <RenameSpaceDialog open={dialog === "space"} onClose={() => setDialog(null)} session={session} />}
       {session && <DeleteSessionDialog open={dialog === "delete"} onClose={() => setDialog(null)} session={session} machineName={machineName} />}
       <LinkTodoDialog open={linkTodoOpen} session={session} onClose={() => setLinkTodoOpen(false)} />
+      {session && sharingOpen && !assistant && !main && <SharingDialog key={`${session.machine_id}/${session.session_id}/${session.manager ?? ""}`} session={session} onClose={() => setSharingOpen(false)} />}
       {assistantDialogs}
     </header>
   );
