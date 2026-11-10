@@ -2205,7 +2205,7 @@ struct ChatView: View {
                 // The assistant takes modes on Codex too (the node maps them to Codex's sandbox / approvals); a Codex thread
                 // on its app-server takes its effort alone (setsEffortOnly).
                 // In the shell the modes are in the composer's model menu (ShellComposerBar, #1091).
-                let modes = viewing == nil && !usesShellComposer && session?.canSend == true && (session.map({ $0.assistant || $0.isClaude || $0.setsEffortOnly }) ?? true)
+                let modes = viewing == nil && !usesShellComposer && session?.canSend == true && (session.map({ $0.canChangeModes || $0.setsEffortOnly }) ?? true)
                 if modes {
                     SessionModeBar(key: key, session: session)
                         .padding(.leading, Theme.Space.xs)
@@ -4209,10 +4209,7 @@ struct Composer: View, Equatable {
     }
 
     /// Effort and permission mode can change: Claude Code and the assistant (`SessionModeBar` shows them for the same).
-    private var setsModes: Bool {
-        guard let s = model.session(key) else { return false }
-        return s.canSend && (s.assistant || s.isClaude)
-    }
+    private var setsModes: Bool { model.session(key)?.canChangeModes == true }
 
     /// Only the effort can change: a Codex thread on its app-server (`Session.setsEffortOnly`).
     private var setsEffortOnly: Bool { model.session(key)?.setsEffortOnly == true }
