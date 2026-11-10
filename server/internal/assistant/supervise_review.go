@@ -37,6 +37,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		// accepted: the owner is still to look at the result themselves (a UI change someone has to see); without it the
 		// supervisor's acceptance passes the task's "Please verify" (#3240).
 		UserCheck bool `json:"user_check"`
+		// accepted: what was done beyond the brief (#3822, task_brief_result.go).
+		AlsoDone []string `json:"also_done"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -135,11 +137,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigOrphaned} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigOrphaned, sigOverdue} {
 		delete(b.pending, t.ID+"|"+k) // reviewed: what waited is answered
 	}
 	b.mu.Unlock()
-	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks})
+	// How it ended against what was asked (task_brief_result.go): each criterion of the brief, as scope changes left them.
+	var result *BriefResult
+	if verdict == reviewAccepted || verdict == reviewCancelled {
+		result = s.recordBriefResult(ctx, t, checks, a.AlsoDone, "", verdict)
+	}
+	_, _ = s.appendFeed(ctx, t.Origin, feedReview, t.ID, reviewFeedBody{Title: t.Title, Verdict: verdict, Round: v.Round, Note: note, Checks: checks, Result: result})
 	if verdict != reviewNeedsUser && verdict != reviewAccepted {
 		s.dropDecision(ctx, t.ID) // the review moved on: a decision still waiting on the owner is over (conclusion.go)
 	}
@@ -181,9 +188,13 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return fmt.Sprintf("Task %s is cancelled and closed; its agents are being closed and archived (archived, not deleted: "+
 				"agent_unarchive brings one back), and the cards they had waiting end. Tell the user only if they need to know.", t.ID), nil
 		}
+		against := result.words()
+		if gaps := result.unsettled(); len(gaps) > 0 {
+			against += " You accepted it with criteria of its brief not shown met: if one no longer applies, say so with task_scope before accepting next time."
+		}
 		if ledger && verdict == reviewAccepted && a.UserCheck {
 			return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. A \"Please verify\" card asks the "+
-				"user to look at it themselves (user_check), and it waits for their \"Pass\": don't ask them again.", t.ID), nil
+				"user to look at it themselves (user_check), and it waits for their \"Pass\": don't ask them again.", t.ID) + against, nil
 		}
 		if ledger && verdict == reviewAccepted {
 			// Checked by the supervisor: its "Please verify" is passed, not left for the owner to press (#3240).
@@ -192,16 +203,16 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			} else if ok {
 				return fmt.Sprintf("Task %s is accepted and closed, and marked verified by you: its \"Please verify\" card now says so and the "+
 					"user is not asked to pass it. Its agent is closed once it stays still. Tell the user the result in a line only if "+
-					"they are waiting for it, and hand out or schedule anything that follows (TestFlight, closing an issue).", t.ID), nil
+					"they are waiting for it, and hand out or schedule anything that follows (TestFlight, closing an issue).", t.ID) + against, nil
 			}
 		}
 		if carded {
 			return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Its conclusion card (the verdict, "+
 				"why in a sentence, the link) went to the user in Lark, marked checked by you (nothing waits for them): don't push the result again. Hand out or schedule anything that "+
-				"follows (deploy, TestFlight, closing an issue).", t.ID), nil
+				"follows (deploy, TestFlight, closing an issue).", t.ID) + against, nil
 		}
 		return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Tell the user the result in a line or two "+
-			"if they are waiting for it, and hand out or schedule anything that follows (deploy, TestFlight, closing an issue).", t.ID), nil
+			"if they are waiting for it, and hand out or schedule anything that follows (deploy, TestFlight, closing an issue).", t.ID) + against, nil
 	case reviewNeedsUser:
 		conclusion.Outcome, conclusion.Recommend = outcomeDecide, a.Recommend
 		if !deadline.IsZero() {
@@ -288,6 +299,9 @@ type reviewFeedBody struct {
 	Round   int           `json:"round,omitempty"`
 	Note    string        `json:"note,omitempty"`
 	Checks  []ReviewCheck `json:"checks,omitempty"`
+	// Result: an accepted or cancelled review against the task's brief (task_brief_result.go): each criterion met,
+	// not_met, unchecked or dropped, then what was done beyond it.
+	Result *BriefResult `json:"result,omitempty"`
 }
 
 // reviewDoneTodo closes todo id after its review (done_by review or cancelled, with reason); false when it was done already. An
