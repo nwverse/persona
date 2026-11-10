@@ -21685,6 +21685,28 @@
       },
       "extractionState" : "manual"
     },
+    "Both avatars use the default Home Screen icon. Older alternate icons reset to the default." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Both avatars use the default Home Screen icon. Older alternate icons reset to the default."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "どちらもデフォルトのホーム画面アイコンを使います。古い代替アイコンはデフォルトに戻ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "两种形象都使用默认桌面图标。旧的备用图标会切回默认。"
+          }
+        }
+      }
+    },
     "Both versions have the same text; the change may be in formatting, images, or layout. Open each one with the buttons below." : {
       "localizations" : {
         "en" : {
@@ -27790,6 +27812,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Choose Mochi or Milk Frog. Milk Frog downloads from the hub when selected. To use its colors, choose Match Avatar under Theme Color." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Mochi or Milk Frog. Milk Frog downloads from the hub when selected. To use its colors, choose Match Avatar under Theme Color."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "団子かミルクガエルを選べます。ミルクガエルは選択時に hub からダウンロードされます。配色を使うには、テーマカラーで「アバターに合わせる」を選んでください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择团子或奶蛙。选中奶蛙时会从 hub 下载；想用奶蛙的配色，在主题色里选「跟随形象」。"
+          }
+        }
+      }
     },
     "Choose Model" : {
       "localizations" : {
@@ -98576,6 +98620,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Resize the list" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resize the list"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストの幅を調整"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调整列表宽度"
+          }
+        }
+      }
     },
     "Resolve" : {
       "localizations" : {

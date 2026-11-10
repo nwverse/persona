@@ -574,6 +574,13 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - Settings entry points all use values (`SettingsPage`); view-based `NavigationLink { page }` pushes the left column's own stack and opens in the narrow column.
 - **Persona**: in regular width, the sidebar is `NavigationSplitView`'s left column (the shell's places and Settings at its foot), with the top-left button showing / hiding it; on iPhone Duo open the
   column's own button at its top hides it and the top-left one only brings it back (#2623, below); compact still uses a drawer.
+- **The line between the list and the page** (#2624, `SplitDividerHandle`, Persona's history and the Agents list; iPad and open Duo), as Feishu's:
+  - A short handle on the line drags the list column wider or narrower. The bounds are iPad 340–480 pt and Duo from 200 pt, and the page keeps at least 300 pt; the page takes the rest.
+  - Dragged more than 80 pt past the least, the list closes and the handle waits at the page's leading edge; dragged right from there, the list comes back.
+  - Width and closing are remembered per list: `agents.list.width` / `.closed`, `assistant.list.width` / `.closed`. Until dragged, the column is the system's.
+  - The column's own button closes and opens it too, remembered the same. A double tap on the handle gives the column back to the system.
+  - VoiceOver: adjusting the handle resizes the list by 40 pt, Hide List / Show List close and open it.
+  - `SplitDividerTests` (`-openSplitFresh YES` starts both lists at the system's width).
 - **Readable width**: chats and the Persona home page are at most 760pt wide (`ChatView.readableWidth`), centered when wider; the top bar still spans the full width.
 - **No screen dimensions**: the screens have different sizes and ratios; never use `UIScreen.main`. The long-press message action bar stays within the chat area (`MessageMenu.area`
   coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`); image scaling uses the view's `traitCollection.displayScale`.
