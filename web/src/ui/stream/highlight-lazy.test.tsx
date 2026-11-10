@@ -2,7 +2,7 @@
 // Code highlighting stays off the first draw: a reply with code draws its blocks plain, the highlighter is asked for
 // once the page is idle, and the same blocks near the viewport take its colors up when it arrives, without drawing the
 // replies again (lazy-plugin.ts, highlight.ts, #2465).
-import { act, Profiler, useState } from "react";
+import { act, Profiler, startTransition, Suspense, use, useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -266,5 +266,54 @@ describe("Markdown's code before and after the highlighter", () => {
       [chat, [pres[1]]],
       [box, [pres[2]]],
     ]);
+  });
+
+  it("colors a block coming near without waiting on another transition (#2905)", async () => {
+    await act(async () => void (await loadHighlight()));
+    let report: IntersectionObserverCallback = () => {};
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(cb: IntersectionObserverCallback) {
+          report = cb;
+        }
+        observe = () => {};
+        unobserve = () => {};
+        disconnect = () => {};
+      },
+    );
+    let frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => frames.push(run));
+    // another transition that does not finish (KaTeX drawing every reply with a formula, as a long chat opens)
+    let slow = () => {};
+    const never = new Promise<never>(() => {});
+    function Slow() {
+      const [on, setOn] = useState(false);
+      slow = () => startTransition(() => setOn(true));
+      if (on) use(never);
+      return null;
+    }
+    act(() =>
+      root.render(
+        <>
+          <Suspense fallback={null}>
+            <Slow />
+          </Suspense>
+          <Markdown text={"```ts\nconst a = 1\n```"} />
+        </>,
+      ),
+    );
+    act(() => {
+      const run = frames;
+      frames = [];
+      run.forEach((f) => f(0));
+    });
+    const pre = host.querySelector("pre")!;
+    expect(pre.querySelector("[class*=hljs-]")).toBeNull(); // not laid out: far
+    await act(async () => {
+      slow();
+      report([{ target: pre, isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+    expect(pre.querySelector(".hljs-keyword")?.textContent).toBe("const");
   });
 });

@@ -7,7 +7,7 @@
 // is within one height of its scroll container above or below what shows (one IntersectionObserver per container);
 // the rest are colored as they come near. What a block draws is what rehype-highlight 7 draws: one lowlight with the
 // common grammars, no guessing of unnamed languages, the `hljs` class first and `hljs-` token classes.
-import { createContext, createElement, startTransition, useContext, useLayoutEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
+import { createContext, createElement, useContext, useLayoutEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import type { ElementContent, Root } from "hast";
 import { commonLowlight } from "../../lib/lowlight";
@@ -158,12 +158,14 @@ function unwatch(e: Entry) {
   }
 }
 
-/** Draws these blocks colored; `now`: before this frame is painted (they mounted with the grammars already in). */
+/** Draws these blocks colored; `now`: before this frame is painted (they mounted with the grammars already in). Else in
+ *  an ordinary update, not a transition: React draws every pending transition in one render, so the blocks in view
+ *  waited for KaTeX to draw every reply with a formula as a long chat opened (#2905). They are a few blocks. */
 function show(entries: Entry[], now = false) {
   if (!entries.length) return;
   entries.forEach(unwatch);
   if (now) flushSync(() => entries.forEach((e) => e.show()));
-  else startTransition(() => entries.forEach((e) => e.show()));
+  else entries.forEach((e) => e.show());
 }
 
 function onIntersect(items: IntersectionObserverEntry[]) {
