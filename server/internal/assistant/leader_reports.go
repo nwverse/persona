@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -48,6 +49,8 @@ type leaderReportBook struct {
 	loaded bool
 	told   leaderReportsTold
 	run    sync.Mutex // one sync at a time
+	// plansDue: a leader's plan was just made; the next sync reads the waiting plans even when it is not the loop's.
+	plansDue atomic.Bool
 }
 
 type leaderReportsTold struct {
@@ -148,7 +151,10 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		}
 	}
 	s.todos.mu.RUnlock()
-	plans := s.leaderPlans(ctx, cfg.Main, leads, now)
+	var plans []leaderPlan
+	if stuckToo || s.lreports.plansDue.Swap(false) { // a plan waits rarely: the loop's, or right after task_plan made one
+		plans = s.leaderPlans(ctx, cfg.Main, leads, now)
+	}
 	if len(tasks) == 0 && len(plans) == 0 {
 		return
 	}
@@ -246,36 +252,58 @@ type leaderPlan struct {
 	lead string
 }
 
-// leaderPlans are the plans of the last 7 days still waiting for the owner's Start that are a current leader's: in a
-// leader's own conversation, or in the main conversation with a leader as their tasks' supervisor (task_plan
-// supervisor). A conversation whose feed cannot be read is left out this time.
+// leaderPlans are the plans of the last 7 days still waiting for the owner's Start that are a current leader's: made in
+// a leader's own conversation, or in the main conversation with a leader as their tasks' supervisor (task_plan
+// supervisor). Read from the plans themselves, not the feed (which pages from its oldest item). A conversation whose
+// plans cannot be read is left out this time.
 func (s *Service) leaderPlans(ctx context.Context, main string, leads []string, now time.Time) []leaderPlan {
 	var out []leaderPlan
-	seen := map[string]bool{}
 	for _, conv := range append(slices.Clone(leads), main) {
 		if conv == "" {
 			continue
 		}
-		items, plans, err := s.feed(ctx, conv, now.Add(-7*24*time.Hour))
-		if err != nil {
-			continue
-		}
-		for _, it := range items {
-			p := plans[it.Ref]
-			if it.Kind != feedPlan || p == nil || p.State != planOpen || seen[p.ID] || len(p.Tasks) == 0 {
-				continue
-			}
+		for _, p := range s.openPlans(ctx, conv, now.Add(-7*24*time.Hour)) {
 			lead := conv
 			if conv == main {
 				lead = p.Tasks[0].Supervisor
 			}
-			if !slices.Contains(leads, lead) {
-				continue
+			if slices.Contains(leads, lead) {
+				out = append(out, leaderPlan{plan: p, lead: lead})
 			}
-			seen[p.ID] = true
-			out = append(out, leaderPlan{plan: p, lead: lead})
 		}
 	}
+	return out
+}
+
+// openPlans are conversation's plans made since then that still wait for Start and have tasks, oldest first.
+func (s *Service) openPlans(ctx context.Context, conversation string, since time.Time) []*TaskPlan {
+	var all []*TaskPlan
+	if st := s.store(); st == nil {
+		s.tasks.mu.Lock()
+		for _, p := range s.tasks.plans {
+			if p.Conversation == conversation {
+				cp := *p
+				cp.Tasks = slices.Clone(p.Tasks)
+				all = append(all, &cp)
+			}
+		}
+		s.tasks.mu.Unlock()
+	} else {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil
+		}
+		for _, r := range rows {
+			all = append(all, planFromRow(r))
+		}
+	}
+	var out []*TaskPlan
+	for _, p := range all {
+		if p.State == planOpen && len(p.Tasks) > 0 && p.CreatedAt.After(since) {
+			out = append(out, p)
+		}
+	}
+	slices.SortFunc(out, func(a, b *TaskPlan) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return out
 }
 

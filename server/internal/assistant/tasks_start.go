@@ -96,6 +96,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if sup := p.Conversation; s.supervises(ctx, sup) {
 			if t.Supervisor != "" && s.isLeader(ctx, t.Supervisor) {
 				sup = t.Supervisor
+				if t.ReuseTodo == "" {
+					s.taskCard(ctx, sup, todo.ID) // the leader sees its task's card too; the plan's stays where it was made
+				}
 			}
 			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
 		}

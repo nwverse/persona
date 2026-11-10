@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -71,6 +72,9 @@ func TestAgentRouteEndpoint(t *testing.T) {
 		var r agentRoute
 		_ = json.Unmarshal(raw, &r)
 		return r
+	}
+	if code, _ := doRoute(t, s, http.MethodPost, "/api/v1/assistant/route/agent", body, "readonly"); code != http.StatusForbidden {
+		t.Fatalf("a read-only device asked: %d", code)
 	}
 	if r := route(); r.Supervisor != "conv1" || !r.Main || asked != 0 {
 		t.Fatalf("no leaders: %+v (asked %d)", r, asked)
@@ -145,6 +149,12 @@ func TestHandStartedAgentUnderALeaderGetsItsSignals(t *testing.T) {
 	if v := todoNow(s, todo.ID).Supervision; v == nil || v.Supervisor != "conv1" {
 		t.Fatalf("moved: %+v", v)
 	}
+	if items, _, err := s.feed(context.Background(), "conv1", time.Time{}); err != nil || !slices.ContainsFunc(items, func(it FeedItem) bool { return it.Ref == todo.ID }) {
+		t.Fatalf("the card did not follow the task: %+v %v", items, err)
+	}
+	if code, _ := doRoute(t, s, http.MethodPost, "/api/v1/assistant/agents/box/nope/supervisor", `{}`, ""); code != http.StatusNotFound {
+		t.Fatalf("an unknown session: %d", code)
+	}
 }
 
 // task_plan's supervisor: the main conversation hands the plan to a leader, whose tasks they are; nobody else may, and
@@ -213,6 +223,10 @@ func TestLeaderPlanWaitingIsADecision(t *testing.T) {
 	put(main, "", planOpen, "A plan of the main conversation's own")
 	put("conv_lead_a", "", planStarted, "Started already")
 
+	if got := e.reports(time.Now(), false); len(got) != 0 {
+		t.Fatalf("a change's sync read the plans unasked: %+v", got)
+	}
+	e.s.lreports.plansDue.Store(true) // as task_plan sets it
 	got := e.reports(time.Now(), false)
 	if len(got) != 2 {
 		t.Fatalf("reports: %+v", got)
@@ -257,6 +271,18 @@ func (m *planMemStore) TaskPlan(_ context.Context, id string) (*db.TaskPlanRow, 
 		return nil, db.ErrTaskPlanNotFound
 	}
 	return &p, nil
+}
+
+func (m *planMemStore) TaskPlans(_ context.Context, conversation string) ([]db.TaskPlanRow, error) {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	var out []db.TaskPlanRow
+	for _, p := range m.plans {
+		if p.Conversation == conversation {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 
 func (m *planMemStore) TaskPlansByID(_ context.Context, ids []string) ([]db.TaskPlanRow, error) {

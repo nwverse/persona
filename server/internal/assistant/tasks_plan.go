@@ -163,6 +163,7 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		}
 		s.push(ctx, Notification{Subtitle: machineName, DeviceID: here, SessionID: sessionID, Title: title, Body: body})
 		if lead != "" || s.isLeader(ctx, sessionID) {
+			s.lreports.plansDue.Store(true)
 			s.directionsSoon() // a leader's plan waiting for Start is a decision for the owner (leader_reports.go)
 		}
 		return fmt.Sprintf("Plan %s is on the user's screen as a card and pushed to their phone; nothing has started. "+

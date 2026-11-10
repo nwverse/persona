@@ -112,11 +112,11 @@ func (s *Service) putAgentUnder(ctx context.Context, mid, sid, lead, title strin
 	}
 	am, ok := s.device(ctx, mid)
 	if !ok {
-		return Todo{}, false, fmt.Errorf("no machine %q", mid)
+		return Todo{}, false, fmt.Errorf("%w: no machine %q", errAgentNotFound, mid)
 	}
 	c, ok := s.session(ctx, am.ID, sid)
 	if !ok {
-		return Todo{}, false, fmt.Errorf("no session %s on %s", sid, am.Name)
+		return Todo{}, false, fmt.Errorf("%w: no session %s on %s", errAgentNotFound, sid, am.Name)
 	}
 	if c.Assistant {
 		return Todo{}, false, errors.New("that is an assistant conversation, not a coding agent")
@@ -128,7 +128,7 @@ func (s *Service) putAgentUnder(ctx context.Context, mid, sid, lead, title strin
 		if t.Origin == "" {
 			return Todo{}, false, fmt.Errorf("%s is on the owner's own to-do %q: it stays theirs", agentLabel(c), t.Title)
 		}
-		v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		v, moved, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 			if v.Supervisor == lead {
 				return false
 			}
@@ -137,6 +137,9 @@ func (s *Service) putAgentUnder(ctx context.Context, mid, sid, lead, title strin
 		})
 		if err != nil {
 			return Todo{}, false, err
+		}
+		if moved {
+			s.taskCard(ctx, lead, t.ID) // its card follows it (the old conversation keeps its history)
 		}
 		t.Supervision = &v
 		return t, false, nil
@@ -152,9 +155,15 @@ func (s *Service) putAgentUnder(ctx context.Context, mid, sid, lead, title strin
 	return todo, made, nil
 }
 
+var errAgentNotFound = errors.New("not found")
+
 // agentRouteRoutes: the New agent sheet's two calls (docs/protocol/protocol.md "REST (App → hub)").
 func (s *Service) agentRouteRoutes() {
 	s.handle("POST /api/v1/assistant/route/agent", func(w http.ResponseWriter, r *http.Request) {
+		if !fullRole(r) { // it costs a model call: only a device that may start the agent asks
+			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot start agents"))
+			return
+		}
 		var in struct {
 			MachineID string `json:"machine_id"`
 			Cwd       string `json:"cwd"`
@@ -185,7 +194,7 @@ func (s *Service) agentRouteRoutes() {
 		}
 		todo, made, err := s.putAgentUnder(r.Context(), r.PathValue("mid"), r.PathValue("sid"), strings.TrimSpace(in.Supervisor), in.Title)
 		if err != nil {
-			apierr.Write(w, http.StatusConflict, err)
+			apierr.Write(w, cond(errors.Is(err, errAgentNotFound), http.StatusNotFound, http.StatusConflict), err)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"todo": todo, "made": made})
