@@ -105,5 +105,7 @@
   "git_timeout": "Timed out",
   "market_warning": "The extension market has a warning",
   "sandbox_unavailable": "The sandbox is unavailable",
-  "settings_moved": "The settings changed while this was being checked. Nothing was saved; try again"
+  "settings_moved": "The settings changed while this was being checked. Nothing was saved; try again",
+  "translation_skipped": "{file} is left out: {err}; the manifest's own text is shown instead",
+  "entry_translation_skipped": "{id}: the index entry's l10n is left out: {err}; the manifest's own text is shown instead"
 }

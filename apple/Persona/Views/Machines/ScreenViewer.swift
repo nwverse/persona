@@ -1,6 +1,6 @@
 import SwiftUI
 
-// A Mac's VNC (docs/extensions/computer-use.md「实时画面」, #1343): opened from a machine's page, a tool, the running work or a
+// A Mac's VNC (docs/extensions/computer-use.md「Live view」, #1343): opened from a machine's page, a tool, the running work or a
 // chat's ··· menu (`AppModel.openVNC`), it comes up in the small window (VNCPiP) when this device keeps the Mac's
 // sign-in, else on the whole screen (VNCPage) in a window of its own (ScreenWindow). The app draws it itself
 // (RFBSession); the hub's /screen/<machine> page is the web's.

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The Mac inbox's state (docs/assistant/inbox.md, docs/apple/mac.md「收件箱」): one per app, shared by the sidebar's filters, the list
+// The Mac inbox's state (docs/assistant/inbox.md, docs/apple/mac.md「Inbox, Lark, mail and links」): one per app, shared by the sidebar's filters, the list
 // column and the detail column, which the window's three columns hold separately (`MacInboxFilters`, `MacInboxList`,
 // `MacInboxDetail`). The filters are the iPhone's (same `inbox.source` / `inbox.kind` defaults), picked from the
 // sidebar instead of a row of chips.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// ⌘K Quick Open (docs/apple/mac.md「搜索」): one field over the agents, the Persona conversations, the open conversation's
+/// ⌘K Quick Open (docs/apple/mac.md「Quick Open and New」): one field over the agents, the Persona conversations, the open conversation's
 /// files (`MacFileFind`), the inbox, the window's sections and the two "new" actions, like Xcode's Open Quickly. ↑↓ choose, ⏎ opens, Esc closes.
 enum MacQuickOpen {
     enum Target: Hashable {

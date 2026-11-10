@@ -47,7 +47,7 @@ enum LauncherName {
         return r.step("claude")?.state == "ok"
     }
 
-    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「内置预设」).
+    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「Built-in presets」).
     static let presetsFeature = "builtin_presets"
     /// The uses a provider added in the wizard takes over while they are still at their default (docs/assistant/onboarding.md 5.4).
     static let assignPurposes = ["assistant", "agent.new"]

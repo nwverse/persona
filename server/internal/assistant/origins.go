@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Where an assistant conversation comes from (docs/protocol/protocol.md "Where assistant conversations come from", #3264): the user's own (the app,
+// Where an assistant conversation comes from (docs/protocol/protocol.md "Origin of assistant chats", #3264): the user's own (the app,
 // a channel's /new) or one the hub opened by itself (the inbox's AI twin, a scheduled task, conversation_new, a
 // plugin's /agent). The apps keep the user's in "Recent" and fold the others away. An origin is noted when the hub starts
 // the conversation and never changes; conversations from before are backfilled from what the hub can still tell

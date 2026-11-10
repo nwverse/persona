@@ -323,7 +323,7 @@ data class Session(
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
     /**
-     * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant conversations", #3264): user, channel, inbox, task, spawned,
+     * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant chats", #3264): user, channel, inbox, task, spawned,
      * lark_agent, extension, or one this app doesn't know yet; null is the user's (older hubs never say).
      */
     @SerialName("origin") val origin: String? = null,
@@ -352,7 +352,7 @@ data class Session(
     @SerialName("queued") val queued: List<String>? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
     /**
-     * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflow, Monitor"): a running one is
+     * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
      */
     val workflows: List<Workflow>? = null,
@@ -537,7 +537,7 @@ data class Item(
     /** On a notice: the context was compacted here (Claude Code's compact_boundary); the chat draws it as a divider. */
     val compact: CompactBoundary? = null,
     /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by the user; the hub marks it
-     *  (docs/protocol/protocol.md "Messages Persona injects"), older hubs do not (core/domain `injectedOf`). */
+     *  (docs/protocol/protocol.md "Messages injected by Persona"), older hubs do not (core/domain `injectedOf`). */
     val injected: Injected? = null,
     /** Optional provenance for model input that was not typed by the user. Older hubs omit it. */
     val source: MessageSource? = null,

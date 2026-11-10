@@ -15,7 +15,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
 
-// Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and conversation activity"): the plans the
+// Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and the chat feed"): the plans the
 // assistant hands the user, the todos that are tasks, and the items the hub inserts into a conversation (its feed).
 
 @KeepGeneratedSerializer
@@ -263,7 +263,7 @@ data class TaskProgress(
 )
 
 /**
- * Todo states in order of rank (umbrella.final.md / docs/assistant/todos.md "State rules"):
+ * Todo states in order of rank (umbrella.final.md / docs/assistant/todos.md "State calculation rules"):
  * Done -> Needs you -> To review -> In progress -> To follow up -> Not started
  */
 enum class TodoState(val title: CoreText, val rank: Int) {

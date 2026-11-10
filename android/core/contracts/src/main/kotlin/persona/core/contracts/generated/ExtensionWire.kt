@@ -646,7 +646,7 @@ data class ExtensionLookAvatar(
 )
 
 /**
- * An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+ * An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
  */
 @Serializable
 data class ExtensionLookPalette(
@@ -697,8 +697,8 @@ data class ExtensionLookDot(
 )
 
 /**
- * A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
- * app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+ * A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+ * package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
  */
 @Serializable
 data class ExtensionLookItem(

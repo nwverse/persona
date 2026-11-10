@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Pressing a card's actions (docs/assistant/assistant-views.md "Persisted submits"): a form is submitted once with the values typed, a
+// Pressing a card's actions (docs/assistant/assistant-views.md "Persistent submission"): a form is submitted once with the values typed, a
 // confirm asks natively first, a card that changed under the submit (409 view_changed) keeps the draft and asks again at
 // the new version, a live update redraws in place without taking the field being typed in, and push / pop move within
 // the card. The hub is a fake one (fetch), the data made up.

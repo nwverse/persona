@@ -1,7 +1,7 @@
 package proto
 
 // Terminal engines: the terminal host(s) a machine's node drives, chosen per machine. EngineHerdrBoth runs classic
-// herdr and herdr-core side by side (docs/integrations/engines.md "Side by side"): a machine used both locally and through the Herdr
+// herdr and herdr-core side by side (docs/integrations/engines.md "Host sets"): a machine used both locally and through the Herdr
 // app's remote sessions.
 const (
 	EngineHerdr     = "herdr"      // the classic herdr CLI

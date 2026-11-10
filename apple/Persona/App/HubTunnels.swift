@@ -1,7 +1,7 @@
 import Foundation
 
 /// A way through to a paired hub when its own addresses do not answer: its SSH tunnel
-/// (docs/operations/network.md「经 SSH 隧道连 hub」), its local SOCKS5 proxy ("Connecting to hub through a local SOCKS5
+/// (docs/operations/network.md「Connecting to hub through SSH」), its local SOCKS5 proxy ("Connecting to hub through a local SOCKS5
 /// proxy") or, in builds that have the in-app tunnel core for a hub whose extension contributes one, its in-app tunnel
 /// (「经 App 内隧道连 hub」). A hub may have several; each is tried in turn, in that order.
 struct HubTunnel: Hashable {
@@ -65,7 +65,7 @@ struct HubTunnel: Hashable {
 }
 
 extension AppModel {
-    // MARK: Tunnels to the hub (docs/operations/network.md「经 SSH 隧道连 hub」「经 App 内隧道连 hub」)
+    // MARK: Tunnels to the hub (docs/operations/network.md「Connecting to hub through SSH」「经 App 内隧道连 hub」)
 
     /// The group's tunnels ready to use, each paired hub's SSH one, then its local proxy, then its in-app one.
     func hubTunnels(_ group: String) -> [HubTunnel] {
@@ -149,7 +149,7 @@ extension AppModel {
 }
 
 /// How a group's next connection picks its way when its hubs have tunnels
-/// (docs/operations/network.md「经 SSH 隧道连 hub」): the tunnels set to Always Use first, in order, the first that
+/// (docs/operations/network.md「Connecting to hub through SSH」): the tunnels set to Always Use first, in order, the first that
 /// comes up taken; then the hub's own addresses, while the tunnels used last time start meanwhile; an address
 /// answering: straight to the hub; else the first of those to have come up, then the other tunnels in order. Going
 /// through a tunnel only because the direct way did not answer, the direct way is asked again every `recheck`. Pure:

@@ -29,7 +29,7 @@ import persona.core.contracts.generated.ExtensionViewAction
 import persona.core.contracts.generated.ExtensionViewActionInput
 import persona.core.contracts.generated.ExtensionViewChangedError
 
-/** The unified entry's routes on the active pairing (docs/protocol/protocol.md "Tasks and conversation activity"). */
+/** The unified entry's routes on the active pairing (docs/protocol/protocol.md "Tasks and the chat feed"). */
 class HttpTasksApi internal constructor(
     private val request: suspend (path: String, method: String, body: JsonElement?) -> Response,
     override val features: kotlinx.coroutines.flow.StateFlow<Set<String>>? = null,

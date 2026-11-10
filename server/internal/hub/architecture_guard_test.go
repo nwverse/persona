@@ -22,9 +22,9 @@ import (
 // The hub is the communication center only: clients <-> manager, hub <-> hub, connections, pairing / auth, admin,
 // push delivery and relays. Business (the assistant, inbox, todos, usage, boards, extensions, devices' data) is the
 // manager's (internal/assistant, internal/devices, internal/extmgr). These tests pin the hub's surface so new business
-// lands in the manager instead (docs/server/architecture.md "The hub is only the communication center").
+// lands in the manager instead (docs/server/architecture.md "The hub is only a communication center").
 
-const guardDoc = "see docs/server/architecture.md「hub 只做沟通中心」"
+const guardDoc = "see docs/server/architecture.md「The hub is only a communication center」"
 
 const modulePath = "github.com/nwverse/persona/server/"
 

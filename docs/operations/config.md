@@ -383,7 +383,7 @@ A manager's own sections of the configuration are in its `manager.json`, not in 
   `enabled` / `auto_continue` / `wake` / `decide` are merely initial values if never saved in the App (omitted means off). Triage is done by the manager (assistant process), which reads this section here; for hand edits see **Edits** above.
 - `agents.launcher_health`: launcher health checks and automatic repair ([launcher-health.md](../server/launcher-health.md)): `enabled` (off by default; true enables periodic checks and automatic repair), `interval_minutes` (default 30),
   `repair` (repair Agent: no `skill` means no repair Agent, only CLI upgrades; `machine` defaults to the assistant's computer, `cwd` to home, `launcher` to an available one, `permission` is the permission mode, default `bypassPermissions`).
-- `agents.delegate` (#3029): the assistant answers Agent questions first ([assistant.md](../assistant/assistant.md) ("The assistant answers questions first")). **Off by default**, enabled only with `enabled: true`;
+- `agents.delegate` (#3029): the assistant answers Agent questions first ([assistant.md](../assistant/assistant.md) ("Assistant answers questions first")). **Off by default**, enabled only with `enabled: true`;
   `timeout_seconds` is how long the assistant may take (default 180); if no result arrives, the question is pushed to the user unchanged. `rules` are the user's own delegation rules (prose shown to the model with built-in rules; they cannot relax red lines).
   For hand edits see **Edits** above. Example enabling it (alongside the other sections of `manager.json`):
 

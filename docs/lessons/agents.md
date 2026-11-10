@@ -1,6 +1,6 @@
 # Lessons: Claude Code, Codex, and herdr
 
-Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md` ("Lessons"), index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
+Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
 - Task placement must preserve locality (#1175): a failed launcher check is not permission to move an explicitly targeted task to another computer with the original absolute directory. Persist fixed placement by default through preview, card edits and retries; require an explicit flexible policy for portable work. Returning from background dispatch only proves the work was queued, not that a native Agent received its first prompt.
 
@@ -41,7 +41,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 - Persona-managed launchers pass keys through `ANTHROPIC_API_KEY`. Interactive claude first seeing that key prompts "Detected a custom API key … Do you want to use this API key?",
   with No selected by default (measured 2026-11-03 on 2.1.309). Selecting No puts the key in `customApiKeyResponses.rejected`, and every session from that launcher reports not logged in. `-p` doesn't ask,
   so the launcher "Check" passes but creating a session from the phone blocks. `ANTHROPIC_AUTH_TOKEN` (sends `Authorization: Bearer`) and `apiKeyHelper` don't ask, but the official API doesn't accept the former,
-  and the latter needs another `--settings` (only the last is used, above). `personad launch` now records the key as allowed before startup (`docs/integrations/launchers.md` ("How Persona-managed launchers run")).
+  and the latter needs another `--settings` (only the last is used, above). `personad launch` now records the key as allowed before startup (`docs/integrations/launchers.md` ("Running Persona-managed launchers")).
   Acquire Claude's own config lock before writing (the `<config path>.lock` directory, stale after 10 seconds), or concurrent writes by a running claude lose one side's changes.
   Claude Code 2.1.317 includes a `storageV5` config backend (off by default); once it becomes default, global config may stop reading `.claude.json`. Recheck this behavior when upgrading Claude Code.
 - If a launcher connected to a relay gateway returns 401, don't suspect the header first: the relay used here accepted both `Authorization: Bearer` and `x-api-key` from its first version (check its authentication middleware).
@@ -51,7 +51,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   Claude Code fills variables **absent** from the environment from settings `env`, so it sends both `Authorization: Bearer <that token>` and `x-api-key`, and the relay returns 401
   `invalid or missing API key` (2026-11-04, once misdiagnosed as "the gateway only accepts Bearer"). Existing environment variables, even empty ones, aren't overwritten by settings. `personad launch` now sets the other variable empty.
   Reproduce with a fake gateway logging headers, a `settings.json` with `env` under `CLAUDE_CONFIG_DIR=<temporary directory>`, and `claude -p`.
-- User-started claude (launchers, profile directories) lacks Persona hooks; AskUserQuestion can only be answered through screen-reading cards. These must recognize 2.1.316 multiple selection: `[ ]` / `[✔]` are state, not text. Digits toggle but don't submit; move to Submit, press enter, then press 1 on the confirmation page. A digit on the free-answer row types text; a digit on Submit does nothing. Sending several keys together loses some; send one at a time (`docs/integrations/claude-integration.md` ("Screen cards for multi-select questions")).
+- User-started claude (launchers, profile directories) lacks Persona hooks; AskUserQuestion can only be answered through screen-reading cards. These must recognize 2.1.316 multiple selection: `[ ]` / `[✔]` are state, not text. Digits toggle but don't submit; move to Submit, press enter, then press 1 on the confirmation page. A digit on the free-answer row types text; a digit on Submit does nothing. Sending several keys together loses some; send one at a time (`docs/integrations/claude-integration.md` ("Screen cards for multiselect questions")).
 - With preview-bearing AskUserQuestion options, digits only move the cursor; enter is needed to select. A digit-only screen card appears answered but has no effect. After keys, check the screen to confirm the question actually advanced (`docs/integrations/claude-integration.md` ("Questions with previews")).
 - When a screen card is withdrawn because the Agent is no longer blocked, also mark it ended (cancelled) in the database, or history stays pending until hub restarts.
 - Screen dialog recognition must first anchor the dialog's starting row (`screen.dialogTop`: the final separator below the conversation, or the row after a selection panel's `▔` edge), then find numbers below it. Searching the whole screen mistakes the Agent's "1. … 2. …" answer for options—
@@ -138,7 +138,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 - Codex image generation (`scripts/assets/make_persona.py generate`): `codex exec`'s built-in `image_gen` can create transparent PNGs using Codex's own ChatGPT login,
   but its HTTP client doesn't accept `socks5h://` proxies (chat requests do); use an HTTP CONNECT proxy. `-i` takes multiple values, prompts come from stdin; ChatGPT login supports only some models.
   If generation hangs (over ten minutes per image, all parallel work stopped), measure proxy tunnel throughput before blaming rate limits: on 2026-10-31 the hub machine's outbound bandwidth was only 11 KB/s; opening `ssh -D` on a faster internet machine produced four avatars in 6 minutes (`docs/apple/persona.md`).
-- Orca host (`docs/plans/plan-orca-support.md` ("Orca sources")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
+- Orca host (`docs/plans/plan-orca-support.md` ("Orca source")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
   (the first version did this; fake runtime didn't validate parameters, so all tests passed; `orcarttest` now validates Orca's schema). If Orca can't recognize the foreground Agent, it types the "prompt" straight into
   the shell and presses Enter; `accepted:false` exists only with `requireAgentStatus`. Before sending, verify the Agent is foreground using the process table + `terminal.agentStatus`;
   Orca's `agentPrompt` pastes only for Agents it has seen working; newly started claude receives raw text, and multiline input submits at the first newline. Persona sends bracketed paste itself, then Enter separately;
@@ -203,7 +203,7 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   alongside `herdr remote-client-bridge` and `peers.json`; terminal tabs live in `doc.get("herdr-app")`. It and terminal `herdr server`
   (`~/.config/herdr/herdr.sock`) can't see each other. If "sessions opened locally through App remote aren't found", check herdr-core `terminal.list` first, not only the classic socket.
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
-  (`docs/integrations/engines.md` ("Side by side"), `docs/plans/plan-orca-support.md` ("Combined engines")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
+  (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
@@ -277,7 +277,7 @@ other engines' panes (Orca) keep their original error.
   nor does another `--settings` in launcher arguments (Persona's later `--settings` replaces it entirely).
   Manually adding `enableArtifact: false` to `launcher-settings/<name>-env-settings.json` seems ineffective: node rewrites that file at every launch, losing the edit before the next Agent starts.
   Both `enableArtifact: false` in `--settings` and environment `CLAUDE_CODE_DISABLE_ARTIFACT=1` worked in tests (interactive claude in tmux, three configs compared);
-  Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("How Persona-managed launchers run")).
+  Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("Running Persona-managed launchers")).
 
 ## "the tab's shell had not run it yet (is the machine busy?)" when the launcher isn't there at all (#1642)
 
@@ -340,7 +340,7 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   so disconnections, timeouts, and missing threads appeared "changed" on the phone, and later `turn/start` carried the stale selection, potentially changing thread settings unexpectedly after reconnect (PR review).
   Bind remembered selections to that connection and thread; invalidate on change.
 - Test method: start stdio `codex app-server` in a temporary `CODEX_HOME`; `thread/start` needs no login and calls no model, so it can test settings APIs. Don't touch live `~/.codex`.
-  See `docs/integrations/codex.md` ("Effort").
+  See `docs/integrations/codex.md` ("Thinking effort").
 
 ## Interrupt (Esc) doesn't trigger Stop; pid files include procStart (2026-11-04)
 
@@ -356,7 +356,7 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 
 - Before installing hooks in the user's **global** `~/.claude/settings.json`, inspect existing hooks (locally: moshi-hook, Orca synchronous `PermissionRequest`). Hooks for an event compose;
   several blocking hooks run one after another, and terminal dialogs wait until all return. Persona's permission / question hook waits for the phone (`timeout` 86400); installed globally, it prevents the person at the computer from answering in the terminal too.
-  Global hooks must therefore be asynchronous, short-timeout, reporting-only (`hub.json machines[].claude_global_hooks`, `docs/integrations/claude-integration.md` ("Global reporting-only hooks")); blocking hooks remain in the `--plugin-dir` plugin and affect only Persona-started sessions.
+  Global hooks must therefore be asynchronous, short-timeout, reporting-only (`hub.json machines[].claude_global_hooks`, `docs/integrations/claude-integration.md` ("Global report-only hooks")); blocking hooks remain in the `--plugin-dir` plugin and affect only Persona-started sessions.
 - `CLAUDE_CODE_PLUGIN_DIRS` exists (absolute-path list, PATH separator), but is one variable. Another tool (moshi) already occupies its `settings.json` `env` value; using it for Persona would mean changing someone else's value.
 - Global entries must be recognizable: commands end with `hook --persona-global`, and install / uninstall touches only such entries; don't use generic words like `hook --global` that other tools may also use.
 - These global hooks must not bind panes by environment `HERDR_PANE_ID` either: claude started by a tmux server (botmux) inherits it without being in that pane.
@@ -419,7 +419,7 @@ Recorded screens: `server/internal/screen/testdata/claude-2.1.318-rewind-*`; par
   The explanation below (`The code will be restored +1 -1 in notes.txt.` / `The code will be unchanged.`) follows the cursor. 2.1.304 wording differs (`The conversation will be forked`); recognize only by title and option names.
 - Esc: confirmation → list (cursor retained) → closed; Enter on `(current)` also closes silently. After confirmation, the panel closes immediately, the input box contains that message (including multiline), and files are restored as selected.
 - **Chat history isn't deleted**: the file is a tree; the next message after rewind has `parentUuid` equal to the uuid before the target, and abandoned turns remain. node transcript reading removes them using "two user-authored messages under the same parent abandon the earlier message's whole subtree"
-  (`transcript/branch.go`, `docs/protocol/protocol.md` ("Rewind to a message")). **Don't walk parentUuid backward from the final line**: parallel tool results and attachments are legitimate branches (7681 in a real corpus of 122 files); a compaction `compact_boundary`
+  (`transcript/branch.go`, `docs/protocol/protocol.md` ("Rewinding to a message")). **Don't walk parentUuid backward from the final line**: parallel tool results and attachments are legitimate branches (7681 in a real corpus of 122 files); a compaction `compact_boundary`
   has null `parentUuid`, so walking a chain loses the entire pre-compaction chat. Real corpus (122 local jsonl files, comparing only counts / ids): 3 had such user-message branches; old → new reading removed only abandoned items, every other file matched item-for-item,
   and windowed and full reading agree (`TestCorpusWindowed`). Rewind writes no new lines, so node marks its own rewind directly (`File.Rewound`); this isn't persisted, and after node restart it becomes detectable again only with the next message.
   In windowed reads (only the last 8 MB of large files), if the earlier branch begins before the window, its in-window lines are removed only when paging back to that section; removal changes the token and clients refetch.
@@ -519,7 +519,7 @@ Don't assume "hook disconnected = Agent no longer waiting": while waiting, node 
 
 ## Closing a question is a runtime operation (#5700)
 
-`dismiss` hands a question back to the computer and leaves its runtime waiting. A close-without-answer action needs a separate resolution and an explicit runtime capability; sending Escape to a terminal is unsafe because it can fold a question pane or interrupt the turn. See `docs/protocol/protocol.md` ("Question cancellation").
+`dismiss` hands a question back to the computer and leaves its runtime waiting. A close-without-answer action needs a separate resolution and an explicit runtime capability; sending Escape to a terminal is unsafe because it can fold a question pane or interrupt the turn. See `docs/protocol/protocol.md` ("Closing a question without an answer").
 
 Claiming a resolution and persisting it are separate operations. A timeout or disconnected waiter must not write an earlier terminal outcome while the claimed resolution is still being persisted: the database keeps the first outcome, so a reconnect would otherwise lose the cancellation. Arbitrate under the claim lock and broadcast the committed result to overlapping resumable waiters.
 

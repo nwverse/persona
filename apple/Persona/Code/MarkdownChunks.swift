@@ -2,7 +2,7 @@ import MarkdownUI
 import PersonaKit
 import SwiftUI
 
-/// A long Markdown file cut between its top-level blocks into pieces of about `lines` lines (docs/apple/ios.md「文件查看器」):
+/// A long Markdown file cut between its top-level blocks into pieces of about `lines` lines (docs/apple/ios.md「File viewer」):
 /// each piece is its own `Markdown` in a lazy stack, so a 5 000-line README lays out only what is on screen.
 /// Never cut inside a code fence, before an indented line (a list item's continuation, indented code) or a table's
 /// rows; link definitions (`[x]: url`) go with every piece so references still resolve.

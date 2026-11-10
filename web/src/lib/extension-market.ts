@@ -1,4 +1,4 @@
-// Extension markets (docs/extensions/extensions.md "Extension markets"): markets the hub reads (an index persona-extensions.json on a site or a GitHub
+// Extension markets (docs/extensions/extensions.md "Extension marketplace"): markets the hub reads (an index persona-extensions.json on a site or a GitHub
 // repository), their catalog, and installing, upgrading and removing from it. A full-rights device may: the package is
 // pinned by the index's sha256 and nothing installs before the user has seen what it may do (the preview's
 // permissions digest). The admin UI has the same routes under /api/v1/admin/extensions/-/ (its api.ts), the same words

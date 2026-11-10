@@ -107,7 +107,7 @@ type BrowserCookies struct {
 	Removed  int                 `json:"removed,omitempty"`
 }
 
-// ComputerJob is one install or grant the node runs in the background (docs/extensions/computer-use.md "One-click install").
+// ComputerJob is one install or grant the node runs in the background (docs/extensions/computer-use.md "One-tap installation").
 type ComputerJob struct {
 	Kind  string `json:"kind"`  // install | grant | open
 	State string `json:"state"` // running | done | failed | cancelled

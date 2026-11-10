@@ -1,4 +1,4 @@
-// Package apierr writes the JSON bodies of the hub's HTTP API (docs/protocol/protocol.md "Errors"): a result, or an error with a
+// Package apierr writes the JSON bodies of the hub's HTTP API (docs/protocol/protocol.md "Error body"): a result, or an error with a
 // stable code. It is shared by the hub and the services whose requests the hub relays (internal/assistant), so an
 // error reads the same whichever of them answered.
 package apierr

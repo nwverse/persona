@@ -328,18 +328,38 @@ class GoDependenciesTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.sums = Path(self.temp.name) / "go.sum"
         self.sums.write_text("golang.org/x/crypto v1.0.0 h1:placeholder\n")
-        self.build_info = "\tdep\tgolang.org/x/crypto\tv1.0.0\th1:placeholder\n\tbuild\t-tags=public\n"
+        self.tags = Path(self.temp.name) / "build-tags.txt"
+        self.tags.write_text("public,ts_omit_aws,ts_omit_ssh\n")
+        self.build_info = ("\tdep\tgolang.org/x/crypto\tv1.0.0\th1:placeholder\n"
+                           "\tbuild\t-tags=public,ts_omit_aws,ts_omit_ssh\n")
 
     def dependencies(self, text, returncode=0):
         result = subprocess.CompletedProcess([], returncode, stdout=text)
         with patch.object(cbp.subprocess, "run", return_value=result):
-            return cbp.go_dependencies("binary", str(self.sums))
+            return cbp.go_dependencies("binary", str(self.sums), str(self.tags))
 
     def test_checksum_and_public_build_are_required(self):
         self.assertEqual(self.dependencies(self.build_info), {"golang.org/x/crypto"})
         self.assertEqual(self.dependencies(self.build_info.replace("h1:placeholder", "h1:other")), set())
         self.assertEqual(self.dependencies(self.build_info.replace("v1.0.0", "v2.0.0")), set())
-        self.assertEqual(self.dependencies(self.build_info.replace("-tags=public", "-tags=debug")), set())
+
+    def test_only_the_exact_published_tags_mark_a_public_build(self):
+        for tags in ("public", "debug", "public,ts_omit_aws", "public,ts_omit_aws,ts_omit_ssh,debug",
+                     "public,ts_omit_aws,ts_omit_ssh,ts_omit_ssh", "ts_omit_aws,ts_omit_ssh"):
+            with self.subTest(tags=tags):
+                info = self.build_info.replace("-tags=public,ts_omit_aws,ts_omit_ssh", "-tags=" + tags)
+                self.assertEqual(self.dependencies(info), set())
+        # The file itself may hold only the marker and ts_omit_ feature tags.
+        for line in ("public,ts_omit_aws,ts_omit_ssh,debug", "ts_omit_aws,ts_omit_ssh", "public,public"):
+            with self.subTest(file=line):
+                self.tags.write_text(line + "\n")
+                self.assertEqual(self.dependencies(self.build_info.replace(
+                    "-tags=public,ts_omit_aws,ts_omit_ssh", "-tags=" + line)), set())
+        self.tags.unlink()
+        self.assertEqual(self.dependencies(self.build_info), set())
+
+    def test_the_checked_in_tags_file_is_a_public_tag_set(self):
+        self.assertIsNotNone(cbp.public_build_tags())
 
     def test_module_replacements_are_not_trusted(self):
         replaced = self.build_info.replace("\n\tbuild", "\n\t=>\t./local-module\t(devel)\n\tbuild")
@@ -356,9 +376,9 @@ class GoDependenciesTests(unittest.TestCase):
         for error in (FileNotFoundError(), subprocess.TimeoutExpired("go", 10)):
             with self.subTest(error=type(error).__name__):
                 with patch.object(cbp.subprocess, "run", side_effect=error):
-                    self.assertEqual(cbp.go_dependencies("binary", str(self.sums)), set())
+                    self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
         self.sums.unlink()
-        self.assertEqual(cbp.go_dependencies("binary", str(self.sums)), set())
+        self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
 
 
 class BundleScanIntegrationTests(unittest.TestCase):

@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-// The assistant's free drawing (#2025, docs/assistant/assistant-views.md「自由绘制」): an `html` component is a self-contained page
+// The assistant's free drawing (#2025, docs/assistant/assistant-views.md「Free-form HTML rendering」): an `html` component is a self-contained page
 // (HTML / SVG / canvas / JS) the assistant wrote. It runs in a web view that can reach nothing: no network (a content
 // rule list blocks every load but the page itself and inline data), no cookies or storage of the app (a non-persistent
 // data store), no navigation away, no new windows, no downloads. Its only way out is `window.persona.reply(text)` /
