@@ -1,5 +1,13 @@
 # Lessons: web UI and interactions
 
+## Dismiss a draft, not its source item (#3743)
+
+A task-progress reply card has its own feed id; its Inbox reference can be shared by later progress drafts. Persist
+Don't handle on the card, not by marking the Inbox item done or hiding every card with that reference. Send and
+Dismiss need one synchronous admission guard, and only a successful send may show a sent receipt. Undo sends the
+dismissal receipt back to the same manager and applies the full returned body so omitted dismissal fields really clear.
+Check a reload and a new same-reference draft in the actual tray, not only the historical card renderer.
+
 ## Same-state list updates can change background progress (#3588)
 
 The task tray often has only list summaries, whereas the chat header has complete Session detail. A comparison of

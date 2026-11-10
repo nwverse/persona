@@ -336,6 +336,13 @@ export function cardFiled(it: FeedItem): { at: string } | undefined {
   return at && !field(it, "sent_at") ? { at } : undefined;
 }
 
+/** The user dismissed this exact draft, without sending it or completing its task. */
+export function cardDismissed(it: FeedItem): { at: string; id: string } | undefined {
+  const at = field(it, "dismissed_at");
+  const id = field(it, "dismissal_id");
+  return at && !cardSent(it) ? { at, id: id ?? "" } : undefined;
+}
+
 /** A blank a draft leaves to fill in (a phrase in full-width lenticular brackets, {{link}}): it would go out as it is. */
 export function draftPlaceholder(text: string): string | undefined {
   return /【[^】\n]*】|\{\{[^}\n]*\}\}/.exec(text)?.[0];
@@ -636,7 +643,7 @@ export async function sendMessage(card: FeedItem, text: string) {
   const itemId = card.ref;
   const latest = () => st.feeds[card.conversation]?.find((i) => i.id === card.id) ?? card;
   // Handled elsewhere (#5095): the hub would refuse it, so nothing goes out.
-  if (!itemId || st.busy[card.id] || cardSent(latest()) || cardFiled(latest())) return;
+  if (!itemId || st.busy[card.id] || cardSent(latest()) || cardFiled(latest()) || cardDismissed(latest())) return;
   const blank = draftPlaceholder(text);
   if (blank) throw new Error(t("lib-feed.draft_blank", { blank }));
   set({ busy: { ...st.busy, [card.id]: true } });
@@ -649,6 +656,40 @@ export async function sendMessage(card: FeedItem, text: string) {
     // The hub's assistant_feed event brings the card as it recorded it; this draws it sent without waiting.
     const now = latest();
     if (!cardSent(now)) received([{ ...now, body: { ...now.body, sent_at: new Date().toISOString(), sent: text } }]);
+    return true;
+  } finally {
+    set({ busy: { ...st.busy, [card.id]: false } });
+  }
+}
+
+/** Resolve only this draft on the hub. Send and dismiss share a synchronous admission guard. */
+export async function dismissMessage(card: FeedItem): Promise<string | undefined> {
+  const latest = st.feeds[card.conversation]?.find((it) => it.id === card.id) ?? card;
+  if (card.kind !== "message" || st.busy[card.id] || cardSent(latest) || cardFiled(latest) || cardDismissed(latest)) return;
+  const headers = conversationHeaders(card.conversation);
+  set({ busy: { ...st.busy, [card.id]: true } });
+  try {
+    const result = await api<{ item: FeedItem; dismissal_id: string }>(`/assistant/feed/${enc(card.id)}/dismiss`, {
+      method: "POST", json: { draft: field(card, "draft") ?? "" }, headers,
+    });
+    received([result.item]);
+    return result.dismissal_id;
+  } finally {
+    set({ busy: { ...st.busy, [card.id]: false } });
+  }
+}
+
+/** Undo names the dismissal receipt, so a newer draft or decision cannot be overwritten. */
+export async function undoDismissMessage(card: FeedItem, dismissalId: string): Promise<boolean> {
+  if (!dismissalId || st.busy[card.id]) return false;
+  const headers = conversationHeaders(card.conversation);
+  set({ busy: { ...st.busy, [card.id]: true } });
+  try {
+    const result = await api<{ item: FeedItem }>(`/assistant/feed/${enc(card.id)}/undo-dismiss`, {
+      method: "POST", json: { dismissal_id: dismissalId }, headers,
+    });
+    received([result.item]);
+    return true;
   } finally {
     set({ busy: { ...st.busy, [card.id]: false } });
   }

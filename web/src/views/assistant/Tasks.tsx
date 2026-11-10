@@ -8,9 +8,11 @@ import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
   answeredItems,
+  cardDismissed,
   cardFiled,
   cardSent,
   dayLabel,
+  dismissMessage,
   dismissPlan,
   draftPlaceholder,
   field,
@@ -30,6 +32,7 @@ import {
   setRoute,
   startPlan,
   todayFailedRow,
+  undoDismissMessage,
   useFeed,
   type FeedItem,
   type PlanTask,
@@ -630,7 +633,7 @@ export function TaskLine({ todoId }: { todoId: string }) {
 // changes (mergeInto); the plan, todo and "Later" it shows come through its own selectors.
 export const FeedLineView = memo(function FeedLineView({ item, simplified = false }: { item: FeedItem; simplified?: boolean }) {
   const plan = useFeed((s) => (item.kind === "plan" && item.ref ? s.plans[item.ref] : undefined));
-  const isLater = useFeed((s) => (item.ref ? s.later[item.ref] : false));
+  const isLater = useFeed((s) => !!s.later[item.id]);
   const title = useStore((s) => s.todos.find((todo) => todo.id === item.ref)?.title) ?? t("assistant-tasks.task_fallback");
   const known = useStore((s) => s.todos.some((t) => t.id === item.ref));
   const planned = useFeed((s) => item.kind === "task" && Object.values(s.plans).some((p) => p.conversation === item.conversation && p.tasks.some((task) => task.todo_id === item.ref)));
@@ -1032,15 +1035,33 @@ function MessageCard({ item }: { item: FeedItem }) {
   const sent = cardSent(item);
   // handled without a reply from here: nothing left to edit or send
   const filed = cardFiled(item);
+  const dismissed = cardDismissed(item);
+  const resolved = !!(sent || filed || dismissed);
   const busy = useFeed((s) => !!s.busy[item.id]);
   const [text, setText] = useState<string | null>(null);
   const headingId = useId();
   const draft = text ?? field(item, "draft") ?? "";
-  const blank = sent || filed ? undefined : draftPlaceholder(draft);
+  const blank = resolved ? undefined : draftPlaceholder(draft);
+  const dismiss = async () => {
+    try {
+      const receipt = await dismissMessage(item);
+      if (!receipt) return;
+      toast(t("assistant-tasks.dismissed_not_sent"), "ok", {
+        label: t("assistant-tasks.undo_dismiss"),
+        run: () => {
+          void undoDismissMessage(item, receipt).then(
+            (restored) => restored && toast(t("assistant-tasks.dismiss_undone"), "ok"),
+            (e) => toast(t("assistant-tasks.undo_dismiss_failed", { error: String(e instanceof Error ? e.message : e) }), "error"),
+          );
+        },
+      });
+    } catch (e) {
+      toast(t("assistant-tasks.dismiss_failed", { error: String(e instanceof Error ? e.message : e) }), "error");
+    }
+  };
   const send = async () => {
     try {
-      await sendMessage(item, draft);
-      toast(t("assistant-tasks.sent_done"), "ok");
+      if (await sendMessage(item, draft)) toast(t("assistant-tasks.sent_done"), "ok");
     } catch (e) {
       toast(t("assistant-tasks.send_failed", { error: String(e instanceof Error ? e.message : e) }), "error");
     }
@@ -1062,13 +1083,13 @@ function MessageCard({ item }: { item: FeedItem }) {
         </button>
       )}
       {/* handled elsewhere: no longer a draft waiting on you, so not drawn like one (#5095) */}
-      <div className={cx("flex flex-col gap-1 rounded-control p-3", sent ? "bg-green-tint" : filed ? "bg-field" : "bg-accent-tint")}>
-        <span id={headingId} className={cx("flex items-center gap-1 text-[12px] font-semibold", sent ? "text-green" : filed ? "text-ink-2" : "text-accent")}>
-          <Icon name={sent ? "check" : filed ? "archive" : "pencil"} size={12} />
-          {sent ? t("assistant-tasks.replied_as_you") : filed ? t("assistant-tasks.filed_title") : t("assistant-tasks.draft_from_progress")}
+      <div className={cx("flex flex-col gap-1 rounded-control p-3", sent ? "bg-green-tint" : filed || dismissed ? "bg-field" : "bg-accent-tint")}>
+        <span id={headingId} className={cx("flex items-center gap-1 text-[12px] font-semibold", sent ? "text-green" : filed || dismissed ? "text-ink-2" : "text-accent")}>
+          <Icon name={sent ? "check" : filed || dismissed ? "archive" : "pencil"} size={12} />
+          {sent ? t("assistant-tasks.replied_as_you") : dismissed ? t("assistant-tasks.dismiss_draft") : filed ? t("assistant-tasks.filed_title") : t("assistant-tasks.draft_from_progress")}
           {sent && <span className="ml-auto font-normal text-ink-3">{clock(sent.at)}</span>}
         </span>
-        {!sent && !filed ? (
+        {!resolved ? (
           // Named by the visible heading above it; the global focus ring covers only buttons and links, so it draws its own.
           <textarea
             value={draft}
@@ -1083,13 +1104,17 @@ function MessageCard({ item }: { item: FeedItem }) {
       </div>
       {blank && <div className="text-[12px] text-red">{t("assistant-tasks.draft_blank", { blank })}</div>}
       {filed && <div className="text-[12px] text-ink-2">{t("assistant-tasks.filed_not_sent")}</div>}
-      {!sent && !filed && (
-        <div className="flex gap-2">
-          <Button tone="accent" busy={busy} disabled={!!blank || !draft.trim()} onClick={send} className="flex-1">
+      {dismissed && <div className="text-[12px] text-ink-2">{t("assistant-tasks.dismissed_not_sent")}</div>}
+      {!resolved && (
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button tone="accent" busy={busy} disabled={!!blank || !draft.trim()} onClick={send} className="min-h-11 flex-1">
             {t("assistant-tasks.send")}
           </Button>
-          <Button disabled={busy} onClick={() => later(item.ref!)}>
+          <Button disabled={busy} onClick={() => later(item.id)} className="min-h-11">
             {t("assistant-tasks.later")}
+          </Button>
+          <Button disabled={busy} onClick={dismiss} className="min-h-11">
+            {t("assistant-tasks.dismiss_draft")}
           </Button>
         </div>
       )}

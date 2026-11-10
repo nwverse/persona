@@ -56,6 +56,18 @@ keeps an earlier blocked report. Numeric meters use actual report steps or Agent
 compatibility are in [the shared protocol](../protocol/protocol.md#tasks-and-the-chat-feed).
 
 This change aligns task-row placement; existing web tool folding and turn-source presentation remain unchanged.
+
+**Task-progress reply drafts (#3743).** Send is the only primary action; Later and Don't handle are secondary.
+Later hides this card locally until the page reloads. Don't handle persists dismissal of this exact feed card, removes
+it from Needs you without sending a reply, and offers Undo in the existing six-second toast (paused on hover/focus).
+The task, its Agent and its Inbox item stay open; a new progress draft has a new card id and is still eligible.
+The original card remains an audit record with a not-sent receipt. Dismiss and Undo use the card's manager and the
+server-returned full feed item, not an optimistic completion of the task. Apple clients can use the same
+[task draft API](../assistant/agent-work.md). `python3 web/e2e/dismiss-task-draft.py <preview URL> --shots <directory>`
+drives the built client with synthetic data in Chinese, English and Japanese, wide/narrow light/dark. It checks
+Dismiss, Undo, reload, new same-reference progress, and that no reply or task/Agent mutation was requested; `--cdp`
+uses the shared browser and keeps the test pages open.
+
 `python3 web/e2e/assistant-task-trays.py <preview URL> --shots <output directory>` runs the production-built client against
 synthetic HTTP/WebSocket data in wide and phone widths, light/dark, including the entries' measured capsule height and
 selected state, keyboard toggling, live same-row completion, owner decisions and proof that no draft was sent by approval. Its captures are browser screenshots, not a deployed-hub check.
