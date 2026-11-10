@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import PersonaKit
 
-/// Bold and italics next to CJK punctuation (#3863): CommonMark leaves `**注意：**后文` open, so the asterisks showed; the
-/// punctuation moves outside the pair before the reply is parsed, only where CommonMark would leave it open.
+/// Bold and italics next to CJK punctuation (#3863): CommonMark leaves a bold label with a full-width colon and no space
+/// after it open, so the asterisks showed; the punctuation moves outside the pair before the reply is parsed, only where
+/// CommonMark would leave it open.
 struct CJKEmphasisTests {
     /// The web's fixture (`web/src/ui/remark-gfm-parse.test.tsx`, remark-cjk-friendly): bold around 「」, italics around
     /// （）, and `__…__` that CommonMark already reads.
@@ -40,6 +41,28 @@ struct CJKEmphasisTests {
         #expect(CJKEmphasis.apply("**“引号”**中文") == "“**引号**”中文")
         #expect(CJKEmphasis.apply("**（1）注意：**后") == "**（1）注意**：后")
         #expect(CJKEmphasis.apply("* 这是*（斜体）*也是") == "* 这是（*斜体*）也是") // a list's marker is no pair
+        #expect(CJKEmphasis.apply("**「方案（推荐）」：**后") == "「**方案（推荐）**」：后")
+    }
+
+    /// A bracket whose partner stays inside the bold stays with it: only what is past it moves, and with nothing past it
+    /// the pair is left as written rather than bolded with half a bracket.
+    @Test func aBracketStaysWithItsPartner() throws {
+        #expect(CJKEmphasis.apply("**方案 A（推荐）：**使用") == "**方案 A（推荐）**：使用")
+        #expect(try runs(CJKEmphasis.apply("**方案 A（推荐）：**使用"), .stronglyEmphasized) == ["方案 A（推荐）"])
+        #expect(CJKEmphasis.apply("**第一步（可选）：**安装依赖") == "**第一步（可选）**：安装依赖")
+        #expect(CJKEmphasis.apply("**注意（重要）。**后") == "**注意（重要）**。后")
+        #expect(CJKEmphasis.apply("**a（b「c」）：**后") == "**a（b「c」）**：后")
+        for text in ["**注意（重要）**后", "这是**（重要）说明**的", "这是**“重要”说明**的"] {
+            #expect(CJKEmphasis.apply(text) == text, "\(text)")
+        }
+    }
+
+    /// An image's `!` stays before its `[`, and an escaped character stays where it is.
+    @Test func imagesAndEscapesStay() {
+        #expect(CJKEmphasis.apply("**![图](https://example.com/a.png)：**后") == "**![图](https://example.com/a.png)**：后")
+        for text in ["中文**![图](https://example.com/a.png)：**后", "中文**（注意）!**[链接](https://example.com)", "**注意\\!**后"] {
+            #expect(CJKEmphasis.apply(text) == text, "\(text)")
+        }
     }
 
     /// What CommonMark already reads, and what is not about CJK, stays exactly as it is.
@@ -56,6 +79,9 @@ struct CJKEmphasisTests {
         #expect(CJKEmphasis.apply("```\n**注意：**后\n```\n**注意：**后") == "```\n**注意：**后\n```\n**注意**：后")
         #expect(CJKEmphasis.apply("~~~md\n**注意：**后\n~~~") == "~~~md\n**注意：**后\n~~~")
         #expect(CJKEmphasis.apply("$$\na*（b）*c\n$$") == "$$\na*（b）*c\n$$")
+        // A line that is one formula becomes a math fence (`MathMarkdown`).
+        #expect(CJKEmphasis.apply("$$总价 = 单价*（1+税率）*数量$$") == "$$总价 = 单价*（1+税率）*数量$$")
+        #expect(CJKEmphasis.apply("\\[a*（b）*c\\]") == "\\[a*（b）*c\\]")
         #expect(CJKEmphasis.apply("\\(a*（b）*c\\)中") == "\\(a*（b）*c\\)中")
         #expect(CJKEmphasis.apply("\\*\\*注意：\\*\\*后") == "\\*\\*注意：\\*\\*后")
         #expect(CJKEmphasis.apply("看 https://example.com/a**：**b 吧") == "看 https://example.com/a**：**b 吧")
@@ -65,6 +91,15 @@ struct CJKEmphasisTests {
         #expect(CJKEmphasis.apply("## 标题\n    **注意：**后") == "## 标题\n    **注意：**后")
         #expect(CJKEmphasis.apply("- 项\n\n    **注意：**后") == "- 项\n\n    **注意**：后")
         #expect(CJKEmphasis.apply("前文\n    **注意：**后") == "前文\n    **注意**：后")
+        // A fence under a list item, however far in, after a list marker, or in a quote; what comes after it is text.
+        let listed = "1. 安装：\n\n    ```md\n    **注意：**后文\n    ```\n\n**注意：**后"
+        #expect(CJKEmphasis.apply(listed) == "1. 安装：\n\n    ```md\n    **注意：**后文\n    ```\n\n**注意**：后")
+        let nested = "- 一\n  - 二\n\n    ```md\n    **注意：**后文\n    ```"
+        #expect(CJKEmphasis.apply(nested) == nested)
+        #expect(CJKEmphasis.apply("- ```md\n  **注意：**后\n  ```\n- **注意：**后") == "- ```md\n  **注意：**后\n  ```\n- **注意**：后")
+        #expect(CJKEmphasis.apply("> ```md\n> **注意：**后\n> ```\n**注意：**后") == "> ```md\n> **注意：**后\n> ```\n**注意**：后")
+        // The quote ends without closing its fence: so does the fence.
+        #expect(CJKEmphasis.apply("> ```md\n> **注意：**后\n\n**注意：**后") == "> ```md\n> **注意：**后\n\n**注意**：后")
         // CRLF lines are not told apart: left as written.
         #expect(CJKEmphasis.apply("```\r\n**注意：**后\r\n```") == "```\r\n**注意：**后\r\n```")
     }
@@ -76,7 +111,7 @@ struct CJKEmphasisTests {
     }
 
     @Test func mendingTwiceChangesNothing() {
-        for text in [Self.web, "**注意：**后文", "**「强调」**的", "* 这是*（斜体）*也是"] {
+        for text in [Self.web, "**注意：**后文", "**「强调」**的", "* 这是*（斜体）*也是", "**方案 A（推荐）：**使用"] {
             let once = CJKEmphasis.apply(text)
             #expect(CJKEmphasis.apply(once) == once)
         }

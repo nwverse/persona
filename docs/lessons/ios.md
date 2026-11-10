@@ -557,7 +557,9 @@ Use an invalidation revision as the task key and handle the flag after completio
 - cmark (MarkdownUI, and `AttributedString(markdown:)` in `ReplyText`) applies CommonMark's flanking rules as written: `**注意：**后文` and
   `这是**「强调」**的` keep their asterisks, because a `**` after full-width punctuation closes only before a space or punctuation (#3863; the web uses
   remark-cjk-friendly). `CJKEmphasis` moves the punctuation outside such a pair before parsing, in the reply memo pipeline and in `ReplyText`, never
-  inside code. Check a parsing claim against cmark-gfm itself (the swift-cmark checkout builds `cmark-gfm-bin`), not against the spec from memory.
+  inside code (fences under list items and in quotes included) or a formula, and a bracket only with its partner: moving the `）` of
+  `**方案（推荐）：**` alone bolded half a bracket. Check a parsing claim against cmark-gfm itself (the swift-cmark checkout builds
+  `cmark-gfm-bin`), not against the spec from memory.
 - Link endings have one rule (`Links`): stop at whitespace or any non-ASCII (Chinese / fullwidth punctuation), strip trailing `.,;:!?` and unmatched `)` / `]`.
   MarkdownUI cmark-gfm autolinks stop only at whitespace, swallowing Chinese paragraphs after URLs (2026-10-30). Run all MarkdownUI text through
   `Links.markdown` (bare links become `<url>`): replies, plans, files, Lark messages, knowledge. `FilePaths` also stops at non-ASCII.

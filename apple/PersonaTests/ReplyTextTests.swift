@@ -108,7 +108,8 @@ struct ReplyTextTests {
         #expect(s.attribute(.foregroundColor, at: three, effectiveRange: nil) as? UIColor === look.color)
     }
 
-    /// A bold label the Chinese way, `**注意：**后文`, is bold here as in the chat (`CJKEmphasis`): no asterisks left.
+    /// A bold label the Chinese way (a full-width colon, no space after it) is bold here as in the chat (`CJKEmphasis`):
+    /// no asterisks left.
     @Test func cjkBoldLabelsAreBold() {
         let s = reply("**注意：**后文，这是**「强调」**的文字")
         #expect(s.string == "注意：后文，这是「强调」的文字")

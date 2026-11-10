@@ -2,14 +2,17 @@ import Foundation
 
 /// Bold and italics next to CJK punctuation, read as the web reads them (remark-cjk-friendly, #3863). CommonMark closes
 /// `**` after punctuation only when a space or more punctuation follows, and opens it before punctuation only after a
-/// space or punctuation; so `**注意：**后文`, a bold label written the Chinese way with no space after its colon, kept its
-/// asterisks on the screen, and so did `这是**「强调」**的文字` and `*（斜体）*也是`. MarkdownUI's cmark has no option for
-/// it, so before a reply is parsed the punctuation at the inner edge of such a pair moves outside it: `**注意**：后文`,
-/// `这是「**强调**」的文字`, `（*斜体*）也是`. Only a pair of `*` runs on one line that CommonMark would leave open, only
-/// where CJK text is involved (the punctuation moved, or the letter outside it), and only plain sentence punctuation
-/// moves (never a bracket, backtick or other mark Markdown reads). Code spans, fences, indented code, formulas,
-/// autolinks, bare URLs and link destinations are left alone, and so are `_` runs (inside a word they never open
-/// anyway). What is copied stays the source; this is only what is parsed.
+/// space or punctuation; so a bold label written the Chinese way, a full-width colon and no space after it
+/// (`**Note：**text`), kept its asterisks on the screen, and so did bold around corner brackets (`a**「stress」**b`) and
+/// italics around full-width parentheses (`*（aside）*b`). MarkdownUI's cmark has no option for it, so before a reply is
+/// parsed the punctuation at the inner edge of such a pair moves outside it: `**Note**：text`, `a「**stress**」b`,
+/// `（*aside*）b` (in Chinese in `CJKEmphasisTests`). Only a pair of `*` runs on one line that CommonMark would leave
+/// open, only where CJK text is involved (the punctuation moved, or the letter outside it), and only punctuation moves: a
+/// bracket or quote only together with its partner (`**Plan（default）：**` moves just the `：`; with nothing else to
+/// move the pair stays as written), and never a mark Markdown reads (an ASCII bracket, a backtick, an escaped character,
+/// an image's `!`). Code spans, fences (in lists and quotes too), indented code, formulas, autolinks, bare URLs and link
+/// destinations are left alone, and so are `_` runs (inside a word they never open anyway). What is copied stays the
+/// source; this is only what is parsed.
 public nonisolated enum CJKEmphasis {
     public static func apply(_ text: String) -> String {
         // Nothing to mend without an asterisk and something beyond ASCII and Latin. A CRLF text is left as it is: "\r\n"
@@ -17,7 +20,8 @@ public nonisolated enum CJKEmphasis {
         guard text.contains("*"), !text.utf8.contains(13), text.unicodeScalars.contains(where: { $0.value >= 0x2010 }) else { return text }
         var out: [Substring] = []
         var changed = false
-        var fence: MarkdownFence?
+        /// Inside a fence: it, and how many quote markers deep it opened (a line with fewer ends the quote and the fence).
+        var fence: (opener: MarkdownFence, quotes: Int)?
         /// Inside a `$$` / `\[` block: the line that ends it.
         var mathEnd: String?
         var inList = false
@@ -28,9 +32,13 @@ public nonisolated enum CJKEmphasis {
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let open = fence {
-                if open.isClosed(by: trimmed) { fence = nil }
-                out.append(line)
-                continue
+                let (depth, inner) = Self.unquoted(trimmed, upTo: open.quotes)
+                if depth == open.quotes {
+                    if open.opener.isClosed(by: inner) { fence = nil }
+                    out.append(line)
+                    continue
+                }
+                fence = nil
             }
             if let end = mathEnd {
                 if trimmed == end { mathEnd = nil }
@@ -55,8 +63,12 @@ public nonisolated enum CJKEmphasis {
             let wasBlank = afterBlank
             afterBlank = false
             afterText = false
-            if indent < 4, let open = MarkdownFence.opening(trimmed) {
-                fence = open
+            if Self.listContent(trimmed) != nil { inList = true } else if wasBlank, indent == 0 { inList = false }
+            // A fence opens at most three spaces in, or anywhere under a list item (a list's code is indented with
+            // it), after a list marker, or in a quote.
+            let (quotes, quoted) = Self.unquoted(trimmed)
+            if indent < 4 || inList || quotes > 0, let open = MarkdownFence.opening(Self.listContent(quoted) ?? quoted) {
+                fence = (open, quotes)
                 out.append(line)
                 continue
             }
@@ -65,7 +77,11 @@ public nonisolated enum CJKEmphasis {
                 out.append(line)
                 continue
             }
-            if Self.isListItem(trimmed) { inList = true } else if wasBlank, indent == 0 { inList = false }
+            // A line that is one formula (`$$…$$`, `\[…\]`) becomes a math fence (`MathMarkdown`): TeX, not prose.
+            if trimmed.hasPrefix("$$") || trimmed.hasPrefix("\\["), MathMarkdown.display(trimmed) != nil {
+                out.append(line)
+                continue
+            }
             afterText = !trimmed.hasPrefix("#")
             if let mended = Self.mend(line) {
                 out.append(Substring(mended))
@@ -85,8 +101,8 @@ public nonisolated enum CJKEmphasis {
 
     /// One line with its open pairs mended; nil when nothing changes.
     static func mend(_ line: Substring) -> String? {
+        guard line.contains("*") else { return nil }
         let c = Array(line)
-        guard c.contains("*") else { return nil }
         // What is not prose: formulas, code spans, autolinks and tags, link destinations, bare URLs.
         var skip = [Bool](repeating: false, count: c.count)
         func mark(_ r: Range<Int>) { for k in r where k < c.count { skip[k] = true } }
@@ -97,6 +113,7 @@ public nonisolated enum CJKEmphasis {
             if skip[i] { i += 1; continue }
             switch c[i] {
             case "\\":
+                mark(i..<(i + 2)) // an escaped character is no delimiter and stays where it is
                 i += 2
             case "`":
                 let n = run(of: "`", in: c, at: i, skip)
@@ -147,6 +164,31 @@ public nonisolated enum CJKEmphasis {
             let b = before(r), a = after(r)
             return !isSpace(b) && (!isPunctuation(b) || isSpace(a) || isPunctuation(a))
         }
+        /// Whether the character at `p`, between a pair whose closer is `e`, may move across a delimiter: not escaped or
+        /// code, and not a `!` that is an image's or would become one (`![a](u)`; `!**[a](u)` is no image).
+        func movable(_ p: Int, closer e: Run) -> Bool {
+            guard !skip[p], isMovable(c[p]) else { return false }
+            return c[p] != "!" || (p + 1 == e.at ? after(e) : c[p + 1]) != "["
+        }
+        /// The bracket or quote that pairs with the one at `p`, looked for within `r`.
+        func partner(_ p: Int, within r: Range<Int>) -> Int? {
+            let forward = isOpening(c[p])
+            guard forward || isClosing(c[p]) else { return nil }
+            var depth = 0
+            var q = forward ? p + 1 : p - 1
+            while r.contains(q) {
+                if !skip[q] {
+                    if forward ? isOpening(c[q]) : isClosing(c[q]) {
+                        depth += 1
+                    } else if forward ? isClosing(c[q]) : isOpening(c[q]) {
+                        if depth == 0 { return q }
+                        depth -= 1
+                    }
+                }
+                q += forward ? 1 : -1
+            }
+            return nil
+        }
 
         /// Pairs in order, each run with the next of the same length; what moves out of each that needs it.
         var moves: [(open: Run, close: Run, lead: Int, trail: Int)] = []
@@ -159,9 +201,23 @@ public nonisolated enum CJKEmphasis {
             let opens = leftFlanking(o), closes = rightFlanking(e)
             if opens && closes { k += 2; continue } // CommonMark reads it already
             var lead = 0
-            while lo + lead < hi, !skip[lo + lead], isMovable(c[lo + lead]) { lead += 1 }
+            while lo + lead < hi, movable(lo + lead, closer: e) { lead += 1 }
             var trail = 0
-            while hi - trail - 1 >= lo + lead, !skip[hi - trail - 1], isMovable(c[hi - trail - 1]) { trail += 1 }
+            while hi - trail - 1 >= lo + lead, movable(hi - trail - 1, closer: e) { trail += 1 }
+            // A bracket or quote whose partner is in the words that stay inside stays too, and so does what is further
+            // in: `**Plan（default）：**` moves the `：` alone, not the `）` away from its `（`.
+            func paired(_ from: Range<Int>, _ to: Range<Int>) -> Int? {
+                from.first { p in partner(p, within: lo..<hi).map(to.contains) == true }
+            }
+            while true {
+                if let p = paired(lo..<(lo + lead), (lo + lead)..<(hi - trail)) {
+                    lead = p - lo
+                } else if let p = paired((hi - trail)..<hi, (lo + lead)..<(hi - trail)) {
+                    trail = hi - p - 1
+                } else {
+                    break
+                }
+            }
             // Words must be left between them, not starting or ending with a space.
             guard lo + lead < hi - trail, !c[lo + lead].isWhitespace, !c[hi - trail - 1].isWhitespace else { k += 1; continue }
             var moveLead = 0, moveTrail = 0
@@ -174,8 +230,8 @@ public nonisolated enum CJKEmphasis {
                 moveTrail = trail
             }
             // Brackets or quotes around the words move out together: 「**强调**」, not **「强调**」.
-            if moveLead == 0, lead > 0, isOpening(c[lo]), c[(hi - moveTrail)..<hi].contains(where: isClosing) { moveLead = lead }
-            if moveTrail == 0, trail > 0, isClosing(c[hi - 1]), c[lo..<(lo + moveLead)].contains(where: isOpening) { moveTrail = trail }
+            if moveLead == 0, moveTrail > 0, paired((hi - trail)..<hi, lo..<(lo + lead)) != nil { moveLead = lead }
+            if moveTrail == 0, moveLead > 0, paired(lo..<(lo + lead), (hi - trail)..<hi) != nil { moveTrail = trail }
             moves.append((o, e, moveLead, moveTrail))
             k += 2
         }
@@ -298,17 +354,32 @@ public nonisolated enum CJKEmphasis {
         return n
     }
 
-    /// "- item", "* item", "+ item", "3. item", "3) item".
-    private static func isListItem(_ trimmed: String) -> Bool {
-        if let first = trimmed.first, "-*+".contains(first) {
-            let next = trimmed.dropFirst().first
-            return next == " " || next == "\t"
+    /// What follows a list item's marker ("- item", "* item", "+ item", "3. item", "3) item"), trimmed; nil when the
+    /// line is no list item.
+    private static func listContent(_ trimmed: String) -> String? {
+        var rest = Substring(trimmed)
+        if let first = rest.first, "-*+".contains(first) {
+            rest = rest.dropFirst()
+        } else {
+            let digits = rest.prefix { $0.isASCII && $0.isNumber }
+            guard (1...9).contains(digits.count) else { return nil }
+            rest = rest.dropFirst(digits.count)
+            guard let mark = rest.first, mark == "." || mark == ")" else { return nil }
+            rest = rest.dropFirst()
+            if rest.isEmpty { return "" }
         }
-        let digits = trimmed.prefix { $0.isASCII && $0.isNumber }
-        guard (1...9).contains(digits.count) else { return false }
-        let rest = trimmed.dropFirst(digits.count)
-        guard let mark = rest.first, mark == "." || mark == ")" else { return false }
-        let next = rest.dropFirst().first
-        return next == nil || next == " " || next == "\t"
+        guard let next = rest.first, next == " " || next == "\t" else { return nil }
+        return rest.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// How many quote markers (`>`) start the trimmed line, at most `limit`, and what follows them, trimmed.
+    private static func unquoted(_ trimmed: String, upTo limit: Int = .max) -> (Int, String) {
+        var depth = 0
+        var rest = Substring(trimmed)
+        while depth < limit, rest.first == ">" {
+            rest = rest.dropFirst().drop { $0 == " " || $0 == "\t" }
+            depth += 1
+        }
+        return (depth, String(rest))
     }
 }

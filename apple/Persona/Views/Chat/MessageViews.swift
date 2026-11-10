@@ -91,6 +91,7 @@ extension MarkdownUI.Theme {
 
     /// H4–H6 (#3863): MarkdownUI's own were the bare text, so `#### Notes` read as the next paragraph's first line. A step
     /// below the third level (the secondary level's size), semibold in the quieter ink, more space above than below.
+    /// Its label is built as heading1–3's are: a modifier theirs gains (the style's run fonts, say) belongs here too.
     @MainActor static func minorHeading(_ config: BlockConfiguration) -> some View {
         config.label.markdownMargin(top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
             .markdownTextStyle {
