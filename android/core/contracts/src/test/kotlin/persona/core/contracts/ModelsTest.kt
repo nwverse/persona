@@ -7,6 +7,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelsTest {
+    @Test fun agentTaskResultsDecodeRunningAndKeepOriginalReportIdentity() {
+        for (status in listOf("running", "waiting", "completed", "failed", "stopped")) {
+            val item = JsonCodec.decodeFromString<Item>("""{"id":"report#0","seq":12,"role":"user","kind":"tool_result",
+                "tool_use_id":"toolu_launch","text":"Full report","full_size":8192,
+                "task":{"kind":"agent","status":"$status","task_id":"agent-a","tool_use_id":"toolu_launch","detail":"Preview"}}""")
+            assertEquals(status, item.task?.status)
+            assertEquals("toolu_launch", item.toolUseId)
+            assertEquals("Full report", item.text)
+            assertEquals(8192, item.fullSize)
+            assertEquals(item, JsonCodec.decodeFromString<Item>(JsonCodec.encodeToString(item)))
+        }
+        assertNull(JsonCodec.decodeFromString<Item>("""{"id":"legacy","kind":"tool_result","text":"general-purpose says hello"}""").task)
+    }
+
     @Test fun sessionDecodesWithMissingFieldsAndUnknownState() {
         val s = JsonCodec.decodeFromString<Session>(
             """{"machine_id":"server","session_id":"u1","cwd":"/home/x/code/foo","status":"done","state":"later","extra":1}""",

@@ -35,6 +35,7 @@ import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFolde
 import { folderCrumbs, UNFILED } from "../../lib/inbox-folders";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
 import { CheckMark } from "../settings/ProviderFields";
+import { OfflineState, useShownOffline } from "../ManagerParts";
 
 function useStored(key: string): [string, (v: string) => void] {
   const [v, setV] = useState(() => localStorage.getItem(key) ?? "");
@@ -137,8 +138,12 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const connectors = useMemo(() => connectorSources(items), [items]);
   const failed = Boolean(error) && !items.length;
   const empty = !s.tiers.action.length && !s.tiers.working.length && !s.tiers.fyi.length && !s.tiers.noise.length && !agents.length;
+  // the current assistant offline (several assistants): the hub's merged list leaves it out, so nothing here means it
+  // couldn't answer, not that it has nothing; it says so instead of "All caught up" or the first-run page
+  const offline = useShownOffline();
+  const away = ready && empty && !failed && Boolean(offline);
   // nothing ever came in, nothing filtered: is anything connected at all? (still unknown: the plain "All caught up")
-  const sources = useInboxSources(ready && empty && !failed && !items.length && !query && !source && !kind && !folder);
+  const sources = useInboxSources(ready && empty && !failed && !away && !items.length && !query && !source && !kind && !folder);
   const unconnected = sources && !sources.connected ? sources : null;
   // Clean up all: the open items the list shows (its filters and search); the agents waiting are not items.
   const openInView = kind === "agent" ? [] : [...s.tiers.action, ...s.tiers.working, ...s.tiers.fyi, ...s.tiers.noise];
@@ -362,7 +367,8 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
             </Button>
           </div>
         )}
-        {ready && empty && !failed && unconnected && (
+        {away && offline && <OfflineState offline={offline} className="mt-10" />}
+        {ready && empty && !failed && !away && unconnected && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center" data-inbox-no-sources>
             <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
               <Icon name="inbox" size={17} />
@@ -378,7 +384,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
             </div>
           </div>
         )}
-        {ready && empty && !failed && !unconnected && (
+        {ready && empty && !failed && !away && !unconnected && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center">
             <span className="flex size-10 items-center justify-center rounded-full bg-green-tint text-green">
               <Icon name="check" size={17} stroke={2.6} />

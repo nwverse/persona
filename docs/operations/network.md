@@ -50,6 +50,7 @@ The following values are policy defaults from `config_security.go`, **not measur
 | --- | --- | --- |
 | `trusted_cidrs` | `[]` | Additional trusted source subnets, treated as LAN on match; include only networks you truly control |
 | `allow_public_plaintext` | `false` | Allows public plaintext API when enabled, with a startup warning; does not remove the public main-token prohibition |
+| `plaintext_loopback_only` | `false` | Refuses plaintext from every source but loopback, the LAN and `trusted_cidrs` included: pages redirect to the TLS listener, everything else gets `403 tls_required`. Needs `public.tls_listen`; see [Keeping tokens off the LAN](#keeping-tokens-off-the-lan) |
 | `auth_failures` | `10` | Ban source after this many failures within a counting window |
 | `auth_window_seconds` | `60` | Window from the source's first failure in this round, seconds |
 | `auth_block_seconds` | `900` | Ban duration after threshold, seconds |
@@ -83,6 +84,36 @@ Default pairing tokens last 10 minutes and redeem a device token once. After red
 Computer links (persona-link, [link.md](link.md)) also use only this TLS port and pin the fingerprint obtained at pairing, including on LAN; hub rejects their plaintext requests except loopback.
 TLS terminates at hub, which authenticates link credentials and forwards the connection unchanged to the computer-connection manager (2026-11-04, [machines.md](../server/machines.md), "Who connects to computers").
 Forwarding uses `GET /api/v1/bus/relay` with the manager's own bus token (same as the bus: only `Authorization: Bearer jb_…`, TLS required for public sources; device credentials cannot open it, nor can it open app endpoints).
+
+## Keeping tokens off the LAN
+
+By default the plaintext `listen` port accepts tokens from any LAN or VPN source. On a network other people share, such as an office LAN or a company VPN, anyone who can capture traffic there can read them. Setting `security.plaintext_loopback_only: true` limits plaintext to the hub machine itself. For a plaintext request from any other source:
+
+- A page request (`GET` / `HEAD` outside `/api/` and `/i/`) gets `308` to the same path and host name on the TLS port. Links built from an `http://` `public_url` (`/s/...`, `/todos?id=...`) and bookmarks keep working, and the browser reaches the app over HTTPS before any script reads a stored token.
+- Everything else, `/api/v1/health` included, gets `403 tls_required`.
+
+Loopback keeps plaintext. That covers the built-in manager, the local assistant, SSH tunnels that end on the hub machine, and a reverse proxy on the hub machine that terminates TLS. The hub refuses to start with the switch on and no `public.tls_listen`. If the TLS address has gone at start-up (see above), only the hub machine can reach the hub until it is fixed. The setting does not change the listening sockets or `personad.socket`, so it takes effect at the next restart or `personad hub switch`.
+
+Before turning it on, make sure every client can use the TLS port:
+
+| Client | Over the TLS port |
+| --- | --- |
+| Persona Link, mesh peers | Already TLS-only, pinned |
+| Android | Pins the fingerprint from a TLS pairing. A pairing made before TLS was on checks HTTPS against system CAs, like the Apple apps |
+| iOS, watchOS, Mac app | Uses the system trust store only, with no pinning, and keeps the URL it was paired with. Needs a certificate the device trusts, then a new pairing with an `https://` address |
+| Web app | Works after the redirect. The browser warns about a certificate it does not trust, and `localStorage` is per origin, so the first visit on HTTPS asks for sign-in again |
+| ssh / tailcat nodes, the built-in manager | Not affected: they carry no hub token over the hub's HTTP port |
+
+The managed self-signed certificate names only `<hub_id>.persona.invalid`, so no system trust store accepts it. To keep the Apple apps working, give the TLS listener a certificate they trust through `public.cert_file` / `public.key_file`. One option is a publicly trusted certificate for a name that resolves to the hub. Another is a private CA that you install and trust on each device. Issue the certificate for the managed key `~/.persona/tls/hub.key`: the pin is the public key's hash, so Persona Link and other pinned clients keep working without pairing again. With a private CA, for example:
+
+```sh
+cd ~/.persona/tls
+openssl req -new -key hub.key -subj "/CN=<hub address>" -out hub.csr
+printf 'subjectAltName=IP:<hub address>\nextendedKeyUsage=serverAuth\n' > hub.ext
+openssl x509 -req -in hub.csr -CA <ca>.crt -CAkey <ca>.key -CAcreateserial -days 825 -sha256 -extfile hub.ext -out hub-ca.crt
+```
+
+On iOS, install the CA as a profile, then turn it on under Settings › General › About › Certificate Trust Settings. Then set `public_url` to the `https://` address so that new pairings and links use it. Pair each Apple device again, and remove its old device so that its old token stops working. The hub does not renew a custom certificate, so reissue it before it expires. Persona Link pins the key, which does not change.
 
 ## Candidate addresses and DDNS
 
@@ -364,7 +395,7 @@ DEBUG builds: `-seedLocalProxy <base64 of the LocalProxyRoute JSON>` sets the fi
 
 ## Network troubleshooting
 
-Run `personad hub doctor` on the hub machine first. Read-only: checks hub.json plaintext `listen`, `public.tls_listen`, `security.allow_public_plaintext`, TLS certificate, and that the data directory's credential files (hub.json, `secret.key`, `relay-tunnel.token`, the key and credential suffixes, `docker/db-password`…) are mode 0600 and its whole-secret folders (`tls/`, `docker/`, `extensions/data/`…) are 0700; asks running hub for candidates; lists each local IPv6 as publishable / excluded with reasons; on Linux checks public-IPv6 routes through TUN / virtual interfaces and ufw / nft rules; ends with next steps: which TLS port to allow, which URL to test on cellular. **No external reachability probes**: local access to its own address cannot prove public ingress.
+Run `personad hub doctor` on the hub machine first. Read-only: checks hub.json plaintext `listen`, `public.tls_listen`, `security.allow_public_plaintext`, `security.plaintext_loopback_only`, TLS certificate, and that the data directory's credential files (hub.json, `secret.key`, `relay-tunnel.token`, the key and credential suffixes, `docker/db-password`…) are mode 0600 and its whole-secret folders (`tls/`, `docker/`, `extensions/data/`…) are 0700; asks running hub for candidates; lists each local IPv6 as publishable / excluded with reasons; on Linux checks public-IPv6 routes through TUN / virtual interfaces and ufw / nft rules; ends with next steps: which TLS port to allow, which URL to test on cellular. **No external reachability probes**: local access to its own address cannot prove public ingress.
 
 TUN proxy automatic routes may send public-connection responses into the proxy, causing timeout or interrupted handshakes. **Not measured**. On a hub authorized for troubleshooting, inspect IPv6 routes to the phone source and capture on physical / TUN interfaces: did requests arrive, did replies leave correctly? Temporarily disable TUN for comparison. If implicated, preserve direct reply routing for inbound connections in proxy / policy routing; `trusted_cidrs` cannot fix return routes.
 
