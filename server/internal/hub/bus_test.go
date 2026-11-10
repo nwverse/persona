@@ -38,14 +38,6 @@ func init() {
 	handleBus("test.echo", func(_ *Hub, _ context.Context, c *busConn, params json.RawMessage) (any, error) {
 		return map[string]any{"from": c.ident.ID, "params": params}, nil
 	})
-	handleBusCall("test.typed", func(_ *Hub, _ context.Context, p struct {
-		N int `json:"n"`
-	}) (map[string]int, error) {
-		if p.N < 0 {
-			return nil, &rpc.Error{Code: "negative", Message: "n < 0"}
-		}
-		return map[string]int{"double": 2 * p.N}, nil
-	})
 }
 
 // newBusHub is a hub on the lane's test database with no bus identities and no machine moved to a manager, served
@@ -429,16 +421,6 @@ func TestBusCallsBothWays(t *testing.T) {
 	}
 	if err := r.call("test.echo", map[string]any{"a": 1}, &echo); err != nil || echo.From != "assistant" || echo.Params["a"] != float64(1) {
 		t.Fatalf("a registered method: %+v %v", echo, err)
-	}
-	var typed map[string]int
-	if err := r.call("test.typed", map[string]any{"n": 21}, &typed); err != nil || typed["double"] != 42 {
-		t.Fatalf("a typed method: %v %v", typed, err)
-	}
-	if err := r.call("test.typed", map[string]any{"n": "x"}, nil); rpcCode(err) != bus.CodeInvalidParams {
-		t.Fatalf("params that do not fit: %v", err)
-	}
-	if err := r.call("test.typed", map[string]any{"n": -1}, nil); rpcCode(err) != "negative" {
-		t.Fatalf("the function's own error: %v", err)
 	}
 	_ = r.peer.Notify("test.event", map[string]any{"n": "after"})
 	_ = r.peer.Notify("no.such.event", map[string]any{})

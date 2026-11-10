@@ -35,7 +35,7 @@ extension InboxView {
 }
 
 /// The inbox's page itself, in whatever stack shows it: Inbox's own (InboxView), or the shell's Assistant page (pushed from
-/// the drawer, docs/apple/ios.md「新外壳」), which passes `embedded` so the page brings its destinations and link handling.
+/// the drawer, docs/apple/ios.md「New shell」), which passes `embedded` so the page brings its destinations and link handling.
 struct InboxPage: View {
     @Environment(AppModel.self) private var model
     @Binding var path: NavigationPath
@@ -99,7 +99,7 @@ struct InboxPage: View {
                 .pageToolbar {
                     ToolbarItem(placement: .principal) { ConnectionTitle(title: String(localized: "Inbox")) }
                     if model.isMultiHub {
-                        // Each hub has its own inbox (docs/protocol/multi-hub.md「hub 级页面」): whose this is, and the others.
+                        // Each hub has its own inbox (docs/protocol/multi-hub.md「Terminology」): whose this is, and the others.
                         ToolbarItem(placement: .topBarLeading) { HubSwitcher(compact: true) }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -188,7 +188,7 @@ struct InboxPage: View {
     private var cleanScope: [InboxItem] { kind == "agent" ? [] : openItems }
 
     /// Clear All, with what it covers and how many under the name: files every open item in view as dismissed; from
-    /// `InboxBulk.confirmFrom` items on it asks first. One request, Undo after (docs/assistant/inbox.md「全部清理」).
+    /// `InboxBulk.confirmFrom` items on it asks first. One request, Undo after (docs/assistant/inbox.md「Clean up all」).
     private var cleanButton: some View {
         let scope = cleanScope
         return Button { clean(confirmed: false) } label: {
@@ -349,7 +349,7 @@ struct InboxPage: View {
     }
 
     /// A row's long-press menu: Done (or Move Back), then what the item can be muted by — its repository, chat or sender,
-    /// the name under each (docs/assistant/inbox.md「静音」) — then a rule for each of those ("Policies").
+    /// the name under each (docs/assistant/inbox.md「Muting」) — then a rule for each of those ("Policies").
     @ViewBuilder private func rowMenu(_ it: InboxItem) -> some View {
         if it.isDone {
             Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }
@@ -736,6 +736,7 @@ struct InboxAgentRow: View {
 struct InboxDetailView: View {
     var item: InboxItem
     var accounts: [MailAccount]
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var drafting = false
     @State private var handingOff = false
@@ -809,9 +810,9 @@ struct InboxDetailView: View {
         } else if current.connector != nil {
             InboxConnectorDetailView(item: current)
         } else if let m = current.moment {
-            LarkMomentsPostView(postID: m.postID, pushed: true) // the post and its comments, as a shared Moments card opens
+            LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(current.manager)) // the post and its comments, as a shared Moments card opens
         } else if let c = item.larkConversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: model.linkManager(current.manager))
         } else if let m = item.mailSummary {
             MailDetailView(summary: m, accounts: accounts)
         } else {
@@ -823,22 +824,28 @@ struct InboxDetailView: View {
 /// The pages the inbox opens, in either layout (`SplitNavigation`).
 struct InboxDestinations: ViewModifier {
     var accounts: [MailAccount]
+    @Environment(AppModel.self) private var model
     @Environment(\.feishuOpen) private var feishuOpen
 
     // Links on these pages open in the app (feishuHandlesLinks) wherever the stack is: the shell pushes them onto its
-    // own stack, where the inbox page's handler does not reach.
+    // own stack, where the inbox page's handler does not reach. Those on an item's pages, and on a document or post
+    // opened from one, read through the item's manager.
     func body(content: Content) -> some View {
         content
             // Keyed by the item, as on the Mac: in the split the list's links replace the detail column's page, and an
             // unkeyed one is updated in place with the last item's state — a Feishu chat kept the chat before's messages
             // and draft under the new chat's title (#885).
             .navigationDestination(for: InboxItem.self) {
-                InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage().feishuHandlesLinks(feishuOpen)
+                InboxDetailView(item: $0, accounts: accounts).id($0.id).splitDetailPage()
+                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.manager))
             }
-            .navigationDestination(for: FeishuRoute.self) { FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(feishuOpen) }
+            .navigationDestination(for: FeishuRoute.self) {
+                FeishuRouteView(route: $0).splitDetailPage().feishuHandlesLinks(feishuOpen, manager: $0.manager)
+            }
             // view original and the chain's links of an event (inbox phase 1).
             .navigationDestination(for: InboxSourceRoute.self) {
-                InboxSourcePage(route: $0, accounts: accounts).splitDetailPage().feishuHandlesLinks(feishuOpen)
+                InboxSourcePage(route: $0, accounts: accounts).splitDetailPage()
+                    .feishuHandlesLinks(feishuOpen, manager: model.linkManager($0.item.manager))
             }
             .extensionPushDestination()
     }

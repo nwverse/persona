@@ -6,7 +6,13 @@ plugins {
 
 android {
     namespace = "persona.feature.agents"
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            // RecentSetupsFixtureTest reads spec/fixtures/recents.
+            all { it.systemProperty("persona.repo.root", rootProject.projectDir.parentFile.absolutePath) }
+        }
+    }
 }
 
 dependencies {

@@ -11,7 +11,7 @@ import type { Route, SessionView } from "./router";
 import type { AgentState, Machine, Session } from "./types";
 import { byTime } from "./times";
 
-// docs/protocol/agent-states.md "Sort priority": what a folded row shows for everything under it, and which pane a tab opens on.
+// docs/protocol/agent-states.md "Unified states": what a folded row shows for everything under it, and which pane a tab opens on.
 const URGENCY: AgentState[] = ["needs_you", "working", "unread", "idle", "unknown", "offline"];
 
 const urgency = (s: Session) => URGENCY.indexOf(stateOf(s));

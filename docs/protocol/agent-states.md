@@ -16,7 +16,10 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | `interrupted` Interrupted by restart | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
 
-Sort priority: Needs you → Working → Unread → Seen → Unknown → Not running.
+List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Seen → Unknown → Not running.
+
+Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply right after Unread on Android.
+iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
 
 ### Awaiting your reply (#5096)
 
@@ -180,15 +183,15 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
 DSH (`docs/integrations/dsh.md`): `space_kind` is `dsh`, the space is the session's directory (`space_id` = directory, `space_name` = directory name), no slots;
 state comes from the plugin: running → working, a permission / question waiting → blocked, otherwise done (the hub splits it into Unread / Seen by whether it's been seen, as usual).
 
-Paseo (`docs/integrations/paseo.md` ("Which sessions are shown")): `space_kind` is `paseo`, the space is a Paseo project (`space_id` = project record id, `space_name` = project name);
+Paseo (`docs/integrations/paseo.md` ("Which sessions appear")): `space_kind` is `paseo`, the space is a Paseo project (`space_id` = project record id, `space_name` = project name);
 a repository's main checkout and its worktrees share a space; the slot is a Paseo workspace (`slot_id` = workspace id, `slot_name` = workspace title).
 
 opencode (`docs/integrations/opencode.md`): those in herdr panes are herdr sessions (`space_kind` is `herdr`); those outside herdr (web, other terminals) are runtime sessions,
 `space_kind` is `opencode`, the space is the session's directory, no slots, and state comes from the plugin (running → working, waiting on a permission → blocked, otherwise done / idle depending on whether there's an assistant message).
 
 node fills these fields from herdr's `session.snapshot` (workspaces, tabs and agents in one call): once whenever herdr pushes a change via `events.subscribe`
-(the list is rebuilt at most once a second; entering / leaving blocked doesn't wait, see `docs/server/server.md` ("Fast lane for cards")),
-and every 10 seconds as a fallback (every second when the event stream is down or there's a compatible Codex forks pane, see `docs/server/server.md` ("Connection to herdr")). When a tab name is the default number, the App shows `#2`.
+(the list is rebuilt at most once a second; entering / leaving blocked doesn't wait, see `docs/server/server.md` ("Card fast lane (#751)")),
+and every 10 seconds as a fallback (every second when the event stream is down or there's a compatible Codex forks pane, see `docs/server/server.md` ("Connecting to herdr")). When a tab name is the default number, the App shows `#2`.
 
 If herdr cuts a large snapshot at its socket's 8192-byte limit (`herdr.ErrTruncated`, #6083), the client rebuilds it from
 `workspace.list`, then `tab.list` and `pane.list` per workspace, one `pane.layout` per tab, and `agent.get` per detected agent.
@@ -214,7 +217,7 @@ A common pattern: an Agent runs `herdr pane split` in its own tab, then starts C
   If the top-left is a shell rather than an Agent, the group has no number 0 and the Agents are peers (the web doesn't mark a starter).
 - Parent/child relationships across tabs (an Agent opening a subtask in another tab / workspace) are not inferred; if needed later, agree on an explicit marker (like to-dos' `persona_from`).
 
-For the web, see `docs/web/web.md`; Android, `docs/android/android.md` ("Several Agents in one tab") (#2515). iOS / Mac (#2516; the pure logic is in `apple/Persona/Views/Chats/TabPanes.swift`, same rules as the web's `herdr-tree.ts`):
+For the web, see `docs/web/web.md`; Android, `docs/android/android.md` ("Session controls, session origin and capabilities") (#2515). iOS / Mac (#2516; the pure logic is in `apple/Persona/Views/Chats/TabPanes.swift`, same rules as the web's `herdr-tree.ts`):
 
 - In the Agents list (by repository / by project; cards, capsules, compact list), a tab with several Agents first gets a tab row: the status dot of the one most in need of attention, the tab name and its title, "N Agents"; tap it to collapse / expand.
   Below it, ordered by pane position: the starter on top, labeled **Started It**, the rest indented one level beneath it. Each row names its own Agent (when both are Claude they're numbered "Claude 2"; the starter is told apart by its label) and no longer repeats the tab name.

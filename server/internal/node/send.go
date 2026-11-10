@@ -128,6 +128,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		// In a tag so it never mixes with what the user typed; the phone shows these as thumbnails.
 		text = strings.TrimSpace(text) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 	}
+	text = inertControls(text) // as the host pastes it (hostPrompt): the box and the transcript are matched against it
 	var watch *promptWatch
 	if kind == "claude" {
 		text = keepImagePaths(text)
@@ -164,7 +165,7 @@ func (n *Node) prompt(ctx context.Context, pane, text string) error {
 	if err := n.typeable(ctx, pane); err != nil {
 		return err
 	}
-	paste := pasteStart + strings.ReplaceAll(text, "\x1b", inertEscape) + pasteEnd
+	paste := pasteStart + inertControls(text) + pasteEnd
 	if err := n.sendText(ctx, pane, paste); err != nil {
 		return err
 	}

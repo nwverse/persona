@@ -82,7 +82,7 @@ func TestPushReplay(t *testing.T) {
 	app := &client{out: make(chan []byte, 1<<16), subs: map[[2]string]bool{}, role: roleFull}
 	// An app on the delta protocol (sessions_delta): its first message per machine stands for its snapshot.
 	deltaApp := &client{out: make(chan []byte, 1<<16), subs: map[[2]string]bool{}, role: roleFull, delta: true, have: map[string]map[string][]byte{}}
-	h.clients[app], h.clients[deltaApp] = struct{}{}, struct{}{}
+	addTestClient(h, app, deltaApp)
 	machines := map[string]*Machine{}
 	machine := func(id string) *Machine {
 		if machines[id] == nil {

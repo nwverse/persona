@@ -534,7 +534,7 @@ struct TaskLine: View {
 
 // MARK: - The hub's lines
 
-/// One line the hub added to the conversation (docs/protocol/protocol.md「任务和对话动态」).
+/// One line the hub added to the conversation (docs/protocol/protocol.md「Tasks and the chat feed」).
 struct FeedLine: View {
     var item: FeedItem
     var group: String = ""
@@ -718,7 +718,7 @@ struct AnsweredLine: View {
 }
 
 /// A message about one of the conversation's tasks, with the reply the AI twin drafted from the task's progress
-/// (docs/assistant/unified-entry.md「信息和任务互相认得」): who said what, the task (live), the draft, Send / Edit / Later. Once
+/// (docs/assistant/unified-entry.md「Message cards link to tasks」): who said what, the task (live), the draft, Send / Edit / Later. Once
 /// the message was handled elsewhere (#4797) the draft stays as plain text with no buttons: the hub would refuse it.
 struct MessageCard: View {
     var item: FeedItem

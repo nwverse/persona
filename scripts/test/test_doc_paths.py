@@ -8,7 +8,7 @@ records under docs/archive/ and the redesign drafts keep the paths of their own 
 rename docs, which name the retired paths on purpose.
 
 Relative Markdown link targets in the same docs, [text](path) and [text](path#anchor), must exist too; only the file is
-checked, not the anchor.
+checked, not the anchor. The section names quoted after a doc path are test_doc_sections.py's.
 
 Every top-level doc must also be listed in CLAUDE.md's Docs index, the place Agents look for the design docs, and every
 record under docs/archive/ in the table of docs/archive/README.md.

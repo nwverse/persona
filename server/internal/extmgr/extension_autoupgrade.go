@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Plugins upgrade themselves from their markets (docs/extensions/extensions.md "Automatic upgrades"): the hub reads the registered
+// Plugins upgrade themselves from their markets (docs/extensions/extensions.md "Auto-upgrade"): the hub reads the registered
 // markets every few hours and installs a newer version of a plugin it installed from one, when the version asks for
 // nothing more than the user granted and nothing is using the plugin. One that asks for more waits for the user; one
 // that does not come up is rolled back (watchUpgrade) and not tried again. One switched off waits until it is on again:

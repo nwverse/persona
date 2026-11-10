@@ -78,7 +78,7 @@ var capabilities = []capability{
 	{CapHistoryAnchors, reflect.TypeFor[HistoryAnchors](), true},
 }
 
-// Manifest is what a connector says it is and does, in one place (docs/extensions/connectors.md "2 · 1"): read whenever the
+// Manifest is what a connector says it is and does, in one place (docs/extensions/connectors.md "Capability declarations: one explicit manifest"): read whenever the
 // hub needs it, so it answers from memory. A program's (connector/proc) is what the program said when it started.
 type Manifest struct {
 	Capabilities []Capability

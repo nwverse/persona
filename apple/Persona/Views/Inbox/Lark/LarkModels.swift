@@ -25,7 +25,7 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
     var mentionPosition: String?
     /// Client only: open the chat at this message (a flagged message) instead of the first unread.
     var focus: String?
-    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「多账号」); nil: the hub's
+    /// Client only: the Feishu account the chat is in, sent as `ol_account` (docs/extensions/feishu.md「Multiple accounts」); nil: the hub's
     /// own. Kept in the caches.
     var account: Int?
     /// Client only: whose account it is, shown beside Lark while more than one is signed in.
@@ -66,8 +66,11 @@ nonisolated struct LarkConversation: Codable, Identifiable, Hashable, Sendable {
 }
 
 extension LarkMessage {
-    /// The StateCache name of a chat's latest page (the chat paints from it before the network answers).
-    nonisolated static func cacheName(_ c: LarkConversation) -> String { "lark-chat-" + c.key }
+    /// The StateCache name of a chat's latest page (the chat paints from it before the network answers). A named
+    /// manager's page keeps its own under the same prefix, which `LarkSync.displayChanged` clears.
+    nonisolated static func cacheName(_ c: LarkConversation, manager: String? = nil) -> String {
+        "lark-chat-" + c.key + (manager.map { "@" + $0 } ?? "")
+    }
 }
 
 /// One Feishu account signed in on the hub's Lark gateway (`GET /api/v1/lark/accounts`).

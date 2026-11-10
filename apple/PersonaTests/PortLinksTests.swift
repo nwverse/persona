@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Links to a port of the conversation's machine (docs/operations/ports.md「链接」): localhost and its spellings, the machine's
+/// Links to a port of the conversation's machine (docs/operations/ports.md「Recognizing links in replies」): localhost and its spellings, the machine's
 /// own name, with paths; anything else on the web is not one.
 struct PortLinksTests {
     private func one(_ s: String, hostnames: [String] = []) -> PortLink? {

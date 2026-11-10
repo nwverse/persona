@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// A terminal addressed by pane ("pane:<id>", docs/integrations/terminal.md "Standalone terminals") is a shell on the computer, agent or not.
+// A terminal addressed by pane ("pane:<id>", docs/integrations/terminal.md "Standalone terminal") is a shell on the computer, agent or not.
 // Only a full device may open one: the streams of agent sessions are watchable by an answer-only device (the watch
 // shows what it is asked about), a shell's screen is more than that. The same goes for tokens an extension holds
 // (agents.read opens an agent's screen, not a shell's).
@@ -54,7 +54,7 @@ func (h *Hub) newShell(w http.ResponseWriter, r *http.Request, m *Machine) {
 	_, _ = w.Write(out)
 }
 
-// The terminal browser's and the sidebar's context menus change things on a computer (docs/integrations/terminal.md "Node menu"):
+// The terminal browser's and the sidebar's context menus change things on a computer (docs/integrations/terminal.md "Node menus"):
 // close a tab or a pane, split a pane, rename a tab, run an agent in a plain shell pane, fetch / pull / push. Each is
 // a route of its own that a full device alone may call; an answer-only device (the watch) and the tokens an extension
 // holds are refused here and by the lists of what they may call (devicetokens.go, extension_scopes.go). The body is
@@ -148,8 +148,8 @@ var nodeActions = map[string]nodeAction{
 
 // paneRoutes are the terminal browser's (panes, tabs) and the "New worktree…" dialog's.
 func (h *Hub) paneRoutes(api *http.ServeMux) {
-	// The terminal browser (docs/integrations/terminal.md "Standalone terminals"): a machine's workspaces, tabs and panes with plain shells, and
-	// "New terminal". A pane is full shell access on the computer: full devices only (paneRoutesFullOnly).
+	// The terminal browser (docs/integrations/terminal.md "Standalone terminal"): a machine's workspaces, tabs and panes with plain shells, and
+	// "New terminal". A pane is full shell access on the computer: full devices only (allowed in devicetokens.go).
 	api.HandleFunc("GET /api/v1/machines/{mid}/panes", h.proxy("panes.list", nil))
 	api.HandleFunc("POST /api/v1/machines/{mid}/panes", h.withMachine(h.newShell))
 	// close / split / run an agent / git in a pane, close / rename a tab: full devices only (panes.go)

@@ -35,7 +35,7 @@ import { Icon } from "../../ui/icons";
 import { Field, inputClass, Segmented } from "../assistant/parts";
 
 const POLL_MS = 3000;
-const NAME_MAX = 40; // the hub's limit (docs/protocol/protocol.md "Pair codes for computers")
+const NAME_MAX = 40; // the hub's limit (docs/protocol/protocol.md "Computer pairing codes")
 
 /** A computer to give a new code to (one added before that has not connected), instead of adding one. */
 export interface PendingComputer {

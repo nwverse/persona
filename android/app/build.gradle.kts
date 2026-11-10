@@ -64,7 +64,7 @@ android {
     }
     buildTypes {
         release {
-            // R8 shrinks without obfuscating (proguard-rules.pro), so error reports keep class names
+            // R8 shrinks and optimizes without obfuscating (proguard-rules.pro), so error reports keep class names
             // (docs/android/android.md "Release shrinking"; scripts/release/check_android_shrink.py checks the APK).
             // A rollback to false also changes scripts/release/test_check_android_shrink.py, which pins this line.
             isMinifyEnabled = true

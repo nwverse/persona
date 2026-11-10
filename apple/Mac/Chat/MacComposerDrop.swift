@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Files dragged onto a composer (docs/apple/mac.md「细节」): pictures go into the message as images (as the + menu's Photos
+/// Files dragged onto a composer (docs/apple/mac.md「Details」): pictures go into the message as images (as the + menu's Photos
 /// does), everything else is uploaded to the session's machine and its path typed in (as Files does).
 nonisolated enum MacDrop {
     /// The + menu's photo limit per message.

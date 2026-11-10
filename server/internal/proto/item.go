@@ -45,7 +45,7 @@ type Fold struct {
 	SupervisionUser bool `json:"supervision_user,omitempty"`
 }
 
-// FoldImage is an image a tool call of a folded run looked at (docs/protocol/protocol.md "Images looked at this turn"): one its result
+// FoldImage is an image a tool call of a folded run looked at (docs/protocol/protocol.md "Images viewed this turn"): one its result
 // carried (ItemID, fetched from GET …/items/{item id}/image), or a picture file Read opened whose result carried none
 // (only Path; the file's thumbnail is GET /machines/{mid}/file/thumb).
 type FoldImage struct {
@@ -151,7 +151,7 @@ type Item struct {
 	From string `json:"from,omitempty"`
 	// Injected: this user line is a message Persona put into the conversation for the model (a task's notice, a
 	// scheduled run, a wake-up…), not something the user wrote. Set by the hub from the line's text
-	// (prompts.ParseInjected) on its way to the apps; docs/protocol/protocol.md "Messages Persona injects".
+	// (prompts.ParseInjected) on its way to the apps; docs/protocol/protocol.md "Messages injected by Persona".
 	Injected *Injected `json:"injected,omitempty"`
 	// Source is the author of an automated input, independent of its model role.
 	// Unknown nonempty kinds are still not user-authored input.

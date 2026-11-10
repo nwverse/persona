@@ -53,6 +53,20 @@ object LarkMoments {
         } ?: return null
         return id.takeIf { it.isNotEmpty() && it.all { ch -> ch.isLetterOrDigit() || ch == '_' || ch == '-' } }
     }
+
+    /**
+     * A post's picture [url] as [manager] reads it (docs/assistant/managers.md "Clients"): a hub path gets `manager=`, as
+     * a picture loaded by URL sends no header. As it is for none or the default, a full URL (a CDN's) and one that names
+     * a manager already; the web's withManager and iOS's LarkMedia.url do the same.
+     */
+    fun imageUrl(url: String, manager: String?): String {
+        val named = manager?.takeIf { it.isNotBlank() && it != persona.core.contracts.api.AssistantManagerChoice.current.value.defaultId }
+        if (named == null || !url.startsWith("/") || url.startsWith("//") || Regex("[?&]${persona.core.hub.ManagerQuery}=").containsMatchIn(url)) return url
+        val hash = url.indexOf('#').takeIf { it >= 0 } ?: url.length
+        val head = url.substring(0, hash)
+        return head + (if ('?' in head) "&" else "?") + persona.core.hub.ManagerQuery + "=" +
+            java.net.URLEncoder.encode(named, "UTF-8") + url.substring(hash)
+    }
 }
 
 /** A post's or comment's time in the language the app is in: "Nov 5, 2:30 PM" in English, the same in each language's own form. */
@@ -226,6 +240,7 @@ fun LarkMomentsScreen(
             item("post-card") {
                 MomentsPostCard(
                     post = p,
+                    manager = record?.manager,
                     onOpenImage = { images, index -> viewerImage = images to index }
                 )
             }
@@ -268,20 +283,21 @@ fun LarkMomentsScreen(
     }
 }
 
-/** Bottom sheet for a Moments post opened from a share link inside a conversation. */
+/** Bottom sheet for a Moments post opened from a share link inside a conversation; read through [manager] (null: none named). */
 @Composable
 internal fun LarkMomentsSheet(
     postId: String,
     link: String?,
     repository: InboxRepository,
+    manager: String? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val res = LocalResources.current
-    var post by remember(postId) { mutableStateOf<LarkMomentsPost?>(null) }
-    var comments by remember(postId) { mutableStateOf<List<LarkMomentsComment>>(emptyList()) }
-    var loading by remember(postId) { mutableStateOf(true) }
-    var error by remember(postId) { mutableStateOf<String?>(null) }
+    var post by remember(postId, manager) { mutableStateOf<LarkMomentsPost?>(null) }
+    var comments by remember(postId, manager) { mutableStateOf<List<LarkMomentsComment>>(emptyList()) }
+    var loading by remember(postId, manager) { mutableStateOf(true) }
+    var error by remember(postId, manager) { mutableStateOf<String?>(null) }
     var viewerImage by remember { mutableStateOf<Pair<List<ViewerImage>, Int>?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -290,15 +306,15 @@ internal fun LarkMomentsSheet(
             loading = true
             error = null
             try {
-                post = repository.momentsPost(postId)
-                comments = repository.momentsComments(postId)
+                post = repository.momentsPost(postId, manager)
+                comments = repository.momentsComments(postId, manager)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { error = e.message ?: res.getString(R.string.inbox_load_failed) }
             finally { loading = false }
         }
     }
 
-    LaunchedEffect(postId) { reload() }
+    LaunchedEffect(postId, manager) { reload() }
 
     val feishuUrl = link ?: "https://applink.feishu.cn/client/moments/detail?postId=$postId"
 
@@ -334,7 +350,7 @@ internal fun LarkMomentsSheet(
                 verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)
             ) {
                 item("post") {
-                    MomentsPostCard(post = p, onOpenImage = { images, idx -> viewerImage = images to idx })
+                    MomentsPostCard(post = p, manager = manager, onOpenImage = { images, idx -> viewerImage = images to idx })
                 }
                 item("comments-header") {
                     JSectionHeader(title = (p.commentCount ?: comments.size).let { pluralStringResource(R.plurals.inbox_moments_comments, it, it) })
@@ -359,6 +375,8 @@ internal fun LarkMomentsSheet(
 @Composable
 private fun MomentsPostCard(
     post: LarkMomentsPost,
+    /** The manager the post is read through (null: none named); its pictures are read as its too. */
+    manager: String?,
     onOpenImage: (List<ViewerImage>, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -382,6 +400,7 @@ private fun MomentsPostCard(
         }
 
         val images = post.images.orEmpty().filter { !it.url.isNullOrBlank() }
+            .map { it.copy(url = LarkMoments.imageUrl(it.url.orEmpty(), manager)) }
         if (images.isNotEmpty()) {
             MomentsImagesLayout(images, onOpenImage)
         }
@@ -508,32 +527,33 @@ private fun reactionLabel(type: String): String = when (type.uppercase()) {
 
 /**
  * A Moments share link opened in a conversation's link card (iOS LarkMomentsPostView in LinkSheet, web MomentsPanel):
- * the post and its comments, text selectable for [picks]; a read that fails offers "Retry" and the web page.
+ * the post and its comments, text selectable for [picks], read through the conversation's [manager] (null: none named);
+ * a read that fails offers "Retry" and the web page.
  */
 @Composable
 fun LarkMomentsLink(postId: String, url: String, modifier: Modifier = Modifier, picks: LarkLinkPicks? = null, refresh: Int = 0,
-    webpageContent: @Composable () -> Unit) {
-    LarkMomentsLinkContent(injectedInboxRepository(), postId, url, modifier, picks, refresh, webpageContent)
+    manager: String? = null, webpageContent: @Composable () -> Unit) {
+    LarkMomentsLinkContent(LocalInboxRepository.current ?: injectedInboxRepository(), postId, url, modifier, picks, refresh, manager, webpageContent)
 }
 
 @Composable
 internal fun LarkMomentsLinkContent(repository: InboxRepository, postId: String, url: String, modifier: Modifier = Modifier,
-    picks: LarkLinkPicks? = null, refresh: Int = 0, webpageContent: @Composable () -> Unit) {
+    picks: LarkLinkPicks? = null, refresh: Int = 0, manager: String? = null, webpageContent: @Composable () -> Unit) {
     val context = LocalContext.current
     val res = LocalResources.current
-    var post by remember(postId) { mutableStateOf<LarkMomentsPost?>(null) }
-    var comments by remember(postId) { mutableStateOf<List<LarkMomentsComment>>(emptyList()) }
-    var loading by remember(postId) { mutableStateOf(true) }
-    var error by remember(postId) { mutableStateOf<String?>(null) }
+    var post by remember(postId, manager) { mutableStateOf<LarkMomentsPost?>(null) }
+    var comments by remember(postId, manager) { mutableStateOf<List<LarkMomentsComment>>(emptyList()) }
+    var loading by remember(postId, manager) { mutableStateOf(true) }
+    var error by remember(postId, manager) { mutableStateOf<String?>(null) }
     var webpage by remember(postId) { mutableStateOf(false) }
     var round by remember(postId) { mutableIntStateOf(0) }
     var viewerImage by remember { mutableStateOf<Pair<List<ViewerImage>, Int>?>(null) }
-    LaunchedEffect(postId, round, refresh) {
+    LaunchedEffect(postId, manager, round, refresh) {
         loading = true
         error = null
         try {
-            post = repository.momentsPost(postId)
-            comments = try { repository.momentsComments(postId) } catch (e: CancellationException) { throw e } catch (_: Exception) { comments }
+            post = repository.momentsPost(postId, manager)
+            comments = try { repository.momentsComments(postId, manager) } catch (e: CancellationException) { throw e } catch (_: Exception) { comments }
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { error = e.message?.takeIf { it.isNotBlank() } ?: res.getString(R.string.inbox_load_failed_retry) }
         finally { loading = false }
@@ -565,7 +585,7 @@ internal fun LarkMomentsLinkContent(repository: InboxRepository, postId: String,
                 }
                 if (loading && loaded == null) item("loading") { JLoading(text = stringResource(R.string.inbox_moments_loading)) }
                 if (loaded != null) {
-                    item("post") { MomentsPostCard(post = loaded, onOpenImage = { images, index -> viewerImage = images to index }) }
+                    item("post") { MomentsPostCard(post = loaded, manager = manager, onOpenImage = { images, index -> viewerImage = images to index }) }
                     item("comments-header") {
                         JSectionHeader(title = (loaded.commentCount ?: comments.size).let { pluralStringResource(R.plurals.inbox_moments_comments, it, it) })
                     }

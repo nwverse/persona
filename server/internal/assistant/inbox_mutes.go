@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
-// Muting (docs/assistant/inbox.md "Mute", docs/extensions/connectors.md "2 · 5"): the user mutes a repository, a chat or a sender from an
+// Muting (docs/assistant/inbox.md "Muting", docs/extensions/connectors.md "Structured Inbox attributes"): the user mutes a repository, a chat or a sender from an
 // item's menu; the inbox keeps the mute (settings "inbox_mutes", only it reads and writes them) and, the same for every source, files
 // the open items it covers as done and the ones that come in later as soon as they do. What an item can be muted by (its `mutes`) is a
 // connector's tags (InboxThing.Tags) or, for Feishu and mail, read off the item.

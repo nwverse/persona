@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// What a finished task came to (#2820, docs/assistant/todos.md "Record the outcome when done"). When a task the main conversation opened (its todo
+// What a finished task came to (#2820, docs/assistant/todos.md "Record conclusions on completion"). When a task the main conversation opened (its todo
 // has an origin) is done, closed by the judge (done.go) or by the user, its agents' last replies are read and a model
 // pulls out a one-line outcome, its links, the decisions made and the pitfalls hit. They go in the todo's decisions
 // (source "outcome", once per completion) and in the timelines of the projects the agents worked in («to-do · <title>», in Chinese),
@@ -124,11 +124,6 @@ func (s *Service) goRecordTaskOutcome(t Todo, doneAt time.Time) {
 		s.sourceReportNow(t.ID) // the outcome is as written as it will be: tell where the request came from (todo_source.go)
 	}()
 }
-
-// waitTaskOutcomes returns once the outcome recordings started so far have finished: what checks that a completion
-// recorded no outcome needs not wait out a deadline. For tests only: the caller must know nothing else is finishing
-// a task meanwhile, as a WaitGroup's Add from zero must not race its Wait.
-func (s *Service) waitTaskOutcomes() { s.tasks.outcomeRuns.Wait() }
 
 // outcomeRecorded: the store already has decisions of this completion.
 func (s *Service) outcomeRecorded(ctx context.Context, todoID, key string) bool {

@@ -1,7 +1,7 @@
 import PersonaSSH
 import SwiftUI
 
-/// Settings › hub › SSH Tunnel (docs/operations/network.md「经 SSH 隧道连 hub」): one paired hub's tunnel, with what it is doing now.
+/// Settings › hub › SSH Tunnel (docs/operations/network.md「Connecting to hub through SSH」): one paired hub's tunnel, with what it is doing now.
 struct HubSSHTunnelPage: View {
     @Environment(AppModel.self) private var model
     let hubID: String
