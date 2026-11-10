@@ -2625,7 +2625,7 @@ Deploys are frequent (hub restarts, node binary swaps). Questions / plans / perm
 
 ### When the manager is away (resident nodes)
 
-A resident node (`personad node --attach`: Persona Link, the Mac's launchd node, a service node) outlives its manager connection. While no connection is served (before the first one, and between one ending and the next), it answers `node.sock` itself, in **standby** (`server/internal/node/spool.go`). Standby only listens where nothing else answers: a `node --stdio` that serves by itself (it reached no resident node in time) keeps the socket, and standby takes it once that one is gone (it looks every 5 seconds).
+A resident node (`personad node --attach`: Persona Link, the Mac's launchd node, a service node) outlives its manager connection. While no connection is served (before the first one, and between one ending and the next), it answers `node.sock` itself, in **standby** (`server/internal/node/spool_standby.go`). Standby only listens where nothing else answers: a `node --stdio` that serves by itself (it reached no resident node in time) keeps the socket, and standby takes it once that one is gone (it looks every 5 seconds).
 
 - `hook`: the event is kept in the spool. Two kinds are not kept: a resumed hook (the node it first reached already reported it), and the events a report-only hook does not report anyway.
   - A hook that would wait on the phone (`PermissionRequest`, `Elicitation`) gets `{"retry":true}` while the **hold** lasts: 10 minutes after the manager was last connected for at least a minute, or after the resident node started. It then asks again with the same `attempt` and gets its card if the manager is back within `nodeclient.ResumeWait` (2 minutes); after that it goes to the terminal. So each such hook waits at most 2 minutes, and the hold only decides whether it waits at all. Connections shorter than a minute (a manager that keeps failing) don't renew the hold.
@@ -2737,9 +2737,9 @@ these sessions have no `pane_id`, and the App doesn't show a terminal for them a
 Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified-entry.md)). The assistant hands in a plan with `task_plan`; read-only ones and ones the user chose to remember start directly, and the rest wait for "Start" on the phone.
 
 **Stable task rows (#2878).** The feed endpoint additionally returns `task_cards`, a derived projection, without changing or
-removing its original `items` and `plans`. Android and web render a task only as its single **Progress** tray row; the chat
-shows a small "Dispatched N tasks · See Progress" entry instead of plan/task/receipt/review/report cards. Plans awaiting
-approval and acceptance decisions are handled in **Pending**. Task details and the original audit records remain accessible.
+removing its original `items` and `plans`. Android and web render a task only as its single row in **In progress**, or in
+**Needs you** while it waits on the user (#3387); the chat shows a small "Dispatched N tasks · See In progress" entry instead
+of plan/task/receipt/review/report cards. Plans awaiting Start and acceptance decisions are handled in **Needs you**. Task details and the original audit records remain accessible.
 
 `TaskCard` is `{id,todo_id?,plan_id?,index?,at,updated_at,state,receipt_id?,report_id?}`:
 

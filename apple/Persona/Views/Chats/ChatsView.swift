@@ -283,7 +283,7 @@ struct ChatsView: View {
         // Closing the search before a push from its results redraws the navigation with it, as when the list was
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
-        SplitNavigation(path: pushing, destinations: AgentsDestinations(), pageSwitch: pageTabSwitch) {
+        SplitNavigation(path: pushing, listKey: "agents.list", destinations: AgentsDestinations(), pageSwitch: pageTabSwitch) {
             AgentsList(path: $path, spaceAt: $spaceAt, query: $query, searching: $searching,
                        searchedBeforePush: $searchedBeforePush, showNew: $showNew, menuActions: menuActions, ownsTop: ownsTop,
                        showsPersonalEntry: showsPersonalEntry, beginSearch: beginSearch)
