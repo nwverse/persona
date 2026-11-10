@@ -164,13 +164,9 @@ func TestRemedyToolsAnswerAndRetryInTheSameTab(t *testing.T) {
 	if got := remedyHistory(t, s, todo.ID); !slices.Equal(got, want) {
 		t.Errorf("history %v", got)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for !slices.ContainsFunc(f.notices(), func(n string) bool { return strings.Contains(n, "重试后 Agent 开起来了") }) {
-		if time.Now().After(deadline) {
-			t.Fatalf("no started message: %q", f.notices())
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitFor(t, "the retry started message", func() bool {
+		return slices.ContainsFunc(f.notices(), func(n string) bool { return strings.Contains(n, "重试后 Agent 开起来了") })
+	})
 }
 
 // The supervision turn that heard of the failure ends with no retry going: the start fails for good, with its
