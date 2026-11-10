@@ -17,8 +17,6 @@ pub struct Record {
     pub pairing: RpPairingFile,
 }
 
-// Writing records is for `pair` (#3448).
-#[allow(dead_code)]
 impl Record {
     /// A new record for pairing: a host name unique to this record, so two computers pairing with the
     /// same phone never replace each other's record on it.
@@ -76,7 +74,6 @@ impl Record {
     }
 }
 
-#[allow(dead_code)]
 /// A random number from the standard library's per-process hash keys: good enough to tell records apart.
 fn random_u32() -> u32 {
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();

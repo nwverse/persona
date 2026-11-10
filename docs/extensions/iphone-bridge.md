@@ -257,12 +257,15 @@ Durations are capped at 10 seconds.
 
 ## USB and Bonjour: `usb-list`, `pair`, `match`
 
-Implemented in #3448, in `native/iphone-bridge/src/pair.rs`; until then each answers `unsupported`. Pairing needs the phone on USB and
-already trusting this computer.
+In `native/iphone-bridge/src/pair.rs` (#3448). Pairing needs the phone on USB and already trusting this computer (the "Trust This
+Computer?" prompt answered once); without that, `pair` answers `trust_pending` and nothing is written.
 
-- `usb-list --json` → `[{"udid": "<udid>", "name": "<device name>", "product_version": "18.1", "model": "iPhone16,2"}]`.
-- `pair --udid <udid> --out <path>` writes the record (0600) and prints what #3448 defines. Error codes besides the common ones:
-  `trust_pending`, `locked`, `not_found`.
+- `usb-list --json` → `[{"udid": "<udid>", "name": "<device name>", "product_version": "18.1", "model": "iPhone16,2"}]`: the phones
+  usbmuxd sees over USB, each once. `name` is `null` until the phone trusts this computer (recent iOS gives its name only in a session).
+- `pair --udid <udid> --out <path>` opens `remotepairingdeviced` through lockdown over usbmuxd and runs RemotePairing's manual pairing:
+  the phone asks its user to allow it and for the passcode, then hands back the key its Bonjour advertisements are tagged with (`altIRK`).
+  The record (keys, host name, that key) is written 0600, and the answer is `{"udid", "name", "model", "product_version"}`. Error codes
+  besides the common ones: `trust_pending`, `locked`, `not_found` (no such phone on USB), `pairing_rejected` (the user declined).
 - The record is the bridge's own format (`record.rs`: the RemotePairing keys plus the host name they were made under, which every later
   connection must send again) and opaque to the node.
 - `match --record <path> --identifier <id> --auth-tag <tag>` → `{"match": true}` or `{"match": false}`: whether a `_remotepairing._tcp`
@@ -283,6 +286,7 @@ to a phone has run against one:
 | `screenshot`, its rotation in landscape | not verified on a real device |
 | `list_apps`, `launch_app`, `terminate_app` | not verified on a real device |
 | Input gate (display stream), touch coordinates and rotation, keys, buttons | not verified on a real device |
+| `usb-list`, `pair` over USB (consent prompt, `altIRK`), `match` against a real advertisement | not verified on a real device; `usb-list` answered `[]` from a Mac's usbmuxd with no phone attached, `match` is unit-tested against the library's tag function |
 | `ax_tree` | `unsupported` |
 
 ## Open questions
