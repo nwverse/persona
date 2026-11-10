@@ -263,7 +263,7 @@ func Update(path string, change func(*Config) error) error {
 	return os.Rename(tmp, path)
 }
 
-// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route choice").
+// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route selection").
 func kindOf(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {

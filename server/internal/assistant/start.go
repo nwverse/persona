@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Starting the assistant's conversations (docs/assistant/assistant.md "Processes", "New main chat"): its directory on the machine is
+// Starting the assistant's conversations (docs/assistant/assistant.md "Process", "New main chat"): its directory on the machine is
 // prepared first (the CLAUDE.md written from what the hub tells it, the connectors' and plugins' skills), the model
 // configuration applied, then the node's assistant.send. The main conversation is one of them; putting it away for a
 // new one keeps what it left for the next one's first message.
@@ -467,7 +467,7 @@ func (s *Service) startRoutes() {
 			Effort         string        `json:"effort"`
 			Main           bool          `json:"main"` // becomes the main conversation
 			// Purpose is the model purpose it runs under ("assistant" when empty; a plugin's /agent asks for its own);
-			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "Assistant").
+			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "REST (App → hub)").
 			Purpose   string `json:"purpose"`
 			MachineID string `json:"machine_id"`
 			Space     string `json:"space"` // "health": a conversation of the health space (docs/assistant/health.md)

@@ -61,6 +61,7 @@ class TasksStore(
     private val todosLock = Any()
     /** The hub's last answer (a list, or an older hub's 404 as none); null until it answers, while the cache shows. */
     private var answered: List<Todo>? = null
+    private val acceptedAsks = mutableSetOf<Pair<String, String>>()
     private val writing = Mutex()
     private val refreshingTodos = Mutex()
     private val agentLookup = TaskAgentLookup(api, scope)
@@ -76,6 +77,8 @@ class TasksStore(
     val plans: StateFlow<Map<String, TaskPlan>> = _plans.asStateFlow()
     private val _feeds = MutableStateFlow<Map<String, List<FeedItem>>>(emptyMap())
     val feeds: StateFlow<Map<String, List<FeedItem>>> = _feeds.asStateFlow()
+    private val _taskCards = MutableStateFlow<Map<String, List<persona.core.contracts.AssistantTaskCard>>>(emptyMap())
+    val taskCards: StateFlow<Map<String, List<persona.core.contracts.AssistantTaskCard>>> = _taskCards.asStateFlow()
     /** Conversations whose whole feed has been read once: a live item alone does not make a later load incremental (#4689). */
     private val loaded = MutableStateFlow<Set<String>>(emptySet())
     /** Conversation → the task the next message goes straight to ("Say to 'xx'"). */
@@ -122,7 +125,13 @@ class TasksStore(
                     val list = api.todos()
                     _todosSupported.value = true
                     todosLoaded = true
-                    synchronized(todosLock) { answered = list; if (list != _todos.value) _todos.value = list }
+                    synchronized(todosLock) {
+                        val shown = list.map { todo ->
+                            if (todo.ask?.askedAt?.let { (todo.id to it) in acceptedAsks } == true) todo.copy(ask = null) else todo
+                        }
+                        answered = shown
+                        if (shown != _todos.value) _todos.value = shown
+                    }
                     dropStaleRoutes()
                     remember()
                 } catch (cancelled: CancellationException) {
@@ -270,6 +279,19 @@ class TasksStore(
             }
             runCatching { api.feed(conversation, since) }.onSuccess { res ->
                 if (res.plans.isNotEmpty()) _plans.update { it + res.plans }
+                res.taskCards?.takeIf { it.isNotEmpty() }?.let { cards ->
+                    _taskCards.update { held ->
+                        val merged = held[conversation].orEmpty().associateBy { it.id }.toMutableMap()
+                        cards.forEach { card ->
+                            val old = merged[card.id]
+                            val previousAt = AssistantLines.time(old?.updatedAt)
+                            val updatedAt = AssistantLines.time(card.updatedAt)
+                            if (old == null || previousAt == null || (updatedAt != null && !updatedAt.isBefore(previousAt)))
+                                merged[card.id] = card
+                        }
+                        held + (conversation to merged.values.toList())
+                    }
+                }
                 cards.snapshot(conversation, res.views, res.viewActions, res.viewBlocks)
                 received(res.items, conversation)
                 loaded.update { it + conversation }
@@ -380,6 +402,20 @@ class TasksStore(
         _todos.update { list -> list.filterNot { it.id == todo.id } }
         routes.update { r -> r.filterValues { it != todo.id } }
         reloadTodos()
+    }
+
+    fun acceptTask(todo: Todo, onError: (Throwable) -> Unit, onChanged: () -> Unit) {
+        val ask = todo.ask ?: return
+        if (ask.askedAt.isBlank()) return
+        act("accept:${todo.id}", onError) {
+            if (_todos.value.firstOrNull { it.id == todo.id }?.ask != ask) { onChanged(); return@act }
+            api.acceptTask(todo.id, ask.askedAt)
+            synchronized(todosLock) {
+                acceptedAsks += todo.id to ask.askedAt
+                _todos.update { rows -> rows.map { if (it.id == todo.id && it.ask == ask) it.copy(ask = null) else it } }
+            }
+            reloadTodos()
+        }
     }
 
     private fun act(id: String, onError: (Throwable) -> Unit, block: suspend () -> Unit) {

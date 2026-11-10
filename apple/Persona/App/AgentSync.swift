@@ -26,7 +26,7 @@ final class AgentSync {
     /// What has been pulled, by rev ("<machine>/<session>" → rev); kept across launches, beside the chats' disk cache it
     /// describes (`StateCache`). Not in UserDefaults: it changes with nearly every push, and each write to UserDefaults
     /// draws every `@AppStorage` view in the app again; the Agents list re-laid itself out under the finger
-    /// (docs/archive/apple/live-updates.md「滚动时被迫刷新」).
+    /// (docs/archive/apple/live-updates.md「Forced refreshes while scrolling」).
     private var synced: [String: Int64]
     private var queue: [SessionKey] = []
     private var running = Set<SessionKey>()

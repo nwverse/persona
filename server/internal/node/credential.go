@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "4 · Credentials"). Only the hub
+// Credentials the hub reads from this machine for a connector (docs/plans/plan-connectors.md "Credentials"). Only the hub
 // asks — it is a hub → node RPC, the node socket of hooks and MCP does not route here — and nothing is logged.
 
 var ghHost = lazyre.New(`^[A-Za-z0-9.-]+(:[0-9]+)?$`)

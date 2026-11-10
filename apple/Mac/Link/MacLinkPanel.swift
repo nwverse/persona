@@ -3,7 +3,7 @@ import SwiftUI
 import WebKit
 
 // Links open inside the app (CLAUDE.md). On the iPhone that is a card rising from the bottom; on the Mac it is a panel
-// sliding in at the detail column's trailing edge, beside what it came from (docs/apple/mac.md「和 iOS 的对应」): the page
+// sliding in at the detail column's trailing edge, beside what it came from (docs/apple/mac.md「Mapping from iOS」): the page
 // stays usable, the panel's width is dragged and remembered, ⌘W closes it, 「在浏览器打开」 hands it to the default
 // browser, and 「在单独窗口打开」 moves it into a window of its own. Feishu documents and company-feed posts open in the
 // native views (FeishuRouteView) while the hub has them (`LarkFeatures`), the rest in a WKWebView from the shared pool

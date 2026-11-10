@@ -5,7 +5,7 @@ package identity
 // agent's own processes open) and `personad hub doctor` (hub/doctor.go: the modes the credential files are kept in).
 // The guard and the sandbox match them where they are written, at the top of the data directory (the path guard also
 // at the top of a manager's folder, managers/<id>/, which the sandbox closes whole, and of a manager's folder
-// anywhere, one holding a manager's manager.json); docs/server/agent-sandbox.md "Which files" says where the two
+// anywhere, one holding a manager's manager.json); docs/server/agent-sandbox.md "The rules close names at the top of the data directory" says where the two
 // differ.
 
 import (

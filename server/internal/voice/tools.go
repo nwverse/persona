@@ -16,7 +16,7 @@ import (
 var toolNames = []string{"search_knowledge", "list_agents", "send_to_agent", "ask_persona"}
 
 // boundTools are a call bound to a conversation's (protocol 2): the two that only read, and delegate_task, which hands
-// work to that conversation (docs/assistant/voice.md "Sending, the gate and 409").
+// work to that conversation (docs/assistant/voice.md "Sending, gates, and 409").
 var boundTools = []string{"search_knowledge", "list_agents", "delegate_task"}
 
 // toolLabels are what the app shows while a tool runs.

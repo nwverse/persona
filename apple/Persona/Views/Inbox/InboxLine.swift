@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Thread (#2128, docs/assistant/inbox.md「线索」), as on the web (#2352): under an opened item's summary, what it grew out of (its
+// Thread (#2128, docs/assistant/inbox.md「Relationships: parents and children」), as on the web (#2352): under an opened item's summary, what it grew out of (its
 // parent's chain, up to a todo or an agent session) and what grew out of it (the items right under it). Each row opens
 // where it lives: another item, the todo, the agent's chat. Nothing is drawn when the item has neither, nor from a hub
 // without GET /api/v1/inbox/tree.

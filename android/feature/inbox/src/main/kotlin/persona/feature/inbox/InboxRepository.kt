@@ -107,7 +107,7 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun emojis(): kotlinx.serialization.json.JsonObject? = null
 
     /**
-     * "Muted" (docs/assistant/inbox.md "Mute"): what the user muted, in every source, newest first; [manager]'s (each
+     * "Muted" (docs/assistant/inbox.md "Muting"): what the user muted, in every source, newest first; [manager]'s (each
      * keeps its own; named even when it is the default, which may move before an Unmute), else the default's.
      */
     suspend fun inboxMutes(manager: String? = null): List<InboxMute> = error("静音尚未接入") // i18n-ignore: developer error for a repository without the hub
@@ -369,7 +369,7 @@ sealed interface LarkPart {
     data class Card(val content: LarkCardContent, val source: LarkContentSource, val messageId: String? = null) : LarkPart
     // Models may carry an authenticated Coil ImageRequest supplied by the data layer.
     data class Image(val model: Any, val description: String = "", val width: Int = 1, val height: Int = 1) : LarkPart
-    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream") : LarkPart
+    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream", val source: LarkContentSource? = null) : LarkPart
     data class External(val title: String, val larkUrl: String, val kind: String, val duration: String = "", val cover: Image? = null) : LarkPart
     data class Code(val code: String, val language: String = "") : LarkPart
     data class Audio(val ref: String, val durationMs: Long, val source: LarkContentSource? = null) : LarkPart

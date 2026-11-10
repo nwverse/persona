@@ -1,6 +1,6 @@
 # Lessons: Lark and mail
 
-Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md` ("Lessons"); index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
+Pitfalls, odd behavior and the trade-offs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Put new lessons in the matching section; if none fits, start a new one.
 
 ## Sending attachments
 

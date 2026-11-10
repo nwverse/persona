@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -30,7 +31,12 @@ type sheetSpec struct {
 	Widths  []float64 `json:"widths"`
 	Formats []string  `json:"formats"`
 	Freeze  *bool     `json:"freeze"`
+	csv     bool      // from CSV: its strings, the header's too, are csvText
 }
+
+// csvText is a CSV field that is not a number: only text, never a formula or a date. An exported field that starts
+// with = is data, and as a formula Excel may not parse it or would run it on open (CSV injection).
+type csvText string
 
 // Xlsx is the workbook JSON src describes.
 func Xlsx(src []byte, title string) ([]byte, error) {
@@ -45,7 +51,7 @@ func Xlsx(src []byte, title string) ([]byte, error) {
 
 // XlsxFromCSV is a one-sheet workbook of CSV src, its first row the header. Integers stay
 // numeric only when serialization keeps them exact, decimals when it changes no more than
-// 15-digit rounding; IDs like 007 stay text.
+// 15-digit rounding; IDs like 007 stay text. A field that starts with = stays text: formulas come only from JSON.
 func XlsxFromCSV(src []byte, name, title string) ([]byte, error) {
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(src, []byte("\xef\xbb\xbf"))))
 	r.FieldsPerRecord = -1
@@ -56,7 +62,7 @@ func XlsxFromCSV(src []byte, name, title string) ([]byte, error) {
 	if len(recs) == 0 {
 		return nil, errEmpty
 	}
-	s := sheetSpec{Name: name, Header: recs[0]}
+	s := sheetSpec{Name: name, Header: recs[0], csv: true}
 	for _, rec := range recs[1:] {
 		row := make([]any, len(rec))
 		for i, v := range rec {
@@ -157,6 +163,24 @@ type gcell struct {
 	style int
 }
 
+// Excel's limits (Microsoft's "Excel specifications and limits"). Past them Excel reports a problem with the file
+// and cuts or drops what does not fit, so a workbook that needs more is refused rather than written.
+const (
+	maxCellChars    = 32767   // characters of text in a cell, counted in UTF-16 as Excel does
+	maxFormulaChars = 8192    // characters of a formula after its = (MS-OI29500 on ST_Formula)
+	maxCols         = 16384   // columns, A to XFD
+	maxRows         = 1048576 // rows, the header included
+)
+
+// excelLen is how many characters Excel counts in s: UTF-16 code units, so one outside the BMP counts two.
+func excelLen(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
 func buildGrid(s sheetSpec, st *xlsxStyles) (*grid, error) {
 	g := &grid{header: len(s.Header) > 0, sheet: &xsheet{cells: map[[2]int]*xcell{}}}
 	var rows [][]any
@@ -168,9 +192,18 @@ func buildGrid(s sheetSpec, st *xlsxStyles) (*grid, error) {
 		rows = append(rows, h)
 	}
 	rows = append(rows, s.Rows...)
+	if len(rows) > maxRows {
+		return nil, fmt.Errorf("%d rows, an Excel sheet holds at most %d (the header included)", len(rows), maxRows)
+	}
 	for ri, r := range rows {
+		if len(r) > maxCols {
+			return nil, fmt.Errorf("%s: row %d has %d cells, an Excel row holds at most %d (A to XFD)", cellRef(maxCols, ri), ri+1, len(r), maxCols)
+		}
 		row := make([]gcell, len(r))
 		for ci, v := range r {
+			if str, ok := v.(string); ok && s.csv {
+				v = csvText(str)
+			}
 			header := ri == 0 && g.header
 			format := ""
 			if ci < len(s.Formats) && !header {
@@ -206,18 +239,32 @@ func cellOf(v any, format string) (*xcell, error) {
 		return &xcell{v: num(f)}, nil
 	case float64:
 		return &xcell{v: num(v)}, nil
+	case csvText:
+		return textCell(string(v))
 	case string:
 		if strings.HasPrefix(v, "=") && len(v) > 1 {
-			return &xcell{formula: strings.TrimPrefix(v, "=")}, nil
+			f := strings.TrimPrefix(v, "=")
+			if n := excelLen(f); n > maxFormulaChars {
+				return nil, fmt.Errorf("a formula of %d characters, Excel takes at most %d", n, maxFormulaChars)
+			}
+			return &xcell{formula: f}, nil
 		}
 		if isDateFormat(format) {
 			if serial, ok := excelDate(v); ok {
 				return &xcell{v: num(serial)}, nil
 			}
 		}
-		return &xcell{v: value{kind: 's', str: v}}, nil
+		return textCell(v)
 	}
 	return nil, fmt.Errorf("a cell is text, a number, true / false or null, not %T", v)
+}
+
+// textCell is a cell of text s, refused when s is longer than an Excel cell holds (JSON and CSV text alike).
+func textCell(s string) (*xcell, error) {
+	if n := excelLen(s); n > maxCellChars {
+		return nil, fmt.Errorf("%d characters, an Excel cell holds at most %d", n, maxCellChars)
+	}
+	return &xcell{v: value{kind: 's', str: s}}, nil
 }
 
 func (g *grid) xml(book *xbook, s sheetSpec) string {

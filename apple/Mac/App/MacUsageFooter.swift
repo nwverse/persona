@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The foot of the sections column (docs/server/usage-windows.md「界面」, as the web's sidebar has it): the two fullest
+/// The foot of the sections column (docs/server/usage-windows.md「UI」, as the web's sidebar has it): the two fullest
 /// subscription accounts as thin bars, name and fullest window's percentage; a click opens every account's windows with
 /// the reset countdowns, the sample ages and the pace. Not drawn while the hubs have no accounts.
 struct MacUsageFooter: View {

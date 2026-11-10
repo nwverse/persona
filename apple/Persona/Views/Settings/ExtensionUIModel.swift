@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// A plugin's declarative UI (docs/extensions/extensions.md「声明式 UI」): the plugin sends a View made of a few fixed kinds of items, the
+// A plugin's declarative UI (docs/extensions/extensions.md「Declarative UI」): the plugin sends a View made of a few fixed kinds of items, the
 // app draws them with its own design system (ExtensionViewRenderer) and sends the buttons back. Nothing of the plugin
 // runs here; its tones become the app's role colors, it gives no colors, sizes or icons.
 
@@ -15,7 +15,7 @@ nonisolated extension ExtensionUIPlace: Identifiable {
     var ownerName: String? { extensionName?.isEmpty == false ? extensionName : pluginName }
 
     /// The slots this app draws (anything else from a newer hub is ignored). `extension_page` is UI version 3's name for
-    /// `plugin_page` (docs/extensions/extensions.md「UI 版本 3」, compatibility).
+    /// `plugin_page` (docs/extensions/extensions.md「UI version 3」, compatibility).
     static let slots: Set<String> = ["plugin_page", "extension_page", "launcher_section", "nav_page", "overview_card",
                                      "machine_section", "inbox_item"]
 
@@ -88,7 +88,7 @@ nonisolated extension ExtensionComponent {
 
 /// `persona://inbox/<item id>/source` (the id path-escaped): an inbox_item page asking to open its item's own source
 /// page, what opening the item showed before the slot (a Feishu chat at the item's first message). The only `open_url`
-/// that is not https, and only for the item the page is drawn for (docs/extensions/extensions.md「收件箱条目」).
+/// that is not https, and only for the item the page is drawn for (docs/extensions/extensions.md「Inbox items」).
 nonisolated enum InboxSourceLink {
     /// The item `url` opens the source of, nil when it is no such link.
     static func item(_ url: URL) -> String? {
@@ -117,7 +117,7 @@ nonisolated enum ExtensionSettingsLink {
 
 extension APIClient {
     /// What enabled extensions draw at a placement (a launcher's section: only the extensions whose gateway it is).
-    /// No placement: every slot's but launchers' sections (docs/extensions/extensions.md「UI 插槽」). Placements this app does not
+    /// No placement: every slot's but launchers' sections (docs/extensions/extensions.md「UI slots」). Placements this app does not
     /// draw are left out.
     func pluginUI(placement: String?, launcher: String? = nil, machine: String? = nil) async throws -> [ExtensionUIPlace] {
         let query = ["placement": placement, "launcher": launcher, "machine": machine].compactMapValues { $0?.isEmpty == false ? $0 : nil }
@@ -425,7 +425,7 @@ extension APIClient {
         }
         do {
             // The page's fields (submit), then the component's own values (a path, a line, what was written), then the
-            // action's own (UI version 4): the later wins (docs/extensions/extensions.md「UI 版本 4」).
+            // action's own (UI version 4): the later wins (docs/extensions/extensions.md「UI version 4: code hosting」).
             let sent = (action.submit == true ? submitted : [:]).merging(chosen) { _, c in c }
                 .merging(action.values ?? [:]) { _, own in own }
             let r = try await call(action.id, values: sent.isEmpty ? nil : sent)

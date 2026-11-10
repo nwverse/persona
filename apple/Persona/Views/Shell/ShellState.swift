@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「新外壳」): Assistant (the Persona assistant) and Agents (the Agents list)
+/// The ChatGPT-style shell on an iPhone (docs/apple/ios.md「New shell」): Assistant (the Persona assistant) and Agents (the Agents list)
 /// under one top switch, the drawer on the left (Inbox, Scheduled Tasks, Knowledge, Machines, the conversations, Settings), Settings as a sheet.
 ///
 /// The pages read this from the environment (`\.shell`): nil means a regular-width iPad / iPhone Duo,

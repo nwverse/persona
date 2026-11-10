@@ -1,4 +1,4 @@
-// End-to-end check of the DSH plugin's self-update (docs/integrations/dsh.md "Auto-update", docs/integrations/runtimes.md "Auto-update"): a real
+// End-to-end check of the DSH plugin's self-update (docs/integrations/dsh.md "Automatic updates", docs/integrations/runtimes.md "Auto-update"): a real
 // `dsh web` with the plugin's loader (index.js) and a real `personad node --stdio` whose packages come from a directory
 // (PERSONA_RUNTIME_PACKAGES), so it can carry another version of the plugin than DSH runs without another build.
 //

@@ -14345,6 +14345,28 @@
       },
       "extractionState" : "manual"
     },
+    "A file goes up to this conversation's computer, and its path into your message." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A file goes up to this conversation's computer, and its path into your message."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルはこの会話のコンピュータにアップロードされ、そのパスがメッセージに入ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件会上传到这个对话所在的电脑，路径写进你的消息。"
+          }
+        }
+      }
+    },
     "A file in Lark Drive. Download it to preview." : {
       "localizations" : {
         "en" : {
@@ -15218,6 +15240,28 @@
       },
       "extractionState" : "manual"
     },
+    "Access Your Photos" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access Your Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真へのアクセス"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "访问你的照片"
+          }
+        }
+      }
+    },
     "Accessibility" : {
       "comment" : "macOS privacy setting name",
       "localizations" : {
@@ -15838,6 +15882,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Add a caption…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add a caption…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "キャプションを追加…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加说明…"
+          }
+        }
+      }
     },
     "Add a computer first" : {
       "localizations" : {
@@ -24642,6 +24708,28 @@
       },
       "extractionState" : "manual"
     },
+    "Browse Files" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Browse Files"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルを参照"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "浏览文件"
+          }
+        }
+      }
+    },
     "Browser" : {
       "localizations" : {
         "en" : {
@@ -29513,6 +29601,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Choose Photos" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真を選択"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择照片"
+          }
+        }
+      }
     },
     "Choose Provider" : {
       "localizations" : {
@@ -60257,6 +60367,28 @@
       },
       "extractionState" : "manual"
     },
+    "Let Persona see your photos to pick them here, or choose them in the system's picker." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let Persona see your photos to pick them here, or choose them in the system's picker."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona に写真へのアクセスを許可するとここで選べます。システムのピッカーで選ぶこともできます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Persona 访问照片后可以在这里直接挑选，也可以用系统的选择器。"
+          }
+        }
+      }
+    },
     "Let the Assistant Control This Computer" : {
       "localizations" : {
         "en" : {
@@ -63025,6 +63157,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "确认它开着、网络通、node 在运行，然后重新连接"
+          }
+        }
+      }
+    },
+    "Manage" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manage"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理"
           }
         }
       }
@@ -82833,6 +82987,28 @@
       },
       "extractionState" : "manual"
     },
+    "Persona can see only the photos you chose." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona can see only the photos you chose."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona が見られるのは選択した写真だけです。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Persona 只能看到你选定的照片。"
+          }
+        }
+      }
+    },
     "Persona doesn't listen when it's not on screen. Go back to Persona to keep talking" : {
       "localizations" : {
         "en" : {
@@ -83731,6 +83907,28 @@
       },
       "extractionState" : "manual"
     },
+    "Photo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片"
+          }
+        }
+      }
+    },
     "Photo · %@" : {
       "localizations" : {
         "en" : {
@@ -83960,6 +84158,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Picked, %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Picked, %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択済み、%lld 枚目"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选，第 %lld 张"
+          }
+        }
+      }
     },
     "Picking one fills it in; it's sent only when you tap Send" : {
       "localizations" : {
@@ -88312,6 +88532,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Recents" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recents"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近の項目"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近项目"
+          }
+        }
+      }
     },
     "Recommended" : {
       "localizations" : {
@@ -102408,6 +102650,28 @@
         }
       }
     },
+    "Slide to cancel" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slide to cancel"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スライドでキャンセル"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "滑动取消"
+          }
+        }
+      }
+    },
     "Slider" : {
       "localizations" : {
         "en" : {
@@ -107324,6 +107588,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Take Photo" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Take Photo"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真を撮る"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拍照"
+          }
+        }
+      }
     },
     "Take screenshot" : {
       "localizations" : {
@@ -120856,6 +121142,28 @@
       },
       "extractionState" : "manual"
     },
+    "Touch and hold to dictate. Slide left to cancel, or up to keep dictating." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touch and hold to dictate. Slide left to cancel, or up to keep dictating."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "長押しで音声入力。左にスライドでキャンセル、上にスライドで入力を続けます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按住听写。左滑取消，上滑可松手继续听写。"
+          }
+        }
+      }
+    },
     "Touch and hold an item in the Inbox to mute its repo, conversation, or sender." : {
       "localizations" : {
         "en" : {
@@ -133645,6 +133953,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "All Photos" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All Photos"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべての写真"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部照片"
+          }
+        }
+      }
     },
     "api.anthropic.com, with an API key from the Anthropic Console" : {
       "localizations" : {

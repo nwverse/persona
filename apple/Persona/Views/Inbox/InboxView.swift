@@ -35,7 +35,7 @@ extension InboxView {
 }
 
 /// The inbox's page itself, in whatever stack shows it: Inbox's own (InboxView), or the shell's Assistant page (pushed from
-/// the drawer, docs/apple/ios.md「新外壳」), which passes `embedded` so the page brings its destinations and link handling.
+/// the drawer, docs/apple/ios.md「New shell」), which passes `embedded` so the page brings its destinations and link handling.
 struct InboxPage: View {
     @Environment(AppModel.self) private var model
     @Binding var path: NavigationPath
@@ -99,7 +99,7 @@ struct InboxPage: View {
                 .pageToolbar {
                     ToolbarItem(placement: .principal) { ConnectionTitle(title: String(localized: "Inbox")) }
                     if model.isMultiHub {
-                        // Each hub has its own inbox (docs/protocol/multi-hub.md「hub 级页面」): whose this is, and the others.
+                        // Each hub has its own inbox (docs/protocol/multi-hub.md「Terminology」): whose this is, and the others.
                         ToolbarItem(placement: .topBarLeading) { HubSwitcher(compact: true) }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -188,7 +188,7 @@ struct InboxPage: View {
     private var cleanScope: [InboxItem] { kind == "agent" ? [] : openItems }
 
     /// Clear All, with what it covers and how many under the name: files every open item in view as dismissed; from
-    /// `InboxBulk.confirmFrom` items on it asks first. One request, Undo after (docs/assistant/inbox.md「全部清理」).
+    /// `InboxBulk.confirmFrom` items on it asks first. One request, Undo after (docs/assistant/inbox.md「Clean up all」).
     private var cleanButton: some View {
         let scope = cleanScope
         return Button { clean(confirmed: false) } label: {
@@ -349,7 +349,7 @@ struct InboxPage: View {
     }
 
     /// A row's long-press menu: Done (or Move Back), then what the item can be muted by — its repository, chat or sender,
-    /// the name under each (docs/assistant/inbox.md「静音」) — then a rule for each of those ("Policies").
+    /// the name under each (docs/assistant/inbox.md「Muting」) — then a rule for each of those ("Policies").
     @ViewBuilder private func rowMenu(_ it: InboxItem) -> some View {
         if it.isDone {
             Button { store.setDone(it, false) } label: { Label("Move Back", systemImage: Theme.Icon.undo) }

@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// fakeHub is the Persona hub's API as the voice extension uses it (docs/assistant/voice.md "Extension calls the hub"): the main conversation
+// fakeHub is the Persona hub's API as the voice extension uses it (docs/assistant/voice.md "Extension calls to hub"): the main conversation
 // and its transcript, sends, the sessions list, the items pages and /full, the machines, and /api/v1/ws pushing what
 // changes to its subscribers. A message the main conversation takes is worked on for work, then answered with
 // reply(text) and a turn_duration line, unless the test drives the conversation itself (manual).

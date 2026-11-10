@@ -151,7 +151,7 @@ The first sample lacks CPU and network rates (need two readings); fields are omi
 | Load | First column of `/proc/loadavg` | `sysctl vm.loadavg` (binary struct loadavg) | None (Windows has no load average), omitted |
 | Memory | Used = MemTotal − MemAvailable (page cache available, like `free` available); old kernels without MemAvailable use free + buffers + cached. In a container (the v2 `memory.max` / v1 `memory.limit_in_bytes` under `/sys/fs/cgroup` has a limit below MemTotal) the total is that limit and used = usage − inactive_file (like `docker stats` and `kubectl top`): without lxcfs, `/proc/meminfo` in a container is the host's; the system info's memory uses the same limit | Resident `vm_stat 10`: used = anonymous pages − purgeable + wired + compressor size, matching Activity Monitor **Memory Used** (App Memory + Wired Memory + Compressed); file cache available | `GlobalMemoryStatusEx`: used = total − available (standby-list file cache is available, like Linux MemAvailable) |
 | Swap | SwapTotal − SwapFree | `sysctl vm.swapusage` | Page files: sum size and used amount from `NtQuerySystemInformation(SystemPageFileInformation)` |
-| Network | Physical-interface receive/send byte differences in `/proc/net/dev` / elapsed time | Physical-interface differences from routing socket `NET_RT_IFLIST2` (`if_msghdr2` 64-bit counters) / elapsed time | InOctets / OutOctets from `GetIfEntry2Ex`, physical-interface differences / elapsed time; eligible interfaces listed once a minute (~7 ms to list, ~0.2 ms to read counters), discard sample when set changes |
+| Network | Physical-interface receive/send byte differences in `/proc/net/dev` / elapsed time; in a container's own network namespace, where every interface is virtual, the interfaces the name keeps (eth0, not lo); discard sample when set changes | Physical-interface differences from routing socket `NET_RT_IFLIST2` (`if_msghdr2` 64-bit counters) / elapsed time | InOctets / OutOctets from `GetIfEntry2Ex`, physical-interface differences / elapsed time; eligible interfaces listed once a minute (~7 ms to list, ~0.2 ms to read counters), discard sample when set changes |
 | Disk | Sum `statfs` for local block devices in `/proc/self/mountinfo` (`/dev/…`, excluding loop and read-only squashfs / iso9660 images, counting bind mounts of a device once): data disks often mount at `/data00`, so `/` alone makes a 5 TB machine show 118 GB. A mount whose root is not `/` (one directory of a device) is skipped, except `/` itself and btrfs subvolumes: in a container, Kubernetes / Docker bind directories of the host's data disk in (an emptyDir on `/tmp`, `/etc/hosts`), and that disk is shared by every container on the host; without mountinfo it falls back to `/proc/self/mounts`; used = total blocks − free blocks, total = used + ordinary-user available (like df) | `statfs("/System/Volumes/Data")` (`/` is a read-only system snapshot, only a few GB) | Sum `GetDiskFreeSpaceEx` for fixed drives actually on disks (`GetDriveType` = `DRIVE_FIXED`, volume has a positive-length disk extent, each volume once); used = total − free, total = used + user available (like df); excludes network, USB, optical and sync-client virtual drives such as Google Drive (claims FAT32 fixed drive and copies C capacity, but disk extent length is 0); drive letters listed once a minute |
 
 Why macOS starts two resident processes: builds use `CGO_ENABLED=0`, so Mach calls such as `host_statistics` are unavailable; `vm.page_*` sysctls lack anonymous-page and compressor counts.
@@ -166,13 +166,16 @@ Count only traffic actually leaving the machine. Virtual interfaces are either l
 - **Linux**: exclude `/sys/class/net/<name>` links into `/sys/devices/virtual/net/`. The kernel puts software interfaces there: lo, docker0, veth*, br-*,
   virbr*, tun* (TUN proxies), tailscale0, wg*, bond / VLAN (member interfaces still count, without duplication). Real interfaces, including VM virtio, live under buses and count.
   Without `/sys`, exclude name prefixes (`sysmon.virtualName`: lo, docker, br-, veth, virbr, tailscale, tun, tap, wg, zt, cni, flannel, cali, etc.).
+  The names also decide when `/sys` calls every interface virtual: in a container's own network namespace (Docker, Kubernetes) eth0 is one end of a veth pair,
+  and its traffic is the container's own; counting nothing would draw a flat 0.
 - **macOS**: Ethernet type (IFT_ETHER), `en*` name, non-loopback only: Wi-Fi, wired Ethernet, Thunderbolt. Exclude utun* (Tailscale, VPN, TUN proxies),
   bridge* (Thunderbolt bridge, member en* already counted), awdl / llw (AirDrop), anpi, gif, stf, ap.
 - **Windows**: only `MIB_IF_ROW2` with `HardwareInterface` set and `FilterInterface` unset: Wi-Fi, Ethernet, USB tethering.
   Tailscale (wintun), VPN adapters, Hyper-V / WSL vEthernet, Wi-Fi Direct virtual adapters, Bluetooth PAN and loopback are software interfaces and excluded;
   filter layers atop physical interfaces (WFP, QoS) duplicate counters and are excluded too.
 
-If counters decrease between readings (interface vanished or counters reset), discard that sample instead of drawing a huge spike.
+If counters decrease between readings (interface vanished or counters reset), discard that sample instead of drawing a huge spike. Linux and Windows also
+discard it when the set of counted interfaces changes: a newcomer brings its bytes since boot.
 
 ### Overhead
 
@@ -304,7 +307,7 @@ Follow dataviz rules:
 
 ## Doctor: what this computer can do (#2429)
 
-The web Machines page has **What this computer can do** (modeled on Moshi's Doctor page), presenting `personad node doctor` results (`docs/integrations/claude-integration.md`, "Doctor") by feature, not a string of check names.
+The web Machines page has **What this computer can do** (modeled on Moshi's Doctor page), presenting `personad node doctor` results (`docs/integrations/claude-integration.md`, "Self-check") by feature, not a string of check names.
 iOS / Mac machine detail (#3018, `apple/Persona/Views/Machines/NodeHealthSection.swift`, grouping in `NodeHealthModel.swift`'s `NodeHealth`) places it after Engine. Grouping, states and copy match web; changing one requires updating the other.
 The native Mac app is frozen ([mac.md](../apple/mac.md)): it shows this section through the shared iOS view and gets no Mac-only changes for it.
 

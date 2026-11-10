@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The assistant is the chief manager, and the user's computers are its (docs/server/machines.md "Who connects the computers"): its process
+// The assistant is the chief manager, and the user's computers are its (docs/server/machines.md "Who connects to computers"): its process
 // connects them itself (internal/devices), the hub only relays to it. This file is how the bus connection (bus.go)
 // takes the hub's devices.* calls and events to that layer, and how the assistant's own calls to a machine go to it
 // directly instead of round the hub.
@@ -47,6 +47,10 @@ type Devices interface {
 	Session(id, session string) (proto.Session, bool)
 	ConnectedAt(id string) time.Time
 	Usage() assistantwire.UsageSummary
+	// CapacitySnapshot is the account-pool capacity view for scheduling (proto.CapacitySnapshot): how many
+	// subscription accounts of each upstream provider are schedulable now and when the nearest one recovers.
+	// Read-only, from the manager's in-memory caches; the zero value when no pool is configured.
+	CapacitySnapshot(ctx context.Context) proto.CapacitySnapshot
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.
 	Follow(ctx context.Context, machine, session string, on bool) error
 	// SetAttention hands over Persona Link's "Needs you" summary (fleet_attention.go) on every look; it goes on to the
