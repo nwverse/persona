@@ -297,10 +297,12 @@ type request struct {
 	Params any    `json:"params"`
 }
 
-// answerReaders are the 64 KiB readers calls read herdr's answer through. Every call is a connection of its own, and
-// a node makes about 15 a minute for each resting Claude (pane.read every 5 s, pane.process_info every 15 s): a new
-// reader each was most of what the node allocated at rest.
-var answerReaders = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 64<<10) }}
+// answerReaders are the readers calls read herdr's answer through. Every call is a connection of its own, and a node
+// makes about 15 a minute for each resting Claude (pane.read every 5 s, pane.process_info every 15 s): a new 64 KiB
+// reader each was most of what the node allocated at rest. 16 KiB holds a pane read or process info whole; a bigger
+// answer (a snapshot) only grows the copy readLine makes. Small, because the resting reads of many agents come due
+// together and the pool keeps a reader for each.
+var answerReaders = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 16<<10) }}
 
 // ErrTruncated: herdr's answer stopped short. herdr 0.9.4 on macOS writes an answer to its socket in one go, and
 // past the socket's 8192-byte buffer the rest is lost: a big answer (60 colored lines of a wide pane, a session

@@ -85,8 +85,8 @@ func BenchmarkRPCPaneRead(b *testing.B) {
 const rpcAllocLimit = 16_600
 
 // A call read herdr's answer through a new 64 KiB bufio.Reader and built its request from a map: at about 15 calls a
-// minute for each resting Claude, the readers alone were about 1 MB a minute. The reader is pooled; the request is the
-// same bytes as before.
+// minute for each resting Claude, the readers alone were about 1 MB a minute. The reader is pooled (and smaller); the
+// request is the same bytes as before.
 func TestRPCAllocatesLittlePerCall(t *testing.T) {
 	first := make(chan []byte, 1)
 	c := &Client{Bin: "/nonexistent/herdr", Socket: answerServer(t, paneReadAnswer, first)}
