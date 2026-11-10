@@ -1,12 +1,12 @@
 import Foundation
 
 /// The conversations opened on this device, newest first, by when they were opened rather than by their last activity
-/// (#2191): the home screen icon's long-press menu has the last two (`QuickAction`). The rules are the web's ⌘K's
+/// (#2191): the home screen icon's long-press menu has the last one (`QuickAction`). The rules are the web's ⌘K's
 /// (spec/fixtures/recents/README.md, checked against recent_conversations.json in `RecentChatsTests`).
 nonisolated enum RecentChats {
     static let maxEntries = 10
-    /// How many the home screen menu lists.
-    static let homeScreen = 2
+    /// How many the home screen menu lists: one, with Record a Meeting, New Chat and Inbox (the system shows four).
+    static let homeScreen = 1
 
     /// The conversation shown goes first; one already there moves (no second entry); the ten newest stay.
     static func open(_ before: [String], _ key: String) -> [String] {

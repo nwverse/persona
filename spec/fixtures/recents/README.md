@@ -27,7 +27,7 @@ Only these ids are kept, on the device, per hub; never a message.
 # Recently opened conversations
 
 The conversations opened on a device, in the order they were opened, not by their last activity (#2191): the web's ⌘K
-shows them first (`web/src/lib/recent-chats.ts`) and the iPhone's home screen menu has the last two
+shows them first (`web/src/lib/recent-chats.ts`) and the iPhone's home screen menu has the last one
 (`apple/Persona/App/RecentChats.swift`). `recent_conversations.json` holds the rules every client follows.
 
 ## An entry
@@ -42,7 +42,7 @@ on the device, per hub; never sent to the hub or synced.
 | Rule | Cases |
 | --- | --- |
 | **Open**: the conversation shown goes first; one already there moves (no second entry); the 10 newest stay; an empty key changes nothing. | `open_*`, `keeps_ten`, `ignores_empty` |
-| **Shown**: the entries the client still has (`existing`), without the one on the page (`current`, `""` for none), in order, at most `limit` (`palette`: 5, `home_screen`: 2). The first is the one to go back to. A missing entry stays in the list until newer ones push it out. | `shown_*` |
+| **Shown**: the entries the client still has (`existing`), without the one on the page (`current`, `""` for none), in order, at most `limit` (`palette`: 5, `home_screen`: 1). The first is the one to go back to. A missing entry stays in the list until newer ones push it out. | `shown_*` |
 
 `open` cases give `before` and `opened` and expect `after`; `shown` cases give `entries`, `current`, `existing` and `limit`
 and expect `shown`.

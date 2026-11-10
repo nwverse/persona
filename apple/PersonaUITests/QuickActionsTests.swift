@@ -1,7 +1,8 @@
 import XCTest
 
-/// The home screen icon's long-press menu (#3199, `QuickAction`): each item opens its page; a chat opened is on it (#2191,
-/// the last two opened, before New Chat and Inbox), and Agents no longer is.
+/// The home screen icon's long-press menu (#3199, `QuickAction`): each item opens its page; the chat opened last is on it
+/// (#2191), above Record a Meeting, New Chat and Inbox, and Agents no longer is. Record a Meeting is never tapped (it
+/// records).
 final class QuickActionsTests: XCTestCase {
     private var app: XCUIApplication!
     /// A demo Agent's chat (Persona/Resources/Demo.json), its title (the menu's) and its first message (the open chat's;
@@ -9,6 +10,8 @@ final class QuickActionsTests: XCTestCase {
     private static let review = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
     private static let reviewTitle = "检查 PR #42 的改动"
     private static let reviewMessage = "看一下 PR #42"
+    /// The menu's Record a Meeting (#2949).
+    private static let recordTitle = "会议录音"
     /// Another demo Agent's chat, its title and the start of its first message.
     private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
     private static let widgetTitle = "给天气 App 加主屏幕小组件"
@@ -45,11 +48,12 @@ final class QuickActionsTests: XCTestCase {
         springboard.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
     }
 
-    /// The icon's menu: `title` tapped; `absent` must not be on the menu.
-    @MainActor private func pick(_ title: String, absent: String? = nil) {
+    /// The icon's menu: `title` tapped; `present` must be on the menu too, `absent` must not.
+    @MainActor private func pick(_ title: String, present: String? = nil, absent: String? = nil) {
         let springboard = openMenu()
         let found = item(springboard, title)
         XCTAssertTrue(found.waitForExistence(timeout: 5), "no \(title) in the icon's menu")
+        if let present { XCTAssertTrue(item(springboard, present).exists, "no \(present) in the icon's menu") }
         if let absent { XCTAssertFalse(springboard.buttons[absent].exists, "\(absent) is still in the icon's menu") }
         let shot = XCTAttachment(screenshot: springboard.screenshot())
         shot.name = "menu"; shot.lifetime = .keepAlways; add(shot)
@@ -60,7 +64,7 @@ final class QuickActionsTests: XCTestCase {
     @MainActor func testEachItemOpensItsPage() {
         launch(opening: Self.review)
         XCTAssertTrue(app.staticTexts[Self.reviewMessage].firstMatch.waitForExistence(timeout: 20), "the chat did not open")
-        pick(Self.reviewTitle, absent: "Agents")
+        pick(Self.reviewTitle, present: Self.recordTitle, absent: "Agents")
         XCTAssertTrue(app.staticTexts[Self.reviewMessage].firstMatch.waitForExistence(timeout: 10), "the recent chat did not open")
         pick("收件箱")
         // from an Agent's chat the inbox takes longer to come than from the shell's root
@@ -71,9 +75,9 @@ final class QuickActionsTests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["shell-composer-field"].firstMatch.waitForExistence(timeout: 5), "no composer")
     }
 
-    /// The last two opened, newest first, above New Chat (#2191): two chats opened in turn, then the menu (its screenshot
-    /// is attached, "two recent").
-    @MainActor func testMenuListsTheLastTwoOpened() {
+    /// Only the chat opened last, above Record a Meeting, New Chat and Inbox (#2191; the system shows four): two chats
+    /// opened in turn, then the menu (its screenshot is attached, "menu order").
+    @MainActor func testMenuListsTheLastOpened() {
         launch(opening: Self.widget)
         let first = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", Self.widgetMessage)).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 20), "the first chat did not open")
@@ -85,12 +89,15 @@ final class QuickActionsTests: XCTestCase {
         launch(opening: Self.review)
         XCTAssertTrue(app.staticTexts[Self.reviewMessage].firstMatch.waitForExistence(timeout: 20), "the chat did not open")
         springboard = openMenu()
-        let newest = item(springboard, Self.reviewTitle), before = item(springboard, Self.widgetTitle), new = item(springboard, "新对话")
-        XCTAssertTrue(newest.waitForExistence(timeout: 5) && before.exists && new.exists, "the menu lacks a recent conversation")
-        XCTAssertLessThan(newest.frame.minY, before.frame.minY, "the newest opened is not first")
-        XCTAssertLessThan(before.frame.minY, new.frame.minY, "the recent conversations are not above New Chat")
+        let titles = [Self.reviewTitle, Self.recordTitle, "新对话", "收件箱"]
+        XCTAssertTrue(item(springboard, titles[0]).waitForExistence(timeout: 5), "the chat opened last is not on the menu")
+        XCTAssertFalse(item(springboard, Self.widgetTitle).exists, "the chat opened before it is still on the menu")
+        for (above, below) in zip(titles, titles.dropFirst()) {
+            XCTAssertTrue(item(springboard, below).exists, "no \(below) in the icon's menu")
+            XCTAssertLessThan(item(springboard, above).frame.minY, item(springboard, below).frame.minY, "\(above) is not above \(below)")
+        }
         let shot = XCTAttachment(screenshot: springboard.screenshot())
-        shot.name = "two recent"; shot.lifetime = .keepAlways; add(shot)
+        shot.name = "menu order"; shot.lifetime = .keepAlways; add(shot)
         XCUIDevice.shared.press(.home)
     }
 }

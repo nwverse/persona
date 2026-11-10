@@ -2,7 +2,7 @@
   "schema_version": 1,
   "max_entries": 10,
   "palette": 5,
-  "home_screen": 2,
+  "home_screen": 1,
   "cases": [
     {
       "name": "open_into_empty",
@@ -179,7 +179,7 @@
     {
       "name": "shown_up_to_the_limit",
       "operation": "shown",
-      "description": "At most `limit`: 5 in ⌘K, 2 in the iPhone's home screen menu.",
+      "description": "At most `limit` (`palette`: 5 in ⌘K, `home_screen`: 1 in the iPhone's home screen menu).",
       "input": {
         "entries": [
           "s:m1/1",
