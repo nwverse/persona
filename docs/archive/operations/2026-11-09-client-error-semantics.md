@@ -133,6 +133,24 @@ install, lint, typecheck, 7,555 tests passed / 1 skipped, production build and
 privacy. Apple catalog completeness, Android translations, and the documentation
 path / Go-path / section / wire suites passed (12 / 3 / 3 / 13 tests).
 
+### Further upstream synchronization — 2026-11-10
+
+Upstream `4156d9e4a` was merged after main advanced again. The recording-detail
+conflict retains upstream's meeting minutes and timestamp navigation, together
+with this PR's distinction between local deletion and pending Knowledge removal.
+The catalog retains all 6,150 upstream entries and this PR's 12 entries unchanged.
+Only the new entries are inserted in the documented key order; existing entries
+are not reordered, and entries removed upstream are not restored. No code is
+relocated to avoid a merge conflict: shared error classification stays in the
+existing client boundaries, and recording retry/deletion state stays in
+`RecordingSync`.
+
+The full Web lane with Node 24 passed install, lint, typecheck, 7,585 tests
+passed / 1 skipped, production build and privacy. After the catalog resolution,
+Apple localization checks passed again, including 60 checker tests. Android
+translation/token checks and the documentation path / Go-path / section / wire
+suites passed.
+
 Web is the primary validation for this review. Remaining validation gaps are
 disclosed rather than treated as a blocker to marking the PR ready for review:
 

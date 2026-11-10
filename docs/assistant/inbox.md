@@ -153,7 +153,7 @@ a summary up to 40 characters, and a short reason:
     fixing, while the server's exact answer stays in mail settings. An account deleted during the round is not named. A round without mail (a poll) keeps the entries;
     the next mail round replaces them, and they go with mail itself. Mixed versions: a sender from before this change (an older hub or extension manager) has no
     `mail.failed`, so the account is left out as before and nothing is named here; an Inbox from before this change ignores the field and reads the round as before.
-  Apps use it for the waiting-for-triage banner below, and Android and web show sources with a `read_error` in a quiet neutral notice under it, one line per source, "name: `read_reason`" (#1849; mock `MOCK_INBOX_UNREAD`).
+  Apps use it for the waiting-for-triage banner below, and iOS / iPadOS, Android and web show sources with a `read_error` in a quiet neutral notice under it, one line per source, "name: `read_reason`" (#1849; mock `MOCK_INBOX_UNREAD`). All three use the same fallback words when `read_reason` is absent, and the notice clears with the next good read.
 - **Waiting-for-triage banner** (#1773, consistent on web, iOS / Mac, Android): if `triage.state` is not `ok` and `waiting > 0`, show a non-dismissible caution-colored (orange) banner at the top of the Inbox list, below search / filters and above the first section.
   It follows list refresh (Inbox pushes, reconnect, pull-to-refresh), disappearing on recovery to `ok`. Older hubs without `triage` show none.
   - Text: with exactly one waiting source (`waiting > 0` in `sources`, with `name`), "{waiting} {name} messages waiting for triage: {reason}"; otherwise "{waiting} messages waiting for triage: {reason}."
@@ -474,12 +474,15 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
   A history item memory no longer holds still opens (`GET /api/v1/inbox/{id}` reads its row, read-only) and can be reopened (`/{id}/done` with `done:false`, `/bulk` `reopen`,
   `/done` with `done:false` load its row into memory first); filing it again finds no item (404 / `missing`), as before. Without a database there is nothing to fall back to.
   Deleting a source's data (`inbox.forget`) deletes its history rows too.
+- **Days** (#2967): `GET /api/v1/inbox/done/days?tz=` counts the history per calendar day in the zone the app names (Postgres's `AT TIME ZONE` on `done_at`, so a day follows the zone's offset on its date; a manager without a database counts what it holds). With `sources=all` it reads only `done_at` from `inbox_items_open`. The apps' Done lists every day's count from it and jumps to a day with `GET /api/v1/inbox/done?before=<the day's end>` and no `before_id`, which lists the items done before that moment.
 - **Storage** (#2779, manager migration `0471`): `inbox_items.data` is `json` compressed with lz4, the bytes the manager wrote; every reader unmarshals them in Go,
   so the start read no longer turns jsonb back into text. `source` is a generated column of `data->>'source'` with its own index, which `DeleteInboxSource` reads
   instead of every document. `inbox_items_open` is `(done_at, id)`, so an upsert of an open item changes no indexed column and can be a HOT update.
   Writes still need valid JSON without `\u0000` in a string, as with jsonb: computing `source` refuses them (`docs/lessons/server.md`, "Inbox rows as json").
   A server built without lz4, or a Postgres before 14, gets the same rewrite with the default compression. The migration also adds `jsonb_typeof(json)`, so the
   done page of a build from before it still runs if a hub goes back to that build (`docs/operations/hub-restart.md`); it can be dropped once no such build can run.
+  The start read (`InboxItems`) has no `ORDER BY` (the manager keys the items by id) and hands each row to the manager straight from the driver's buffer,
+  where it is decoded; the rows are never collected as bytes first. A read that fails midway takes nothing in, as before.
 - Read elsewhere (Lark / another mail client): mark `read`; non-Needs you items become done (`done_by=read`). Needs you remains open, but unread count becomes zero and me / everyone mention flags clear (no longer unread mentions). Rule-tiered items are retiered using current rules after reading; no longer Needs you means done.
   Already-read open items with remaining unread count or stale rule tiers (read before a rule change) are reconciled next round (#798).
 - A reply by me in Lark (latest chat message is mine, newer than the item) handles it (`done_by=replied`).
