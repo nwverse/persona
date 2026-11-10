@@ -399,7 +399,8 @@ private struct SentDetailSheet: View {
                 if item.canRecall {
                     Button(role: .destructive) { askingRecall = true } label: {
                         HStack(spacing: Theme.Space.m) {
-                            Label("Recall…", systemImage: Theme.Icon.undo).lineLimit(1)
+                            // Red on every style: a plain row (the Mac, BeautifulUI) shows neither the role's color nor the tint.
+                            Label("Recall…", systemImage: Theme.Icon.undo).lineLimit(1).foregroundStyle(Theme.danger)
                             Spacer(minLength: 0)
                             if busy { ProgressView() }
                         }

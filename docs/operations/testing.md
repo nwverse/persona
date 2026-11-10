@@ -598,7 +598,8 @@ From WeChat below first main-chat message. Restart mock for dark (binding state 
 Sent as You (`SentModelTests`, `SentAsYouTests`, #5278, `docs/extensions/connectors.md` ("Sent as the user")): `MOCK_SENT=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/SentAsYouTests`: the row after Connectors, how each send was let through, a row's details and a text of exactly 4000 characters,
 the chat that asked, Load Earlier, the connector chips and a chip with nothing recorded (Show All), and the empty / no database / no full access / older hub / unreachable states. Each test first puts the mock back to its rows
-(`GET /mock/sent?mode=1`), then switches it with `mode=empty|nodb|forbidden|old`. `TEST_RUNNER_PERSONA_SHOTS=<dir>` writes `ios-sent-as-you-light.png` and `-dark.png` (`testScreenshots`). `-tab settings -openSentAsYou YES` opens the page directly.
+(`GET /mock/sent?mode=1`, which also forgets recalls), then switches it with `mode=empty|nodb|forbidden|old`. Recall (#3219, `testRecallAsksThenTakesTheMessageBack`): row 66 has **Recall…** and the mock takes it back,
+row 60's recall is refused (502 `recall_refused`, the red text under the button) and row 54 carries the **Recalled** tag; shots `sent-qa-recall` and `sent-qa-recall-refused`. `TEST_RUNNER_PERSONA_SHOTS=<dir>` writes `ios-sent-as-you-light.png` and `-dark.png` (`testScreenshots`). `-tab settings -openSentAsYou YES` opens the page directly.
 
 Browser logins (#1304): `MOCK_BROWSER=ready PORT=<dedicated port> python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port>` runs `BrowserLoginsTests`: machine websites, pick cookies.txt (`-openCookieFile <path>` replaces file picker), none selected by default, expired disabled, import/clear; `TEST_RUNNER_PERSONA_SHOTS=<directory>`.
 
