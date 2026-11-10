@@ -172,7 +172,7 @@ func TestMinutesPastMeetingTools(t *testing.T) {
 	up := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: 30, Device: "phone", Complete: true, Kind: kb.RecordingMeeting,
 		Segments: []kb.RecordingSegment{{Start: 0, End: 9, Text: "Ada: the export drops large entries"},
 			{Start: 10, End: 19, Text: "we keep the cap"}, {Start: 20, End: 29, Text: "Bo adds the regression test by Friday"}}}
-	if st, err := e.PutRecording(id, up, start.Add(time.Minute)); err != nil || st != kb.RecordingStored {
+	if st, err := e.PutRecording(id, up, start.Add(time.Minute)); err != nil || st.Status != kb.RecordingStored {
 		t.Fatalf("put: %v %v", st, err)
 	}
 	if n := e.WriteMinutes(ctx, 2); n != 1 {

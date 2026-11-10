@@ -1,5 +1,7 @@
 package assistantwire
 
+import "github.com/nwverse/persona/server/internal/devicewire"
+
 // ---- the bus ----
 
 // AssistantID is the bus identity the assistant connects as (a manager's token, hub/bustokens.go).
@@ -20,6 +22,10 @@ const (
 	// of it (devicewire MethodMachinesPut / Remove / Get) once the hub hands it MachinesOwn
 	// (docs/assistant/managers.md "Each manager's computers").
 	CapabilityMachinesOwn = "machines.own"
+	// CapabilityMeetingAttendance: the manager attends recorded meetings (the recordings' attendance fields, …/live,
+	// …/ask and meeting_attendance_default; docs/assistant/meeting-minutes.md "Attending a meeting"). The hub lists the
+	// meeting_attendance feature only while the default manager names it.
+	CapabilityMeetingAttendance = "meeting_attendance"
 )
 
 // The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
@@ -73,18 +79,21 @@ const (
 // HTTPRequest is http.request's params: an app's request on one of Routes, with an escaped URL path (header without
 // the hub's credentials and hop-by-hop headers, the asking device's role in RoleHeader; body as base64).
 type HTTPRequest struct {
-	Method string              `json:"method"`
-	Path   string              `json:"path"`
-	Query  string              `json:"query,omitempty"`
-	Header map[string][]string `json:"header,omitempty"`
-	Body   []byte              `json:"body,omitempty"`
+	Caller         *devicewire.Caller         `json:"caller,omitempty"`
+	ShareAuthority *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	Method         string                     `json:"method"`
+	Path           string                     `json:"path"`
+	Query          string                     `json:"query,omitempty"`
+	Header         map[string][]string        `json:"header,omitempty"`
+	Body           []byte                     `json:"body,omitempty"`
 }
 
 // HTTPResponse is http.request's answer, written back to the app unchanged.
 type HTTPResponse struct {
-	Status int                 `json:"status"`
-	Header map[string][]string `json:"header,omitempty"`
-	Body   []byte              `json:"body,omitempty"`
+	ShareAuthority *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	Status         int                        `json:"status"`
+	Header         map[string][]string        `json:"header,omitempty"`
+	Body           []byte                     `json:"body,omitempty"`
 }
 
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
@@ -101,6 +110,14 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"GET /api/v1/assistant/directions/offers",
+	"DELETE /api/v1/assistant/directions/offers/{id}",
+	"POST /api/v1/assistant/directions/{id}/start",
+	"POST /api/v1/assistant/directions/{id}/make",
+	"POST /api/v1/assistant/directions/{id}/end",
+	"POST /api/v1/assistant/route/agent",
+	"POST /api/v1/assistant/agents/{mid}/{sid}/supervisor",
+	"PUT /api/v1/assistant/directions/{id}/name",
 	"GET /api/v1/assistant/conversations/{id}/feed",
 	"POST /api/v1/assistant/conversations/{id}/route",
 	"POST /api/v1/assistant/conversations/{id}/today",
@@ -191,4 +208,8 @@ var Routes = []string{
 	"GET /api/v1/recordings",
 	"POST /api/v1/recordings/{id}/minutes",
 	"POST /api/v1/recordings/{id}/minutes/todos",
+	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").
+	"POST /api/v1/recordings/{id}/live",
+	"GET /api/v1/recordings/{id}/live",
+	"POST /api/v1/recordings/{id}/ask",
 }

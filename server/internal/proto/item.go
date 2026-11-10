@@ -187,6 +187,9 @@ type MessageSource struct {
 	Kind           string `json:"kind"`
 	ConversationID string `json:"conversation_id,omitempty"`
 	Title          string `json:"title,omitempty"`
+	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
+	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
+	Push string `json:"push,omitempty"`
 }
 
 const (
@@ -194,6 +197,9 @@ const (
 	SourcePatrol       = "patrol"
 	SourceFollowup     = "followup"
 	SourceSupervision  = "supervision"
+	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
+	// the attending session"): other people's words, never the user's; Title is the meeting's name.
+	SourceMeeting = "meeting"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.

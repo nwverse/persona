@@ -36,6 +36,13 @@ type TriageSwitches struct {
 	Wake         bool `json:"wake"`          // wake agents whose wait should be over
 	Decide       bool `json:"decide"`        // cards for what the user is to decide
 	ToolLoop     bool `json:"tool_loop"`     // detect repeated tool calls while a turn runs
+	// Closeout: hold an agent's stop once when a turn that did work ends without a closeout, and ask for one
+	// (agents_closeout.go). The held stop runs one more turn of the agent on its own model.
+	Closeout bool `json:"closeout"`
+	// CloseoutAsk: ask an agent nobody supervises where its work stands, once, when a turn that did work ended
+	// without a closeout and the triage could not call it finished (agents_closeout_ask.go). The question runs one
+	// turn of the agent on its own model.
+	CloseoutAsk bool `json:"closeout_ask"`
 	// ReplyReminder: push once when an agent the user looked at still waits on their answer (agents_reply.go,
 	// #5096). Rules only, no tokens: unset is on.
 	ReplyReminder *bool `json:"reply_reminder,omitempty"`
@@ -53,9 +60,12 @@ func (sw TriageSwitches) transientOn() bool { return sw.TransientRetry == nil ||
 func (sw TriageSwitches) active() bool { return sw.Enabled || sw.transientOn() }
 
 // wakes: w's pending wake still goes under sw. A transient error's "Continue" is transient_retry's alone; everything
-// else needs the main switch, then auto_continue for a usage limit's continue and wake for a wait's wake.
+// else needs the main switch, then closeout_ask for a status question, auto_continue for a usage limit's continue and
+// wake for a wait's wake.
 func (sw TriageSwitches) wakes(w proto.WorkState) bool {
 	switch {
+	case w.CloseoutAsk == closeoutAskPending:
+		return sw.Enabled && sw.CloseoutAsk
 	case w.On == proto.WaitTransient && w.ResetsAt == nil:
 		return sw.transientOn()
 	case !sw.Enabled:
@@ -72,7 +82,7 @@ func set(b *bool) bool { return b != nil && *b }
 
 func switchesOf(c assistantwire.TriageConfig) TriageSwitches {
 	return TriageSwitches{Enabled: set(c.Enabled), AutoContinue: set(c.AutoContinue), Wake: set(c.Wake), Decide: set(c.Decide), ToolLoop: set(c.ToolLoop),
-		TransientRetry: c.TransientRetry}
+		Closeout: set(c.Closeout), CloseoutAsk: set(c.CloseoutAsk), TransientRetry: c.TransientRetry}
 }
 
 func maxRetries(c assistantwire.TriageConfig) int { return cmp0(c.MaxRetries, 5) }
@@ -307,7 +317,11 @@ func (s *Service) readTriageSwitches(ctx context.Context) (TriageSwitches, error
 		saved = def
 	}
 	s.work.mu.Lock()
-	s.work.switches = &saved
+	// A settings PUT or another initial read may have finished while the store was answering.
+	if s.work.switches == nil {
+		s.work.switches = &saved
+	}
+	saved = *s.work.switches
 	s.work.mu.Unlock()
 	return saved, nil
 }
@@ -400,7 +414,8 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 	}
 	var stale []db.SessionWork
 	for _, e := range s.work.entries {
-		off := !sw.wakes(e.Work) && (!sw.Enabled || continues(e.Work) || e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent)
+		off := !sw.wakes(e.Work) && (!sw.Enabled || continues(e.Work) || e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent ||
+			e.Work.CloseoutAsk == closeoutAskPending)
 		if e.InteractionID != "" && (!sw.Enabled || !sw.Decide) {
 			delete(s.work.cards, e.InteractionID)
 			e.InteractionID, e.Work.InteractionID = "", ""
@@ -643,14 +658,14 @@ func (s *Service) workReport(ctx context.Context) *WorkReport {
 	}
 	s.work.mu.Lock()
 	for _, e := range s.work.entries {
-		if e.Work.Phase == "" {
+		if !workShown(&e.Work) {
 			continue // unsure: nothing shown
 		}
 		if !r.On && !transientPending(e.Work) {
 			continue // triage off: only a "Continue" on its way is told (fleet_work.go)
 		}
 		w := e.Work
-		w.CI, w.RetiredAt, w.RetiredTurnAt = nil, nil, nil // internal state stays in the manager's store
+		w.CI, w.RetiredAt, w.RetiredTurnAt, w.CloseoutAsk = nil, nil, nil, "" // internal state stays in the manager's store
 		w.TurnAt = e.TurnAt
 		r.Sessions = append(r.Sessions, SessionWork{MachineID: e.MachineID, SessionID: e.SessionID, Work: w})
 	}

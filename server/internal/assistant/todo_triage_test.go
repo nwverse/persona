@@ -125,6 +125,19 @@ func TestTriageRelatedKeysFollowTheSharedCases(t *testing.T) {
 	}
 }
 
+func TestTriageDueByUsesUTCWithoutAUserZone(t *testing.T) {
+	td := Todo{ID: "due", DueDate: "2026-11-10"}
+	got, ok := triageDueBy(td, nil)
+	if !ok || got.Location() != time.UTC || got.Format(time.RFC3339) != "2026-11-10T23:59:59Z" {
+		t.Fatalf("nil zone: got %v (%v), ok=%v", got, got.Location(), ok)
+	}
+	zone := time.FixedZone("user", 8*60*60)
+	got, ok = triageDueBy(td, zone)
+	if !ok || got.Location() != zone || got.Format(time.RFC3339) != "2026-11-10T23:59:59+08:00" {
+		t.Fatalf("user zone: got %v (%v), ok=%v", got, got.Location(), ok)
+	}
+}
+
 // Dismissed agents are not the apps' (formatTodo leaves them out): one still asking does not make the to-do wait.
 func TestTriageLeavesDismissedAgentsOut(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)

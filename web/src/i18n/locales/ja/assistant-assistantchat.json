@@ -36,5 +36,6 @@
   "other_model": "その他のモデル…",
   "model_id_placeholder": "モデルID（例：vendor/model-name）",
   "forget_typed": "入力したモデルを削除",
-  "forget_failed": "「{id}」を削除できませんでした：{error}"
+  "forget_failed": "「{id}」を削除できませんでした：{error}",
+  "pick_dropped": "「{launcher}」はアシスタントの会話を実行できないため、既定のランチャーに戻しました"
 }

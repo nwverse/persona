@@ -1,8 +1,4 @@
 {
-  "kind_question": "質問",
-  "kind_plan": "承認待ちのプラン",
-  "kind_permission": "許可が必要",
-  "kind_screen": "ターミナルのダイアログ",
   "greeting_late": "夜遅くまでお疲れさまです",
   "greeting_morning": "おはようございます",
   "greeting_noon": "こんにちは",
@@ -33,7 +29,6 @@
   "online": "オンライン",
   "mark_all_seen_title_other": "未確認のセッション{count}件を確認済みにする",
   "agent_preview": "{agent}：{preview}",
-  "kind_elicitation": "MCPリクエスト",
   "answered": "回答済み：{answer}",
   "permission_detail": "{tool}：{what}",
   "tasks": "進行中のタスク",

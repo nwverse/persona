@@ -7,8 +7,11 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
@@ -17,7 +20,8 @@ import (
 // device; changing anything needs full access (read_only_device otherwise).
 
 // subscriptionsFeature is in the manager's report once subscriptions deliver to the Inbox and the knowledge base
-// (#2039): the apps show their entry rows only then, so a subscription the user turns on does what its switch says.
+// (#2039, so now): the apps show their entry rows only then, so a subscription the user turns on does what its switch
+// says.
 const subscriptionsFeature = "source_subscriptions"
 
 // subscriptionsShown says whether the report carries subscriptionsFeature.
@@ -31,7 +35,13 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 	} else {
 		store = subscriptions.NewMemStore() // no database (tests): kept in memory only
 	}
-	h.subs = subscriptions.New(subscriptions.Options{
+	h.subs = subscriptions.New(h.subscriptionOptions(store))
+	go h.subs.Run(ctx)
+}
+
+// subscriptionOptions are the service's parts in this manager, over store.
+func (h *Manager) subscriptionOptions(store subscriptions.Store) subscriptions.Options {
+	return subscriptions.Options{
 		Store:      store,
 		Connectors: subscriptionConnectors{h},
 		Location:   h.userLocation,
@@ -43,9 +53,139 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 			h.broadcast(map[string]any{"type": "subscription", "id": s.ID, "connector": s.Connector, "revision": s.Revision,
 				"state": s.State, "removed": removed})
 		},
-		Logf: h.logf,
-	})
-	go h.subs.Run(ctx)
+		Logf:     h.logf,
+		Features: subscriptions.Features{Deliver: true, Generate: true},
+		// Drafting recipes (#2040): the assistant holds the keys and the purpose subscription.recipe.
+		Model:    subscriptionModel{h},
+		Models:   h.purposeModelInfo,
+		Language: func(ctx context.Context) string { return h.contextLang(ctx).Name() },
+		// The destinations (#2039): each subscription is an internal source of the Inbox's rounds (readSubscriptions)
+		// and of the knowledge base's archives (kbArchives, subscriptionArchive).
+		Lang: h.userLang,
+		ExtensionRules: func(ext string) string {
+			if h.extensions == nil {
+				return ""
+			}
+			return h.extensionTriageRules(ext)
+		},
+		Delivered: func(s subscriptions.Subscription) {
+			if s.ToInbox {
+				h.kickInbox()
+			}
+			if s.ToKB {
+				h.kbKick(s.ID, connector.ScopeChats)
+			}
+		},
+		Forget: h.forgetSubscription,
+	}
+}
+
+// readSubscriptions adds the subscriptions to an Inbox round as sources a plugin's connector would be (their new items
+// are triaged before they enter, and wait without a model unless they carry a fallback tier): every round names them,
+// so the Inbox keeps their held-back counts; a round that reads the connectors reads their things too.
+func (h *Manager) readSubscriptions(ctx context.Context, r *assistantwire.InboxRound, things bool) {
+	if h.subs == nil {
+		return
+	}
+	if !things { // a round of the Feishu chats (a Lark event): the names only, no items read
+		list, _, err := h.subs.List(ctx, subscriptions.Filter{})
+		if err != nil {
+			h.logf("inbox: subscriptions: %v", err)
+		}
+		for _, s := range list {
+			r.Names[s.ID] = s.Label
+		}
+		return
+	}
+	srcs, err := h.subs.InboxSources(ctx)
+	if err != nil {
+		h.logf("inbox: subscriptions: %v", err)
+		return
+	}
+	for _, src := range srcs {
+		r.Names[src.ID] = src.Name
+		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Kinds: src.Kinds,
+			Things: src.Things})
+	}
+}
+
+// subscriptionArchive is a subscription as the knowledge base reads a connector's archive.
+type subscriptionArchive struct {
+	subs *subscriptions.Service
+	id   string
+}
+
+func (a subscriptionArchive) Changes(ctx context.Context, cursor string, limit int) ([]connector.ChatBatch, string, bool, error) {
+	return a.subs.Changes(ctx, a.id, cursor, limit)
+}
+
+// forgetSubscription removes what the Inbox and the knowledge base took from a subscription (a delete with its data,
+// which switched it off first). Both parts are asked; either failing leaves the subscription for another delete.
+func (h *Manager) forgetSubscription(ctx context.Context, s subscriptions.Subscription) error {
+	f, kerr := h.forgetArchive(ctx, s.ID)
+	n, ierr := h.forgetInbox(ctx, s.ID)
+	if err := errors.Join(kerr, ierr); err != nil {
+		if kbOffline(kerr) || kbOffline(ierr) || errors.Is(ierr, errAssistantOffline) {
+			return &subscriptions.Error{Status: http.StatusServiceUnavailable, Code: assistantwire.CodeAssistantOffline,
+				Message: "the assistant is away: its Inbox items and knowledge-base chats could not be deleted yet"}
+		}
+		return err
+	}
+	h.logf("subscription %s: deleted %d chat(s) from the knowledge base and %d Inbox item(s)", s.ID, f.Chats, n)
+	return nil
+}
+
+// subscriptionModel makes the drafting calls on the purpose subscription.recipe, through the assistant
+// (models.purpose_complete): the manager never holds a model's key.
+type subscriptionModel struct{ h *Manager }
+
+// purposeModelInfo is what a model purpose runs on now, as the assistant resolves it (models.usable): not usable when
+// it cannot be asked.
+func (h *Manager) purposeModelInfo(ctx context.Context, purpose string) subscriptions.ModelInfo {
+	var res struct {
+		Usable   bool   `json:"usable"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := h.callAssistant(ctx, assistantwire.MethodModelsUsable, map[string]any{"purpose": purpose}, &res); err != nil || !res.Usable {
+		return subscriptions.ModelInfo{}
+	}
+	return subscriptions.ModelInfo{OK: true, Provider: res.Provider, Model: res.Model}
+}
+
+// subscriptionModelWait bounds one drafting call, its second try for the schema included.
+const subscriptionModelWait = 60
+
+func (m subscriptionModel) JSON(ctx context.Context, c subscriptions.ModelCall) (json.RawMessage, error) {
+	turns := make([]assistantwire.ModelMessage, len(c.Turns))
+	for i, t := range c.Turns {
+		turns[i] = assistantwire.ModelMessage{Role: t.Role, Content: t.Content}
+	}
+	var out assistantwire.ModelCompleteResult
+	err := m.h.callAssistant(ctx, assistantwire.MethodModelsPurposeComplete, assistantwire.PurposeComplete{
+		Purpose: assistantwire.PurposeSubscriptionRecipe,
+		Params: assistantwire.ModelCompleteParams{System: c.System, Messages: turns, MaxTokens: c.MaxTokens, JSONSchema: c.Schema,
+			TimeoutSeconds: subscriptionModelWait, Label: c.Label},
+	}, &out)
+	var re *rpc.Error
+	switch {
+	case errors.As(err, &re) && re.Code == assistantwire.CodeModelUnavailable:
+		return nil, subscriptions.ErrNoModel
+	case errors.As(err, &re) && re.Code == assistantwire.CodeModelPaused:
+		var p assistantwire.ModelPause
+		_ = json.Unmarshal(re.Data, &p)
+		e := &subscriptions.Error{Status: http.StatusServiceUnavailable, Code: subscriptions.CodeModelFailed,
+			Message: "The model's connection is held for now; try again later."}
+		if until, perr := time.Parse(time.RFC3339, p.Until); perr == nil {
+			e.RetryAfter = max(1, time.Until(until).Seconds())
+		}
+		return nil, e
+	case err != nil:
+		return nil, err
+	case len(out.JSON) == 0:
+		return nil, errors.New("the reply has no JSON")
+	}
+	return out.JSON, nil
 }
 
 // Subscriptions is the service, for the declarative pages (#2041) and tests; nil before the manager runs.
@@ -134,6 +274,8 @@ func (h *Manager) subscriptionRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"subscription": s, "runs": runs})
 	})
+	// The pages (#2041): every device may draw them; the actions they carry check full access themselves.
+	api.HandleFunc("POST /api/v1/subscriptions/-/ui", h.subscriptionUI)
 	api.HandleFunc("POST /api/v1/subscriptions/-/dry-run", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, _ subscriptions.Actor) {
 		var in subscriptions.DryRunRequest
 		if !readSubscriptionJSON(w, r, &in) {
@@ -171,6 +313,24 @@ func (h *Manager) subscriptionRoutes(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(w, s)
+	}))
+	// Drafting a recipe with the model (#2040): {id} regenerates and saves the subscription; "-" drafts for
+	// {connector, source} and writes nothing.
+	api.HandleFunc("POST /api/v1/subscriptions/{id}/generate", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, by subscriptions.Actor) {
+		in := subscriptions.GenerateRequest{}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&in); err != nil && !errors.Is(err, io.EOF) { // a body is optional
+			writeErrCode(w, http.StatusBadRequest, subscriptions.CodeBadRequest, err)
+			return
+		}
+		if id := r.PathValue("id"); id != "-" {
+			in.ID, in.Connector, in.Source = id, "", ""
+		}
+		out, err := h.subs.Generate(r.Context(), in, by)
+		if err != nil {
+			writeSubscriptionErr(w, err)
+			return
+		}
+		writeJSON(w, out)
 	}))
 	api.HandleFunc("POST /api/v1/subscriptions/{id}/run", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, by subscriptions.Actor) {
 		s, err := h.subs.RunNow(r.Context(), r.PathValue("id"), by)
@@ -230,6 +390,9 @@ func writeSubscriptionErr(w http.ResponseWriter, err error) {
 	}
 	if e.RetryAfter > 0 {
 		body["retry_after"] = e.RetryAfter
+	}
+	if e.Draft != nil {
+		body["recipe"] = e.Draft
 	}
 	writeErrorBody(w, e.Status, body)
 }

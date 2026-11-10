@@ -18,8 +18,8 @@ import java.time.Instant
 private const val AskMax = 160
 
 /**
- * What a card asks, in one line for a row that waits on it (#3964; the web's `taskAsk` / `rowLine`): "Asking you: which framework?",
- * "Needs permission: swift test", "Plan awaiting approval", "Terminal dialog: …", "MCP request: …"; the kind alone when the card carries no
+ * What a card asks, in one line for a row that waits on it (#3964; the web's `taskAsk` / `rowLine`): "Has a question: which framework?",
+ * "Needs your permission: swift test", "Plan awaiting approval", "Terminal needs you: …", "MCP request: …"; the kind alone when the card carries no
  * words. Null for a card of a kind this app does not know with nothing to say.
  */
 fun Interaction.askLine(): CoreText? {

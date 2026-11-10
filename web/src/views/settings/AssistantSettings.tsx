@@ -19,7 +19,7 @@ import { refreshAssistant, useStore } from "../../lib/store";
 import { Button, cx, Dialog, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { Group, Pill, Row, Switch } from "../settings/SettingsParts";
+import { Group, Pill, Row, settingsInputClass, Switch } from "../settings/SettingsParts";
 import { SkillsGroup } from "./Skills";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
@@ -38,7 +38,22 @@ interface AssistantState {
   main_tasks_quiet?: boolean;
   /** "Start what I asked for in the chat right away" (#2559): on by default; tasks the user asked for start without the plan card's "Start". */
   start_requested_tasks?: boolean;
+  /** The role a meeting recording pre-selects (#2981, docs/assistant/meeting-minutes.md "Attendance fields"); only from a hub
+   *  that attends meetings. */
+  meeting_attendance_default?: string;
+  /** "Follow up every agent Persona starts" (#3617, docs/assistant/unified-entry.md "Agent tasks"): off by default; unset
+   *  from a hub before it. */
+  agent_tasks?: boolean;
+  /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
+   *  archive themselves"): 0 is never, at most 3650; unset from a hub before it. */
+  archive_closed_days?: number;
 }
+
+/** `archive_closed_days`' upper bound, the hub's (assistant/profile_write.go). */
+const MAX_ARCHIVE_DAYS = 3650;
+
+/** `meeting_attendance_default`'s values, in the picker's order. */
+const MEETING_ROLES = ["off", "listener", "participant"] as const;
 
 export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner);
@@ -69,6 +84,17 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setPermissionBusy(false); }
   };
+  const [meetingBusy, setMeetingBusy] = useState(false);
+  const setMeetingRole = async (role: string) => {
+    setMeetingBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { meeting_attendance_default: role } });
+      if (r.manager !== manager || r.meeting_attendance_default !== role) throw new Error(t("settings-assistantsettings.meeting_attendance_unconfirmed"));
+      setInfo((i) => i ? { ...i, meeting_attendance_default: r.meeting_attendance_default } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setMeetingBusy(false); }
+  };
 
   const setQuiet = async (on: boolean) => {
     setQuietBusy(true);
@@ -81,6 +107,24 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally {
       setQuietBusy(false);
+    }
+  };
+
+  const [agentsBusy, setAgentsBusy] = useState(false);
+  // One field of the Agents group (#3617, #3618): shown as chosen at once, taken back with the reason when the hub refuses.
+  const setAgents = async (patch: { agent_tasks: boolean } | { archive_closed_days: number }) => {
+    const before = info;
+    setAgentsBusy(true);
+    setInfo((i) => (i ? { ...i, ...patch } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: patch });
+      // what the hub saved, when it says
+      setInfo((i) => (i ? { ...i, agent_tasks: r.agent_tasks ?? i.agent_tasks, archive_closed_days: r.archive_closed_days ?? i.archive_closed_days } : i));
+    } catch (e) {
+      setInfo((i) => (i && before ? { ...i, agent_tasks: before.agent_tasks, archive_closed_days: before.archive_closed_days } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setAgentsBusy(false);
     }
   };
 
@@ -170,6 +214,23 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
+      {/* Following up agents and tidying closed ones (#3617, #3618): each row only from a hub that has its setting */}
+      {(typeof info?.agent_tasks === "boolean" || typeof info?.archive_closed_days === "number") && (
+        <Group anchor="agents" title={t("settings-assistantsettings.agents_title")}>
+          {typeof info.agent_tasks === "boolean" && (
+            <Row label={t("settings-assistantsettings.agent_tasks")} hint={t("settings-assistantsettings.agent_tasks_hint")} wrapHint>
+              <Switch on={info.agent_tasks} onChange={(on) => void setAgents({ agent_tasks: on })} disabled={agentsBusy} label={t("settings-assistantsettings.agent_tasks")} />
+            </Row>
+          )}
+          {typeof info.archive_closed_days === "number" && (
+            <Row label={t("settings-assistantsettings.archive_closed")} hint={t("settings-assistantsettings.archive_closed_hint")} wrapHint>
+              <DaysField value={info.archive_closed_days} disabled={agentsBusy} label={t("settings-assistantsettings.archive_closed")} onCommit={(days) => void setAgents({ archive_closed_days: days })} />
+              <span className="whitespace-nowrap">{t("settings-assistantsettings.archive_closed_unit")}</span>
+            </Row>
+          )}
+        </Group>
+      )}
+
       <Group title={t("settings-nav.tab_model_config")}>
         <a href={BASE + settingsHref("models", "agent.new", false, manager, "model-config")} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
           <span>{t("settings-assistantsettings.task_models")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
@@ -189,6 +250,20 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           </select>
         </Row>
       </Group>
+
+      {typeof info?.meeting_attendance_default === "string" && (
+        <Group anchor="meetings" title={t("settings-assistantsettings.meetings_title")} footer={t("settings-assistantsettings.meeting_attendance_footer")}>
+          <Row label={t("settings-assistantsettings.meeting_attendance")}>
+            <select aria-label={t("settings-assistantsettings.meeting_attendance")} value={info.meeting_attendance_default} disabled={info.manager !== manager || meetingBusy}
+              className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field"
+              onChange={(e) => void setMeetingRole(e.target.value)}>
+              {/* A role this page does not know yet stays shown as it is, not as the first option. */}
+              {!(MEETING_ROLES as readonly string[]).includes(info.meeting_attendance_default) && <option value={info.meeting_attendance_default} disabled>{info.meeting_attendance_default}</option>}
+              {MEETING_ROLES.map((role) => <option key={role} value={role}>{t(`settings-assistantsettings.meeting_attendance_${role}`)}</option>)}
+            </select>
+          </Row>
+        </Group>
+      )}
 
       <Group title={t("settings-assistantsettings.knows_title")} footer={t("settings-assistantsettings.knows_footer")}>
         {info && <AboutMe notesSaves={notesSaves} info={info} onSaved={(notes) => setInfo((i) => (i ? { ...i, notes, notes_effective: notes.trim() } : i))} />}
@@ -244,6 +319,41 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         />
       )}
     </>
+  );
+}
+
+/** A whole number of days, 0 to `MAX_ARCHIVE_DAYS`: saved when the field is left or Enter is pressed, and only when it
+ *  changed; anything else goes back to the saved value. */
+function DaysField({ value, disabled, label, onCommit }: { value: number; disabled?: boolean; label: string; onCommit: (days: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  const [was, setWas] = useState(value);
+  if (was !== value) {
+    // the hub's answer (or a refused change taken back) replaces what is typed
+    setWas(value);
+    setDraft(String(value));
+  }
+  const commit = () => {
+    const days = Number(draft);
+    if (draft.trim() === "" || !Number.isInteger(days) || days < 0 || days > MAX_ARCHIVE_DAYS) return setDraft(String(value));
+    if (days !== value) onCommit(days);
+  };
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      min={0}
+      max={MAX_ARCHIVE_DAYS}
+      step={1}
+      aria-label={label}
+      value={draft}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+      className={`${settingsInputClass} max-w-20 shrink-0 text-right tabular-nums`}
+    />
   );
 }
 

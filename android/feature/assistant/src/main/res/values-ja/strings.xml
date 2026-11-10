@@ -126,6 +126,7 @@
     <string name="assistant_needs_you_header">今すぐ対応が必要</string>
     <string name="assistant_source_lark">Lark</string>
     <string name="assistant_source_mail">メール</string>
+    <string name="assistant_needs_you_agent">エージェント</string>
     <string name="assistant_pair_first">先にハブをペアリングしてください</string>
     <plurals name="assistant_show_all_recent">
         <item quantity="other">すべて表示（%1$d件）</item>
