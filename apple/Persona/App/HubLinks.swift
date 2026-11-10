@@ -153,7 +153,7 @@ extension AppModel {
             link.live.disconnect()
         }
         // iOS cuts them in the background anyway; back in front each socket picks its way again (docs/operations/network.md).
-        closeAllTunnels()
+        closeTunnelsForBackground()
     }
 
     /// A silent push in the background: the group that sent it connects for its call (nil: every group).

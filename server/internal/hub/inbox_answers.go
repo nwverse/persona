@@ -258,9 +258,7 @@ func (h *Hub) mergedInbox(w http.ResponseWriter, r *http.Request, key string, as
 		c.write(w, r, kept)
 		return
 	case leader:
-		a := h.mergedAnswer(r, key, ids, ask)
-		c.finish(k, ids, call, a)
-		c.write(w, r, a)
+		c.write(w, r, h.leadInbox(r, key, k, ids, call, ask))
 		return
 	}
 	select {
@@ -274,7 +272,26 @@ func (h *Hub) mergedInbox(w http.ResponseWriter, r *http.Request, key string, as
 	c.write(w, r, h.mergedAnswer(r, key, ids, ask))
 }
 
-// mergedAnswer is what mergeList writes when it asks ids (none named, no body), as one answer.
+// leadInbox fetches call's answer and finishes call with it. When the fetch panics, call is finished with an answer
+// nobody shares, so the requests waiting for it fetch for themselves rather than wait out their contexts on a call that
+// never ends, and the panic goes on to recoverPanics as it would have without the reuse.
+func (h *Hub) leadInbox(r *http.Request, key string, k inboxAnswerKey, ids []string, call *inboxCall, ask func(w http.ResponseWriter, r *http.Request, id string)) *inboxAnswer {
+	c := &h.inboxAnswers
+	finished := false
+	defer func() {
+		if !finished {
+			c.finish(k, ids, call, &inboxAnswer{})
+		}
+	}()
+	a := h.mergedAnswer(r, key, ids, ask)
+	c.finish(k, ids, call, a)
+	finished = true
+	return a
+}
+
+// mergedAnswer is what mergeList writes when it asks ids (none named, no body), as one answer. The managers are not
+// sent the request's If-None-Match: the merged list's validator is the hub's (write), and a manager's 304 would leave
+// its items out of the merge.
 func (h *Hub) mergedAnswer(r *http.Request, key string, ids []string, ask func(w http.ResponseWriter, r *http.Request, id string)) *inboxAnswer {
 	out := newBufferedWriter()
 	if len(ids) == 0 { // listManagers always has the default; as mergeList, should it not
@@ -285,7 +302,9 @@ func (h *Hub) mergedAnswer(r *http.Request, key string, ids []string, ask func(w
 	answers := make([]listAnswer, 0, len(ids))
 	for _, id := range ids {
 		bw := newBufferedWriter()
-		ask(bw, withBody(r, nil), id)
+		asked := withBody(r, nil) // a copy of r's headers
+		asked.Header.Del("If-None-Match")
+		ask(bw, asked, id)
 		ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}
 		shared = shared && ans.ok()
 		answers = append(answers, ans)
@@ -345,17 +364,29 @@ func (a *inboxAnswer) etag() string {
 	return a.tag
 }
 
-// topLevelValue is where the value of key is in the JSON object b, a merge's own bytes (valid JSON by construction):
-// b[from:to]. Not ok when b is no object or has no such member.
+// topLevelValue is where the value of key is in the JSON object b: b[from:to]. Not ok when b is no object, has no such
+// member, or ends before it is read that far. A merge's own bytes are valid JSON, but when no manager answered with an
+// object the default's answer goes on as it is (writeDecoded), whatever its bytes: a valid member always has more of
+// the object after it, so a key, ':' or value that reaches the end of b is no member.
 func topLevelValue(b []byte, key string) (from, to int, ok bool) {
 	i := jsonWS(b, 0)
 	if i >= len(b) || b[i] != '{' {
 		return 0, 0, false
 	}
 	for i = jsonWS(b, i+1); i < len(b) && b[i] == '"'; {
-		ke, _, _ := jsonString(b, i)
-		v := jsonWS(b, jsonWS(b, ke)+1) // after ':'
+		ke, _, _ := jsonString(b, i) // len(b) or more when the string does not end before b does
+		colon := jsonWS(b, ke)
+		if colon >= len(b) || b[colon] != ':' {
+			return 0, 0, false
+		}
+		v := jsonWS(b, colon+1)
+		if v >= len(b) {
+			return 0, 0, false
+		}
 		ve, _ := jsonValue(b, v)
+		if ve >= len(b) {
+			return 0, 0, false
+		}
 		if string(b[i+1:ke-1]) == key {
 			return v, ve, true
 		}

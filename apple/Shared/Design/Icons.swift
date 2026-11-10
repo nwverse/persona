@@ -576,6 +576,8 @@ extension Theme {
         static let keyPoint = "text.bubble.fill"
         static let decision = "signature"
         static let openQuestion = "questionmark.circle.dashed"
+        /// A meeting's minutes as a whole (the watch's Meeting Minutes).
+        static let minutes = "note.text"
         /// People in the knowledge base.
         static let people = "person.3"
         /// A tap on the screen, in tips and features.
