@@ -77,8 +77,7 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
 | Close | Backend support | Archives the Agent in Paseo, stopping it and removing it from the list. Like Rename, the App's Close button currently appears only for terminal sessions |
 | Change permission mode and reasoning effort | ✅ | Claude Code's five modes; on Codex, `bypassPermissions` switches to Paseo's `full-access` and a Codex agent in `full-access` reports `bypassPermissions`; reasoning effort includes only the levels supported by the model |
 | Keystrokes, screen reading, live terminal, phone takeover | ❌ | Paseo has no terminal |
-| Agent tools (`report_to_supervisor`, to-do decisions, and the rest of Persona's agent MCP tools) | ✅ for new sessions | Agents created through the bridge get Persona's MCP servers (see "Create"); Agents Paseo created itself or took over through Persona do not |
-| Phone tools (`phone_*`, `mail_*`) | ❌ | Not yet injected into Paseo Agents |
+| Agent MCP tools | ✅ for new sessions | A new Agent gets whatever tools the hub gives an agent on that computer (see "Create"): on a personal machine the phone tools (`phone_*`), the connectors' agent tools (such as `mail_*`) and the agent tools (`report_to_supervisor`, to-do decisions, dispatch when enabled); on a work machine only the agent tools. Taken-over sessions and Agents Paseo created itself get none |
 
 Login-shell launchers (those in `~/.zshrc`) still appear in the creation form. If selected, use the Paseo provider with the same name if one exists;
 otherwise use Paseo's default provider (its built-in Claude Code provider if enabled, otherwise the first provider running Claude Code).
@@ -153,7 +152,8 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
 - **Create**: use Paseo's `agent.create`. The bridge chooses the Agent ID and includes the form's selected model, permission mode, and reasoning effort. The first message is `initialPrompt`.
   - Creating from a space places it in that Paseo workspace.
   - If Paseo does not finish creation within 25 seconds, return the session row first and keep waiting in the background.
-  - **Agent tools** (#3655): the bridge reads the node's `mcp.json` (the one terminal Agents load) at each creation and puts its stdio servers into the request's `config.mcpServers`.
+  - **Agent MCP tools** (#3655): the bridge reads the node's `mcp.json` (the one terminal Agents load) at each creation and puts its stdio servers (`personad mcp`) into the request's `config.mcpServers`.
+    The tool list is the hub's, as for terminal Agents: it decides per computer (personal machine: phone, connector and agent tools; work machine: agent tools only), and the bridge adds no filter.
     Each server's environment gets `PERSONA_SESSION_ID` set to that Agent's own `persona.session` label (`paseo-<agent id>`), not the provider's session ID, so `report_to_supervisor` and the other
     tools resolve the same task link as for terminal Agents. Paseo keeps `mcpServers` when it reloads the Agent. If `mcp.json` is missing or has no stdio server, the Agent is created without the tools and the bridge logs why.
     Only new Agents get them: taken-over sessions (`import_agent`) and Agents created in Paseo itself are unchanged.
@@ -163,7 +163,7 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
 ## Out of scope and known limitations
 
 - No terminal: no keystrokes, screen reading, live terminal view, or phone takeover. The App hides these entry points based on session capabilities.
-- Phone tools (`phone_*`, `mail_*`) are not yet injected into Paseo Agents. Persona's agent tools reach only Agents created through Persona (see "Create").
+- Persona's MCP tools (phone, connector and agent tools) reach only Agents created through Persona; taken-over sessions and Agents created in Paseo itself do not get them (see "Create").
 - All three clients show "Rename" and "Close" based on whether the session has a terminal. Paseo sessions have none, so these actions are currently hidden. Node and the bridge already support both operations;
   the App can show them by capability once session `capabilities` includes rename / close.
 - Connect only to the local Paseo daemon. Paseo's relay and its other connected hosts are not integrated. Paseo on another computer uses that computer's own node.
