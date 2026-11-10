@@ -411,4 +411,14 @@ func TestInboxAnswersBounds(t *testing.T) {
 	if c.kept[big] != nil || c.size != inboxAnswersMax*2 {
 		t.Fatalf("the big one kept: %d bytes counted", c.size)
 	}
+	// The gzipped copy is made once, counts while its answer is kept, and goes with it.
+	last := keyN(inboxAnswersMax + 2)
+	gz := c.gzipped(c.kept[last])
+	if len(gz) == 0 || c.size != inboxAnswersMax*2+len(gz) || &c.gzipped(c.kept[last])[0] != &gz[0] {
+		t.Fatalf("%d bytes counted with a gzipped copy of %d", c.size, len(gz))
+	}
+	c.drop(last)
+	if c.size != (inboxAnswersMax-1)*2 {
+		t.Fatalf("%d bytes counted after dropping it", c.size)
+	}
 }

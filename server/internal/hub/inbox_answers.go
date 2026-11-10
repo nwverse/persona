@@ -1,16 +1,21 @@
 package hub
 
 import (
+	"bytes"
 	"cmp"
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/webasset"
 )
 
 // The merged inbox (GET /api/v1/inbox naming no manager) is what every app asks for again after each inbox push and
@@ -30,7 +35,8 @@ import (
 // wait for it, each as long as its own context lets it, and fetch for themselves when it did not come out a 2xx from
 // every manager. A request that names a manager, an extension's (it is its manager's) and one with a body go the way
 // they went (mergeList). What is kept is the status, the merge's own headers and its bytes, none of what the
-// middleware set (X-Request-Id, Cache-Control).
+// middleware set (X-Request-Id, Cache-Control), and the bytes gzipped once for the first request that takes gzip:
+// those go out with the headers gzipResponses would have set, and it passes them as they are (gzip.go).
 //
 // inboxAnswerTTL 0 turns it off: every request fetches its own, as before.
 const inboxAnswerTTL = 2 * time.Second
@@ -79,10 +85,13 @@ type inboxAnswer struct {
 
 	stamp uint64    // the generations it was fetched at (kept answers)
 	at    time.Time // and when that fetch began
-}
 
-// size is what a kept answer counts against inboxAnswersMaxSize.
-func (a *inboxAnswer) size() int { return len(a.body) }
+	gzOnce sync.Once
+	gz     []byte // body gzipped (shared answers, once a request took gzip)
+
+	kept    bool // in inboxAnswers.kept (under inboxAnswers.mu)
+	counted int  // its bytes inboxAnswers.size counts: body, and gz once made (under inboxAnswers.mu)
+}
 
 // changed moves manager id's inbox generation: the answers that asked it are not given again.
 func (c *inboxAnswers) changed(id string) {
@@ -157,27 +166,61 @@ func (c *inboxAnswers) keep(k inboxAnswerKey, a *inboxAnswer) {
 	if c.kept == nil {
 		c.kept = map[inboxAnswerKey]*inboxAnswer{}
 	}
-	for len(c.kept) > 0 && (len(c.kept) >= inboxAnswersMax || c.size+a.size() > inboxAnswersMaxSize) {
-		var oldest inboxAnswerKey
-		var at time.Time
-		first := true
-		for key, b := range c.kept {
-			if first || b.at.Before(at) {
-				oldest, at, first = key, b.at, false
-			}
-		}
-		c.drop(oldest)
+	for len(c.kept) > 0 && (len(c.kept) >= inboxAnswersMax || c.size+len(a.body) > inboxAnswersMaxSize) {
+		c.dropOldest(nil)
 	}
 	c.kept[k] = a
-	c.size += a.size()
+	a.kept, a.counted = true, len(a.body)
+	c.size += a.counted
+}
+
+// dropOldest forgets the answer kept longest, but for except. Under c.mu.
+func (c *inboxAnswers) dropOldest(except *inboxAnswer) {
+	var oldest inboxAnswerKey
+	var at time.Time
+	found := false
+	for key, b := range c.kept {
+		if b != except && (!found || b.at.Before(at)) {
+			oldest, at, found = key, b.at, true
+		}
+	}
+	if found {
+		c.drop(oldest)
+	}
 }
 
 // drop forgets the answer kept for k. Under c.mu.
 func (c *inboxAnswers) drop(k inboxAnswerKey) {
 	if a := c.kept[k]; a != nil {
-		c.size -= a.size()
+		c.size -= a.counted
+		a.kept, a.counted = false, 0
 		delete(c.kept, k)
 	}
+}
+
+// gzipped is a's bytes gzipped, made by the first request that asks and then counted against the bounds while a is
+// kept. The same bytes gzipResponses would have written for it: one gzip writer of its pool, the body in one Write.
+func (c *inboxAnswers) gzipped(a *inboxAnswer) []byte {
+	a.gzOnce.Do(func() {
+		var b bytes.Buffer
+		gz := gzipWriters.Get().(*gzip.Writer)
+		gz.Reset(&b)
+		_, _ = gz.Write(a.body)
+		_ = gz.Close()
+		gz.Reset(io.Discard)
+		gzipWriters.Put(gz)
+		c.mu.Lock()
+		a.gz = b.Bytes()
+		if a.kept {
+			a.counted += len(a.gz)
+			c.size += len(a.gz)
+			for c.size > inboxAnswersMaxSize && len(c.kept) > 1 {
+				c.dropOldest(a)
+			}
+		}
+		c.mu.Unlock()
+	})
+	return a.gz
 }
 
 // mergedInbox answers the merged inbox list: what mergeList answers, reused while it holds (see the top of the file).
@@ -201,23 +244,23 @@ func (h *Hub) mergedInbox(w http.ResponseWriter, r *http.Request, key string, as
 	kept, call, leader := c.join(k, ids, time.Now())
 	switch {
 	case kept != nil:
-		kept.write(w)
+		c.write(w, r, kept)
 		return
 	case leader:
 		a := h.mergedAnswer(r, key, ids, ask)
 		c.finish(k, ids, call, a)
-		a.write(w)
+		c.write(w, r, a)
 		return
 	}
 	select {
 	case <-call.done:
 		if call.ans.shared {
-			call.ans.write(w)
+			c.write(w, r, call.ans)
 			return
 		}
 	case <-r.Context().Done():
 	}
-	h.mergedAnswer(r, key, ids, ask).write(w)
+	c.write(w, r, h.mergedAnswer(r, key, ids, ask))
 }
 
 // mergedAnswer is what mergeList writes when it asks ids (none named, no body), as one answer.
@@ -242,13 +285,40 @@ func (h *Hub) mergedAnswer(r *http.Request, key string, ids []string, ask func(w
 	return a
 }
 
-// write sends a as writeMerged would have sent it to w: its headers over what w has, its status, its bytes. Each
-// request gets its own copy of the headers (the layers outside add to them).
-func (a *inboxAnswer) write(w http.ResponseWriter) {
+// write sends a to w for r as writeMerged would have sent it: its headers over what w has, its status, its bytes.
+// Each request gets its own copy of the headers (the layers outside add to them). A shared answer goes gzipped, from
+// its gzipped copy, to a request that gzipResponses would have compressed it for.
+func (c *inboxAnswers) write(w http.ResponseWriter, r *http.Request, a *inboxAnswer) {
 	hd := w.Header()
 	for k, v := range a.header {
 		hd[k] = slices.Clone(v)
 	}
+	body := a.body
+	if a.shared && gzipWanted(r) && gzipsAs(a.status, hd, a.body) {
+		body = c.gzipped(a)
+		hd.Del("Content-Length")
+		hd.Set("Content-Encoding", "gzip")
+		hd.Add("Vary", "Accept-Encoding")
+	}
 	w.WriteHeader(a.status)
-	_, _ = w.Write(a.body)
+	_, _ = w.Write(body)
+}
+
+// gzipsAs: gzipWriter would compress a whole body written at once with status and headers h
+// (gzipWriter.compressible, and gzipMinSize bytes or more).
+func gzipsAs(status int, h http.Header, body []byte) bool {
+	switch {
+	case status < 200, status == http.StatusNoContent, status == http.StatusNotModified,
+		status == http.StatusPartialContent, h.Get("Content-Encoding") != "", h.Get("Content-Range") != "",
+		len(h.Values("Set-Cookie")) > 0, len(body) < gzipMinSize:
+		return false
+	}
+	if n, err := strconv.Atoi(h.Get("Content-Length")); err == nil && n < gzipMinSize {
+		return false
+	}
+	ct := h.Get("Content-Type")
+	if ct == "" {
+		ct = http.DetectContentType(body)
+	}
+	return webasset.CompressibleType(ct)
 }
