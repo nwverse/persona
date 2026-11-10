@@ -60,17 +60,72 @@ type IPhoneCall struct {
 	Args      json.RawMessage `json:"args,omitempty"`
 	Approved  string          `json:"approved,omitempty"`
 	TimeoutMS int             `json:"timeout_ms,omitempty"`
+	// Confirm is the extension's "ask before every action": the node asks step by step (the manager does not ask
+	// again first).
+	Confirm bool `json:"confirm,omitempty"`
 }
 
-// IPhoneResult is what an iphone call answered: its JSON (Output), or Text, and a screenshot; or that the step needs the
-// user's approval first (ApprovalSummary says what for; the call is made again with Approved = ApprovalID once given).
+// IPhoneResult is what an iphone call answered: its JSON (Output), or Text, and a screenshot; or that a step needs the
+// user's approval first (Approval says what, as data the manager words for the card; the call is made again with only
+// Approved = ApprovalID once given). The JSON name approval_summary is the node core's (iphonectl.Response).
 type IPhoneResult struct {
-	Output          json.RawMessage `json:"output,omitempty"`
-	Text            string          `json:"text,omitempty"`
-	Image           *Image          `json:"image,omitempty"`
-	NeedsApproval   bool            `json:"needs_approval,omitempty"`
-	ApprovalSummary string          `json:"approval_summary,omitempty"`
-	ApprovalID      string          `json:"approval_id,omitempty"`
+	Output        json.RawMessage `json:"output,omitempty"`
+	Text          string          `json:"text,omitempty"`
+	Image         *Image          `json:"image,omitempty"`
+	NeedsApproval bool            `json:"needs_approval,omitempty"`
+	Approval      *IPhoneApproval `json:"approval_summary,omitempty"`
+	ApprovalID    string          `json:"approval_id,omitempty"`
+}
+
+// IPhoneApproval is the step that waits for the owner, as the node core gives it (iphonectl.Approval): which step of
+// the do, what it does, why it needs approval (Needs: payment | delete | send_message | password | confirm | unchecked,
+// unchecked being a screen without elements, so the target can't be identified), in which app, on what (Target) or
+// where (At), what it types (Text, never a password; TextLen always), and with confirm the steps it covers. Evidence
+// is English facts for the log, never shown.
+type IPhoneApproval struct {
+	Step      int                 `json:"step"`
+	Action    string              `json:"action"`
+	Needs     []string            `json:"needs"`
+	App       IPhoneApp           `json:"app"`
+	Target    *IPhoneElementRef   `json:"target,omitempty"`
+	At        *IPhonePoint        `json:"at,omitempty"`
+	Text      string              `json:"text,omitempty"`
+	TextLen   int                 `json:"text_len,omitempty"`
+	Key       string              `json:"key,omitempty"`
+	Button    string              `json:"button,omitempty"`
+	LaunchApp string              `json:"launch_app,omitempty"`
+	Evidence  []string            `json:"evidence,omitempty"`
+	Steps     []IPhoneStepSummary `json:"steps,omitempty"`
+}
+
+// IPhoneStepSummary is one step an approval with confirm covers.
+type IPhoneStepSummary struct {
+	Action  string            `json:"action"`
+	Target  *IPhoneElementRef `json:"target,omitempty"`
+	At      *IPhonePoint      `json:"at,omitempty"`
+	TextLen int               `json:"text_len,omitempty"`
+	Key     string            `json:"key,omitempty"`
+	Button  string            `json:"button,omitempty"`
+	App     string            `json:"app,omitempty"`
+}
+
+// IPhoneApp is the app in front: zero on the home or lock screen when the bridge can't tell.
+type IPhoneApp struct {
+	BundleID string `json:"bundle_id,omitempty"`
+	Name     string `json:"name,omitempty"`
+}
+
+// IPhoneElementRef is an element of the screen by its number in the latest read, role and label.
+type IPhoneElementRef struct {
+	N     int    `json:"n,omitempty"`
+	Role  string `json:"role"`
+	Label string `json:"label,omitempty"`
+}
+
+// IPhonePoint is a position on the screen in points, origin at the top left.
+type IPhonePoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
 
 // A failed iphone call is an RPC error whose data says whether the operation may have reached the iPhone:

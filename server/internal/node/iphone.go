@@ -85,12 +85,12 @@ type iphoneRun struct {
 // iphoneOutcome is what the driver answered: its result, a screenshot it had written into TempDir, or that the step
 // needs approval first.
 type iphoneOutcome struct {
-	Output          json.RawMessage
-	Text            string
-	ImageFile       string
-	NeedsApproval   bool
-	ApprovalSummary string
-	ApprovalID      string
+	Output        json.RawMessage
+	Text          string
+	ImageFile     string
+	NeedsApproval bool
+	Approval      *proto.IPhoneApproval
+	ApprovalID    string
 }
 
 // iphones and iphoneCore are this computer's host and driver. Until those are built in, there is no bridge here and
@@ -339,7 +339,7 @@ func iphoneCall(ctx context.Context, params json.RawMessage) (*proto.IPhoneResul
 		return nil, iphoneStepErr(ctx, cctx, p.Op, err, timeout, acted.Load())
 	}
 	res := &proto.IPhoneResult{Output: out.Output, Text: out.Text, NeedsApproval: out.NeedsApproval,
-		ApprovalSummary: out.ApprovalSummary, ApprovalID: out.ApprovalID}
+		Approval: out.Approval, ApprovalID: out.ApprovalID}
 	if f := iphoneImageIn(dir, out.ImageFile); f != "" {
 		res.Image = screenshotImage(f)
 	}

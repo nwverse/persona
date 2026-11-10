@@ -41,8 +41,9 @@ An iPhone is **allowed** when a computer that reaches it is on and its id is in 
 some iPhone is allowed, and only allowed iPhones can be named. Everything else fails closed: an iPhone the app could not
 identify never gets consent, a computer turned off takes its iPhones away, taking the consent back takes the iPhone away.
 
-The extension's `confirm` (**Ask on the phone before every action**, off by default) asks before every `iphone_do`.
-Without it only the steps the node marks as needing approval are asked.
+The extension's `confirm` (**Ask on the phone before every action**, off by default) goes down with every `iphone.call`
+(`proto.IPhoneCall.Confirm`); the node core asks step by step, with the screen in view, and the manager asks nothing
+first itself. Without it only the steps the core marks as needing approval are asked.
 
 ### Which iPhone is this one
 
@@ -65,8 +66,8 @@ conversations only, like `computer_*`.
 | Tool | Arguments | Does |
 | --- | --- | --- |
 | `iphone_status` | `{}` | Each allowed iPhone: id, name, model, iOS, the computer it is reached through, connected, transport, locked, ready, note, plus what the node says of it now (`iphone.call` op `status`, as `detail`); `not_allowed` counts the rest |
-| `iphone_look` | `{phone?, screenshot? = true, query?}` | `phone.call` op `look`: the screen as numbered elements and a screenshot |
-| `iphone_do` | `{phone?, steps, observe?}` | `phone.call` op `do`: the steps in order, stopping at the first failure |
+| `iphone_look` | `{phone?, screenshot? = true}` | `iphone.call` op `look`: the app in front, a numbering, the screen as numbered elements and a screenshot |
+| `iphone_do` | `{phone?, steps, numbering?, screenshot?, timeout_ms?}` | `iphone.call` op `do`: the steps in order, stopping at the first failure. Steps are the core's ([iphone-control.md](iphone-control.md)): a target is `{"n"}`, `{"label", "role"?}` or `{"x", "y"}`; actions tap, long_press, drag, swipe, type, key, button, launch, terminate, wait |
 
 `phone` is an id or a name (several allowed iPhones with the same name must be named by id); without it, the only
 allowed iPhone. The target comes from what the computers said last, and only when that does not settle it are they asked
@@ -92,11 +93,24 @@ which the hub hands to the app ([phone-tools.md](../apple/phone-tools.md)).
 
 ### Approval
 
-`iphone.call` answers `{output?, text?, image?, needs_approval?, approval_summary?, approval_id?}` (`proto.IPhoneResult`). When
-`needs_approval` is set, the manager shows the usual permission card (`iphone_do`, "On “<iPhone>”: <approval_summary>") and,
-once allowed, makes the same call again with `approved: <approval_id>`. A refusal (or 15 minutes without an answer) tells
-the assistant the user declined and not to retry. One call asks at most 8 times. Which steps need approval is the node's
-decision (block D); the manager only asks and passes the answer on.
+`iphone.call` answers `{output?, text?, image?, needs_approval?, approval_summary?, approval_id?}` (`proto.IPhoneResult`),
+`approval_summary` being the core's structured approval (`proto.IPhoneApproval`): the step, its action, why
+(`needs`: payment, delete, send_message, password, confirm, unchecked), the app, the target or the point (`at`, when the
+screen gives no elements), the text it types (never a password: only `text_len`), the key, button or app, and with
+`confirm` the steps one answer covers; `evidence` is English facts for the log.
+
+The manager words the usual permission card itself, in the user's language (`hub-iphone.card_*`, `extmgr/iphone_card.go`):
+"On “<iPhone>”, in <app>: Tap “Pay ¥36.00”", the reasons, and the steps it also covers. A point reads "(x, y) on the
+screen (target not identified)". The card's input is the approval without its evidence, never the model's arguments
+(which can hold a password being typed). The card has no picture yet, so the screenshot the core keeps with an
+unchecked approval is not on it.
+
+Once allowed, the manager resumes the do with `approved: <approval_id>` and no arguments. The core answers a resume it
+no longer holds (the id used before, the do replaced by a newer one, older than 15 minutes, the node restarted) with
+"nothing was sent"; the model gets that as it is, told the approved step was not done and not to try it again without
+asking. A refusal (or 15 minutes without an answer) tells the assistant the user declined and not to retry. One call
+asks at most 8 times. Which steps need approval is the core's decision (block D); the manager only asks and passes the
+answer on.
 
 ## Interfaces
 
@@ -109,10 +123,14 @@ decision (block D); the manager only asks and passes the answer on.
 - `PUT /api/v1/iphone/consent` `{"device", "allowed"}` → that device as above. Not the user's own app → 403; extension off → 404.
 - `proto.Machine.iphone` is the computer's `IPhone` while the extension is on (the manager's report, like `computer`).
 - Node: `iphone.status` → `IPhone` (the manager sets `enabled` and `allowed` itself, never taking the node's word);
-  `iphone.call` `{device, session, op: status|look|do, args, approved?, timeout_ms?}` (`proto.IPhoneCall`) → `IPhoneResult`;
+  `iphone.call` `{device, session, op: status|look|do, args, approved?, timeout_ms?, confirm?}` (`proto.IPhoneCall`) → `IPhoneResult`;
   `iphone.pair` / `iphone.forget` / `iphone.cancel` `{device}` → `IPhone`. Through `plugin.node.call` to the built-in
   program `iphone` (methods `status`, `call`, `pair`, `forget`, `cancel`) on a node that lists it, by these names otherwise.
   `op: status` is the node's own answer; `look` and `do` go to block D's package.
+  The node passes `confirm` to the core as `Request.Confirm`, and the core's `Response` into `IPhoneResult` as it is:
+  `approval_summary` is the core's `Approval` object (`proto.IPhoneApproval` mirrors it field for field) and
+  `approval_id` its id. A resume is op `do` with only `approved` (no `args`); the core's "nothing was sent" for a resume
+  it no longer holds stays an `*rpc.Error` with `sent: no` and the core's message.
 
 ## Notes and their languages
 
