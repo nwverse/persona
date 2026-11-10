@@ -18,6 +18,7 @@
   "name_assistant_title": "对话标题",
   "name_agent_title": "Agent 标签名",
   "name_todo_title": "待办标题",
+  "name_meeting_answer": "会议中的回答",
   "name_schedule": "定时任务",
   "group_default": "默认模型",
   "group_agents": "Agents",
