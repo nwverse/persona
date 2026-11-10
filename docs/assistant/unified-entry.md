@@ -325,10 +325,14 @@ Code: `server/internal/assistant/ask_route.go`.
   later card cannot quietly go the other way.
 - **Nothing hangs**: a card not handled within 5 minutes (`askHoldFor`) goes up a rung: from a leader to the main chat
   (its entry marked as raised), from the main chat to the user (all of the task's cards reaching the user then ring
-  as one, without supervisor context).
-- **Limits**: the route lives on the pending card. A held card shown again without it (after a manager restart, or a
-  Codex card listed again once its node reconnected) is on the apps without a push; the supervisor still hears of it
-  through the task's `needs_you` signal, and `ask_escalate` takes it. A card the assistant is deciding on for the user
+  as one, without supervisor context). The 5 minutes do not count while the conversation holding the card is on a
+  turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends.
+- **Limits**: the route lives on the pending card, not in the store. After a manager restart the card is back on the
+  apps without a push (as every card is); its route is made again from the task's supervisor, so the supervisor can
+  still answer it or escalate it. Whether the user was told of the card before the restart is not kept either, so a
+  restored card that reaches the user again only goes on the apps, without a second push. A Codex card listed again
+  once its node reconnected is on the apps without a push too; the supervisor still hears of it through the task's
+  `needs_you` signal, and `ask_escalate` takes it. A card the assistant is deciding on for the user
   (agents.delegate) is not escalated: that decision tells the user itself. `ask_escalate` refuses without leaders. Cards raised after an escalation go to the supervisor again rather than joining the
   escalated push.
 

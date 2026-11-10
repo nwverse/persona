@@ -881,7 +881,7 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 
 // restoreInteractions takes back, as the manager starts, the resumable cards the last one left pending: their hooks
 // reconnect through the next node and claim them again (waitInteraction), without a second push; the others it left
-// are over (cancelled in the history).
+// are over (cancelled in the history). A card that was on its way up to the user finds its route again (restoreRoute).
 func (s *Service) restoreInteractions(ctx context.Context) {
 	st, ok := s.store().(interface {
 		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, error)
@@ -897,13 +897,45 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 		s.logf("expire stale interactions: %v", err)
 		return
 	}
+	var back []proto.Interaction
 	s.fleet.mu.Lock()
 	m := s.ixMapLocked()
 	for _, ix := range resumable {
 		if m[ix.ID] == nil {
 			m[ix.ID] = &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
 			s.orphanLocked(m[ix.ID])
+			back = append(back, ix)
 		}
 	}
 	s.fleet.mu.Unlock()
+	for _, ix := range back {
+		s.restoreRoute(ctx, ix)
+	}
+}
+
+// restoreRoute puts card ix, restored after a restart, back on its way to the supervisor of the task it belongs to:
+// the route lived on the pending card only, and the apps got the card back without it. The ladder is derived now, as
+// routeAsk does for a new card, so a card whose task is done or already waits for the user stays the user's. Whether
+// the user was told of the card before the restart is not kept either: r.maybeTold keeps a later timeout from ringing
+// them again (ringAsks). The supervisor hears of it as any card held with it (signalAsk).
+func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) {
+	if !routable(ix) {
+		return
+	}
+	ladder, todo, home, ok := s.askLadder(ctx, ix.MachineID, ix.SessionID)
+	if !ok {
+		return
+	}
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
+		s.fleet.mu.Unlock()
+		return
+	}
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: time.Now(), maybeTold: true}
+	p.ix.Delegating = true
+	shown := p.ix
+	s.fleet.mu.Unlock()
+	s.show(shown)
+	s.signalAsk(todo, ladder[0], ix, 0)
 }
