@@ -22,6 +22,10 @@ import SwiftUI
     /// Set by the chat: a held header began, or ended, rising to show what opened under it (`rising`). Meanwhile the
     /// newest end is off the screen for a moment, and ↓ came up for that moment only (#1123).
     var onRising: (Bool) -> Void = { _ in }
+    /// Set by the chat: a row is opening or closing under the finger (`toggleInPlace`). True when the chat would take the
+    /// list to whatever comes in next and now holds it instead (`ChatFollow.toggledRow`): the row is kept where it is
+    /// until the user takes the list, taps ↓ or sends (#3005).
+    var anchor: () -> Bool = { false }
 
     /// The coordinate space of the list's content: a place in it does not change when the list scrolls.
     nonisolated static let space = "chatContent"
@@ -120,6 +124,18 @@ import SwiftUI
         resume = nil
     }
 
+    /// The list got taller or shorter by `by` at its bottom edge (what sits under it came or went: the queue strip, a
+    /// card, the mode bar). Drawn upside down from that edge, everything on it moved by as much; a held header is put back
+    /// where it was. The queued message taken as the next turn started moved the rows the user had open 60 pt down (#3005).
+    func resized(by d: CGFloat) {
+        guard var h = held, Date.now <= h.until, abs(d) >= 0.5, let list, !list.isTracking, !list.isDecelerating,
+              let spot = last[h.key] else { return }
+        h.base -= d
+        held = h
+        want = wanted(h, grown: spot.content - h.at.content)
+        put(list)
+    }
+
     /// The kept hold is no longer kept (the line folded, another one opened): it lasts the usual time from now, so what
     /// was tapped settles first.
     func unkeep() {
@@ -142,6 +158,10 @@ import SwiftUI
     #if DEBUG
     /// Where `key` last reported itself on screen (`UnfoldTrace`).
     func screenY(_ key: String) -> CGFloat? { last[key]?.y }
+    /// How tall the list's content is (`UnfoldTrace`).
+    var contentHeight: CGFloat? { list?.contentSize.height }
+    /// What is held, for `ScrollTrace`: its key, and whether it is kept.
+    var traceHeld: String { held.map { "\($0.key)\($0.until == .distantFuture ? "+kept" : "")" } ?? "-" }
     #endif
 
     func moved(_ key: String, to spot: Spot) {
@@ -354,64 +374,53 @@ private struct ChatPinReport: ViewModifier {
 }
 
 /// Opens or closes something in a row (`change`). In the chat the height changes at once, with the row's top held in
-/// place (`ChatPin`): a height animating in the flipped lazy list slid everything above it. What opens animates
-/// instead (`unfold`, shown with `.unfolding`): it reveals itself after the change, and on `closing` folds away before
-/// it. Elsewhere: the animation as before.
+/// place (`ChatPin`): a height animating in the flipped lazy list slid everything above it. What opens fades in over
+/// the space it takes (`unfold`, shown with `.unfolding`); what closes goes at once, its space with it. It used to
+/// fold away first, its space held, and then leave: for a fifth of a second the rows under it sat below a fading copy
+/// of the output and a blank (#3005). Where the chat would follow what comes in next, the tapped row is kept where it
+/// is instead (`ChatPin.anchor`). `closing` names the tap for the trace. Elsewhere: the animation as before.
 @MainActor func toggleInPlace(_ pin: ChatPin?, _ key: String, animation: Animation, unfold: Binding<Unfolding>? = nil,
                               closing: Bool = false, _ change: @escaping () -> Void) {
     #if DEBUG
-    UnfoldTrace.shared.begin("\(key.split(separator: "-").first ?? "row") \(closing ? "fold" : "toggle")") { [weak pin] in pin?.screenY(key) }
+    UnfoldTrace.shared.begin("\(key.split(separator: "-").first ?? "row") \(closing ? "fold" : "toggle")",
+                             height: { [weak pin] in pin?.contentHeight }) { [weak pin] in pin?.screenY(key) }
     #endif
     guard let pin else { withAnimation(animation, change); return }
-    func now() {
-        pin.hold(key)
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t, change)
-    }
-    guard let unfold, !Theme.Motion.reduced else { return now() }
-    if closing {
-        unfold.wrappedValue.concealing = true
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Theme.Motion.concealTime))
-            unfold.wrappedValue.concealing = false
-            now()
-        }
-    } else {
-        unfold.wrappedValue.revealing = true
-        now()
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Theme.Motion.revealTime))
-            unfold.wrappedValue.revealing = false
-        }
+    pin.hold(key, keep: pin.anchor())
+    let reveals = !closing && unfold != nil && !Theme.Motion.reduced
+    if reveals { unfold?.wrappedValue.revealing = true }
+    var t = Transaction()
+    t.disablesAnimations = true
+    withTransaction(t, change)
+    guard reveals, let unfold else { return }
+    Task { @MainActor in
+        try? await Task.sleep(for: .seconds(Theme.Motion.revealTime))
+        unfold.wrappedValue.revealing = false
     }
 }
 
-/// What a row shows when opened, as it comes and goes in the chat (`toggleInPlace`).
+/// What a row shows when opened, as it comes in the chat (`toggleInPlace`).
 struct Unfolding: Equatable {
-    /// Just opened: it reveals itself.
+    /// Just opened: it fades in.
     var revealing = false
-    /// About to close: it folds away.
-    var concealing = false
 }
 
 extension View {
-    /// What a row shows when opened: it reveals itself from the top (a mask growing down, and a fade) when it appears
-    /// while `revealing`, and folds away while `concealing`. Its height never animates, so the list's layout changes
-    /// once and the pin holds the header in that same pass.
-    func unfolding(_ u: Unfolding) -> some View { modifier(Reveal(revealing: u.revealing, concealing: u.concealing)) }
+    /// What a row shows when opened: it fades in when it appears while `revealing`, over all the space it takes from the
+    /// first frame. Its height never animates, so the list's layout changes once and the pin holds the header in that
+    /// same pass. It used to be revealed from the top by a mask growing down: until the mask got there, the rows pushed
+    /// under it sat below a blank (#3005).
+    func unfolding(_ u: Unfolding) -> some View { modifier(Reveal(revealing: u.revealing)) }
 }
 
 private struct Reveal: ViewModifier {
-    var concealing: Bool
-    @State private var shown: CGFloat
+    @State private var shown: Double
 
-    init(revealing: Bool, concealing: Bool) {
-        self.concealing = concealing
+    init(revealing: Bool) {
         _shown = State(initialValue: revealing ? 0 : 1)
     }
 
-    /// Reduce Motion: it is there, or not, at once.
+    /// Reduce Motion: it is there at once.
     @Environment(\.accessibilityReduceMotion) private var still
 
     func body(content: Content) -> some View {
@@ -419,26 +428,8 @@ private struct Reveal: ViewModifier {
             content
         } else {
             content
-                .clipShape(RevealShape(shown: shown))
                 .opacity(shown)
                 .onAppear { if shown < 1 { withAnimation(Theme.Motion.reveal) { shown = 1 } } }
-                .onChange(of: concealing) { _, c in withAnimation(c ? Theme.Motion.conceal : Theme.Motion.reveal) { shown = c ? 0 : 1 } }
         }
-    }
-}
-
-/// The part of the content shown, from its top; fully shown, it clips nothing (shadows and the like reach past it).
-nonisolated private struct RevealShape: Shape {
-    /// How far past the content a fully shown clip reaches: further than anything draws.
-    static let reach: CGFloat = 10_000
-    var shown: CGFloat
-    var animatableData: CGFloat {
-        get { shown }
-        set { shown = newValue }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        guard shown < 1 else { return Path(rect.insetBy(dx: -Self.reach, dy: -Self.reach)) }
-        return Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height * max(shown, 0)))
     }
 }

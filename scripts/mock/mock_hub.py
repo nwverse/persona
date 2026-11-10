@@ -11754,6 +11754,122 @@ def agent_live(step, n):
     return {"ok": True, "step": step}
 
 
+# MOCK_TOOL_TURN=1 (#3005): an agent in the middle of a turn of shell calls with long outputs, a message of the user's
+# queued behind it, history above it. GET /mock/tool_turn?step=… moves it on one push at a time, as the hub pushes them:
+#   call     a new call starts (its tool_use alone: running)
+#   result   the running call's result lands
+#   answer   the agent's answer lands and the turn is over (the agent idle)
+#   next     the queued message is taken: it lands, and a new turn starts on it (a call running)
+#   reset    the agent as it was at the start (open pages keep what they have until reloaded)
+# For the last turn's tool rows keeping what is open, and the list holding still, as all of that comes in (ToolFoldTests).
+TOOL_TURN = os.environ.get("MOCK_TOOL_TURN") == "1"
+TOOL_TURN_SID = "a1f3c2d4-0000-4000-8000-0000000000f5"
+TOOL_TURN_BASE = {}
+TOOL_TURN_N = [0]
+TOOL_TURN_CALLS = [
+    ("Check source subscription issues and PRs", "gh issue list --search 'source subscriptions' --state all",
+     ["#2038  OPEN    Source subscriptions: daily digest per source", "#2036  OPEN    Source subscriptions: mute a source",
+      "#2190  CLOSED  feat(connectors): add source tags", "#2647  OPEN    Send compatible digests to older hubs",
+      "#2492  MERGED  feat(web): add the subscriptions page", "#2440  MERGED  fix(hub): stricter source ids",
+      "#2224  MERGED  fix(web): open the source from a card", "#1345  MERGED  fix(office): keep the source title"]),
+    ("Read the open question on #2037", "gh issue view 2037 --comments",
+     ["closed 2026-11-09T08:21:48Z", "[11-09T07:05 example-dev] Claim: implement the digest", "[11-09T12:51 example-dev] Clarification before merging:",
+      "  - one digest per source, or one for all?", "  - what happens to a muted source's items?", "[11-09T13:02 example-lead] One per source.",
+      "[11-09T13:05 example-dev] Done in #2647.", "labels: enhancement, area/inbox"]),
+    ("Find the PR that closed it", "gh api repos/example/persona/issues/2037/timeline --jq '.[] | .event'",
+     ["cross-referenced  #2038 Source subscriptions", "cross-referenced  #2036 Source subscriptions", "cross-referenced  #2190 feat(connectors)",
+      "closed", "PR #2647  OPEN    11-09T15:56  Send compatible digests", "PR #2492  MERGED  11-09T12:54  feat(web): add the page",
+      "PR #2440  MERGED  11-09T12:00  fix(hub): stricter ids", "PR #2224  MERGED  11-09T08:29  fix(web): open the source"]),
+    ("Ask the lane for its status", "herdr pane send-keys w2:p1 'status?' Enter", ["sent"]),
+    ("Check the lane's reply", "herdr pane read w2:p1 --tail 6",
+     ["status: the digest is in review (#2647)", "next: the mute switch (#2036)", "blocked: nothing"]),
+    ("List what is left", "gh issue list --label area/inbox --state open",
+     ["#2036  OPEN  Source subscriptions: mute a source", "#2647  OPEN  Send compatible digests to older hubs"]),
+]
+
+
+def tool_turn_call(n):
+    """The nth call of the scenario: its tool_use, and its result."""
+    desc, cmd, out = TOOL_TURN_CALLS[n % len(TOOL_TURN_CALLS)]
+    tid = "toolu_fold_%04d" % n
+    use = it("assistant", "tool_use", 0, tool_use_id=tid, tool_name="Bash", tool_input={"command": cmd, "description": desc})
+    return use, it("user", "tool_result", 0, tool_use_id=tid, text="\n".join(out))
+
+
+if TOOL_TURN:
+    SESSIONS.append(sess("macbook", TOOL_TURN_SID, "核对来源订阅的进展", "/Users/me/code/persona", "working", "working", "persona", 4,
+                         "subs", 1, 0, "Find the PR that closed it", state_since=ago(minutes=7),
+                         queued=["顺便看一下静音开关那条还缺什么"]))
+    _earlier = []
+    for _q, _a in (("把收件箱的折叠改一下", "收件箱的折叠改好了：已处理的分组默认收起，网页和 iOS 都在里面。"),
+                   ("网页那边部署了吗", "部署了，网页已经是新版本，iOS 跟下次 TestFlight 走。")):
+        _earlier += [it("user", "text", 30, text=_q)] + tool("Bash", {"command": "git log --oneline -3", "description": "Recent commits"},
+                                                              "abc1234 fix(web): fold handled groups\nbcd2345 docs: inbox folds", 30) \
+            + [it("assistant", "text", 29, text=_a + "\n\n" + "\n".join("- 第 %d 项：已经核对过，没有遗留问题。" % _k for _k in range(1, 9)))]
+    ITEMS[TOOL_TURN_SID] = _earlier + [it("user", "text", 7, text="来源订阅的需求推进情况如何")]
+    for _n in range(3):
+        ITEMS[TOOL_TURN_SID] += list(tool_turn_call(_n))
+    TOOL_TURN_N[0] = 3
+
+
+def tool_turn(step):
+    sid, mid = TOOL_TURN_SID, "macbook"
+    row = next(x for x in SESSIONS if x["session_id"] == sid)
+    if not TOOL_TURN_BASE:
+        TOOL_TURN_BASE.update(items=list(ITEMS[sid]), row=dict(row), n=TOOL_TURN_N[0])
+
+    def stamp():
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def add(new):
+        before = ITEMS[sid][-1]["seq"]
+        for i, x in enumerate(new):
+            x["seq"], x["ts"] = before + 1 + i, stamp()
+        ITEMS[sid] = ITEMS[sid] + new
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try: out({"type": "items", "machine_id": mid, "session_id": sid, "items": new, **span(new, before)})
+                except Exception: pass
+
+    def state(st, **kw):
+        now = stamp()
+        row.update(state=st, status=STATUS_OF_STATE[st], updated_at=now, rev=(row.get("rev") or 0) + 1, **kw)
+        push_machine(mid)
+
+    running = [x for x in ITEMS[sid] if x["kind"] == "tool_use"
+               and not any(r["kind"] == "tool_result" and r.get("tool_use_id") == x["tool_use_id"] for r in ITEMS[sid])]
+    if step == "call":
+        use, _ = tool_turn_call(TOOL_TURN_N[0])
+        TOOL_TURN_N[0] += 1
+        add([use])
+        state("working", last_text=use["tool_input"]["description"])
+    elif step == "result":
+        if not running:
+            return {"error": "no call is running"}
+        n = int(running[-1]["tool_use_id"].rsplit("_", 1)[1])
+        add([tool_turn_call(n)[1]])
+        state("working")
+    elif step == "answer":
+        add([it("assistant", "text", 0, text="来源订阅这边：每日摘要在评审（#2647），静音开关（#2036）还没开始，其余都已合入。")])
+        state("unread", last_text="来源订阅这边：每日摘要在评审，静音开关还没开始。")
+    elif step == "next":
+        add([it("user", "text", 0, text=(row.get("queued") or ["继续"])[0])])
+        use, _ = tool_turn_call(TOOL_TURN_N[0])
+        TOOL_TURN_N[0] += 1
+        add([use])
+        state("working", state_since=stamp(), queued=[], last_text=use["tool_input"]["description"])
+    elif step == "reset":
+        ITEMS[sid] = list(TOOL_TURN_BASE["items"])
+        TOOL_TURN_N[0] = TOOL_TURN_BASE["n"]
+        rev = (row.get("rev") or 0) + 1
+        row.clear()
+        row.update(TOOL_TURN_BASE["row"], rev=rev)
+        push_machine(mid)
+    else:
+        return {"error": "step is call, result, answer, next or reset"}
+    return {"ok": True, "step": step, "calls": TOOL_TURN_N[0]}
+
+
 NARRATED = {}  # session id → machine id of the conversations /mock/narrate?step=start streamed in
 NARRATED_WORDS = {}  # session id → the words streamed there, which step=finish writes as the thinking line
 LIVE_TEXT = {}  # session id → the text being generated, sent again after a subscription's backlog as the hub does
@@ -14028,6 +14144,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/lark_send_delay": return self.send_json(set_lark_send_delay(q.get("s", [""])[0]))  # LarkSendTests
         if p == "/mock/agent_live" and AGENT_LIVE:  # an agent's reply streaming as Claude shows it (MOCK_AGENT_LIVE above)
             return self.send_json(agent_live(q.get("step", [""])[0], int(q.get("n", ["0"])[0])))
+        if p == "/mock/tool_turn" and TOOL_TURN:  # #3005: the last turn's tool calls arriving one push at a time
+            return self.send_json(tool_turn(q.get("step", [""])[0]))
         if p == "/mock/narrate":  # #1966: words streamed before a tool call, recorded as thinking; ?step=start|finish
             args = (q.get("step", [""])[0], q.get("words", ["我先找一下负责的 Agent，再把任务交给它。"])[0], q.get("answer", ["已交给负责的 Agent。"])[0],
                     int(q.get("steps", ["8"])[0]), int(q.get("ms", ["250"])[0]), q.get("line", ["1"])[0] != "0")

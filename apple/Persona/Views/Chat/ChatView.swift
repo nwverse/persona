@@ -117,12 +117,9 @@ struct ChatView: View {
     @State private var scratch = ChatScratch()
     /// Keeps a tapped header in place while what it opens settles (`ChatPin`).
     @State private var pin = ChatPin()
-    /// Work lines just opened, until when their steps reveal themselves as they appear (they arrive from the hub after
-    /// the tap); and ones folding away before they close (`Unfolding`).
+    /// Work lines just opened, until when their steps fade in as they appear (they arrive from the hub after the tap,
+    /// `Unfolding`). Closing has no such phase: what closes goes at once (#3005).
     @State private var revealUntil: [String: Date] = [:]
-    @State private var concealing: Set<String> = []
-    /// The calls of a run of chips folding away before it closes (the rest of its work line stays).
-    @State private var concealingCalls: Set<String> = []
 
     private enum Entry: Equatable { case latestAnswer, line(String), message(String) }
     /// The line being landed on, measured while landing (only that one row watches its frame).
@@ -1129,70 +1126,49 @@ struct ChatView: View {
 
     /// Folds or opens a work line. From its header, the header stays under the finger (`ChatPin`), through the steps
     /// arriving from the hub after the tap; from Collapse under the last step, the flipped list keeps the reply below where
-    /// it was on its own. No animation: hundreds of rows animating out left blank frames behind.
+    /// it was on its own. No animation: hundreds of rows animating out left blank frames behind. Folding is at once too:
+    /// the steps used to fade away first, their space held, and for a fifth of a second the screen showed a fading copy
+    /// of them over a blank (#3005).
     private func toggleWork(_ id: String, fromHeader: Bool, run: Bool = false) {
         Haptics.tap()
         let wasOpen = run ? isRunOpen(id) : isOpen(id)
         #if DEBUG
-        UnfoldTrace.shared.begin("\(run ? "run" : "work") \(wasOpen ? "fold" : "open")") { [pin] in
+        UnfoldTrace.shared.begin("\(run ? "run" : "work") \(wasOpen ? "fold" : "open")", height: { [pin] in pin.contentHeight }) { [pin] in
             pin.screenY(id)
         }
         #endif
-        guard run || !wasOpen else { return concealWork(id, fromHeader: fromHeader) }
-        // Its steps reveal themselves (a fade from nothing) as they appear, unless the list is at its newest end: the
-        // steps come in there first and the pin brings the header back a frame later, and for that frame the screen
-        // held nothing but steps still fading in: blank (#754). They show at once instead.
-        if !run { revealUntil[id] = scratch.atNewest ? nil : .now.addingTimeInterval(Self.stepsArrive) }
+        // Its steps fade in as they appear, unless the list is at its newest end: the steps come in there first and the
+        // pin brings the header back a frame later, and for that frame the screen held nothing but steps still fading in:
+        // blank (#754). They show at once instead.
+        if !run { revealUntil[id] = wasOpen || scratch.atNewest ? nil : .now.addingTimeInterval(Self.stepsArrive) }
         changeWork(id, fromHeader: fromHeader, run: run, wasOpen: wasOpen)
     }
 
     /// How long after opening a work line its steps may still arrive (and reveal themselves): the pin's hold.
     private static let stepsArrive: TimeInterval = 1.5
 
-    /// Opens or closes a run of chips like a work line: its calls reveal themselves under it, or fold away first.
-    /// They are already loaded, so only the ones appearing in this pass reveal (`revealUntil` of the work line, briefly).
-    private func toggleRun(_ id: String, calls: [ToolCall]) {
+    /// Opens or closes a run of chips like a work line: its calls fade in under it, or go at once. They are already
+    /// loaded, so only the ones appearing in this pass fade in (`revealUntil` of the work line, briefly).
+    private func toggleRun(_ id: String) {
         let line = id.components(separatedBy: "/run-")[0] // a run's id is "<work line>/run-<first call>"
+        let wasOpen = isRunOpen(id)
         #if DEBUG
-        UnfoldTrace.shared.begin("run \(isRunOpen(id) ? "fold" : "open")") { [pin] in pin.screenY(id) }
+        UnfoldTrace.shared.begin("run \(wasOpen ? "fold" : "open")", height: { [pin] in pin.contentHeight }) { [pin] in pin.screenY(id) }
         #endif
-        guard isRunOpen(id) else {
-            Haptics.tap()
-            revealUntil[line] = max(revealUntil[line] ?? .distantPast, .now.addingTimeInterval(Theme.Motion.revealTime))
-            return changeWork(id, fromHeader: true, run: true, wasOpen: false)
-        }
         Haptics.tap()
-        concealingCalls.formUnion(calls.map(\.id))
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Theme.Motion.concealTime))
-            concealingCalls.subtract(calls.map(\.id))
-            changeWork(id, fromHeader: true, run: true, wasOpen: true)
-        }
-    }
-
-    /// Closing a work line: its steps fold away first, then go. Under a header near the top (opened at the newest, it
-    /// goes up there), its steps are all the screen holds: fading away they left it blank for the fade, so they go at
-    /// once, as they come at once there (#754).
-    private func concealWork(_ id: String, fromHeader: Bool) {
-        if let y = scratch.workHeadY[id], scratch.listFrame.height > 0,
-           y < scratch.listFrame.minY + headerRoom + scratch.listFrame.height / 3 {
-            revealUntil[id] = nil
-            return changeWork(id, fromHeader: fromHeader, run: false, wasOpen: true)
-        }
-        concealing.insert(id)
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Theme.Motion.concealTime))
-            concealing.remove(id)
-            revealUntil[id] = nil
-            changeWork(id, fromHeader: fromHeader, run: false, wasOpen: true)
-        }
+        if !wasOpen { revealUntil[line] = max(revealUntil[line] ?? .distantPast, .now.addingTimeInterval(Theme.Motion.revealTime)) }
+        changeWork(id, fromHeader: true, run: true, wasOpen: wasOpen)
     }
 
     private func changeWork(_ id: String, fromHeader: Bool, run: Bool, wasOpen: Bool) {
         // A work line opened while following (at the newest end its header goes up under the top bar, #1173): it stays
         // where it is while a running turn's steps keep coming in under it, until the user takes the list, folds it or
-        // taps ↓. Following on would scroll it away; holding back would freeze the turn (#1046).
-        let anchored = fromHeader && !run && !wasOpen && follow.follows
+        // taps ↓. Following on would scroll it away; holding back would freeze the turn (#1046). The same for one opened
+        // while the chat holds still for a row the user opened (`ChatFollow.toggledRow`), and for a run of chips opened
+        // or closed: handed to the usual hold, following came back 1.5 s later and took the list to the newest end, the
+        // tapped chips up by what had opened under them (BeautifulUI, 119–381 pt, #1123), or the next step did (#3005).
+        let following = follow.follows
+        let anchored = fromHeader && (run || !wasOpen) && follow.followsNext
         if fromHeader {
             pin.hold(id, from: id, slow: true,
                      rise: !run && !wasOpen ? workRise(id) : 0, keep: anchored)
@@ -1200,11 +1176,8 @@ struct ChatView: View {
         if wasOpen { scratch.foldedAt = .now }
         // Not taking the list: while the header settles nothing pulls it away (the pin has it) and nothing is held
         // back (the running turn opened at the newest keeps growing: it froze, #1046); then the chat goes on as before.
-        // A run of chips in a work line kept in place (opened while following): it stays kept. Handed to the usual
-        // hold, following came back 1.5 s later and took the list to the newest end, the tapped chips up by what had
-        // opened under them (BeautifulUI, 119–381 pt, #1123).
-        if !(run && follow.anchored) { holdFollow(anchored: anchored) }
-        if anchored { keepHeader(id, rise: workRise(id)) }
+        holdFollow(anchored: anchored)
+        if anchored, following, !run { keepHeader(id, rise: workRise(id)) }
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -1226,11 +1199,9 @@ struct ChatView: View {
         return y - (scratch.listFrame.minY + headerRoom + Theme.Space.l)
     }
 
-    /// A step of the work line `group`, as it opens and closes: steps appearing just after it opened reveal themselves.
-    private func stepUnfolding(_ group: String, item: WorkItem? = nil) -> Unfolding {
-        var closing = concealing.contains(group)
-        if !closing, !concealingCalls.isEmpty, case .step(.call(let c))? = item { closing = concealingCalls.contains(c.id) }
-        return Unfolding(revealing: (revealUntil[group] ?? .distantPast) > .now, concealing: closing)
+    /// A step of the work line `group` as it opens: steps appearing just after it opened fade in.
+    private func stepUnfolding(_ group: String) -> Unfolding {
+        Unfolding(revealing: (revealUntil[group] ?? .distantPast) > .now)
     }
 
     /// A work line's header moved (its top on screen): kept for the fold probe, and told to the pin. The wake
@@ -1296,7 +1267,7 @@ struct ChatView: View {
             .modifier(WorkHeadReport(id: id, moved: workHeadMoved))
         case .workStep(let group, let item, let first):
             WorkStepView(item: item, first: first).equatable()
-                .unfolding(stepUnfolding(group, item: item))
+                .unfolding(stepUnfolding(group))
         case .agentOut(_, let call):
             // A card of its own (no rail on the timeline: the line above is shut).
             Group {
@@ -1307,7 +1278,7 @@ struct ChatView: View {
             SubagentGrid(calls: calls, first: first, alone: alone)
                 .unfolding(alone ? Unfolding() : stepUnfolding(group))
         case .toolRun(let id, let calls, let open, let first):
-            ToolRunRow(calls: calls, open: open, first: first) { toggleRun(id, calls: calls) }
+            ToolRunRow(calls: calls, open: open, first: first) { toggleRun(id) }
                 .equatable()
                 .unfolding(stepUnfolding(id.components(separatedBy: "/run-")[0])) // a run's id is "<work line>/run-<first call>"
                 .modifier(WorkHeadReport(id: id, moved: workHeadMoved))
@@ -2430,8 +2401,13 @@ struct ChatView: View {
             scratch.newestGap = new.offset + new.top
             setFollow { $0.scrolled(gap: scratch.newestGap) }
             chrome.offset = new.offset
-            // A height change (keyboard) moves the offset too: that is not the user scrolling.
-            if old.height != new.height { return }
+            // A height change (keyboard) moves the offset too: that is not the user scrolling. One from what sits under
+            // the list (the queue strip, a card) moves a held row with the list's bottom edge: the pin puts it back. Not
+            // for the keyboard: the newest stays above it, as it always has.
+            if old.height != new.height {
+                if !KeyboardState.shared.isUp { pin.resized(by: new.height - old.height) }
+                return
+            }
             scrolled(by: new.offset - old.offset)
         }
         .onScrollPhaseChange { old, phase in
@@ -2442,7 +2418,9 @@ struct ChatView: View {
             scratch.userDragging = phase == .tracking || phase == .interacting || flick
             if phase == .idle, old != .idle, old != .animating {
                 settleChrome() // the finger lifted, the glide ended
-                setFollow { $0.released() } // where the user's scrolling stopped decides (nothing if it was the app's)
+                // Where the user's scrolling stopped decides (nothing if it was the app's). A tap (down and up, the list
+                // never scrolled) is no scrolling: deciding there ended the hold on a row just opened (#3005).
+                setFollow { if old == .tracking { $0.tapped() } else { $0.released() } }
             }
             // On this upside-down list (`flippedBack`) `.scrollDismissesKeyboard(.interactively)` never put the keyboard
             // away while scrolling (#1823). A real drag does it; a touch that may still be a tap (.tracking) does not, so
@@ -2470,6 +2448,12 @@ struct ChatView: View {
         .onAppear {
             pin.letGo = { [position = $position] in position.wrappedValue = ScrollPosition(idType: String.self) }
             pin.onRising = { [rising = $pinRising] in rising.wrappedValue = $0 }
+            pin.anchor = { [follow = $follow] in
+                var next = follow.wrappedValue
+                let anchored = next.toggledRow()
+                if next != follow.wrappedValue { follow.wrappedValue = next }
+                return anchored
+            }
         }
         #if os(macOS)
         .onAppear {
@@ -2482,8 +2466,8 @@ struct ChatView: View {
         #if DEBUG
         .onAppear {
             guard ScrollTrace.enabled else { return }
-            ScrollTrace.shared.start(list: { [pin] in pin.list }) { [store, scratch, follow = $follow, frozen = $frozen] in
-                Self.traceLine(follow: follow.wrappedValue, frozen: frozen.wrappedValue, scratch: scratch, store: store)
+            ScrollTrace.shared.start(list: { [pin] in pin.list }) { [store, scratch, pin, follow = $follow, frozen = $frozen] in
+                Self.traceLine(follow: follow.wrappedValue, frozen: frozen.wrappedValue, scratch: scratch, store: store) + " pin \(pin.traceHeld)"
             }
         }
         #endif
@@ -2557,7 +2541,7 @@ struct ChatView: View {
     #if DEBUG
     /// One `ScrollTrace` state line. Out of the modifier chain: inline, its interpolation helped the chain time out (#2963).
     private static func traceLine(follow: ChatFollow, frozen: Frozen?, scratch: ChatScratch, store: ChatStore) -> String {
-        let mode = "\(follow.mode) near \(follow.near ? 1 : 0) touch \(follow.touching ? 1 : 0) drag \(scratch.userDragging ? 1 : 0)"
+        let mode = "\(follow.mode)\(follow.anchored ? "+anchored" : "") near \(follow.near ? 1 : 0) touch \(follow.touching ? 1 : 0) drag \(scratch.userDragging ? 1 : 0)"
         let held = "frozen \(frozen == nil ? 0 : 1) ftext \(frozen?.text.count ?? -1)"
         return "\(mode) \(held) live \(store.liveText.count) items \(store.items.count) gap \(Int(scratch.newestGap))"
     }

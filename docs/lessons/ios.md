@@ -1438,6 +1438,27 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 下拉关闭的闸门不能用 `isTracking` 表示「已开始拖动」：手指按下即 tracking，方向尚未确定。用 `isDragging`、`isDecelerating` 判断；外层分页 pan 拒绝以向下为主的起手，避免抢走下拉关闭。
 
 
+## Opening and closing tool rows in the running turn (2026-11-10, #3005)
+
+- **Read the recording by what was pressed**: a tapped row's title dims for a frame or two. In the user's 21 s recording every row that "closed by itself"
+  had a dimmed title just before: the user closed it. What made it look like a reset was the list moving: the rows were pushed off the screen.
+- **A fold that keeps its space while it fades leaves a blank and a ghost**: `toggleInPlace` changed the height at once (the flipped lazy list cannot
+  animate a height without sliding everything above it), so opening revealed the content with a mask growing down over space already taken (a blank
+  band), and closing faded the content out for 0.2 s with its space held, then dropped it (a fading copy, then the rows under it jumping up). Close at
+  once; open with a plain fade over the whole space. The height is the layout's, so whatever animates must cover all of it from the first frame.
+- **A short pin hold is not a follow decision**: the pin's hold for a tapped row ends as soon as the row is back in place. Following was still on, so the
+  next push (`contentArrived`) scrolled to the newest end. Any toggle in the chat goes through `ChatFollow.toggledRow` (anchored, kept pin hold), runs of
+  chips and work lines opened while anchored included.
+- **A tap in a scroll view has a scroll phase**: SwiftUI reports a tap on a row as `tracking` → `idle`. Read as "the user's scrolling ended",
+  it ran `released()`, which ends any anchor and decides by "within 100 pt of the newest": every tap on a row near the bottom switched the chat
+  back to following. Only `interacting` / `decelerating` → `idle` is a scroll; `tracking` → `idle` is `tapped()`, which decides nothing. And the
+  row's action runs while the finger is still down (`touching`), so a rule that waits for no finger never applies to a tapped row.
+- **The list's height is part of "holding still"**: the pin corrects by the content alone, but the upside-down list is drawn from its bottom edge,
+  so when the footer under it changes (the queue strip leaving as its message is taken) everything moves by that much. Watch the scroll
+  geometry's container height and put the held row back (`ChatPin.resized`), except for the keyboard.
+- **Test it with a mock that pushes one step at a time** (`MOCK_TOOL_TURN=1`, `/mock/tool_turn?step=…`, `ToolFoldTests`): a step, the answer and the
+  next turn each as its own push, and `UnfoldTrace`'s per-frame `heights` to tell "gone in this frame" from "gone after a fade".
+
 ## A live card inside an `Equatable` work step (2026-11-07, #3436)
 
 - **`WorkStepView` compares only its item and `first`**: a value handed down from the chat (a workflow run's progress) never reaches a step that is already drawn, because the hub's pushes do not change the item. A card that changes on its own reads its data itself, by a key in the item: `WorkflowCallCard` reads `AppModel.workflow(_:call:)`, one observable cell per (session, Workflow call) set only when that run changes, so a push about another run or the rest of the session draws nothing.

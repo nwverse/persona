@@ -29,6 +29,8 @@ final class UnfoldTrace: NSObject {
         var step: Int = 0
         /// The row's screen y, frame by frame, from the tap (nil: it did not report, off screen or not pinned).
         var ys: [Int?]
+        /// The list's content height, frame by frame, from the tap: the frame the opened or closed part went in or out (#3005).
+        var heights: [Int?] = []
         /// View bodies evaluated meanwhile, the most first (`-perfCounts YES`).
         var bodies: [String] = []
     }
@@ -38,6 +40,8 @@ final class UnfoldTrace: NSObject {
 
     @ObservationIgnored private var what = ""
     @ObservationIgnored private var y: () -> CGFloat? = { nil }
+    @ObservationIgnored private var height: () -> CGFloat? = { nil }
+    @ObservationIgnored private var heights: [CGFloat?] = []
     @ObservationIgnored private var y0: CGFloat?
     @ObservationIgnored private var start: CFTimeInterval = 0
     @ObservationIgnored private var tapped = Date.now
@@ -59,15 +63,18 @@ final class UnfoldTrace: NSObject {
         }
     }
 
-    /// A row was tapped to open or fold: `what` names it ("work open", "thought fold"), `y` says where it is now.
-    func begin(_ what: String, y: @escaping () -> CGFloat?) {
+    /// A row was tapped to open or fold: `what` names it ("work open", "thought fold"), `y` says where it is now,
+    /// `height` how tall the list's content is.
+    func begin(_ what: String, height: @escaping () -> CGFloat? = { nil }, y: @escaping () -> CGFloat?) {
         guard Self.enabled else { return }
         finish()
         self.what = what
         self.y = y
+        self.height = height
         y0 = y()
         deltas = []
         ys = []
+        heights = [height()]
         last = 0
         start = CACurrentMediaTime()
         tapped = .now
@@ -86,6 +93,7 @@ final class UnfoldTrace: NSObject {
         expected = max(link.targetTimestamp - link.timestamp, 1.0 / 120)
         last = link.timestamp
         ys.append(y())
+        heights.append(height())
         if CACurrentMediaTime() - start > 1.6 { finish() }
     }
 
@@ -100,6 +108,7 @@ final class UnfoldTrace: NSObject {
         let r = Result(what: what, at: tapped.timeIntervalSince1970, frames: deltas.count, hitches: deltas.filter { $0 > expected * 1.5 }.count,
                        worstMS: Int(((deltas.max() ?? 0) * 1000).rounded()), moved: Int(moved.rounded()),
                        end: Int((off.last.flatMap { $0 } ?? 0).rounded()), step: Int(step.rounded()), ys: ys.map { $0.map { Int($0.rounded()) } },
+                       heights: heights.map { $0.map { Int($0.rounded()) } },
                        bodies: PerfCount.bodies.map { ($0.key, $0.value - (bodiesAtStart[$0.key] ?? 0)) }.filter { $0.1 > 0 }
                            .sorted { $0.1 > $1.1 }.prefix(8).map { "\($0.0) \($0.1)" })
         print("UNFOLD \(r.what): frames \(r.frames) hitches \(r.hitches) worst \(r.worstMS) ms moved \(r.moved) end \(r.end) ys "
