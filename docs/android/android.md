@@ -52,6 +52,14 @@ The latter is not a home-layout toggle and is not a reason to remove Android's I
 
 ### Simplified Assistant conversation and action trays (#2878)
 
+Since #3387 the actions are two, **Needs you** and **In progress**, and each thing is in one only: the split is
+`assistantEntries` in `persona.core.domain.tasks`, checked against `spec/fixtures/entries` with the web app
+([unified-entry.md](../assistant/unified-entry.md#needs-you-and-in-progress-each-thing-once-3387)). Needs you takes Pending's
+rows, with a task's cards folded into one row for the task (its oldest card first) and the main chat's hand-opened Agents
+that ask; In progress takes the open tasks that do not wait on the user and the hand-opened working Agents (the old Agents
+entry), keeps the quiet supervision group and gets the board's **All N**. Finished and shelved tasks are in neither. The
+list below describes the earlier three entries.
+
 The existing **Assistant / Agents** home tabs do not change. Above the Assistant composer, the old All/task/Agent chip
 strip becomes three single-line actions, ordered **Pending**, **Progress**, **Agents**. Tapping opens a bounded, scrollable
 tray upward and selects its entry; opening another closes the first. The bar is absent on the Agents page.

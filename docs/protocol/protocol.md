@@ -1231,6 +1231,7 @@ Server → client:
 | `endpoints` | `endpoints` (the full candidate list, only sent to connections that declared the capability of the same name) |
 | `client_hello_ack` | `heartbeat: {interval, pong_timeout}` (the seconds actually used after this negotiation) |
 | `machines` | `machines` (also after a rename: the whole list, with the new `name`) |
+| `file_transfer` | `transfer` (`FileTransfer`): a computer-to-computer transfer started, progressed (at most once a second) or ended; `manager` identifies a non-default manager. Only full devices that declared `file_transfer` receive it; not in the event log, so clients `GET` the current transfers after reconnecting ([file-transfer.md](file-transfer.md)) |
 | `managers` | No payload: the manager roster changed (created, renamed, connected, disconnected, deleted, new reported bot identities); clients re-read `GET /api/v1/managers` ("Bus" below, [managers.md](../assistant/managers.md) "Clients"). Only sent to connections that asked for feature `managers` (`?features=` or `client_hello.features`), not in the event log |
 | `workspace_board` | `revision`: a board change was saved; the client re-reads the full state; doesn't indicate an Agent state change |
 | `workspace_board_settings` | `enabled`: the board switch changed (`PUT /api/v1/workspace-board/settings`); clients show or hide the entry accordingly |
@@ -2516,7 +2517,7 @@ Since 2026-11-04 computers are connected by the manager that carries them (curre
   - Call `devices.request {machine_id, method, params, request}` → the hub's answer: things the node needs the hub to answer (`notify`); `request` is a key the manager gives.
   - Event `devices.request_end {machine_id, request}`: the node connection this request came from dropped before the hub answered, and the hub stops waiting for it (same as the node's own connection dropping: resumable cards stay, waiting for the hook to claim them from the next connection).
   - Call `devices.connected {machine_id, connected_at}` → `{configure?:{key: value}, calls?:[{method, params}]}`: the node just connected (or the manager's connection to the hub was just established, once more for each online machine).
-    The hub returns what to add to `node.configure` (`codex`) and what to send afterward (`launchers.managed`, `session.echoes`); the manager does this before asking for the session list. The hub at the same time starts the things it does on connect.
+    The hub returns what to add to `node.configure` (`codex`, `hub_features`) and what to send afterward (`launchers.managed`, `session.echoes`); the manager does this before asking for the session list. `hub_features` carries the same capabilities as `hello.features`, including `persona_contracts_v1`. On a hub reconnect, `rehook` forwards the new announcement through `node.configure`; until `hubConnected` succeeds, retained node connections keep the previous capabilities. A successful reply from an older hub sends an empty list; a node also clears the previous capabilities when a full handover (`machine_id`) omits the field, while partial configuration updates preserve them. Nodes snapshot this connection-local capability at assistant startup to choose MCP namespaces ([rolling-upgrade-compatibility.md](rolling-upgrade-compatibility.md), "MCP namespace / tools"). The hub at the same time starts the things it does on connect.
   - Calls `devices.connector_cred {machine_id}` → `{machine_id, fp, token, version?}` (a kind service credential, stored sealed by the hub; empty `token` means not paired), `devices.connector_paired {machine_id, fp, token, version}` → `{}` (after pairing, handed to the hub to store).
 - hub → manager:
   - Call `devices.call {machine_id, method, params, timeout_ms?}` → the node's result: calls to the node from the App and hub features; the manager also remembers `session.watch` / `session.unwatch` and re-watches when the node changes connection; a watch the new connection refuses (a node just started) is asked again while it lasts, waiting 1 s and doubling to 30 s, 8 times, unless no app or Follow wants it any more; giving up is logged (#6372).
@@ -2624,7 +2625,7 @@ Deploys are frequent (hub restarts, node binary swaps). Questions / plans / perm
 
 ### When the manager is away (resident nodes)
 
-A resident node (`personad node --attach`: Persona Link, the Mac's launchd node, a service node) outlives its manager connection. While no connection is served (before the first one, and between one ending and the next), it answers `node.sock` itself, in **standby** (`server/internal/node/spool.go`). Standby only listens where nothing else answers: a `node --stdio` that serves by itself (it reached no resident node in time) keeps the socket, and standby takes it once that one is gone (it looks every 5 seconds).
+A resident node (`personad node --attach`: Persona Link, the Mac's launchd node, a service node) outlives its manager connection. While no connection is served (before the first one, and between one ending and the next), it answers `node.sock` itself, in **standby** (`server/internal/node/spool_standby.go`). Standby only listens where nothing else answers: a `node --stdio` that serves by itself (it reached no resident node in time) keeps the socket, and standby takes it once that one is gone (it looks every 5 seconds).
 
 - `hook`: the event is kept in the spool. Two kinds are not kept: a resumed hook (the node it first reached already reported it), and the events a report-only hook does not report anyway.
   - A hook that would wait on the phone (`PermissionRequest`, `Elicitation`) gets `{"retry":true}` while the **hold** lasts: 10 minutes after the manager was last connected for at least a minute, or after the resident node started. It then asks again with the same `attempt` and gets its card if the manager is back within `nodeclient.ResumeWait` (2 minutes); after that it goes to the terminal. So each such hook waits at most 2 minutes, and the hold only decides whether it waits at all. Connections shorter than a minute (a manager that keeps failing) don't renew the hold.
@@ -2736,9 +2737,9 @@ these sessions have no `pane_id`, and the App doesn't show a terminal for them a
 Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified-entry.md)). The assistant hands in a plan with `task_plan`; read-only ones and ones the user chose to remember start directly, and the rest wait for "Start" on the phone.
 
 **Stable task rows (#2878).** The feed endpoint additionally returns `task_cards`, a derived projection, without changing or
-removing its original `items` and `plans`. Android and web render a task only as its single **Progress** tray row; the chat
-shows a small "Dispatched N tasks · See Progress" entry instead of plan/task/receipt/review/report cards. Plans awaiting
-approval and acceptance decisions are handled in **Pending**. Task details and the original audit records remain accessible.
+removing its original `items` and `plans`. Android and web render a task only as its single row in **In progress**, or in
+**Needs you** while it waits on the user (#3387); the chat shows a small "Dispatched N tasks · See In progress" entry instead
+of plan/task/receipt/review/report cards. Plans awaiting Start and acceptance decisions are handled in **Needs you**. Task details and the original audit records remain accessible.
 
 `TaskCard` is `{id,todo_id?,plan_id?,index?,at,updated_at,state,receipt_id?,report_id?}`:
 

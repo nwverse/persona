@@ -126,6 +126,11 @@ func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *device
 			}
 		}
 	}
+	// A reconnect to an older hub must clear the previous hub's capabilities,
+	// including when the manager kept this node connection alive across the reconnect.
+	if _, ok := params["hub_features"]; !ok {
+		params["hub_features"] = []string{}
+	}
 	_ = peer.Call(ctx, "node.configure", params, nil)
 	var calls []devicewire.NodeCall
 	if hub != nil {
