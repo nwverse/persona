@@ -47,7 +47,7 @@ Chat page:
 - One `DiffView` (Claude Edit / MultiEdit / Write supplies old/new text; Codex unified diff), sharing Git row models (`DiffText.Line` / `parse`):
   header filename, directory, +N −N (opens file); only ± and row backgrounds are colored, code uses body color; long lines scroll horizontally with right fade; beyond 40 lines show beginning + Expand all.
   Old/new text is compared in PersonaKit's `LineDiff` (#2915, a Myers line diff like the web's `compare.ts`): unchanged lines stay as plain context, two or more in a row that are over 3 lines
-  from any change fold into one "… N unchanged lines" row until Show All, and a removed line paired with the added one after it (first with first) marks its changed words on
+  from any change fold into one "… N unchanged lines" row until Show All (which opens through `toggleInPlace`, the diff's top pinned), and a removed line paired with the added one after it (first with first) marks its changed words on
   `Theme.Diff.addEmphasis` / `delEmphasis` (words as in the web's `code-review.ts`: ≤ 1,000 characters, ≤ 500 words, similar enough; Han and kana count one character per word).
   Every +N −N (header, tool chip, changed files) is that diff's. Past its budget (1,000 lines between the common start and end, 100,000 characters a side) the middle is all removed, then all added.
   A newline ending both texts (or a Write's content) ends the last line, as git counts; ending only one of an Edit's texts (pieces of a file), it is a line break put in or taken out and shows as an empty line added or removed.

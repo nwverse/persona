@@ -510,16 +510,19 @@ struct ToolDetail: View {
                 CodeBlock(text: "$ " + (i["command"]?.string ?? ""), maxLines: 12)
             case "Edit":
                 // Codex: the patch as a unified diff; Claude: the old and new strings.
-                let diff = i["diff"]?.string.map(DiffView.init(unified:))
-                    ?? DiffView(old: i["old_string"]?.string ?? "", new: i["new_string"]?.string ?? "")
+                let key = "diff-" + call.id
+                let diff = i["diff"]?.string.map { DiffView(unified: $0, pinKey: key) }
+                    ?? DiffView(old: i["old_string"]?.string ?? "", new: i["new_string"]?.string ?? "", pinKey: key)
                 diffHeader(i["file_path"]?.string, [diff])
                 diff
             case "MultiEdit":
-                let diffs = (i["edits"]?.array ?? []).map { DiffView(old: $0["old_string"]?.string ?? "", new: $0["new_string"]?.string ?? "") }
+                let diffs = (i["edits"]?.array ?? []).enumerated().map { n, e in
+                    DiffView(old: e["old_string"]?.string ?? "", new: e["new_string"]?.string ?? "", pinKey: "diff-\(call.id)-\(n)")
+                }
                 diffHeader(i["file_path"]?.string, diffs)
                 ForEach(Array(diffs.enumerated()), id: \.offset) { _, d in d }
             case "Write":
-                let diff = DiffView(old: "", new: i["content"]?.string ?? "")
+                let diff = DiffView(old: "", new: i["content"]?.string ?? "", pinKey: "diff-" + call.id)
                 diffHeader(i["file_path"]?.string, [diff])
                 diff
             case "Read", "NotebookEdit":
@@ -983,6 +986,9 @@ struct DiffView: View {
     var short: [DiffText.Line]
     var adds: Int
     var dels: Int
+    /// What the chat's pin knows it by (`chatPinned`): Show All keeps its top where it is on screen.
+    var pinKey: String
+    @Environment(\.chatPin) private var pin
     @State private var full = false
     @State private var moreRight = false
     private static let maxLines = 40
@@ -991,19 +997,20 @@ struct DiffView: View {
     /// into one row until Show All, removed lines before added ones, and in a line changed rather than rewritten, the
     /// words that changed. Claude's Edit carries no line numbers, so none are shown. Past `LineDiff`'s budget, all of
     /// old removed, then all of new added.
-    init(old: String, new: String) {
-        self.init(ToolDiffMemo.edit(old: old, new: new))
+    init(old: String, new: String, pinKey: String) {
+        self.init(ToolDiffMemo.edit(old: old, new: new), pinKey: pinKey)
     }
 
-    init(unified diff: String) {
-        self.init(ToolDiffMemo.unified(diff))
+    init(unified diff: String, pinKey: String) {
+        self.init(ToolDiffMemo.unified(diff), pinKey: pinKey)
     }
 
-    private init(_ content: ToolDiffMemo.Content) {
+    private init(_ content: ToolDiffMemo.Content, pinKey: String) {
         lines = content.lines
         short = content.short
         adds = content.adds
         dels = content.dels
+        self.pinKey = pinKey
     }
 
     var body: some View {
@@ -1031,9 +1038,15 @@ struct DiffView: View {
             .background(Theme.codeBackground)
             .clipShape(.rect(cornerRadius: Theme.Radius.control, style: .continuous))
             if clipped {
-                Button("Show All \(lines.count) Lines [Tool Views 3aed77]") { withAnimation { full = true } }.font(Theme.Font.labelMedium).lineLimit(1)
+                // Held in place: the rows it adds would push the diff's top, and the call's head above it, up under the
+                // top bar of the upside-down chat (docs/lessons/ios.md, "Every expander inside a chat row needs the pin").
+                Button("Show All \(lines.count) Lines [Tool Views 3aed77]") {
+                    toggleInPlace(pin, pinKey, animation: Theme.Motion.standard) { full = true }
+                }
+                .font(Theme.Font.labelMedium).lineLimit(1)
             }
         }
+        .chatPinned(pinKey)
     }
 
     private func line(_ l: DiffText.Line) -> some View {
