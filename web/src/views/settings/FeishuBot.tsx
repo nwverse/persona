@@ -256,8 +256,15 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
         </div>
       </Group>
 
+      {dialogLarkcli && (
+        <Group title={t("settings-feishubot.larkcli_row")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
+          <LarkCliRow connector={dialogLarkcli} onOpen={(id) => { onClose(); onOpen?.(id); }} />
+        </Group>
+      )}
+
       {status?.has_secret && (
-        <Group
+        <>
+          <Group
             title={t("settings-feishubot.pairing")}
             footer={status.owner || pairing ? undefined : status.enabled ? t("settings-feishubot.pair_hint") : t("settings-feishubot.pair_enable_first")}
           >
@@ -303,16 +310,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
               </div>
             )}
           </Group>
-      )}
 
-      {dialogLarkcli && (
-        <Group title={t("settings-feishubot.larkcli_row")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
-          <LarkCliRow connector={dialogLarkcli} onOpen={(id) => { onClose(); onOpen?.(id); }} />
-        </Group>
-      )}
-
-      {status?.has_secret && (
-        <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
+          <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
             {FEATURES.map((f) => {
               // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either.
               const off = (f.key === "all_cards" && !features.cards) || (f.key === "only_conclusions" && features.reports === false);
@@ -347,7 +346,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
                 ))}
               </select>
             </div>
-        </Group>
+          </Group>
+        </>
       )}
 
       {agents.length > 0 && (
