@@ -32,6 +32,7 @@ func newRouteEnv(t *testing.T, st Store, leaders bool) *routeEnv {
 	}
 	s, f := ft.s, ft.f
 	shortSupervise(t, s)
+	noDirectionsTimers(s)
 	old := askHoldFor
 	askHoldFor = time.Hour // tests move cards up by hand (askTick)
 	t.Cleanup(func() { askHoldFor = old })
@@ -137,12 +138,13 @@ func (e *routeEnv) noticeWith(to, want string) string {
 	return got
 }
 
-// settle waits until the supervision messages due have gone out: nothing pending and no digest armed, then the one
-// being delivered (sendDigest holds dedupMu while it delivers) done.
-func (e *routeEnv) settle() {
-	e.t.Helper()
-	b := &e.s.supervise
-	waitFor(e.t, "the supervision messages due to go out", func() bool {
+// settleService waits until s's supervision messages due have gone out: nothing pending and no digest armed, then the
+// one being delivered (sendDigest holds dedupMu while it delivers) done. Left running past its test, one logs through
+// that test's T after it ended.
+func settleService(t *testing.T, s *Service) {
+	t.Helper()
+	b := &s.supervise
+	waitFor(t, "the supervision messages due to go out", func() bool {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		return len(b.pending) == 0 && b.timer == nil
@@ -151,12 +153,25 @@ func (e *routeEnv) settle() {
 	b.dedupMu.Unlock()
 }
 
-// supervisorState says what the apps see the two assistant conversations in: the main conversation idle, the leader in
-// status (working while it is on a turn).
-func (e *routeEnv) supervisorState(status string) {
+// settle is settleService for e's own manager.
+func (e *routeEnv) settle() {
+	e.t.Helper()
+	settleService(e.t, e.s)
+}
+
+// noDirectionsTimers keeps s's directions comparison from running at all: it is a timer of its own, and one left armed
+// past its test logs through that test's T (a database already closed) after it ended. The route tests do not read
+// what it compares.
+func noDirectionsTimers(s *Service) {
+	s.directions.after = func(time.Duration, func()) {}
+}
+
+// supervisorState says what the apps see the two assistant conversations in: the main conversation and the leader in
+// their statuses (working while on a turn).
+func (e *routeEnv) supervisorState(main, lead string) {
 	convs := []proto.Session{
-		{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
-		{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: status}}
+		{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: main},
+		{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: lead}}
 	e.sessions("server", convs...)
 	e.f.setSessions("server", convs...)
 }
@@ -343,16 +358,21 @@ func TestUnhandledAskGoesUp(t *testing.T) {
 	}
 }
 
-// A leader on a long turn has not neglected the card: its hold does not count while the leader works, so a card does
-// not climb to the user merely because the turn is long; its time starts when the turn ends.
+// A leader (and then the main conversation) on a long turn has not neglected the card: its hold does not count while
+// the conversation works, so a card does not climb to the user merely because the turn is long; its time starts when
+// the turn ends. A conversation still on a turn askBusyMax after the card came is stuck instead, and the card climbs.
 func TestAskHoldWaitsForABusySupervisor(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
+	oldHold, oldBusy := askHoldFor, askBusyMax
+	askHoldFor, askBusyMax = time.Minute, 10*time.Minute
+	t.Cleanup(func() { askHoldFor, askBusyMax = oldHold, oldBusy })
 	e.raise(askPermission("ix1", "worker-1"))
 	e.noticeWith("lead1", "interaction_id=ix1")
-	start, hold := time.Now(), askHoldFor // an hour in these tests
-	e.supervisorState(proto.StatusWorking)
-	e.s.askTick(start.Add(2 * hold)) // the leader is on a long turn
-	e.s.askTick(start.Add(3 * hold))
+	start := time.Now()
+
+	e.supervisorState(proto.StatusIdle, proto.StatusWorking) // the leader is on a long turn
+	e.s.askTick(start.Add(2 * time.Minute))
+	e.s.askTick(start.Add(5 * time.Minute))
 	e.settle()
 	if got := e.f.noticesTo("conv1"); len(got) != 0 {
 		t.Fatalf("the card climbed while its leader worked: %q", got)
@@ -361,15 +381,23 @@ func TestAskHoldWaitsForABusySupervisor(t *testing.T) {
 		t.Fatal("the card left its leader")
 	}
 
-	e.supervisorState(proto.StatusIdle) // the turn ended: the hold starts now
-	e.s.askTick(start.Add(3*hold + time.Minute))
-	e.s.askTick(start.Add(4*hold - time.Minute)) // 59 minutes: still its time
+	e.supervisorState(proto.StatusIdle, proto.StatusIdle) // the turn ended: the hold starts now
+	e.s.askTick(start.Add(6*time.Minute + 30*time.Second))
+	e.noticeWith("conv1", "interaction_id=ix1") // its time was up: the main conversation has it
+
+	e.supervisorState(proto.StatusWorking, proto.StatusIdle) // and it is on a long turn too
+	e.s.askTick(start.Add(8 * time.Minute))
 	e.settle()
-	if got := e.f.noticesTo("conv1"); len(got) != 0 {
-		t.Fatalf("the card climbed before its time was up: %q", got)
+	if got := e.pushesOf("ix1"); got != 0 {
+		t.Fatalf("the card reached the user while the main conversation worked (%d)", got)
 	}
-	e.s.askTick(start.Add(4*hold + time.Minute))
-	e.noticeWith("conv1", "interaction_id=ix1")
+	if _, ok := e.s.routedTo("ix1", "conv1"); !ok {
+		t.Fatal("the card left the main conversation")
+	}
+
+	e.s.askTick(start.Add(17 * time.Minute)) // busy for longer than askBusyMax: stuck, not working
+	waitFor(t, "the push", func() bool { return e.pushesOf("ix1") == 1 })
+	e.settle()
 }
 
 // A manager that restarts finds the cards it left pending on their way to the task's supervisor again: the leader can
@@ -394,12 +422,26 @@ func TestRestoredAskFindsItsSupervisorAgain(t *testing.T) {
 	}
 
 	e.f.mu.Lock()
-	e.f.sends, e.f.told = nil, nil // what the first manager told
+	e.f.sends, e.f.told, e.f.pushes = nil, nil, nil // what the first manager told and pushed
 	e.f.mu.Unlock()
 	s2 := New(Options{Hub: e.f, Store: func() Store { return database }, Logf: t.Logf, Devices: e.d})
 	shortSupervise(t, s2)
-	s2.FleetUp(context.Background())
+	noDirectionsTimers(s2)
 
+	// A node may claim a card before the hub's handshake restores the others: it finds its route then too.
+	answer := make(chan proto.Resolution, 1)
+	go func() { r, _ := s2.waitInteraction(context.Background(), ask); answer <- r }()
+	waitFor(t, "the hook waiting again", func() bool {
+		s2.fleet.mu.Lock()
+		defer s2.fleet.mu.Unlock()
+		p := s2.fleet.interactions[ask.ID]
+		return p != nil && p.resolved != nil // await made its channel: the wait is on the card
+	})
+	if got, ok := s2.routedTo("ix1", "lead1"); !ok || got != e.todo.ID {
+		t.Fatalf("the card its node claimed before the handshake: route to its leader = %q, %v", got, ok)
+	}
+
+	s2.FleetUp(context.Background())
 	for _, id := range []string{"ix1", "ix2"} {
 		if got, ok := s2.routedTo(id, "lead1"); !ok || got != e.todo.ID {
 			t.Fatalf("restored card %s: route to its leader = %q, %v", id, got, ok)
@@ -409,14 +451,6 @@ func TestRestoredAskFindsItsSupervisorAgain(t *testing.T) {
 		}
 	}
 	// The hooks reconnect through the next node; the leader answers the question...
-	answer := make(chan proto.Resolution, 1)
-	go func() { r, _ := s2.waitInteraction(context.Background(), ask); answer <- r }()
-	waitFor(t, "the hook waiting again", func() bool {
-		s2.fleet.mu.Lock()
-		defer s2.fleet.mu.Unlock()
-		p := s2.fleet.interactions[ask.ID]
-		return p != nil && p.resolved != nil // await made its channel: the wait is on the card
-	})
 	if _, err := runJSON(t, s2, "lead1", "interaction_answer", map[string]any{"machine": "mac", "session_id": "worker-1",
 		"interaction_id": "ix1", "answers": map[string]any{"用哪个分支？": "main"}, "reason": "任务就在 main 上"}); err != nil {
 		t.Fatalf("the leader could not answer the restored card: %v", err)
@@ -443,6 +477,7 @@ func TestRestoredAskFindsItsSupervisorAgain(t *testing.T) {
 	if n := e.pushesOf("ix1"); n != 0 {
 		t.Fatalf("the answered card was pushed %d times", n)
 	}
+	settleService(t, s2)
 }
 
 // A card restored after a restart may have rung the user already: when its time is up it goes back on the apps as the
@@ -461,6 +496,7 @@ func TestRestoredAskReachingTheUserAgainDoesNotRing(t *testing.T) {
 
 	s2 := New(Options{Hub: e.f, Store: func() Store { return database }, Logf: t.Logf, Devices: e.d})
 	shortSupervise(t, s2)
+	noDirectionsTimers(s2)
 	s2.FleetUp(context.Background())
 	if _, ok := s2.routedTo("ix1", "lead1"); !ok {
 		t.Fatal("the restored card has no route to its leader")
@@ -471,6 +507,7 @@ func TestRestoredAskReachingTheUserAgainDoesNotRing(t *testing.T) {
 	if n := e.pushesOf("ix1"); n != 0 {
 		t.Fatalf("a restored card was pushed again %d times", n)
 	}
+	settleService(t, s2)
 }
 
 // Without leaders nothing changes: the card is the user's at once.

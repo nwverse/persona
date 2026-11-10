@@ -348,14 +348,18 @@ Code: `server/internal/assistant/ask_route.go`.
 - **Nothing hangs**: a card not handled within 5 minutes (`askHoldFor`) goes up a rung: from a leader to the main chat
   (its entry marked as raised), from the main chat to the user (all of the task's cards reaching the user then ring
   as one, without supervisor context). The 5 minutes do not count while the conversation holding the card is on a
-  turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends.
+  turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends. A
+  conversation still on a turn an hour (`askBusyMax`) after the card came is counted as stuck instead, and the card
+  climbs all the same, so no card waits on a conversation for ever.
 - **Limits**: the route lives on the pending card, not in the store. After a manager restart the card is back on the
   apps without a push (as every card is); its route is made again from the task's supervisor, so the supervisor can
   still answer it or escalate it. Whether the user was told of the card before the restart is not kept either, so a
-  restored card that reaches the user again only goes on the apps, without a second push. A Codex card listed again
-  once its node reconnected is on the apps without a push too; the supervisor still hears of it through the task's
-  `needs_you` signal, and `ask_escalate` takes it. A card the assistant is deciding on for the user
-  (agents.delegate) is not escalated: that decision tells the user itself. `ask_escalate` refuses without leaders. Cards raised after an escalation go to the supervisor again rather than joining the
+  restored card never pushes when its time is up (it only goes on the apps); the supervisor may answer a question the
+  user was already asked, and an explicit `ask_escalate` still rings — that is the supervisor saying the user must
+  decide now. A Codex card listed again once its node reconnected is on the apps without a push too; the supervisor
+  still hears of it through the task's `needs_you` signal, and `ask_escalate` takes it. A card the assistant is
+  deciding on for the user (agents.delegate) is not escalated: that decision tells the user itself. `ask_escalate`
+  refuses without leaders. Cards raised after an escalation go to the supervisor again rather than joining the
   escalated push.
 
 **Directions and reports up (#3484, #3485).** Each leader has a record, `assistant.directions` (`directions.go`): the kb

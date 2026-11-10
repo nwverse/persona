@@ -244,7 +244,12 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 		s.finished(old)
 	}
 	if again {
-		s.show(ix)
+		// A card the history has as pending and this manager does not hold was left by a manager that restarted: its
+		// node may claim it before the hub's handshake restores the others (restoreInteractions), so it finds its route
+		// here too (restoreRoute). One no task supervises any more is only shown again, as before.
+		if !s.restoreRoute(ctx, ix) {
+			s.show(ix)
+		}
 	} else {
 		s.record(ix)
 		s.announce(ix)
@@ -917,25 +922,27 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 // the route lived on the pending card only, and the apps got the card back without it. The ladder is derived now, as
 // routeAsk does for a new card, so a card whose task is done or already waits for the user stays the user's. Whether
 // the user was told of the card before the restart is not kept either: r.maybeTold keeps a later timeout from ringing
-// them again (ringAsks). The supervisor hears of it as any card held with it (signalAsk).
-func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) {
+// them again (ringAsks). The supervisor hears of it as any card held with it (signalAsk). True when it was routed.
+func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
 	if !routable(ix) {
-		return
+		return false
 	}
 	ladder, todo, home, ok := s.askLadder(ctx, ix.MachineID, ix.SessionID)
 	if !ok {
-		return
+		return false
 	}
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[ix.ID]
 	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
 		s.fleet.mu.Unlock()
-		return
+		return false
 	}
-	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: time.Now(), maybeTold: true}
+	now := time.Now()
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now, maybeTold: true}
 	p.ix.Delegating = true
 	shown := p.ix
 	s.fleet.mu.Unlock()
 	s.show(shown)
 	s.signalAsk(todo, ladder[0], ix, 0)
+	return true
 }

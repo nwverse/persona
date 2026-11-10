@@ -35,6 +35,11 @@ import (
 // card, and a longer fixed hold would run out under a longer turn all the same.
 var askHoldFor = 5 * time.Minute
 
+// askBusyMax bounds that: a rung whose conversation is still on a turn this long after the card came is stuck rather
+// than working through it, and the card's hold runs again (askTick), so a conversation that never comes back cannot
+// keep a card for ever.
+var askBusyMax = time.Hour
+
 // askRoute is where a pending card is on its way to the user: the conversations it goes through, nearest first (its
 // task's leader, then the main conversation), the one it is with (step; past the last: the user's), and since when.
 type askRoute struct {
@@ -43,6 +48,7 @@ type askRoute struct {
 	ladder  []string
 	step    int
 	since   time.Time
+	held    time.Time // when it reached this rung: askBusyMax counts from here
 	// maybeTold: the card was pending when the manager restarted, and whether the user was told of it is not kept: a
 	// way back that cannot tell whether it rang before never rings them again (ringAsks).
 	maybeTold bool
@@ -92,8 +98,10 @@ func (s *Service) askLadder(ctx context.Context, machine, sid string) (ladder []
 	if len(cfg.Leaders) == 0 || cfg.Main == "" || sid == cfg.Main || slices.Contains(cfg.Leaders, sid) {
 		return nil, "", "", false
 	}
+	home = cfg.MachineID
 	if s.devs != nil {
 		machine = s.devs.Canonical(machine) // as the task's agents are kept
+		home = s.devs.Canonical(home)       // and as the session lists the apps see are (busyLocked reads stateSince)
 	}
 	t, found := s.taskOf(ctx, machine, sid)
 	if !found || t.Supervision == nil {
@@ -104,9 +112,9 @@ func (s *Service) askLadder(ctx context.Context, machine, sid string) (ladder []
 		return nil, "", "", false
 	}
 	if lead := t.Supervision.Supervisor; lead != cfg.Main && slices.Contains(cfg.Leaders, lead) {
-		return []string{lead, cfg.Main}, t.ID, cfg.MachineID, true
+		return []string{lead, cfg.Main}, t.ID, home, true
 	}
-	return []string{cfg.Main}, t.ID, cfg.MachineID, true
+	return []string{cfg.Main}, t.ID, home, true
 }
 
 // routeAsk sends new card ix to its supervisor instead of the user (announce); false when it is not one to route.
@@ -126,7 +134,8 @@ func (s *Service) routeAsk(ix proto.Interaction) bool {
 		s.fleet.mu.Unlock()
 		return false
 	}
-	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: time.Now()}
+	now := time.Now()
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now}
 	p.ix.Delegating = true
 	s.fleet.mu.Unlock()
 	shown := ix
@@ -196,7 +205,8 @@ func (s *Service) routedTo(id, self string) (string, bool) {
 
 // askTick moves each card held past askHoldFor one rung up: to the next conversation, or to the user, every card of
 // the same task that reached the user at once going out as one. The time a card has spent with a conversation on a turn
-// does not count (busyLocked): it is being worked through, not waiting to be looked at.
+// does not count (busyLocked): it is being worked through, not waiting to be looked at. A conversation still on a turn
+// askBusyMax after the card came is stuck instead, and its time counts again.
 func (s *Service) askTick(now time.Time) {
 	type up struct {
 		todo, to string
@@ -211,7 +221,7 @@ func (s *Service) askTick(now time.Time) {
 		if r == nil || p.claimed {
 			continue
 		}
-		if r.busyLocked(s) {
+		if r.busyLocked(s) && now.Sub(r.held) < askBusyMax {
 			r.since = now // its conversation is on a turn: the hold starts again once the turn ends
 			continue
 		}
@@ -219,7 +229,7 @@ func (s *Service) askTick(now time.Time) {
 			continue
 		}
 		r.step++
-		r.since = now
+		r.since, r.held = now, now
 		if to := r.at(); to != "" {
 			ups = append(ups, up{r.todo, to, p.ix, r.step})
 		} else {
@@ -300,8 +310,8 @@ func (s *Service) ringAsks(todo string, ids []string, d *proto.Delegate) []proto
 	return list
 }
 
-// waitingCards are the pending cards of task t's agents the user has not been told of: held by a supervisor, or back
-// on the apps after a restart without their route.
+// waitingCards are the pending cards of task t's agents the user has not been told of: held by a supervisor, or put
+// back on the apps after a restart without a route (its task is not supervised any more).
 func (s *Service) waitingCards(t Todo) []string {
 	agents := map[[2]string]bool{}
 	for _, a := range t.Agents {
