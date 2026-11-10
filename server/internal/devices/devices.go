@@ -867,6 +867,7 @@ func (d *Devices) Follow(ctx context.Context, machine, session string, on bool) 
 		m.followed[session] = true
 	} else {
 		delete(m.followed, session)
+		m.forgetSeqLocked(session)
 	}
 	m.mu.Unlock()
 	var err error

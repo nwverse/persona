@@ -574,8 +574,17 @@ func (m *Machine) noteWatch(method string, params json.RawMessage) {
 		m.watched[p.SessionID] = true
 	} else {
 		delete(m.watched, p.SessionID)
+		m.forgetSeqLocked(p.SessionID)
 	}
 	m.mu.Unlock()
+}
+
+// forgetSeqLocked drops a session's last item seq once neither the hub nor the manager watches it: the seq is only
+// read to watch it again, and a later watch catches up from the node's own to_seq. m.mu is held.
+func (m *Machine) forgetSeqLocked(id string) {
+	if !m.watched[id] && !m.followed[id] {
+		delete(m.lastSeq, id)
+	}
 }
 
 // setSessions keeps the node's session list (the hub gets it as the node sent it, devices.event).
@@ -675,7 +684,8 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 				last = max(last, *p.ToSeq)
 			}
 			m.mu.Lock()
-			if last > m.lastSeq[p.SessionID] {
+			// Only a watched session's seq is kept: a late batch after its unwatch must not bring it back.
+			if (m.watched[p.SessionID] || m.followed[p.SessionID]) && last > m.lastSeq[p.SessionID] {
 				m.lastSeq[p.SessionID] = last
 			}
 			m.mu.Unlock()
