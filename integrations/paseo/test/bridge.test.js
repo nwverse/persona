@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
@@ -45,7 +45,7 @@ async function setup(t, o = {}) {
   const logs = []
   const paseo = new PaseoClient({ home, retryMin: 30, retryMax: 100, log: (m) => logs.push(m) })
   const bridge = createPaseoBridge({ paseo, log: (m) => logs.push(m) },
-    { socketPath: node.path, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500 })
+    { socketPath: node.path, mcpConfig: o.mcpConfig, retryMs: 30, pushDelayMs: 5, refreshMs: 0, awayGrace: o.awayGrace ?? 400, callWait: 1500 })
   bridge.start()
   t.after(() => bridge.stop())
   await node.ready
@@ -278,6 +278,47 @@ test('interrupt, rename, permission mode and effort go to the agent', async (t) 
   // Codex: Persona's bypassPermissions is Paseo's full-access; the other modes are Paseo's own (left alone).
   await call(node, 'session.modes', { session_id: `paseo-${a.codex.id}`, permission_mode: 'bypassPermissions' })
   assert.equal(fake.requestsOf('set_agent_mode_request').at(-1).modeId, 'full-access')
+})
+
+const MCP_JSON = {
+  mcpServers: {
+    persona: { command: '/usr/bin/personad', args: ['mcp'], env: { PERSONA_HOME: '/home/u/.persona' } },
+    legacy: { command: '/usr/bin/personad', args: ['mcp'] },
+  },
+}
+
+test("a new session gets Persona's agent tools, each server naming the session the agent is kept under", async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const mcpConfig = join(dir, 'mcp.json')
+  writeFileSync(mcpConfig, JSON.stringify(MCP_JSON))
+  const { fake, node } = await setup(t, { mcpConfig })
+  for (const launcher of ['my-claude', 'my-codex']) {
+    await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher })
+    const req = fake.requestsOf('agent.create.request').at(-1)
+    const sessionId = req.labels['persona.session']
+    assert.equal(sessionId, `paseo-${req.agentId}`)
+    assert.deepEqual(req.config.mcpServers, {
+      persona: { type: 'stdio', command: '/usr/bin/personad', args: ['mcp'], env: { PERSONA_HOME: '/home/u/.persona', PERSONA_SESSION_ID: sessionId } },
+      legacy: { type: 'stdio', command: '/usr/bin/personad', args: ['mcp'], env: { PERSONA_SESSION_ID: sessionId } },
+    })
+  }
+  const [first, second] = fake.requestsOf('agent.create.request').map((r) => r.config.mcpServers.persona.env.PERSONA_SESSION_ID)
+  assert.notEqual(first, second, 'each agent has its own session id')
+  assert.equal(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.persona.env.PERSONA_SESSION_ID, undefined, 'the shared config is not changed')
+})
+
+test('a new session without a usable MCP config is created as before, and the log says why', async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const missing = await setup(t, { mcpConfig: join(dir, 'absent.json') })
+  await call(missing.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
+  assert.deepEqual(missing.fake.requestsOf('agent.create.request')[0].config, { provider: 'my-claude', cwd: '/tmp' })
+  assert.ok(missing.logs.some((l) => /cannot read the MCP config .*absent\.json.*no Persona tools/.test(l)), missing.logs.join('\n'))
+  const unset = await setup(t)
+  await call(unset.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' })
+  assert.equal(unset.fake.requestsOf('agent.create.request')[0].config.mcpServers, undefined)
+  assert.ok(unset.logs.some((l) => /no MCP config given/.test(l)))
 })
 
 test('a new session: an agent of the launcher\'s provider, with the form\'s choices, under an id kept on it', async (t) => {

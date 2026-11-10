@@ -14,6 +14,7 @@ import {
   launchersOf, linkedWorktree, paseoMode, projectSpaces, providerRoots, responseOf, sessionIdOf, slotNameOf, spaceIdOf,
   strayRecord, timelineItems, transcriptOf,
 } from './map.js'
+import { personaMcpServers } from './mcp.js'
 import { PaseoClient } from './paseo.js'
 
 export const BRIDGE_VERSION = '0.1.0'
@@ -32,7 +33,7 @@ const TIMEOUT = Symbol('timeout')
 /**
  * @param {{ paseo?: object, log?: (msg: string) => void, connect?: (path: string) => import('node:net').Socket }} [deps]
  *   paseo: a PaseoClient (default: one for options.home).
- * @param {{ home?: string, socketPath?: string, retryMs?: number, pushDelayMs?: number, refreshMs?: number,
+ * @param {{ home?: string, socketPath?: string, mcpConfig?: string, retryMs?: number, pushDelayMs?: number, refreshMs?: number,
  *   awayGrace?: number, callWait?: number }} [options]
  */
 export function createPaseoBridge(deps = {}, options = {}) {
@@ -651,6 +652,8 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     const agentId = randomUUID()
     const sessionId = `${RUNTIME}-${agentId}`
+    const mcpServers = personaMcpServers(options.mcpConfig, sessionId, log)
+    if (mcpServers) config.mcpServers = mcpServers
     const req = { agentId, config, labels: { [SESSION_LABEL]: sessionId } }
     const prompt = typeof params.prompt === 'string' ? params.prompt : ''
     if (prompt.trim()) req.initialPrompt = prompt
