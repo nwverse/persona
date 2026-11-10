@@ -1286,6 +1286,31 @@ if os.environ.get("MOCK_AGENT_MARKS"):
         SESSIONS.append(sess("server", sid, title, "/home/me/code/marks", status, state, MARKS_SPACE, 12, f"agent-{i}", i, mins,
                              "好的，我先看一下。", agent=agent, **extra))
 
+# MOCK_DESKTOP_APPS=1 (#3756): someone who works in the desktop apps on the MacBook, for the Agents list's By App. Claude's
+# desktop app and the Codex App each have running and offline sessions (the Codex App's chats in its projects), and two run
+# from a terminal. Fields as the node sends them (claudebg.go, codex_registry.go).
+if os.environ.get("MOCK_DESKTOP_APPS"):
+    DESKTOP_APPS = [  # (session id, agent, surface, title, status, state, project, minutes ago)
+        ("d3a0e7a0-0000-4000-8000-000000000001", "claude", "desktop", "重构登录流程", "working", "working", "web-app", 2),
+        ("d3a0e7a0-0000-4000-8000-000000000002", "claude", "desktop", "升级前检查网关配置", "idle", "unread", "gateway", 25),
+        ("d3a0e7a0-0000-4000-8000-000000000003", "claude", "desktop", "整理周报模板", "offline", "offline", "notes", 300),
+        ("d3a0e7a0-0000-4000-8000-000000000004", "claude", "desktop", "排查推送延迟", "offline", "offline", "web-app", 1440),
+        ("d3a0e7a0-0000-4000-8000-000000000005", "codex", "desktop", "修复导出 CSV 的编码", "working", "working", "billing", 4),
+        ("d3a0e7a0-0000-4000-8000-000000000006", "codex", "desktop", "给订单列表加分页", "offline", "offline", "billing", 600),
+        ("d3a0e7a0-0000-4000-8000-000000000007", "codex", "desktop", "写一个图片压缩脚本", "offline", "offline", "tools", 2880),
+        ("d3a0e7a0-0000-4000-8000-000000000008", "claude", "cli", "跑一遍集成测试", "working", "working", "web-app", 8),
+        ("d3a0e7a0-0000-4000-8000-000000000009", "codex", "cli", "清理旧的迁移文件", "offline", "offline", "billing", 900),
+    ]
+    for sid, agent, surface, title, status, state, project, mins in DESKTOP_APPS:
+        kw = dict(NO_SPACE, agent_surface=surface, started_by_persona=False)
+        if surface == "desktop" and agent == "codex":
+            kw.update(space_kind="codex_app", space_id=f"codex-project:/Users/me/code/{project}", space_name=project,
+                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True})
+        elif surface == "desktop" and status != "offline":
+            kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
+        SESSIONS.append(sess("macbook", sid, title, f"/Users/me/code/{project}", status, state, "", 0, "", 0, mins,
+                             "好的，我先看一下。", agent=agent, **kw))
+
 # MOCK_SPLIT_TABS=1: herdr's layout for the sidebar's "By machine" tree and the chat's pane tabs (#1963): two machines (the
 # NAS offline, its agent only under "Recent"), workspaces whose tabs hold one pane or two (claude and codex in one slot),
 # and a botmux space without tabs.
@@ -3951,6 +3976,50 @@ if MOCK_TASKS:
         _cut_at = ago(minutes=_cut)
         ITEMS[ASK1] = [x for x in ITEMS[ASK1] if (x.get("ts") or "") <= _cut_at]
         TASK_FEED[ASK1] = [x for x in TASK_FEED[ASK1] if x["at"] <= _cut_at]
+    # MOCK_INTERRUPTS=1: one model-service outage cut four tasks off within minutes (#3834); the hub batched three of
+    # them (one cancelled, one dispatched again, one still pending) and a fourth with another cause was resumed since.
+    # =legacy: the same receipts as a hub from before #3834 wrote them (no cause, group, resolution or batch); =handled: the
+    # pending one was resumed too, so the batch is all handled (grey).
+    _interrupts = os.environ.get("MOCK_INTERRUPTS", "")
+    if _interrupts:
+        _gw = "API Error: 502 Bad Gateway"
+        _cut_tasks = [("todo_cut_login", "修登录页的崩溃", 9, "cancelled"), ("todo_cut_deps", "升级依赖到最新版", 8.5, "rerouted"),
+                      ("todo_cut_tests", "补网络层的单元测试", 8, "resumed" if _interrupts == "handled" else "pending")]
+        _now_iso = ago()
+        for _tid, _title, _min, _res in _cut_tasks:
+            _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 20, ""), agents=[])
+            if _res in ("cancelled", "rerouted"):
+                _todo.update(done_at=_now_iso, done_by="cancelled", cancelled_at=_now_iso)
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+        _again = dict(_task_todo("todo_cut_deps2", "升级依赖到最新版", "", "macbook", "", "/Users/me/code/example", 5, ""), agents=[])
+        _solo = dict(_task_todo("todo_cut_docs", "整理周报", "", "studio", "", "/Users/me/code/example", 40, ""), agents=[])
+        for _todo in (_again, _solo):
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+        _head = "feed_cut_1"
+        _bodies = []
+        for _i, (_tid, _title, _min, _res) in enumerate(_cut_tasks):
+            _b = {"title": _title, "state": "interrupted", "machine": "MacBook", "summary": "模型服务出错，中断了", "error": _gw}
+            if _interrupts != "legacy":
+                _b.update(cause="model_error", resolution=_res)
+                if _i:
+                    _b["group"] = _head
+            _bodies.append(_b)
+        if _interrupts != "legacy":
+            _open = sum(1 for _c in _cut_tasks if _c[3] == "pending")
+            _bodies[0]["batch"] = {"cause": "model_error", "machine": "MacBook", "total": 3, "pending": _open, "resolved": 3 - _open,
+                                   "tasks": [{"receipt": "feed_cut_%d" % (_i + 1), "todo_id": _tid, "title": _title,
+                                              "resolution": _res, "at": ago(minutes=_min)}
+                                             for _i, (_tid, _title, _min, _res) in enumerate(_cut_tasks)]}
+        for _i, ((_tid, _title, _min, _res), _b) in enumerate(zip(_cut_tasks, _bodies)):
+            TASK_FEED[ASK1].append(_feed("feed_cut_%d" % (_i + 1), _min, "receipt", _tid, _b))
+        _solo_body = {"title": "整理周报", "state": "interrupted", "machine": "Studio", "summary": "模型服务出错，中断了",
+                      "error": "API Error: 429 Too Many Requests"}
+        if _interrupts != "legacy":
+            _solo_body.update(cause="rate_limited", resolution="resumed")
+        TASK_FEED[ASK1].append(_feed("feed_cut_solo", 30, "receipt", "todo_cut_docs", _solo_body))
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_TASKS_REVIEW=1: open tasks awaiting Persona's review, with and without explicit criteria (#4893).
     if os.environ.get("MOCK_TASKS_REVIEW") == "1":
         for _n, _title in [(3, "整理发布说明"), (0, "检查任务清单")]:

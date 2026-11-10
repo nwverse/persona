@@ -53,6 +53,40 @@ nonisolated struct TaskPlan: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// How an interrupted receipt's task was dealt with, as the hub worked it out (#3834; docs/protocol/protocol.md
+/// "Tasks and the chat feed").
+nonisolated enum InterruptResolution: String, Codable, Hashable, Sendable {
+    case pending, cancelled, rerouted, resumed, accepted, done
+}
+
+/// Interruptions with the same cause in one chat within ten minutes, as their first receipt carries them (#3834).
+nonisolated struct InterruptBatch: Codable, Hashable, Sendable {
+    struct Entry: Codable, Hashable, Sendable {
+        var receipt: String
+        var todoID: String
+        var title: String
+        var resolution: String
+        enum CodingKeys: String, CodingKey { case receipt, todoID = "todo_id", title, resolution }
+        /// A resolution this build doesn't know reads as handled, not as pending.
+        var resolved: InterruptResolution { InterruptResolution(rawValue: resolution) ?? .done }
+    }
+    var cause: String
+    var machine: String?
+    var total: Int
+    var pending: Int
+    var resolved: Int
+    var tasks: [Entry]
+}
+
+/// How the chat draws an interrupted receipt: `hidden` inside its batch's head, `batch` the head of several,
+/// `resolved` one dealt with (a grey line), `pending` still to deal with (the red card).
+nonisolated enum InterruptLook: Equatable, Sendable {
+    case hidden
+    case batch(InterruptBatch)
+    case resolved(InterruptResolution)
+    case pending
+}
+
 /// An item the hub inserted into an assistant conversation; drawn among the transcript's lines by `at`.
 nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
@@ -115,6 +149,18 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     /// An interrupted receipt's raw error (the API error that cut the turn off); older hubs put it in `summary`.
     var receiptError: String? { string("error") }
     var summary: String? { string("summary") }
+    /// How the chat draws an interrupted receipt, from what the hub worked out (#3834): nil from a hub before it.
+    var interruptLook: InterruptLook? {
+        guard kind == .receipt, turnInterrupted, let raw = string("resolution"),
+              let resolution = InterruptResolution(rawValue: raw) else { return nil }
+        if let group = string("group"), !group.isEmpty, group != id { return .hidden }
+        if case .object(let o)? = body, let b = o["batch"],
+           let data = try? JSONEncoder().encode(b), let batch = try? JSONDecoder().decode(InterruptBatch.self, from: data),
+           batch.tasks.count > 1 {
+            return .batch(batch)
+        }
+        return resolution == .pending ? .pending : .resolved(resolution)
+    }
     var pr: String? { string("pr") }
     var machine: String? { string("machine") }
     /// `routed`: what the user said straight to the task; `message`: the message itself.
