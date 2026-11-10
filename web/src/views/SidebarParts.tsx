@@ -13,7 +13,7 @@ import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, navigate, type Route } from "../lib/router";
 import { useAgentSessions } from "../lib/sessions";
-import { useScopedCounts, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
+import { scoped, useScope, useScopedCounts, useScopedTodos } from "../lib/current-assistant";
 import { triageTodos } from "../lib/todo-triage";
 import { makeSessionLookup } from "../lib/todos";
 import { useRestoredTodos } from "../lib/todo-restore";
@@ -67,10 +67,11 @@ export type NavPage = { k: string; to: Route; icon: IconName; label: string; sho
 export function useNavPages() {
   const phase = connPhase(useStore((s) => s.conn), useStore((s) => s.link));
   // the counts on the pages are the current assistant's (docs/assistant/managers.md "Clients"); the other assistants' are in
-  // the switcher at the sidebar's head
-  const machines = useScopedMachines();
-  const online = machines.filter((m) => m.online).length;
-  const total = machines.length;
+  // the switcher at the sidebar's head. Numbers, not the computers: a push of a computer's load or memory leaves them
+  // equal and doesn't draw the sidebar again.
+  const scope = useScope();
+  const online = useStore((s) => scoped(s.machines, scope).filter((m) => m.online).length);
+  const total = useStore((s) => scoped(s.machines, scope).length);
   // "Terminal" (docs/integrations/terminal.md "Standalone terminal") is there where the hub can list panes
   const terminalPanes = useStore((s) => s.features.includes("terminal_panes"));
   const assistant = useStore((s) => s.assistant);

@@ -509,13 +509,15 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
 function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, foldable = false, grouping, chooseGrouping, pagedList }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void; pagedList?: () => void }) {
   // the current assistant's computers, agents and to-dos (all of them with one assistant)
   const scope = useScope();
-  const ownMachines = useStore((s) => s.machines);
   const sidebarMachines = useStore(selectSidebarMachines);
+  // the ids of the current assistant's computers (null with one assistant): strings, so a push of a computer's load or
+  // memory leaves them equal and doesn't draw the block again
+  const ownIds = useStore((s) => (scope.several ? scoped(s.machines, scope).map((m) => m.id) : null));
   const machines = useMemo(() => {
-    if (!scope.several) return sidebarMachines;
-    const own = new Set(scoped(ownMachines, scope).map((m) => m.id));
+    if (!ownIds) return sidebarMachines;
+    const own = new Set(ownIds);
     return sidebarMachines.filter((m) => own.has(m.id));
-  }, [scope, ownMachines, sidebarMachines]);
+  }, [ownIds, sidebarMachines]);
   const { sessions: every, loaded } = useFullAgentSessions();
   const all = useScoped(every);
   const mutes = useStore((s) => s.mutes);
