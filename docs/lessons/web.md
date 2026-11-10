@@ -589,6 +589,8 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 
 - Global `prefers-reduced-motion` rules in `styles.css` reduce CSS animation / transition duration to 1 ms, but cannot control explicit JS `scrollTo({ behavior: "smooth" })` / `scrollIntoView({ behavior: "smooth" })`.
   All scripted scrolling must use `scrollBehavior()` (`src/ui/stream/motion.ts`, reuses `prefersReducedMotion`), not duplicate `matchMedia` strings.
+- Since 2026-11-10 (#2998) `src/ui/stream/scroll-motion.test.ts` enforces it: it scans `web/src` and fails on `behavior: "smooth"`, an inline `reduce ? "auto" : "smooth"`, or a scroller styled `scroll-behavior: smooth` / `scroll-smooth` (that one animates `"auto"` too) anywhere outside `motion.ts`.
+  Pick the target before scrolling: `a?.scrollIntoView() ?? b?.scrollIntoView()` runs both, since `scrollIntoView` returns `undefined`, and the second scroll wins (diff review's open-threads button always went to the first thread).
 
 ## Reduced motion and busy indicators (2026-11-05, #3475)
 

@@ -18,6 +18,7 @@ import type { MenuAt, MenuItem } from "../../ui/menu-model";
 import { Pill, Switch } from "../settings/SettingsParts";
 import { ImageViewer } from "../chat/ImageViewer";
 import { Slider } from "../../ui/Slider";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { NEW_ICON_GLYPH } from "./icon-map";
 
 /** What UI version 6's components are drawn with, besides a view's handlers. */
@@ -361,7 +362,7 @@ export function Carousel({ item, compact, ...h }: TileHandlers & { item: UIItem;
     ro.observe(el);
     return () => ro.disconnect();
   }, [tiles.length]);
-  const page = (dir: 1 | -1) => box.current?.scrollBy({ left: dir * box.current.clientWidth * 0.8, behavior: "smooth" });
+  const page = (dir: 1 | -1) => box.current?.scrollBy({ left: dir * box.current.clientWidth * 0.8, behavior: scrollBehavior() });
   const arrow = "absolute top-1/2 z-[1] hidden size-8 -translate-y-1/2 items-center justify-center rounded-full bg-surface text-ink-2 shadow-raised transition-opacity [@media(hover:hover)]:flex opacity-0 group-hover/carousel:opacity-100 focus-visible:opacity-100";
   return (
     <div className={cx(compact ? "py-2" : "")}>
