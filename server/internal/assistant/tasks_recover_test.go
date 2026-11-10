@@ -293,8 +293,7 @@ func (st *pausingRecoveryCompletionStore) TaskPlan(ctx context.Context, id strin
 }
 
 func TestRecoverTaskStartsKeepsConcurrentCompletion(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	database := taskRecoveryDatabase(t)
 	old, _ := newTaskServiceOn(t, database)
 	pt := pendingRecoveryTask(t, old, "plan_completed_during_recovery")
@@ -308,6 +307,9 @@ func TestRecoverTaskStartsKeepsConcurrentCompletion(t *testing.T) {
 	if err := restarted.ensureTodosLoaded(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// Bound the concurrent operations, not the database fixture's migrations on a shared test server.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	completed := make(chan error, 1)
 	go func() {
 		done := true
