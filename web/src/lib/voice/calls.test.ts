@@ -2,7 +2,7 @@
 // the click still makes the audio, nothing talks to the extension before the code is in, and a start that is left, tapped
 // twice or whose code would not load does what it did when the code came with the page.
 import { readFileSync } from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceAudio, VoiceDeps, VoiceSocket } from "./conversation";
 
 const reported = vi.hoisted(() => ({ list: [] as { boundary: string; chunk: boolean }[] }));
@@ -63,6 +63,9 @@ function fakeDeps() {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+// The first import transforms the call's whole module graph, which can take seconds on a busy machine: do it once,
+// outside the tests' own time (resetModules keeps the transformed code).
+beforeAll(() => import("./calls").then(() => import("./call-stack")), 30_000);
 beforeEach(() => {
   vi.resetModules();
   contexts.length = 0;
