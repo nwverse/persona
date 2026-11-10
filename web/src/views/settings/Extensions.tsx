@@ -229,7 +229,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
         title={
           <span className="flex items-center gap-2">
             {t("settings-extensions.title")}
-            {own && <span className="font-normal">{listSummary(own)}</span>}
+            {own && !(offline && own.length === 0) && <span className="font-normal">{listSummary(own)}</span>}
           </span>
         }
         right={<IconButton icon="retry" label={t("settings-extensions.refresh")} onClick={load} disabled={loading} size={24} iconSize={13} className="-mb-1" />}
