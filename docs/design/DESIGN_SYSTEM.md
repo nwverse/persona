@@ -409,6 +409,12 @@ Links open inside the app in a card that fills the screen. Dragged down to 0.6 i
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
 
+Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
+parent-chat message bubbles (#3378). Reuse the existing work summary and manually opened tool/report disclosures;
+keep each delivery separately inspectable, including its full text. Nonterminal `running` / `waiting` reports retain
+the existing progress presentation. Empty completion pointers update status without creating another report. The
+shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
+
 ## 5. Content
 
 ### 5.1 Voice and tone
