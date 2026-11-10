@@ -21,8 +21,6 @@ const (
 	Name = "Lark via lark-cli"
 )
 
-const expiryReminderDays = 7
-
 // requiredScopes is the union of the scopes used by this connector's L2
 // read commands. These names come from the lark-cli shortcut guidance and the
 // missing_scope errors returned by lark-cli 1.0.99. Keep the list here so an
@@ -49,18 +47,21 @@ var requiredScopes = []string{
 // Connector is enabled only when manager.json configures lark.cli. It owns no
 // credentials; the adapter delegates all authentication to lark-cli.
 type Connector struct {
-	runner *adapter.Runner
-	now    func() time.Time
+	runner  *adapter.Runner
+	now     func() time.Time
+	profile string
 }
 
 // New creates the built-in connector from the configured CLI runner.
 func New(cfg adapter.Config) *Connector {
-	return &Connector{runner: adapter.New(cfg)}
+	return &Connector{runner: adapter.New(cfg), profile: cfg.Profile}
 }
 
 // NewWithRunner is useful for unit tests and embedders that already constructed a
 // runner. The runner still executes the real configured subprocess.
-func NewWithRunner(r *adapter.Runner) *Connector { return &Connector{runner: r} }
+func NewWithRunner(r *adapter.Runner) *Connector {
+	return &Connector{runner: r, profile: r.Profile()}
+}
 
 func (c *Connector) ID() string   { return ID }
 func (c *Connector) Name() string { return Name }
@@ -79,7 +80,8 @@ func tool(name string) proto.Tool {
 }
 
 // Status reads the CLI version and auth status. It never includes raw command
-// output, message bodies, account tokens, or the configured profile.
+// output, message bodies, or account tokens; the configured profile appears
+// only in the localized login command shown when the user must sign in.
 func (c *Connector) Status(ctx context.Context) connector.Status {
 	st := connector.Status{State: connector.StateError, Via: "lark-cli"}
 	if c == nil || c.runner == nil {
@@ -108,8 +110,12 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 		return c.statusMissingScopes(ctx, st, missing)
 	}
 	st.State = connector.StateOK
-	if days := auth.DaysUntilExpiry(c.currentTime()); days > 0 && days <= expiryReminderDays {
-		st.Error = i18n.T(c.lang(ctx), "hub-connectors.expiry_reminder", i18n.Args{"count": days})
+	now := c.currentTime()
+	if auth.RefreshWindowNeedsReminder(now) {
+		st.Error = i18n.T(c.lang(ctx), "hub-connectors.expiry_reminder", i18n.Args{
+			"count":   auth.DaysUntilExpiry(now),
+			"command": c.loginCommand(),
+		})
 	}
 	return st
 }
@@ -248,14 +254,14 @@ func (c *Connector) statusError(ctx context.Context, st connector.Status, err er
 func (c *Connector) statusNotSignedIn(ctx context.Context, st connector.Status) connector.Status {
 	st.State = connector.StateNotSignedIn
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.not_signed_in")
-	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide")}
+	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide", i18n.Args{"command": c.loginCommand()})}
 	return st
 }
 
 func (c *Connector) statusExpired(ctx context.Context, st connector.Status) connector.Status {
 	st.State = connector.StateNotSignedIn
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.expired")
-	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide")}
+	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide", i18n.Args{"command": c.loginCommand()})}
 	return st
 }
 
@@ -263,8 +269,36 @@ func (c *Connector) statusMissingScopes(ctx context.Context, st connector.Status
 	st.State = connector.StateNoPermission
 	args := i18n.Args{"scope": strings.Join(scopes, ", ")}
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.missing_permission", args)
-	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide")}
+	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide", i18n.Args{"command": c.loginCommand()})}
 	return st
+}
+
+func (c *Connector) loginCommand() string {
+	command := "lark-cli"
+	profile := c.profile
+	if profile == "" && c.runner != nil {
+		profile = c.runner.Profile()
+	}
+	if profile != "" {
+		command += " --profile " + commandArg(profile)
+	}
+	return command + " auth login --domain all"
+}
+
+func commandArg(value string) string {
+	if value != "" {
+		safe := true
+		for _, r := range value {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.", r)) {
+				safe = false
+				break
+			}
+		}
+		if safe {
+			return value
+		}
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func missingRequiredScopes(granted []string) []string {

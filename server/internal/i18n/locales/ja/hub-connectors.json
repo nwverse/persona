@@ -7,10 +7,9 @@
   "old_version": "lark-cli {got} は古すぎます。Persona には {want} 以降が必要です",
   "not_signed_in": "lark-cli にサインインしていません",
   "expired": "lark-cli のログインの有効期限が切れています",
-  "login_guide": "ハブのマシンで lark-cli auth login --domain all を実行してください",
+  "login_guide": "ハブのマシンで {command} を実行してください",
   "missing_permission": "lark-cli に権限がありません：{scope}",
-  "permission_guide": "Lark アプリの管理者に不足している権限を付与してもらい、もう一度サインインしてください",
   "rate_limited": "lark-cli はレート制限中です。後でもう一度お試しください",
   "error": "lark-cli で Lark を読み取れませんでした",
-  "expiry_reminder": "ログインはあと {count} 日で期限切れになります。ハブのマシンで lark-cli auth login を実行してください"
+  "expiry_reminder": "ログインはあと {count} 日で期限切れになります。ハブのマシンで {command} を実行してください"
 }

@@ -122,7 +122,7 @@ The "Needs" column: unread = Lark's unread / read position; feed = the conversat
 - `lark.cli.profile`: optional lark-cli profile (`--profile`); empty uses its default profile. Every call from the hub and the assistant passes it.
 - `lark.prefer`: which source is primary when both are configured: unset (default, the Lark gateway) or `cli`; any other value is passed as-is to the extension that provides Lark (see "Shape").
 - App credentials do not go into `hub.json`: lark-cli uses the app bound in its own `config`.
-- **Enable every permission that can be enabled** (user decision 2026-11-03): log in with `lark-cli auth login --domain all` (user permissions for all domains; on machines without a browser add `--no-wait --json` to use Device Flow
+- **Enable every permission that can be enabled** (user decision 2026-11-03): log in with `lark-cli auth login --domain all` (or `lark-cli --profile <profile> auth login --domain all` for a configured profile; user permissions for all domains; on machines without a browser add `--no-wait --json` to use Device Flow
   and authorize by tapping a link on the phone). Permissions that need admin approval are unavailable until approved: the settings page lists what is missing with `auth check`, and a missing feature says which permission it needs, instead of being reported as a connection failure.
 - Settings › Connectors › Lark: shows the status of each source, which one is currently primary, the account lark-cli is logged in as, when the token expires, and missing permissions; when it has expired, it says to run `lark-cli auth login` on the hub machine.
 
@@ -180,7 +180,7 @@ One PR per step; all existing tests for hubs with the Lark gateway pass.
 | One source per hub, or both side by side | **Both may coexist**: one primary source per capability (`lark.prefer`), switching to the other when the primary is unavailable; the Inbox and knowledge base collect from only one source at a time ("Shape") |
 | What the Inbox collects from the lark-cli source | **@me, my direct chats, and new replies in topics I take part in within topic groups** ("What the Inbox collects") |
 | Polling frequency | **As proposed for now**: Inbox and archiving every 2 minutes, `/agent` every 20 seconds; adjust after measuring Open Platform rate limits in L3 |
-| Permissions | **Enable everything possible**: `lark-cli auth login --domain all`; permissions needing admin approval are listed on the settings page ("Configuration") |
+| Permissions | **Enable everything possible**: `lark-cli auth login --domain all` (or `lark-cli --profile <profile> auth login --domain all` for a configured profile); permissions needing admin approval are listed on the settings page ("Configuration") |
 | Whose identity sends messages (2026-11-04) | **The bot**: sending and replying use `--as bot`, and the phone card says "as the bot"; all other reads and writes still use the user identity |
 
 ## Risks
