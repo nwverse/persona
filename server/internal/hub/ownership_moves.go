@@ -121,6 +121,9 @@ func (h *Hub) moveMachineMoving(ctx context.Context, mid, to string) (from strin
 	if from == to {
 		return from, nil
 	}
+	if err := h.retireShareMachine(ctx, mid); err != nil {
+		return from, err
+	}
 	if h.keptBy(mid) != "" && h.cfgEntry(mid) == nil { // its manager keeps it (machines_kept.go)
 		if err := h.moveKept(ctx, mid, from, to); err != nil {
 			return from, err
@@ -300,6 +303,7 @@ func (h *Hub) withdrawCardsOn(mid, to string) {
 // forgetMachineOwner drops who carries machine mid, a hub.json entry removed (removeMachineLive): an entry added
 // again later starts at the carrier.
 func (h *Hub) forgetMachineOwner(ctx context.Context, mid string) {
+	_ = h.retireShareMachine(ctx, mid)
 	d := &h.devices
 	d.moving.Lock()
 	defer d.moving.Unlock()

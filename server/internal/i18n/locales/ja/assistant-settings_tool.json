@@ -30,5 +30,12 @@
   "change_meeting_attendance_default": "録音する会議での Persona：{before} → {after}",
   "meeting_role_off": "出席しない",
   "meeting_role_listener": "聞き手",
-  "meeting_role_participant": "参加者"
+  "meeting_role_participant": "参加者",
+  "title_minutes_days": "議事録を保存する日数",
+  "change_minutes_days": "議事録の保存期間：{before} → {after}",
+  "change_minutes_days_saved": "議事録の保存期間：{previous} → {saved}を保存。現在は{after}（録音の保存期間以上）",
+  "minutes_forever": "無期限",
+  "minutes_days_value": "{days}日",
+  "minutes_unchanged": "議事録の保存期間は変更されていません。保存値は{saved}、現在の有効値は{after}です。",
+  "minutes_applied": "議事録の保存期間を{saved}に設定しました。現在の有効値は{after}です。文字起こしは引き続き録音の保存期間に従います。"
 }

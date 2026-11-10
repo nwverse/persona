@@ -68,6 +68,12 @@ type Engine struct {
 	Unindex func(kind string, ids []string)
 	// RecordingDaysFunc is how many days recordings are kept (the assistant's recording_days; nil or <= 0: 14).
 	RecordingDaysFunc func() int
+	// MinutesDaysFunc is how many days a meeting's minutes are kept once its transcript went (the assistant's
+	// minutes_days; nil or <= 0: forever); finite windows are never fewer than RecordingDaysFunc's (MinutesDays).
+	MinutesDaysFunc func() int
+	// EarlierMeetingsInAnswers stays false until #3862 phase 1 adds a per-meeting private mark.
+	// Only tests opt in for now, preserving retrieval coverage without exposing earlier minutes in answers.
+	EarlierMeetingsInAnswers bool
 	// MinutesWritten is told when a recording's minutes for its current revision are written (minutes.go): the
 	// assistant pushes them. Called from the loop, outside the store's locks.
 	MinutesWritten func(ctx context.Context, r Recording, m Minutes)

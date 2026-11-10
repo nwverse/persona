@@ -25,6 +25,8 @@ type stateFile struct {
 }
 
 type sessionState struct {
+	CreationID       string    `json:"creation_id,omitempty"`
+	Incarnation      string    `json:"incarnation,omitempty"`
 	Pane             string    `json:"pane,omitempty"`
 	Launcher         string    `json:"launcher"`
 	Model            string    `json:"model,omitempty"`
@@ -213,6 +215,9 @@ func (s *stateFile) setPane(id, pane string) {
 
 func (s *stateFile) put(id string, v sessionState) {
 	s.mu.Lock()
+	if old, ok := s.Sessions[id]; ok && old.CreationID != "" {
+		v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
+	}
 	s.Sessions[id] = v
 	persist := s.persist
 	s.mu.Unlock()

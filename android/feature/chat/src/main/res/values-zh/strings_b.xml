@@ -4,7 +4,8 @@
     <string name="chat_api_error_retry">重试</string>
     <string name="chat_api_error_request_id">请求 ID</string>
     <string name="chat_api_error_copy_request_id">复制请求 ID</string>
-    <string name="chat_api_error_copy_session">复制 Session</string>
+    <string name="chat_api_error_session">会话</string>
+    <string name="chat_api_error_copy_session">复制会话</string>
     <string name="chat_api_error_time">时间</string>
     <string name="chat_api_error_copy_raw">复制原文</string>
     <string name="chat_api_error_transient">临时故障</string>

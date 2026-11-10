@@ -30,7 +30,8 @@ type SessionTitle struct {
 func RenderSessionTitle(t SessionTitle) string { return render("tools/session_title", t) }
 
 // SessionTitleInput is what the title model reads: the first exchange, and its last answer when that broke the format.
-type SessionTitleInput struct{ First, Reply, Retry string }
+// Source is the title the extension that opened the conversation gave it ("" for none, #3758): a hint, not the title.
+type SessionTitleInput struct{ First, Reply, Retry, Source string }
 
 func RenderSessionTitleInput(in SessionTitleInput) string {
 	return render("tools/session_title_input", in)

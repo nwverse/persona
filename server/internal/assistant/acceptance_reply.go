@@ -62,6 +62,8 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.botNote(ctx, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		} else if ok {
 			s.botNote(ctx, messageID, acceptedNote(l, &ask))
+		} else { // not this round that waits: answered as its button answers (feishu_card_actions.go), not swallowed
+			s.botNote(ctx, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
 		}
 		return true
 	}
@@ -102,7 +104,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.logf("task %s: acceptance reopen: %v", id, err)
 		}
 	}
-	if _, err := s.routeToTask(ctx, t.Origin, id, msg); err != nil {
+	if _, err := s.relayToTask(ctx, t.Origin, id, msg, nil); err != nil {
 		s.logf("task %s: acceptance to agent: %v", id, err)
 		s.botNote(ctx, messageID, withMediaDropped(l, i18n.T(l, "assistant-reports.accept_not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 120)}), media))
 		return true
