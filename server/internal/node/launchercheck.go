@@ -233,8 +233,9 @@ func (n *Node) removeCheckProject(dir string) {
 }
 
 // isLauncherCheckProject: base is the name of the projects directory Claude Code keeps for a launcher check's temp
-// directory ("<anywhere>/persona-check-<digits>", or an older node's prefix; the temp parent differs by machine):
-// what a check leaves is no session of the user's.
+// directory ("<temp parent>/persona-check-<digits>", or an older node's prefix; the temp parent differs by machine).
+// A fast first cut on the name only: the user may have a directory of their own with a similar name, so the caller
+// checks where the run started before dropping the transcript (isLauncherCheckRun).
 func isLauncherCheckProject(base string) bool {
 	for _, prefix := range []string{launcherCheckDir, compat.LauncherCheckDir} {
 		i := strings.LastIndex(base, "-"+prefix)
@@ -242,6 +243,22 @@ func isLauncherCheckProject(base string) bool {
 			continue
 		}
 		digits := base[i+1+len(prefix):]
+		if digits != "" && strings.Trim(digits, "0123456789") == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// isLauncherCheckDir: dir is the temp directory a launcher check runs in ("<temp parent>/persona-check-<digits>", or
+// an older node's prefix), or "" (unknown).
+func isLauncherCheckDir(dir string) bool {
+	for _, prefix := range []string{launcherCheckDir, compat.LauncherCheckDir} {
+		i := strings.LastIndex(dir, "/"+prefix)
+		if i < 0 {
+			continue
+		}
+		digits := dir[i+1+len(prefix):]
 		if digits != "" && strings.Trim(digits, "0123456789") == "" {
 			return true
 		}

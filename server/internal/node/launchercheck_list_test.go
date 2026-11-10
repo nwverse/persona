@@ -17,22 +17,26 @@ func TestLauncherCheckTranscriptsTakeNoSlots(t *testing.T) {
 	n, _ := claudeHome(t)
 	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
 	projects := filepath.Join(n.home, ".claude", "projects")
-	write := func(project, id string, age time.Duration) {
+	writeIn := func(project, id, cwd string, age time.Duration) {
 		dir := filepath.Join(projects, project)
 		_ = os.MkdirAll(dir, 0o700)
 		p := filepath.Join(dir, id+".jsonl")
-		body := `{"type":"user","uuid":"u1","timestamp":"2026-11-10T10:00:00Z","cwd":"/src/app","message":{"role":"user","content":"hi"}}` + "\n" +
+		body := `{"type":"user","uuid":"u1","timestamp":"2026-11-10T10:00:00Z","cwd":"` + cwd + `","message":{"role":"user","content":"hi"}}` + "\n" +
 			`{"type":"assistant","uuid":"a1","timestamp":"2026-11-10T10:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}` + "\n"
 		_ = os.WriteFile(p, []byte(body+strings.Repeat(" ", 4096)+"\n"), 0o600)
 		at := time.Now().Add(-age)
 		_ = os.Chtimes(p, at, at)
 	}
-	const old = "dddddddd-0000-0000-0000-000000000001"
-	const cur = "dddddddd-0000-0000-0000-000000000002"
-	write("-private-tmp-persona-check-1000123032", old, 30*time.Hour) // an older node's check, its temp dir now gone
-	write("-tmp-persona-check-1001641372", old, 20*time.Hour)         // the same check on another machine layout
+	write := func(project, id string, age time.Duration) { writeIn(project, id, "/src/app", age) }
+	const gone = "dddddddd-0000-0000-0000-000000000001"    // a check's: its temp directory is gone
+	const mine = "dddddddd-0000-0000-0000-000000000002"    // the user's: its directory exists
+	kept := filepath.Join(t.TempDir(), "persona-check-42") // named like a check's, and real
+	_ = os.MkdirAll(kept, 0o700)
+	writeIn("-tmp-persona-check-42", mine, kept, 30*time.Hour)
+	writeIn("-tmp-persona-check-1001641372", gone, "/tmp/persona-check-1001641372", 30*time.Hour)
+	writeIn("-private-tmp-jarvis-check-3821031972", gone, "/tmp/jarvis-check-3821031972", 25*time.Hour) // an older node's check, old prefix
 	for i := 0; i < 100; i++ {
-		write("-tmp-persona-check-1000"+fmt.Sprint(500000+i), fmt.Sprintf("eeeeeeee-0000-0000-0000-%012d", i), time.Duration(100-i)*time.Minute)
+		writeIn("-tmp-persona-check-1000"+fmt.Sprint(500000+i), fmt.Sprintf("eeeeeeee-0000-0000-0000-%012d", i), "/tmp/persona-check-100050000"+fmt.Sprint(i), time.Duration(100-i)*time.Minute)
 	}
 	for i := 0; i < 5; i++ { // the user's own, quieter than the checks
 		write("-src-app", fmt.Sprintf("cccccccc-0000-0000-0000-%012d", i), 10*time.Hour+time.Duration(i)*time.Minute)
@@ -47,9 +51,12 @@ func TestLauncherCheckTranscriptsTakeNoSlots(t *testing.T) {
 		}
 	}
 	for id := range listed {
-		if strings.HasPrefix(id, "eeeeeeee") {
+		if strings.HasPrefix(id, "eeeeeeee") || id == gone {
 			t.Fatalf("a check's transcript is listed: %v", listed)
 		}
+	}
+	if !listed[mine] {
+		t.Fatal("the user's own work in a directory named like a check's is hidden")
 	}
 }
 

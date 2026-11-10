@@ -91,10 +91,6 @@ func (n *Node) scanOffline() []proto.Session {
 		if !validID(id) {
 			continue
 		}
-		// A launcher health check's run, a hundred a day on each computer: no session of the user's (#2959).
-		if isLauncherCheckProject(filepath.Base(filepath.Dir(p))) {
-			continue
-		}
 		st, err := os.Stat(p)
 		if err != nil {
 			continue
@@ -133,6 +129,9 @@ func (n *Node) scanOffline() []proto.Session {
 			continue
 		}
 		m := n.meta(c.path, c.st)
+		if isLauncherCheckRun(c.path, m) {
+			continue // a launcher health check's run, a hundred a day on each computer: no session of the user's (#2959)
+		}
 		// Where the session is: an assistant conversation's start directory, before the filters look at it.
 		cwd := n.assistantHome(id, m.cwd)
 		if !n.sessionScopeAllows(cwd) {
@@ -283,3 +282,19 @@ var assistantProjectSuffixes = sync.OnceValue(func() []string {
 	former := "-" + nonAlnum.ReplaceAllString(compat.StateDir, "-") // "." becomes "-" as in the project's name
 	return []string{"--persona-assistant", former + "-assistant", "--persona-health", former + "-health"}
 })
+
+// isLauncherCheckRun: the transcript at path is a launcher health check's: its directory — a temp directory the check
+// made and removed when it ended — no longer exists, and the run started there (the head's start directory, which
+// Claude Code names even after `cd`s; the check never runs a Bash that could move). A directory of the user's own with
+// a similar name exists, so the name alone is not enough (#2959). The head is the meta the listing has already read.
+func isLauncherCheckRun(path string, m quickMeta) bool {
+	if !isLauncherCheckProject(filepath.Base(filepath.Dir(path))) {
+		return false
+	}
+	if st, err := os.Stat(m.start); err == nil && st.IsDir() {
+		return false // the directory exists: not one of the check's
+	}
+	// Before a big first read the head is still running: it holds the check's prompt or nothing, never a start
+	// directory; decide on what is known, and let the next pass (the read finishes) be exact.
+	return m.start == "" || isLauncherCheckDir(m.start)
+}
