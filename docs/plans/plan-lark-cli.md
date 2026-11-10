@@ -11,7 +11,7 @@ and the assistant's Lark gateway skill. A hub without the Lark gateway has no La
 Lark's official [lark-cli](https://github.com/larksuite/cli) (npm `@larksuite/cli`, MIT) reads and writes Lark with an Open Platform app plus user authorization, and anyone can install it.
 Goal: a hub that only installs lark-cli, without a Lark gateway, can still give Persona and the AI twin Lark context. The Lark gateway's existing behavior stays the same; this is just one more source.
 
-Not doing: no browsing pages for Lark (`docs/extensions/feishu.md` ("Not a second Lark")); not replacing the Lark gateway.
+Not doing: no browsing pages for Lark (`docs/extensions/feishu.md` ("Persona is not a second Lark")); not replacing the Lark gateway.
 
 ## What lark-cli can do (tested on 1.0.72, 2026-11-02)
 

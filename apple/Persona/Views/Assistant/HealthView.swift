@@ -5,7 +5,7 @@ import SwiftUI
 // from and what stays private. Its conversations run in a directory of their own on the assistant's machine, so the
 // assistant's other conversations never see them and its memory is its own (`?space=health`). The web's `/health`.
 
-/// Health's state and what it asks the hub (MVVM, docs/apple/ios.md「逻辑层的选型」): the space's conversations
+/// Health's state and what it asks the hub (MVVM, docs/apple/ios.md「Data flow」): the space's conversations
 /// (`GET /api/v1/assistant?space=health`) and how many memories it keeps.
 @Observable final class HealthModel {
     private(set) var fetched: [Session] = []
@@ -55,12 +55,12 @@ struct HealthView: View {
     /// Starts a health conversation with the message (`AssistantView.start(…, space:)`).
     var send: (String, [ImagePayload]) -> Void
     @State private var page = HealthModel()
-    // Upload a Checkup Report (docs/assistant/health.md「体检报告」): the picked files go to reports/; once they are up the conversation starts.
+    // Upload a Checkup Report (docs/assistant/health.md「Checkup reports」): the picked files go to reports/; once they are up the conversation starts.
     @State private var showReports = false
     @State private var reports = FileUploads()
 
-    /// The assistant's machine (the hub's unless set otherwise), where the health space's directory is.
-    private var machine: MachineRef { model.hubRef(model.assistantConfig?.machineID ?? model.hubMachineID) }
+    /// The default manager's assistant machine (the hub's unless set otherwise), where the health space's directory is.
+    private var machine: MachineRef { model.hubRef(model.healthMachineID) }
 
     private func uploadReports(_ urls: [URL]) {
         let send = send

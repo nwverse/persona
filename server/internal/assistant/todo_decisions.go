@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A todo's decision record (#1618, docs/assistant/todos.md "Decision record"): the calls the user made on it, written by hand in the
+// A todo's decision record (#1618, docs/assistant/todos.md "Decision records"): the calls the user made on it, written by hand in the
 // todo or from their answers to the question cards of the agents working on it (interaction.resolved), and handed to
 // every agent the todo is given to (assistant.todo_handoff).
 

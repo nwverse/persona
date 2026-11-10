@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The app's side of the in-app tunnel (docs/operations/network.md「经 App 内隧道连 hub」): only a hub with an extension that
+/// The app's side of the in-app tunnel (docs/operations/network.md「Connecting to hub through an in-app tunnel」): only a hub with an extension that
 /// contributes a tunnel, switched on, has one; its name titles the tunnel and its settings say where it goes.
 struct InAppTunnelRouteTests {
     private func extensions(_ json: String) throws -> [HubExtension] {

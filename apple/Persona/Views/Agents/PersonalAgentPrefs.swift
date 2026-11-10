@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// The personal-agents list prefs shared with the web (docs/protocol/protocol.md 「个人 Agent 列表偏好」): pins, the view
+// The personal-agents list prefs shared with the web (docs/protocol/protocol.md 「Personal Agent list preferences」): pins, the view
 // (Group By / Sort / Display / Source), and custom sections. Kept on the hub (GET/PUT /api/v1/agents/prefs), cached in
 // UserDefaults; an older hub without the endpoint leaves them local.
 

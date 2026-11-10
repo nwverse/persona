@@ -34,6 +34,7 @@
     <string name="agents_action_new_session">New session</string>
     <string name="agents_action_list_settings">List settings</string>
     <string name="agents_search_placeholder">Search spaces, sessions or latest messages</string>
+    <string name="agents_action_search">Search</string>
     <string name="agents_requests_title">Needs your decision</string>
     <plurals name="agents_requests_more">
         <item quantity="one">1 more</item>
@@ -298,6 +299,10 @@
     <string name="agents_new_use_directory">Use this directory</string>
     <string name="agents_new_retry_check">Check result again</string>
     <string name="agents_new_start">Start chat</string>
+    <string name="agents_new_recent">Recent</string>
+    <string name="agents_new_recent_separator">" · "</string>
+    <string name="agents_new_recent_remove">Remove from Recent</string>
+    <string name="agents_new_recent_clear">Clear Recent Setups</string>
     <string name="agents_mode_follow">Follow launcher</string>
     <string name="agents_mode_default">Ask each time</string>
     <string name="agents_mode_accept_edits">Auto-edit files</string>
@@ -434,6 +439,8 @@
     <string name="agents_todo_active_agents">Agents on it</string>
     <string name="agents_todo_no_agents">No agents assigned</string>
     <string name="agents_todo_no_agents_hint">Tap “Hand to agent” below to assign it.</string>
+    <string name="agents_todo_no_agents_done_hint">Reopen it to hand it to an agent.</string>
+    <string name="agents_todo_hand_off_failed">Couldn\'t hand it over: %1$s</string>
     <string name="agents_todo_session_short">Session %1$s</string>
     <string name="agents_todo_not_listed">(Not in the current active list)</string>
     <string name="agents_todo_remove_agent">Remove</string>
@@ -452,6 +459,7 @@
     <string name="agents_handoff_directory">Working directory</string>
     <string name="agents_handoff_mode_default">Default (default)</string>
     <string name="agents_handoff_mode_bypass">Allow everything (bypassPermissions)</string>
+    <string name="agents_handoff_mode_named">%1$s (%2$s)</string>
     <string name="agents_handoff_pick_agent">Choose a running agent</string>
     <string name="agents_handoff_no_agents">No agents running</string>
     <string name="agents_handoff_no_agents_hint">No active agent can take a task right now.</string>
@@ -503,4 +511,20 @@
     <string name="agents_page_loaded">%1$d of %2$d sessions loaded</string>
     <string name="agents_page_more">Load more</string>
     <string name="agents_page_previous">Load earlier sessions</string>
+    <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
+    <string name="agents_todos_section_waiting">Needs you</string>
+    <string name="agents_todos_section_working">Working</string>
+    <string name="agents_todos_section_just_done">Just finished</string>
+    <string name="agents_todos_section_pr">PR to merge</string>
+    <string name="agents_todos_section_other">Other open</string>
+    <string name="agents_todos_section_shelved">Shelved</string>
+    <string name="agents_todos_summary">%1$d open · %2$d shelved · %3$d done</string>
+    <string name="agents_todo_restore">Restore</string>
+    <string name="agents_todo_pr_moved">%1$s · moved %2$s</string>
+    <string name="agents_todo_pr">PR</string>
+    <string name="agents_todo_state_accepted">Accepted</string>
+    <plurals name="agents_todos_related">
+        <item quantity="one">1 related</item>
+        <item quantity="other">%1$d related</item>
+    </plurals>
 </resources>

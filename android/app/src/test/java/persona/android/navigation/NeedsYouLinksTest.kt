@@ -11,7 +11,6 @@ import org.junit.Test
 class NeedsYouLinksTest {
     private val stacks = mapOf<AppTab, MutableList<NavKey>>(
         AppTab.Persona to mutableListOf(AssistantRoute), AppTab.Agents to mutableListOf(AgentsRoute),
-        AppTab.Inbox to mutableListOf(InboxRoute), AppTab.Settings to mutableListOf(SettingsRoute),
     )
 
     @Test fun aRequestOpensItsConversationOnAgents() {
@@ -21,9 +20,9 @@ class NeedsYouLinksTest {
         assertEquals(listOf<NavKey>(AssistantRoute), stacks.getValue(AppTab.Persona))
     }
 
-    @Test fun anInboxItemOpensOnTheInbox() {
+    @Test fun anInboxItemOpensUnderPersonaWithTheInboxParent() {
         val line = NeedsYouLine.Inbox("item-1", lark = true, itemKind = "dm", who = "发布群", what = "要你确认")
-        assertEquals(AppTab.Inbox, needsYouRoute(line).open(stacks))
-        assertEquals(InboxItemRoute("item-1"), stacks.getValue(AppTab.Inbox).last())
+        assertEquals(AppTab.Persona, needsYouRoute(line).open(stacks))
+        assertEquals(listOf(AssistantRoute, InboxRoute, InboxItemRoute("item-1")), stacks.getValue(AppTab.Persona))
     }
 }

@@ -2,7 +2,29 @@
 
 Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "Lessons" in `CLAUDE.md`; see the index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
-## Display provenance is not a model role (#2130)
+## Visible supervision replies do not exempt tool execution from folding (#2705)
+
+A promoted supervision round must expose its input and final reply, not pull visibility tools out of the work
+summary. `task_review` and `supervision_finish` were extracted by tool name even on failure: a trace with two ordinary
+calls, compaction, a review and a failed finish displayed a two-tool summary plus two uncollapsible rows. Compaction
+was already inside the same turn; the display extraction, not the turn boundary or failure icon, caused the leak.
+Keep every call and compaction step in one summary, including subagent and workflow calls. Manual expansion is the
+only path that exposes those rows, during execution, after completion and after serialized-history reload.
+A compaction after the latest assistant text is not necessarily idle: that text can be narration, with later calls
+still running or already failed. Keep the divider in the work summary unless the turn is stopped and nothing but
+compaction notices follows its answer.
+The generic screenshot mock folds tool calls without production's `fold.supervision_user` evidence. An accepted
+review hidden in such a fold falsely makes the entire synthetic round quiet. Emit the same retained evidence as
+production when testing this case; do not disable folding or force-open the UI to make the screenshot pass.
+
+## Wake continuations use the ordinary execution summary (#2796)
+
+A wake before new assistant text must not cut the segment holding the previous answer: doing so shows the pre-wake
+narration again outside the folded summary. Keep the previous answer in place until new words arrive and put wake
+notices, new tools and narration in the same inspectable summary. Remove the separate wake-chip/drawer path rather
+than leaving it appended after the answer. Cover the interval between wake and new text in both the line model and
+the shared sync fixture, not only the final completed turn.
+
 
 Persona's `conversation_send` relay is model input with role `user`, not the user's own words. Its existing `from`
 field belongs to runtime peer messages, not Persona conversation ids. Prefer structured source metadata; an older-server
@@ -64,8 +86,8 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   Recaps can close a turn without ending its supervision round; only the next actual input does that. A queued genuine
   input must not be absorbed into the quiet round. Preserve successful visibility evidence when overlapping raw pages
   replace server folds, persist that client-side evidence and invalidate caches when adding the fields. Structure-only
-  chat diagnostics must also handle the new line kinds without logging the input or answer. Automatic live-work
-  expansion belongs inside an opened supervision trace; it must never open the quiet round itself. Keep the pending
+  chat diagnostics must also handle the new line kinds without logging the input or answer. Opening a supervision
+  trace does not automatically open its nested work summary; rule 2 requires manual inspection for both. Keep the pending
   stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
   newest transcript owner, not only whether the round is still running.
 
@@ -90,7 +112,7 @@ The same window also lost the last words of online sessions (#1583): after the A
 `last_text` became empty, leaving task cards and main-chat snapshots showing "No activity yet" for 7 minutes. `readQuickMetaSince` now reuses the previously read text when the window contains none;
 if there is no previous value (the node has just started), it searches backward in segments (`lastWordsBefore`, up to 8 MB). For any "last X" value found only in the tail, consider that it may already be outside the window.
 - **A Claude Code transcript is a tree** (`uuid` / `parentUuid`): rewinding (`/rewind`) or editing and resending with ↑ writes the next message as a sibling of an earlier one. Rewound turns remain in the file. See
-  `transcript/branch.go` (two messages from the user under the same parent, with an assistant reply to the earlier one → the earlier message's entire subtree produces no items) and `docs/protocol/protocol.md` ("Rewind to a message");
+  `transcript/branch.go` (two messages from the user under the same parent, with an assistant reply to the earlier one → the earlier message's entire subtree produces no items) and `docs/protocol/protocol.md` ("Rewinding to a message");
   **pressing Esc to cancel a message before any reply, then sending again, also writes the same pair of siblings** (#3036; observed: two identical messages under the same "[Request interrupted by user]" line, with no reply to the first).
   This is not a rewind. Older versions treated any "two siblings" as a rewind, added `.r1` to `history`, made all clients discard and refetch local content, and removed the interrupted turn from the chat too.
   To detect a rewind, check whether the earlier message received a reply. Persona's own rewind does not rely on this inference (`File.Rewound` is marked by the node).
@@ -140,3 +162,34 @@ A view that fetches once per id cannot recover when the store puts the same id b
   id whose `projects/…/<id>.jsonl` never appears. (The pid file has no transcript path; node derives it from the session id —
   `transcriptPath` in `node/transcript_files.go` looks for `<config dir>/projects/*/<id>.jsonl`.) Check the node's own environment
   for the child flag first (`/proc/<pid>/environ`, on macOS `KERN_PROCARGS2`), then the pane shell's.
+
+## A session's cwd follows `cd` (#2368, Claude Code 2.1.319)
+
+- Claude Code writes the Bash tool's current directory into every transcript line's `cwd`, and into every hook input's `cwd`, once the model `cd`s (there is a `CwdChanged` hook too). The transcript file stays in `~/.claude/projects/<encoded start directory>/`, and its first lines carry the start directory.
+- So "a session's latest `cwd`" is where its shell is now, not where the session is. A Persona conversation whose Lark `/agent` turn `cd`'d into `~/.persona/assistant/.claude/skills/<skill>` was listed there: the hub's exact directory check said `assistant: false`, the conversation lost its origin and title and showed under Agents. A health conversation that `cd`s into `reports/` or `/tmp` would have left the health space, with its cards on the lock screen.
+- Codex rollouts record `cwd` only in `session_meta`; a later `turn_context` directory does not move it.
+- Decide placement (assistant, space, health redaction) by where the session started: the node's start record, else the transcript's first `cwd` (`quickMeta.start`), else its own project directory's name (a first prompt bigger than the 256 KB head read hides the first line). Agents keep reporting their latest directory: their git place walks up to `.git`, so a `cd` into a subfolder keeps the repository. Except an assistant or health directory itself: an agent started in the home directory that `cd`s into one is listed where it started, or the hub, going by the exact directory, takes it for one of their conversations at rest.
+- Hiding and confirming may count a directory inside a health space (`identity.InHealthSpace`); classifying must not (`SpaceOf`, `IsAssistantDirOf` stay exact): a pane-less Claude the user runs in a subfolder of the assistant directory is theirs.
+- Reproduce with Stop, not the 20-minute reap: Stop kills `claude -p`, and the conversation is listed from its transcript at once.
+
+## A tool call's outcome is in its record, not in its text (#2912, Claude Code up to 2.1.314)
+
+- Claude Code writes `toolUseResult` next to every tool result, and its shape depends on the tool and on how the call
+  went: a failed call records a string (`"Error: …"`), an MCP call its content blocks, the rest an object that holds the
+  whole output again (`stdout`, a Read's `content`, an Edit's `originalFile`). Decode only the fields you read, through a
+  type that takes any value (`claudeToolResult`): a plain struct field fails the whole line on the first string, and a
+  `json.RawMessage` copies megabytes per line (`TestToolUseResultNotCopied`). The same goes for any new top-level
+  field such as `toolDenialKind`: a value of another type there fails the whole line, so read it through a type that
+  takes any value.
+- Strings an outcome takes from a result's text (the output's tail, a saved output's path) are copies
+  (`strings.Clone`): a slice keeps the whole output alive in every light item a node keeps, a megabyte per result
+  where the page holds 4 KB (`TestLightResultRetainsNoOutput`).
+- The tail starts where the page's text stops (`pageCut`), not at a fixed 4 KB: `light` ends the page at a newline
+  up to 512 bytes earlier, so a fixed start dropped the line across the cut, often the one that says what failed.
+- A denial is marked by the line's top-level `toolDenialKind` (`user-rejected`, `permission-rule` for rules, the
+  permission mode and hooks, `automode-*`; `interrupted` / `cancelled` are aborts, not denials). Lines from older
+  versions only have the words, and a hook's denial says whatever the hook printed.
+- `timedOutAfterMs` came with `backgroundTaskId` every time: the command was moved to the background, not killed.
+  A Write that creates a file records no hunks; its lines are the content's.
+- One machine's transcripts (2026-11-10): 76k records, 4.4k of them strings and 554 arrays, none with a field of an
+  unexpected type; parsing them before and after the change gave the same items in all 2,023 files.

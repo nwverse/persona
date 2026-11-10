@@ -102,17 +102,20 @@ nonisolated struct SentItem: Decodable, Hashable, Identifiable, Sendable {
     var letThrough = SentLetThrough()
     var messageRef = ""
     var recalledAt: Date?
+    /// The hub can take the message back now (a hub from before recall leaves it out: no button).
+    var canRecall = false
 
     init(id: Int, at: Date? = nil, connector: String = "", action: String = "", target: [String: JSONValue] = [:], text: String = "",
          summary: String = "", origin: SentOrigin = SentOrigin(), letThrough: SentLetThrough = SentLetThrough(), messageRef: String = "",
-         recalledAt: Date? = nil) {
+         recalledAt: Date? = nil, canRecall: Bool = false) {
         (self.id, self.at, self.connector, self.action, self.target) = (id, at, connector, action, target)
         (self.text, self.summary, self.origin, self.letThrough, self.messageRef, self.recalledAt) = (text, summary, origin, letThrough, messageRef, recalledAt)
+        self.canRecall = canRecall
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, at, connector, action, target, text, summary, origin
-        case letThrough = "let_through", messageRef = "message_ref", recalledAt = "recalled_at"
+        case letThrough = "let_through", messageRef = "message_ref", recalledAt = "recalled_at", canRecall = "can_recall"
     }
 
     init(from decoder: Decoder) throws {
@@ -134,6 +137,7 @@ nonisolated struct SentItem: Decodable, Hashable, Identifiable, Sendable {
         letThrough = (try? c.decodeIfPresent(SentLetThrough.self, forKey: .letThrough)) ?? SentLetThrough()
         messageRef = c.text(.messageRef)
         recalledAt = JSON.parseDate(c.text(.recalledAt))
+        canRecall = (try? c.decodeIfPresent(Bool.self, forKey: .canRecall)) == true
     }
 }
 
@@ -183,6 +187,18 @@ extension APIClient {
             throw error
         }
     }
+
+    /// `POST /connectors/sent/{id}/recall`: the user agreed in the page's own confirmation, so `confirm: true` (the hub shows
+    /// no card). The row as the ledger has it afterwards. The hub may wait about 40 seconds for a recall already on its way
+    /// and asks clients to allow at least 60.
+    func recallSent(_ id: Int) async throws -> SentItem? {
+        let data = try await request("POST", "/api/v1/connectors/sent/\(id)/recall", body: ["confirm": true], timeout: 70)
+        return (try? JSON.decoder.decode(SentRecallAnswer.self, from: data))?.item
+    }
+}
+
+private nonisolated struct SentRecallAnswer: Decodable {
+    var item: SentItem?
 }
 
 // MARK: - The page's words and rules
@@ -216,6 +232,12 @@ struct SentAllowed: Equatable {
 struct SentProblem: Equatable {
     enum Kind: Equatable { case noDatabase, forbidden, unsupported, error }
     var kind: Kind
+    var text: String
+}
+
+/// Why a recall of row `id` did not happen, in plain words.
+struct SentRecallError: Equatable {
+    var id: Int
     var text: String
 }
 
@@ -254,7 +276,30 @@ enum SentText {
                 return SentProblem(kind: .unsupported, text: String(localized: "This hub's version doesn't record what was sent as you yet. Update the hub and come back."))
             }
         }
-        return SentProblem(kind: .error, text: error.shown ?? String(localized: "Can't reach the hub"))
+        return SentProblem(kind: .error, text: error.isOffline ? String(localized: "Can't reach the hub") : error.localizedDescription)
+    }
+
+    /// Why a recall did not happen, in plain words (docs/extensions/connectors.md "Sent as the user", Failures);
+    /// `recall_refused` says what the hub said, and a code this page does not know is the usual error text.
+    static func recallProblem(_ error: Error) -> String {
+        if let e = error as? APIError {
+            if e.status == 403 { return String(localized: "Only one of your own devices with full access can recall a message.") }
+            if (e.status == 404 && e.code == nil) || e.status == 405 {
+                return String(localized: "This hub's version can't recall messages. Update the hub and try again.")
+            }
+            switch e.code {
+            case "not_found": return String(localized: "This record is no longer on the hub.")
+            case "not_recallable": return String(localized: "This message can't be recalled.")
+            case "too_old": return String(localized: "This message is too old to recall now.")
+            case "already_recalled": return String(localized: "This message was already recalled.")
+            case "connector_unavailable": return String(localized: "The connector is off, signed out or offline. Turn it on or sign in, then try again.")
+            case "no_database": return String(localized: "This hub runs without a database, so it can't recall messages.")
+            case "recall_unknown": return String(localized: "It isn't known whether the message was removed. Try again to check.")
+            case "recall_refused": return String(localized: "The message was not recalled: \(e.message)")
+            default: break
+            }
+        }
+        return error.isOffline ? String(localized: "Can't reach the hub") : error.localizedDescription
     }
 
     // MARK: The list
@@ -465,6 +510,10 @@ enum SentText {
     private(set) var moreError: String?
     /// The connectors the loaded rows have shown, in the order they first showed (the chips).
     private(set) var seen: [String] = []
+    /// The row a recall is on its way for.
+    private(set) var recalling: Int?
+    /// Why the last recall failed.
+    private(set) var recallError: SentRecallError?
 
     /// Moves when the filter changes: a read that started under an earlier one is dropped.
     @ObservationIgnored private var generation = 0
@@ -537,7 +586,27 @@ enum SentText {
         loadingMore = false
         loadedOlder = false
         hasFirst = false
+        recallError = nil
         await load()
+    }
+
+    /// Recall: takes back row `id`'s message once the user confirmed it. Reads of the first page already on their way are
+    /// dropped (they would bring the row back as it was), the row the hub answers with replaces the old one, and the first
+    /// page is read again whether it worked or not (a row now `too_old` or `already_recalled` changes too).
+    func recall(_ id: Int) async {
+        guard let api = deps.api(), recalling == nil else { return }
+        let gen = generation
+        applied = reads
+        recalling = id
+        recallError = nil
+        do {
+            let row = try await api.recallSent(id)
+            if gen == generation, let row { items = items?.map { $0.id == row.id ? row : $0 } }
+        } catch {
+            if gen == generation, !error.isCancellation { recallError = SentRecallError(id: id, text: SentText.recallProblem(error)) }
+        }
+        recalling = nil
+        if gen == generation { await load() }
     }
 
     /// Load Earlier: the page after the list, added by id.

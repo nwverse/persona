@@ -52,7 +52,8 @@ type Handler interface {
 	ProfileChanged(ctx context.Context)
 	// SessionsChanged is sessions.changed: a machine's node sent its session list.
 	SessionsChanged(ctx context.Context, d DeviceSessions)
-	// Resync is manager.resync: report the whole snapshot again (the hub has none, or a partial one).
+	// Resync is manager.resync: report the whole snapshot again. The hub no longer sends it; the assistant calls it
+	// itself when its connection is up (bus.go).
 	Resync(ctx context.Context)
 
 	// The todos (todos.go).

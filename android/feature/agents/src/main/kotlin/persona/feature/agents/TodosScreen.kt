@@ -10,7 +10,15 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
+import persona.core.domain.tasks.Triage
+import persona.core.domain.tasks.TriageRule
+import persona.core.domain.tasks.TriageSection
+import persona.core.domain.tasks.acceptedAtRest
+import persona.core.domain.tasks.triageTodos
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -93,7 +101,6 @@ fun TodosScreen(
         val requests = newTodoRequests ?: return@LaunchedEffect
         requests.requests.collect { at -> if (at != null && requests.take(at)) creating = true }
     }
-    var completedFolded by rememberSaveable { mutableStateOf(true) }
     var newTitle by remember { mutableStateOf("") }
     var newNotes by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -110,13 +117,38 @@ fun TodosScreen(
         }
     }
 
-    val uncompleted = remember(filtered, sessions) {
-        filtered.filter { !it.isDone }.ordered(sessionLookup)
+    // Status sections (#3206, docs/assistant/todo-status-sop.md), the web's rules: related to-dos share a row.
+    val context = LocalContext.current
+    val restores = remember(context) { TodoRestores(context) }
+    var restored by remember(restores) { mutableStateOf(restores.read()) }
+    val nowMs = now.toEpochMilli()
+    val triaged = remember(filtered, sessionMap, restored, nowMs) { triageTodos(filtered, sessionLookup, nowMs, restored) }
+    // Which sections the user folded or unfolded: Other open, Shelved and Done start folded.
+    var toggled by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    // Other open starts unfolded when the open sections above it are empty, so the list never opens on nothing.
+    val quietAbove = listOf(TriageSection.Waiting, TriageSection.Working, TriageSection.JustDone, TriageSection.Pr).all { triaged.rows(it).isEmpty() }
+    fun isFolded(section: TriageSection): Boolean {
+        val byDefault = section.folded && !(section == TriageSection.Other && quietAbove)
+        return byDefault != (section.name in toggled)
     }
-    val completed = remember(filtered) {
-        filtered.filter { it.isDone }.sortedWith(
-            compareByDescending<Todo> { it.done ?: it.created ?: Instant.EPOCH }.thenBy { it.id }
-        )
+    var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val setDone: (Todo, Boolean) -> Unit = { todo, done ->
+        scope.launch {
+            try {
+                tasks?.setTodoDone(todo, done)
+            } catch (e: Exception) {
+                onError(res.getString(if (done) R.string.agents_todo_done_failed else R.string.agents_todo_reopen_failed, e.message.orEmpty()))
+            }
+        }
+    }
+    val delete: (Todo) -> Unit = { todo ->
+        scope.launch {
+            try {
+                tasks?.deleteTodo(todo.id)
+            } catch (e: Exception) {
+                onError(res.getString(R.string.agents_todo_delete_failed, e.message.orEmpty()))
+            }
+        }
     }
 
     if (creating) {
@@ -196,7 +228,7 @@ fun TodosScreen(
                 JSearchField(query, { query = it }, placeholder = stringResource(R.string.agents_todos_search))
             }
 
-            if (uncompleted.isEmpty() && completed.isEmpty()) {
+            if (filtered.isEmpty()) {
                 item(key = "empty") {
                     JEmptyState(
                         title = stringResource(if (query.isBlank()) R.string.agents_todos_empty else R.string.agents_todos_no_match),
@@ -208,201 +240,215 @@ fun TodosScreen(
                     )
                 }
             } else {
-                if (uncompleted.isNotEmpty()) {
-                    item(key = "uncompleted-header") {
-                        JSectionHeader(stringResource(R.string.agents_todos_open), count = uncompleted.size)
+                item(key = "summary") {
+                    Text(
+                        stringResource(R.string.agents_todos_summary, triaged.open, triaged.shelved, triaged.finished),
+                        style = PersonaTheme.type.caption,
+                        color = PersonaTheme.palette.ink3,
+                        maxLines = 1,
+                        modifier = Modifier.testTag("todos-summary"),
+                    )
+                }
+                for (section in TriageSection.entries) {
+                    val rows = triaged.rows(section)
+                    if (rows.isEmpty()) continue
+                    val folded = isFolded(section)
+                    item(key = "section:${section.name}") {
+                        JSectionHeader(
+                            section.label,
+                            count = triaged.todoCounts[section],
+                            status = section.status,
+                            onClick = { toggled = if (section.name in toggled) toggled - section.name else toggled + section.name },
+                            sub = false,
+                            action = { JIcon(if (folded) PhIcons.CaretDown else PhIcons.CaretUp, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) },
+                        )
                     }
-
-                    itemsIndexed(uncompleted, key = { _, todo -> todo.id }) { index, todo ->
-                        val state = todo.state(sessionLookup)
-                        val urgent = mostUrgentAgent(todo, sessionLookup)
-                        val status = when (state) {
-                            TodoState.NeedsYou -> Status.NeedsYou
-                            TodoState.Unread -> Status.Unread
-                            TodoState.Working -> Status.Working
-                            else -> Status.Idle
-                        }
-
-                        JSwipeActions(
-                            start = SwipeAction(stringResource(R.string.agents_todo_done_action), PhIcons.Check, Status.Working, {
-                                scope.launch {
-                                    try {
-                                        tasks?.setTodoDone(todo, true)
-                                    } catch (e: Exception) {
-                                        onError(res.getString(R.string.agents_todo_done_failed, e.message.orEmpty()))
-                                    }
-                                }
-                            }),
-                            end = SwipeAction(stringResource(R.string.agents_todo_delete_action), PhIcons.Trash, Status.NeedsYou, {
-                                scope.launch {
-                                    try {
-                                        tasks?.deleteTodo(todo.id)
-                                    } catch (e: Exception) {
-                                        onError(res.getString(R.string.agents_todo_delete_failed, e.message.orEmpty()))
-                                    }
-                                }
-                            }, destructive = true)
-                        ) {
-                            JCard(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = { onOpenTodo(todo.id) }
-                            ) {
-                                Column(
-                                    Modifier.padding(Tokens.Space.m),
-                                    verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)
-                                    ) {
-                                        Box(
-                                            Modifier
-                                                .size(Tokens.Space.xxl)
-                                                .clip(CircleShape)
-                                                .clickable {
-                                                    scope.launch {
-                                                        try {
-                                                            tasks?.setTodoDone(todo, true)
-                                                        } catch (e: Exception) {
-                                                            onError(res.getString(R.string.agents_todo_done_failed, e.message.orEmpty()))
-                                                        }
-                                                    }
-                                                },
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Box(
-                                                Modifier
-                                                    .size(ContentTokens.statusIcon)
-                                                    .border(ContentTokens.optionOutline, PersonaTheme.palette.ink3, CircleShape)
-                                            )
-                                        }
-                                        Text(
-                                            todo.title,
-                                            style = PersonaTheme.type.headline,
-                                            color = PersonaTheme.palette.ink,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        JTag(state.label)
-                                    }
-
-                                    // One line of what is going on (iOS TodoRow): why it finished on its own, the most urgent
-                                    // agent's latest (red while it waits for you), the notes, or that no agent has it yet.
-                                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] })
-                                    // Done as asked but not live yet (#3306): where it is held, while its agents are not
-                                    // at it again.
-                                    todo.hold?.takeIf { state != TodoState.Working && state != TodoState.NeedsYou }?.let {
-                                        TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxxl))
-                                    }
-                                    // Due date, high priority, a reminder still to push (#1683).
-                                    TodoPlanLine(todo, Modifier.padding(start = Tokens.Space.xxxl))
-
-                                    // Relative time and linked agent count at the bottom
-                                    Row(
-                                        Modifier.fillMaxWidth().padding(start = Tokens.Space.xxxl, top = Tokens.Space.xxs),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)
-                                    ) {
-                                        val timeStr = relativeTime(res, todo.updated ?: todo.created, now)
-                                        if (timeStr.isNotBlank()) {
-                                            Text(timeStr, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3)
-                                        }
-                                        Spacer(Modifier.weight(1f))
-                                        if (todo.currentAgents.isNotEmpty()) {
-                                            Text(pluralStringResource(R.plurals.agents_todo_agents, todo.currentAgents.size, todo.currentAgents.size), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3)
-                                        }
-                                    }
+                    if (folded) continue
+                    items(rows, key = { "row:${it.key}" }) { group ->
+                        val open = group.key in expanded
+                        Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                            TodoTriageRow(
+                                todo = group.lead,
+                                triage = group.triage.getValue(group.lead.id),
+                                related = group.members.size - 1,
+                                relatedOpen = open,
+                                onToggleRelated = { expanded = if (open) expanded - group.key else expanded + group.key },
+                                sessionLookup = sessionLookup,
+                                cards = cards,
+                                now = now,
+                                onOpen = { onOpenTodo(group.lead.id) },
+                                onDone = setDone,
+                                onDelete = delete,
+                                onRestore = { restored = restores.restore(group.lead.id, System.currentTimeMillis()) },
+                            )
+                            if (open) {
+                                for (m in group.members.drop(1)) {
+                                    TodoRelatedLine(m, group.triage.getValue(m.id).section, Modifier.padding(start = Tokens.Space.xxxl)) { onOpenTodo(m.id) }
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
 
-                // Foldable finished group at the bottom
-                if (completed.isNotEmpty()) {
-                    item(key = "completed-header") {
-                        Row(
-                            Modifier.fillMaxWidth().clickable { completedFolded = !completedFolded }.padding(vertical = Tokens.Space.xs),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            JSectionHeader(
-                                stringResource(R.string.agents_todos_done),
-                                count = completed.size,
-                                modifier = Modifier.weight(1f)
-                            )
-                            JIcon(if (completedFolded) PhIcons.CaretDown else PhIcons.CaretUp, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink3)
+/** A section's name on its header. */
+private val TriageSection.label: String @Composable get() = stringResource(when (this) {
+    TriageSection.Waiting -> R.string.agents_todos_section_waiting
+    TriageSection.Working -> R.string.agents_todos_section_working
+    TriageSection.JustDone -> R.string.agents_todos_section_just_done
+    TriageSection.Pr -> R.string.agents_todos_section_pr
+    TriageSection.Other -> R.string.agents_todos_section_other
+    TriageSection.Shelved -> R.string.agents_todos_section_shelved
+    TriageSection.Done -> R.string.agents_todos_done
+})
+
+/** The state colour a section's header borrows (the Board style draws it). */
+private val TriageSection.status: Status? get() = when (this) {
+    TriageSection.Waiting -> Status.NeedsYou
+    TriageSection.Working -> Status.Working
+    TriageSection.JustDone -> Status.Unread
+    else -> null
+}
+
+/** "PR #9" from a pull request's address; "PR" when it ends in no number. */
+@Composable
+private fun prLabel(url: String): String {
+    val n = url.trim().trimEnd('/').substringAfterLast('/').takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+    val pr = stringResource(R.string.agents_todo_pr)
+    return if (n != null) "$pr #$n" else pr
+}
+
+/** A related to-do under its row's lead (#3206): its title and section, a tap opens it. */
+@Composable
+private fun TodoRelatedLine(todo: Todo, section: TriageSection, modifier: Modifier = Modifier, onOpen: () -> Unit) {
+    Row(
+        modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).clickable(onClick = onOpen).padding(vertical = Tokens.Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+    ) {
+        Text(todo.title, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        JTag(section.label)
+    }
+}
+
+/**
+ * One row of the status list: an open to-do's card (state, what its most urgent agent says, where its work is held, its
+ * plan), or a finished one's; PR to merge rows carry the PR and how long since it moved, Shelved rows a Restore.
+ */
+@Composable
+private fun TodoTriageRow(
+    todo: Todo,
+    triage: Triage,
+    related: Int,
+    relatedOpen: Boolean,
+    onToggleRelated: () -> Unit,
+    sessionLookup: (SessionKey) -> Session?,
+    cards: Map<SessionKey, Interaction>,
+    now: Instant,
+    onOpen: () -> Unit,
+    onDone: (Todo, Boolean) -> Unit,
+    onDelete: (Todo) -> Unit,
+    onRestore: () -> Unit,
+) {
+    val res = agentResources()
+    val finished = todo.isDone && triage.rule != TriageRule.FailedStart
+    val state = todo.state(sessionLookup)
+    val accepted = triage.rule == TriageRule.Accepted || todo.acceptedAtRest(sessionLookup)
+    val urgent = mostUrgentAgent(todo, sessionLookup)
+    val lastMoved = if (triage.last > 0) Instant.ofEpochMilli(triage.last) else todo.updated ?: todo.created
+    JSwipeActions(
+        start = if (finished) SwipeAction(stringResource(R.string.agents_todo_reopen), PhIcons.ArrowUUpLeft, Status.Working, { onDone(todo, false) })
+        else SwipeAction(stringResource(R.string.agents_todo_done_action), PhIcons.Check, Status.Working, { onDone(todo, true) }),
+        end = SwipeAction(stringResource(R.string.agents_todo_delete_action), PhIcons.Trash, Status.NeedsYou, { onDelete(todo) }, destructive = true),
+    ) {
+        JCard(modifier = Modifier.fillMaxWidth(), onClick = onOpen) {
+            Column(Modifier.padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    Box(
+                        Modifier.size(Tokens.Space.xxl).clip(CircleShape).clickable { onDone(todo, !finished) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (finished) {
+                            JIcon(PhIcons.CheckCircle, null, size = ContentTokens.statusIcon, selected = true, tint = PersonaTheme.palette.done.dot)
+                        } else {
+                            Box(Modifier.size(ContentTokens.statusIcon).border(ContentTokens.optionOutline, PersonaTheme.palette.ink3, CircleShape))
                         }
                     }
-
-                    if (!completedFolded) {
-                        itemsIndexed(completed, key = { _, todo -> "done:${todo.id}" }) { _, todo ->
-                            val reopen: () -> Unit = {
-                                scope.launch {
-                                    try {
-                                        tasks?.setTodoDone(todo, false)
-                                    } catch (e: Exception) {
-                                        onError(res.getString(R.string.agents_todo_reopen_failed, e.message.orEmpty()))
-                                    }
-                                }
-                            }
-                            // iOS: swipe right to reopen, left to delete.
-                            JSwipeActions(
-                                start = SwipeAction(stringResource(R.string.agents_todo_reopen), PhIcons.ArrowUUpLeft, Status.Working, reopen),
-                                end = SwipeAction(stringResource(R.string.agents_todo_delete_action), PhIcons.Trash, Status.NeedsYou, {
-                                    scope.launch {
-                                        try {
-                                            tasks?.deleteTodo(todo.id)
-                                        } catch (e: Exception) {
-                                            onError(res.getString(R.string.agents_todo_delete_failed, e.message.orEmpty()))
-                                        }
-                                    }
-                                }, destructive = true),
-                            ) {
-                                JCard(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    onClick = { onOpenTodo(todo.id) }
-                                ) {
-                                    Column(Modifier.padding(Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)
-                                        ) {
-                                            Box(
-                                                Modifier
-                                                    .size(Tokens.Space.xxl)
-                                                    .clip(CircleShape)
-                                                    .clickable(onClick = reopen),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                JIcon(PhIcons.CheckCircle, null, size = ContentTokens.statusIcon, selected = true, tint = PersonaTheme.palette.done.dot)
-                                            }
-                                            Text(
-                                                todo.title,
-                                                style = PersonaTheme.type.body.copy(textDecoration = TextDecoration.LineThrough),
-                                                color = PersonaTheme.palette.ink3,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            if (todo.doneBy == "auto") {
-                                                JTag(stringResource(R.string.agents_todo_auto_done))
-                                            }
-                                        }
-                                        todo.autoDoneReason?.let { reason ->
-                                            Text(
-                                                reason,
-                                                style = PersonaTheme.type.caption,
-                                                color = PersonaTheme.palette.ink2,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.padding(start = Tokens.Space.xxxl)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    Text(
+                        todo.title,
+                        style = if (finished) PersonaTheme.type.body.copy(textDecoration = TextDecoration.LineThrough) else PersonaTheme.type.headline,
+                        color = if (finished) PersonaTheme.palette.ink3 else PersonaTheme.palette.ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    when {
+                        // an accepted task the hub reopened with more work reads Accepted, not Follow up (#3156)
+                        accepted && state != TodoState.Working && state != TodoState.NeedsYou ->
+                            JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
+                        finished && todo.doneBy == "auto" -> JTag(stringResource(R.string.agents_todo_auto_done))
+                        finished -> {}
+                        else -> JTag(state.label)
+                    }
+                }
+                if (finished) {
+                    todo.autoDoneReason?.let { reason ->
+                        Text(reason, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 2,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = Tokens.Space.xxxl))
+                    }
+                } else {
+                    // One line of what is going on (iOS TodoRow): why it finished on its own, the most urgent
+                    // agent's latest (red while it waits for you), the notes, or that no agent has it yet.
+                    TodoActivityLine(todo, urgent, urgent?.let { cards[it.agent.key] })
+                    // Done as asked but not live yet (#3306): where it is held, while its agents are not at it again.
+                    todo.hold?.takeIf { state != TodoState.Working && state != TodoState.NeedsYou }?.let {
+                        TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxxl))
+                    }
+                    TodoPlanLine(todo, Modifier.padding(start = Tokens.Space.xxxl))
+                }
+                if (triage.section == TriageSection.Pr) {
+                    // PR to merge: the PR, and how long since anything of it moved, however old (#3206)
+                    val links = LocalUriHandler.current
+                    val url = todo.prUrl?.takeIf { it.isNotBlank() }
+                    Text(
+                        stringResource(R.string.agents_todo_pr_moved, url?.let { prLabel(it) } ?: stringResource(R.string.agents_todo_pr), relativeTime(res, lastMoved, now)),
+                        style = PersonaTheme.type.caption,
+                        color = PersonaTheme.palette.accent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = Tokens.Space.xxxl)
+                            .then(if (url != null) Modifier.clickable { runCatching { links.openUri(url) } } else Modifier),
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(start = Tokens.Space.xxxl, top = Tokens.Space.xxs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                ) {
+                    val timeStr = relativeTime(res, lastMoved, now)
+                    if (timeStr.isNotBlank() && triage.section != TriageSection.Pr) {
+                        Text(timeStr, style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
+                    }
+                    if (related > 0) {
+                        Text(
+                            pluralStringResource(R.plurals.agents_todos_related, related, related),
+                            style = PersonaTheme.type.micro,
+                            color = PersonaTheme.palette.accent,
+                            maxLines = 1,
+                            modifier = Modifier.clip(PersonaTheme.shapes.controlShape).clickable(onClick = onToggleRelated)
+                                .padding(horizontal = Tokens.Space.xs),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (triage.section == TriageSection.Shelved) {
+                        JTextButton(stringResource(R.string.agents_todo_restore), onRestore, icon = PhIcons.ArrowUUpLeft)
+                    } else if (!finished && todo.currentAgents.isNotEmpty()) {
+                        Text(pluralStringResource(R.plurals.agents_todo_agents, todo.currentAgents.size, todo.currentAgents.size),
+                            style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                     }
                 }
             }

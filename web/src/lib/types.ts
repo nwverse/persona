@@ -110,6 +110,8 @@ export interface SessionCapabilities {
   approve?: boolean;
   terminal?: boolean;
   attach?: boolean;
+  /** The permission mode and effort chips can change it (session.modes, #1843): the node's word, absent from older nodes. */
+  modes?: boolean;
 }
 
 /** A session's work state (docs/assistant/agent-work.md): working, blocked on a named precondition, or done. */
@@ -202,6 +204,8 @@ export interface Session {
   model?: string;
   permission_mode?: string;
   effort?: string;
+  /** This Claude Code may switch to Allow All while it runs: it was started with a flag that allows it (#1379). */
+  bypass_available?: boolean;
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_window?: number;
@@ -295,12 +299,12 @@ export interface Session {
   /** The HTTP ports its processes listen on (docs/operations/ports.md): closing it would stop those servers, and they are
    *  the dev servers a preview offers (docs/web/preview.md). */
   ports?: Port[];
-  /** Who opened an assistant conversation (docs/protocol/protocol.md "Assistant conversation origins"): user, channel, inbox, task, spawned,
+  /** Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant chats"): user, channel, inbox, task, spawned,
    *  lark_agent, extension, or one this page doesn't know; none is the user's (older hubs never say). */
   origin?: string;
   /** What it was opened for: the inbox item, the task, the conversation, the channel, the extension. */
   origin_ref?: string;
-  /** The channels messages came into it from, newest first (docs/extensions/channels.md "Origin marks"). */
+  /** The channels messages came into it from, newest first (docs/extensions/channels.md "Source markers"). */
   channels?: string[];
   todo?: { id: string; title: string };
   /** Works (or worked) for a quiet task (#1731): not in the global badge; the main conversation tells about it. */
@@ -512,7 +516,7 @@ export interface MessageSource {
   title?: string;
 }
 
-/** What a message Persona wrote for the model is (docs/protocol/protocol.md "Messages Persona injects"). */
+/** What a message Persona wrote for the model is (docs/protocol/protocol.md "Messages injected by Persona"). */
 export interface Injected {
   kind: "task_notice" | "followup" | "system" | (string & {});
   /** task_notice: done | needs | interrupted | failed; followup: once | daily | interval | wake; system: lost_tasks | supervise */

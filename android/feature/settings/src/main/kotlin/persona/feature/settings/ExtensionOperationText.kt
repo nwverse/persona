@@ -7,7 +7,7 @@ import persona.core.contracts.api.ExtensionOperation
 import java.time.Instant
 import java.util.Locale
 
-// An extension's install, upgrade or removal in steps (docs/protocol/protocol.md "Extension install, upgrade and removal progress", #3277): the words and
+// An extension's install, upgrade or removal in steps (docs/protocol/protocol.md "Extension install, upgrade and uninstall progress", #3277): the words and
 // rules of its step list. The model is CatalogExtensionModel, the view ExtensionOperationView.kt.
 
 internal object OperationText {

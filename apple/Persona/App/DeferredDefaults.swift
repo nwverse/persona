@@ -4,7 +4,7 @@ import AppKit
 #endif
 
 /// UserDefaults writes that can wait (the section or tab to come back to): every write to UserDefaults draws each
-/// `AppStorage` view in the app again (CLAUDE.md「常变的状态别写 UserDefaults」), and a switch between the Mac's
+/// `AppStorage` view in the app again (CLAUDE.md「Most common pitfalls」), and a switch between the Mac's
 /// sections wrote two, with every section's page kept in the window (#390). On the Mac they are written once the
 /// switching rests (`rest`), when the app is left, or when it quits; elsewhere, and to any other defaults, at once.
 /// The keys stay in UserDefaults rather than `StateCache`: they are read at launch where they always were, and a crash

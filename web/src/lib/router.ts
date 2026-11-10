@@ -36,7 +36,7 @@ export type Route =
   | { name: "machine"; mid: string }
   // one space of a machine by its name (lib/space-page.ts): its agents, the todos it hangs on, what can be done to it
   | { name: "space"; mid: string; space: string }
-  // the terminal browser (docs/integrations/terminal.md "Standalone terminals"): every pane of every machine; `id` is the terminal opened (an agent
+  // the terminal browser (docs/integrations/terminal.md "Standalone terminal"): every pane of every machine; `id` is the terminal opened (an agent
   // session's id, or "pane:<pane>" for a plain shell)
   | { name: "terminal"; mid?: string; id?: string }
   | { name: "settings" }
@@ -100,6 +100,17 @@ export function parse(path: string, search = ""): Route {
     return r;
   }
   return { name: "home" };
+}
+
+/** The route a link's address opens in this app (`a.href`: absolute, under the sub-path); null for another origin. */
+export function routeAt(url: string): Route | null {
+  let u: URL;
+  try {
+    u = new URL(url, location.href);
+  } catch {
+    return null;
+  }
+  return u.origin === location.origin ? parse(stripBase(u.pathname), u.search) : null;
 }
 
 /** The address of a route as this page reaches it: under the sub-path the hub is served at (lib/base.ts), if any. */

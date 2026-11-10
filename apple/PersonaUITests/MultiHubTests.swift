@@ -3,7 +3,7 @@ import XCTest
 /// Several groups of hubs on one phone (docs/protocol/multi-hub.md), against three scripts/mock_hub.py: A alone (「家里」), B and C one
 /// group (「公司」, each lists the other in its hello's mesh; C owns the MacBook). Both groups have a MacBook with the same
 /// machine and session ids and the same interaction ids, so a request sent to the wrong group's hub shows. Start them
-/// as docs/operations/testing.md「多 hub」 says and pass TEST_RUNNER_PERSONA_HUB_A / _B / _C (http://127.0.0.1:<port>).
+/// as docs/operations/testing.md「Multiple hubs」 says and pass TEST_RUNNER_PERSONA_HUB_A / _B / _C (http://127.0.0.1:<port>).
 final class MultiHubTests: XCTestCase {
     private struct Hubs { var a: String; var b: String; var c: String }
 

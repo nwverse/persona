@@ -26,7 +26,7 @@ final class AgentSync {
     /// What has been pulled, by rev ("<machine>/<session>" → rev); kept across launches, beside the chats' disk cache it
     /// describes (`StateCache`). Not in UserDefaults: it changes with nearly every push, and each write to UserDefaults
     /// draws every `@AppStorage` view in the app again; the Agents list re-laid itself out under the finger
-    /// (docs/archive/apple/live-updates.md「滚动时被迫刷新」).
+    /// (docs/archive/apple/live-updates.md「Forced refreshes while scrolling」).
     private var synced: [String: Int64]
     private var queue: [SessionKey] = []
     private var running = Set<SessionKey>()
@@ -243,7 +243,7 @@ final class AgentSync {
         guard let api = model.api(key.group) else { return .failed(refused: false) }
 
         do {
-            try await Self.pullToDisk(key, api)
+            try await Self.pullToDisk(key, api, cacheFolder: model.stateFolder)
             return .pulled
         } catch let e as APIError {
             return .failed(refused: AgentSyncPacing.refused(status: e.status))
@@ -273,8 +273,8 @@ final class AgentSync {
     /// No store in memory: update the disk cache the chat will open from (decoding and writing off the main thread).
     /// What comes after the cache's `covered` is added when it continues it; anything else (a capped catch-up, a
     /// replaced transcript) writes the latest page instead.
-    private nonisolated static func pullToDisk(_ key: SessionKey, _ api: APIClient) async throws {
-        let cached = await Task.detached(priority: .utility) { ChatCache.load(key) }.value
+    private nonisolated static func pullToDisk(_ key: SessionKey, _ api: APIClient, cacheFolder: URL?) async throws {
+        let cached = await Task.detached(priority: .utility) { ChatCache.load(key, in: cacheFolder) }.value
         if let cached, let covered = cached.covered ?? cached.items.last?.seq {
             let r = try await api.items(key, afterSeq: covered)
             let sameFile = r.history == nil || cached.history == nil || r.history == cached.history
@@ -285,7 +285,7 @@ final class AgentSync {
                     let all = ChatStore.ordered(cached.items + ChatStore.withImageRefs(r.items, key).filter { !have.contains($0.id) })
                     let tail = ChatCache.tail(all, turns: 2)
                     ChatCache.save(key, items: tail, hasMore: cached.hasMore || tail.count < all.count,
-                                   history: r.history ?? cached.history, covered: max(covered, r.toSeq ?? all.last?.seq ?? covered))
+                                   history: r.history ?? cached.history, covered: max(covered, r.toSeq ?? all.last?.seq ?? covered), in: cacheFolder)
                 }.value
                 return
             }
@@ -293,7 +293,7 @@ final class AgentSync {
         let page = try await api.items(key, beforeSeq: nil)
         await Task.detached(priority: .utility) {
             ChatCache.save(key, items: ChatStore.withImageRefs(page.items, key), hasMore: page.hasMore,
-                           history: page.history, covered: page.toSeq)
+                           history: page.history, covered: page.toSeq, in: cacheFolder)
         }.value
     }
 }

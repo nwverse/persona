@@ -1,4 +1,4 @@
-// What the Feishu chat page has sent and not yet seen come back (docs/extensions/lark-attachments.md "Sending and confirming"): text, pictures
+// What the Feishu chat page has sent and not yet seen come back (docs/extensions/lark-attachments.md "Sending and confirmation"): text, pictures
 // and files go one after another, each with a client_id of its own, drawn at once as a local message that the hub's
 // copy replaces. A failed one can be sent again with the same client_id; a file whose upload broke off halfway is not
 // sent again on its own: it is checked against the newest page, or its local copy removed.

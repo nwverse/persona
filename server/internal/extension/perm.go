@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Permissions are what a plugin asks for (docs/plans/plan-extensions.md "Permissions"). The vocabulary is closed: a manifest naming
+// Permissions are what a plugin asks for (docs/plans/plan-extensions.md "Key decisions"). The vocabulary is closed: a manifest naming
 // a permission this hub does not know does not install, so nobody is shown one the hub cannot explain.
 type Permissions struct {
 	// Network are the hosts it reaches ("api.example.com", "*.example.com"). Shown and recorded; the hub does not

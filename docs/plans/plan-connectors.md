@@ -28,7 +28,7 @@ Each new source needs its own implementation in six or seven places, plus anothe
 Each source implements one **`connector`**, providing capabilities as needed, all optional. The hub discovers what it implements and automatically attaches it to the knowledge base, `Inbox`, assistant (MCP tools) and App.
 Adding a source no longer `changes` these pipelines.
 
-Out of scope: source-specific browsing pages (`docs/extensions/feishu.md` ("Do not build another Lark") applies equally to GitHub and Messages); changing existing `sources`' behavior.
+Out of scope: source-specific browsing pages (`docs/extensions/feishu.md` ("Persona is not a second Lark") applies equally to GitHub and Messages); changing existing `sources`' behavior.
 
 ## I. `Connector` interface
 

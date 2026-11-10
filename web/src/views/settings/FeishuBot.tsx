@@ -32,6 +32,7 @@ const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail:
   { key: "board", icon: "pin", title: t("settings-feishubot.feature_board_title"), detail: t("settings-feishubot.feature_board_detail") },
   { key: "workbench", icon: "home", title: t("settings-feishubot.feature_workbench_title"), detail: t("settings-feishubot.feature_workbench_detail") },
   { key: "only_conclusions", icon: "check", title: t("settings-feishubot.feature_only_conclusions_title"), detail: t("settings-feishubot.feature_only_conclusions_detail") },
+  { key: "report_steps", icon: "list", title: t("settings-feishubot.feature_report_steps_title"), detail: t("settings-feishubot.feature_report_steps_detail") },
   { key: "agents", icon: "agent", title: t("settings-feishubot.feature_agents_title"), detail: t("settings-feishubot.feature_agents_detail") },
 ];
 
@@ -256,8 +257,15 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
         </div>
       </Group>
 
+      {dialogLarkcli && (
+        <Group title={t("settings-feishubot.larkcli_row")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
+          <LarkCliRow connector={dialogLarkcli} onOpen={(id) => { onClose(); onOpen?.(id); }} />
+        </Group>
+      )}
+
       {status?.has_secret && (
-        <Group
+        <>
+          <Group
             title={t("settings-feishubot.pairing")}
             footer={status.owner || pairing ? undefined : status.enabled ? t("settings-feishubot.pair_hint") : t("settings-feishubot.pair_enable_first")}
           >
@@ -303,19 +311,16 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
               </div>
             )}
           </Group>
-      )}
 
-      {dialogLarkcli && (
-        <Group title={t("settings-feishubot.larkcli_row")} footer={t("settings-feishubot.larkcli_dialog_footer")}>
-          <LarkCliRow connector={dialogLarkcli} onOpen={(id) => { onClose(); onOpen?.(id); }} />
-        </Group>
-      )}
-
-      {status?.has_secret && (
-        <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
-            {FEATURES.map((f) => {
-              // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either.
-              const off = (f.key === "all_cards" && !features.cards) || (f.key === "only_conclusions" && features.reports === false);
+          <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
+            {FEATURES.filter((f) => f.key !== "report_steps" || features.report_steps !== undefined).map((f) => {
+              // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either,
+              // and trims only the execution steps, which a current hub pushes only with "report_steps" on (#3218).
+              // "report_steps" needs task progress too; a hub from before it leaves the key out and the switch is hidden.
+              const off =
+                (f.key === "all_cards" && !features.cards) ||
+                (f.key === "only_conclusions" && (features.reports === false || (features.report_steps === false && !features.only_conclusions))) ||
+                (f.key === "report_steps" && features.reports === false);
               return (
                 <div key={f.key} className={cx("flex items-start gap-3 px-4 py-2.5", off && "opacity-50")}>
                   <Icon name={f.icon} size={15} className="mt-0.5 shrink-0 text-accent" />
@@ -347,7 +352,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
                 ))}
               </select>
             </div>
-        </Group>
+          </Group>
+        </>
       )}
 
       {agents.length > 0 && (

@@ -1,5 +1,7 @@
 package persona.feature.agents
 
+import persona.core.domain.tasks.acceptedAtRest
+
 import persona.core.domain.tasks.hold
 import persona.feature.chat.ReviewChecklist
 import persona.core.designsystem.text
@@ -174,7 +176,8 @@ fun TodoDetailScreen(
                         },
                         modifier = Modifier.weight(1f)
                     )
-                    JButton(
+                    // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
+                    if (!todo.isDone) JButton(
                         text = stringResource(R.string.agents_todo_hand_to_agent),
                         icon = PhIcons.Robot,
                         onClick = { onHandOff(todo) },
@@ -216,6 +219,9 @@ fun TodoDetailScreen(
                                 } else {
                                     JTag(stringResource(R.string.agents_todos_done))
                                 }
+                            } else if (todo.acceptedAtRest(sessionLookup)) {
+                                // accepted, then reopened by the hub with more work: still Accepted until a new review (#3156)
+                                JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
                             } else {
                                 JTag(state.label)
                             }
@@ -363,7 +369,8 @@ fun TodoDetailScreen(
 
             if (todo.currentAgents.isEmpty()) {
                 item(key = "active-empty") {
-                    JEmptyState(stringResource(R.string.agents_todo_no_agents), stringResource(R.string.agents_todo_no_agents_hint))
+                    JEmptyState(stringResource(R.string.agents_todo_no_agents),
+                        stringResource(if (todo.isDone) R.string.agents_todo_no_agents_done_hint else R.string.agents_todo_no_agents_hint))
                 }
             } else {
                 itemsIndexed(todo.currentAgents, key = { _, a -> a.key.path }) { index, agent ->

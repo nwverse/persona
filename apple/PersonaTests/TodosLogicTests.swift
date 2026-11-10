@@ -757,7 +757,7 @@ struct TodosLogicTests {
         #expect(hub.sent("GET", "/api/v1/todos").count == 1)
     }
 
-    /// A task the hub closed (docs/assistant/todos.md「自动完成」) reads 「自动完成」 with its reason; reopened or closed by the user, it does not.
+    /// A task the hub closed (docs/assistant/todos.md「Automatic completion」) reads 「自动完成」 with its reason; reopened or closed by the user, it does not.
     @Test func autoDoneTodo() throws {
         let json = """
         {"id":"t","title":"统一连接器 logo 尺寸","done_at":"2026-11-04T08:00:00Z","origin":"conv","done_by":"auto",

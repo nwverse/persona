@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Settings › Connectors › Messages: one Mac's Messages, read through the hub (docs/plans/plan-connectors.md「五」). The user reads every
+// Settings › Connectors › Messages: one Mac's Messages, read through the hub (docs/plans/plan-connectors.md「iMessage `connector`」). The user reads every
 // conversation here; Hand to Persona (on by default) also gives the real ones to the knowledge base, the inbox and the
 // assistant, and can be turned off, and what the hub kept deleted. Nothing is marked read, nothing is sent.
 

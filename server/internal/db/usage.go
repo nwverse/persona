@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// ---- token usage by machine (docs/server/machines.md「Token 用量」) ----
+// ---- token usage by machine (docs/server/machines.md "Token usage") ----
 
 // UsageMinuteStep is the step of a row as a node reported it; UsageRolledStep of ten minutes rolled up.
 const (

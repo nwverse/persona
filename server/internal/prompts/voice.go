@@ -62,7 +62,7 @@ func RenderVoiceInstructions(d VoiceInstructions) string { return render("voice/
 
 // VoiceReport is what the voice model is told when a turn handed to the main conversation is over, or stops to wait for
 // the user (voice/report). Its first sentence and the <agent_output> block around the answer are the wording measured
-// to keep the model from doing what an agent wrote (docs/lessons/voice.md "Original text used in the injection tests").
+// to keep the model from doing what an agent wrote (docs/lessons/voice.md "Verbatim injection-test text").
 type VoiceReport struct {
 	Lang   string
 	To     string   // who did it: an agent's name (Claude Code…); "" the Persona main conversation
@@ -83,7 +83,7 @@ type VoiceReport struct {
 	// answer; done: Answer is what it wrote before that.
 	Failure string
 	// Observed: the turn was not handed over by voice: the bound conversation began it otherwise (typed on the phone or
-	// at the computer, a wake-up, docs/assistant/voice.md "Turn tracking"); Tasks is then empty.
+	// at the computer, a wake-up, docs/assistant/voice.md "Per-round tracking"); Tasks is then empty.
 	Observed bool
 }
 

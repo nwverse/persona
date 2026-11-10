@@ -55,7 +55,7 @@ func fakeEdge(t *testing.T, slot string) <-chan string {
 
 // Without --binary, a switch goes on with the program the edge's active slot runs, whichever program asks for it
 // (`persona-hub switch` or `personad hub switch`; here the test binary, neither): a hub on personad stays on personad,
-// one on persona-hub stays on persona-hub (docs/operations/hub-restart.md "Blue-green switch").
+// one on persona-hub stays on persona-hub (docs/operations/hub-restart.md "Blue-green switching: the hub's edge").
 func TestSwitchKeepsTheProgramTheHubRuns(t *testing.T) {
 	bin := t.TempDir()
 	for _, name := range []string{"personad", "personad.prev", "persona-hub", "persona-hub.prev"} {

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The sidebar's Auto Chats (#3264, docs/protocol/protocol.md「助手对话的来源」): the conversations Persona opened by itself out of
+/// The sidebar's Auto Chats (#3264, docs/protocol/protocol.md「Origin of assistant chats」): the conversations Persona opened by itself out of
 /// Recent, by source; a hub that never says who opened them lists them as before.
 struct AutoConversationsTests {
     private func session(_ id: String, origin: String? = nil, state: String = "idle", title: String = "") throws -> Session {

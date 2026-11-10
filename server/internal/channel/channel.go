@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -241,7 +242,7 @@ func ValidID(id string) bool { return idPattern.MatchString(id) && !uuidHead.Mat
 var Reserved = []string{App, Feishu, LarkAgent, "voice", "siri", "watch", "web"}
 
 // ClientMsgID is the client_msg_id a channel's message goes into a conversation with: the source mark the apps read
-// (docs/extensions/channels.md "Source marks"), and the hub's once-only guard for a message the chat app delivers again.
+// (docs/extensions/channels.md "Source markers"), and the hub's once-only guard for a message the chat app delivers again.
 func ClientMsgID(channel, messageID string) string { return channel + "-" + messageID }
 
 // FromClientMsgID is the channel a client_msg_id says its message came from, when it is one of known ("" when not).
@@ -275,7 +276,7 @@ func (it Item) Validate() error {
 	switch {
 	case !ValidID(it.ID):
 		return fmt.Errorf("channel id %q: a-z0-9_, a letter first, at most 32, not 8 hex digits", it.ID)
-	case contains(Reserved, it.ID):
+	case slices.Contains(Reserved, it.ID):
 		return fmt.Errorf("channel id %q is the hub's own", it.ID)
 	case strings.TrimSpace(it.Name) == "" || utf8.RuneCountInString(it.Name) > 40:
 		return fmt.Errorf("channel %s: name, 1 to 40 characters", it.ID)
@@ -321,15 +322,6 @@ func (c Capabilities) Normalized() Capabilities {
 		c.Asks = AsksNone
 	}
 	return c
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // --- the plugin protocol's channel namespace (docs/extensions/channels.md "Protocol") ---

@@ -80,8 +80,12 @@ import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.TaskNow
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.receiptState
+import persona.core.domain.tasks.receiptTitle
 import persona.core.domain.lines.ApiErrorInfo
 import persona.core.domain.tasks.TasksStore
+import persona.core.domain.tasks.SentToAgents
+import persona.core.domain.tasks.interrupting
+import persona.core.domain.tasks.sentByPersona
 import persona.core.domain.tasks.isRemovable
 import persona.core.domain.answer.askLine
 import persona.core.domain.answer.firstBySession
@@ -89,7 +93,7 @@ import persona.core.domain.answer.waitingCard
 
 // The unified entry in the assistant's conversation (docs/assistant/unified-entry.md; iOS Views/Assistant/Tasks, web
 // views/assistant/Tasks.tsx): the lines the assistant's host adds — plan cards, task cards, receipts, answered lines,
-// routed bubbles, the "Today" card, message cards, quick results, day lines — and the dock and route chip above the composer.
+// routed bubbles and Persona's folded messages to agents, the "Today" card, message cards, quick results, day lines — and the dock and route chip above the composer.
 
 /** What the assistant's chat needs to draw its tasks: the store, the sessions, and how to open an agent's chat. */
 internal class AssistantTaskHost(
@@ -107,6 +111,10 @@ internal class AssistantTaskHost(
     val machines: List<persona.core.contracts.Machine> = emptyList(),
     /** The cards waiting for an answer: a waiting task says what its agent's card asks (#3964). */
     val pending: List<persona.core.contracts.Interaction> = emptyList(),
+    /** Original records remain inspectable from Progress, never discarded by the conversation projection. */
+    val backgroundRecords: List<persona.core.domain.lines.ChatLine> = emptyList(),
+    val onOpenBackground: (() -> Unit)? = null,
+    val onOpenProgress: (() -> Unit)? = null,
 ) {
     /** Each session's first card ([firstBySession]). */
     val cards: Map<SessionKey, persona.core.contracts.Interaction> by lazy { pending.firstBySession() }
@@ -166,6 +174,17 @@ internal fun AssistantExtraLine(payload: Any, host: AssistantTaskHost?) {
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         is AssistantExtra.Quick -> QuickResultCard(payload.result)
         is AssistantExtra.Feed -> FeedLine(payload.item, host)
+        is persona.core.domain.tasks.DispatchHint -> {
+            val label = pluralStringResource(R.plurals.chat_assistant_dispatched, payload.count, payload.count)
+            Row(Modifier.fillMaxWidth().clickable(enabled = host.onOpenProgress != null,
+                onClickLabel = label) { host.onOpenProgress?.invoke() }.padding(vertical = Tokens.Space.xs)
+                .testTag("assistant-dispatch-hint"), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                Text(label, Modifier.weight(1f, fill = false), style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
+            }
+        }
     }
 }
 
@@ -185,7 +204,9 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
         "receipt" -> ReceiptCard(item, host, todos)
         "review" -> ReviewLine(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
         "report" -> ReportCard(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
-        "routed" -> Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxxl), horizontalAlignment = Alignment.End,
+        // Persona's own message to the task's agent is folded, never the user's bubble (#1542, #1623).
+        "routed" -> if (item.sentByPersona) SentLine(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
+        else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxxl), horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(stringResource(R.string.chat_tasks_routed_to, title), style = PersonaTheme.type.caption, color = PersonaTheme.palette.accent, maxLines = 1)
             Text(item.field("text").orEmpty(), Modifier.clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
@@ -240,6 +261,109 @@ internal fun AnsweredLine(item: FeedItem, title: String, onOpenTask: (() -> Unit
     }
 }
 
+// ── what Persona sent to its tasks' agents (#1542, #1623; web views/assistant/Sent.tsx, iOS SentViews.swift) ──
+
+/** "Sent to “task”", or "Stopped “task” and sent" when Persona cut in first. */
+@Composable
+private fun sentTitle(item: FeedItem, title: String): String =
+    stringResource(if (item.interrupting) R.string.chat_tasks_sent_interrupting else R.string.chat_tasks_sent_to, title)
+
+/**
+ * One of Persona's messages to a task's agent in the conversation: a capsule on the left like the answered line, with its
+ * mark (a stop when Persona cut in first), where it went (tap: the task) and the first line. A tap opens the whole text,
+ * selectable, with Copy, and again folds it.
+ */
+@Composable
+internal fun SentLine(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) {
+    var open by rememberSaveable(item.id) { mutableStateOf(false) }
+    val text = item.field("text").orEmpty()
+    val first = remember(text) { SentToAgents.firstLine(text) }
+    val shape = if (open) PersonaTheme.shapes.cardShape else CircleShape
+    val toggleLabel = stringResource(if (open) R.string.chat_tasks_collapse else R.string.chat_tasks_expand)
+    val toggleState = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
+    Column(Modifier.then(if (open) Modifier.fillMaxWidth() else Modifier).clip(shape).background(PersonaTheme.palette.surfaceStrong)
+        .animateContentSize().testTag("sent-line")) {
+        Row(Modifier.clickable(onClickLabel = toggleLabel) { open = !open }.semantics { stateDescription = toggleState }
+            .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JIcon(if (item.interrupting) PhIcons.Stop else PhIcons.PaperPlaneTilt, decorative = true, size = Tokens.Space.m,
+                tint = PersonaTheme.palette.ink2)
+            Text(sentTitle(item, title), (if (onOpenTask != null) Modifier.clickable(onClickLabel = stringResource(R.string.chat_tasks_open_task),
+                onClick = onOpenTask) else Modifier).weight(1f, fill = false), style = PersonaTheme.type.caption,
+                color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (first.isNotEmpty()) Text("· $first", Modifier.weight(1f, fill = false), style = PersonaTheme.type.caption,
+                color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
+                modifier = Modifier.rotate(if (open) 90f else 0f))
+        }
+        if (open) SentText(text, Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
+    }
+}
+
+/** The whole text Persona sent, newlines kept and selectable, with Copy under it. */
+@Composable
+private fun SentText(text: String, modifier: Modifier = Modifier) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    Column(modifier.fillMaxWidth().testTag("sent-detail"), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        SelectionContainer { Text(text, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink) }
+        JButton(stringResource(R.string.chat_menu_copy), { clipboard.setText(androidx.compose.ui.text.AnnotatedString(text)) },
+            kind = JButtonKind.Quiet, size = JButtonSize.Small, icon = PhIcons.Copy)
+    }
+}
+
+/**
+ * On a task's card: what Persona sent to its agent, "N instructions sent"; a tap lists them (time and first line), and a
+ * tap on one opens its whole text. Nothing when it sent none (a task the user started from a plan). Taps stay here: they
+ * don't open the task as the rest of the card does.
+ */
+@Composable
+private fun TaskSentList(todoId: String, host: AssistantTaskHost) {
+    val feeds by host.tasks.feeds.collectAsStateWithLifecycle()
+    val feed = feeds[host.conversation].orEmpty()
+    val sent = remember(feed, todoId) { SentToAgents.sent(feed, todoId) }
+    if (sent.isEmpty()) return
+    TaskSentRows(sent)
+}
+
+/** [TaskSentList]'s rows, for the list it was given. */
+@Composable
+internal fun TaskSentRows(sent: List<FeedItem>) {
+    var open by rememberSaveable(sent.first().id) { mutableStateOf(false) }
+    var shown by rememberSaveable(sent.first().id) { mutableStateOf<String?>(null) }
+    val locale = currentLocale
+    val toggleState = stringResource(if (open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        Row(Modifier.clip(PersonaTheme.shapes.controlShape).clickable { open = !open }.semantics { stateDescription = toggleState }
+            .padding(vertical = Tokens.Space.xxs).testTag("task-sent"),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            JIcon(PhIcons.PaperPlaneTilt, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink2)
+            Text(pluralStringResource(R.plurals.chat_tasks_sent_count, sent.size, sent.size), style = PersonaTheme.type.caption,
+                color = PersonaTheme.palette.ink2, maxLines = 1)
+            JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
+                modifier = Modifier.rotate(if (open) 90f else 0f))
+        }
+        if (open) sent.forEach { item ->
+            val text = item.field("text").orEmpty()
+            val isOpen = shown == item.id
+            Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
+                .animateContentSize().testTag("task-sent-entry")) {
+                Row(Modifier.fillMaxWidth().clickable { shown = if (isOpen) null else item.id }
+                    .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    AssistantLines.time(item.at)?.let { Text(LocalizedFormats.format(it, LocalizedFormats.TIME, locale),
+                        style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1) }
+                    if (item.interrupting) JIcon(PhIcons.Stop, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink2)
+                    Text(SentToAgents.firstLine(text), Modifier.weight(1f), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3,
+                        modifier = Modifier.rotate(if (isOpen) 90f else 0f))
+                }
+                if (isOpen) SentText(text, Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, bottom = Tokens.Space.m))
+            }
+        }
+    }
+}
+
 /** An agent's report to Persona keeps its full text and inline links, without a separate evidence list. */
 @Composable
 private fun ReportCard(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) {
@@ -263,13 +387,14 @@ private fun ReportCard(item: FeedItem, title: String, onOpenTask: (() -> Unit)?)
 internal fun permissionLabel(mode: String?): String = when (mode ?: "default") {
     "acceptEdits" -> stringResource(R.string.chat_tasks_permission_accept_edits)
     "plan" -> stringResource(R.string.chat_tasks_permission_plan)
+    "auto" -> stringResource(R.string.chat_tasks_permission_auto)
     "bypassPermissions" -> stringResource(R.string.chat_tasks_permission_bypass)
     "default" -> stringResource(R.string.chat_tasks_permission_default)
     else -> mode.orEmpty()
 }
 
 @Composable
-private fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
+internal fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     var remember by remember(plan.id) { mutableStateOf(false) }
     var editing by remember(plan.id) { mutableStateOf(false) }
@@ -376,6 +501,8 @@ private fun TaskCard(todo: Todo, host: AssistantTaskHost) {
                     Text(workflow.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            // what Persona sent its agent (#1542, #1623): the hand-off sent with this card is drawn only here
+            TaskSentList(todo.id, host)
             if (state == TaskState.Done && todo.supervision != null) ReviewTag(todo)
             if (state != TaskState.Done) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 Text(state.label.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.status(state.status()).text, maxLines = 1)
@@ -418,7 +545,7 @@ private fun ReceiptCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
     if (outcome == "interrupted") return InterruptedReceipt(item, host, todos)
     val failed = outcome == "failed"
     val todo = todos.firstOrNull { it.id == item.ref }
-    val title = item.field("title") ?: stringResource(R.string.chat_tasks_default_title)
+    val title = receiptTitle(item, todo) ?: stringResource(R.string.chat_tasks_default_title)
     // A failed start's banner follows its task: "Retry" while it is still failed (with its latest error), a quiet line once
     // it was started again, so no stale error stays in the conversation (#1396).
     val state = todo?.let { host.tasks.stateOf(it, host.sessions) }
@@ -480,7 +607,7 @@ private fun ReceiptSummary(md: String) {
 @Composable
 private fun InterruptedReceipt(item: FeedItem, host: AssistantTaskHost, todos: List<Todo>) {
     val todo = todos.firstOrNull { it.id == item.ref }
-    val title = item.field("title") ?: stringResource(R.string.chat_tasks_default_title)
+    val title = receiptTitle(item, todo) ?: stringResource(R.string.chat_tasks_default_title)
     val state = todo?.let { host.tasks.stateOf(it, host.sessions) }
     if (todo != null && state != TaskState.Interrupted) {
         Row(Modifier.clip(PersonaTheme.shapes.controlShape).clickable { openTask(host, todo) }.padding(vertical = Tokens.Space.xs),
@@ -659,52 +786,6 @@ private fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
                 JButton(stringResource(R.string.chat_tasks_later), { host.tasks.putOff(itemId) }, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
             }
         }
-    }
-}
-
-// ── above the composer ──
-
-/**
- * The dock (iOS TaskDock): "All N" for the board, held at the leading edge so it never scrolls away, then a pill for each
- * task going on (waiting first) and, in the main conversation, each agent going on that no task stands for (#1113),
- * scrolling beside it; a long press on a task's pill removes it while nothing of it runs. Then the route chip.
- */
-@Composable
-internal fun AssistantTaskBar(host: AssistantTaskHost) {
-    val todos by host.tasks.todos.collectAsStateWithLifecycle()
-    val routes by host.tasks.routes.collectAsStateWithLifecycle()
-    val main by host.tasks.mainConversation.collectAsStateWithLifecycle()
-    val mine = todos.filter { it.origin == host.conversation }
-    val going = mine.map { it to host.tasks.stateOf(it, host.sessions) }
-        .filter { (_, s) -> s == TaskState.NeedsYou || s == TaskState.Interrupted || s == TaskState.Working || s == TaskState.NotStarted || s == TaskState.Unread }
-        .sortedWith(compareBy({ it.second.rank }, { it.first.createdAt?.let { c -> -(AssistantLines.time(c)?.toEpochMilli() ?: 0) } ?: 0 }))
-    val agents = remember(host.conversation, main, host.sessions, todos) { persona.core.domain.tasks.dockAgents(host.conversation, main, host.sessions, todos) }
-    var removing by remember { mutableStateOf<Todo?>(null) }
-    Column(Modifier.padding(horizontal = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-        if (mine.isNotEmpty() || agents.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            JChip(stringResource(R.string.chat_tasks_dock_all, mine.size + agents.size), onClick = { host.sheet.value = TaskSheet.Board })
-            if (going.isNotEmpty() || agents.isNotEmpty()) Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                going.forEach { (todo, state) ->
-                    JChip(when (state) {
-                        TaskState.NeedsYou -> stringResource(R.string.chat_tasks_dock_waiting, todo.title)
-                        TaskState.Interrupted -> stringResource(R.string.chat_tasks_dock_interrupted, todo.title)
-                        else -> todo.title
-                    }, onClick = { openTask(host, todo) }, status = state.status(),
-                        onLongClick = if (state.isRemovable) ({ removing = todo }) else null)
-                }
-                agents.forEach { session ->
-                    JChip(if (session.agentState == AgentState.NeedsYou) stringResource(R.string.chat_tasks_dock_waiting, session.displayTitle) else session.displayTitle,
-                        onClick = { host.sheet.value = TaskSheet.Agent(session.key) }, status = session.agentState.designStatus, icon = PhIcons.Robot)
-                }
-            }
-        }
-        val routed = routes[host.conversation]?.let { id -> mine.firstOrNull { it.id == id } }
-        if (routed != null) JChip(stringResource(R.string.chat_tasks_route_chip, routed.title), selected = true, onClick = { host.tasks.setRoute(host.conversation, null) }, icon = PhIcons.PaperPlaneTilt)
-    }
-    removing?.let { todo ->
-        persona.core.designsystem.JActionSheet(listOf(persona.core.designsystem.JAction(stringResource(R.string.chat_task_detail_remove), PhIcons.Trash,
-            destructive = true) { host.tasks.removeTask(todo, host.onError) }), { removing = null }, title = todo.title)
     }
 }
 
