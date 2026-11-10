@@ -51,6 +51,23 @@ func changeTodo(s *Service, id string, change func(*Todo)) {
 	s.todosChanged(context.Background())
 }
 
+// interruptedAt returns the timestamp of todo's interrupted receipt, so a test can put the next effect strictly
+// after it without sleeping for the wall clock to advance.
+func interruptedAt(t *testing.T, s *Service, todo Todo) time.Time {
+	t.Helper()
+	items, _, err := s.feed(context.Background(), todo.Origin, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.Ref == todo.ID && it.Kind == feedReceipt {
+			return it.At
+		}
+	}
+	t.Fatalf("no interrupted receipt for %s", todo.ID)
+	return time.Time{}
+}
+
 const gatewayDown = "API Error: 502 Bad Gateway"
 
 // A cancelled task's interrupted receipt reads cancelled, and the apps are sent the new body (same id).
@@ -94,7 +111,12 @@ func TestInterruptedReceiptRerouted(t *testing.T) {
 	s, _ := newTaskService(t)
 	ctx := context.Background()
 	old := cutTask(t, s, "升级依赖", "mlx", gatewayDown)
-	time.Sleep(2 * time.Millisecond)
+	createdAt := interruptedAt(t, s, old).Add(time.Nanosecond)
+	s.todos.mu.Lock()
+	todo := s.todos.todos[old.ID]
+	todo.CreatedAt = createdAt
+	s.todos.todos[old.ID] = todo
+	s.todos.mu.Unlock()
 	now := time.Now().UTC()
 	changeTodo(s, old.ID, func(x *Todo) { x.CancelledAt, x.DoneAt, x.DoneBy = &now, &now, db.DoneByCancelled })
 	if _, err := s.createTodo(ctx, "升级依赖", "", "conv1", ""); err != nil {
@@ -105,9 +127,9 @@ func TestInterruptedReceiptRerouted(t *testing.T) {
 	}
 
 	moved := cutTask(t, s, "整理周报", "mlx", gatewayDown)
-	time.Sleep(2 * time.Millisecond)
+	linkedAt := interruptedAt(t, s, moved).Add(time.Nanosecond)
 	changeTodo(s, moved.ID, func(x *Todo) {
-		x.Agents = append(x.Agents, TodoAgent{MachineID: "box", SessionID: "s9", LinkedAt: time.Now().UTC()})
+		x.Agents = append(x.Agents, TodoAgent{MachineID: "box", SessionID: "s9", LinkedAt: linkedAt})
 	})
 	if rb := receiptsOf(t, s)[moved.ID]; rb.Resolution != resolutionRerouted {
 		t.Fatalf("another agent took it over: %+v", rb)
@@ -120,9 +142,9 @@ func TestInterruptedReceiptResumedAcceptedDone(t *testing.T) {
 	s, _ := newTaskService(t)
 	ctx := context.Background()
 	going := cutTask(t, s, "补测试", "mlx", gatewayDown)
-	time.Sleep(2 * time.Millisecond)
+	workingAt := interruptedAt(t, s, going).Add(time.Nanosecond)
 	s.tasks.mu.Lock()
-	s.tasks.working[going.ID] = time.Now()
+	s.tasks.working[going.ID] = workingAt
 	s.tasks.mu.Unlock()
 	if rb := receiptsOf(t, s)[going.ID]; rb.Resolution != resolutionResumed {
 		t.Fatalf("working again: %+v", rb)
@@ -130,8 +152,8 @@ func TestInterruptedReceiptResumedAcceptedDone(t *testing.T) {
 
 	// After a restart the hub no longer remembers the turn: the later receipt says it went on.
 	later := cutTask(t, s, "写文档", "mlx", gatewayDown)
-	time.Sleep(2 * time.Millisecond)
-	if _, err := s.appendFeed(ctx, "conv1", feedReceipt, later.ID, receiptBody{Title: "写文档", State: "done", Summary: "好了"}); err != nil {
+	if _, err := s.appendFeedAt(ctx, "conv1", feedReceipt, later.ID,
+		receiptBody{Title: "写文档", State: "done", Summary: "好了"}, interruptedAt(t, s, later).Add(time.Nanosecond)); err != nil {
 		t.Fatal(err)
 	}
 	items, _, _ := s.feed(ctx, "conv1", time.Time{})

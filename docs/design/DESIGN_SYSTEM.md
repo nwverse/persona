@@ -278,6 +278,10 @@ Reduce Motion:
 - Raw symbol names still appear in about 87 baselined places (settings rows, Lark, notification actions, controls).
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
 
+`Theme.Icon.phoneControl` (`iphone.radiowaves.left.and.right`) is the assistant operating an iPhone through a computer:
+the phone-control sections and the `iphone_*` tools. Why a separate symbol: `Theme.Icon.phone` (`iphone`) already means a
+device, and the phone's own data tools (`phone_*`) keep their icon.
+
 ### 2.9 Styles and theme colors
 
 | Style | Surface | Buttons | Canvas | Icons |
@@ -741,3 +745,11 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.
 - [ ] Structure: in every grouping a session that needs the user is visible without opening anything; rows follow the work-item row; primary screens show no raw model IDs, session IDs, paths or engine names (sections 3.4, 5.6).
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
+
+## Codex speed controls (#3865)
+
+The web composer reuses its effort chip and radio menu. A Speed submenu reveals native model speed choices and their
+current value, including Unknown before native settings arrive. Its Fast choice explains increased usage or cost.
+Selection waits for native acknowledgment and the session push. Standard is the reversible choice. This requested
+control reuses Menu typography, spacing, focus behavior and light/dark tokens. Settings > Agents > Codex uses the
+existing agent-settings row for the native default. No account or session is automatically switched to Fast.

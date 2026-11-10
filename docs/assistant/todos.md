@@ -138,6 +138,20 @@ Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-ent
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).
 
+### 6. task_briefs and task_brief_todos tables
+A task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): what was asked when the work was handed out.
+- `task_briefs`: `id` (text, PK), `brief` (jsonb, written once: the owner's message, who started it, goal, `done_when`,
+  `expect_minutes`, `out_of_bounds`), `state` (jsonb: the log of scope changes and overdue marks, the result),
+  `created_at`, `updated_at`. Nothing rewrites `brief`; `done_when` in effect is the brief's as its logged scope changes
+  left it, and a supervised task's `todo_supervision.done_when` carries the same list.
+- `task_brief_todos`: `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE), `brief_id` (FK → `task_briefs(id)`),
+  `continues` (the to-do it took the work over from), `reason`, `linked_at`. A brief's rows in `linked_at` order are its
+  lineage.
+
+`GET /api/v1/todos` carries both on a to-do that has a brief: `brief` (the record, its `log`, `criteria` and
+`expect_minutes_now` in effect, `clock_at`, `due_at`, `overdue_at`, `result`) and `lineage`. A task from before briefs
+gets a reconstructed one lazily.
+
 Link/release semantics:
 - When an Agent is linked to a new to-do and is active on another, the same transaction marks the original association `released` (records `released_at`); the old to-do shows it as "Previously involved".
 - If an Agent previously involved in this to-do is manually linked back, clear `released_at`/`dismissed_at`, and refresh `linked_at` and snapshot information.
@@ -332,6 +346,14 @@ Normal receipts are written before judgment for both supervised and unsupervised
 
 Nonempty `skip` means automatic flow would not judge this to-do (`not_a_task` manual, `done` completed, `reopened` no new work after reopen), but API still returns model verdict for inspection.
 With **Delivery** enabled (next section), response also has `delivery`; `verdict` may be hub's own `undelivered`.
+
+### Judged against the brief (#3822)
+
+The judge's input names the task's brief (`docs/assistant/unified-entry.md`, "Briefs") when it has one: the owner's
+message that led to the work, verbatim with its day, and the criteria as logged scope changes left them, with the
+dropped ones listed as no longer required. A take-over's notes are a hand-over prompt; the request and the criteria
+are what the work is judged against. When the judge closes a task itself (spot-check reviews), the brief's `result`
+records each criterion as it did for the supervisor's review.
 
 ## Delivery
 

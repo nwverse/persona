@@ -33,9 +33,9 @@ type fake struct {
 	generate  bool
 	model     subscriptions.ModelInfo
 	// gen answers Generate; release (when set) holds it until closed.
-	gen     func(subscriptions.GenerateRequest) (subscriptions.Generated, error)
-	release chan struct{}
-	genAsks []subscriptions.GenerateRequest
+	gen       func(subscriptions.GenerateRequest) (subscriptions.Generated, error)
+	release   chan struct{}
+	genAsks   []subscriptions.GenerateRequest
 	deleteErr error
 }
 
