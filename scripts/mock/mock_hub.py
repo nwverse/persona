@@ -4255,6 +4255,147 @@ if os.environ.get("MOCK_SCREEN_MULTI"):
                         {"key": "4", "label": "Type something", "kind": "type_something", "keys": ["4"], "checked": True,
                          "text": "平板也看一眼"},
                         {"key": "5", "label": "Chat about this", "kind": "chat", "keys": ["5"]}]}})
+# MOCK_SCREEN_STEPS=1: a terminal AskUserQuestion of three questions read off the screen (Claude Code 2.1.316) that
+# answers as the terminal does (#2970): ← and → move between the tabs, an answer moves on to the next one, and after an
+# answer that names its option the node submits the review tab once every question has one (keys alone never do).
+# Each change comes 0.6 s later as a new screen card, as the hub's look after the keys makes it; a question gone back
+# to keeps its id (its rev is the question, not the answer). MOCK_SCREEN_STEPS=review starts on the review tab with
+# the last question unanswered. GET /mock/screen-steps: where it is and what was answered; ?reset=1 starts again.
+SCREEN_STEPS_QS = [
+    {"label": "环境", "question": "先发哪个环境？", "options": [("1", "预览 (Recommended)", "先给设计组看，确认后再上线。"), ("2", "正式", "直接发给所有人。")]},
+    {"label": "平台", "question": "哪些平台要一起发？", "multi": True,
+     "options": [("1", "手机", "iPhone 版本。"), ("2", "手表", "Watch 版本。"), ("3", "电脑", "Mac 版本。")]},
+    {"label": "通知", "question": "发完通知谁？", "options": [("1", "设计组", None), ("2", "全组", None)]},
+]
+SCREEN_STEPS = {}
+
+
+def screen_steps_reset(mode):
+    SCREEN_STEPS.clear()
+    SCREEN_STEPS.update(at=0, answers={}, done=None, log=[])
+    if mode == "review":
+        SCREEN_STEPS.update(at=3, answers={0: {"key": "1"}, 1: {"keys": ["1", "3"], "text": ""}})
+
+
+def screen_steps_text(i):
+    q, a = SCREEN_STEPS_QS[i], SCREEN_STEPS["answers"][i]
+    labels = [l.replace(" (Recommended)", "") for k, l, _ in q["options"] if k in a.get("keys", [a.get("key")])]
+    return ", ".join(labels + ([a["text"]] if a.get("text") else []))
+
+
+def screen_steps_card():
+    st, qs = SCREEN_STEPS, SCREEN_STEPS_QS
+    steps = [{"label": q["label"], "done": i in st["answers"]} for i, q in enumerate(qs)]
+    bar = "←  " + "  ".join(("☒ " if s["done"] else "☐ ") + s["label"] for s in steps) + "  ✔ Submit  →"
+    if st["at"] >= len(qs):
+        lines = []
+        for i, q in enumerate(qs):
+            if i in st["answers"]:
+                lines += ["● " + q["question"], "→ " + screen_steps_text(i)]
+        d = {"question": "Ready to submit your answers?", "detail": "\n".join(lines), "review": True, "steps": steps,
+             "options": [{"key": "1", "label": "Submit answers", "keys": ["1"]}, {"key": "2", "label": "Cancel", "keys": ["2"]}]}
+        if len(st["answers"]) < len(qs):
+            d["incomplete"] = True
+        screen = "\n".join([bar, "", "Review your answers", ""] + (["⚠ You have not answered all questions", ""] if d.get("incomplete") else [])
+                           + lines + ["", "Ready to submit your answers?", "", "❯ 1. Submit answers", "  2. Cancel"])
+        rev = hashlib.sha1(screen.encode()).hexdigest()[:12]
+    else:
+        q, a = qs[st["at"]], st["answers"].get(st["at"]) or {}
+        opts = []
+        for k, label, detail in q["options"]:
+            o = {"key": k, "label": label, "keys": [k]}
+            if detail:
+                o["detail"] = detail
+            if k in a.get("keys", []) or a.get("key") == k:
+                o["checked"] = True
+            opts.append(o)
+        tk, ck = str(len(q["options"]) + 1), str(len(q["options"]) + 2)
+        t = {"key": tk, "label": "Type something.", "kind": "type_something", "keys": [tk]}
+        if a.get("text"):
+            t.update(text=a["text"], checked=bool(q.get("multi")))
+        opts += [t, {"key": ck, "label": "Chat about this", "kind": "chat", "keys": [ck]}]
+        d = {"question": q["question"], "steps": steps, "options": opts}
+        if q.get("multi"):
+            d.update(multi=True, submit="Next" if st["at"] < len(qs) - 1 else "Submit")
+        screen = "\n".join([bar, "", q["question"], ""] + ["%s %s. %s" % ("❯" if j == 0 else " ", o["key"], o.get("text") or o["label"])
+                                                           for j, o in enumerate(opts)])
+        rev = hashlib.sha1(q["question"].encode()).hexdigest()[:12]
+    d["rev"] = rev
+    return {"id": "scr_macbook_%s_%s" % (REVIEW, rev), "machine_id": "macbook", "session_id": REVIEW,
+            "session_title": "检查 PR #42 的改动", "cwd": "/Users/me/code/weather", "kind": "screen", "created_at": ago(minutes=1),
+            "expires_at": later(hours=24), "screen": screen, "dialog": d}
+
+
+def screen_steps_answer(rid, body):
+    """An answer to one of its cards (POST …/resolve): the terminal moves, and the next card comes."""
+    st, n = SCREEN_STEPS, len(SCREEN_STEPS_QS)
+    keys, pre, text = body.get("keys") or [], body.get("pre_keys") or [], body.get("text") or ""
+    option, options = body.get("option"), body.get("options")
+    at = st["at"]
+    st["log"].append({"id": rid, "at": at, "resolution": body})
+    if at >= n:
+        k = option or (keys[0] if keys else None)
+        if keys == ["left"]:
+            st["at"] = n - 1
+        elif k == "1":
+            st["done"] = "submitted"
+        elif k == "2":
+            st["done"] = "cancelled"
+    elif keys == ["left"]:
+        st["at"] = max(0, at - 1)
+    elif keys == ["right"]:
+        st["at"] = min(n, at + 1)
+    elif options is not None:
+        st["answers"][at] = {"keys": list(options), "text": text}
+        st["at"] = at + 1
+    else:
+        k = option or (pre[0] if pre else (keys[0] if keys else None))
+        if k == str(len(SCREEN_STEPS_QS[at]["options"]) + 1):
+            st["answers"][at] = {"text": text}
+        elif k:
+            st["answers"][at] = {"key": k}
+        st["at"] = at + 1
+    if (option or options is not None) and st["at"] >= n and len(st["answers"]) == n and not st["done"]:
+        st["done"] = "submitted"  # the node presses Submit answers after an answer that names its option
+
+    def push():
+        if st["done"]:
+            return
+        ix = screen_steps_card()
+        screen_steps_clear()
+        with REQUEST_LOCK:
+            INTERACTIONS.append(ix)
+        for out, _ in list(LIVE):
+            try: out({"type": "interaction", "interaction": ix})
+            except Exception: pass
+    threading.Timer(0.6, push).start()
+
+
+def screen_steps_clear():
+    """The dialog's cards off both lists (MOCK_INTERACTIONS copied the first one at start): one card at a time."""
+    with REQUEST_LOCK:
+        for lst in (MOCK_INTERACTIONS, INTERACTIONS):
+            lst[:] = [x for x in lst if not x["id"].startswith("scr_macbook_%s_" % REVIEW)]
+
+
+def mock_screen_steps(q):
+    if q.get("reset"):
+        screen_steps_clear()
+        screen_steps_reset(q["reset"][0])
+        ix = screen_steps_card()
+        with REQUEST_LOCK:
+            INTERACTIONS.append(ix)
+        for out, _ in list(LIVE):
+            try: out({"type": "interaction", "interaction": ix})
+            except Exception: pass
+    return {"at": SCREEN_STEPS.get("at"), "done": SCREEN_STEPS.get("done"),
+            "answers": {str(k): v for k, v in SCREEN_STEPS.get("answers", {}).items()}, "log": SCREEN_STEPS.get("log", [])}
+
+
+if os.environ.get("MOCK_SCREEN_STEPS"):
+    screen_steps_reset(os.environ["MOCK_SCREEN_STEPS"])
+    INTERACTIONS.append(screen_steps_card())
+
 # MOCK_SCREEN_CHAT=1: a terminal dialog with a header and a "chat about this" option (kind: chat), as Claude Code's
 # plan-mode question reads: the request panel shows the header, numbers the options and offers "Say it in chat instead".
 if os.environ.get("MOCK_SCREEN_CHAT"):
@@ -4675,7 +4816,8 @@ def cell_width(ch):
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
-# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell.
+# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
+# shell is a new session.
 NODE_ACTIONS = []
 CLOSED_PANES, CLOSED_TABS, TAB_NAMES, SPLIT_PANES = set(), set(), {}, {}
 # #2431 "New worktree…": worktree/create adds a workspace (with one shell pane) next to the persona one; a branch or a path
@@ -4801,6 +4943,23 @@ def node_action(h, p, body):
         return h.send_json({"op": body.get("op"), "outcome": outcome, "message": message})
     elif area == "panes" and verb == "agent":
         time.sleep(0.6)
+        # As the node answers (docs/protocol/protocol.md): the session it started, bound to that pane, idle with no first
+        # message, listed from now on; the apps open its chat (#3287). A started session's id: /mock/reset takes it away.
+        hosts = mock_panes(mid)["hosts"]
+        pane = str(body.get("pane", ""))
+        shell = next((x for x in (hosts[0]["panes"] if hosts else []) if x["pane"] == pane), None)
+        if shell:  # a pane the computer does not list starts nothing: answered as before
+            tab = next((t for t in hosts[0]["tabs"] if t["id"] == shell["tab_id"]), {})
+            ws = shell["workspace_id"]
+            mate = next((x for x in SESSIONS if x["machine_id"] == mid and x.get("workspace_id") == ws), {})  # the space it joins
+            START_IDS[0] += 1
+            s = sess(mid, "d4e6f8a0-0000-4000-8000-%012d" % START_IDS[0], "新会话", shell.get("cwd") or mate.get("cwd", ""), "idle", "idle",
+                     mate.get("space_name", ""), mate.get("space_index", 0), tab.get("label", ""), tab.get("number", 0), 0, "",
+                     pane_id=pane, tab_id=shell["tab_id"], slot_id=shell["tab_id"], workspace_id=ws, space_id=mate.get("space_id", ws))
+            s["launcher"] = body.get("launcher") or "claude"
+            SESSIONS.append(s)
+            push_machine(mid)  # as the hub pushes the machine's list once the node has the session: the app's chat gets its name
+            return h.send_json({"session_id": s["session_id"]})
     return h.send_json({})
 
 
@@ -14827,6 +14986,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/delegate": return self.send_json(*mock_delegate(q))
         if p == "/mock/reanswered": return self.send_json({"reanswered": REANSWERED})
         if p == "/mock/resolved": return self.send_json({"resolved": RESOLVED})
+        if p == "/mock/screen-steps": return self.send_json(mock_screen_steps(q))
         if p == "/mock/devices": return self.send_json({"devices": DEVICES})
         if p == "/mock/hello": return self.send_json(HELLO)
         if p == "/mock/phone":
@@ -16750,6 +16910,8 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "终端上的对话框已经变了（可能在电脑上答过了），这次什么都没按：看看新的再答。",
                                        "code": "prompt_changed", "delivered": "none"}, 409)
             resolve_mock_interaction(p.split("/")[4], json.loads(self.last_body or b"{}"))
+            if SCREEN_STEPS and p.split("/")[4].startswith("scr_macbook_%s_" % REVIEW):
+                screen_steps_answer(p.split("/")[4], json.loads(self.last_body or b"{}"))
             sync_resolved(p.split("/")[4])
             push_fleet()
             return self.send_json({"ok": True})

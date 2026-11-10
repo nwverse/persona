@@ -303,6 +303,7 @@ todos.write          PATCH /api/v1/todos/{id}
 agents.control       POST /api/v1/agents/sessions/{id}/messages
 agents.control       POST /api/v1/agents/sessions/{id}/read
 -                    POST /api/v1/agents/sessions/{id}/unhide
+-                    POST /api/v1/assistant/agents/{mid}/{sid}/supervisor
 assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/archive
 -                    POST /api/v1/assistant/conversations/{id}/compact
@@ -323,6 +324,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/origins/backfill
 -                    POST /api/v1/assistant/places
 -                    POST /api/v1/assistant/readiness/dismiss
+-                    POST /api/v1/assistant/route/agent
 -                    POST /api/v1/assistant/routines/{id}/run
 -                    POST /api/v1/assistant/tasks
 -                    POST /api/v1/assistant/tasks/{id}/fresh
@@ -453,6 +455,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/sessions/{mid}/{sid}/unarchive
 -                    POST /api/v1/subscriptions
 -                    POST /api/v1/subscriptions/-/dry-run
+-                    POST /api/v1/subscriptions/-/ui
 -                    POST /api/v1/subscriptions/{id}/run
 -                    POST /api/v1/tabs/autoname
 -                    POST /api/v1/task-plans/{id}/dismiss
@@ -484,6 +487,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/agents/prefs
 -                    PUT /api/v1/agents/triage
 -                    PUT /api/v1/assistant
+-                    PUT /api/v1/assistant/directions/{id}/name
 -                    PUT /api/v1/assistant/feishu/companions
 -                    PUT /api/v1/assistant/memory/{name}
 -                    PUT /api/v1/assistant/places/{id}
