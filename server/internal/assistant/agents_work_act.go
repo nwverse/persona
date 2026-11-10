@@ -26,6 +26,7 @@ func (s *Service) actOn(ctx context.Context, v *workView, machine string, c prot
 	if w.Phase != proto.WorkBlocked || c.ReadOnlyReason != "" {
 		return // nothing to do, or nothing Persona may send it
 	}
+	s.approveByTask(ctx, k, w, sw.Wake) // a step its task asked for: no card, the wake below (agents_work_authorized.go)
 	switch w.On {
 	case proto.WaitTransient:
 		if !sw.transientOn() {
