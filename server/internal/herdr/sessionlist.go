@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -53,7 +54,8 @@ func (c *Client) sessionList(ctx context.Context, limit time.Duration) ([]byte, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.out = nil
-	if err != nil || binInfo == nil || namesErr != nil || configDir() == "" {
+	// On Windows the sockets are named pipes, not files: a server starting there creates nothing a stat can see.
+	if err != nil || binInfo == nil || namesErr != nil || configDir() == "" || runtime.GOOS == "windows" {
 		return out, err
 	}
 	if sockets, ok := nothingRunning(out, dir); ok {
