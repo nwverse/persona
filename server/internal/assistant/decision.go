@@ -330,9 +330,9 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (bo
 	return true, nil
 }
 
-// ownCard: card is one of the cards of task id's ask as it is now ("" when Feishu does not say: taken as one), so a
+// askCardNow: card is one of the cards of task id's ask as it is now ("" when Feishu does not say: taken as one), so a
 // press on an earlier round's card answers nothing (#4853).
-func (s *Service) ownCard(id, card string) bool {
+func (s *Service) askCardNow(id, card string) bool {
 	a, ok := s.askCopy(id)
 	return ok && (card == "" || card == a.MessageID || slices.Contains(a.Messages, card))
 }

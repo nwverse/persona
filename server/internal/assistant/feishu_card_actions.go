@@ -44,12 +44,12 @@ func (s *Service) botCardAction(ctx context.Context, a *feishubot.CardAction, ac
 		ok, err := false, error(nil)
 		ask, _ := s.askCopy(a.Str("id"))
 		if resp := a.Str("resp"); resp != "" { // "I can't answer this": to its supervisor, nothing taken (decision.go)
-			if s.ownCard(a.Str("id"), a.Context.MessageID) {
+			if s.askCardNow(a.Str("id"), a.Context.MessageID) {
 				ok, err = s.ownerCannotAnswer(ctx, a.Str("id"), "", resp)
 			}
 			ask.Response = resp
 		} else if opt := a.Str("opt"); opt != "" { // an option of the decision other than the recommended one
-			if s.ownCard(a.Str("id"), a.Context.MessageID) {
+			if s.askCardNow(a.Str("id"), a.Context.MessageID) {
 				ok, err = s.chooseOption(ctx, a.Str("id"), "", opt)
 			}
 			ask.Chosen = opt
