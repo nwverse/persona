@@ -32,7 +32,9 @@ pub const OPS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct DeviceSpec {
     pub udid: String,
-    pub address: String,
+    /// The phone's address; not needed for a simulator.
+    #[serde(default)]
+    pub address: Option<String>,
     #[serde(default)]
     pub port: Option<u16>,
     pub pairing_file: String,

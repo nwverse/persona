@@ -11,6 +11,70 @@ use idevice::remote_pairing::RpPairingFile;
 use crate::error::{BridgeError, Code};
 
 const FORMAT: u64 = 1;
+const SIMULATOR: &str = "simulator";
+
+/// What a record file names: a phone reached over the network, or a simulator on this computer (the
+/// development and testing backend).
+pub enum Stored {
+    Network(Box<Record>),
+    Simulator(SimRecord),
+}
+
+impl Stored {
+    pub fn read(path: &Path) -> Result<Self, BridgeError> {
+        let bytes = std::fs::read(path).map_err(|e| {
+            BridgeError::new(
+                Code::PairingMissing,
+                format!("read pairing record {}: {e}", path.display()),
+            )
+        })?;
+        Self::from_bytes(&bytes)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BridgeError> {
+        let value: plist::Value = plist::from_bytes(bytes).map_err(|_| not_a_record("not a plist"))?;
+        let d = value.as_dictionary().ok_or_else(|| not_a_record("not a dictionary"))?;
+        if d.get("Transport").and_then(plist::Value::as_string) == Some(SIMULATOR) {
+            if d.get("Format").and_then(plist::Value::as_unsigned_integer) != Some(FORMAT) {
+                return Err(not_a_record("unknown format"));
+            }
+            let udid = d
+                .get("UDID")
+                .and_then(plist::Value::as_string)
+                .filter(|u| !u.is_empty())
+                .ok_or_else(|| not_a_record("no simulator UDID"))?;
+            return Ok(Stored::Simulator(SimRecord { udid: udid.to_owned() }));
+        }
+        Record::from_bytes(bytes).map(|r| Stored::Network(Box::new(r)))
+    }
+}
+
+/// A simulator "paired" for the development backend: nothing to prove, only which one.
+pub struct SimRecord {
+    pub udid: String,
+}
+
+impl SimRecord {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut d = plist::Dictionary::new();
+        d.insert("Format".into(), plist::Value::Integer(FORMAT.into()));
+        d.insert("Transport".into(), plist::Value::String(SIMULATOR.into()));
+        d.insert("UDID".into(), plist::Value::String(self.udid.clone()));
+        let mut out = Vec::new();
+        plist::Value::Dictionary(d)
+            .to_writer_xml(&mut out)
+            .expect("a dictionary always serializes");
+        out
+    }
+
+    pub fn write(&self, path: &Path) -> Result<(), BridgeError> {
+        crate::files::write_private(path, &self.to_bytes())
+    }
+}
+
+fn not_a_record(why: &str) -> BridgeError {
+    BridgeError::new(Code::PairingMissing, format!("not a pairing record: {why}"))
+}
 
 pub struct Record {
     pub sending_host: String,
@@ -41,7 +105,7 @@ impl Record {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BridgeError> {
-        let bad = |why: &str| BridgeError::new(Code::PairingMissing, format!("not a pairing record: {why}"));
+        let bad = not_a_record;
         let value: plist::Value = plist::from_bytes(bytes).map_err(|_| bad("not a plist"))?;
         let d = value.as_dictionary().ok_or_else(|| bad("not a dictionary"))?;
         if d.get("Format").and_then(plist::Value::as_unsigned_integer) != Some(FORMAT) {
@@ -58,16 +122,6 @@ impl Record {
             .ok_or_else(|| bad("no RemotePairing record"))?;
         let pairing = RpPairingFile::from_bytes(pairing).map_err(|_| bad("unreadable RemotePairing record"))?;
         Ok(Self { sending_host, pairing })
-    }
-
-    pub fn read(path: &Path) -> Result<Self, BridgeError> {
-        let bytes = std::fs::read(path).map_err(|e| {
-            BridgeError::new(
-                Code::PairingMissing,
-                format!("read pairing record {}: {e}", path.display()),
-            )
-        })?;
-        Self::from_bytes(&bytes)
     }
 
     /// Writes the record readable by this user only, replacing `path` in one step.
@@ -105,6 +159,19 @@ mod tests {
     }
 
     #[test]
+    fn tells_simulator_records_from_network_ones() {
+        let sim = SimRecord { udid: "SIM-1".into() }.to_bytes();
+        assert!(matches!(Stored::from_bytes(&sim).unwrap(), Stored::Simulator(r) if r.udid == "SIM-1"));
+        let net = Record::generate().to_bytes();
+        assert!(matches!(Stored::from_bytes(&net).unwrap(), Stored::Network(_)));
+        assert!(
+            Record::from_bytes(&sim).is_err(),
+            "a simulator record is not a RemotePairing record"
+        );
+        assert_eq!(Stored::from_bytes(b"x").err().unwrap().code, Code::PairingMissing);
+    }
+
+    #[test]
     fn rejects_other_files() {
         assert_eq!(Record::from_bytes(b"hello").err().unwrap().code, Code::PairingMissing);
         let mut d = plist::Dictionary::new();
@@ -112,7 +179,7 @@ mod tests {
         let mut bytes = Vec::new();
         plist::Value::Dictionary(d).to_writer_xml(&mut bytes).unwrap();
         assert!(Record::from_bytes(&bytes).is_err());
-        let missing = Record::read(Path::new("/nonexistent/persona/pairing.record"));
+        let missing = Stored::read(Path::new("/nonexistent/persona/pairing.record"));
         assert_eq!(missing.err().unwrap().code, Code::PairingMissing);
     }
 
@@ -128,7 +195,10 @@ mod tests {
         r.write(&path).unwrap(); // replaces
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        assert_eq!(Record::read(&path).unwrap().sending_host, r.sending_host);
+        let Stored::Network(back) = Stored::read(&path).unwrap() else {
+            panic!("a network record")
+        };
+        assert_eq!(back.sending_host, r.sending_host);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }

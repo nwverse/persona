@@ -11,6 +11,7 @@ mod pair;
 mod record;
 mod run;
 mod shot;
+mod sim;
 mod wire;
 
 use std::path::{Path, PathBuf};
@@ -22,9 +23,11 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use crate::device::{Device, Target};
 use crate::error::{BridgeError, Code};
 use crate::ops::Action;
+use crate::record::Stored;
 use crate::run::{Outcome, Phone};
+use crate::sim::{SimDevice, System};
 
-const USAGE: &str = "usage: persona-iphone-bridge version | call | serve --udid <udid> --record <path> --host <address> [--port <port>] [--timeout-ms <ms>] | usb-list --json | pair --udid <udid> --out <path> | match --record <path> --identifier <id> --auth-tag <tag>";
+const USAGE: &str = "usage: persona-iphone-bridge version | call | serve --udid <udid> --record <path> [--host <address>] [--port <port>] [--timeout-ms <ms>] | usb-list --json | pair --udid <udid> --out <path> | match --record <path> --identifier <id> --auth-tag <tag>";
 
 fn version_line() -> String {
     format!(
@@ -78,6 +81,59 @@ impl Flags {
     }
 }
 
+/// The phone a record names: over the network, or a simulator here.
+enum AnyPhone {
+    Network(Box<Device>),
+    Simulator(SimDevice<System>),
+}
+
+impl Phone for AnyPhone {
+    async fn run(&mut self, action: Action) -> Result<Value, BridgeError> {
+        match self {
+            AnyPhone::Network(d) => d.run(action).await,
+            AnyPhone::Simulator(d) => d.run(action).await,
+        }
+    }
+
+    fn idle_at(&self) -> Option<tokio::time::Instant> {
+        match self {
+            AnyPhone::Network(d) => d.idle_at(),
+            AnyPhone::Simulator(d) => d.idle_at(),
+        }
+    }
+
+    async fn idle(&mut self) {
+        match self {
+            AnyPhone::Network(d) => d.idle().await,
+            AnyPhone::Simulator(d) => d.idle().await,
+        }
+    }
+
+    async fn close(&mut self) {
+        match self {
+            AnyPhone::Network(d) => d.close().await,
+            AnyPhone::Simulator(d) => d.close().await,
+        }
+    }
+}
+
+/// Opens what `record` names. A network record needs the phone's address; a simulator record does not.
+async fn open(udid: &str, record: &Path, host: Option<&str>, port: u16) -> Result<AnyPhone, BridgeError> {
+    match Stored::read(record)? {
+        Stored::Simulator(r) => Ok(AnyPhone::Simulator(SimDevice::connect(System, &r, udid).await?)),
+        Stored::Network(r) => {
+            let host =
+                host.ok_or_else(|| BridgeError::bad_request("the phone's address is required for this record"))?;
+            let target = Target {
+                udid: udid.to_owned(),
+                host: host.to_owned(),
+                port,
+            };
+            Ok(AnyPhone::Network(Box::new(Device::connect(&target, *r).await?)))
+        }
+    }
+}
+
 fn failed(e: &BridgeError) -> Outcome {
     Outcome {
         code: 1,
@@ -111,21 +167,19 @@ async fn one_shot(result: Result<Value, BridgeError>) -> Outcome {
 async fn serve(args: &[String]) -> Outcome {
     let setup = || -> Result<_, BridgeError> {
         let flags = Flags::parse(args, &["udid", "record", "host", "port", "timeout-ms"], &[])?;
-        let target = Target {
-            udid: flags.req("udid")?.to_owned(),
-            host: flags.req("host")?.to_owned(),
-            port: flags.num("port")?.unwrap_or(wire::DEFAULT_PORT),
-        };
+        let udid = flags.req("udid")?.to_owned();
+        let host = flags.get("host").filter(|h| !h.is_empty()).map(str::to_owned);
+        let port = flags.num("port")?.unwrap_or(wire::DEFAULT_PORT);
         let record = PathBuf::from(flags.req("record")?);
         let timeout = wire::clamp_timeout(flags.num("timeout-ms")?);
-        Ok((target, record, timeout))
+        Ok((udid, host, port, record, timeout))
     };
-    let (target, record, timeout) = match setup() {
+    let (udid, host, port, record, timeout) = match setup() {
         Ok(s) => s,
         Err(e) => return failed(&e),
     };
     let connected = tokio::time::timeout(Duration::from_millis(timeout), async {
-        let mut device = Device::connect(&target, &record).await?;
+        let mut device = open(&udid, &record, host.as_deref(), port).await?;
         let info = device.run(Action::DeviceInfo).await?;
         Ok::<_, BridgeError>((device, info))
     })
@@ -149,12 +203,13 @@ async fn call() -> Outcome {
     let mut input = BufReader::new(tokio::io::stdin());
     let mut out = tokio::io::stdout();
     run::call(&mut input, &mut out, async |spec: wire::DeviceSpec| {
-        let target = Target {
-            port: spec.port(),
-            udid: spec.udid,
-            host: spec.address,
-        };
-        Device::connect(&target, Path::new(&spec.pairing_file)).await
+        open(
+            &spec.udid,
+            Path::new(&spec.pairing_file),
+            spec.address.as_deref(),
+            spec.port(),
+        )
+        .await
     })
     .await
 }
@@ -175,7 +230,12 @@ async fn dispatch(args: &[String]) -> Outcome {
         "pair" => {
             let result = async {
                 let flags = Flags::parse(rest, &["udid", "out"], &[])?;
-                pair::pair(flags.req("udid")?, Path::new(flags.req("out")?)).await
+                let (udid, out) = (flags.req("udid")?, Path::new(flags.req("out")?));
+                if sim::is_simulator(&System, udid).await {
+                    sim::pair(&System, udid, out).await
+                } else {
+                    pair::pair(udid, out).await
+                }
             };
             one_shot(result.await).await
         }
@@ -237,7 +297,7 @@ mod tests {
         assert_eq!(o.code, 1);
         assert!(o.stderr_error.unwrap().contains("bad_request"));
         let o = dispatch(&strings(&["serve", "--udid", "U"])).await;
-        assert!(o.stderr_error.unwrap().contains("--host is required"));
+        assert!(o.stderr_error.unwrap().contains("--record is required"));
         let o = dispatch(&strings(&["pair", "--udid", "U"])).await;
         assert!(o.stderr_error.unwrap().contains("--out is required"));
         let o = dispatch(&strings(&["match", "--record", "/r", "--identifier", "i"])).await;

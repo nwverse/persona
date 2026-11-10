@@ -120,8 +120,7 @@ async fn dial(addr: SocketAddr, what: &str) -> Result<TcpStream, BridgeError> {
 }
 
 impl Device {
-    pub async fn connect(target: &Target, record_path: &Path) -> Result<Self, BridgeError> {
-        let mut record = Record::read(record_path)?;
+    pub async fn connect(target: &Target, mut record: Record) -> Result<Self, BridgeError> {
         let addr = socket_addr(&target.host, target.port).await?;
 
         // Prove who we are with the saved record. Never fall back to pairing anew: that needs the user.
@@ -372,6 +371,8 @@ impl Device {
                 Some(input || screenshot)
             },
             "battery": level.map(|l| json!({"level": l as f64 / 100.0, "charging": charging})),
+            "simulated": false,
+            "transport": "network",
             "capabilities": {"screenshot": screenshot, "ax_tree": false, "input": input, "apps": apps},
             "notes": notes,
         }))
@@ -896,6 +897,11 @@ mod tests {
     }
 
     async fn connect_err(target: &Target, record: &Path) -> BridgeError {
+        let record = match crate::record::Stored::read(record) {
+            Ok(crate::record::Stored::Network(r)) => *r,
+            Ok(_) => panic!("a network record"),
+            Err(e) => return e,
+        };
         match Device::connect(target, record).await {
             Ok(_) => panic!("connected to a stand-in"),
             Err(e) => e,

@@ -17,6 +17,8 @@ Status: v1. **Nothing here has been verified on a real device yet** (see "Verifi
 - It connects with **RemotePairing** (iOS 17 and later): a saved pairing record plus the phone's address on the LAN or on Tailscale. It
   verifies the record, opens the encrypted tunnel the phone offers, runs a **userspace** TCP stack over it, reads the service directory
   (RSD) and talks to the developer services listed there. It never changes the computer's routes, DNS or interfaces: no `utun`, no root.
+- A **simulator backend** for development and testing: the same requests against an iOS simulator on this computer (see "Simulator
+  backend"), so everything above the bridge can run end to end without a phone.
 - Two ways to run it with the same requests and answers: **`call`** (one process per request) and **`serve`** (one process per phone,
   keeping the tunnel open). Every request has a total deadline.
 - It is optional for the node, like Cua Driver for a Mac: not part of personad's build or CI. The node looks for it at
@@ -30,7 +32,7 @@ Status: v1. **Nothing here has been verified on a real device yet** (see "Verifi
 ```
 persona-iphone-bridge version                             # "persona-iphone-bridge 0.1.0 (wire 1)"; also --version
 persona-iphone-bridge call                                # one request on stdin, one answer on stdout
-persona-iphone-bridge serve --udid <udid> --record <path> --host <address> [--port <port>] [--timeout-ms <ms>]
+persona-iphone-bridge serve --udid <udid> --record <path> [--host <address>] [--port <port>] [--timeout-ms <ms>]
 persona-iphone-bridge usb-list --json                     # phones attached over USB (#3448)
 persona-iphone-bridge pair --udid <udid> --out <path>     # pair over trusted USB, write the record (#3448)
 persona-iphone-bridge match --record <path> --identifier <id> --auth-tag <tag>   # is this Bonjour advertisement the record's phone? (#3448)
@@ -49,7 +51,8 @@ persona-iphone-bridge match --record <path> --identifier <id> --auth-tag <tag>  
 
 ### `serve`
 
-One process per phone. `--record` is the pairing record, `--host` the phone's address (an IP literal, an IPv6 literal with `%zone` such
+One process per phone. `--record` is the pairing record, `--host` the phone's address (required for a phone, not given for a simulator
+record: an IP literal, an IPv6 literal with `%zone` such
 as a Bonjour link-local address, or a host name), `--port` its RemotePairing port (default 49152, not verified on a real device: pass the
 port Bonjour reports), `--timeout-ms` the deadline for connecting (default 30000).
 
@@ -99,7 +102,7 @@ argument list, so they never show in the process list. Screenshots written with 
 | `op` | string | One of the operations below. |
 | `device` | object | `call` only; `serve` takes the device from its flags. |
 | `device.udid` | string | The phone's UDID; checked against what the phone reports, a mismatch fails with `wrong_device`. |
-| `device.address` | string | As `serve --host`. |
+| `device.address` | string | As `serve --host`; left out for a simulator record. |
 | `device.port` | int, optional | RemotePairing port. Default 49152 (not verified on a real device). |
 | `device.pairing_file` | string | The pairing record on this computer. The bridge only reads it. |
 | `timeout_ms` | int, optional | Deadline for the request (in `call`, connecting included). Default 30000, clamped to 1000–120000. |
@@ -167,10 +170,13 @@ ready event.
   "point_width": 430, "point_height": 932, "scale": 3, "orientation": "portrait",
   "locked": null, "developer_mode": true, "ddi_mounted": true,
   "battery": { "level": 0.81, "charging": false },
+  "simulated": false, "transport": "network",
   "capabilities": { "screenshot": true, "ax_tree": false, "input": true, "apps": true },
   "notes": { "ax_tree": "unsupported" }
 }
 ```
+
+- `simulated` / `transport`: `true` / `"simulator"` for the simulator backend, `false` / `"network"` for a phone.
 
 - `orientation`: `portrait` | `portrait_upside_down` | `landscape_left` | `landscape_right` (Home button or indicator on that side).
 - Any field the phone did not answer is `null`. `locked` is always `null` in v1: no service found yet says whether the screen is locked.
@@ -269,6 +275,25 @@ already trusting this computer.
   advertisement (its TXT `identifier` and `authTag`) belongs to the record's phone. The tag is derived from a key inside the record, and the
   identifier is not a stable value to save at pairing, so the node asks the bridge for each advertisement and connects to the first match.
 
+## Simulator backend (development and testing)
+
+The same wire contract against an iOS simulator on this computer, through `xcrun simctl`. It is for developing and testing everything
+above the bridge without a phone, and says so: `device_info` reports `"simulated": true`, `"transport": "simulator"`, and a `notes.simulated`
+line.
+
+- **Pairing**: `pair --udid <simulator udid>` (any simulator `simctl list devices` shows) writes a record marked as a simulator, 0600, with
+  no USB or trust, and prints `{"udid", "name", "model", "product_version", "transport": "simulator"}`. A udid that is not a simulator here
+  goes to the USB pairing above.
+- **Connecting**: `serve --udid <udid> --record <path>` without `--host`, or `call` without `device.address`. The simulator must already be
+  booted (`scripts/app/sim-boot.sh`): the bridge never boots, shuts down or erases one. Not booted: `unreachable`. Gone from this computer:
+  `pairing_rejected`. A record for another simulator: `wrong_device`.
+- **Operations**: `device_info` (model, iOS version and screen from the simulator's environment), `screenshot` (`simctl io screenshot`),
+  `list_apps` (`simctl listapps`), `launch_app` (`simctl launch`; `env` is passed through as `SIMCTL_CHILD_…`), `terminate_app`
+  (`simctl terminate`; by pid only for an app process of that simulator, found with its `launchctl list`, never any other process on the
+  computer).
+- **Not yet**: `ax_tree` and input (touches, keys, buttons) answer `unsupported`; `simctl` has no input. The orientation cannot be read
+  either: `portrait`, or `landscape_right` when a capture is wider than tall.
+
 ## Verification status
 
 No iPhone was available while this was written. Every unit test runs against stand-ins: the request / answer / error framing, argument
@@ -284,6 +309,7 @@ to a phone has run against one:
 | `list_apps`, `launch_app`, `terminate_app` | not verified on a real device |
 | Input gate (display stream), touch coordinates and rotation, keys, buttons | not verified on a real device |
 | `ax_tree` | `unsupported` |
+| Simulator backend: pair, `device_info`, `screenshot`, `list_apps`, `launch_app`, `terminate_app`, `serve` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
 ## Open questions
 
