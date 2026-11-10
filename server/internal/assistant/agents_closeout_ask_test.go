@@ -36,6 +36,7 @@ func workedTurn(f *fakeHub, reply string) {
 func justStopped(id, last string, ago time.Duration) proto.Session {
 	c := stopped(id, last)
 	c.UpdatedAt = time.Now().Add(-ago).UTC().Truncate(time.Second)
+	c.StartedByPersona = true // only an agent Persona started is asked
 	return c
 }
 
@@ -136,9 +137,10 @@ func TestCloseoutAskIgnoredIsNotRepeated(t *testing.T) {
 // finished turn with something to show, or for an agent that is supervised or not an agent's own session.
 func TestCloseoutAskOnlyWhenDue(t *testing.T) {
 	for name, change := range map[string]func(s *Service, f *fakeHub, c *proto.Session){
-		"switch off": func(s *Service, _ *fakeHub, _ *proto.Session) { s.work.switches = &TriageSwitches{Enabled: true} },
-		"triage off": func(s *Service, _ *fakeHub, _ *proto.Session) { s.work.switches = &TriageSwitches{CloseoutAsk: true} },
-		"a closeout": func(_ *Service, f *fakeHub, c *proto.Session) { workedTurn(f, doneCloseout); c.LastText = doneCloseout },
+		"switch off":      func(s *Service, _ *fakeHub, _ *proto.Session) { s.work.switches = &TriageSwitches{Enabled: true} },
+		"started by hand": func(_ *Service, _ *fakeHub, c *proto.Session) { c.StartedByPersona = false },
+		"triage off":      func(s *Service, _ *fakeHub, _ *proto.Session) { s.work.switches = &TriageSwitches{CloseoutAsk: true} },
+		"a closeout":      func(_ *Service, f *fakeHub, c *proto.Session) { workedTurn(f, doneCloseout); c.LastText = doneCloseout },
 		"no work": func(_ *Service, f *fakeHub, _ *proto.Session) {
 			f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant", Text: askReply})
 		},

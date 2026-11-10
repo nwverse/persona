@@ -60,12 +60,15 @@ func (s *Service) planCloseoutAsk(ctx context.Context, machine string, c proto.S
 	e.WakeAt, w.CloseoutAsk = &at, closeoutAskPending // not Work.WakeAt: the apps are told of no wait
 }
 
-// closeoutAskable: c is a session the status question may go to. Not an assistant conversation, a review's reviewer,
+// closeoutAskable: c is a session the status question may go to. Only one Persona started; not an assistant conversation, a review's reviewer,
 // a session of a source or an archived or read-only one, and not an agent on a supervised open todo (its supervisor
 // follows it).
 func closeoutAskable(machine string, c proto.Session, s *Service) bool {
 	if c.Assistant || c.SourceKind != "" || c.Archived || c.ReadOnlyReason != "" || s.isReviewer(machine, c.SessionID) {
 		return false
+	}
+	if !c.StartedByPersona {
+		return false // a session the user started by hand in a terminal is theirs: nothing is typed into it unasked
 	}
 	t, ok := s.openTodoOfAgent(machine, c.SessionID)
 	return !ok || t.Supervision == nil || t.Supervision.Supervisor == ""
