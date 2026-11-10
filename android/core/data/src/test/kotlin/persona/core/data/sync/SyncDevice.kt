@@ -304,7 +304,9 @@ internal class SyncDevice(val name: String, private val run: SyncRun, private va
         }
 
         override suspend fun reconcile(request: MessageRequest, createdAt: Long, allowTextMatch: Boolean): MessageEvidence? {
-            val receipt = run.read("/ops", get("/ops")) { run.receipt(request.opId) ?: JsonNull }
+            val receipt = run.read("/ops", buildJsonObject { put("get", "/ops"); put("id", run.keyOfOp(request.opId)) }) {
+                run.receipt(request.opId) ?: JsonNull
+            }
             if (receipt is JsonObject && receipt.str("state") in setOf("done", "failed", "unknown")) {
                 val result = SyncReply(receipt.obj("result")!!).sendResult()
                 if (result != MessageTransportResult.Accepted) return MessageEvidence.Receipt(result)
