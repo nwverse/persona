@@ -135,6 +135,30 @@ func TestManyMediumStringsShareTheBudget(t *testing.T) {
 	}
 }
 
+// A string only a little over the share stays whole: cut, with its note, it would be longer than it was.
+func TestStringsJustOverTheShareStayWhole(t *testing.T) {
+	items := make([]map[string]string, 200)
+	for i := range items {
+		items[i] = map[string]string{"text": strings.Repeat("y", minInputShare+30)}
+	}
+	in, _ := json.Marshal(map[string]any{"items": items})
+	out := clipJSON(in)
+	if len(out) > len(in) {
+		t.Errorf("clipping made the input longer: %d bytes from %d", len(out), len(in))
+	}
+	var got struct {
+		Items []map[string]string `json:"items"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil || len(got.Items) != len(items) {
+		t.Fatalf("lost its shape: %v", err)
+	}
+	for i, it := range got.Items {
+		if it["text"] != items[i]["text"] {
+			t.Fatalf("items[%d] was cut to %d bytes from %d", i, len(it["text"]), len(items[i]["text"]))
+		}
+	}
+}
+
 // BenchmarkClipJSONNested clips the push_files input; bytes/item is what every page and push carries for it.
 func BenchmarkClipJSONNested(b *testing.B) {
 	raw := json.RawMessage(pushFilesInput())

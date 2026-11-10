@@ -58,9 +58,15 @@ func dropSplitQPEscape(b []byte) []byte {
 }
 
 // dropSplitRune drops what a byte cut leaves of the last character: the U+FFFD a charset decoder (GBK, Shift_JIS)
-// writes for a lead byte without its trail byte, or the at most utf8.UTFMax-1 bytes of an incomplete UTF-8 sequence.
+// writes for a lead byte without its trail byte, the U+FFFD and ASCII digit (and U+FFFD) GB18030 writes for the first
+// two (three) bytes of a four-byte character, or the at most utf8.UTFMax-1 bytes of an incomplete UTF-8 sequence.
 func dropSplitRune(s string) string {
-	if t, ok := strings.CutSuffix(s, string(utf8.RuneError)); ok {
+	const bad = string(utf8.RuneError)
+	t, lone := strings.CutSuffix(s, bad)
+	if n := len(t) - 1; n >= len(bad) && '0' <= t[n] && t[n] <= '9' && strings.HasSuffix(t[:n], bad) {
+		return t[:n-len(bad)]
+	}
+	if lone {
 		return t
 	}
 	for range utf8.UTFMax - 1 {

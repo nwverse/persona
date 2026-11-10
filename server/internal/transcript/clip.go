@@ -72,7 +72,8 @@ const (
 
 // clipJSON shortens long strings anywhere in a tool input object: a Write's content, but also push_files'
 // files[].content, MultiEdit's edits[].new_string or an MCP call's nested blocks, which went out whole in every page and
-// push. The shape stays, so the apps' renderers still find their fields. A value that is not an object is left as it is.
+// push. The shape stays, so the apps' renderers still find their fields. A value that is not an object is left as it is:
+// a Claude tool_use's input and an MCP call's arguments are always objects.
 func clipJSON(raw json.RawMessage) json.RawMessage {
 	if len(raw) <= maxInputLen {
 		return raw
@@ -85,8 +86,9 @@ func clipJSON(raw json.RawMessage) json.RawMessage {
 	if len(b) <= maxInputLen {
 		return b
 	}
-	// Still too long (many medium strings): the long ones share evenly what the rest leaves, so the input stays about
-	// maxInputLen. A share is never under minInputShare, so only a great many long strings can still go over.
+	// Still too long (many medium strings): the strings over minInputShare share evenly what the rest leaves. Shorter
+	// strings, keys and other values are never cut, and a share is never under minInputShare, so an input made mostly of
+	// those (thousands of short array items) or of a great many long strings still goes over maxInputLen.
 	long, kept := 0, 0
 	rest, _ := json.Marshal(mapStrings(m, func(s string) string {
 		if len(s) <= minInputShare {
@@ -96,12 +98,17 @@ func clipJSON(raw json.RawMessage) json.RawMessage {
 		return ""
 	}))
 	if long == 0 {
-		return b
+		return b // nothing left that may be cut
 	}
 	// JSON escapes make a kept byte cost more than one: scale the share by what the first pass's strings cost.
 	share := (maxInputLen - len(rest)) * kept / (len(b) - len(rest)) / long
 	share = min(max(share-clipNoteRoom, minInputShare), maxInputLen/2)
-	b, _ = json.Marshal(mapStrings(m, func(s string) string { return clipTo(s, share) }))
+	b, _ = json.Marshal(mapStrings(m, func(s string) string {
+		if len(s) <= share+clipNoteRoom {
+			return s // within a note of the share: cut, it would come out about as long, or longer
+		}
+		return clipTo(s, share)
+	}))
 	return b
 }
 

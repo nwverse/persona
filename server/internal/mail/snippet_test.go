@@ -23,6 +23,8 @@ var (
 	snippetHan     = strings.Repeat("中文", 400)  // i18n-ignore
 	snippetNiHao   = strings.Repeat("你好", 400)  // i18n-ignore
 	snippetNihongo = strings.Repeat("日本語", 300) // i18n-ignore
+	// GB18030 writes a character outside its two-byte table (an emoji) as four bytes: lead, digit, lead, digit.
+	snippetEmoji = strings.Repeat("\U0001F600", 300)
 )
 
 // snippetHTML is an HTML body whose <style> block (css rules of 11 bytes) fills most of the first snippetBytes once
@@ -129,6 +131,13 @@ func TestSnippetOfDropsTheCharacterTheCutSplits(t *testing.T) {
 			header: "Content-Type: text/html; charset=gb18030\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
 			body:   func(pad int) string { return encodeOrFail(t, gb18030, snippetHTML(160, snippetHan, pad)) },
 			text:   "x" + snippetHan, pads: 2,
+		},
+		{
+			// A cut after the second or third byte of a four-byte character decodes to U+FFFD and the ASCII digit.
+			name:   "gb18030 8bit four-byte",
+			header: "Content-Type: text/html; charset=gb18030\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
+			body:   func(pad int) string { return encodeOrFail(t, gb18030, snippetHTML(160, snippetEmoji, pad)) },
+			text:   "x" + snippetEmoji, pads: 4,
 		},
 		{
 			name:   "shift_jis 8bit",
