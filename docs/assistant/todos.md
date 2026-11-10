@@ -334,6 +334,19 @@ effective from the next judgment and next dispatched task. When on:
 - **Batch user approvals**: assistant live snapshot lists delivery blockers after each task; open tasks with `unblock = user` get a separate "Waiting for user approval to go live" group (oldest ten).
   Assistant CLAUDE.md tells it to present these together in one message; after user approves in one reply, use `agent_send` to notify the corresponding Agents separately, rather than asking anew for every item.
 
+## Spot-check reviews
+
+(#3128, `assistant/supervise_sample.go`.) Every finished supervised task waits for the main conversation's `task_review`; with many tasks that makes the main conversation the bottleneck. The assistant setting `review_sample_percent` (0–100) lets the done judge close the tasks it can verify and sends only a share of them to the main conversation.
+
+- **Default 100**: nothing changes. The judge is not asked for anything more and every finished task waits for `task_review`.
+- **Turning it on**: tell the assistant (`assistant.review_sample_percent` in `persona_settings`, confirmation card on the phone), or `PUT /api/v1/assistant` with `{"review_sample_percent": 20}`; `GET /api/v1/assistant` reports the share in effect. It applies from the next judgment.
+- **The judge's check**: below 100, the "Automatic completion" model of a supervised task with `done_when` also returns `checks` (per criterion, in order: `checkable`, `met`, `evidence`) and `delivery` (as in "Delivery", whether or not `done_needs_delivery` is on; it is not written to the to-do unless that setting is on). The hub matches the checks to the ledger's criteria by position. A task **passes** when every criterion is checkable (a command's output, CI, a link, a live reading — not a matter of taste or something only the user can confirm), met, with evidence, and the delivery is `live`. A task without `done_when` never passes.
+- **Passed and not sampled**: the judge closes it as `task_review accepted` would: the ledger records an accepted review `by: "judge"` with the checks, the to-do closes (`done_reason` starts with 判官核对通过), the outcome goes to the project timeline, and the owner gets the usual conclusion card. The main conversation gets no supervision message for it.
+- **Passed and sampled**: whether a task is sampled is a hash of the to-do id and the stretch of work, so the same work always gets the same answer; about `review_sample_percent` percent are. A sampled one waits for `task_review` as before, its supervision message starting with 抽查 so the main conversation knows the judge's check already passed.
+- **Failed the check**: waits for `task_review` as before.
+- **Never closed by the judge**: a rework round (the supervisor was promised the next review, and asked for more than `done_when` says), a task that was reopened or was ever accepted or cancelled before, and a task the supervisor reviewed while the judge was deciding. `live` counts only when the judge itself says so, never on the Agent's delivery line alone; checks that do not come one per criterion with each criterion copied in its place count as not met.
+- When the independent review (`supervise_autoreview.go`) starts for a task, it runs first and its result waits for `task_review`; the judge's check does not close it.
+
 ## Close Agents for completed tasks
 
 Completing a to-do stops Persona's automatic follow-ups for its linked Agents, including when a turn ends after

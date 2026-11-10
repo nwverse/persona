@@ -17,5 +17,7 @@
   "title_leaders": "Leader 对话",
   "change_leaders": "Leader 对话（督办自己派出的任务）：{before} → {after}",
   "title_model_tiers": "Agent 预设",
-  "change_model_tier": "{profile} · {tier}：{before} → {after}"
+  "change_model_tier": "{profile} · {tier}：{before} → {after}",
+  "title_review_sample_percent": "抽查验收的比例",
+  "change_review_sample_percent": "抽查验收的比例：{before}% → {after}%"
 }
