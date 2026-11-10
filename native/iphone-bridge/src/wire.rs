@@ -107,6 +107,7 @@ pub fn parse_request(line: &str, require_v: bool, require_id: bool) -> Result<Re
         return Err(fail("missing id".into()));
     }
     let op = raw.op.ok_or_else(|| fail("missing op".into()))?;
+    let mount = op == "mount_ddi";
     if !OPS.contains(&op.as_str()) {
         return Err(fail(format!("unknown op {op:?}")));
     }
@@ -119,8 +120,10 @@ pub fn parse_request(line: &str, require_v: bool, require_id: bool) -> Result<Re
         id,
         op,
         device: raw.device,
-        timeout_ms: if op == "mount_ddi" {
-            raw.timeout_ms.unwrap_or(MOUNT_TIMEOUT_MS).clamp(MIN_TIMEOUT_MS, MAX_MOUNT_TIMEOUT_MS)
+        timeout_ms: if mount {
+            raw.timeout_ms
+                .unwrap_or(MOUNT_TIMEOUT_MS)
+                .clamp(MIN_TIMEOUT_MS, MAX_MOUNT_TIMEOUT_MS)
         } else {
             clamp_timeout(raw.timeout_ms)
         },

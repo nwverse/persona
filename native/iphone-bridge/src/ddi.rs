@@ -121,8 +121,12 @@ pub trait Mounter {
     async fn device_ticket(&mut self, image_hash: Vec<u8>) -> Result<Option<Vec<u8>>, BridgeError>;
     /// A ticket from Apple's signing server.
     async fn signed_ticket(&mut self, manifest: &plist::Dictionary) -> Result<Vec<u8>, BridgeError>;
-    async fn upload_and_mount(&mut self, image: Vec<u8>, ticket: Vec<u8>, trust_cache: Vec<u8>)
-    -> Result<(), BridgeError>;
+    async fn upload_and_mount(
+        &mut self,
+        image: Vec<u8>,
+        ticket: Vec<u8>,
+        trust_cache: Vec<u8>,
+    ) -> Result<(), BridgeError>;
 }
 
 pub async fn mount<M: Mounter>(m: &mut M, dir: &Path, force: bool) -> Result<Value, BridgeError> {
@@ -172,7 +176,10 @@ mod tests {
         };
         let mut m = plist::Dictionary::new();
         m.insert("PersonalizedDMG".into(), entry(image));
-        m.insert("LoadableTrustCache".into(), entry(&format!("Firmware/{image}.trustcache")));
+        m.insert(
+            "LoadableTrustCache".into(),
+            entry(&format!("Firmware/{image}.trustcache")),
+        );
         let mut id = plist::Dictionary::new();
         id.insert("ApBoardID".into(), board.into());
         id.insert("ApChipID".into(), chip.into());
@@ -190,13 +197,20 @@ mod tests {
     fn ddi_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("persona-ddi-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("Firmware")).unwrap();
-        let m = manifest(vec![identity("0x0C", "0x8010", "a.dmg"), identity("0x0C", "0x8101", "b.dmg")]);
+        let m = manifest(vec![
+            identity("0x0C", "0x8010", "a.dmg"),
+            identity("0x0C", "0x8101", "b.dmg"),
+        ]);
         plist::Value::Dictionary(m)
             .to_file_xml(dir.join("BuildManifest.plist"))
             .unwrap();
         for f in ["a.dmg", "b.dmg"] {
             std::fs::write(dir.join(f), format!("image {f}")).unwrap();
-            std::fs::write(dir.join("Firmware").join(format!("{f}.trustcache")), format!("trust {f}")).unwrap();
+            std::fs::write(
+                dir.join("Firmware").join(format!("{f}.trustcache")),
+                format!("trust {f}"),
+            )
+            .unwrap();
         }
         dir
     }
@@ -277,13 +291,19 @@ mod tests {
 
     #[test]
     fn picks_the_build_for_this_phone() {
-        let m = manifest(vec![identity("0x0C", "0x8010", "a.dmg"), identity("0x0C", "0x8101", "b.dmg")]);
+        let m = manifest(vec![
+            identity("0x0C", "0x8010", "a.dmg"),
+            identity("0x0C", "0x8101", "b.dmg"),
+        ]);
         assert_eq!(
             pick(&m, 0x0C, 0x8101).unwrap(),
             ("b.dmg".to_owned(), "Firmware/b.dmg.trustcache".to_owned())
         );
         assert_eq!(pick(&m, 0x0E, 0x8101).unwrap_err().code, Code::DdiUnsupportedDevice);
-        assert_eq!(pick(&plist::Dictionary::new(), 1, 1).unwrap_err().code, Code::DdiUnsupportedDevice);
+        assert_eq!(
+            pick(&plist::Dictionary::new(), 1, 1).unwrap_err().code,
+            Code::DdiUnsupportedDevice
+        );
         assert_eq!(number(Some(&plist::Value::String("12".into()))), Some(12));
         assert_eq!(number(Some(&plist::Value::String("0xzz".into()))), None);
     }
@@ -304,7 +324,10 @@ mod tests {
         let mut p = phone();
         p.phone_ticket = Some(b"kept".to_vec());
         let r = mount(&mut p, &dir, false).await.unwrap();
-        assert_eq!(r, json!({"mounted": true, "already": false, "image": "b.dmg", "ticket": "phone"}));
+        assert_eq!(
+            r,
+            json!({"mounted": true, "already": false, "image": "b.dmg", "ticket": "phone"})
+        );
         assert_eq!(
             p.log,
             ["lookup", "phone ticket", "mount image b.dmg kept trust b.dmg", "lookup"]
@@ -323,7 +346,10 @@ mod tests {
         let mut p = phone();
         p.signing = Some(BridgeError::new(Code::TssFailed, "no answer"));
         assert_eq!(mount(&mut p, &dir, false).await.unwrap_err().code, Code::TssFailed);
-        assert!(!p.log.iter().any(|l| l.starts_with("mount")), "nothing uploaded without a ticket");
+        assert!(
+            !p.log.iter().any(|l| l.starts_with("mount")),
+            "nothing uploaded without a ticket"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -345,18 +371,26 @@ mod tests {
     #[tokio::test]
     async fn says_what_is_missing() {
         let mut p = phone();
-        let err = mount(&mut p, Path::new("/nonexistent/persona-ddi"), false).await.unwrap_err();
+        let err = mount(&mut p, Path::new("/nonexistent/persona-ddi"), false)
+            .await
+            .unwrap_err();
         assert_eq!(err.code, Code::DdiMissing);
         assert!(err.message.contains(DIR_ENV));
 
         let dir = ddi_dir();
         let mut p = phone();
         p.developer_mode = Some(false);
-        assert_eq!(mount(&mut p, &dir, false).await.unwrap_err().code, Code::DeveloperModeOff);
+        assert_eq!(
+            mount(&mut p, &dir, false).await.unwrap_err().code,
+            Code::DeveloperModeOff
+        );
 
         let mut p = phone();
         p.ids = Some((0x0E, 0x9999));
-        assert_eq!(mount(&mut p, &dir, false).await.unwrap_err().code, Code::DdiUnsupportedDevice);
+        assert_eq!(
+            mount(&mut p, &dir, false).await.unwrap_err().code,
+            Code::DdiUnsupportedDevice
+        );
 
         let mut p = phone();
         p.ids = None;

@@ -49,6 +49,7 @@ serve)
     id=$(printf '%s' "$line" | sed 's/.*"id":"\([^"]*\)".*/\1/')
     op=$(printf '%s' "$line" | sed 's/.*"op":"\([^"]*\)".*/\1/')
     echo "$op" >> "$FAKE_SERVE_LOG"
+    if [ -n "$FAKE_SERVE_REQUESTS" ]; then echo "$line" >> "$FAKE_SERVE_REQUESTS"; fi
     if [ "$op" = "drop" ]; then
       echo '{"event":"disconnected","reason":"wifi lost"}'
       exit 1

@@ -15,6 +15,7 @@ use idevice::core_device::{
     build_start_video_parameters,
 };
 use idevice::lockdown::LockdownClient;
+use idevice::mobile_image_mounter::ImageMounter;
 use idevice::remote_pairing::{RemotePairingClient, RpPairingSocket, connect_tls_psk_tunnel_native};
 use idevice::rsd::RsdHandshake;
 use idevice::springboardservices::{InterfaceOrientation, SpringBoardServicesClient};
@@ -67,6 +68,10 @@ pub struct Device {
     gate: Option<Gate>,
     apps: Option<AppServiceClient<Box<dyn ReadWrite>>>,
     springboard: Option<SpringBoardServicesClient>,
+    /// Where the service directory answers inside the tunnel, to read it again after a mount.
+    rsd_port: u16,
+    /// The service directory could not be read again after a mount: the session must be started afresh.
+    stale: bool,
 }
 
 /// The phone takes synthetic input only while a display stream is running; its video is read and dropped.
@@ -178,6 +183,8 @@ impl Device {
             gate: None,
             apps: None,
             springboard: None,
+            rsd_port: info.server_rsd_port,
+            stale: false,
         };
         let udid = device.udid_reported().await?;
         if !udid.eq_ignore_ascii_case(&target.udid) {
@@ -789,8 +796,136 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+impl Device {
+    /// `mount_ddi` (ddi.rs), then the service directory read again so the developer services show up in this
+    /// session. If that fails the mount still stands and is reported; the session asks to be started afresh.
+    async fn mount_ddi(&mut self, dir: Option<String>, force: bool) -> Result<Value, BridgeError> {
+        let dir = crate::ddi::resolve_dir(dir.as_deref(), std::env::var_os(crate::ddi::DIR_ENV));
+        let mut result = crate::ddi::mount(self, &dir, force).await?;
+        if result["already"] == true {
+            return Ok(result);
+        }
+        let refreshed = match self.adapter.connect(self.rsd_port).await {
+            Ok(stream) => RsdHandshake::new(stream).await.ok(),
+            Err(_) => None,
+        };
+        match refreshed {
+            Some(rsd) => {
+                self.rsd = rsd;
+                self.springboard = None;
+                self.apps = None;
+                result["services_refreshed"] = json!(true);
+            }
+            None => {
+                self.stale = true;
+                result["services_refreshed"] = json!(false);
+            }
+        }
+        Ok(result)
+    }
+
+    async fn mounter(&mut self) -> Result<ImageMounter, BridgeError> {
+        ImageMounter::connect_rsd(&mut self.adapter, &mut self.rsd)
+            .await
+            .map_err(|e| from_idevice(e, Phase::Operation, "image mounter"))
+    }
+}
+
+/// A mount error: what the phone said, kept apart from a dropped link or a locked phone.
+fn mount_error(e: IdeviceError, what: &str) -> BridgeError {
+    let mapped = from_idevice(e, Phase::Operation, what);
+    match mapped.code {
+        Code::Disconnected | Code::DeveloperModeOff | Code::Locked | Code::Timeout => mapped,
+        _ => BridgeError::new(Code::MountFailed, mapped.message),
+    }
+}
+
+impl crate::ddi::Mounter for Device {
+    async fn mounted(&mut self) -> Result<bool, BridgeError> {
+        match self.mounter().await?.lookup_image(crate::ddi::IMAGE_TYPE).await {
+            Ok(_) => Ok(true),
+            Err(IdeviceError::NotFound) => Ok(false),
+            Err(e) => Err(from_idevice(e, Phase::Operation, "look up mounted images")),
+        }
+    }
+
+    async fn developer_mode(&mut self) -> Result<Option<bool>, BridgeError> {
+        match self.mounter().await?.query_developer_mode_status().await {
+            Ok(on) => Ok(Some(on)),
+            Err(_) => Ok(self.developer_mode().await),
+        }
+    }
+
+    async fn identifiers(&mut self) -> Result<(u64, u64), BridgeError> {
+        let ids = self
+            .mounter()
+            .await?
+            .query_personalization_identifiers(None)
+            .await
+            .map_err(|e| from_idevice(e, Phase::Operation, "personalization identifiers"))?;
+        let get = |k: &str| ids.get(k).and_then(plist::Value::as_unsigned_integer);
+        match (get("BoardId"), get("ChipID")) {
+            (Some(board), Some(chip)) => Ok((board, chip)),
+            _ => Err(BridgeError::internal("the phone did not say its board and chip")),
+        }
+    }
+
+    async fn device_ticket(&mut self, image_hash: Vec<u8>) -> Result<Option<Vec<u8>>, BridgeError> {
+        // No ticket for this image is an error from the phone, which also closes this connection.
+        Ok(self
+            .mounter()
+            .await?
+            .query_personalization_manifest("DeveloperDiskImage", image_hash)
+            .await
+            .ok())
+    }
+
+    async fn signed_ticket(&mut self, manifest: &plist::Dictionary) -> Result<Vec<u8>, BridgeError> {
+        let [ecid] = self.lockdown_values([("UniqueChipID", None)]).await;
+        let ecid = ecid
+            .and_then(|v| v.as_unsigned_integer())
+            .ok_or_else(|| BridgeError::internal("the phone did not give the chip ID the signing request needs"))?;
+        let mut mounter = self.mounter().await?;
+        mounter
+            .get_manifest_from_tss(manifest, ecid)
+            .await
+            .map_err(|e| match e {
+                IdeviceError::Socket(_) | IdeviceError::Http(_) | IdeviceError::UnexpectedResponse(_) => {
+                    BridgeError::new(
+                        Code::TssFailed,
+                        format!("Apple's signing server (gs.apple.com) gave no ticket: {e}"),
+                    )
+                }
+                other => from_idevice(other, Phase::Operation, "personalization request"),
+            })
+    }
+
+    async fn upload_and_mount(
+        &mut self,
+        image: Vec<u8>,
+        ticket: Vec<u8>,
+        trust_cache: Vec<u8>,
+    ) -> Result<(), BridgeError> {
+        let mut mounter = self.mounter().await?;
+        mounter
+            .upload_image(crate::ddi::IMAGE_TYPE, &image, ticket.clone())
+            .await
+            .map_err(|e| mount_error(e, "upload the disk image"))?;
+        mounter
+            .mount_image(crate::ddi::IMAGE_TYPE, ticket, Some(trust_cache), None)
+            .await
+            .map_err(|e| mount_error(e, "mount the disk image"))
+    }
+}
+
 impl Phone for Device {
     async fn run(&mut self, action: Action) -> Result<Value, BridgeError> {
+        if self.stale {
+            return Err(BridgeError::new(
+                Code::Disconnected,
+                "the phone's services changed with the mounted disk image: connect again",
+            ));
+        }
         let input = action.is_input();
         let result = match action {
             Action::DeviceInfo => self.device_info().await,
@@ -809,6 +944,7 @@ impl Phone for Device {
             } => self.launch_app(bundle_id, args, env, kill_existing).await,
             Action::TerminateApp(t) => self.terminate_app(t).await,
             Action::ListApps { include_system } => self.list_apps(include_system).await,
+            Action::MountDdi { ddi_dir, force } => self.mount_ddi(ddi_dir, force).await,
             gesture => self.gesture(gesture).await.map(|()| json!({})),
         };
         if input {
