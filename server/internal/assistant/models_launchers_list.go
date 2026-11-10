@@ -196,6 +196,46 @@ func (s *Service) machineLaunchers(ctx context.Context, machine string) ([]proto
 	return out, nil
 }
 
+// assistantLaunchers are the machine's launchers backed by a provider the main conversation supports.
+func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]ConfiguredLauncher, error) {
+	ctx = withSettingsMemo(ctx)
+	ls, err := s.machineLaunchers(ctx, machine)
+	if err != nil {
+		return nil, err
+	}
+	p, err := s.modelPurposeDef(ctx, "assistant")
+	if err != nil {
+		return nil, err
+	}
+	p.MachineID = machine
+	stored := s.storedLaunchers(ctx)
+	allowed := map[string]bool{}
+	for _, v := range s.modelProviders(ctx) {
+		if name, ok := strings.CutPrefix(v.ID, "launcher."); ok && !v.Hidden && modelProviderCompatible(p, v, stored) {
+			allowed[name] = true
+		}
+	}
+	discovered := make([]ConfiguredLauncher, 0, len(ls))
+	for _, l := range ls {
+		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+	}
+	out := []ConfiguredLauncher{}
+	seen := map[string]bool{}
+	for _, l := range sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[machine]) {
+		if allowed[l.Name] {
+			out = append(out, l)
+			seen[l.Name] = true
+		}
+	}
+	// Ordinary Agent lists omit direct API providers; Messages providers are already sent to nodes as launchers.
+	for _, l := range stored {
+		if l.Kind == "api" && allowed[l.Name] && !seen[l.Name] {
+			out = append(out, ConfiguredLauncher{Launcher: proto.Launcher{Name: l.Name, BaseURL: l.BaseURL, Model: l.Model, Source: "persona"}, AgentType: "claude"})
+		}
+	}
+	return out, nil
+}
+
 // launcherAvailable: whether the machine can still run this launcher name (plain claude always; a deleted managed
 // launcher or a renamed ~/.zshrc one does not; one hub.json names for it does). A failed list counts as available.
 func (s *Service) launcherAvailable(ctx context.Context, machine, name string) bool {

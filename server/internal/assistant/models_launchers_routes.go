@@ -380,16 +380,23 @@ func (s *Service) machineLauncherRoutes() {
 			apierr.Write(w, http.StatusNotFound, errUnknownMachine)
 			return
 		}
-		ls, err := s.machineLaunchers(ctx, mid)
+		var list []ConfiguredLauncher
+		var err error
+		if r.URL.Query().Get("purpose") == "assistant" {
+			list, err = s.assistantLaunchers(ctx, mid)
+		} else {
+			var ls []proto.Launcher
+			ls, err = s.machineLaunchers(ctx, mid)
+			discovered := make([]ConfiguredLauncher, 0, len(ls))
+			for _, l := range ls {
+				discovered = append(discovered, ConfiguredLauncher{Launcher: l})
+			}
+			list = sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[mid])
+		}
 		if err != nil {
 			apierr.Call(w, err)
 			return
 		}
-		discovered := make([]ConfiguredLauncher, 0, len(ls))
-		for _, l := range ls {
-			discovered = append(discovered, ConfiguredLauncher{Launcher: l})
-		}
-		list := sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[mid])
 		out := map[string]any{"launchers": s.withHealth(ctx, mid, list), "default": s.pickerDefault(ctx, r)}
 		if purpose := r.URL.Query().Get("purpose"); purpose == "" || purpose == "agent.new" {
 			if p, tiers := s.pickerTiers(ctx, list); len(tiers) > 0 {
