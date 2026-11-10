@@ -545,6 +545,14 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     so switching Apps on an open Duo could return to "Select an Agent" in the right column (2026-11-04). Also, chats opened by left-column links do not write to `path`. The new Agents page therefore
     reopens `dev.openChat` (saved when opening a chat, cleared on returning to the list), one beat later (the outgoing tree's split view clears the path as it leaves);
     header-switched Agents in the same space are stored in `AppModel.chatSwitched`, and a rebuilt chat page on the same path opens that one directly. `ReturnToChatTests` uses `-swapTreeAt` on iPad to simulate a tree swap.
+  - Since #2836 the snapshots build nothing again: while the app is away (inactive, in the background) `RootView` gives the pages below it the width class it had while it was the active app
+    (`heldWidthClass`, in the environment, so the splits, the assistant's column and the detail presentations stay too, not only the shell / tabs choice), and on coming back the window's
+    (folded meanwhile, the shell). Swapped there, every part lost its state: an open sheet such as New Agent with what was typed in it, uploads under way, picked attachments.
+    The simulators take no snapshots in another width (a trip to the home screen keeps the sheet on the open Duo simulator without the fix too): that the hold works on the way to the background is checked on a real iPhone Duo open.
+    `-swapTreeAt` alone flips only `RootView`'s choice (the tree swap above); with `-swapTreeAway YES` the whole app's width class flips instead, from above `RootView` (`TreeSwapFlip`), while the app counts as away,
+    and the pages report they never saw it change (`probe.tree-inner`, `TreeSwapAwayTests`).
+    A real fold or unfold while the app is active still builds the tree again, and the pages' own width class changes with it: an open New Agent sheet and Health's uploads under way are lost then,
+    and in a simulation that flips the pages too the Agents page did not open its chat again (#2836, open).
   - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
     `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).

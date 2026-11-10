@@ -13,6 +13,9 @@ struct PersonaApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                #if DEBUG && os(iOS)
+                .modifier(TreeSwapFlip()) // `-swapTreeAway YES` (#2836)
+                #endif
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
