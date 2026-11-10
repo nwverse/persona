@@ -71,10 +71,14 @@ func (d *DB) PurgeInboxItems(ctx context.Context, doneBefore time.Time) (int64, 
 	return tag.RowsAffected(), err
 }
 
-// InboxItems returns the open items and those done since doneSince, newest first; older done items stay stored (as
-// history, DoneInboxItems) until PurgeInboxItems.
+// inboxItemsSQL has no ORDER BY: the manager keys what it loads by id, so the order was never used, and the sort cost
+// the start read a Sort node over every row.
+const inboxItemsSQL = `SELECT data FROM inbox_items WHERE done_at IS NULL OR done_at >= $1`
+
+// InboxItems returns the open items and those done since doneSince, in no particular order; older done items stay
+// stored (as history, DoneInboxItems) until PurgeInboxItems.
 func (d *DB) InboxItems(ctx context.Context, doneSince time.Time) ([][]byte, error) {
-	rows, err := d.pool.Query(ctx, `SELECT data FROM inbox_items WHERE done_at IS NULL OR done_at >= $1 ORDER BY updated_at DESC`, doneSince)
+	rows, err := d.pool.Query(ctx, inboxItemsSQL, doneSince)
 	if err != nil {
 		return nil, err
 	}
