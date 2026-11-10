@@ -27,6 +27,7 @@
     <string name="chat_agent_share_individual">逐条选择</string>
     <string name="chat_agent_share_all_note">全部历史和从某条开始覆盖完整目录，而不只是已加载的页面。加载更多消息后可从中选择。</string>
     <string name="chat_agent_share_future">后续消息</string>
+    <string name="chat_agent_share_resume_future">恢复发布后续消息</string>
     <string name="chat_agent_share_future_note">默认关闭。启用后仅添加启用时刻之后完成的新消息。关闭期间的消息不会补入。</string>
     <string name="chat_agent_share_tools">显示执行过程</string>
     <string name="chat_agent_share_tools_note">默认关闭。包括关联的中间文字、工具参数和结果。阅读者手动展开后才会显示。</string>

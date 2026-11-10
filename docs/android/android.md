@@ -240,6 +240,26 @@ Ported 2026-11-02 from the old App on the main line (inventory items C5–C7, C9
 - Mock hub: `MOCK_SOURCES=1` adds three sessions: "整理部署脚本" ("tidy deploy scripts"; Codex live, can send, can join live, can't approve before joining, with a Codex permission card that has `always_label`), "迁移日志采集" ("migrate log collection"; Codex history, read-only, with `read_only_reason`) and "生成季度报表" ("generate quarterly report"; DSH runtime, `agent_label: DSH`, no terminal, with a permission card without `always_label`). `POST …/attach` sets `attached` to true and enables approval, and returns 403 `codex_read_only` for sessions that can't attach. `/info` returns Codex's model and version for Codex sessions. `MOCK_SCREEN_CHAT=1` adds a terminal dialog with a header ("计划模式", "plan mode") and a back-to-chat option ("照片同步脚本支持 HEIC", "photo sync script supports HEIC"), to look at the interaction panel's tags, numbering and **Say it in the chat**. To see the Mode button under **Allow all**, `POST /api/v1/sessions/{mid}/{sid}/modes {"permission_mode":"bypassPermissions"}` to the mock hub directly.
 - Unit tests: `SessionSourceTest` in `core:domain` (cases from the old `SessionSourcesTest` + runtime, resume commands), `AgentCloseTest`, `AlwaysOfferTest` and the answer / approval fixtures; `ModelsTest` in `core:contracts` (new fields, `agentLabel`, `SessionInfo`); `HttpChatActionsTest` (attach, queue, info) and `HttpAgentOperationsTest` (attach) in `core:hub`; `SessionModesTest` (old `SessionModesTest`, `ModelPickerTest`), `ChatSessionInfoTest` (old `SessionInfoTest`) and `InteractionOptionsTest` in `feature:chat`; `AgentsListInfoTest` in `feature:agents`; `NotificationExecutionTest` in `platform:notify` (sessions that can't approve send nothing back).
 
+## Agent public sharing
+
+The Agent session menu opens `AgentShareSheet`, backed by the authority-bound `HttpAgentShares` adapter and the
+management contract in #3604. All history, From a message and individual selection use the complete sealed catalog;
+the UI shows the selected count and a full sanitized preview. Future messages and execution default off, with a
+three-day lifetime; the choices are 1, 3, 7 and 30 days, capped at creation plus 30 days.
+
+Creation and widening require an exact preview and sensitivity acknowledgement, plus a separate transport-risk
+acknowledgement on HTTP. A paused publication with its future preference still on has an explicit Resume action
+that requires fresh preview consent and sends `include_future:true`. The list describes effective publication,
+not just that preference: only active, live, future-enabled links add new messages. Sealed history remains available
+for inspection, narrowing and revocation without the source; revocation has a destructive confirmation.
+
+The bearer link is shown once, stays only in sheet memory until the user leaves or closes it, and is never persisted
+in app storage or returned in the management list. A lost creation response is inspected through tokenless metadata, not retried.
+`AgentShareModelTest`, `AgentShareShotsTest`, `HttpAgentSharesTest` and `AgentSharesWiringTest` cover policy consent,
+selection, publication state and real application routing. For #3606, the maintainer directly authorized real
+Compose/Robolectric native UI previews instead of emulator/device screenshots on the build machine without KVM;
+the captures cover all three styles in light and dark and are explicitly JVM UI previews, not device evidence.
+
 ## Connection details and haptics (#3054, aligned with iOS)
 
 - **Connection details**: when the hub can't be reached, the titles of Agents, Inbox, Lark chats and the Lark document reader turn into the connection state (the Agents page used to always show the machine name), and a tap pops up a **Connection details** sheet in place (design system `ConnectionDetails.kt`, modeled on iOS `ConnectionDetails`) instead of jumping to the Settings tab. The sheet gives the current state and reason (Waiting for network / Connecting… / Updating…, plus local network permission, certificate changed, pairing invalid), followed by a few facts: the last failure's reason and "Retrying in N seconds" (only while connecting), "Last connected: N seconds ago / N minutes ago / time", "N messages send once connected". States where retrying helps have **Retry now** (`HubConnection.reconnect()`, then refresh this page) and **Connection settings**; for certificate, pairing and permission, retrying is useless, so only **Connection settings** is offered. Online, the title isn't tappable (the Agents page used to jump to Settings even when online).

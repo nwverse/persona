@@ -30,6 +30,7 @@
     <string name="chat_agent_share_individual">Choose messages</string>
     <string name="chat_agent_share_all_note">All history and From a message cover the complete catalog, not just the loaded pages. Load more messages to pick from them.</string>
     <string name="chat_agent_share_future">Future messages</string>
+    <string name="chat_agent_share_resume_future">Resume future messages</string>
     <string name="chat_agent_share_future_note">Off by default. When enabled, only new completed messages after activation are added. Messages during a disabled interval are not backfilled.</string>
     <string name="chat_agent_share_tools">Show execution</string>
     <string name="chat_agent_share_tools_note">Off by default. Includes associated intermediate text, tool arguments and results. Execution remains collapsed until the reader opens it.</string>
@@ -82,7 +83,7 @@
     <string name="chat_agent_share_tools_off">Execution hidden</string>
     <string name="chat_agent_share_future_on">Adds new messages</string>
     <string name="chat_agent_share_future_off">No new messages</string>
-    <string name="chat_agent_share_omitted_title">Not shareable</string>
+    <string name="chat_agent_share_omitted_title">Content that can\'t be shared</string>
     <string name="chat_agent_share_omission_unknown_provenance">Messages whose sender cannot be verified</string>
     <string name="chat_agent_share_omission_unfinished_turn">Replies that had not finished</string>
     <string name="chat_agent_share_omission_unassociated_execution">Tool work not tied to a reply</string>

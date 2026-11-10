@@ -39,6 +39,7 @@ class AgentShareModel(private val api: AgentShares, private val session: Session
     var sealedCursor by mutableStateOf<String?>(null); private set
     var removed by mutableStateOf<Set<String>>(emptySet()); private set
     var replacingSelection by mutableStateOf(false); private set
+    var resumingFuture by mutableStateOf(false); private set
     var expiry by mutableStateOf<String?>(null); private set
     var publicLink by mutableStateOf<String?>(null); private set
     var uncertainCreation by mutableStateOf(false); private set
@@ -83,7 +84,18 @@ class AgentShareModel(private val api: AgentShares, private val session: Session
         if (widening && removed.isNotEmpty()) { notice = UiText.Res(R.string.chat_agent_share_separate_changes); return true }
         return false
     }
-    fun future(value: Boolean) { if (!busy && !separateNarrowing(value && detail?.share?.includeFuture == false)) { includeFuture = value; invalidatePreview() } }
+    fun future(value: Boolean) {
+        if (!busy && !separateNarrowing(value && detail?.share?.includeFuture == false)) {
+            includeFuture = value; resumingFuture = false; invalidatePreview()
+        }
+    }
+    val canResumeFuture: Boolean get() = editable && detail?.canWiden == true && includeFuture &&
+        detail?.share?.let { it.includeFuture && it.publicationStatus == "paused" } == true
+    /** Reactivation is widening even when the persisted future preference is already on. */
+    fun resumeFuture() {
+        if (busy || !canResumeFuture || separateNarrowing(true)) return
+        resumingFuture = true; invalidatePreview()
+    }
     fun tools(value: Boolean) { if (!busy && !separateNarrowing(value && detail?.share?.showTools == false)) { showTools = value; invalidatePreview() } }
     fun lifetime(value: Int) {
         if (busy || value !in listOf(1, 3, 7, 30)) return
@@ -131,7 +143,7 @@ class AgentShareModel(private val api: AgentShares, private val session: Session
         if (uncertainCreation && (!listVerified || shares.any { it.status == "active" && it.shareId !in creationBaseline.orEmpty() })) {
             notice = UiText.Res(R.string.chat_agent_share_lost); return
         }
-        page = AgentSharePage.New; detail = null; removed = emptySet(); replacingSelection = false
+        page = AgentSharePage.New; detail = null; removed = emptySet(); replacingSelection = false; resumingFuture = false
         includeFuture = false; showTools = false; days = 3; expiry = null; selection = ShareSelection.All
         submitted = false; uncertainCreation = false; publicLink = null; notice = null; invalidatePreview()
         loadCatalog()
@@ -156,7 +168,7 @@ class AgentShareModel(private val api: AgentShares, private val session: Session
         val messages = api.messages(shareId); checkCurrent()
         if (messages.revision != response.share.revision || messages.contentVersion != response.share.contentVersion) throw AgentShareFailure("share_changed")
         detail = response; sealedMessages = messages.messages; sealedCursor = messages.nextCursor; seenSealedCursors.clear()
-        page = AgentSharePage.Editor; removed = emptySet(); replacingSelection = false; catalog = null; catalogMessages = emptyList()
+        page = AgentSharePage.Editor; removed = emptySet(); replacingSelection = false; resumingFuture = false; catalog = null; catalogMessages = emptyList()
         includeFuture = response.share.includeFuture; showTools = response.share.showTools; expiry = response.share.expiresAt
         publicLink = null; notice = null; invalidatePreview()
     }
@@ -176,13 +188,13 @@ class AgentShareModel(private val api: AgentShares, private val session: Session
     fun keepSelection() { if (!busy) { replacingSelection = false; invalidatePreview() } }
     val needsPreview: Boolean get() {
         val old = detail?.share ?: return true
-        return replacingSelection || (showTools && !old.showTools) || (includeFuture && !old.includeFuture) ||
+        return resumingFuture || replacingSelection || (showTools && !old.showTools) || (includeFuture && !old.includeFuture) ||
             expiry?.let { Instant.parse(it).isAfter(Instant.parse(old.expiresAt)) } == true
     }
     /** Whether the editor holds anything to save. */
     val changed: Boolean get() {
         val old = detail?.share ?: return false
-        return replacingSelection || removed.isNotEmpty() || showTools != old.showTools || includeFuture != old.includeFuture ||
+        return resumingFuture || replacingSelection || removed.isNotEmpty() || showTools != old.showTools || includeFuture != old.includeFuture ||
             (expiry != null && expiry != old.expiresAt)
     }
     val editable: Boolean get() = detail?.share?.status == "active"
@@ -279,7 +291,7 @@ class AgentShareModel(private val api: AgentShares, private val session: Session
         val request = ShareUpdateRequest(current.revision, current.contentVersion.takeIf { needsPreview || removed.isNotEmpty() },
             removed.toList().takeIf { it.isNotEmpty() }, snapshot?.snapshotId, snapshot?.snapshotVersion,
             selection.takeIf { replacingSelection }, showTools.takeIf { it != current.showTools },
-            includeFuture.takeIf { it != current.includeFuture }, expiry?.takeIf { it != current.expiresAt }, ack)
+            includeFuture.takeIf { resumingFuture || it != current.includeFuture }, expiry?.takeIf { it != current.expiresAt }, ack)
         val result = api.update(current.shareId, request); checkCurrent()
         shares = shares.map { if (it.shareId == result.share.shareId) result.share else it }
         page = AgentSharePage.List; detail = null; invalidatePreview(); notice = UiText.Res(R.string.chat_agent_share_saved)

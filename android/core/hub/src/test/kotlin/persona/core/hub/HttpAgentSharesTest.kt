@@ -135,6 +135,29 @@ class HttpAgentSharesTest {
         } }
     }
 
+    @Test fun sharingUsesCurrentAppLanguageAndRetainsServerTransportWarningOnEveryPreviewPage() = runBlocking {
+        val original = persona.core.contracts.ClientLanguage.current
+        try {
+            Server().use { server -> server.connection().use { connection ->
+                server.ready(connection)
+                val api = HttpAgentShares(connection) { true }.forSession(session, "manager-one")
+                listOf(persona.core.contracts.AppLanguage.En, persona.core.contracts.AppLanguage.ZhHans,
+                    persona.core.contracts.AppLanguage.Ja).forEach { language ->
+                    persona.core.contracts.ClientLanguage.current = language
+                    val warning = "Synthetic HTTP transport warning (${persona.core.contracts.ClientLanguage.tag})"
+                    server.result = preview.replace("\"next_cursor\":null",
+                        "\"next_cursor\":null,\"requires_insecure_transport_ack\":true,\"transport_warning\":\"$warning\"")
+                    val prepared = api.preview(SharePreviewRequest("create", "snapshot", "v1", ShareSelection.All, false, false, 3))
+                    assertEquals(persona.core.contracts.ClientLanguage.tag, server.last().getHeader("Accept-Language"))
+                    assertEquals(warning, prepared.transportWarning); assertTrue(prepared.requiresInsecureTransportAck)
+                    val continued = api.previewPage(prepared.previewId, "next")
+                    assertEquals(persona.core.contracts.ClientLanguage.tag, server.last().getHeader("Accept-Language"))
+                    assertEquals(warning, continued.transportWarning); assertTrue(continued.requiresInsecureTransportAck)
+                }
+            } }
+        } finally { persona.core.contracts.ClientLanguage.current = original }
+    }
+
     @Test fun aNewSheetCannotCaptureOldCredentialsAfterTheActiveMemberCredentialWasReplaced() = runBlocking {
         Server().use { server ->
             val member = HubMember("synthetic-hub", null, "member-credential", listOf(Endpoint(server.server.url("/").toString(), "lan")))

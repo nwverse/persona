@@ -99,6 +99,7 @@ class AgentSharesWiringTest {
                 server.requests.forEach { request ->
                     assertEquals("explicit-manager", request.getHeader(ManagerHeader))
                     assertEquals("Bearer synthetic-device", request.getHeader("Authorization"))
+                    assertEquals(ClientLanguage.tag, request.getHeader("Accept-Language"))
                     assertFalse(request.path!!.contains("~g0a1b2c3d"))
                     assertNull(request.getHeader("X-Persona-Operation-Id"))
                 }

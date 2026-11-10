@@ -522,7 +522,12 @@ Sharing an Agent session follows the user-control rules: everything that widens 
 details, future messages, a longer lifetime) goes through a preview and an explicit confirmation of possibly
 sensitive content, plus a transport-risk confirmation on an HTTP sharing origin; narrowing and revoking need no
 preview, and revoking is a destructive confirmation. Defaults are the narrowest: future messages and work details
-off, three days. The link is shown once with a copy action and is never listed again. The public viewer is a
+off, three days. A paused publication can retain its future-messages preference; resuming it is an explicit action
+that requires a fresh preview and sensitivity confirmation, plus transport-risk confirmation on HTTP, even when
+the preference is already on. Sharing lists describe effective publication: new messages are added only while
+the link is active, publication is live and future messages are enabled; paused, revoked and expired links say
+that no new messages are added. The editor retains the configured preference separately from publication state.
+The link is shown once with a copy action and is never listed again. The public viewer is a
 separate, read-only document with the same palette tokens, plain text only and work details collapsed (section 4.7).
 Web: `web/src/sharing/`, `web/public-share/`; Android: `AgentShareSheet`; server contract in #3604.
 

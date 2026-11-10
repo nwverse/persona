@@ -27,6 +27,7 @@
     <string name="chat_agent_share_individual">個別に選択</string>
     <string name="chat_agent_share_all_note">全履歴と指定箇所からの選択は、読み込み済みのページだけでなく全カタログが対象です。さらに読み込むとそのメッセージも選べます。</string>
     <string name="chat_agent_share_future">今後のメッセージ</string>
+    <string name="chat_agent_share_resume_future">今後のメッセージを再開</string>
     <string name="chat_agent_share_future_note">初期設定はオフです。有効化後に完了した新しいメッセージだけが追加されます。無効だった期間の内容は追加されません。</string>
     <string name="chat_agent_share_tools">実行過程を表示</string>
     <string name="chat_agent_share_tools_note">初期設定はオフです。関連する途中の文章、ツールの引数と結果を含みます。読者が開くまで折りたたまれます。</string>

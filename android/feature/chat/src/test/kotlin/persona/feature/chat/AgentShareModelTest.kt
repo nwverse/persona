@@ -52,6 +52,18 @@ internal open class ShareModelApi : AgentShares {
 }
 
 class AgentShareModelTest {
+    @Test fun listDescribesOnlyActiveLiveFuturePublicationNotTheRetainedPreference() {
+        for (status in listOf("active", "revoked", "expired")) {
+            for (publication in listOf("live", "paused", "frozen")) {
+                for (future in listOf(false, true)) {
+                    val share = syntheticShare(status).copy(includeFuture = future, publicationStatus = publication)
+                    assertEquals("$status / $publication / $future", status == "active" && publication == "live" && future,
+                        publishesFutureMessages(share))
+                }
+            }
+        }
+    }
+
     @Test fun independentHttpLinkRequiresTransportConsentForExactPreviewAndPolicyChangesClearBothConsents() = runTest {
         val api = ShareModelApi().apply { insecureTransport = true }
         val model = AgentShareModel(api, SessionKey("machine", "session"), this)
@@ -152,6 +164,50 @@ class AgentShareModelTest {
         assertEquals("preview-1", api.updateRequest!!.acknowledgement!!.previewId)
         model.close()
     }
+    @Test fun pausedFuturePreferenceRequiresExplicitReactivationAndFreshExactConsent() = runTest {
+        val api = ShareModelApi().apply {
+            insecureTransport = true
+            share = share.copy(includeFuture = true, publicationStatus = "paused", pauseReason = "source_incomplete")
+        }
+        val model = AgentShareModel(api, SessionKey("machine", "session"), this)
+        model.edit("sealed"); runCurrent()
+        assertTrue(model.canResumeFuture); assertFalse(model.changed); assertFalse(model.needsPreview)
+        model.save(); runCurrent(); assertNull(api.updateRequest)
+        // A preview obtained before the explicit resume action cannot authorize reactivation.
+        model.preparePreview(); runCurrent(); model.acknowledge(true); model.acknowledgeTransport(true)
+        model.resumeFuture()
+        assertTrue(model.includeFuture); assertTrue(model.changed); assertTrue(model.needsPreview)
+        assertNull(model.preview); assertFalse(model.confirmed)
+        model.save(); runCurrent(); assertNull(api.updateRequest)
+        model.preparePreview(); runCurrent()
+        val target = api.previewRequests.last()
+        assertEquals("update", target.operation); assertEquals(true, target.includeFuture)
+        assertEquals(1L, target.expectedRevision); assertEquals(1L, target.expectedContentVersion)
+        assertNull(target.selection); assertNull(target.snapshotId)
+        model.acknowledge(true); assertFalse(model.confirmed)
+        model.acknowledgeTransport(true); model.save(); runCurrent()
+        val request = api.updateRequest!!
+        assertEquals(true, request.includeFuture); assertEquals(1L, request.expectedContentVersion)
+        assertEquals("preview-2", request.acknowledgement!!.previewId)
+        assertTrue(request.acknowledgement!!.insecureTransport)
+        assertNull(request.selection); assertNull(request.removeMessageIds)
+        model.close()
+    }
+
+    @Test fun reactivationIsUnavailableOfflineOrAfterExpiryAndCannotMixWithMessageRemovals() = runTest {
+        val api = ShareModelApi().apply { share = share.copy(includeFuture = true, publicationStatus = "paused") }
+        val model = AgentShareModel(api, SessionKey("machine", "session"), this)
+        model.edit("sealed"); runCurrent(); model.remove("editor-recent"); model.resumeFuture()
+        assertFalse(model.resumingFuture); assertFalse(model.needsPreview)
+        model.remove("editor-recent"); model.resumeFuture(); assertTrue(model.resumingFuture)
+        model.future(false); assertFalse(model.resumingFuture); assertFalse(model.needsPreview)
+        api.canWiden = false; model.edit("sealed"); runCurrent()
+        assertFalse(model.canResumeFuture); model.resumeFuture(); assertFalse(model.changed)
+        api.canWiden = true; api.share = api.share.copy(status = "expired"); model.edit("sealed"); runCurrent()
+        assertFalse(model.canResumeFuture); model.resumeFuture(); assertFalse(model.changed)
+        model.close()
+    }
+
     @Test fun closeDuringPreviewAndAuthorityChangeClearLateContentAndCapability() = runTest {
         val api = ShareModelApi().apply { previewGate = CompletableDeferred() }
         val model = AgentShareModel(api, SessionKey("machine", "session"), this)

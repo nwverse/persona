@@ -89,6 +89,8 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
                     JSwitchRow(stringResource(R.string.chat_agent_share_future), model.includeFuture, model::future,
                         subtitle = stringResource(R.string.chat_agent_share_future_note), subtitleLines = Int.MAX_VALUE,
                         enabled = policyEnabled && (model.includeFuture || (canWiden && (editing || model.catalog?.canIncludeFuture == true))))
+                    if (model.canResumeFuture) JButton(stringResource(R.string.chat_agent_share_resume_future), model::resumeFuture,
+                        Modifier.fillMaxWidth(), kind = JButtonKind.Secondary, enabled = policyEnabled && !model.resumingFuture)
                     JSwitchRow(stringResource(R.string.chat_agent_share_tools), model.showTools, model::tools,
                         subtitle = stringResource(R.string.chat_agent_share_tools_note), subtitleLines = Int.MAX_VALUE,
                         enabled = policyEnabled && (model.showTools || canWiden))
@@ -207,7 +209,10 @@ internal fun AgentShareContent(model: AgentShareModel, onDismiss: () -> Unit) {
 }
 @Composable private fun shareOptions(share: ShareMetadata) = stringResource(R.string.chat_agent_share_options,
     stringResource(if (share.showTools) R.string.chat_agent_share_tools_on else R.string.chat_agent_share_tools_off),
-    stringResource(if (share.includeFuture) R.string.chat_agent_share_future_on else R.string.chat_agent_share_future_off))
+    stringResource(if (publishesFutureMessages(share)) R.string.chat_agent_share_future_on else R.string.chat_agent_share_future_off))
+/** The list describes actual publication, not the retained opt-in preference in the editor. */
+internal fun publishesFutureMessages(share: ShareMetadata) = share.status == "active" &&
+    share.publicationStatus == "live" && share.includeFuture
 @Composable private fun omissionReason(code: String) = stringResource(when (code) {
     "unknown_provenance" -> R.string.chat_agent_share_omission_unknown_provenance
     "unfinished_turn" -> R.string.chat_agent_share_omission_unfinished_turn
