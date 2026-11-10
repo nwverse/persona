@@ -28,13 +28,14 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 	switch {
 	case c.Main:
 		cfg := s.settings(ctx)
+		names := s.leaderNames(ctx, cfg.Leaders)
 		for _, id := range cfg.Leaders {
 			if id != "" && id != cfg.Main {
-				c.Directions = append(c.Directions, prompts.ContextDirection{ID: id, Name: clip(oneLine(s.leaderName(ctx, id)), 40)})
+				c.Directions = append(c.Directions, prompts.ContextDirection{ID: id, Name: names[id]})
 			}
 		}
 	case c.Leader:
-		c.LeaderName = clip(oneLine(s.leaderName(ctx, p.SessionID)), 40)
+		c.LeaderName = s.leaderNames(ctx, []string{p.SessionID})[p.SessionID]
 	}
 	text := prompts.RenderAssistantContext(c)
 	errs, receipts := s.viewErrors(ctx, p)

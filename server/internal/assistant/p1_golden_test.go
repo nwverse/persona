@@ -71,3 +71,95 @@ func TestLeaderStuckTellsTheMainConversation(t *testing.T) {
 		t.Fatalf("goes to %q", to)
 	}
 }
+
+// The main conversation's context lists the current directions by name (by id when one has none at all); a leader's
+// names its own direction; another conversation gets neither.
+func TestContextNamesTheDirections(t *testing.T) {
+	e := directionEnv(t, &memStore{})
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv_main" })
+	e.title("conv_lead_a", "1110 | 探索 | x")
+	e.leaders("conv_lead_a", "conv_lead_b")
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv_main" })
+	e.syncLeaders()
+	if err := e.s.setDirectionName(context.Background(), "conv_lead_a", "基建", directionByUser); err != nil {
+		t.Fatal(err)
+	}
+	main := e.s.Context(context.Background(), ContextParams{SessionID: "conv_main"}).Text
+	for _, want := range []string{"- conv_lead_a：基建", "- conv_lead_b：conv_lead_b", "task_plan 的 supervisor"} {
+		if !strings.Contains(main, want) {
+			t.Fatalf("the main context lacks %q:\n%s", want, main)
+		}
+	}
+	if lead := e.s.Context(context.Background(), ContextParams{SessionID: "conv_lead_a"}).Text; !strings.Contains(lead, "方向「基建」") || strings.Contains(lead, "现在的方向") {
+		t.Fatalf("the leader's context:\n%s", lead)
+	}
+	if other := e.s.Context(context.Background(), ContextParams{SessionID: "conv_other"}).Text; strings.Contains(other, "基建") {
+		t.Fatalf("another conversation's context names directions:\n%s", other)
+	}
+}
+
+// The briefing's line per direction: open tasks of each current leader, those waiting for the owner, those reported
+// stuck in the last day (a task waiting on the owner counted once), the summary of the day; the main conversation's
+// own tasks are not a direction.
+func TestBriefLeaders(t *testing.T) {
+	e := directionEnv(t, &memStore{})
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv_main" })
+	e.leaders("conv_lead_a")
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv_main" })
+	e.syncLeaders()
+	ctx := context.Background()
+	_ = e.leaderTask("A", "conv_lead_a")
+	b := e.leaderTask("B", "conv_lead_a")
+	c := e.leaderTask("C", "conv_lead_a")
+	_ = e.leaderTask("Main's own", "conv_main")
+	e.review(b, reviewNeedsUser, "?")
+	now := time.Now()
+	lb := &e.s.lreports
+	lb.mu.Lock()
+	if !e.s.leaderReportsLocked(ctx) {
+		t.Fatal("reports book")
+	}
+	lb.told.Stuck[b], lb.told.Stuck[c] = now.Add(-time.Hour), now.Add(-time.Hour)
+	lb.mu.Unlock()
+	if _, err := e.s.leaderProgressReport(ctx, "conv_lead_a", leaderProgress{Reached: "侧栏分组上线", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	got := e.s.briefLeaders(ctx, now)
+	if len(got) != 1 || got[0].Open != 3 || got[0].Waiting != 1 || got[0].Stuck != 1 || got[0].Reached != "侧栏分组上线" {
+		t.Fatalf("lines: %+v", got)
+	}
+	if later := e.s.briefLeaders(ctx, now.Add(25*time.Hour)); later[0].Stuck != 0 || later[0].Reached != "" {
+		t.Fatalf("a day later: %+v", later)
+	}
+}
+
+// A stuck task is told to the main conversation once a day, not again within the day nor after a restart.
+func TestLeaderStuckOncePerDay(t *testing.T) {
+	st := &memStore{}
+	e := directionEnv(t, st)
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv_main" })
+	e.leaders("conv_lead_a")
+	setSettings(t, e.s, func(v *Settings) { v.Main = "conv_main" })
+	id := e.leaderTask("平板布局", "conv_lead_a")
+	later := time.Now().Add(3 * 24 * time.Hour)
+	count := func(rs []assistantwire.LeaderReportEvent) int {
+		n := 0
+		for _, r := range rs {
+			if r.Kind == assistantwire.LeaderStuck && r.Todo == id {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(e.reports(later, true)); n != 1 {
+		t.Fatalf("first: %d", n)
+	}
+	if n := count(e.reports(later.Add(time.Hour), true)); n != 0 {
+		t.Fatalf("within the day: %d", n)
+	}
+	e2 := directionEnv(t, st)
+	setSettings(t, e2.s, func(v *Settings) { v.Main, v.Leaders = "conv_main", []string{"conv_lead_a"} })
+	if n := count(e2.reports(later.Add(2*time.Hour), true)); n != 0 {
+		t.Fatalf("after a restart: %d", n)
+	}
+}

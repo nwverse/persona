@@ -166,6 +166,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		look, reached = s.leaderSessions(ctx, tasks)
 	}
 	l, loc := s.lang(ctx), s.location(ctx)
+	names := s.leaderNames(ctx, leads) // before the book's lock: it reads the titles and the knowledge base
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -207,7 +208,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 			text := leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section)
 			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, text, now))
 			stuckSigs = append(stuckSigs, superviseSignal{Todo: t.ID, Kind: sigLeaderStuck, Key: key,
-				Detail: clip(s.leaderName(ctx, lead)+" · "+oneLine(text), 200)})
+				Detail: clip(names[lead]+" · "+oneLine(text), 200)})
 		}
 	}
 	for _, lp := range plans {

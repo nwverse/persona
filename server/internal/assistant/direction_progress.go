@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -202,15 +203,22 @@ func (s *Service) directionOf(id string) *direction {
 	return &cp
 }
 
-// leaderName is what leader id's direction is called now (directionName), "" when it is no conversation the hub knows.
-func (s *Service) leaderName(ctx context.Context, id string) string {
+// leaderNames are what the directions of leaders ids are called now (directionName), read once for all of them; a
+// leader with no name at all is called by its id.
+func (s *Service) leaderNames(ctx context.Context, ids []string) map[string]string {
 	titles, _ := s.conversationTitles()
-	d := s.directionOf(id)
-	if d == nil {
-		return directionName(nil, titles[id].title, "")
-	}
 	pn, ok := s.projectNames(ctx)
-	return nameOf(d, titles[id].title, pn, ok)
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		var name string
+		if d := s.directionOf(id); d != nil {
+			name = nameOf(d, titles[id].title, pn, ok)
+		} else {
+			name = directionName(nil, titles[id].title, "")
+		}
+		out[id] = cmp.Or(clip(oneLine(name), 40), id)
+	}
+	return out
 }
 
 // briefLeaders are the current leaders as the briefings list them, one line each (#3609): the direction's name, its
@@ -226,21 +234,29 @@ func (s *Service) briefLeaders(ctx context.Context, now time.Time) []prompts.Bri
 		maps.Copy(stuck, b.told.Stuck)
 	}
 	b.mu.Unlock()
-	todos := s.todosOf(ctx, "*")
+	var todos []Todo // every supervised task, as the leaders' reports read them (leader_reports.go)
+	s.todos.mu.RLock()
+	for _, t := range s.todos.todos {
+		if t.Supervision != nil && t.DoneAt == nil {
+			todos = append(todos, copyTodoLocked(t))
+		}
+	}
+	s.todos.mu.RUnlock()
+	names := s.leaderNames(ctx, cfg.Leaders)
 	for _, id := range cfg.Leaders {
 		if id == "" || id == cfg.Main {
 			continue
 		}
-		bl := prompts.BriefLeader{Name: clip(oneLine(s.leaderName(ctx, id)), 40)}
+		bl := prompts.BriefLeader{Name: names[id]}
 		for _, t := range todos {
 			if t.DoneAt != nil || t.Supervision == nil || t.Supervision.Supervisor != id {
 				continue
 			}
 			bl.Open++
-			if t.Supervision.state(t) == reviewNeedsUser {
-				bl.Waiting++
-			}
-			if at, ok := stuck[t.ID]; ok && now.Sub(at) < 24*time.Hour {
+			switch at, ok := stuck[t.ID]; {
+			case t.Supervision.state(t) == reviewNeedsUser:
+				bl.Waiting++ // counted once: waiting on the owner, whether or not it was also reported stuck
+			case ok && now.Sub(at) < 24*time.Hour:
 				bl.Stuck++
 			}
 		}

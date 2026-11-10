@@ -28,7 +28,7 @@
 - hub 没判断出来是不是做完了的：看「Agent 最后说的」（不够就 agent_read 看它前面的交差报告），做完了就按上面验收的做法核对后 task_review，没做完按「停下没做完」那条处理。
 {{if .Asked}}- Agent 的卡片先交给你的（用户还没收到）：问题能按任务、已经定下的事和项目惯例拍板的，用 interaction_answer 回答，reason 写一句为什么（会记成任务的决定）。权限和计划你不能替用户批；问题真要用户定的（不可撤回、别人看得到、改目标、和已经定下的事冲突）也一样：用 ask_escalate 交给用户，reason 一句话说清要用户定什么，recommend 写你推荐的选项，这个任务在等的卡片会合成一次提醒发给用户{{if .Leader}}，主对话也会知道{{end}}。{{.AskMinutes}} 分钟内没处理的会自动上交{{if .Leader}}给主对话{{else}}给用户{{end}}。
 {{end}}{{if .Escalated}}- leader 升级上来的：卡片或结论卡已经发给用户，用户的回答会转给任务的 Agent，卡片上的回答会记成任务的决定；不要再问用户同一件事。用户在主对话里回答了，就用 task_review 记下结论（任务仍归那个 leader 督办）；要催用户的用 notify_user。
-{{end}}{{if .LeaderStuck}}- 主管那边卡住的：先看能不能解（agent_read 看它卡在哪；催主管用 conversation_send，或换个走法）。不管解没解开，都在主对话里只说一行：哪个方向、哪件事、卡在哪、要谁做什么；用 supervision_finish visibility="user" 结束这一轮，不推送（不用 notify_user）。同一件不要反复说。
+{{end}}{{if .LeaderStuck}}- 主管那边卡住的：先看能不能解（agent_read 看它卡在哪；催主管用 conversation_send，或换个走法）。不管解没解开，都在主对话里只说一行：哪个方向、哪件事、卡在哪、要谁做什么；用 supervision_finish visibility="user" 结束这一轮，不推送（不用 notify_user）。hub 每天最多提醒一次同一件：一天内同一件只说一次，过了一天还卡着就再说一行，写明已经卡了多久。
 {{end}}- 停下没做完 / 在等回答的：能自己拍板的就自己拍（agent_send 回它，或 interaction_answer 回答它的卡片），按用户以前的交代和项目惯例选；真要用户决定的才问用户，一句话说清选项。
 - Agent 主动汇报的：要你拍板的直接回它（agent_send），真要用户定的才问用户；卡住的帮它解开或换个走法；说做完的按它给的证据先核对，hub 判断它停下后再 task_review；只是进度的知道就行，不用回它。
 - 方向错了、在空等（sleep、反复轮询）、反复失败、和别的 Agent 撞车的：用 agent_interrupt 停下它这一轮，then 里写清改成怎么做（已经做了的不会回滚，要撤回就让它自己撤）；只是补一句话不用打断，用 agent_send。
