@@ -34,6 +34,10 @@ import kotlinx.coroutines.flow.stateIn
 @Module
 @InstallIn(SingletonComponent::class)
 object ChatWiringModule {
+    /** Used by every live group binding, not a route-independent singleton HTTP client. */
+    internal fun agentShares(connection: OkHttpHubConnection, isCurrent: () -> Boolean): AgentSharesProvider =
+        HttpAgentShares(connection, isCurrent)
+
     @Provides @Singleton
     fun chatWiring(application: android.app.Application, owner: ChatDataOwner, stacks: GroupStacks): ChatWiringSource = object : ChatWiringSource {
         override val current = owner.wiring
@@ -110,6 +114,7 @@ internal suspend fun createChatWiring(
         // The photos sent with messages load from the session's machine (Persona' own conversations too).
         files = HubSessionFiles(connection),
         ports = HubPortOpener(connection),
+        agentShares = ChatWiringModule.agentShares(connection, ::current),
         tasks = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(connection), group, data.coroutineScope,
             repositories.snapshots.todoCache()))
 }

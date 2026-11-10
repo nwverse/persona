@@ -86,6 +86,18 @@ export interface Todo {
   /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
    *  and from hubs before it. */
   ask?: TodoAsk;
+  /** Nobody is working on it (#3618, docs/assistant/todos.md "Nobody is working on this"): every agent of this open
+   *  to-do is gone and nothing brings one back. `reason`: `error` (closed after a model error), `offline` (its computer
+   *  is not connected) or `closed`; `since` is when the hub first saw it. Unset otherwise, and from hubs before it. */
+  orphaned?: { reason?: "error" | "offline" | "closed" | (string & {}); since?: string };
+}
+
+/** "Nobody is working on this" and why ("closed after an error"), for an open to-do the hub found orphaned; undefined
+ *  for every other. A reason this page does not know leaves the lead alone. */
+export function orphanedLine(todo: Pick<Todo, "orphaned" | "done_at">): { lead: string; reason: string } | undefined {
+  if (!todo.orphaned || todo.done_at) return undefined;
+  const reason = todo.orphaned.reason;
+  return { lead: t("lib-todos.orphaned"), reason: reason === "error" || reason === "offline" || reason === "closed" ? t(`lib-todos.orphaned_${reason}`) : "" };
 }
 
 /**

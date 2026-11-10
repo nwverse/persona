@@ -49,7 +49,7 @@ func workOf(l i18n.Lang, sess proto.Session, reported *proto.WorkState, asking m
 	if sess.Status == proto.StatusBlocked && !asks {
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: i18n.T(l, "hub-agents_link.screen")}
 	}
-	if reported == nil || reported.Phase == "" || !sameTurn(sess, reported.TurnAt) {
+	if reported == nil || !workShown(reported) || !sameTurn(sess, reported.TurnAt) {
 		return nil
 	}
 	w := *reported

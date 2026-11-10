@@ -118,6 +118,12 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 			return nil, true, err
 		}
 		return s.closeoutCheck(ctx, machine, p), true, nil
+	case assistantwire.MethodCloseoutBrief: // a session starts: the closeout's form, up front (agents_closeout_brief.go)
+		var p assistantwire.CloseoutBriefRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		return s.closeoutStart(ctx, machine, p), true, nil
 	case "assistant.lark":
 		out, err := s.assistantLark(ctx, machine)
 		return out, true, err

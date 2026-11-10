@@ -9,6 +9,7 @@ import java.util.Collections
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.logging.Logger
 import kotlin.concurrent.thread
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -54,6 +55,7 @@ class LocalProxyForward(val dial: Dial) : AutoCloseable {
 
     @Volatile private var server: ServerSocket? = null
     @Volatile private var stopped = false
+    private var acceptWorker: Thread? = null
     private val sockets = Collections.synchronizedSet(HashSet<Socket>())
 
     /** How each connection's dial went (null: it got through), on the connection's thread. Set before [listen]. */
@@ -73,7 +75,7 @@ class LocalProxyForward(val dial: Dial) : AutoCloseable {
     }
 
     /** Listens on 127.0.0.1: at [preferred] when it is free, else on any free one. Already listening: that port. */
-    fun listen(preferred: Int = 0): Int {
+    @Synchronized fun listen(preferred: Int = 0): Int {
         server?.let { return it.localPort }
         val loopback = InetAddress.getByName("127.0.0.1")
         fun bind(port: Int) = ServerSocket().apply {
@@ -83,14 +85,23 @@ class LocalProxyForward(val dial: Dial) : AutoCloseable {
         val socket = (if (preferred != 0) runCatching { bind(preferred) }.getOrNull() else null) ?: bind(0)
         server = socket
         if (stopped) socket.close()
-        thread(isDaemon = true, name = "Local proxy forward ${socket.localPort}") { accept(socket) }
+        acceptWorker = thread(isDaemon = true, name = "Local proxy forward ${socket.localPort}") { accept(socket) }
         return socket.localPort
     }
 
-    override fun close() {
+    @Synchronized override fun close() {
         stopped = true
         runCatching { server?.close() }
         synchronized(sockets) { sockets.toList() }.forEach { runCatching { it.close() } }
+        // A blocked accept can defer the descriptor close until its worker returns.
+        acceptWorker?.takeIf { it !== Thread.currentThread() }?.let { worker ->
+            try { worker.join(CLOSE_WAIT_MILLIS) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                LOG.warning("Interrupted while waiting for the local proxy listener to stop")
+                return@let
+            }
+            if (worker.isAlive) LOG.warning("Local proxy listener is still stopping after the close deadline")
+        }
     }
 
     private fun accept(server: ServerSocket) {
@@ -143,6 +154,9 @@ class LocalProxyForward(val dial: Dial) : AutoCloseable {
     }
 
     companion object {
+        private const val CLOSE_WAIT_MILLIS = 1_000L
+        private val LOG = Logger.getLogger(LocalProxyForward::class.java.name)
+
         /**
          * The hub answers through [route] ("Test connection and save"): the proxy is asked for the hub's address once,
          * then the hub's health check goes through a forward of its own. Kept only when it is this hub ([hubId]) and it

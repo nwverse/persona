@@ -296,3 +296,60 @@ func TestRuntimeWithoutModelCapabilityRejectsModel(t *testing.T) {
 		t.Fatal("unsupported model reached runtime")
 	}
 }
+
+func TestRuntimeLauncherAvailabilityCheck(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := paseoEngineHello()
+	hello["caps"].(map[string]any)["check"] = true
+	host := dialRuntime(t, n, hello)
+	var workspace string
+	host.mu.Lock()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method != "launchers.check" {
+			return nil, errors.New("unexpected shell fallback")
+		}
+		var p struct{ Launcher, Cwd, Prompt string }
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		workspace = p.Cwd
+		if _, err := os.Stat(p.Cwd); err != nil {
+			return nil, err
+		}
+		if p.Launcher != "paseo-claude" || p.Prompt == "" {
+			return nil, errors.New("missing check parameters")
+		}
+		return proto.LauncherCheck{OK: true, Model: "native-model", Answer: "OK"}, nil
+	}
+	host.mu.Unlock()
+	result := n.launcherCheck(context.Background(), "paseo-claude")
+	if !result.OK || result.Model != "native-model" || result.Agent != "claude" || result.Answer != "OK" {
+		t.Fatalf("native check: %+v", result)
+	}
+	if _, err := os.Stat(workspace); !os.IsNotExist(err) {
+		t.Fatalf("check workspace survived: %v", err)
+	}
+	host.mu.Lock()
+	host.answer = func(string, json.RawMessage) (any, error) {
+		return nil, errors.New("native authentication unavailable")
+	}
+	host.mu.Unlock()
+	result = n.launcherCheck(context.Background(), "paseo-claude")
+	if result.OK || !strings.Contains(result.Error, "native authentication unavailable") {
+		t.Fatalf("native error lost: %+v", result)
+	}
+	if len(host.got("launchers.check")) != 2 {
+		t.Fatal("runtime check did not own the result")
+	}
+}
+
+func TestRuntimeAvailabilityCheckRequiresOptIn(t *testing.T) {
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, paseoEngineHello())
+	if _, handled := n.runtimeLauncherCheck(context.Background(), "paseo-claude", t.TempDir(), "probe"); handled {
+		t.Fatal("older runtime intercepted the shell check")
+	}
+	if len(host.got("launchers.check")) != 0 {
+		t.Fatal("unsupported check reached runtime")
+	}
+}
