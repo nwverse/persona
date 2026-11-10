@@ -213,7 +213,9 @@ func TestCallConnectsAndStaysConnectedWhileIdle(t *testing.T) {
 	if p.dials[0] != (Endpoint{Host: "192.0.2.5", Port: 49152, Source: "manual"}) {
 		t.Fatalf("dialed %+v", p.dials[0])
 	}
-	time.Sleep(50 * time.Millisecond) // idle: nothing closes the link
+	timer := time.NewTimer(50 * time.Millisecond) // idle: nothing closes the link
+	defer timer.Stop()
+	<-timer.C
 	d := m.Devices(context.Background())
 	if len(d) != 1 || d[0].State != StateConnected || d[0].Address != "192.0.2.5" || d[0].Port != 49152 || string(d[0].Info) != `{"name":"Test Phone"}` {
 		t.Fatalf("Devices = %+v", d)
@@ -426,7 +428,7 @@ func TestNotPairedAndForget(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("Forget left the link open")
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-time.After(5 * time.Millisecond)
 	}
 }
 
@@ -448,7 +450,7 @@ func TestCloseEndsSessions(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("Close left the link open")
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-time.After(5 * time.Millisecond)
 	}
 	if _, err := call(t, m, "tap", time.Second); Code(err) != CodeUnreachable {
 		t.Fatalf("after Close: %v", err)
@@ -605,7 +607,7 @@ func waitFor(t *testing.T, ok func() bool) {
 		if time.Now().After(deadline) {
 			t.Fatal("condition not met in time")
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-time.After(5 * time.Millisecond)
 	}
 }
 
