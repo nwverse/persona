@@ -214,6 +214,8 @@ final class TodoStore {
                     back[idx] = before
                     apply(back)
                 }
+                // Felt as well as shown (offline has its own haptic, in `notDone`).
+                if !error.isOffline { Haptics.error() }
                 AppModel.shared.show(error)
                 return false
             }

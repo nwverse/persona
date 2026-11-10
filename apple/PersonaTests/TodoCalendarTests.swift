@@ -241,6 +241,17 @@ struct TodoCalendarTests {
         scrolled.scrolled = 100
         #expect(scrolled.day(CGPoint(x: 120, y: 350)) == 3 * 7 + 2)
         #expect(scrolled.day(CGPoint(x: 120, y: 590)) == nil) // past the last week
+        // five weeks of 100 fit in 500: nothing to scroll
+        #expect(map.autoscroll(CGPoint(x: 120, y: 595), edge: 44) == 0)
+        // six don't (a phone on its side): down near the bottom or below it, up near the top or above it
+        var tall = map
+        tall.rows = 6
+        #expect(tall.scrollRange == 100)
+        #expect(tall.autoscroll(CGPoint(x: 120, y: 580), edge: 44) == 1)
+        #expect(tall.autoscroll(CGPoint(x: 120, y: 700), edge: 44) == 1)
+        #expect(tall.autoscroll(CGPoint(x: 120, y: 120), edge: 44) == -1)
+        #expect(tall.autoscroll(CGPoint(x: 120, y: 50), edge: 44) == -1)
+        #expect(tall.autoscroll(CGPoint(x: 120, y: 350), edge: 44) == 0)
     }
 
     /// A move is drawn at once and saved as `due_date` / `due_at`; a failed save puts only that to-do back.

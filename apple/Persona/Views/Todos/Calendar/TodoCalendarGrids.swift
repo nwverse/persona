@@ -601,6 +601,7 @@ struct TodoCalendarMonth: View {
     /// A to-do being dragged, and the grid's frame, scroll and day height that say which day it is over.
     @State private var dragging: CalendarDragging?
     @State private var dropMap = MonthDropMap()
+    @State private var scroll = ScrollPosition()
     private static let space = "todo.calendar.month"
 
     private var shownDays: [Date] { TodoCalendar.days(.month, anchor: anchor, calendar: calendar) }
@@ -616,6 +617,21 @@ struct TodoCalendarMonth: View {
     private var landed: CalendarEntry? {
         guard let d = dragging, let landing else { return nil }
         return TodoCalendar.landed(d.entry, at: landing, calendar: calendar, now: .now)
+    }
+
+    private var autoscroll: Int {
+        dragging.map { dropMap.autoscroll($0.point, edge: Theme.Size.tapTarget) } ?? 0
+    }
+
+    /// Scrolls the weeks a step each frame while the dragged to-do is held near the grid's edge `way` (-1 up, 1 down),
+    /// when they don't all fit (a phone on its side).
+    private func scrollWhileHeld(_ way: Int) async {
+        guard way != 0 else { return }
+        while !Task.isCancelled {
+            let y = min(max(dropMap.scrolled + CGFloat(way) * Theme.CalendarGrid.autoscrollStep, 0), dropMap.scrollRange)
+            if y != dropMap.scrolled { scroll.scrollTo(y: y) }
+            try? await Task.sleep(for: .milliseconds(16))
+        }
     }
 
     /// An entry's chip, picked up and carried on this month.
@@ -677,6 +693,7 @@ struct TodoCalendarMonth: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollDisabled(cell * CGFloat(rows) <= geo.size.height || dragging != nil)
+                .scrollPosition($scroll)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in dropMap.scrolled = y }
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { dropMap.grid = $0 }
                 .onChange(of: cell, initial: true) { _, c in dropMap.cell = c }
@@ -686,6 +703,7 @@ struct TodoCalendarMonth: View {
         .coordinateSpace(.named(Self.space))
         // a tick at each new day it would land on
         .onChange(of: landing) { old, new in if old != nil, new != nil { Haptics.selection() } }
+        .task(id: autoscroll) { await scrollWhileHeld(autoscroll) }
     }
 
     private func dayCell(_ day: Date) -> some View {

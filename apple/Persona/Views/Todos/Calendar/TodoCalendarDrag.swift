@@ -94,6 +94,18 @@ nonisolated struct MonthDropMap: Equatable {
         guard row >= 0, row < rows, column >= 0 else { return nil }
         return row * 7 + column
     }
+
+    /// How far the grid scrolls: its weeks' height past the part in sight.
+    var scrollRange: CGFloat { max(0, cell * CGFloat(rows) - grid.height) }
+
+    /// Which way the grid scrolls while a finger is near its top or bottom edge (within `edge`), or past it: -1 up,
+    /// 1 down, 0 not, nor when the weeks all fit.
+    func autoscroll(_ p: CGPoint, edge: CGFloat) -> Int {
+        guard scrollRange > 0, grid.height > edge * 2 else { return 0 }
+        if p.y > grid.maxY - edge { return 1 }
+        if p.y < grid.minY + edge { return -1 }
+        return 0
+    }
 }
 
 /// Saving a moved to-do: drawn there at once (the store), a toast that says where it went with Undo, and a failed save
