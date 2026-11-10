@@ -15,27 +15,31 @@ const shots = args.includes("--shots") ? flag("--shots") : undefined;
 if (!base) throw new Error("usage: personal-agents-visibility.mjs <web URL> [--cdp <URL>] [--shots <directory>]");
 if (shots) mkdirSync(shots, { recursive: true });
 const browser = await chromium.connectOverCDP(cdp);
+let activePage;
 const fixture = { id: "example:planning", source: "example", sessionKey: "planning", accountId: "example-account", provider: "example", title: "Project planning", canSend: true, unreadCount: 0, rankTimeMs: 1 };
 
 try {
   for (const theme of ["light", "dark"]) {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, locale: "zh-CN", colorScheme: theme });
-    const page = await context.newPage();
+    // Use a new page in the existing context: temporary contexts are destroyed when the CDP client disconnects.
+    const page = await browser.contexts()[0].newPage();
+    activePage = page;
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await page.emulateMedia({ colorScheme: theme });
     let setup = "disabled";
     let sessions = [fixture];
     let revision = 1;
     let pending = true;
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
-    await context.addInitScript((value) => {
+    await page.addInitScript((value) => {
       localStorage.setItem("persona.language", "zh-Hans");
       localStorage.setItem("persona.theme", value);
     }, theme);
-    await context.route("**/api/v1/agents", async (route) => {
+    await page.route("**/api/v1/agents", async (route) => {
       if (pending) await gate;
       await route.fulfill({ json: { sources: [{ source: "example", enabled: true, accounts: [{ id: "example-account" }], ...(setup ? { setup } : {}) }] } });
     });
-    await context.route("**/api/v1/agents/sessions*", async (route) => {
+    await page.route("**/api/v1/agents/sessions*", async (route) => {
       const url = new URL(route.request().url());
       if (url.searchParams.has("counts")) {
         await route.fulfill({ json: { total: sessions.length, revision: String(revision), state: sessions.length ? { idle: sessions.length } : {}, machine: {}, project: {}, group: {} } });
@@ -79,11 +83,15 @@ try {
     const loaded = await page.locator('[data-paged-sessions="personal"]').getAttribute("data-loaded-sessions");
     assert.equal(loaded, "1", "bounded list must contain a visible session");
     console.log(`PASS ${theme}: loading/missing/disabled/no_accounts/empty hidden; live configured session shown without reload`);
-    await context.unrouteAll({ behavior: "wait" });
+    await page.unrouteAll({ behavior: "wait" });
   }
   console.log("PASS personal-agents visibility browser verification (synthetic data; light and dark)");
   process.exit(0);
 } catch (error) {
   console.error("FAIL personal-agents visibility browser verification:", error);
+  if (activePage) {
+    console.error("Sidebar snapshot:", await activePage.locator("aside").textContent().catch(() => "unavailable"));
+    await activePage.unrouteAll({ behavior: "ignoreErrors" });
+  }
   process.exit(1);
 }
