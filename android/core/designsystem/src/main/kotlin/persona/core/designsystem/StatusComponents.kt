@@ -219,6 +219,8 @@ fun StatusLine(
     onClick: ((StatusLineKind) -> Unit)? = null,
     chips: List<String> = emptyList(),
     trailing: (@Composable RowScope.() -> Unit)? = null,
+    /** False where the page's header already says the state (an Agent's chat, #3957): the line keeps its words, not a second state mark. */
+    stateMark: Boolean = true,
 ) {
     val line = resolveStatusLine(state)
     if (line == null && chips.isEmpty()) return
@@ -247,6 +249,7 @@ fun StatusLine(
         if (line != null) {
             when {
                 caution -> JIcon(PhIcons.HourglassMedium, null, size = 16.dp, tint = color)
+                !stateMark -> Unit
                 style == AppStyle.Brief && line.kind == StatusLineKind.NeedsYou -> Box(Modifier.size(10.dp).clip(CircleShape).background(palette.marker).border(1.5.dp, palette.ink, CircleShape))
                 style == AppStyle.Brief && (line.kind == StatusLineKind.Working || line.kind == StatusLineKind.Stopping) -> JSpinner(Modifier.size(14.dp), stroke = 1.8.dp)
                 style == AppStyle.Board -> JStatusMark(status, animated = line.kind == StatusLineKind.Working)

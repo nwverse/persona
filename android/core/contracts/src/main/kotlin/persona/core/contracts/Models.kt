@@ -319,6 +319,11 @@ data class Session(
     @SerialName("launcher") val launcher: String? = null,
     @SerialName("model") val model: String? = null,
     @SerialName("permission_mode") val permissionMode: String? = null,
+    /**
+     * The agent's process can take Allow Everything while it runs (its start flags put the mode in its cycle, read off the
+     * process by the node; #1379, #3957). False while unknown and from older hubs: then Allow Everything is a start's choice.
+     */
+    @SerialName("bypass_available") val bypassAvailable: Boolean = false,
     @SerialName("assistant") val assistant: Boolean = false,
     /** An assistant conversation put away (POST /api/v1/assistant/conversations/{id}/archive): kept, not listed. */
     @SerialName("archived") val archived: Boolean = false,

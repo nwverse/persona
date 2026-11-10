@@ -59,5 +59,6 @@ internal fun ChatSessionStatusLine(
         session?.background?.takeIf { it.isNotEmpty() }?.let { stringResource(R.string.chat_status_chip_background, it.size) },
         draftSaveError?.let { stringResource(R.string.chat_status_draft_failed) },
     )
-    StatusLine(state, chips = chips, onClick = { onDetails() })
+    // The header's title line says the state (#3957): this line keeps its words and facts, not a second state mark.
+    StatusLine(state, chips = chips, onClick = { onDetails() }, stateMark = false)
 }
