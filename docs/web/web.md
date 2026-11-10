@@ -24,13 +24,16 @@ retains planning, permission/question and owner-acceptance flows; `Todo.ask` use
 individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
 TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
 
-Progress lists and counts **every open task** of the conversation (#3162): working, waiting for the user, finished but
-unseen, stopped between rounds (`follow_up`, where supervised tasks spend most of their time) and plan tasks still waiting
-for Start — not only the ones with a running agent. What needs the user sorts first (`todoRank`, a plan task waiting for
-Start right after), each row leads with its status mark (`TaskMark`), and closed tasks (done, accepted, cancelled, failed to
-start) fold under one **Closed N** line. While a plan waits for Start a fourth entry, **To start N**, sits after Pending:
-its tray is the plan cards themselves (Start, Edit, Don't start), so a plan is not lost in the chat; Pending no longer
-lists or counts those plans. Tapping a plan task in Progress opens To start.
+Progress lists and counts the conversation's open tasks by **the To-dos page's rule** (#3331, `todoBucket` in
+`web/src/lib/todo-triage.ts`, the same `countsAsOpen` as the page's "Not done"): working, waiting for the user, finished but
+unseen and stopped between rounds count; a task shelved (no activity for 48 h, nothing running, not restored on this
+browser) folds under one **Shelved N** line and is not counted; accepted (task_review accepted), deployed, done, cancelled
+and old failed starts fold under **Closed N**. The main conversation watches every task, so its Progress has a row for
+every to-do whatever its origin, and its count is the To-dos page's "Not done"; other conversations count only the tasks
+they handed out. What needs the user sorts first (`todoRank`), each row leads with its status mark (`TaskMark`). Plan
+tasks waiting for Start are no to-dos yet: neither Progress nor the To-dos page lists or counts them. While a plan waits
+a fourth entry, **To start N**, sits after Pending: its tray is the plan cards themselves (Start, Edit, Don't start), so a
+plan is not lost in the chat; Pending no longer lists or counts those plans.
 
 The three entries are the dock's old **All** / task capsules (#2999): `DOCK_CAPSULE` in `web/src/views/assistant/Tasks.tsx`
 gives "All", the task pills and the entries one height (2 rem, 32 px at the default size), full capsule radius, 12 px side
@@ -532,7 +535,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     Below that is the handling chain: only the latest entry by default, with "Expand all (N)" for all of them (oldest on top). Each row is "time · type icon · text": `source` opens the original (Lark chats jump to `position`, mail opens the message `uid`, `url` opens in the app),
     `session` opens that chat, `item` opens that item; rows without a link expand in place to show the basis / original words / the messages received (rows with both a link and content expand with the small arrow on the right). Further down is **Related** (`related`, opens that item) and leads.
     Rows and details of items archived by a manager after reading (`done_by: "manager"`) say **Handled by manager**; **Done** chain entries (`done`: you marked it done / the manager read it, no action needed) use a check mark and have no link. FYI conclusions stay in FYI until **Got it** archives them.
-    The original body (Lark chat, mail, cloud doc…) is not lost: **Original** at the top switches to it and **Handling** switches back. When there is a suggestion, the AI twin's draft (the copy the hub mirrors for old apps) is no longer drawn as a separate draft card, and the button is just **AI draft reply**.
+    A Lark item shows its chat under the event instead (#3262): the event part sits on top, as tall as it needs up to 40% of the pane (then it scrolls, its bottom fading while there is more), and the chat below it opens at the first new message with its composer; a chain entry with a `position` scrolls that chat to it instead of switching pages, and there is no **Original** / **Handling** switch. Other items keep their original body (mail, cloud doc…) behind **Original** at the top, and **Handling** switches back. When there is a suggestion, the AI twin's draft (the copy the hub mirrors for old apps) is no longer drawn as a separate draft card, and the button is just **AI draft reply**.
     Old hubs lack these fields: the list, rows and details are exactly as before. For screenshots use the mock hub with `MOCK_INBOX_EVENTS=1` (`scripts/mock/inbox_events.json`, one item per state; `GET /mock/inbox_events/bump?id=<item>` swaps in a new suggestion version to see **Suggestion updated**; `MOCK_INBOX_EVENTS=legacy` is the same items without the new fields).
   Agents waiting on you (pending interactions, except muted ones) come first under needs you, and clicking opens that chat. Hovering a row shows "Done / Move back" (the web has no swipe-left); local state changes first and is restored on failure.
   Rows the AI twin has drafted get a draft card below (send / edit); while handling it says "AI twin is handling: …".

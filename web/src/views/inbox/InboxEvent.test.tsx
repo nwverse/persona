@@ -10,6 +10,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
+  // a Feishu item's chat draws under its event (LarkThread): what jsdom lacks
+  Object.assign(globalThis, {
+    ResizeObserver: globalThis.ResizeObserver ?? class { observe() {} unobserve() {} disconnect() {} },
+    IntersectionObserver: globalThis.IntersectionObserver ?? class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
+  });
+  globalThis.CSS ??= { escape: (s: string) => s } as unknown as typeof CSS;
 });
 
 const calls = vi.hoisted(() => ({ list: [] as { path: string; json?: unknown }[], items: [] as unknown[] }));
@@ -29,7 +35,7 @@ vi.mock("../../lib/store", async (orig) => {
   return { ...m, useStore: <T,>(sel: (s: ReturnType<typeof m.getState>) => T) => m.useStore((s) => sel({ ...s, loaded: true })) };
 });
 vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined }));
-vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined }));
+vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined, translatesChat: () => false }));
 
 import type { InboxItem } from "../../lib/inbox";
 import { resetInboxForTests } from "../../lib/inbox";
@@ -167,6 +173,21 @@ describe("收件箱事件：详情", () => {
     expect(host.textContent).toContain(reply.preview);
     await press("看处理");
     expect(host.querySelector("[data-event-body]")).not.toBeNull();
+  });
+  it("a Feishu item: the event above its chat, no 看原文; a chain entry scrolls the chat to its message (#3262)", async () => {
+    const item: InboxItem = { ...reply, lark: { ...reply.lark!, start_position: "102" } };
+    const around = () => calls.list.map((c) => c.path).filter((p) => p.includes("around="));
+    act(() => root.render(<InboxDetail item={item} loaded />));
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull();
+    expect(buttons()).not.toContain("看原文");
+    expect(around().at(-1)).toContain("around=102"); // the chat, at the first new message
+    await press("展开全部（3）");
+    const received = host.querySelector('[data-chain-entry="received"]')!;
+    await act(async () => received.querySelector("button")!.click());
+    await flush();
+    expect(host.querySelector('[data-event-body="embedded"]')).not.toBeNull(); // the page stays
+    expect(around().at(-1)).toContain("around=100");
   });
   it("an older hub's item: no event body, no 看原文, the AI 分身's draft as before", () => {
     const old = renderToStaticMarkup(<InboxDetail item={plain(legacy(reply))} loaded />);

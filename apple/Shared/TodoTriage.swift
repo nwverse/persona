@@ -38,6 +38,11 @@ nonisolated enum TodoSection: String, CaseIterable, Sendable {
     }
 }
 
+/// Open counts, shelved folds (no activity for 48 h, nothing running), closed is finished (`TodoTriageLogic.bucket`).
+nonisolated enum TodoBucket: String, Sendable {
+    case open, shelved, closed
+}
+
 /// Which SOP rule placed a to-do; the section follows from it.
 nonisolated enum TodoTriageRule: String, Sendable {
     case failedStart = "failed_start", agentAsks = "agent_asks", ownerDecides = "owner_decides", agentRunning = "agent_running"
@@ -199,6 +204,14 @@ nonisolated enum TodoTriageLogic {
         if t.rule == .failedStart { return t.section == .waiting }
         if todo.doneAt != nil || t.section == .shelved || t.section == .done { return false }
         return t.rule != .accepted && t.rule != .deployed
+    }
+
+    /// Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the assistant's
+    /// Progress entry read this one rule, so the two numbers agree (the web's `todoBucket`).
+    static func bucket(_ todo: TodoItem, lookup: TodosLogic.SessionLookup?, now: Date, restoredAt: Date? = nil) -> TodoBucket {
+        let t = triage(todo, lookup: lookup, now: now, restoredAt: restoredAt)
+        if countsAsOpen(todo, t) { return .open }
+        return t.section == .shelved ? .shelved : .closed
     }
 
     // MARK: Related to-dos

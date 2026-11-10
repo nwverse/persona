@@ -29,7 +29,7 @@ const Usage = `usage:
   personad manager update inventory --plan PATH --main ID --machine ID --machine-uid UID
                        read persisted main identity and two complete local node activity snapshots; writes nothing
   personad manager join <hub 地址> <安装码> [--dir 目录] [--database-url URL] [--fingerprint 指纹] [--install]
-                       用 App 里「新建管理者」给的安装码换这个管理者的 token，写进目录里的 manager.json
+                       用 App 里「新建助手」给的安装码换这个助手的 token，写进目录里的 manager.json
                        （默认 ~/.persona/managers/<id>）；数据库是它自己的 Postgres：install 时在 Docker 里建
                        （容器 persona-mgr-<id>-pg），或者 --database-url 给一个
   personad manager join --builtin <hub address> [<code>] [--fingerprint <fingerprint>] [--install]
