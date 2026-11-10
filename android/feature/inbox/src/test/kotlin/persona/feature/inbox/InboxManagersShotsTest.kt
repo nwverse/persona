@@ -190,6 +190,31 @@ class InboxManagersShotsTest {
         gone("助手 离线")
     }
 
+    /** The same in English and Japanese (the words every client shares), Glass light: `inbox-offline-<language>.png`. */
+    private fun offlineWords(language: String, vararg words: String) {
+        AssistantManagerChoice.choose("hub", "m-8b04d2", "assistant")
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                CompositionLocalProvider(LocalManagerRoster provides roster) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                        InboxScreen(OneInbox(InboxSnapshot()), navigator)
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        see(*words)
+        val dir = File(System.getProperty("persona.shots") ?: "build/managers-shots").also { it.mkdirs() }
+        val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+        File(dir, "inbox-offline-$language.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
+    @Test fun anOfflineAssistantsInboxInEnglish() = offlineWords("en", "家里 is offline", "Last synced 3 hours ago. This updates when it's back online.")
+
+    @Config(sdk = [35], qualifiers = "ja-w400dp-h900dp-xhdpi")
+    @Test fun anOfflineAssistantsInboxInJapanese() = offlineWords("ja", "家里 はオフラインです", "最終同期 3時間前。オンラインに戻ると更新されます。")
+
     /** Each manager's own rules and mutes: 工作's and the default's, 家里 offline. */
     private class ManagerLists : InboxRepository by OneInbox(InboxSnapshot()) {
         override suspend fun inboxPolicies(record: InboxRecord?, manager: String?) = when (manager) {
