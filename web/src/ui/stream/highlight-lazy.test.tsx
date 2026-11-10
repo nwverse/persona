@@ -2,7 +2,8 @@
 // Code highlighting stays off the first draw: a reply with code draws its blocks plain, the highlighter is asked for
 // once the page is idle, and the same blocks near the viewport take its colors up when it arrives, without drawing the
 // replies again (lazy-plugin.ts, highlight.ts, #2465).
-import { act, Profiler } from "react";
+import { act, Profiler, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Markdown } from "../Markdown";
@@ -56,6 +57,24 @@ describe("a lazy plugin", () => {
       await lp.load();
     });
     expect(importer).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toBe("plugin");
+  });
+
+  it("is taken up in its transition only: a sync render of the reply before that commits still draws without it (#2905)", async () => {
+    const lp = lazyPlugin(async () => "plugin");
+    let bump = () => {};
+    function Probe() {
+      const [n, setN] = useState(0);
+      bump = () => setN(n + 1);
+      return <span>{lp.use(true) ?? "plain"}</span>;
+    }
+    act(() => root.render(<Probe />));
+    await act(async () => {
+      await lp.load();
+      // a store's answer (path-presence) arriving before the transition commits: every waiting reply drawn in that frame
+      flushSync(() => bump());
+      expect(host.textContent).toBe("plain");
+    });
     expect(host.textContent).toBe("plugin");
   });
 
