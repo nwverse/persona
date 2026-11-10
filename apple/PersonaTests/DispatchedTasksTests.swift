@@ -15,6 +15,25 @@ struct DispatchedTasksTests {
         FeedItem(id: "feed", conversation: "main", at: .now, kind: kind, ref: ref, body: body)
     }
 
+    @Test func macDetailSelectionOpensTheRequestedSessionNotAnotherLead() {
+        let first = SessionKey(group: "hub", machineID: "computer", sessionID: "first")
+        let second = SessionKey(group: "hub", machineID: "computer", sessionID: "second")
+        #expect(DispatchedTasks.selectedAgent(first, available: [first, second], lead: second) == first)
+        #expect(DispatchedTasks.selectedAgent(second, available: [first, second], lead: first) == second)
+    }
+
+    @Test func macDetailSelectionRejectsAStaleOrOtherHubTarget() {
+        let current = SessionKey(group: "hub", machineID: "computer", sessionID: "same-id")
+        let otherHub = SessionKey(group: "other-hub", machineID: "computer", sessionID: "same-id")
+        #expect(DispatchedTasks.selectedAgent(otherHub, available: [current], lead: current) == current)
+        #expect(DispatchedTasks.selectedAgent(otherHub, available: [current], lead: otherHub) == nil)
+    }
+
+    @Test func macDetailSelectionWithoutAnAgentStaysOnTaskDetails() {
+        let missing = SessionKey(machineID: "computer", sessionID: "missing")
+        #expect(DispatchedTasks.selectedAgent(missing, available: [], lead: missing) == nil)
+    }
+
     @Test func oneTaskKeepsItsExactTodoTarget() throws {
         let entries = try #require(DispatchedTasks.entries(for: feed(.task, ref: "new"), plans: [:],
                                                           titleOf: { $0 == "new" ? "Current title" : nil }, fallback: "Task"))

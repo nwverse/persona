@@ -51,7 +51,7 @@ struct TaskDetailSheet: View {
 
     @ViewBuilder private func content(_ todo: TodoItem) -> some View {
         let sessions = store.sessions(todo)
-        let key = picked.flatMap { p in sessions.first { $0.key == p }?.key } ?? store.leadSession(todo)?.key
+        let key = DispatchedTasks.selectedAgent(picked, available: sessions.map(\.key), lead: store.leadSession(todo)?.key)
         let state = store.state(todo)
         // Top-aligned: when the agent's page asks for more than the sheet has (several tall cards waiting), what gives
         // is its bottom, never the header with its close.

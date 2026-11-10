@@ -19,6 +19,7 @@ final class DispatchedTaskCardTests: XCTestCase {
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", url, "-holdChromeOpen", "YES", "-ui.scheme", "system", "-tab", "assistant", "-dev.openChat", "",
                                "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]
+        app.launchEnvironment["PERSONA_UI_TEST_SESSION"] = "1"
         app.launchPinned()
         XCTAssertTrue(app.buttons["action-bar.running"].waitForExistence(timeout: 20), app.debugDescription)
         return app
@@ -57,12 +58,13 @@ final class DispatchedTaskCardTests: XCTestCase {
         return link
     }
 
-    @MainActor private func assertPush(_ app: XCUIApplication, title: String) {
+    @MainActor private func assertPush(_ app: XCUIApplication, title: String, session: String) {
         let header = app.buttons.matching(identifier: "chat.title").firstMatch
         XCTAssertTrue(header.waitForExistence(timeout: 10), app.debugDescription)
         let deadline = Date.now.addingTimeInterval(10)
         while !header.label.hasPrefix(title) && Date.now < deadline { usleep(200_000) }
         XCTAssertTrue(header.label.hasPrefix(title), "opened another Agent: \(header.label)")
+        XCTAssertEqual(header.value as? String, session, "the rendered conversation is not the dispatched SessionKey")
         XCTAssertFalse(app.buttons["关闭"].exists, "opened a sheet instead of pushing")
         XCTAssertFalse(app.buttons["task-detail.fullscreen"].exists, "opened the task sheet")
         XCTAssertFalse(app.buttons["action-bar.running"].isHittable, "the Assistant dock shows through the pushed chat")
@@ -87,7 +89,7 @@ final class DispatchedTaskCardTests: XCTestCase {
         XCTAssertTrue(one.label.contains("打开"), one.label)
         try shot(app, "one")
         one.tap()
-        assertPush(app, title: "给天气 App 加主屏幕小组件")
+        assertPush(app, title: "给天气 App 加主屏幕小组件", session: "macbook/a1f3c2d4-0000-4000-8000-000000000001")
         sleep(2)
         try shot(app, "one-opened")
         back(app)
@@ -114,11 +116,11 @@ final class DispatchedTaskCardTests: XCTestCase {
         XCTAssertFalse(app.buttons["未启动的计划任务"].exists, "failed plan slot has an invented target")
         try shot(app, "many")
         first.tap()
-        assertPush(app, title: "补齐网络层的单元测试")
+        assertPush(app, title: "补齐网络层的单元测试", session: "macbook/a1f3c2d4-0000-4000-8000-000000000002")
         try shot(app, "many-first-opened")
         back(app)
         link(app, "todo_task_release").tap()
-        assertPush(app, title: "整理发布说明")
+        assertPush(app, title: "整理发布说明", session: "macbook/a1f3c2d4-0000-4000-8000-000000000008")
         try shot(app, "many-second-opened")
         back(app)
     }

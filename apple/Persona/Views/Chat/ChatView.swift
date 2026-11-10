@@ -2890,6 +2890,9 @@ struct ChatView: View {
             .tint(Color.primary) // a title, not a button: the menu's accent tint would color it blue
             .accessibilityLabel("\(title), \(host.agents.count) agents, tap to switch")
             .accessibilityIdentifier("chat.title")
+            #if DEBUG
+            .modifier(UITestSessionProof(session: key.path))
+            #endif
             .connectionDetails($showLink)
         } else {
             infoTitleButton
@@ -2941,6 +2944,9 @@ struct ChatView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(link != .online ? String(localized: "\(title), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true)), view connection details") : String(localized: "\(title), view session info"))
         .accessibilityIdentifier("chat.title")
+        #if DEBUG
+        .modifier(UITestSessionProof(session: key.path))
+        #endif
         .connectionDetails($showLink)
     }
 

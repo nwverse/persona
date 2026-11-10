@@ -9,6 +9,15 @@ nonisolated enum DispatchedTasks {
         var title: String
     }
 
+    /// The task detail's actual session selection. A requested target must still belong to this task; neither a
+    /// stale request nor a stale lead can send the page to another task/hub. Pure so Mac routing is testable unlocked
+    /// or locked, independently of the native UI test host.
+    static func selectedAgent(_ requested: SessionKey?, available: [SessionKey], lead: SessionKey?) -> SessionKey? {
+        if let requested, available.contains(requested) { return requested }
+        if let lead, available.contains(lead) { return lead }
+        return nil
+    }
+
     /// nil means this is not a dispatch (keep its normal card); [] means a task already named by its plan.
     static func entries(for item: FeedItem, plans: [String: TaskPlan], titleOf: (String) -> String?, fallback: String) -> [Entry]? {
         switch item.kind {
