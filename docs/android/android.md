@@ -1,6 +1,6 @@
 # Android App
 
-`android/`: the Android client, in Kotlin + Jetpack Compose. It connects to the same hub with the same API as iOS (`docs/protocol/protocol.md`); the server needs no changes.
+`android/`: the Android client, in Kotlin + Jetpack Compose. It connects to the same hub with the same API as iOS (`docs/protocol/protocol.md`); shared additive fields, such as task-row identity, are available to every client.
 minSdk 30 (Android 11), compileSdk 37, targetSdk 37. The UI comes in three languages, 简体中文, English and 日本語. It follows the system by default and can be chosen in Settings; see "Internationalization".
 
 In one sentence: on an Android phone, see the Agents in the engine of each of your computers (herdr, Herdr App, Orca or Paseo, one per computer, `docs/integrations/engines.md`), send messages, answer questions / approve plans / grant permissions, and press the options of terminal dialogs,
@@ -45,6 +45,63 @@ chat-rendering preferences are independent of home navigation and remain availab
 
 Apple PR #1696 removed the old root-navigation switch; PR #2539 separately removed conversation-presentation settings.
 The latter is not a home-layout toggle and is not a reason to remove Android's Inbox rendering preference.
+
+### Simplified Assistant conversation and action trays (#2878)
+
+The existing **Assistant / Agents** home tabs do not change. Above the Assistant composer, the old All/task/Agent chip
+strip becomes three single-line actions, ordered **Pending**, **Progress**, **Agents**. Tapping opens a bounded, scrollable
+tray upward and flips its arrow; opening another closes the first. The bar is absent on the Agents page.
+
+- **Pending:** orange dot/count; one row per decision, with Approve or Review and an Approve all header. Bulk approval
+  takes only explicitly approvable permissions/plans, respects the session's approval capability and never chooses an
+  answer to a question. Task plans awaiting Start and task acceptance decisions use their existing review/detail flows.
+  Draft replies have a separate **Sent on your behalf · Only after you tap** group, with individual Send actions. An empty
+  Pending action becomes gray; data-read failures must not be represented as an empty successful read.
+- **Progress:** blue dot and neutral count. Each task has **one row only**, from its planned slot through execution and
+  acceptance. Title, PR reference, reported steps, blocked orange state and completed check update in that row; tapping
+  opens task details. Scheduled tasks and supervision have a separate quiet group and an inspectable background-record
+  entry rather than new conversation turns. A missing numeric progress total is indeterminate, not a guessed percentage.
+- **Agents:** green dot and neutral count; one session per row, working green / needs-you orange / completed-unread blue,
+  with the computer display name and latest state line. A row opens that session. The old All entry still opens the task
+  board, and task/Agent details plus routing controls remain accessible. The old chips were navigation and task routing,
+  not an Agent-based message filter; this change does not invent a new conversation filter.
+
+Task plan/task/receipt/review/report cards, including historical ones, are no longer rendered in the conversation. A
+small **Dispatched N tasks · See Progress** entry opens Progress instead; the task row there is the only card. Tools and
+intermediate narration remain under a default-collapsed **Checked N places** summary, which can be opened manually.
+Housekeeping notices (compaction, restarts, schedule setup) are hidden while dates remain. Explicit message-source
+metadata identifies supervision/patrol/follow-up turns; normal user messages are never hidden by their title or emoji.
+Original events and background records remain inspectable rather than being deleted from history.
+
+#### Shared data contract
+
+The only hub API addition is `task_cards` on the existing `GET /api/v1/assistant/conversations/{id}/feed?since=` response:
+`{id,todo_id?,plan_id?,index?,at,updated_at,state,receipt_id?,report_id?}`. It is an additive **upsert page**, not a removal
+snapshot. Identity is `plan:<plan_id>:<index>` before and after task binding, or `todo:<todo_id>` without a plan; `at` stays
+at creation, not receipt time. A missing/null projection keeps legacy/cached data, and an empty page does not delete rows.
+The full state and compatibility semantics are in [the protocol](../protocol/protocol.md#tasks-and-the-chat-feed).
+
+Everything else reuses current endpoints and pushes:
+
+| Use | Existing data and write path |
+| --- | --- |
+| Delegated tasks and PRs | `GET /api/v1/todos`, `Todo.origin`, `plan_id`, `pr_url`, `agents`, `done_at`, `supervision.state`, and live `todos` updates |
+| Real progress | `Todo.supervision.progress.{kind,step,steps,text,at}`; otherwise the linked `Session.plan.{done,total,current}` and `activity` / `last_text` |
+| Planning | Feed `plans` / `GET /api/v1/task-plans/{id}`; Start / Dismiss use their existing plan routes |
+| Decisions | Current interactions and the existing `/interactions/{id}/resolve`; nontrivial questions/forms keep the existing Review flow |
+| Draft replies | Feed message drafts and Inbox `suggestion.{kind,version,text}`; suggestion confirmation uses `/inbox/{id}/suggestion` with the captured `version`, `action:confirm`, and `client_id`; ordinary feed sends retain the existing message-send path |
+| Quiet schedules | `GET /api/v1/assistant/tasks`, `repeat`, `every_minutes`, `next_run`, `last_run`, `last_status`, `last_error`, `run_machine_id`, `run_session_id`; refreshed by `assistant_schedule` |
+| Agent rows | Existing session and computer snapshots, `state`, pending interactions, activity and completion-unread state |
+
+No new database tables, model calls, approval bypass or draft-send endpoint are introduced. Android now decodes the
+already-served progress/plan, PR and cancellation fields; Apple can use the same hub contract in its independent implementation.
+
+For real-app synthetic captures, start `PORT=<unused loopback port> python3 scripts/mock/assistant_trays.py` and pair a
+task-owned emulator through the existing DEBUG mock address. The fixture has four tasks (working, blocked and accepted),
+a permission, a question and a versioned Inbox reply draft, with only fictional names and messages. Its
+`GET /mock/assistant-trays?clear=1` removes pending decisions/drafts and pushes the new state without changing pairing;
+`?reset=1` restores the fixture. `python3 scripts/mock/test_assistant_trays.py` verifies the stable rows and clear behavior
+without opening sockets. JVM Native-rendered component captures are separate evidence, not emulator or handset captures.
 
 ## Pairing pages (#2481)
 

@@ -213,5 +213,9 @@
   "calendar_undated_other": "期限のない ToDo が {count} 件あり、カレンダーには出ません。",
   "calendar_see_list": "リストで見る →",
   "calendar_back": "カレンダーに戻る",
-  "calendar_close": "閉じる"
+  "calendar_close": "閉じる",
+  "ask_ok": "OK",
+  "ask_answer": "チャットで答える",
+  "ask_answer_hint": "おすすめがないので、元の会話で答えてください。",
+  "ask_failed": "できませんでした：{error}"
 }

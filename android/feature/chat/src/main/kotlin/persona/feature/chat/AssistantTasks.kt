@@ -107,6 +107,10 @@ internal class AssistantTaskHost(
     val machines: List<persona.core.contracts.Machine> = emptyList(),
     /** The cards waiting for an answer: a waiting task says what its agent's card asks (#3964). */
     val pending: List<persona.core.contracts.Interaction> = emptyList(),
+    /** Original records remain inspectable from Progress, never discarded by the conversation projection. */
+    val backgroundRecords: List<persona.core.domain.lines.ChatLine> = emptyList(),
+    val onOpenBackground: (() -> Unit)? = null,
+    val onOpenProgress: (() -> Unit)? = null,
 ) {
     /** Each session's first card ([firstBySession]). */
     val cards: Map<SessionKey, persona.core.contracts.Interaction> by lazy { pending.firstBySession() }
@@ -166,6 +170,17 @@ internal fun AssistantExtraLine(payload: Any, host: AssistantTaskHost?) {
             style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         is AssistantExtra.Quick -> QuickResultCard(payload.result)
         is AssistantExtra.Feed -> FeedLine(payload.item, host)
+        is persona.core.domain.tasks.DispatchHint -> {
+            val label = pluralStringResource(R.plurals.chat_assistant_dispatched, payload.count, payload.count)
+            Row(Modifier.fillMaxWidth().clickable(enabled = host.onOpenProgress != null,
+                onClickLabel = label) { host.onOpenProgress?.invoke() }.padding(vertical = Tokens.Space.xs)
+                .testTag("assistant-dispatch-hint"), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                Text(label, Modifier.weight(1f, fill = false), style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                JIcon(PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
+            }
+        }
     }
 }
 
@@ -269,7 +284,7 @@ internal fun permissionLabel(mode: String?): String = when (mode ?: "default") {
 }
 
 @Composable
-private fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
+internal fun PlanCard(plan: TaskPlan, host: AssistantTaskHost) {
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     var remember by remember(plan.id) { mutableStateOf(false) }
     var editing by remember(plan.id) { mutableStateOf(false) }
@@ -659,52 +674,6 @@ private fun MessageCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
                 JButton(stringResource(R.string.chat_tasks_later), { host.tasks.putOff(itemId) }, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
             }
         }
-    }
-}
-
-// ── above the composer ──
-
-/**
- * The dock (iOS TaskDock): "All N" for the board, held at the leading edge so it never scrolls away, then a pill for each
- * task going on (waiting first) and, in the main conversation, each agent going on that no task stands for (#1113),
- * scrolling beside it; a long press on a task's pill removes it while nothing of it runs. Then the route chip.
- */
-@Composable
-internal fun AssistantTaskBar(host: AssistantTaskHost) {
-    val todos by host.tasks.todos.collectAsStateWithLifecycle()
-    val routes by host.tasks.routes.collectAsStateWithLifecycle()
-    val main by host.tasks.mainConversation.collectAsStateWithLifecycle()
-    val mine = todos.filter { it.origin == host.conversation }
-    val going = mine.map { it to host.tasks.stateOf(it, host.sessions) }
-        .filter { (_, s) -> s == TaskState.NeedsYou || s == TaskState.Interrupted || s == TaskState.Working || s == TaskState.NotStarted || s == TaskState.Unread }
-        .sortedWith(compareBy({ it.second.rank }, { it.first.createdAt?.let { c -> -(AssistantLines.time(c)?.toEpochMilli() ?: 0) } ?: 0 }))
-    val agents = remember(host.conversation, main, host.sessions, todos) { persona.core.domain.tasks.dockAgents(host.conversation, main, host.sessions, todos) }
-    var removing by remember { mutableStateOf<Todo?>(null) }
-    Column(Modifier.padding(horizontal = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-        if (mine.isNotEmpty() || agents.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            JChip(stringResource(R.string.chat_tasks_dock_all, mine.size + agents.size), onClick = { host.sheet.value = TaskSheet.Board })
-            if (going.isNotEmpty() || agents.isNotEmpty()) Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                going.forEach { (todo, state) ->
-                    JChip(when (state) {
-                        TaskState.NeedsYou -> stringResource(R.string.chat_tasks_dock_waiting, todo.title)
-                        TaskState.Interrupted -> stringResource(R.string.chat_tasks_dock_interrupted, todo.title)
-                        else -> todo.title
-                    }, onClick = { openTask(host, todo) }, status = state.status(),
-                        onLongClick = if (state.isRemovable) ({ removing = todo }) else null)
-                }
-                agents.forEach { session ->
-                    JChip(if (session.agentState == AgentState.NeedsYou) stringResource(R.string.chat_tasks_dock_waiting, session.displayTitle) else session.displayTitle,
-                        onClick = { host.sheet.value = TaskSheet.Agent(session.key) }, status = session.agentState.designStatus, icon = PhIcons.Robot)
-                }
-            }
-        }
-        val routed = routes[host.conversation]?.let { id -> mine.firstOrNull { it.id == id } }
-        if (routed != null) JChip(stringResource(R.string.chat_tasks_route_chip, routed.title), selected = true, onClick = { host.tasks.setRoute(host.conversation, null) }, icon = PhIcons.PaperPlaneTilt)
-    }
-    removing?.let { todo ->
-        persona.core.designsystem.JActionSheet(listOf(persona.core.designsystem.JAction(stringResource(R.string.chat_task_detail_remove), PhIcons.Trash,
-            destructive = true) { host.tasks.removeTask(todo, host.onError) }), { removing = null }, title = todo.title)
     }
 }
 
