@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -290,4 +291,33 @@ func (n *Node) liveRuntimeModels(ctx context.Context, name string, refresh bool,
 		out.Models = []proto.AgentModel{}
 	}
 	return out, nil
+}
+
+// runtimeLauncherCheck opts into the runtime's authenticated availability probe. A refused probe never falls back to
+// the login shell, whose credentials may be different. Older runtimes keep the existing shell check.
+func (n *Node) runtimeLauncherCheck(ctx context.Context, name, cwd, prompt string) (proto.LauncherCheck, bool) {
+	h := n.runtimes.launcherRuntime(name)
+	if h == nil {
+		return proto.LauncherCheck{}, false
+	}
+	h.mu.Lock()
+	supported := h.hello.Caps.Check
+	h.mu.Unlock()
+	if !supported {
+		return proto.LauncherCheck{}, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
+	defer cancel()
+	start := time.Now()
+	var result proto.LauncherCheck
+	if err := h.peer.Call(ctx, "launchers.check", map[string]any{"launcher": name, "cwd": cwd, "prompt": prompt}, &result); err != nil {
+		result = proto.LauncherCheck{Error: err.Error()}
+	}
+	launcher, _ := h.launcherNamed(name)
+	result.Agent = launcher.Agent
+	if result.Agent == "" {
+		result.Agent = h.agent()
+	}
+	result.Millis = int(time.Since(start).Milliseconds())
+	return result, true
 }

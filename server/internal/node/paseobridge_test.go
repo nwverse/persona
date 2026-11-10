@@ -93,6 +93,16 @@ func TestJSRuntimeEnv(t *testing.T) {
 	}
 }
 
+// The bridge is told the node's mcp.json, the one beside the runtime socket, to give its new Agents the Persona tools.
+func TestPaseoBridgeArgsNameTheNodesMCPConfig(t *testing.T) {
+	got := paseoBridgeArgs("/pkg", "/data/persona/runtime.sock", "/home/u/.paseo")
+	want := []string{"/pkg/paseo/bridge.mjs", "--socket", "/data/persona/runtime.sock", "--paseo-home", "/home/u/.paseo",
+		"--mcp-config", "/data/persona/mcp.json"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 // fakeBridge makes the bridge a shell script that marks each start in dir and lives until stopped (or exits at once
 // when quit is set).
 func fakeBridge(t *testing.T, quit bool) string {

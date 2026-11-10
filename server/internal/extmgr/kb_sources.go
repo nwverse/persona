@@ -68,7 +68,7 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 		out, err = h.kbConnectorOwner(ctx)
 	case assistantwire.ConnectorsChanges:
 		var arch connector.Archive
-		if arch, err = h.kbArchive(a.ID); err == nil {
+		if arch, err = h.kbArchive(ctx, a.ID); err == nil {
 			var res assistantwire.ChangesResult
 			res.Batches, res.Next, res.More, err = arch.Changes(ctx, a.Cursor, a.Limit)
 			if res.Batches == nil {
@@ -78,7 +78,7 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 		}
 	case assistantwire.ConnectorsArchiveMedia:
 		var arch connector.Archive
-		if arch, err = h.kbArchive(a.ID); err == nil {
+		if arch, err = h.kbArchive(ctx, a.ID); err == nil {
 			media, ok := arch.(connector.ArchiveMedia)
 			if !ok {
 				return nil, true, errors.New("no attachments")
@@ -143,12 +143,26 @@ func (h *Manager) kbArchives(ctx context.Context) assistantwire.Archives {
 		out.Archives = append(out.Archives, assistantwire.ArchiveSource{ID: c.ID(), PollMS: c.Manifest().Poll.Milliseconds(),
 			Sources: h.archiveSources(c), Media: media, History: history, HistoryAnchors: history && anchors})
 	}
+	// The subscriptions with "Add to knowledge base" on (#2039): read like a connector's archive, kicked after a run.
+	if h.subs != nil {
+		ids, err := h.subs.Archives(ctx)
+		if err != nil {
+			h.logf("kb: subscriptions: %v", err)
+		}
+		for _, id := range ids {
+			out.Archives = append(out.Archives, assistantwire.ArchiveSource{ID: id})
+		}
+	}
 	return out
 }
 
-// kbArchive is connector id's archive, while the user lets it into the knowledge base.
-func (h *Manager) kbArchive(id string) (connector.Archive, error) {
+// kbArchive is connector id's archive, while the user lets it into the knowledge base; or subscription id's (#2039),
+// which answers errArchiveOff-like itself while its knowledge base is off.
+func (h *Manager) kbArchive(ctx context.Context, id string) (connector.Archive, error) {
 	c := h.connectorByID(id)
+	if c == nil && h.subs != nil && h.subs.IsSubscription(ctx, id) {
+		return subscriptionArchive{h.subs, id}, nil
+	}
 	a, ok := connector.As[connector.Archive](c)
 	if c == nil || !ok {
 		return nil, fmt.Errorf("connector %q has no archive", id)
@@ -179,7 +193,7 @@ func (h *Manager) kbHistoryCall(ctx context.Context, p assistantwire.AppCall) (j
 			return nil, true, err
 		}
 	}
-	if _, err := h.kbArchive(params.ID); err != nil {
+	if _, err := h.kbArchive(ctx, params.ID); err != nil {
 		return nil, true, err
 	}
 	c := h.connectorByID(params.ID)
