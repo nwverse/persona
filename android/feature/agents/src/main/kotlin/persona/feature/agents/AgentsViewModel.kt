@@ -93,6 +93,16 @@ internal class AgentsViewModel(
     private val groupListCounts = MutableStateFlow<Map<String, GroupListCounts>>(emptyMap())
     private val countingGroups = mutableSetOf<Triple<String, String, SessionListFilter>>()
     private val groupFilter = MutableStateFlow<GroupFilter?>(null)
+    /** The current assistant the list is of (docs/assistant/managers.md "Clients"); null until the page says: every manager's. */
+    private val assistant = MutableStateFlow<persona.core.contracts.api.CurrentAssistant?>(null)
+    /** Lists [value]'s agents and computers: the sessions and computers stamped with it, the cards that go with them. */
+    fun show(value: persona.core.contracts.api.CurrentAssistant) {
+        val before = assistant.value
+        if (before == value) return
+        // Another assistant is another list; the same one's roster changing (a count, a name) keeps the rows in place.
+        if (before?.id != value.id) previous = null
+        assistant.value = value
+    }
     /** The hub group the list shows; null is every group (AgentGroups.kt). */
     val group = groupFilter.asStateFlow()
     // Written while building [page] (on listContext) and reset from the main thread.
@@ -183,7 +193,10 @@ internal class AgentsViewModel(
     private val todosFlow = tasks?.todos ?: MutableStateFlow(emptyList())
     private val projectedPage = combine(renamer?.project(repository.sessions) ?: repository.sessions, repository.machines,
         preferences.snapshots(pairingScope).combine(repository.listStatus) { prefs, status -> prefs to status },
-        settings.combine(groupFilter, ::Pair), combine(operationState, todosFlow, ::Pair)) { everySession, everyMachine, (localPrefs, pagination), (settings, group), (ops, todos) ->
+        combine(settings, groupFilter, assistant, ::Triple), combine(operationState, todosFlow, ::Pair)) { hubSessions, hubMachines, (localPrefs, pagination), (settings, group, assistant), (ops, todos) ->
+        // The current assistant's (the hub's lists are every manager's, each row with its own).
+        val everySession = if (assistant == null) hubSessions else hubSessions.filter { assistant.ownsOn(it.machineId, it.manager) }
+        val everyMachine = if (assistant == null) hubMachines else hubMachines.filter { assistant.ownsOn(it.id, it.manager) }
         val source = if (group == null) everySession else everySession.filter { group.admits(it.machineId) }
         val machines = if (group == null) everyMachine else everyMachine.filter { group.admits(it.id) }
         val sessions = ops.project(source)

@@ -1,7 +1,15 @@
 package persona.core.designsystem
 
 import android.content.res.Resources
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +23,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
@@ -29,8 +39,8 @@ import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
 
-// Several managers on one hub (docs/assistant/managers.md step 4): the pages that list what managers own group it by manager,
-// and the assistant page switches between them. With one installed manager none of this draws anything.
+// The hub's managers, "assistants" to the user (docs/assistant/managers.md "Clients"): the sidebar's switcher picks the
+// current one, and every page shows what is its.
 
 /**
  * The selected hub's roster of managers, as the app last read it; null until read (or from a hub without managers).
@@ -40,6 +50,16 @@ val LocalManagerRoster = compositionLocalOf<ManagerRoster?> { null }
 
 /** The group ([persona.core.contracts.GroupKeys] namespace; null: the primary) whose hub [LocalManagerRoster] is. */
 val LocalManagerGroup = compositionLocalOf<String?> { null }
+
+/**
+ * The current assistant, for a page to list only what is its ([persona.core.contracts.api.CurrentAssistant.owns]):
+ * the switcher's choice against the roster, read again when either changes.
+ */
+@Composable
+fun currentAssistant(): persona.core.contracts.api.CurrentAssistant {
+    val choice by persona.core.contracts.api.AssistantManagerChoice.current.collectAsState()
+    return persona.core.contracts.api.CurrentAssistant(LocalManagerRoster.current, choice, LocalManagerGroup.current)
+}
 
 /** How long ago, as a manager's 最后同步于 says it: 刚刚, n 分钟前, n 小时前, then the day. */
 fun managerAgo(res: Resources, at: Instant, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
@@ -104,7 +124,124 @@ fun JManagerHeader(group: ManagerGroup<*>, modifier: Modifier = Modifier, now: I
 }
 
 /**
- * The assistant page's switcher: one chip per installed manager (the default first), the shown one selected; an
+ * The colour of an assistant's monogram, the same on every client: the default assistant's is the AI purple (null
+ * here), another's goes by the sum of its id's UTF-8 bytes, mod 5: blue, green, orange, pink, indigo.
+ */
+fun managerHue(id: String, isDefault: Boolean): JHue? {
+    if (isDefault) return null
+    val sum = id.toByteArray(Charsets.UTF_8).sumOf { it.toInt() and 0xFF }
+    return ManagerHues[sum % ManagerHues.size]
+}
+
+private val ManagerHues = listOf(JHue.Blue, JHue.Green, JHue.Orange, JHue.Pink, JHue.Indigo)
+
+/** The first letter an assistant's monogram shows: its name's first character (a whole code point), in capitals. */
+fun managerInitial(name: String): String {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) return ""
+    return trimmed.substring(0, trimmed.offsetByCodePoints(0, 1)).uppercase()
+}
+
+/**
+ * An assistant in the switcher: its initial on its colour ([managerHue]) in a circle, with its status dot at the
+ * corner when [status] is given. Not [JAvatar]: that one is a person's or a source's picture on the quiet surface,
+ * and this one's colour is what tells the assistants apart.
+ */
+@Composable
+fun JManagerAvatar(
+    manager: HubManager, isDefault: Boolean, modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = HomeTokens.assistantAvatar, status: Status? = null,
+    /** Something waits for the user at another assistant: the needs-you dot at the top corner. */
+    alert: Boolean = false,
+) {
+    val palette = PersonaTheme.palette
+    val hue = managerHue(manager.id, isDefault)
+    val fill = hue?.let { palette.hue(it).dot } ?: palette.ai
+    val ink = hue?.let { palette.hue(it).onDot } ?: ExtensionThemeColors.on(fill)
+    androidx.compose.foundation.layout.Box(modifier.size(size).clearAndSetSemantics {}) {
+        androidx.compose.foundation.layout.Box(
+            // An offline assistant's is faded as a whole (the layer comes before what it fades).
+            Modifier.fillMaxSize().stableAlpha(if (manager.online || manager.isInstalling) 1f else HomeTokens.assistantOfflineAlpha)
+                .clip(androidx.compose.foundation.shape.CircleShape).background(fill),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(managerInitial(manager.shownName), style = PersonaTheme.type.label.copy(
+                fontSize = androidx.compose.ui.unit.TextUnit(size.value * HomeTokens.assistantInitialShare, androidx.compose.ui.unit.TextUnitType.Sp),
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = ink, maxLines = 1)
+        }
+        status?.let {
+            androidx.compose.foundation.layout.Box(Modifier.align(Alignment.BottomEnd).clip(androidx.compose.foundation.shape.CircleShape)
+                .background(palette.background).padding(Tokens.Space.xxs)) { JStatusDot(it) }
+        }
+        if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
+    }
+}
+
+/**
+ * The sidebar's head: the current assistant ([avatar], its [name] with a caret, its [status] line under it); a tap
+ * opens and closes the roster under it ([expanded]). [trailing] is the bar's other button (the sidebar's search).
+ */
+@Composable
+fun JAssistantSwitcherHeader(
+    name: String, status: String, state: Status, expanded: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier,
+    avatar: @Composable () -> Unit, trailing: (@Composable () -> Unit)? = null,
+) {
+    val palette = PersonaTheme.palette
+    val label = stringResource(R.string.designsystem_manager_switcher)
+    val stateText = stringResource(if (expanded) R.string.designsystem_expanded else R.string.designsystem_collapsed)
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.android).clip(PersonaTheme.shapes.controlShape)
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = label, onClick = onClick)
+            .semantics(mergeDescendants = true) { stateDescription = stateText }
+            .padding(vertical = Tokens.Space.xs),
+            verticalAlignment = Alignment.CenterVertically) {
+            avatar()
+            Spacer(Modifier.width(Tokens.Space.m))
+            androidx.compose.foundation.layout.Column(Modifier.weight(1f, fill = false)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, Modifier.weight(1f, fill = false), style = PersonaTheme.type.headline, color = palette.ink,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.width(Tokens.Space.xs))
+                    JIcon(if (expanded) persona.core.designsystem.icons.PhIcons.CaretUp else persona.core.designsystem.icons.PhIcons.CaretDown,
+                        null, size = Tokens.Space.m, tint = palette.ink3, decorative = true)
+                }
+                JStateLabel(status, state)
+            }
+        }
+        trailing?.let { Spacer(Modifier.width(Tokens.Space.s)); it() }
+    }
+}
+
+/**
+ * One assistant of the switcher's roster: its monogram, its name with Default beside it, its [status] line, and at the
+ * end what waits for the user there ([badge]) or the tick of the current one.
+ */
+@Composable
+fun JAssistantSwitcherRow(
+    manager: HubManager, isDefault: Boolean, status: String, state: Status, current: Boolean, badge: Int,
+    onClick: () -> Unit, modifier: Modifier = Modifier, defaultTag: String? = null,
+) {
+    val palette = PersonaTheme.palette
+    JRow(modifier, onClick = onClick, chevron = false, selected = current, trailing = if (current || badge > 0) ({
+        if (current) JIcon(persona.core.designsystem.icons.PhIcons.Check, stringResource(R.string.designsystem_manager_current),
+            size = Tokens.Space.xl, tint = palette.accent)
+        else JBadge(badge)
+    }) else null) {
+        JManagerAvatar(manager, isDefault, size = HomeTokens.assistantAvatarSmall)
+        Spacer(Modifier.width(Tokens.Space.m))
+        androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                Text(manager.shownName, Modifier.weight(1f, fill = false), style = PersonaTheme.type.body,
+                    color = if (manager.online || manager.isInstalling) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                defaultTag?.let { JTag(it) }
+            }
+            JStateLabel(status, state)
+        }
+    }
+}
+
+/**
+ * The settings pages' own picker: one chip per installed manager (the default first), the shown one selected; an
  * offline one greyed with its dot. Draws nothing with one manager.
  */
 @Composable

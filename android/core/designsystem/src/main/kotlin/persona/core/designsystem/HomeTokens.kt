@@ -14,6 +14,11 @@ internal object HomeTokens {
     val drawerDark = Color(0xFF171717)
     val drawerRowHeight = 52.dp
     val sidebarBadgeSize = 22.dp
+    /** An assistant's monogram: in the sidebar's head, and in the switcher's rows. */
+    val assistantAvatar = 40.dp
+    val assistantAvatarSmall = 32.dp
+    const val assistantInitialShare = 0.42f
+    const val assistantOfflineAlpha = 0.45f
     val chromeLight = Color(0xCCFFFFFF)
     val chromeDark = Color(0xB83A3A3C)
     val settingsGlyph = 54.dp

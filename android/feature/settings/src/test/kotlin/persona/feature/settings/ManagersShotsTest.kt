@@ -154,7 +154,7 @@ class ManagersShotsTest {
         rule.waitForIdle()
         assertTrue(fake.reads > reads)
         rule.onNodeWithText("书房").assertIsDisplayed()
-        rule.onNode(hasText("新建管理者") and hasClickAction()).assertIsDisplayed()
+        rule.onNode(hasText("新建助手") and hasClickAction()).assertIsDisplayed()
     }
 
     /**
@@ -173,7 +173,7 @@ class ManagersShotsTest {
         rule.onNodeWithText("MacBook · macOS · 服务").assertIsDisplayed()
         rule.onNode(hasText("换个地方装") and hasClickAction()).performClick()
         rule.waitForIdle()
-        rule.onNodeWithText("换个地方装会给一个新的安装码；用它装好后，原来那处的管理者立即停止工作。").assertIsDisplayed()
+        rule.onNodeWithText("换个地方装会给一个新的安装码；用它装好后，原来那处的助手立即停止工作。").assertIsDisplayed()
         assertTrue(fake.calls.isEmpty())
         rule.onAllNodes(hasText("换个地方装") and hasClickAction()).fetchSemanticsNodes().let { assertEquals(2, it.size) }
         rule.onAllNodes(hasText("换个地方装") and hasClickAction())[1].performClick()
@@ -209,7 +209,7 @@ class ManagersShotsTest {
             }
         }
         rule.waitForIdle()
-        rule.onNodeWithText("关掉后，这台设备不再收到这个管理者的推送").assertIsDisplayed()
+        rule.onNodeWithText("关掉后，这台设备不再收到这个助手的推送").assertIsDisplayed()
         rule.onNode(hasText("推送通知") and hasClickAction()).performClick()
         rule.waitForIdle()
         assertEquals(listOf(listOf("m-3fa21c")), devices.saved)
@@ -224,7 +224,7 @@ class ManagersShotsTest {
             }
         }
         rule.waitForIdle()
-        rule.onNodeWithText("hub 自己运行的管理者不能删除").assertIsDisplayed()
+        rule.onNodeWithText("hub 自己运行的助手不能删除").assertIsDisplayed()
         rule.onNode(hasText("删除") and hasClickAction()).assertIsNotEnabled()
         assertTrue(rule.onAllNodes(hasText("换个地方装")).fetchSemanticsNodes().isEmpty())
         assertTrue(rule.onAllNodes(hasText("设为默认")).fetchSemanticsNodes().isEmpty())
@@ -240,14 +240,14 @@ class ManagersShotsTest {
             }
         }
         rule.waitForIdle()
-        val row = rule.onNode(hasText("管理者") and hasClickAction()).fetchSemanticsNode().boundsInRoot
+        val row = rule.onNode(hasText("助手") and hasClickAction()).fetchSemanticsNode().boundsInRoot
         val pairing = rule.onNode(hasText("配对") and hasClickAction()).fetchSemanticsNode().boundsInRoot
         assertTrue(row.bottom <= pairing.top)
-        rule.onNode(hasText("管理者") and hasClickAction()).performClick()
+        rule.onNode(hasText("助手") and hasClickAction()).performClick()
         assertEquals(SettingsPage.Managers, opened)
         services = services.copy(demo = true)
         rule.waitForIdle()
-        rule.onAllNodesWithText("管理者").assertCountEquals(0)
+        rule.onAllNodesWithText("助手").assertCountEquals(0)
     }
 
     private fun settingsServices(api: HubManagers) = SettingsServices(

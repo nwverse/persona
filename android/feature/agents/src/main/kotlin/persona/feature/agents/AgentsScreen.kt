@@ -66,7 +66,17 @@ internal fun AgentsScreen(
     val connection by model.connection.state.collectAsStateWithLifecycle()
     val group by model.group.collectAsStateWithLifecycle()
     val everyRequest by model.interactions.pending.collectAsStateWithLifecycle()
-    val pending = remember(everyRequest, group) { if (group == null) everyRequest else everyRequest.filter { group.admits(it.machineId) } }
+    // The current assistant's agents (docs/assistant/managers.md "Clients"), and the cards that are theirs.
+    val assistant = persona.core.designsystem.currentAssistant()
+    LaunchedEffect(model, assistant) { model.show(assistant) }
+    val pending = remember(everyRequest, group, assistant, page.sessions) {
+        val managers = page.sessions.associate { it.key to it.manager }
+        everyRequest.filter { request ->
+            (group == null || group.admits(request.machineId)) &&
+                // a card names its manager, else it is its session's (one of a session the list no longer has: its own stamp alone)
+                assistant.ownsOn(request.machineId, request.manager ?: managers[request.sessionKey])
+        }
+    }
     val outbox by model.sender.outbox.collectAsStateWithLifecycle()
     val delivery by model.delivery.collectAsStateWithLifecycle()
     val requestHistory by model.requestHistory.collectAsStateWithLifecycle()
