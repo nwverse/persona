@@ -782,7 +782,7 @@ func (s *Service) snapshotUnaccepted(ctx context.Context, loc *time.Location) ([
 		}
 		total++
 		if len(out) < 8 { // the oldest eight; the total says how many more
-			out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: verdictText(s.botLang(ctx), &x.a),
+			out = append(out, prompts.SnapshotAccept{Title: clip(oneLine(t.Title), 40), Verdict: clip(oneLine(verdictText(s.botLang(ctx), &x.a)), 120),
 				Changed: x.a.Changed, Link: x.a.Link, Since: x.a.AskedAt.In(loc)})
 		}
 	}

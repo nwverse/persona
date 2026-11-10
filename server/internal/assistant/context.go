@@ -3,7 +3,6 @@ package assistant
 import (
 	"cmp"
 	"context"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Context is the <persona-context> block a message to conversation p.SessionID starts with (the node asks on every
@@ -75,7 +75,7 @@ func (s *Service) contextSnapshot(ctx context.Context) string {
 	out := *snap
 	out.Now = time.Now().In(s.location(ctx))
 	out.ModelProfile = s.modelProfileContext(ctx)
-	return fitSnapshot(&out)
+	return fitSnapshot(out)
 }
 
 const (
@@ -84,77 +84,61 @@ const (
 	snapshotStale   = 30 * time.Minute
 	snapshotSlowest = 5 * time.Second
 
-	// snapshotBudget: characters of rendered snapshot one message may carry (#3203). It goes to every message, so its
-	// size is paid again on each of the turn's tool calls; past it the sections below are dropped in that order.
-	// A range of a few kilobytes keeps what the assistant needs to answer and leaves the rest to the tools.
+	// snapshotBudget: characters of rendered snapshot one message may carry (#3203). The block stays in the
+	// conversation, so its size is what every message adds to the context until the next compaction; the node sends
+	// only the sections that changed, but after a compaction or a restart it sends all of them again.
 	snapshotBudget = 6000
-	// snapshotLine: characters one free-text line keeps (an agent's last line, what a task is doing, a conclusion).
-	snapshotLine = 220
 )
 
-// fitSnapshot trims out until the rendered snapshot fits snapshotBudget: first every free-text line, then whole
-// sections from the least to the most needed, whose counts stay in the header lines. The assistant can always ask
-// the tools (agents_list, inbox, todo_list) for what was dropped.
-func fitSnapshot(s *prompts.Snapshot) string {
-	trimAgent := func(in []prompts.SnapshotAgent) []prompts.SnapshotAgent {
-		out := slices.Clone(in)
-		for i := range out {
-			out[i].Line = clip(out[i].Line, snapshotLine)
-		}
-		return out
-	}
-	s.Needs, s.Unread, s.Awaiting, s.Waiting, s.Done = trimAgent(s.Needs), trimAgent(s.Unread), trimAgent(s.Awaiting),
-		trimAgent(s.Waiting), trimAgent(s.Done)
-	for i := range s.Tasks {
-		s.Tasks[i].Last = clip(s.Tasks[i].Last, snapshotLine)
-		s.Tasks[i].Doing = clip(s.Tasks[i].Doing, snapshotLine)
-	}
-	for i := range s.Unaccepted {
-		s.Unaccepted[i].Verdict = clip(s.Unaccepted[i].Verdict, snapshotLine)
-		s.Unaccepted[i].Changed = clip(s.Unaccepted[i].Changed, snapshotLine)
-	}
-	if text := prompts.RenderSnapshot(*s); len(text) <= snapshotBudget {
-		return text
-	}
-	for _, drop := range []func(*prompts.Snapshot){
-		func(s *prompts.Snapshot) { s.Muted = nil },
-		func(s *prompts.Snapshot) { s.Done = nil },
-		func(s *prompts.Snapshot) { s.Routines, s.RoutinesTotal = nil, 0 },
-		func(s *prompts.Snapshot) { s.Followups = nil },
-		func(s *prompts.Snapshot) { s.Plans, s.PlansTotal = nil, 0 },
-		func(s *prompts.Snapshot) { s.Asked = nil },
-		func(s *prompts.Snapshot) { s.KB = "" },
-		func(s *prompts.Snapshot) {
-			if s.Chats != nil {
-				chats := *s.Chats
-				chats.Other = nil
-				s.Chats = &chats
-			}
-		},
-		func(s *prompts.Snapshot) { s.Working = nil },
-		func(s *prompts.Snapshot) { s.Unaccepted, s.UnacceptedTotal = nil, 0 },
-		func(s *prompts.Snapshot) { s.Tasks = nil },
-		func(s *prompts.Snapshot) { s.Unread = nil },
-		func(s *prompts.Snapshot) { s.Approvals = nil },
-	} {
-		if text := prompts.RenderSnapshot(*s); len(text) <= snapshotBudget {
-			return text
-		}
-		drop(s)
-	}
-	return clipSnapshot(prompts.RenderSnapshot(*s))
+// snapshotOmits are the sections fitSnapshot leaves out, the least needed first. Never left out: the agents waiting
+// for the user (needs you, awaiting a reply), the running workflows (an agent waiting for one has not finished), the
+// plan cards waiting for "Start" and the failed scheduled runs (no tool lists them), the calendar and the chats that
+// @ the user.
+var snapshotOmits = []func(*prompts.SnapshotOmit){
+	func(o *prompts.SnapshotOmit) { o.Muted = true },
+	func(o *prompts.SnapshotOmit) { o.Done = true },
+	func(o *prompts.SnapshotOmit) { o.Waiting = true },
+	func(o *prompts.SnapshotOmit) { o.Routines = true },
+	func(o *prompts.SnapshotOmit) { o.Followups = true },
+	func(o *prompts.SnapshotOmit) { o.OtherChats = true },
+	func(o *prompts.SnapshotOmit) { o.Working = true },
+	func(o *prompts.SnapshotOmit) { o.KB = true },
+	func(o *prompts.SnapshotOmit) { o.Asked = true },
+	func(o *prompts.SnapshotOmit) { o.Unaccepted = true },
+	func(o *prompts.SnapshotOmit) { o.Tasks = true },
+	func(o *prompts.SnapshotOmit) { o.Unread = true },
+	func(o *prompts.SnapshotOmit) { o.Approvals = true },
 }
 
-// clipSnapshot is text cut at a line break to the budget, with a line saying where the rest is: a section the drops
-// above cannot shorten (a long list of agents waiting for the user) must not push the block past it.
-func clipSnapshot(text string) string {
-	head := text[:snapshotBudget]
-	if cut := strings.LastIndexByte(head, '\n'); cut > 0 {
-		head = head[:cut]
-	} else if !utf8.ValidString(head) { // one line longer than the budget: cut at a rune boundary
-		head = strings.ToValidUTF8(head, "")
+// fitSnapshot is s rendered within snapshotBudget: as it is when it fits, else with sections left out in
+// snapshotOmits' order until it does (each keeps its heading and count: prompts.SnapshotOmit), else cut short. It
+// changes nothing but s.Omit: s shares its lists with the cached snapshot other messages render at the same time,
+// and the free text in them was clipped where the snapshot was taken.
+func fitSnapshot(s prompts.Snapshot) string {
+	text := prompts.RenderSnapshot(s)
+	for _, omit := range snapshotOmits {
+		if utf8.RuneCountInString(text) <= snapshotBudget {
+			return text
+		}
+		omit(&s.Omit)
+		text = prompts.RenderSnapshot(s)
 	}
-	return head + "\n- 快照到此截断；其余用 agents_list、todo_list、inbox 查"
+	if utf8.RuneCountInString(text) <= snapshotBudget {
+		return text
+	}
+	return cutSnapshot(text)
+}
+
+// cutSnapshot is text cut short, with the line saying so, within snapshotBudget: for what no section can be left out
+// of. The agents waiting for the user come first in the template, so they are what stays; the cut is at a line break
+// unless that would lose more than half the block (one agent list is one line).
+func cutSnapshot(text string) string {
+	tail := "\n" + prompts.SnapshotCut()
+	head := textfmt.Cut(text, snapshotBudget-utf8.RuneCountInString(tail))
+	if i := strings.LastIndexByte(head, '\n'); i > len(head)/2 {
+		head = head[:i]
+	}
+	return head + tail
 }
 
 // takeSnapshot reads the sources and keeps the result for contextSnapshot; done is closed when it is in.
@@ -188,7 +172,7 @@ func (s *Service) takeSnapshot(done chan struct{}) {
 	if e, err := s.kbGet(ctx); err == nil {
 		snap.KB = e.Prompt(6, 8)
 	}
-	snap.Followups, snap.Routines, snap.RoutinesTotal, snap.Missed, snap.MissedTotal = s.snapshotSchedule(ctx, loc, now)
+	snap.Followups, snap.FollowupsTotal, snap.Routines, snap.RoutinesTotal, snap.Missed, snap.MissedTotal = s.snapshotSchedule(ctx, loc, now)
 	wg.Wait()
 
 	cs := &s.live
@@ -243,6 +227,7 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			if a.Line == "" && c.AwaitsReply {
 				a.Line = c.Asks // what it asks (#5096)
 			}
+			a.Line = clip(oneLine(a.Line), 160)
 			recent := time.Since(c.UpdatedAt) < 24*time.Hour
 			var into *[]prompts.SnapshotAgent
 			switch {
@@ -340,7 +325,8 @@ func (s *Service) snapshotCalendar(ctx context.Context, now time.Time) *prompts.
 		}
 		for _, m := range d.Meetings {
 			if m.End.After(now) {
-				out.Events = append(out.Events, prompts.SnapshotEvent{Start: m.Start.In(now.Location()), End: m.End.In(now.Location()), Title: m.Title})
+				out.Events = append(out.Events, prompts.SnapshotEvent{Start: m.Start.In(now.Location()), End: m.End.In(now.Location()),
+					Title: clip(oneLine(m.Title), 40)})
 			}
 		}
 	}
@@ -352,13 +338,13 @@ func (s *Service) snapshotCalendar(ctx context.Context, now time.Time) *prompts.
 
 // snapshotSchedule is the schedule as the snapshot says it: the follow-ups to come, the daily tasks with how their
 // last run went, and the scheduled runs that failed or were skipped since yesterday 18:00 (#4124: the "Morning briefing" tells them
-// without calling list_followups). Bounded: eight daily tasks and the six newest misses, with the totals. The words
+// without calling list_followups). Bounded: the next eight follow-ups, eight daily tasks and the six newest misses, with the totals. The words
 // for a status are the template's (prompts/assistant/snapshot.md).
 func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now time.Time) (follow []prompts.SnapshotFollowup,
-	routines []prompts.SnapshotRoutine, routinesTotal int, misses []prompts.SnapshotMiss, missed int) {
+	followTotal int, routines []prompts.SnapshotRoutine, routinesTotal int, misses []prompts.SnapshotMiss, missed int) {
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		return nil, nil, 0, nil, 0
+		return nil, 0, nil, 0, nil, 0
 	}
 	defer sc.mu.Unlock()
 	for _, t := range sc.tasks {
@@ -379,7 +365,7 @@ func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now 
 			}
 			continue
 		}
-		f := prompts.SnapshotFollowup{At: t.At.In(loc), Label: t.label()}
+		f := prompts.SnapshotFollowup{At: t.At.In(loc), Label: clip(oneLine(t.label()), 30)}
 		if t.Repeat == repeatInterval {
 			f.Every = everyText(t.EveryMinutes)
 		}
@@ -399,7 +385,12 @@ func (s *Service) snapshotSchedule(ctx context.Context, loc *time.Location, now 
 	if len(all) > 6 {
 		all = all[:6]
 	}
-	return follow, routines, routinesTotal, all, missed
+	sort.SliceStable(follow, func(i, j int) bool { return follow[i].At.Before(follow[j].At) })
+	followTotal = len(follow)
+	if len(follow) > 8 {
+		follow = follow[:8]
+	}
+	return follow, followTotal, routines, routinesTotal, all, missed
 }
 
 // snapshotPlans are the plan cards in the main conversation still waiting for the user's "Start" (#4453), newest first:
