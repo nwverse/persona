@@ -895,6 +895,47 @@
     }
   },
   {
+    "name": "inbox_folders",
+    "description": "List the folders the user's inbox items are filed under: each `/`-separated path (`work/alerts/engine`, every segment a level) with its item count and open count, and whether automatic filing by the triage model is on. Give `folder` to also list the items filed in that folder and below, or `unfiled: true` for the items in no folder; each line has the item's id (what inbox_move takes), source, title, sender and whether it is done. Call it before inbox_move, to reuse a folder in use rather than open a near-duplicate.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "folder": {
+          "type": "string",
+          "description": "a folder path: also list the items filed there and below"
+        },
+        "unfiled": {
+          "type": "boolean",
+          "description": "also list the items in no folder"
+        }
+      }
+    }
+  },
+  {
+    "name": "inbox_move",
+    "description": "Move inbox items into a folder, as the user would from the inbox: `items` are their ids (from inbox_folders, or the id of an item handed to this conversation), `folder` a `/`-separated path (`work/alerts/engine`; a new path makes the folder), or `\"\"` to take them out of every folder. Moved items stay where they are put: the triage model no longer files them. An unknown id or a path with no name in it moves nothing. Move only what the user asked for.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "items",
+        "folder"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "inbox item ids"
+        },
+        "folder": {
+          "type": "string",
+          "description": "the folder path, or \"\" for no folder"
+        }
+      }
+    }
+  },
+  {
     "name": "kb_search",
     "description": "Search the knowledge base: summaries and metadata of chats, people, projects, docs, meetings, events, recordings (with their full transcripts), project timelines, the notes directories the user added (hits with an absolute path) and, with messages=true, the full message archive (newest days first). All words must match.",
     "input_schema": {
