@@ -154,7 +154,9 @@ func (m *Machine) rememberClaudeDirs(params json.RawMessage) {
 	if json.Unmarshal(params, &p) != nil || m.d.opts.Store == nil {
 		return
 	}
-	ctx := context.Background()
+	// On the node's read loop: bounded like state.put (nodeStoreWait); a later claude.dirs event adds what was missed.
+	ctx, cancel := m.storeCtx()
+	defer cancel()
 	// Held across the reads and the write: a setBlockedClaudeDirs in between would have its pruning undone.
 	m.claudeDirsMu.Lock()
 	defer m.claudeDirsMu.Unlock()
