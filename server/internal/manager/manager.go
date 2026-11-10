@@ -4,6 +4,7 @@
 package manager
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -94,15 +95,23 @@ func Main(ctx context.Context, build update.Build, args []string, stdout io.Writ
 
 // --- helpers ------------------------------------------------------------------------------------------------------
 
-// parseInterleaved parses flags that may come before, between or after the positional arguments.
+// parseInterleaved parses flags that may come before, between or after the positional arguments. What the flag package
+// prints waits in a buffer: -h writes the flags' help to the flag set's output (stdout) and returns errHelp; a flag
+// mistake writes nothing there and returns a usageMistake with the flag's message, which the caller prints with Usage on
+// stderr.
 func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	out := fs.Output()
+	var printed bytes.Buffer
+	fs.SetOutput(&printed)
+	defer fs.SetOutput(out)
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
+				_, _ = io.Copy(out, &printed)
 				return nil, errHelp
 			}
-			return nil, errUsage
+			return nil, usageMistake{err.Error()}
 		}
 		args = fs.Args()
 		if len(args) == 0 {
@@ -112,6 +121,12 @@ func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 		args = args[1:]
 	}
 }
+
+// usageMistake is errUsage that says what was wrong (the flag package's "flag provided but not defined: -json").
+type usageMistake struct{ msg string }
+
+func (e usageMistake) Error() string { return e.msg }
+func (e usageMistake) Unwrap() error { return errUsage }
 
 // ConfigError is a mistake in the manager's configuration (no manager.json, no database to use): personad exits 2,
 // which its systemd service does not restart on (RestartPreventExitStatus=2; a container's restart policy does, so
