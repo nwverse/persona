@@ -320,11 +320,20 @@ configuration process before checking connectivity. The publisher never provisio
 
 Without `--apply`, publication only reads the service and product state and returns `checked`.
 It does not create remote staging, rewrite product configuration or operate a service.
+The installed executable must support `manager update inventory --plan -`; an older
+executable without that read capability fails the check rather than staging a reader.
+
 Applying additionally requires an unfrozen, explicit maintenance window of at most fifteen
-minutes and a fresh scoped session snapshot. Older managers do not report full background
-idleness; the window explicitly authorizes that first bootstrap and is not represented as
-proof that every background activity is idle. Working, compacting, unknown or offline
-session state refuses the operation. Idle evidence is refreshed after artifact transfer.
+minutes. The publisher stages the same-source formal candidate in the existing isolated
+transaction directory with no idle digest. It executes that candidate's read-only inventory
+CLI before checking or starting activation. The CLI receives only the original manager
+identity through stdin, reads persisted assistant identity without migrations, and obtains
+two complete, stable local node runtime inventories. Hub REST reads verify online status,
+main session and machine ownership; display session lists never attest idleness.
+Busy, compacting, pending, incomplete, unsupported or changing runtime evidence refuses
+activation. One exact owned machine must be covered; additional machines fail closed.
+After candidate checks, the publisher reads authority again and binds the fresh real digest
+to the activation plan. A maintenance window alone never establishes idle state.
 
 ### Confirmation and recovery
 

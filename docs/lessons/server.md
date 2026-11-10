@@ -1533,6 +1533,17 @@ A Hub-only receipt requires unchanged node versions. When the user explicitly en
 After activating matching native and downloadable packages, reapply an enabled runtime node policy through its existing settings route so managers recheck the new pointer. A filesystem pointer change has no consumer watcher. Check the current policy first so an intervening disable is respected; a failed recheck must not produce a completed publication receipt.
 
 
+
+## Manager publication needs a real inventory producer (#3353)
+
+A display session list cannot stand in for the local node's authoritative update inventory.
+Read persisted identity separately from activation-plan validation, so the first idle read
+does not require inventing the digest it is meant to produce. Keep the producer's completion
+time when binding evidence to activation: later transport, REST and validation work must not
+renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
+ordinary imports; a transitive import can be available locally and missing remotely.
+
+
 ## Release status reporting is opt-in (#2671)
 
 A source validation result and a deployment result are different facts. Keep release
