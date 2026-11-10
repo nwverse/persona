@@ -284,6 +284,17 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
         </div>
       </Group>
 
+      {dialogLarkcli && (
+        <LarkReadSection
+          connector={dialogLarkcli}
+          reload={fetchLarkcli}
+          onOpen={() => {
+            onClose();
+            onOpen?.("larkcli");
+          }}
+        />
+      )}
+
       <Group title={dialogLarkcli ? t("settings-feishubot.bot_section") : undefined} footer={t("settings-feishubot.footer")}>
         <div className="flex items-center gap-3 px-4 py-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent-ink">
@@ -417,16 +428,6 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
         ))}
       </Group>
 
-      {dialogLarkcli && (
-        <LarkReadSection
-          connector={dialogLarkcli}
-          reload={fetchLarkcli}
-          onOpen={() => {
-            onClose();
-            onOpen?.("larkcli");
-          }}
-        />
-      )}
 
     </Dialog>
   );
@@ -453,7 +454,7 @@ function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnecto
           <BrandMark brand="lark" size={36} fit="tile" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13.5px] font-medium text-ink">{connector.account || t("settings-feishubot.read_account_unknown")}</div>
+          <div className="truncate text-[13.5px] font-medium text-ink">{t("settings-feishubot.read_as_you")}</div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
             <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", connectorDotClass[tone])} />
             <span className="truncate">{connectorState(connector)}{connector.status === "ok" && connector.account ? ` · ${connectorSummary(connector)}` : ""}</span>
@@ -476,7 +477,10 @@ function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnecto
           </div>
         </div>
       )}
-      {signsInHere(connector) && <SignInSteps c={connector} reload={reload} startLabel={t("settings-feishubot.read_authorize")} bare />}
+      {signsInHere(connector) && (
+        // Signed in: signing in again is a quiet secondary action; otherwise it is what this section is for.
+        <SignInSteps c={connector} reload={reload} startLabel={t(connector.status === "ok" ? "settings-feishubot.read_reauthorize" : "settings-feishubot.read_authorize")} startTone={connector.status === "ok" ? "quiet" : "accent"} bare />
+      )}
       <Row label={t("settings-feishubot.read_more")} hint={t("settings-feishubot.read_more_hint")} onClick={onOpen} />
     </Group>
   );

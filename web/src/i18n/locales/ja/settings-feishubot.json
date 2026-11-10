@@ -76,12 +76,13 @@
   "credentials_shared_note": "ボットと自分として読む機能はこのアプリを共用します。",
   "bot_section": "ボット · Persona とチャット",
   "read_section": "自分として読む · 受信トレイに追加",
-  "read_account_unknown": "未サインイン",
   "read_not_connected": "未接続",
   "read_status_prefix": "読み取り：{status}",
   "read_authorize": "QRコードで認証",
   "read_missing_title": "権限が不足しています",
   "read_open_platform": "オープンプラットフォームで権限を開く",
   "read_more": "その他の設定",
-  "read_more_hint": "受信トレイに集める内容を選択"
+  "read_more_hint": "受信トレイに集める内容を選択",
+  "read_as_you": "あなたとして",
+  "read_reauthorize": "もう一度認証"
 }
