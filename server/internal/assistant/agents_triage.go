@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -116,8 +116,8 @@ func triageAnswered(records []db.InteractionRecord) []prompts.AgentAnswerItem {
 }
 
 // A model may select a request, never turn a statement into one. The prompt handles intent; this checks its evidence.
-var userRequest = regexp.MustCompile(`(?i)^(?:请(?:你|您)?(?:确认|选择|提供|告诉|决定|批准|授权|登录|打开|回复|帮我|在)|麻烦|你决定|需要(?:你|您)(?:确认|选择|提供|决定|批准|授权)|(?:please\s+)?(?:confirm(?:\s+to)?|choose|select|provide|tell|approve|authorize|sign in|log in|open|visit|let me know|reply)\b|(?:確認|選択|承認|入力|ログイン)してください)`) // i18n-ignore: match literal request syntax, not UI text
-var requestAnnotation = regexp.MustCompile(`\s*(?:\([^()\n]*\)|（[^（）\n]*）|\[[^\[\]\n]*\]|【[^【】\n]*】)$`)
+var userRequest = lazyre.New(`(?i)^(?:请(?:你|您)?(?:确认|选择|提供|告诉|决定|批准|授权|登录|打开|回复|帮我|在)|麻烦|你决定|需要(?:你|您)(?:确认|选择|提供|决定|批准|授权)|(?:please\s+)?(?:confirm(?:\s+to)?|choose|select|provide|tell|approve|authorize|sign in|log in|open|visit|let me know|reply)\b|(?:確認|選択|承認|入力|ログイン)してください)`) // i18n-ignore: match literal request syntax, not UI text
+var requestAnnotation = lazyre.New(`\s*(?:\([^()\n]*\)|（[^（）\n]*）|\[[^\[\]\n]*\]|【[^【】\n]*】)$`)
 
 func explicitUserRequest(text string) bool {
 	text = strings.TrimSpace(text)

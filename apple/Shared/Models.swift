@@ -35,6 +35,9 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
     var engines: [DetectedEngine] = []
+    /// The set of engine hosts the computer runs (docs/integrations/engines.md "Host sets"); nil from a hub before sets.
+    /// `[]` is no terminal engine: `engine` still says herdr then, for older clients.
+    var engineHosts: [String]? = nil
     /// Operating it through Cua Driver; nil while the hub's plugin cua is off or it is not a Mac.
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
@@ -64,6 +67,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, clipboard, route, trust, manager
+        case engineHosts = "engine_hosts"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
@@ -109,6 +113,7 @@ extension Machine {
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
+        engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
         clipboard = try? c.decodeIfPresent(MachineClipboard.self, forKey: .clipboard)
@@ -202,6 +207,9 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
     static let cindy = Self(rawValue: "cindy")
+    /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
+    /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
+    static let noEngine = Self(rawValue: "none")
     static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
@@ -212,6 +220,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .orca: "Orca"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
+        case .noEngine: String(localized: "No Terminal Engine")
         default: rawValue
         }
     }
@@ -223,6 +232,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .orca: String(localized: "Terminals in Orca")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
+        case .noEngine: String(localized: "Sessions of the desktop apps only")
         default: nil
         }
     }
@@ -436,7 +446,9 @@ nonisolated struct ComputerJob: Codable, Hashable, Sendable {
 }
 
 extension Machine {
-    var engineName: String { engines.first { $0.id == engine.rawValue }?.name ?? engine.name }
+    var engineName: String {
+        engineHosts?.isEmpty == true ? MachineEngine.noEngine.name : engines.first { $0.id == engine.rawValue }?.name ?? engine.name
+    }
 }
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
