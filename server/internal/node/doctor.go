@@ -166,12 +166,14 @@ func hookSettings(bin, dir string, assistant bool) map[string]any {
 		return map[string]any{"matcher": matcher, "hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 86400}}}
 	}
 	notify := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 10}}}
+	postQuestion := map[string]any{"matcher": "AskUserQuestion", "hooks": notify["hooks"]}
 	pre := []any{blocking("AskUserQuestion")}
 	if assistant {
 		pre = append(pre, blocking("Bash"))
 	}
 	return map[string]any{"hooks": map[string]any{
 		"PreToolUse":        pre,
+		"PostToolUse":       []any{postQuestion},
 		"PermissionRequest": []any{blocking("*")},
 		"Elicitation":       []any{blocking("*")},
 		"Notification":      []any{notify},
@@ -235,7 +237,10 @@ func generatedFiles(bin, dir string) ([]generatedFile, error) {
 	if dir != "" {
 		server["env"] = map[string]string{"PERSONA_HOME": dir}
 	}
-	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.AddMCPAliases(map[string]any{"persona": server})})
+	// This shared file also serves automatic Agent resumes, before any hub handshake.
+	// Keep both namespaces here so historical tool calls remain available. Assistant
+	// starts choose their own per-process registration after capability negotiation.
+	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.MCPRegistrationServers(map[string]any{"persona": server}, true)})
 	if err != nil {
 		return nil, err
 	}

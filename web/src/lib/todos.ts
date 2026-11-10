@@ -1,6 +1,6 @@
 import { formatDate, t } from "../i18n";
 import { noteItemManager } from "./manager-choice";
-import { reviewState, type Supervision } from "./supervision";
+import { acceptanceStands, reviewState, type Supervision } from "./supervision";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
 import { parseAPIError, retryable } from "./api-errors";
@@ -140,7 +140,7 @@ export function heldDelivery(todo: Todo): TodoDelivery | null {
   return d.state === "pr" || d.state === "merged" || d.state === "off" ? d : null;
 }
 
-export type TodoStatus = "done" | "needs_you" | "interrupted" | "usage_limit" | "unread" | "working" | "follow_up" | "not_started" | "failed";
+export type TodoStatus = "done" | "needs_you" | "interrupted" | "usage_limit" | "unread" | "working" | "waiting" | "follow_up" | "not_started" | "failed";
 
 /** Where a status sorts, as the task board orders its sections (lib/task-board.ts): what the user must act on first —
  *  Needs you, Awaiting review (rank 2, see todoRank), Failed to start — then Working, Finished, Stopped, Done (#4896). */
@@ -150,6 +150,7 @@ export const TODO_STATUS_RANK: Record<TodoStatus, number> = {
   usage_limit: 1.5, // after Interrupted, before Awaiting review (todoRank returns 2)
   failed: 3,
   working: 4,
+  waiting: 4.5, // under way like Working, its agent between rounds (#3274)
   not_started: 5,
   unread: 6,
   follow_up: 7,
@@ -184,6 +185,7 @@ export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" |
   usage_limit: { label: t("lib-usage-limit.short"), tone: "amber" },
   unread: { label: stateName("unread"), tone: "green" },
   working: { label: stateName("working"), tone: "amber" },
+  waiting: { label: stateName("task_waiting"), tone: "amber" },
   follow_up: { label: stateName("follow_up"), tone: "idle" },
   not_started: { label: stateName("not_started"), tone: "off" },
   failed: { label: stateName("failed"), tone: "red" },
@@ -206,8 +208,21 @@ export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
 }
 
-/** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did. */
+/** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
+ *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks"). */
+export function acceptedAtRest(todo: Todo, status: TodoStatus): boolean {
+  return !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
+}
+
+/** The status a row draws its tone and mark from: Done for an accepted task at rest, else its own. */
+export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
+  return acceptedAtRest(todo, status) ? "done" : status;
+}
+
+/** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
+ *  (or accepted and nothing runs again). */
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
+  if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
@@ -231,6 +246,7 @@ export function makeSessionLookup(sessions: Session[] | Record<string, Session[]
  * 2.6 Usage limit: an attached agent is stopped on a subscription usage limit that has not reset yet
  * 3. Unread: an attached agent finished and you have not seen it
  * 4. Working: an attached agent is working or starting
+ * 4.5 Waiting: an attached agent ended its turn but something brings it back (agentWaits, #3274)
  * 5. Follow-up: every attached agent is stopped (seen, not running, failed to start)
  * 6. Not started: no attached agent
  */
@@ -245,6 +261,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   let hasLimit = false;
   let hasUnread = false;
   let hasWorking = false;
+  let hasWaiting = false;
 
   for (const a of active) {
     if (a.start_error) {
@@ -260,6 +277,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
     if (usageLimitAgent(s)) hasLimit = true;
     else if (interruptedAgent(s)) hasInterrupted = true;
     else if (st === "unread") hasUnread = true;
+    else if (s && agentWaits(s)) hasWaiting = true;
     else if (st === "working" || s?.starting) hasWorking = true;
   }
 
@@ -268,7 +286,31 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   if (hasLimit) return "usage_limit";
   if (hasUnread) return "unread";
   if (hasWorking) return "working";
+  if (hasWaiting) return "waiting";
   return "follow_up";
+}
+
+/** The agent ended its turn, yet something brings it back, so its task waits rather than stopped (#3274; the hub's
+ *  agentWaits): only its background commands, subagents, Monitors or workflows run and will report back
+ *  (background_working), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure
+ *  for it and wakes it (work blocked on anything but the user). */
+export function agentWaits(s: Session): boolean {
+  const st = stateOf(s);
+  if (st === "working") return Boolean(s.background_working);
+  const w = s.work;
+  return st !== "needs_you" && st !== "unread" && w?.phase === "blocked" && (w.on === "agent" || w.on === "external" || w.on === "transient");
+}
+
+/** What a waiting task waits for, in one line: the first waiting agent's own words for it (#3274). */
+export function waitingLine(todo: Todo, lookup?: SessionLookup): string | undefined {
+  for (const a of todo.agents ?? []) {
+    if (a.released_at) continue;
+    const s = lookup?.(a.machine_id, a.session_id);
+    if (!s || !agentWaits(s)) continue;
+    const line = (s.work?.phase === "blocked" ? s.work.line || s.work.wait : undefined)?.trim();
+    if (line) return line;
+  }
+  return undefined;
 }
 
 /** The agent stopped on a model API error (the hub's turn_error): cut off, not finished (#1516). */

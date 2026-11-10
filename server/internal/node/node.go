@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,8 @@ type Node struct {
 
 	// decided: calls another PermissionRequest hook answered (hookdecided.go).
 	decided decisions
+	// questions: AskUserQuestion calls shared by the terminal and the phone (questioncalls.go).
+	questions questionCalls
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).
@@ -84,6 +87,8 @@ type Node struct {
 	engEpoch uint64
 	peer     *rpc.Peer
 	logger   *log.Logger
+	// hubPersonaContracts is connection-local: Attach makes a fresh Node on each reconnect.
+	hubPersonaContracts atomic.Bool
 	// lcu drives amontlabs/lcu for the computer-use plugin when that backend is selected (lcu_mcp.go).
 	lcuMu   sync.Mutex
 	lcuSess *lcuSession
@@ -491,6 +496,10 @@ func (n *Node) fetchState(ctx context.Context) bool {
 // writeClaudeConfig writes the files the sessions Persona starts load (hooks, MCP, skills; generatedFiles).
 func (n *Node) writeClaudeConfig() error { return writeGeneratedConfig(n.dir, n.bin) }
 
+// hubSupportsPersonaContracts snapshots the hub capability for one process start.
+// Until the authenticated hub's configuration arrives, keep the legacy MCP alias.
+func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts.Load() }
+
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
@@ -505,6 +514,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
+	}
+	switch method { // sharing the clipboard with the phone (clipshare.go)
+	case "clipboard.get":
+		return clipboardGet(ctx)
+	case "clipboard.set":
+		return clipboardSet(ctx, params)
 	}
 	var p struct {
 		Path             string        `json:"path"`
@@ -544,6 +559,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ThroughSeq       int           `json:"through_seq"`
 		Name             string        `json:"name"`
 		Pane             string        `json:"pane"`      // panes.*: a pane the host lists
+		InPane           string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
 		Direction        string        `json:"direction"` // panes.split: right or down
 		TabID            string        `json:"tab_id"`    // tabs.*
 		Label            string        `json:"label"`     // tabs.rename
@@ -671,13 +687,18 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			n.runtimeHost.setPaseoBridge(n.hostEnabled(proto.EnginePaseo))
 			// Orca's chats come through a bridge the node runs too (orcabridge.go); its terminals, the Orca host.
 			n.runtimeHost.setOrcaBridge(n.hostEnabled(proto.EngineOrca))
+			// Cindy's agents come through its bridge (cindybridge.go).
+			n.runtimeHost.setCindyBridge(n.hostEnabled(proto.EngineCindy))
 		}
 		n.configured()
 		c := n.engineChoice()
 		return map[string]any{"engine": n.engine(), "hosts": c.Hosts, "default": c.Default}, nil
 	case "node.configure":
 		var c struct {
-			ClaudeDirs []string `json:"claude_dirs"`
+			// HubFeatures comes from the authenticated hub through devices.connected. Partial
+			// configuration updates omit it; a full handover without it means an older hub.
+			HubFeatures *[]string `json:"hub_features"`
+			ClaudeDirs  []string  `json:"claude_dirs"`
 			// ClaudeDirsBlocked: patterns of config directories kept out (claudedirs.go); nil leaves them as they are.
 			ClaudeDirsBlocked *[]string          `json:"claude_dirs_blocked"`
 			Codex             *proto.CodexConfig `json:"codex"`
@@ -711,6 +732,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.HubFeatures != nil || c.MachineID != "" {
+			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 		}
 		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
@@ -860,7 +884,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := n.checkStartHost(p.Host); err != nil {
 			return nil, err
 		}
-		ctx := withStartHost(ctx, p.Host)
+		ctx := n.reusingKeptTab(withStartHost(ctx, p.Host), p.InPane)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, err := n.startOnEngineRuntime(ctx, rp)
 			return map[string]any{"session": s}, err
@@ -931,6 +955,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		n.restoreEchoes(a.Echoes)
+		return ok(nil)
+	case "start.keys": // into a failed start's kept tab (startremedy.go, #2570)
+		if err := n.startKeys(ctx, p.Pane, p.Text, p.Keys); err != nil {
+			return nil, err
+		}
 		return ok(nil)
 	case "session.keys":
 		if a, ok := n.agent(p.SessionID); ok {
@@ -1545,6 +1574,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramIDs,
+		Clipboard:          clipboardSupport(),
 	}
 }
 

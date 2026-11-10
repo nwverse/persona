@@ -172,7 +172,7 @@ struct TodoDetailView: View {
                         .onSubmit { commitTitle() }
 
                     HStack(spacing: Theme.Space.sm) {
-                        Chip(text: todo.statusLabel(status), look: .tone(status.todoTone))
+                        Chip(text: todo.statusLabel(status), look: .tone(todo.shownState(status).todoTone))
                         Text("·")
                             .foregroundStyle(.secondary)
                         Text("\(activeAgents.count) agents")

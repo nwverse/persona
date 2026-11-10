@@ -335,7 +335,8 @@ final class LocalProxies {
         close(id, forget: true)
     }
 
-    private func close(_ id: String, forget: Bool) {
+    /// `forget`: no longer the way to start first next time (`recent`).
+    func close(_ id: String, forget: Bool) {
         epochs[id, default: 0] += 1
         starting[id] = nil
         drop(id, forget: forget)
