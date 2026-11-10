@@ -42,6 +42,12 @@ fun operationFeedback(error: Throwable): OperationFeedback {
     if (error is persona.core.contracts.api.InteractionPromptChangedException)
         return operationFeedback(mapOperationFailure("prompt_changed", "none", false))
     val failure = HubFailure.from(error)
+    // Cloudflare Access in front of the hub, not the hub: what to fix is the service token in Settings › hub.
+    when (failure.kind) {
+        HubError.AccessRequired -> return OperationFeedback(UiText.Res(R.string.designsystem_core_endpoint_access_required), FailureAction.None)
+        HubError.AccessRejected -> return OperationFeedback(UiText.Res(R.string.designsystem_core_endpoint_access_rejected), FailureAction.None)
+        else -> Unit
+    }
     val category = when (failure.kind) {
         HubError.PairingExpired, HubError.HubMismatch -> FailureCategory.Pairing
         HubError.CertificateMismatch -> FailureCategory.Certificate
