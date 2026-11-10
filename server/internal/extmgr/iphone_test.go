@@ -784,3 +784,70 @@ func TestIPhoneTypedTextStaysOut(t *testing.T) {
 		t.Fatalf("log: %s", l)
 	}
 }
+
+// The core's refusals: busy on a resume keeps the approval, so the same id is tried again without asking the owner
+// again; not_pending is said as it is and not tried again; bad_args tells the model to fix its call.
+func TestIPhoneRefusals(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	ctx := context.Background()
+	old := iphoneBusyWaits
+	iphoneBusyWaits = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
+	t.Cleanup(func() { iphoneBusyWaits = old })
+	refuse := func(code string) error {
+		data, _ := json.Marshal(proto.IPhoneErrorData{Sent: proto.IPhoneNotSent})
+		return &rpc.Error{Code: code, Message: code + ": refused", Data: data}
+	}
+	var mu sync.Mutex
+	busy, mode := 0, "busy"
+	_, seen := iphoneMac(t, h, "mac", []proto.IPhoneDevice{testIPhone}, func(p proto.IPhoneCall) (proto.IPhoneResult, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case mode == "bad_args":
+			return proto.IPhoneResult{}, refuse("bad_args")
+		case p.Approved == "":
+			return proto.IPhoneResult{NeedsApproval: true, ApprovalID: "ap1", Approval: &proto.IPhoneApproval{Step: 1, Action: "tap", Needs: []string{"payment"}}}, nil
+		case mode == "not_pending":
+			return proto.IPhoneResult{}, refuse("not_pending")
+		case busy < 2:
+			busy++
+			return proto.IPhoneResult{}, refuse("busy")
+		}
+		return proto.IPhoneResult{Text: "paid"}, nil
+	})
+	if err := h.extensions.reg.SetEnabled(ctx, iphoneExtensionID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.extensions.reg.SetConfig(ctx, iphoneExtensionID, json.RawMessage(`{"machines": ["mac"], "phones": ["dev-a1"]}`), "test"); err != nil {
+		t.Fatal(err)
+	}
+	h.refreshIPhoneMacs(ctx)
+	do := json.RawMessage(`{"steps": [{"action": "tap", "target": {"n": 1}}]}`)
+	cards := func() int { th := hubOf(h); th.mu.Lock(); defer th.mu.Unlock(); return len(th.pending) }
+	before := cards()
+	if res := h.callIPhoneTool(ctx, "c", "iphone_do", do); res.IsError || res.Content[0].Text != "paid" {
+		t.Fatalf("busy twice, then done: %+v", res)
+	}
+	var approved []string
+	for _, c := range seen() {
+		if c.Method == "iphone.call" {
+			approved = append(approved, c.Call.Approved)
+		}
+	}
+	if strings.Join(approved, ",") != ",ap1,ap1,ap1" || cards()-before != 1 {
+		t.Fatalf("the same id again, one card: %v, %d cards", approved, cards()-before)
+	}
+	mu.Lock()
+	mode = "not_pending"
+	mu.Unlock()
+	if res := h.callIPhoneTool(ctx, "c", "iphone_do", do); !res.IsError || !strings.Contains(res.Content[0].Text, "no longer holds") ||
+		!strings.Contains(res.Content[0].Text, "do not try it again without asking") {
+		t.Fatalf("%+v", res)
+	}
+	mu.Lock()
+	mode = "bad_args"
+	mu.Unlock()
+	if res := h.callIPhoneTool(ctx, "c", "iphone_do", do); !res.IsError || !strings.Contains(res.Content[0].Text, "fix them") {
+		t.Fatalf("%+v", res)
+	}
+}

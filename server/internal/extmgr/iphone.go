@@ -568,13 +568,30 @@ func (h *Manager) callIPhoneTool(ctx context.Context, sessionID, name string, ar
 			h.logf("[%s] %s declined on the phone (%s, step %d %s)", m.cfg.ID, name, what, res.Approval.Step, res.Approval.Action)
 			return proto.TextResult("The user declined this on the phone. Do not retry it unless they ask.", true)
 		}
-		// Resumed with the approval alone: the node holds the pending do.
+		// Resumed with the approval alone: the node holds the pending do. A phone busy with another call keeps the
+		// approval pending: the same id is tried again, without asking the owner again.
 		call.Args, call.Approved, resumed = nil, res.ApprovalID, true
 		res, err = h.iphoneCall(ctx, m, call)
+		for try := 1; err != nil && iphoneCode(err) == "busy" && try <= len(iphoneBusyWaits); try++ {
+			select {
+			case <-time.After(iphoneBusyWaits[try-1]):
+			case <-ctx.Done():
+				return proto.TextResult("gave up waiting for "+d.Name+" to be free: the approved step was not done", true)
+			}
+			res, err = h.iphoneCall(ctx, m, call)
+		}
 	}
 	h.logf("[%s] %s for %s: %s, %v, %s", m.cfg.ID, name, convID(sessionID), what, time.Since(start).Round(time.Millisecond),
 		map[bool]string{true: "failed (sent " + iphoneSentOf(err) + ")", false: "ok"}[err != nil])
 	if err != nil {
+		switch iphoneCode(err) {
+		case "bad_args":
+			return proto.TextResult(err.Error()+" (the iPhone could not read the arguments or steps; nothing was sent: fix them and call again)", true)
+		case "not_pending":
+			return proto.TextResult(err.Error()+" (the approval no longer holds: used, replaced by a newer do, expired, or the node restarted. The approved step was not done: tell the user, and do not try it again without asking them)", true)
+		case "busy":
+			return proto.TextResult(err.Error()+" (the iPhone stayed busy; nothing was sent: try again in a moment)", true)
+		}
 		if resumed && iphoneSentOf(err) == proto.IPhoneNotSent {
 			// The approval was not used (used before, replaced by a newer do, too old, the node restarted).
 			return proto.TextResult(err.Error()+" (the approved step was not done: tell the user, and do not try it again without asking them)", true)
@@ -582,6 +599,19 @@ func (h *Manager) callIPhoneTool(ctx context.Context, sessionID, name string, ar
 		return iphoneFailure(err)
 	}
 	return computerResult(&proto.ComputerResult{Output: res.Output, Text: res.Text, Image: res.Image})
+}
+
+// iphoneBusyWaits are the pauses before trying a resume again while the phone is busy with another call (the
+// approval stays pending meanwhile).
+var iphoneBusyWaits = []time.Duration{time.Second, 2 * time.Second, 3 * time.Second}
+
+// iphoneCode is a failed call's code (the node core's refusals: bad_args, not_pending, busy), "" for another error.
+func iphoneCode(err error) string {
+	var e *rpc.Error
+	if errors.As(err, &e) {
+		return e.Code
+	}
+	return ""
 }
 
 // iphoneTurn waits for device's turn: the do before it on that iPhone done, or ctx over. release ends the turn.
