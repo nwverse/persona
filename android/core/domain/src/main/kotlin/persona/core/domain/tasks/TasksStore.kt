@@ -283,7 +283,7 @@ class TasksStore(
     fun load(conversation: String, whole: Boolean = false) {
         scope.launch {
             val held = _feeds.value[conversation].orEmpty()
-            val unsent = held.indexOfFirst { it.kind == "message" && it.sent == null }
+            val unsent = held.indexOfFirst { it.kind == "message" && it.sent == null && it.dismissedAt == null }
             val since = when {
                 whole || conversation !in loaded.value -> null
                 unsent >= 0 -> held.take(unsent).lastOrNull { it.at != held[unsent].at }?.at // reads are after `since`: skip ties

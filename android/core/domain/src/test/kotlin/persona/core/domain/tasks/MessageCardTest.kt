@@ -81,7 +81,8 @@ class MessageCardTest {
         override suspend fun todos() = emptyList<Todo>()
         // As the hub: after `since`, only items made later and cards sent later (filed_at is worked out on each read, no event).
         override suspend fun feed(conversation: String, since: String?): FeedResponse {
-            val response = FeedResponse((if (since == null) items else items.filter { (it.at ?: "") > since || (it.field("sent_at") ?: "") > since }).take(page))
+            val response = FeedResponse((if (since == null) items else items.filter { (it.at ?: "") > since ||
+                (it.field("sent_at") ?: "") > since || (it.field("dismissal_updated_at") ?: "") > since }).take(page))
             feedGate?.await()
             return response
         }
@@ -183,6 +184,29 @@ class MessageCardTest {
         api.items = listOf(old, card(), later)
         store.load("c1")
         assertTrue(store.feeds.value["c1"]!!.single { it.id == "m1" }.canSend)
+    }
+
+    @Test fun dismissedCardsDoNotPinTheReadWhileNewProgressAndMissedUndoStillArrive() = kotlinx.coroutines.test.runTest {
+        val start = java.time.Instant.parse("2026-11-04T00:00:00Z")
+        val old = (0 until 12).map { index ->
+            card("old-$index", mapOf("draft" to "Earlier reply $index", "dismissed_at" to start.plusSeconds(index * 3600L + 60).toString(),
+                "dismissal_id" to "dismissal-$index", "dismissal_updated_at" to start.plusSeconds(index * 3600L + 60).toString()))
+                .copy(at = start.plusSeconds(index * 3600L).toString())
+        }
+        val api = Api(CompletableDeferred(Unit), old, page = old.size)
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        val progress = FeedItem("new-progress", "c1", start.plusSeconds(12 * 3600L).toString(), "task", "task-one")
+        api.items = old + progress
+        store.load("c1"); runCurrent()
+        assertEquals(progress, store.feeds.value["c1"]!!.last())
+        val restored = old.first().copy(body = JsonObject((old.first().body as JsonObject) - setOf("dismissed_at", "dismissal_id") +
+            ("dismissal_updated_at" to JsonPrimitive(start.plusSeconds(13 * 3600L).toString()))))
+        api.items = listOf(restored) + old.drop(1) + progress
+        store.load("c1"); runCurrent()
+        assertEquals(restored, store.feeds.value["c1"]!!.first())
+        assertTrue(store.feeds.value["c1"]!!.first().canSend)
+        assertEquals(progress, store.feeds.value["c1"]!!.last())
     }
 
     @Test fun websocketOnlyCardsCaptureTheirOwnerBeforeTheyAreShown() = kotlinx.coroutines.test.runTest {

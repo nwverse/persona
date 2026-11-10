@@ -14,6 +14,10 @@ the same source item remains visible. Apply the hub's complete returned item, ra
 `dismissed_at` and `dismissal_id`. Fence reads captured before a mutation, and reject a late Undo receipt when newer progress
 already changed that card. Retain its captured assistant manager across selection changes. Use the shell's existing Undo
 snackbar, with only Send primary; large-text and narrow action groups stack primary-first through `DraftDecisionButtons`.
+Exclude persistently dismissed cards from the oldest-unsent read anchor, but retain dynamically filed cards. Undo catch-up
+uses the retained `dismissal_updated_at`. A whole page of recently updated old rows still needs server-side pagination.
+A snackbar action can pass semantic visibility assertions while its text is invisible. `JAppSnackbarHost` uses the inverse
+message-text role for its action, not the accent; inspect light/dark images and test contrast on the actual inverse surface.
 
 ## Large-font screenshots need Compose density, not just configuration (#3588)
 

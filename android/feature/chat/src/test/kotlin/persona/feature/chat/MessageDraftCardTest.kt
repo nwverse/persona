@@ -3,7 +3,14 @@ package persona.feature.chat
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -16,6 +23,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -59,7 +67,7 @@ import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.tasks.TasksStore
 
-/** Native-rendered component evidence only; emulator captures verify the actual application separately. */
+/** Native JVM snapshots of the real feed card and the standard application snackbar; not emulator captures. */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "zh-w400dp-h1200dp-xhdpi")
@@ -106,10 +114,13 @@ class MessageDraftCardTest {
     private class Feedback : AppFeedback {
         var action: FeedbackAction? = null
         var message: String? = null
+        val pending = MutableStateFlow<persona.core.designsystem.FeedbackNotice?>(null)
         override fun failure(error: Throwable, operation: Boolean): Boolean = false
         override fun notice(message: String) = false
         override fun notice(message: String, action: FeedbackAction): Boolean {
-            this.message = message; this.action = action; return true
+            this.message = message; this.action = action
+            pending.value = persona.core.designsystem.FeedbackNotice(message, action)
+            return true
         }
     }
 
@@ -131,11 +142,24 @@ class MessageDraftCardTest {
                 androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, textScale)) {
                 PersonaTheme(style = appearance.value.first, darkTheme = appearance.value.second, reduceMotion = true) {
                     val feeds by store.feeds.collectAsState()
-                    val host = AssistantTaskHost(store, original.conversation, emptyList(), { it }, {}, { throw it }, {})
-                    Column(Modifier.fillMaxWidth().background(PersonaTheme.palette.background).testTag("draft-scene")) {
-                        feeds[original.conversation].orEmpty().forEach {
-                            AssistantExtraLine(persona.core.domain.tasks.AssistantExtra.Feed(it), host)
+                    val pending by feedback.pending.collectAsState()
+                    val snackbar = remember { SnackbarHostState() }
+                    LaunchedEffect(pending) {
+                        pending?.let { notice ->
+                            // Freeze only the timeout for the image matrix; Root uses the same host with Short duration.
+                            val result = snackbar.showSnackbar(notice.message, actionLabel = notice.action?.label, duration = SnackbarDuration.Indefinite)
+                            if (result == SnackbarResult.ActionPerformed) notice.action?.run?.invoke()
                         }
+                    }
+                    val host = AssistantTaskHost(store, original.conversation, emptyList(), { it }, {}, { throw it }, {})
+                    Column(Modifier.fillMaxWidth().background(PersonaTheme.palette.background).testTag("draft-scene"),
+                        verticalArrangement = Arrangement.spacedBy(persona.core.designsystem.Tokens.Space.s)) {
+                        feeds[original.conversation].orEmpty().forEach {
+                            Box(Modifier.testTag("draft-history-card")) {
+                                AssistantExtraLine(persona.core.domain.tasks.AssistantExtra.Feed(it), host)
+                            }
+                        }
+                        persona.core.designsystem.JAppSnackbarHost(snackbar, Modifier.testTag("draft-undo-snackbar"))
                     }
                 }
             }
@@ -161,19 +185,23 @@ class MessageDraftCardTest {
         rule.onNodeWithTag("assistant-draft-send-draft-one").assertDoesNotExist()
         rule.onNodeWithTag("assistant-draft-later-draft-one").assertDoesNotExist()
         rule.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        rule.onNodeWithText(notice).assertIsDisplayed()
+        rule.onAllNodesWithText(notice).assertCountEquals(2)
+        rule.onNodeWithText(undo).assertIsDisplayed()
         rule.onNodeWithText(original.field("draft")!!).assertIsDisplayed()
         for (style in AppStyle.entries) for (dark in listOf(false, true)) {
             rule.runOnIdle { appearance.value = style to dark; Snapshot.sendApplyNotifications() }
-            rule.onNodeWithText(notice).assertIsDisplayed()
-            val bitmap = rule.onNodeWithTag("draft-scene").captureToImage().asAndroidBitmap()
-            val output = File("build/message-draft-component-shots/$language-${style.name.lowercase()}-${if (dark) "dark" else "light"}-font$textScale-history.png")
-            output.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            rule.onAllNodesWithText(notice).assertCountEquals(2)
+            rule.onNodeWithText(undo).assertIsDisplayed()
+            val bitmap = rule.onNodeWithTag("draft-history-card").captureToImage().asAndroidBitmap()
+            val prefix = "build/message-draft-component-shots/$language-${style.name.lowercase()}-${if (dark) "dark" else "light"}-font$textScale"
+            File("$prefix-history.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val withUndo = rule.onNodeWithTag("draft-scene").captureToImage().asAndroidBitmap()
+            File("$prefix-undo-snackbar.png").outputStream().use { withUndo.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
         assertEquals(listOf(original.id to original.field("draft")), api.dismissals)
         assertEquals(notice, feedback.message)
         assertEquals(undo, feedback.action?.label)
-        rule.runOnIdle { feedback.action!!.run(); Snapshot.sendApplyNotifications() }
+        rule.onNodeWithText(undo).performClick()
         rule.mainClock.advanceTimeBy(500)
         rule.onNodeWithTag("assistant-draft-dismiss-draft-one").assertIsDisplayed()
         assertEquals(listOf(original.id to "dismissal-one"), api.undos)
