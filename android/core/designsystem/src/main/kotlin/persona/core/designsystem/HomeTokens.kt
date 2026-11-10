@@ -19,6 +19,9 @@ internal object HomeTokens {
     val assistantAvatarSmall = 32.dp
     const val assistantInitialShare = 0.42f
     const val assistantOfflineAlpha = 0.45f
+    /** An assistant's presence dot at its monogram's corner, and the ring cut around it. */
+    val assistantPresenceDot = 8.dp
+    val assistantPresenceRing = 2.dp
     val chromeLight = Color(0xCCFFFFFF)
     val chromeDark = Color(0xB83A3A3C)
     val settingsGlyph = 54.dp

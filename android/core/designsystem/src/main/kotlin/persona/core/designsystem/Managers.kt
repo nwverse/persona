@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.layout.Arrangement
@@ -142,15 +144,28 @@ fun managerInitial(name: String): String {
     return trimmed.substring(0, trimmed.offsetByCodePoints(0, 1)).uppercase()
 }
 
+/** An assistant's presence, the dot at its monogram's corner: green online, grey offline, orange while it is installed. */
+@Composable
+fun managerPresenceColor(manager: HubManager): androidx.compose.ui.graphics.Color {
+    val palette = PersonaTheme.palette
+    return when {
+        manager.isInstalling -> palette.hue(JHue.Orange).dot
+        manager.online -> palette.status(Status.Unread).dot
+        // The offline tone's dot is a faint fill meant to sit inside its outline; alone on a monogram its text grey reads.
+        else -> palette.status(Status.Offline).text
+    }
+}
+
 /**
- * An assistant in the switcher: its initial on its colour ([managerHue]) in a circle, with its status dot at the
- * corner when [status] is given. Not [JAvatar]: that one is a person's or a source's picture on the quiet surface,
- * and this one's colour is what tells the assistants apart.
+ * An assistant in the switcher: its initial on its colour ([managerHue]) in a circle, with its presence
+ * ([managerPresenceColor]) as a dot at the bottom corner when [presence] is set. The dot's ring is cut out of the
+ * monogram, so it is whatever lies behind (the sidebar, the menu, a selected row). Not [JAvatar]: that one is a
+ * person's or a source's picture on the quiet surface, and this one's colour is what tells the assistants apart.
  */
 @Composable
 fun JManagerAvatar(
     manager: HubManager, isDefault: Boolean, modifier: Modifier = Modifier,
-    size: androidx.compose.ui.unit.Dp = HomeTokens.assistantAvatar, status: Status? = null,
+    size: androidx.compose.ui.unit.Dp = HomeTokens.assistantAvatar, presence: Boolean = false,
     /** Something waits for the user at another assistant: the needs-you dot at the top corner. */
     alert: Boolean = false,
 ) {
@@ -158,32 +173,49 @@ fun JManagerAvatar(
     val hue = managerHue(manager.id, isDefault)
     val fill = hue?.let { palette.hue(it).dot } ?: palette.ai
     val ink = hue?.let { palette.hue(it).onDot } ?: ExtensionThemeColors.on(fill)
+    val dot = if (presence) managerPresenceColor(manager) else null
     androidx.compose.foundation.layout.Box(modifier.size(size).clearAndSetSemantics {}) {
         androidx.compose.foundation.layout.Box(
-            // An offline assistant's is faded as a whole (the layer comes before what it fades).
-            Modifier.fillMaxSize().stableAlpha(if (manager.online || manager.isInstalling) 1f else HomeTokens.assistantOfflineAlpha)
-                .clip(androidx.compose.foundation.shape.CircleShape).background(fill),
-            contentAlignment = Alignment.Center,
+            Modifier.fillMaxSize()
+                // Its own layer, so clearing the ring leaves what is behind the avatar, not a hole through the window.
+                .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    if (dot != null) {
+                        val radius = HomeTokens.assistantPresenceDot.toPx() / 2
+                        val ring = HomeTokens.assistantPresenceRing.toPx()
+                        val center = androidx.compose.ui.geometry.Offset(this.size.width - radius - ring, this.size.height - radius - ring)
+                        drawCircle(androidx.compose.ui.graphics.Color.Black, radius + ring, center,
+                            blendMode = androidx.compose.ui.graphics.BlendMode.Clear)
+                        drawCircle(dot, radius, center)
+                    }
+                },
         ) {
-            Text(managerInitial(manager.shownName), style = PersonaTheme.type.label.copy(
-                fontSize = androidx.compose.ui.unit.TextUnit(size.value * HomeTokens.assistantInitialShare, androidx.compose.ui.unit.TextUnitType.Sp),
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = ink, maxLines = 1)
-        }
-        status?.let {
-            androidx.compose.foundation.layout.Box(Modifier.align(Alignment.BottomEnd).clip(androidx.compose.foundation.shape.CircleShape)
-                .background(palette.background).padding(Tokens.Space.xxs)) { JStatusDot(it) }
+            androidx.compose.foundation.layout.Box(
+                Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.CircleShape).background(fill),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(managerInitial(manager.shownName), style = PersonaTheme.type.label.copy(
+                    fontSize = androidx.compose.ui.unit.TextUnit(size.value * HomeTokens.assistantInitialShare, androidx.compose.ui.unit.TextUnitType.Sp),
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = ink, maxLines = 1)
+            }
         }
         if (alert) JStatusDot(Status.NeedsYou, Modifier.align(Alignment.TopEnd))
     }
 }
 
+/** An assistant's line under its name (Online · its computer, Offline · last synced …): the dot on its monogram says the state. */
+@Composable
+private fun AssistantLine(text: String) =
+    Text(text, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
 /**
  * The sidebar's head: the current assistant ([avatar], its [name] with a caret, its [status] line under it); a tap
- * opens and closes the roster under it ([expanded]). [trailing] is the bar's other button (the sidebar's search).
+ * opens and closes the roster's menu under it ([expanded]). [trailing] is the bar's other button (the sidebar's search).
  */
 @Composable
 fun JAssistantSwitcherHeader(
-    name: String, status: String, state: Status, expanded: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier,
+    name: String, status: String, expanded: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier,
     avatar: @Composable () -> Unit, trailing: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -205,7 +237,7 @@ fun JAssistantSwitcherHeader(
                     JIcon(if (expanded) persona.core.designsystem.icons.PhIcons.CaretUp else persona.core.designsystem.icons.PhIcons.CaretDown,
                         null, size = Tokens.Space.m, tint = palette.ink3, decorative = true)
                 }
-                JStateLabel(status, state)
+                AssistantLine(status)
             }
         }
         trailing?.let { Spacer(Modifier.width(Tokens.Space.s)); it() }
@@ -213,29 +245,32 @@ fun JAssistantSwitcherHeader(
 }
 
 /**
- * One assistant of the switcher's roster: its monogram, its name with Default beside it, its [status] line, and at the
- * end what waits for the user there ([badge]) or the tick of the current one.
+ * One assistant of the switcher's roster: its monogram with its presence dot, its name with Default beside it, its
+ * [status] line, and at the end what waits for the user there ([badge]) or the tick of the current one. An offline
+ * one's row is faded as a whole and can still be picked.
  */
 @Composable
 fun JAssistantSwitcherRow(
-    manager: HubManager, isDefault: Boolean, status: String, state: Status, current: Boolean, badge: Int,
+    manager: HubManager, isDefault: Boolean, status: String, current: Boolean, badge: Int,
     onClick: () -> Unit, modifier: Modifier = Modifier, defaultTag: String? = null,
 ) {
     val palette = PersonaTheme.palette
-    JRow(modifier, onClick = onClick, chevron = false, selected = current, trailing = if (current || badge > 0) ({
+    val faded = !manager.online && !manager.isInstalling
+    JRow(modifier.stableAlpha(if (faded) HomeTokens.assistantOfflineAlpha else 1f), onClick = onClick, chevron = false,
+        selected = current, trailing = if (current || badge > 0) ({
         if (current) JIcon(persona.core.designsystem.icons.PhIcons.Check, stringResource(R.string.designsystem_manager_current),
             size = Tokens.Space.xl, tint = palette.accent)
         else JBadge(badge)
     }) else null) {
-        JManagerAvatar(manager, isDefault, size = HomeTokens.assistantAvatarSmall)
+        JManagerAvatar(manager, isDefault, size = HomeTokens.assistantAvatarSmall, presence = true)
         Spacer(Modifier.width(Tokens.Space.m))
         androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                Text(manager.shownName, Modifier.weight(1f, fill = false), style = PersonaTheme.type.body,
-                    color = if (manager.online || manager.isInstalling) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(manager.shownName, Modifier.weight(1f, fill = false), style = PersonaTheme.type.body, color = palette.ink,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
                 defaultTag?.let { JTag(it) }
             }
-            JStateLabel(status, state)
+            AssistantLine(status)
         }
     }
 }

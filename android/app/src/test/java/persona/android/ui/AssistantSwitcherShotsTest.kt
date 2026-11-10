@@ -7,7 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -15,23 +15,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -73,11 +74,12 @@ import java.time.Instant
 
 /**
  * The sidebar with the assistant switcher at its head (docs/assistant/managers.md "Clients"), the real sidebar and the real
- * switcher as the shell puts them together, in every style, light and dark: closed, open (the roster with its badges,
- * the tick, Default, one offline, one still installing, New assistant and Manage assistants…), after switching to
- * another assistant, on an offline one, and with one assistant; the open roster also in English, in Japanese and at the
- * largest text size. The roster is the mock hub's (`scripts/mock/mock_hub.py`). PNGs go to `build/switcher-shots/` (or
- * `-Dpersona.shots=<dir>`). The plain Application keeps Hilt's PersonaApp out of the test.
+ * switcher as the shell puts them together, in every style, light and dark: closed, open (the roster's menu with its
+ * badges, presence dots, the tick, Default, one offline, one still installing, New assistant and Manage assistants…),
+ * after switching to another assistant, on an offline one, and with one assistant; the open roster also in English and
+ * Japanese, and at the largest text size (on a short screen scrolled to its actions). The roster is the mock hub's
+ * (`scripts/mock/mock_hub.py`). PNGs go to `build/switcher-shots/` (or `-Dpersona.shots=<dir>`). The plain
+ * Application keeps Hilt's PersonaApp out of the test.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -116,9 +118,26 @@ class AssistantSwitcherShotsTest {
     private fun tap(text: String) = rule.onNode(hasClickAction() and (hasText(text) or hasAnyDescendant(hasText(text))))
         .performSemanticsAction(SemanticsActions.OnClick)
 
+    /**
+     * The picture as the screen shows it: the open roster is a menu, a window of its own over the sidebar, which
+     * captureToImage on the page would leave out. Every window is drawn where it is, then cut to the page. Drawn in
+     * software: the menu's elevation shadow is left out (Robolectric's hardware rendering clips it to the menu's own
+     * window, which leaves grey corners a device does not show).
+     */
+    @Suppress("UNCHECKED_CAST")
     private fun capture(name: String) {
         rule.waitForIdle()
-        val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+        val global = Class.forName("android.view.WindowManagerGlobal")
+        val instance = global.getMethod("getInstance").invoke(null)
+        val views = global.getDeclaredField("mViews").apply { isAccessible = true }.get(instance) as List<android.view.View>
+        val screen = Bitmap.createBitmap(views.first().width, views.first().height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(screen)
+        views.forEach { view ->
+            val at = IntArray(2).also { view.getLocationOnScreen(it) }
+            canvas.save(); canvas.translate(at[0].toFloat(), at[1].toFloat()); view.draw(canvas); canvas.restore()
+        }
+        val page = rule.onNodeWithTag("shot").fetchSemanticsNode().boundsInWindow
+        val bitmap = Bitmap.createBitmap(screen, page.left.toInt(), page.top.toInt(), page.width.toInt(), page.height.toInt())
         File(out(), "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
@@ -144,7 +163,7 @@ class AssistantSwitcherShotsTest {
             val snapshot = if (choice.id == "assistant") AssistantSnapshot(conversations = listOf(main) + conversations, mainSession = main.key,
                 manager = null, managerId = "assistant") else AssistantSnapshot(manager = choice.id, managerId = choice.id)
             val waiting = roster.waiting(cards, sessions)
-            Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+            Box(Modifier.testTag("shot").fillMaxSize().background(PersonaTheme.palette.background)) {
                 JSidebarColumn({
                     AssistantSidebarContent(snapshot, repository, emptySet(), null, operations, demo = false,
                         onOpen = {}, onAction = {}, onSettings = {}, onInbox = {}, onKnowledge = {}, onTodos = {},
@@ -236,17 +255,12 @@ class AssistantSwitcherShotsTest {
         scenario.close()
     }
 
-    /**
-     * The open roster in English and Japanese, to check the words against the other clients', and at the largest text
-     * size (Glass, light).
-     */
-    private fun openRoster(online: String, words: List<String>, name: String, fontScale: Float = 1f) {
+    /** The open roster in English and Japanese, to check the words against the other clients' (Glass, light). */
+    private fun openRoster(online: String, words: List<String>, name: String) {
         AssistantManagerChoice.choose("hub", null, "assistant")
         val scenario = launch {
-            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
-                PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
-                    Sidebar(ManagerRoster(managers, "assistant"), Fake(managers)) {}
-                }
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Sidebar(ManagerRoster(managers, "assistant"), Fake(managers)) {}
             }
         }
         rule.waitForIdle()
@@ -266,6 +280,57 @@ class AssistantSwitcherShotsTest {
         listOf("新しいアシスタント", "アシスタントを管理…", "デフォルト", "オンライン · MacBook", "インストール中 · コードはあと7分で期限切れ"),
         "switcher-open-glass-light-ja")
 
-    @Test fun theOpenRosterAtTheLargestTextSize() = openRoster("在线 · server",
-        listOf("新建助手", "管理助手…", "默认", "在线 · MacBook"), "switcher-open-glass-light-large", fontScale = 2f)
+    /** The open roster at the largest text size on this phone: it still fits. */
+    @Config(fontScale = 2f)
+    @Test fun theOpenRosterAtTheLargestTextSize() {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        val scenario = launch {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Sidebar(ManagerRoster(managers, "assistant"), Fake(managers)) {}
+            }
+        }
+        rule.waitForIdle()
+        // The system's text size, not a density override: the menu is a window of its own, with the system's density.
+        assertEquals(2f, ApplicationProvider.getApplicationContext<Application>().resources.configuration.fontScale)
+        tap("在线 · server")
+        listOf("默认", "新建助手", "管理助手…").forEach { rule.onNodeWithText(it).assertIsDisplayed() }
+        capture("switcher-open-glass-light-large")
+        scenario.close()
+    }
+
+    /**
+     * At the largest text size on a short screen the menu does not fit and scrolls: New assistant and Manage
+     * assistants… start out of view, come wholly into view inside the menu's visible part, and take a real tap there.
+     * (New assistant's name dialog is not opened here: its field's blinking cursor never lets Robolectric go idle.)
+     */
+    @Config(qualifiers = "zh-w400dp-h400dp-xhdpi", fontScale = 2f)
+    @Test fun atTheLargestTextSizeTheActionsScrollIntoViewAndWork() {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        var managed = 0
+        val scenario = launch {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Sidebar(ManagerRoster(managers, "assistant"), Fake(managers)) { managed++ }
+            }
+        }
+        fun inView(label: String): Boolean {
+            val item = rule.onNodeWithText(label).fetchSemanticsNode().boundsInWindow
+            val menu = rule.onNode(hasScrollAction() and hasAnyDescendant(hasText(label))).fetchSemanticsNode().boundsInWindow
+            return item.top >= menu.top - 1 && item.bottom <= menu.bottom + 1
+        }
+        rule.waitForIdle()
+        tap("在线 · server")
+        assertTrue("the menu should not fit here", !inView("管理助手…"))
+        capture("switcher-open-glass-light-large-short")
+        for (label in listOf("新建助手", "管理助手…")) {
+            rule.onNodeWithText(label).performScrollTo().assertIsDisplayed().assertHasClickAction()
+            assertTrue("$label is cut", inView(label))
+        }
+        capture("switcher-open-glass-light-large-short-scrolled")
+        // A real touch where it now shows: Manage assistants… goes to Settings and closes the menu.
+        rule.onNodeWithText("管理助手…").performClick()
+        rule.waitForIdle()
+        assertEquals(1, managed)
+        rule.onAllNodesWithText("新建助手").assertCountEquals(0)
+        scenario.close()
+    }
 }

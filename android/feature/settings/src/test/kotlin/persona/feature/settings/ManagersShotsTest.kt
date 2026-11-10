@@ -65,9 +65,9 @@ class ManagersShotsTest {
     private val outdated = ManagersState(roster = ManagerRoster(ManagersSample.map { if (it.id == "m-3fa21c") it.copy(needsUpdate = true) else it }, "assistant"))
     private val commands = ManagerCommands(
         service = "curl -fsSL http://<hub 地址>/i/mi_0123456789abcdef0123456789abcdef | sh",
-        docker = "docker run -d --name persona-m-new --restart unless-stopped -e PERSONA_INSTALL=http://<hub 地址>/i/mi_0123456789abcdef0123456789abcdef ghcr.io/example/personad:latest manager",
+        docker = "docker run -d --name persona-m-c1e9f0 --restart unless-stopped -e PERSONA_INSTALL=http://<hub 地址>/i/mi_0123456789abcdef0123456789abcdef ghcr.io/example/personad:latest manager",
     )
-    private val fresh = ManagerCodeSheet("m-new", "实验室", ManagerCode("mi_0123456789abcdef0123456789abcdef", "2026-11-05T06:09:41Z", commands = commands))
+    private val fresh = ManagerCodeSheet("m-c1e9f0", "测试", ManagerCode("mi_0123456789abcdef0123456789abcdef", "2026-11-05T06:09:41Z", commands = commands))
     private val expired = ManagerCodeSheet("m-c1e9f0", "测试", ManagerCode("mi_fedcba9876543210fedcba9876543210", "2026-11-05T05:59:00Z"))
 
     private fun out(): File = File(System.getProperty("persona.shots") ?: "build/managers-shots").also { it.mkdirs() }

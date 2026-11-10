@@ -1,12 +1,11 @@
 package persona.feature.settings
 
 import android.content.res.Resources
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -17,6 +16,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -27,15 +29,13 @@ import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.HubManager
 import persona.core.contracts.api.HubManagers
 import persona.core.contracts.api.ManagerRoster
-import persona.core.designsystem.GroupPosition
 import persona.core.designsystem.InlineTone
+import persona.core.designsystem.JAction
 import persona.core.designsystem.JAssistantSwitcherHeader
 import persona.core.designsystem.JAssistantSwitcherRow
-import persona.core.designsystem.JDivider
-import persona.core.designsystem.JGroupItem
 import persona.core.designsystem.JInlineStatus
 import persona.core.designsystem.JManagerAvatar
-import persona.core.designsystem.JRow
+import persona.core.designsystem.JMenu
 import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.LocalManagerRoster
 import persona.core.designsystem.Tokens
@@ -93,11 +93,13 @@ fun AssistantSwitcher(
     AssistantSwitcherContent(roster, choice.shown, waiting, expanded, now, modifier, headModifier,
         failure = state.failure.takeIf { !naming && state.code == null },
         onToggle = { expanded = !expanded; if (expanded) model.clearFailure() },
+        onDismiss = { expanded = false },
         onPick = { manager ->
             if (manager.isInstalling) scope.launch {
-                // Its code is all there is of it: straight to the install commands (a new code, as on its page).
+                // Its code is all there is of it: straight to the install commands (a new code, as on its page). The
+                // menu stays until the code is there, to say so in it when asking fails.
                 if (state.roster == null) model.load()
-                model.newCode(manager.id)
+                if (model.newCode(manager.id)) expanded = false
             } else {
                 expanded = false
                 if (manager.id != choice.shown) {
@@ -117,46 +119,42 @@ fun AssistantSwitcher(
     ManagerCodeSheetHost(state, now, model)
 }
 
-/** The switcher as drawn for [roster] with [shown] current at [now] (the pictures draw this with fixed data). */
+/**
+ * The switcher as drawn for [roster] with [shown] current at [now] (the pictures draw this with fixed data): the head,
+ * and while [expanded] the roster in a menu under it ([JMenu]: as wide as the switcher, closed by a tap outside, scrolled
+ * when it does not fit), then New assistant and Manage assistants….
+ */
 @Composable
 internal fun AssistantSwitcherContent(
     roster: ManagerRoster, shown: String, waiting: Map<String, Int>, expanded: Boolean, now: Instant,
     modifier: Modifier = Modifier, headModifier: Modifier = Modifier, failure: ResText? = null,
-    onToggle: () -> Unit, onPick: (HubManager) -> Unit, onNew: () -> Unit, onManage: () -> Unit,
+    onToggle: () -> Unit, onDismiss: () -> Unit, onPick: (HubManager) -> Unit, onNew: () -> Unit, onManage: () -> Unit,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val res = LocalResources.current
+    val density = LocalDensity.current
     val default = roster.defaultManagerId
     val current = roster.manager(shown)?.takeIf { !it.isInstalling } ?: roster.installed.first()
     val others = waiting.any { (id, count) -> count > 0 && id != current.id }
     // The installed ones, the default first, then the ones still installing, as the roster orders them.
     val list = roster.installed + roster.managers.filter { it.isInstalling }
     val listLabel = stringResource(R.string.settings_managers_title)
-    Column(modifier.fillMaxWidth()) {
-        JAssistantSwitcherHeader(current.shownName, switcherLine(res, current, now), ManagerText.status(current), expanded, onToggle,
-            headModifier, avatar = { JManagerAvatar(current, current.id == default, alert = others && !expanded) }, trailing = trailing)
-        if (expanded) Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.s).heightIn(max = SwitcherMaxHeight)
-            .verticalScroll(rememberScrollState()).semantics { contentDescription = listLabel }) {
-            val rows = list.size + 2
-            list.forEachIndexed { index, manager ->
-                JGroupItem(GroupPosition.of(index, rows)) {
-                    JAssistantSwitcherRow(manager, manager.id == default, switcherLine(res, manager, now), ManagerText.status(manager),
+    var width by remember { mutableStateOf(Dp.Unspecified) }
+    Box(modifier.fillMaxWidth().onSizeChanged { width = with(density) { it.width.toDp() } }) {
+        JAssistantSwitcherHeader(current.shownName, switcherLine(res, current, now), expanded, onToggle, headModifier,
+            avatar = { JManagerAvatar(current, current.id == default, presence = true, alert = others && !expanded) }, trailing = trailing)
+        JMenu(expanded, onDismiss, listOf(
+            JAction(stringResource(R.string.settings_managers_new), PhIcons.Plus, onClick = onNew),
+            JAction(stringResource(R.string.settings_switcher_manage), PhIcons.Gear, onClick = onManage),
+        ), Modifier.width(width)) {
+            Column(Modifier.fillMaxWidth().semantics { contentDescription = listLabel }) {
+                list.forEach { manager ->
+                    JAssistantSwitcherRow(manager, manager.id == default, switcherLine(res, manager, now),
                         current = manager.id == current.id, badge = waiting[manager.id] ?: 0, onClick = { onPick(manager) },
                         defaultTag = stringResource(R.string.settings_managers_default).takeIf { manager.id == default && list.size > 1 })
                 }
+                failure?.let { JInlineStatus(it.text(), Modifier.padding(Tokens.Space.s), tone = InlineTone.Failed) }
             }
-            JGroupItem(GroupPosition.of(rows - 2, rows)) {
-                JRow(stringResource(R.string.settings_managers_new), leadingIcon = PhIcons.Plus, onClick = onNew, chevron = false)
-            }
-            JGroupItem(GroupPosition.of(rows - 1, rows)) {
-                JRow(stringResource(R.string.settings_switcher_manage), leadingIcon = PhIcons.Gear, onClick = onManage, chevron = false)
-            }
-            failure?.let { JInlineStatus(it.text(), Modifier.padding(top = Tokens.Space.s), tone = InlineTone.Failed) }
         }
-        // Outside the scroll: where a long roster (or large text) is cut, the line still marks its end.
-        if (expanded) JDivider(Modifier.padding(top = Tokens.Space.m))
     }
 }
-
-/** The open roster never takes the whole sidebar: past this it scrolls. */
-private val SwitcherMaxHeight = Tokens.MinTouch.android * 8

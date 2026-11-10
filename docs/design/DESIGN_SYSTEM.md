@@ -309,7 +309,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Page titles: `.pageTitle`, `.detailTitle` (`apple/Persona/DesignSystem/PageTitle.swift`).
 - Side rail for iPhone Duo (`apple/Persona/DesignSystem/ShellSideRail.swift:50`).
 - Platforms: web phone shell matches (drawer plus top-bar switch); Android `HomeNavigation` has a 36 dp segment height versus Apple's 44 (DS-18).
-- The sidebar's head is the assistant switcher: the current assistant with a caret, opening the roster in place under it (Android `AssistantSwitcher`). It opens in the sidebar rather than as a sheet so the roster stays beside the lists it changes.
+- The sidebar's head is the assistant switcher: the current assistant with a caret; a tap opens the roster as an anchored menu under the head, as wide as the sidebar, over the sidebar's rows (rounded, with the menu's shadow, closed by a tap outside, scrolled when it does not fit), the assistants above New assistant and Manage assistants… (Android `AssistantSwitcher` in `JMenu`, its content slot holding the rows).
 
 ### 3.6 Sheets
 
@@ -333,7 +333,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.
 
-Assistant monogram (the sidebar's assistant switcher, `docs/assistant/managers.md` ("Clients")): the first character of an assistant's name on a filled circle, the same on every client. The default assistant's is the AI color; another's is picked by the sum of its id's UTF-8 bytes mod 5 from blue, green, orange, pink, indigo (each platform's hue tokens). An offline assistant's is faded. Android: `JManagerAvatar`, with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows. Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
+Assistant monogram (the sidebar's assistant switcher, `docs/assistant/managers.md` ("Clients")): the first character of an assistant's name on a filled circle, the same on every client. The default assistant's is the AI color; another's is picked by the sum of its id's UTF-8 bytes mod 5 from blue, green, orange, pink, indigo (each platform's hue tokens). Its presence is a dot at the bottom-right corner, green online, grey offline, orange while it is being installed, in a ring cut out of the monogram so the surface behind shows around it; the status line beside it is text only. In the roster an offline assistant's whole row is faded and can still be picked. Android: `JManagerAvatar`, with `JAssistantSwitcherHeader` and `JAssistantSwitcherRow` for the sidebar's head and the roster's rows. Why not the person avatar (`Monogram`, Android `JAvatar`): that one sits on the neutral surface, and here the color is what tells the assistants apart.
 
 ### 3.9 Empty states
 
