@@ -85,6 +85,29 @@ func TestBlocksDifferAsJSON(t *testing.T) {
 	}
 }
 
+// migratedThread and migratedKey are built without fmt; the threads are the ones the plugin keys its things by.
+func TestMigratedThreadKeys(t *testing.T) {
+	for _, c := range []struct {
+		it   InboxItem
+		want string
+	}{
+		{InboxItem{Source: "lark", Lark: &InboxLark{FeedID: "f"}}, "chat:f"},
+		{InboxItem{Source: "lark", Lark: &InboxLark{AccountID: 1, FeedID: "f"}}, "chat:f"},
+		{InboxItem{Source: "lark", Lark: &InboxLark{AccountID: 12, FeedID: "f"}}, "chat:12:f"},
+		{InboxItem{Source: "lark", Lark: &InboxLark{AccountID: 2}, Doc: &InboxDoc{NoticeID: "n"}}, "chat:2:"},
+		{InboxItem{Source: "feishu", Doc: &InboxDoc{NoticeID: "n"}}, "doc:n"},
+		{InboxItem{Source: "lark", Moment: &InboxMoment{PostID: "p"}}, "moment:p"},
+		{InboxItem{Source: "mail"}, ""},
+	} {
+		if got := migratedThread(&c.it); got != c.want {
+			t.Errorf("migratedThread = %q, want %q", got, c.want)
+		}
+		if got, want := migratedKey(&c.it), c.it.Source+"\x00"+c.want; got != want {
+			t.Errorf("migratedKey = %q, want %q", got, want)
+		}
+	}
+}
+
 // blockFill sets every field of a block (by reflection) to a value, but changes the leaf numbered at, the edit-th of
 // four ways. Lists hold one element; a list or a pointer is a leaf too (nil, empty, longer).
 type blockFill struct{ n, at, edit int }

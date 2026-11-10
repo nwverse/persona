@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,18 +29,31 @@ const migratedConnectorID = "lark"
 // migratedThread is the thread of a Feishu item by its block: "chat:<feed>" ("chat:<account>:<feed>" for an account
 // other than the primary one), "doc:<notice>", "moment:<post>"; "" for anything else.
 func migratedThread(it *InboxItem) string {
+	var buf [64]byte
+	return string(appendMigratedThread(buf[:0], it))
+}
+
+func appendMigratedThread(b []byte, it *InboxItem) []byte {
 	switch {
 	case it.Lark != nil:
+		b = append(b, "chat:"...)
 		if it.Lark.AccountID > 1 {
-			return fmt.Sprintf("chat:%d:%s", it.Lark.AccountID, it.Lark.FeedID)
+			b = append(strconv.AppendInt(b, int64(it.Lark.AccountID), 10), ':')
 		}
-		return "chat:" + it.Lark.FeedID
+		return append(b, it.Lark.FeedID...)
 	case it.Doc != nil:
-		return "doc:" + it.Doc.NoticeID
+		return append(append(b, "doc:"...), it.Doc.NoticeID...)
 	case it.Moment != nil:
-		return "moment:" + it.Moment.PostID
+		return append(append(b, "moment:"...), it.Moment.PostID...)
 	}
-	return ""
+	return b
+}
+
+// migratedKey is "<source>\x00<migratedThread>", what applyMigrated finds an item's thread by, built as one string: a
+// collection keys every item of the inbox, and openFor keys each item of a thread again as it looks the thread up.
+func migratedKey(it *InboxItem) string {
+	var buf [96]byte
+	return string(appendMigratedThread(append(append(buf[:0], it.Source...), 0), it))
 }
 
 // applyMigrated is applyConnector for the things with Extra of a migrated connector, under b.mu.
@@ -49,7 +63,7 @@ func (b *inboxBook) applyMigrated(id string, things []connector.InboxThing, now 
 		if it.Connector != nil {
 			return "", false
 		}
-		return it.Source + "\x00" + migratedThread(it), true
+		return migratedKey(it), true
 	})
 	for _, t := range things {
 		source := id
