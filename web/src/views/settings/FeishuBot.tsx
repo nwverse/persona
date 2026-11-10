@@ -196,6 +196,11 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
     }
     setStatus(s);
   };
+
+  const reloadAll = useCallback(async () => {
+    const [next] = await Promise.all([botStatus(), fetchLarkcli()]);
+    adopt(next);
+  }, [fetchLarkcli, changed]);
   useEffect(() => {
     if (status && (!editedRef.current || !changed)) setForm(credentialsOf(status));
     // only when the hub's credentials change, not on each keystroke
@@ -287,7 +292,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
       {dialogLarkcli && (
         <LarkReadSection
           connector={dialogLarkcli}
-          reload={fetchLarkcli}
+          status={status}
+          reload={reloadAll}
           onOpen={() => {
             onClose();
             onOpen?.("larkcli");
@@ -433,7 +439,7 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   );
 }
 
-function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnector; reload: () => Promise<void>; onOpen: () => void }) {
+function LarkReadSection({ connector, status, reload, onOpen }: { connector: HubConnector; status: FeishuBotStatus | null; reload: () => Promise<void>; onOpen: () => void }) {
   const [rechecking, setRechecking] = useState(false);
   const [switching, setSwitching] = useState(false);
   const on = isEnabled(connector);
@@ -459,6 +465,18 @@ function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnecto
       await reload();
     } finally {
       setRechecking(false);
+    }
+  };
+  const profile = status?.larkcli;
+  const saveProfile = async (choice: string) => {
+    setSwitching(true);
+    try {
+      await updateBot({ larkcli_profile: choice });
+      await reload();
+    } catch (e) {
+      toast(t("settings-feishubot.error_with", { what: t("settings-feishubot.larkcli_profile_title"), error: errorText(e) }), "error");
+    } finally {
+      setSwitching(false);
     }
   };
   return (
@@ -498,6 +516,24 @@ function LarkReadSection({ connector, reload, onOpen }: { connector: HubConnecto
       {signsInHere(connector) && (
         // Signed in: signing in again is a quiet secondary action; otherwise it is what this section is for.
         <SignInSteps c={connector} reload={reload} startLabel={t(connector.status === "ok" ? "settings-feishubot.read_reauthorize" : "settings-feishubot.read_authorize")} startTone={connector.status === "ok" ? "quiet" : "accent"} bare />
+      )}
+      {profile && (
+        <Row label={t("settings-feishubot.larkcli_profile_title")} hint={profile.mode === "config" ? t("settings-feishubot.larkcli_profile_configured") : undefined}>
+          <select
+            aria-label={t("settings-feishubot.larkcli_profile_title")}
+            value={profile.choice}
+            disabled={profile.mode === "config" || switching}
+            onChange={(e) => void saveProfile(e.target.value)}
+            className={cx(controlClass, "max-w-[300px]")}
+          >
+            <option value="">{t("settings-feishubot.larkcli_profile_auto")}</option>
+            {profile.profiles.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name} · {p.user || t("settings-feishubot.larkcli_profile_not_logged_in")} · {p.app_id ? shortAppID(p.app_id) : t("settings-feishubot.larkcli_profile_no_app")}
+              </option>
+            ))}
+          </select>
+        </Row>
       )}
       <Row label={t("settings-feishubot.read_more")} hint={t("settings-feishubot.read_more_hint")} onClick={onOpen} />
     </Group>

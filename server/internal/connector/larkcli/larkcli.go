@@ -22,29 +22,6 @@ const (
 	Name = "Lark via lark-cli"
 )
 
-// requiredScopes is the union of the scopes used by this connector's L2
-// read commands. These names come from the lark-cli shortcut guidance and the
-// missing_scope errors returned by lark-cli 1.0.99. Keep the list here so an
-// authenticated account with an incomplete grant is reported before a tool
-// call fails.
-var requiredScopes = []string{
-	"im:chat:read",
-	"im:message:readonly",
-	"im:message.group_msg:get_as_user",
-	"im:message.p2p_msg:get_as_user",
-	"im:message.reactions:read",
-	"search:message",
-	"search:docs:read",
-	"contact:user:search",
-	"minutes:minutes.search:read",
-	"task:task:read",
-	"mail:user_mailbox.message:readonly",
-	"mail:user_mailbox.message.address:read",
-	"mail:user_mailbox.message.subject:read",
-	"mail:user_mailbox.message.body:read",
-	"calendar:calendar.event:read",
-}
-
 // Connector is enabled only when manager.json configures lark.cli. It owns no
 // credentials; the adapter delegates all authentication to lark-cli.
 type Connector struct {
@@ -418,7 +395,7 @@ func (c *Connector) loginCommand() string {
 	if profile != "" {
 		command += " --profile " + commandArg(profile)
 	}
-	return command + " auth login --domain all"
+	return command + " auth login --scope " + commandArg(strings.Join(adapter.ReadAsMeScopes, " "))
 }
 
 func commandArg(value string) string {
@@ -443,7 +420,7 @@ func missingRequiredScopes(granted []string) []string {
 		have[strings.TrimSpace(scope)] = struct{}{}
 	}
 	var missing []string
-	for _, scope := range requiredScopes {
+	for _, scope := range adapter.ReadAsMeScopes {
 		if _, ok := have[scope]; !ok {
 			missing = append(missing, scope)
 		}
