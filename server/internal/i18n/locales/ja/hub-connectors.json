@@ -15,5 +15,6 @@
   "missing_permission": "lark-cli に権限がありません：{scope}",
   "rate_limited": "lark-cli はレート制限中です。後でもう一度お試しください",
   "error": "lark-cli で Lark を読み取れませんでした",
-  "expiry_reminder": "ログインはあと {count} 日で期限切れになります。ハブのマシンで {command} を実行してください"
+  "expiry_reminder": "ログインはあと {count} 日で期限切れになります。ハブのマシンで {command} を実行してください",
+  "larkcli_name": "Lark（あなたとして）"
 }

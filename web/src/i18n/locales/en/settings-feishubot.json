@@ -84,5 +84,6 @@
   "read_more": "More settings",
   "read_more_hint": "Choose what to collect into the Inbox",
   "read_as_you": "As you",
-  "read_reauthorize": "Sign in again"
+  "read_reauthorize": "Sign in again",
+  "read_off_footer": "Off: messages that mention you and your direct chats are no longer read; the sign-in and what was collected stay."
 }

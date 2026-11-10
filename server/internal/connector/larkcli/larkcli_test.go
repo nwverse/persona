@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
 )
 
@@ -262,3 +263,17 @@ func TestReadToolsCallTheAdapter(t *testing.T) {
 		t.Fatalf("search = %s, err = %v", out, err)
 	}
 }
+
+func TestDisplayNameFollowsLanguage(t *testing.T) {
+	c := New(adapter.Config{Bin: "lark-cli"})
+	if got := connector.DisplayName(i18n.With(context.Background(), i18n.ZhHans), c); got != "飞书（以我的身份）" { // i18n-ignore: the zh-Hans catalog entry under test
+		t.Fatalf("zh-Hans name = %q", got)
+	}
+	if got := connector.DisplayName(i18n.With(context.Background(), "en"), c); got != "Lark (as you)" {
+		t.Fatalf("en name = %q", got)
+	}
+	if c.Name() != Name {
+		t.Fatalf("stable name changed: %q", c.Name())
+	}
+}
+
