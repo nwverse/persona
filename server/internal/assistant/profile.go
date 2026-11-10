@@ -77,6 +77,9 @@ type Settings struct {
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
+	// ArchiveClosedDays: a closed session idle this many days, on no to-do or only on done ones, is archived by itself
+	// (agent_archive_auto.go, #3618); 0 turns it off, nil is 3 (the default).
+	ArchiveClosedDays *int `json:"archive_closed_days,omitempty"`
 	// ReviewSamplePercent: the share (0–100) of the finished supervised tasks that passed the judge's own check whose
 	// review still goes to the main conversation (#3128, supervise_sample.go); the rest the judge closes. nil is 100:
 	// every finished task waits for task_review, as before.
@@ -368,6 +371,8 @@ type assistantView struct {
 	MeetingAttendanceDefault string `json:"meeting_attendance_default"`
 	// IdleCloseHours is in effect (0: off).
 	IdleCloseHours int `json:"idle_close_hours"`
+	// ArchiveClosedDays is in effect (0: off).
+	ArchiveClosedDays int `json:"archive_closed_days"`
 	// ReviewSamplePercent is in effect (100: every finished task waits for task_review).
 	ReviewSamplePercent int `json:"review_sample_percent"`
 	// InterjectBackground is in effect, like DoneNeedsDelivery.
@@ -387,6 +392,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx), MeetingAttendanceDefault: s.meetingAttendanceDefault(ctx),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
 		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground}
 	if d, ok := s.device(ctx, v.MachineID); ok {

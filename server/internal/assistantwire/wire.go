@@ -350,6 +350,9 @@ type SessionView struct {
 	// Supervising: its current turn was started by a supervision message about the tasks it handed out (#3124): the assistant
 	// does not push its normal finish (SupervisedFinish); it pushes what the user needs to know (notify_user).
 	Supervising bool `json:"supervising,omitempty"`
+	// Direction: the conversation is (or was) a leader, one direction of the owner's work (assistant/directions.go,
+	// #3484); nil for any other.
+	Direction *proto.Direction `json:"direction,omitempty"`
 }
 
 // ErrStaleSnapshot is manager.snapshot's stale_snapshot: a newer one came in first (two changes reported at once).

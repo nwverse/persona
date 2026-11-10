@@ -112,6 +112,12 @@ func (s *Service) NodeRequest(ctx context.Context, machine, method string, param
 		}
 		r, err := s.nodeInteraction(ctx, p.Interaction)
 		return r, true, err
+	case assistantwire.MethodCloseoutCheck: // a turn that did work ends without a closeout (agents_closeout.go)
+		var p assistantwire.CloseoutCheckRequest
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, true, err
+		}
+		return s.closeoutCheck(ctx, machine, p), true, nil
 	case "assistant.lark":
 		out, err := s.assistantLark(ctx, machine)
 		return out, true, err

@@ -271,7 +271,19 @@ end to end in `integrations/dsh/e2e/assistant.mjs`.
 | DSH (`dsh`, configurable) | `integrations/dsh`: a Cordis plugin for `dsh web`; companion process `companion.mjs` (`dsh-files`) for when DSH isn't running | `docs/integrations/dsh.md` |
 | pi (`pi-<pid>`, `pi-web`, `pi-files`) | `integrations/pi`: pi extension (one connection per pi process) + pi-web companion process | `docs/integrations/pi.md` |
 | opencode (`opencode-<pid>`) | `integrations/opencode`: opencode plugin (one connection per opencode server process; list and chats read from opencode.db, live updates over the event stream, control through the plugin API) | `docs/integrations/opencode.md` |
+| Antigravity CLI (`antigravity`) | `integrations/antigravity/companion.mjs`: companion process; reads CLI transcripts and runs terminal-less Agent and assistant sessions through `agy acp` | "Antigravity CLI" below |
 | echo (example) | `integrations/runtime-sdk/examples/echo-runtime.mjs` (with `--listen <port>` it's a daemon) | "Minimal example" in this doc, `docs/integrations/daemons.md` |
+
+### Antigravity CLI
+
+The implemented integration is for the **Antigravity CLI (`agy`)**, not the Antigravity desktop app. With the node running,
+start `node integrations/antigravity/companion.mjs` from the repository root. The companion connects to the node's runtime
+socket, lists CLI transcripts, and uses `agy acp` for terminal-less session creation, sending and interruption. It can also
+serve as an assistant backend through the optional assistant contract above. It requires an installed, authenticated `agy`
+with ACP support; `--agy-bin`, `--agy-dir` and `--socket` override the executable, CLI data directory and node socket.
+Implementation: `integrations/antigravity/lib/runtime.js` and `integrations/antigravity/lib/acp.js`.
+
+### Shared runtime behavior
 
 When two runtimes list the same session (pi's companion lists it from disk while pi-web or a pi terminal is running it), node makes the one running it responsible (ones listing it as `offline` go after),
 and on a tie the newer connection wins. Listing a session as `offline` tells node "I can open it, but it isn't running here".

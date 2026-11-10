@@ -401,7 +401,15 @@ func (s *Service) launchers(ctx context.Context) ([]proto.Launcher, error) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return s.machineLaunchers(cctx, machine)
+	ls, err := s.assistantLaunchers(cctx, machine)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]proto.Launcher, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, l.Launcher)
+	}
+	return out, nil
 }
 
 func (s *Service) getLauncher(ctx context.Context) (string, error) {
@@ -418,7 +426,7 @@ func (s *Service) getLauncher(ctx context.Context) (string, error) {
 	return b.String(), nil
 }
 
-// setLauncher writes the launcher into Model configuration › Main chat, keeping its model and effort.
+// setLauncher writes the launcher into Model configuration › Main chat, inheriting its own default model and effort.
 func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var name string
 	if err := json.Unmarshal(v, &name); err != nil || strings.TrimSpace(name) == "" {
@@ -426,9 +434,6 @@ func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChang
 	}
 	name = strings.TrimSpace(name)
 	before := s.launcherNow(ctx)
-	if name == before {
-		return &ownChange{summary: "启动器没有变化"}, nil
-	}
 	ls, err := s.launchers(ctx)
 	if err != nil {
 		return nil, err
@@ -438,16 +443,32 @@ func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChang
 		known = known || l.Name == name
 	}
 	if !known {
-		return nil, fmt.Errorf("no launcher %q on the assistant's machine (get lists them)", name)
+		return nil, fmt.Errorf("no launcher %q on the assistant's machine (get lists them): %w", name, i18n.Err("assistant-models.err_provider_unsupported"))
+	}
+	if name == before {
+		return &ownChange{summary: "启动器没有变化"}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
-	rec, err := s.modelRecord(ctx, "assistant")
+	providers := s.modelProviders(ctx)
+	p, err := s.modelPurpose(ctx, "assistant", providers)
 	if err != nil {
 		return nil, err
 	}
-	rec.Binding.Provider = "launcher." + name
+	provider, _ := json.Marshal("launcher." + name)
+	binding, err := patchModel(p.Override, modelPatch{Provider: provider})
+	if err != nil {
+		return nil, err
+	}
+	base, _, err := s.modelBaseline(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateModel(ctx, p, mergeModel(base, binding), providers); err != nil {
+		return nil, err
+	}
+	rec := modelRecord{Revision: p.Revision, Binding: binding}
 	return &ownChange{cardText: func(l i18n.Lang) string {
 		return i18n.T(l, "assistant-settings_tool.change_launcher", i18n.Args{"before": before, "after": name})
 	},

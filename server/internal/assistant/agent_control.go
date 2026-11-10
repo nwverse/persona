@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -233,6 +234,29 @@ type sendTask struct {
 	Title         string   `json:"title"`
 	DoneWhen      []string `json:"done_when"`
 	ExpectMinutes int      `json:"expect_minutes"`
+}
+
+// givenTask is agent_send's task as sent, nil for a reply (#3386): left out, null, or an object of only title,
+// done_when and expect_minutes that says nothing (sendTask.none), which runtimes that fill in every field of a tool's
+// schema send for a reply. Anything else stays a task, as before: another type, a field of the wrong type or a key the
+// task has not (a misspelled title) must not turn a hand-off into an untracked reply.
+func givenTask(raw json.RawMessage) *sendTask {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var t sendTask
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&t); err == nil && t.none() {
+		return nil
+	}
+	return &t
+}
+
+// none: task has only blank fields (no title, no non-blank done_when, no expect_minutes above 0); any real value in one
+// of them makes it a hand-off.
+func (t sendTask) none() bool {
+	return strings.TrimSpace(t.Title) == "" && len(cleanDoneWhen(t.DoneWhen)) == 0 && t.ExpectMinutes <= 0
 }
 
 // handedTask is the task agent_send with a task put the agent on: made now, or self's own that it worked for already
@@ -608,7 +632,13 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
-	s.noteProgress(ctx, t.ID, TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()})
+	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
+	if text != progress.Text {
+		progress.Detail = text
+	}
+	if s.noteProgress(ctx, t.ID, progress) {
+		s.goReportLine(t, progress.At, kind, text) // off the tool call: it answers right away
+	}
 	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
 	// the handoff; progress reports only update the card (the stream stays quiet).
