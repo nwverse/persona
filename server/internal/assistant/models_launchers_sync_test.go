@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,17 +100,111 @@ func TestOfflineMachinesLaunchersAreStale(t *testing.T) {
 	f.mu.Lock()
 	f.devices = []Device{{ID: "away", Name: "Away"}}
 	f.mu.Unlock()
-	_, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
-	var res struct {
-		Launchers []LauncherView `json:"launchers"`
-		Sync      []LauncherSync `json:"sync"`
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
+		var res struct {
+			Launchers []LauncherView `json:"launchers"`
+			Sync      []LauncherSync `json:"sync"`
+		}
+		_ = json.Unmarshal([]byte(raw), &res)
+		i := slices.IndexFunc(res.Launchers, func(v LauncherView) bool { return v.Name == "kcc" })
+		if i >= 0 && slices.Equal(res.Launchers[i].Stale, []string{"away"}) && slices.Equal(res.Launchers[i].RCFiles, []string{"~/.zshrc"}) &&
+			len(res.Sync) == 1 && res.Sync[0].State == "offline" && res.Sync[0].SyncedAt != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("offline refresh did not settle: %s", raw)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	_ = json.Unmarshal([]byte(raw), &res)
-	i := slices.IndexFunc(res.Launchers, func(v LauncherView) bool { return v.Name == "kcc" })
-	if i < 0 || !slices.Equal(res.Launchers[i].Stale, []string{"away"}) || !slices.Equal(res.Launchers[i].RCFiles, []string{"~/.zshrc"}) {
-		t.Fatalf("%s", raw)
+}
+
+// A slow node never holds the list: the last snapshot answers while one refresh runs behind it (#3198).
+func TestLauncherListAnswersLastSeenWhileRefreshRuns(t *testing.T) {
+	s, f, _ := modelService(t)
+	f.mu.Lock()
+	f.devices = []Device{{ID: "box", Online: true, Reachable: true}, {ID: "slow", Online: true, Reachable: true}}
+	f.zshrc = map[string][]proto.Launcher{"box": {{Name: "before"}}, "slow": {}}
+	for _, id := range []string{"box", "slow"} {
+		f.sessions[id] = nil
 	}
-	if len(res.Sync) != 1 || res.Sync[0].State != "offline" || res.Sync[0].SyncedAt == nil {
-		t.Fatalf("sync: %+v", res.Sync)
+	f.mu.Unlock()
+	_ = s.zshrcLaunchers(t.Context(), true) // prime the last-seen snapshot without the route under test
+	s.models.zshrcMu.Lock()
+	s.models.zshrc, s.models.zshrcSync = nil, nil // a restart keeps the persisted snapshot, not the memory
+	s.models.zshrcMu.Unlock()
+
+	gate := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"box": {{Name: "after"}}, "slow": {}}
+	f.launcherGate = gate
+	f.mu.Unlock()
+
+	type answer struct {
+		code int
+		raw  string
+	}
+	asyncCall := func() <-chan answer {
+		ch := make(chan answer, 1)
+		go func() {
+			code, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
+			ch <- answer{code, raw}
+		}()
+		return ch
+	}
+	await := func(ch <-chan answer) answer {
+		t.Helper()
+		select {
+		case a := <-ch:
+			return a
+		case <-time.After(2 * time.Second):
+			t.Fatal("the list waited for the gated node instead of answering last seen")
+			return answer{}
+		}
+	}
+
+	countCalls := func() int {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		calls := 0
+		for _, call := range f.calls {
+			if call.Method == DeviceLaunchersList {
+				calls++
+			}
+		}
+		return calls
+	}
+	first := await(asyncCall())
+	for deadline := time.Now().Add(2 * time.Second); countCalls() < 4; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the background refresh did not reach both nodes: %d calls", countCalls())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	second := await(asyncCall())
+	for _, a := range []answer{first, second} {
+		if a.code != http.StatusOK || !strings.Contains(a.raw, "before") || strings.Contains(a.raw, "after") {
+			t.Fatalf("cached answer: %d %s", a.code, a.raw)
+		}
+	}
+	if calls := countCalls(); calls != 4 { // two to prime, then one per machine for the single background refresh
+		t.Fatalf("launchers.list calls = %d, want 4 (concurrent reads started another refresh)", calls)
+	}
+
+	release()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		code, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
+		if code == http.StatusOK && strings.Contains(raw, "after") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the refreshed snapshot did not arrive: %d %s", code, raw)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
