@@ -163,6 +163,8 @@ export function managerError(e: unknown): string {
 
 let roster: ManagerList | null = null;
 let rosterLoad: Promise<void> | null = null;
+/** A `managers` push or hello came while a read was out: its answer may predate the change, so read once more after it. */
+let rosterAgain = false;
 let rosterWatched = false;
 const rosterListeners = new Set<() => void>();
 
@@ -172,16 +174,33 @@ export const ROSTER_RETRY_MS = 5_000;
 let rosterRetries = 0;
 let rosterRetry: ReturnType<typeof setTimeout> | null = null;
 
-/** Reads the roster again (a `managers` push, the socket's hello); a hub without one stays at none. */
+/** Reads the roster again (a `managers` push, the socket's hello); a hub without one stays at none. A call while a read
+ *  is out does not just share it: that read may have been answered before the change the call is about, so one more read
+ *  follows it, and the promise settles after that one (callers that wait see the newest roster). */
 export function loadRoster(): Promise<void> {
-  rosterLoad ??= listManagers()
+  if (rosterLoad) {
+    rosterAgain = true;
+    return rosterLoad;
+  }
+  const load = (async () => {
+    do {
+      rosterAgain = false;
+      await readRoster();
+    } while (rosterAgain);
+  })().finally(() => {
+    if (rosterLoad === load) rosterLoad = null;
+  });
+  rosterLoad = load;
+  return load;
+}
+
+function readRoster(): Promise<void> {
+  return listManagers()
     .then((r) => {
       rosterRetries = 0;
       setRoster({ managers: r.managers ?? [], default: r.default || BUILTIN_MANAGER });
     })
-    .catch(rosterFailed)
-    .finally(() => void (rosterLoad = null));
-  return rosterLoad;
+    .catch(rosterFailed);
 }
 
 /** A roster read that failed: the default is taken as the hub's own assistant for now (settleRosterDefault), so pages
@@ -214,6 +233,7 @@ export function resetRoster() {
   rosterRetry = null;
   rosterRetries = 0;
   rosterLoad = null;
+  rosterAgain = false;
   roster = null;
 }
 
