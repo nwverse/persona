@@ -43,7 +43,7 @@
   "provider_legacy_judge": "hub 判断 API",
   "provider_legacy_kb": "hub 知识 API",
   "provider_claude_default": "Claude Code 默认",
-  "source_hub_config": "管理者配置",
+  "source_hub_config": "助手配置",
   "source_assistant_default": "助手默认",
   "source_default": "默认",
   "source_extension_default": "扩展默认",

@@ -31,7 +31,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
-            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -721,6 +721,12 @@ for _s in SESSIONS:
         _s["model"] = _model
         if _tokens:
             _s.update(context_tokens=_tokens, context_window=_window)
+
+# MOCK_BYPASS_AVAILABLE=1 (#1379): the widget agent's Claude was started with --dangerously-skip-permissions, so Allow All
+# is in its mode cycle and the apps offer it while it runs (Session.bypass_available).
+if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
+    for _s in SESSIONS:
+        if _s["session_id"] == WIDGET: _s["bypass_available"] = True
 
 # MOCK_STALE_DONE=1 (#2069): the widget session as the hub listed it while herdr said done through a turn the phone
 # started (status done, state idle, its activity still moving): the Agents list before the node's fix.
@@ -1960,6 +1966,68 @@ if os.environ.get("MOCK_TODO_OFFLINE") == "1" and not MOCK_MACHINES:
     SESSIONS.append(sess("nas", "a1f3c2d4-0000-4000-8000-0000000000b1", "备份照片库", "/home/me/backup", "unknown",
                          "unknown", "backup", 1, "1", 1, 180, "开始同步照片库。"))
 
+
+# MOCK_TODO_TRIAGE=1 (#3156, docs/assistant/todo-status-sop.md): a long-running hub's to-do list. A few to-dos really move;
+# most are old agent records nobody touched for days, one accepted task was reopened when its agent got more work (eight
+# criteria, the accepted review judged five), an old PR still waits to merge, and two pairs are the same piece of work.
+def _triage_fixture():
+    tr = []
+
+    def agent(sid, title, cwd, state, minutes, last, machine="macbook", **kw):
+        status = {"working": "working", "needs_you": "blocked", "unread": "done", "idle": "idle"}[state]
+        space = cwd.rstrip("/").rsplit("/", 1)[-1]
+        SESSIONS.append(sess(machine, sid, title, cwd, status, state, space, 7, "1", 1, minutes, last, **kw))
+        return {"machine_id": machine, "session_id": sid, "linked_at": ago(minutes=minutes + 30), "released_at": None,
+                "title": title, "cwd": cwd, "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def todo(tid, title, minutes, agents=(), **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 600),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": list(agents)}
+        t.update(kw)
+        tr.append(t)
+
+    def sid(n):
+        return f"c3d5e7f9-0000-4000-8000-{n:012d}"
+
+    todo("tr_inbox", "收件箱分拣加批量操作", 4, [agent(sid(1), "收件箱批量操作", "/Users/me/code/persona", "working", 4,
+         "批量标记已处理的接口写好了，正在补单测。")],
+         supervision={"supervisor": "conv_demo", "done_when": ["批量标记已处理", "单测覆盖"], "state": "", "round": 0, "reviews": [],
+                      "progress": {"kind": "progress", "step": 3, "steps": 5, "text": "写单测", "at": ago(minutes=4)}})
+    todo("tr_migrate", "数据库升级到 18", 12, [agent(sid(2), "数据库升级", "/home/me/code/shop-api", "needs_you", 12,
+         "要不要先在备份库上演练一遍？", pending=1)])
+    accepted_at = ago(hours=5)
+    done_when = ["网关能按账号池转发请求", "额度窗口按重置时间合并", "设置页能添加网关", "单测覆盖转发和合并",
+                 "部署到 hub 后实测", "网页侧边栏显示额度条", "iOS 机器页显示额度", "文档写清楚接入方式"]
+    todo("tr_gateway", "账号池网关第一阶段", 180, [agent(sid(3), "账号池网关", "/Users/me/code/persona", "idle", 180,
+         "追加的三项也做完了。")], reopened_at=ago(hours=4),
+         supervision={"supervisor": "conv_demo", "done_when": done_when, "state": "accepted", "round": 1,
+                      "reviews": [{"at": accepted_at, "verdict": "accepted", "note": "前五项都有证据，验收通过。",
+                                   "checks": [{"criterion": c, "met": True, "evidence": "见 PR 描述"} for c in done_when[:5]]}],
+                      "updated_at": accepted_at})
+    todo("tr_search_pr", "设置页加搜索", 60 * 24 * 6, [agent(sid(4), "设置页搜索", "/Users/me/code/persona", "idle", 60 * 24 * 6,
+         "PR 已经开好了，等合并。")], stage="review", pr_url="https://github.com/example/app/pull/31",
+         delivery={"state": "pr", "gate": "等你批准合并", "unblock": "user", "at": ago(days=6)})
+    todo("tr_push_fix", "修复 #412 推送丢失", 50, [agent(sid(5), "推送丢失", "/Users/me/code/persona", "unread", 50,
+         "修好了：重连后补拉漏掉的推送，单测已加。")])
+    todo("tr_push_test", "#412 推送丢失：补回归测试", 60 * 30, [agent(sid(6), "推送回归测试", "/Users/me/code/persona", "idle",
+         60 * 30, "回归测试写完了。")])
+    todo("tr_follow", "整理本周会议纪要", 120, [agent(sid(7), "会议纪要", "/Users/me/work", "idle", 120, "纪要初稿放在知识库里了。")])
+    stale = [("排查 node 内存上涨", "/Users/me/code/persona", 3), ("试一下新的启动器", "/Users/me/workspace", 4),
+             ("清理旧的构建缓存", "/Users/me", 5), ("看一下日志轮转", "/home/me/work", 7), ("调研新引擎", "/Users/me/workspace", 9),
+             ("修 Android 深色模式的边框", "/Users/me/code/persona", 11)]
+    for i, (title, cwd, days) in enumerate(stale):
+        todo(f"tr_stale_{i}", title, 60 * 24 * days, [agent(sid(20 + i), title, cwd, "idle", 60 * 24 * days, "先到这里。")])
+    tr.append({"id": "tr_deployed", "title": "网页加载提速", "notes": "", "done_at": ago(hours=1), "created_at": ago(days=1),
+               "updated_at": ago(hours=1), "origin": "conv_demo", "done_by": "review", "done_reason": "验收通过",
+               "delivery": {"state": "live", "at": ago(hours=1)}, "spaces": [], "agents": [],
+               "supervision": {"supervisor": "conv_demo", "done_when": ["首屏少于 1 秒"], "state": "accepted", "round": 0,
+                               "reviews": [{"at": ago(hours=1), "verdict": "accepted",
+                                            "checks": [{"criterion": "首屏少于 1 秒", "met": True}]}]}})
+    return tr
+
+
+if os.environ.get("MOCK_TODO_TRIAGE") == "1":
+    TODOS_INIT.extend(_triage_fixture())
 TODOS = copy.deepcopy(TODOS_INIT)
 
 
@@ -2025,10 +2093,26 @@ def apply_todo_plan(t, body):
     return None
 
 
+# MOCK_TODO_ASKS=1 (#2056, docs/assistant/todos.md "Waiting for the owner"): to-dos carry the ask they wait on, as GET
+# /api/v1/todos lists it: a decision with a recommendation (the PR check, its agent idle), a conclusion that cannot be done
+# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" (the brief's accept row). POST …/accept takes one
+# (accept_brief): its ask is gone from the list, and a second press is 409.
+TODO_ASKS = {
+    "todo_review": {"outcome": "decide", "verdict": "🤔 要你拍板：PR #42 改了公开接口，旧接口留不留", "recommend": "先合入，下个版本再删旧接口"},
+    "todo_blog": {"outcome": "cannot", "verdict": "⛔ 做不了：旧主题的短代码没法照搬到 Astro"},
+    "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
+} if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
+TODO_ASKED_AT = ago(hours=2)
+
+
 def sorted_todos():
     tds = copy.deepcopy(TODOS)
     tds.sort(key=lambda t: t.get("created_at") or "", reverse=True)
-    return [format_todo(t) for t in tds]
+    out = [format_todo(t) for t in tds]
+    for t in out:
+        if t.get("done_at") is None and t["id"] in TODO_ASKS and t["id"] not in BRIEF_ACCEPTED:
+            t["ask"] = dict(TODO_ASKS[t["id"]], asked_at=TODO_ASKED_AT)
+    return out
 
 
 def push_todos():
@@ -2163,6 +2247,33 @@ RECORDINGS = {}
 RECORDINGS_DELETED = set()
 RECORDING_PUTS = [0]  # every PUT, stored or refused
 RECORDING_DAYS = int(os.environ.get("MOCK_RECORDING_DAYS", "14"))
+# Meeting minutes (#2710, docs/assistant/meeting-minutes.md): MOCK_RECORDING_MINUTES=ready writes them for a complete meeting
+# recording (`kind: meeting`) as soon as it is stored, from its own sentences; pending leaves them being written; failed says
+# writing them failed; POST /mock/recording_minutes {"mode": …} switches it and forgets the recordings stored so far (a UI
+# test's fresh start on a shared mock).
+# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked").
+RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
+RECORDING_MINUTES_ASKED = []
+
+
+def recording_minutes(body):
+    """Made-up minutes in the contract's shape (docs/assistant/meeting-minutes.md) from a recording's own sentences: the
+    first two are points, those that decide / assign / leave something open are decisions / actions / open questions.
+    Each item's `at` is its sentence's start (seconds into the recording)."""
+    segs = [x for x in body.get("segments", []) if x.get("text")]
+    cal = body.get("calendar") or {}
+    item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
+    out = {
+        "title": cal.get("title") or body.get("title") or None,
+        "when": "2027-01-15 16:00–17:00",
+        "where": cal.get("location"),
+        "attendees": cal.get("attendees"),
+        "points": [item(x) for x in segs[:2]],
+        "decisions": [item(x) for x in segs if "决定" in x["text"]],
+        "actions": [{"who": "张三", "what": x["text"].rstrip("。"), "by": "周五前", "at": x["start"]} for x in segs if "负责" in x["text"]],
+        "open": [item(x) for x in segs if "没定" in x["text"]],
+    }
+    return {k: v for k, v in out.items() if v}
 
 
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
@@ -2208,7 +2319,7 @@ if "nas" in MANAGED_MACHINES and any(m["id"] == "nas" for m in MACHINES) and not
                          "备份改成增量了。", seen_at=ago(minutes=190)))
 # hub-assistant_link.offline (zh-Hans): what the hub puts in an offline manager's computers' error
 MANAGER_OFFLINE_ERROR = "助手暂时连不上，稍后再试"
-MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2"}
+MANAGED_INBOX = {"lark:f3:300": "m-3fa21c", "mail:acc1:t3:503": "m-8b04d2", "lark:f2:200": "m-3fa21c", "mail:acc1:t4:504": "m-3fa21c"}
 # extensions / plugins / connectors of the other managers: by position among the ones not built in. The built-ins
 # (source "builtin": cua, ego, imessage, voice…) are every manager's own, as each one's extmgr adds them (extensions.go
 # AddBuiltin), so the merged list has them once per installed manager.
@@ -2235,7 +2346,7 @@ def stamp_managers(path, obj):
     """The merged lists' `manager` on each item, as the hub adds it; the default manager's items too."""
     if not _stamps() or not isinstance(obj, dict): return obj
     dflt = MANAGERS["default"]
-    if path == "/api/v1/inbox" and isinstance(obj.get("items"), list):
+    if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
     for key in ("extensions", "plugins", "connectors"):
         if path == "/api/v1/" + key and isinstance(obj.get(key), list):
@@ -2248,6 +2359,19 @@ def inbox_owner(item_id):
     dflt = MANAGERS["default"]
     mid = MANAGED_INBOX.get(item_id, dflt)
     return mid if _manager_known(mid) else dflt
+
+
+def inbox_needs_you():
+    """Each installed, online manager's `inbox_needs_you` in the roster (hub/managers.go): its open inbox items under
+    "Needs you" (the hub's status, else the tier; untriaged counts), the connectors' among them. A manager that is
+    away or being installed has none. MOCK_MANAGER_NEEDS_YOU=0: none at all, as a hub or managers from before it."""
+    if os.environ.get("MOCK_MANAGER_NEEDS_YOU") == "0": return {}
+    out = {m["id"]: 0 for m in MANAGERS["list"] if m.get("online") and not m.get("installing")}
+    for x in INBOX:
+        status = x.get("status") or (x.get("tier") if x.get("tier") in ("fyi", "noise") else "action")
+        owner = inbox_owner(x.get("id"))
+        if owner in out and not x.get("done_at") and status == "action": out[owner] += 1
+    return out
 
 
 def merged_by_manager(items):
@@ -2415,7 +2539,9 @@ def managers_route(h, method, p):
                         datetime.fromisoformat(m["installing"].replace("Z", "+00:00")) > datetime.now(timezone.utc) - timedelta(days=7)]
     ms, dflt = MANAGERS["list"], MANAGERS["default"]
     if p == "/api/v1/managers" and method == "GET":
-        out = [dict(m, default=True) if m["id"] == dflt else m for m in ms]
+        needs_you = inbox_needs_you()
+        out = [dict(m, **({"default": True} if m["id"] == dflt else {}),
+                    **({"inbox_needs_you": needs_you[m["id"]]} if m["id"] in needs_you else {})) for m in ms]
         out.sort(key=lambda m: (m["id"] != dflt, bool(m.get("installing"))))
         reply = {"managers": out, "default": dflt}
         if os.environ.get("MOCK_SHARED_BOTS") == "1":
@@ -2477,8 +2603,16 @@ def managers_route(h, method, p):
 
 def recordings_route(h, method, p):
     """The hub's recording sync, and its copy in the knowledge base (KB["recordings"])."""
+    if p == "/mock/recording_minutes" and method == "POST":
+        # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
+        RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
+        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear()
+        KB["recordings"] = []
+        for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
+        return h.send_json({"mode": RECORDING_MINUTES[0]}) or True
     if p == "/mock/recordings" and method == "GET":
-        return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0]}) or True
+        return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
+                            "minutes_asked": RECORDING_MINUTES_ASKED}) or True
     if not (p == "/api/v1/recordings" or p.startswith("/api/v1/recordings/")): return False
     if os.environ.get("MOCK_RECORDINGS_DOWN") == "1":
         return h.send_json({"error": "知识库暂时不可用", "code": "kb_unavailable"}, 503) or True
@@ -2489,6 +2623,13 @@ def recordings_route(h, method, p):
     rid = p.split("/")[4].lower()
     if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
+    if p.endswith("/minutes") and method == "POST":
+        if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音"}, 404) or True
+        if not RECORDINGS[rid].get("complete"): return h.send_json({"error": "转写还没完成"}, 409) or True
+        RECORDING_MINUTES_ASKED.append(rid)
+        detail = KB_DETAIL.setdefault(("recordings", rid), {})
+        detail.pop("minutes", None); detail.setdefault("meta", {})["minutes_state"] = "pending"
+        return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
     if method == "DELETE":
         existed = rid in RECORDINGS
@@ -2510,8 +2651,13 @@ def recordings_route(h, method, p):
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
-    KB_DETAIL[("recordings", rid)] = {"meta": {k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete")},
-                                      "summary": text, "segments": body.get("segments", [])}
+    detail = {"meta": {k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "kind", "calendar")},
+              "summary": text, "segments": body.get("segments", [])}
+    if body.get("kind") == "meeting":
+        ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
+        detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
+        if ready: detail["minutes"] = recording_minutes(body)
+    KB_DETAIL[("recordings", rid)] = detail
     return h.send_json({"id": rid, "revision": body["revision"], "status": "stored"}) or True
 KB_DETAIL = {
     ("projects", "weather-app"): {"summary": "# 天气 App\n\n给自己用的天气 App 和桌面小组件。\n\n- **现在**：小组件按小时刷新\n- **下一步**：中号布局的降雨条",
@@ -2878,6 +3024,9 @@ if os.environ.get("MOCK_REWIND"):
         it("user", "text", 60, text="继续"), it("assistant", "text", 55, text="把 `fetchAll` 改成了 `loadAll`。"),
         it("user", "text", 40, text="把 tmp 也改了"), it("assistant", "text", 35, text="`tmp` 已经改成 `cached`。"),
         it("user", "text", 20, text="继续"), it("assistant", "text", 15, text="CI 绿了，可以合。")]
+    if os.environ.get("MOCK_REWIND") == "safeguards":
+        ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
+        ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
 # MOCK_WORKFLOW=1 (#3436): the Workflow calls that launched the review agent's runs, each drawn as its run's card (the
 # parity-audit one in a turn the hub folds: the app fetches that fold for the card), and each agent's own conversation.
 if os.environ.get("MOCK_WORKFLOW") == "1":
@@ -2961,6 +3110,22 @@ if os.environ.get("MOCK_QUOTE") == "1":
            "> 2. **照片同步脚本**（Mac Studio）的计划写好了，等你批准。\n> 3. 韩梅梅在飞书问你**周五的发布能不能赶上**，她下午要和客户确认。\n\n第二件先放一放，周五前提醒我。"),
         it("assistant", "text", 2.2, text="好，周四下午提醒你看照片同步脚本的计划。"),
     ]
+# MOCK_COMMENTS=1: a review sent from the web (#151): the widget chat's newest message leads with two `Code comment N`
+# blocks and an `Element comment N` block (docs/protocol/protocol.md "Quote and comment blocks at the start of messages"),
+# then its summary; the iOS bubble draws the blocks as cards (MessageComments, CommentBubbleTests).
+if os.environ.get("MOCK_COMMENTS") == "1":
+    ITEMS[WIDGET] = ITEMS[WIDGET] + [
+        it("user", "text", 0.6, text="\n".join([
+            "> Code comment 1", "> File: Shared/Forecast.swift:7", "> Diff: branch since 4f2a9c1", "> ```diff", "> +let city: String?", "> ```", "> ",
+            "> 城市名用可选的吧，老缓存里没有这个字段", "",
+            "> Code comment 2", "> File: Shared/Forecast.swift:30-31", "> Diff: branch since 4f2a9c1", "> ```diff", ">  return cached", "> +?? last", "> ```", "> ",
+            "> 解析失败时回退到上次的缓存，别让小组件空着", "",
+            "> Element comment 3", "> Page: http://localhost:5173/settings", "> Element: button.save",
+            "> Component: SaveButton (src/settings/SaveButton.tsx:14)", "> Text: Save", "> ```html", '> <button class="save">Save</button>', "> ```", "> ",
+            "> 改成整行宽的主按钮", "",
+            "整体可以，改完这三处再提交。"])),
+        it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
+    ]
 # MOCK_TASKS=1: the unified entry (docs/assistant/unified-entry.md, #930). The main conversation dispatches tasks: a started plan
 # of two (the widget fix working, the unit tests waiting for an answer — ix_tests), a read-only one that finished with a
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
@@ -3023,6 +3188,16 @@ if MOCK_TASKS:
                        "/Users/me/code/weather", 18, "plan_mock_2"),
         ]
     TODOS = copy.deepcopy(TODOS_INIT)
+    # MOCK_TASK_DECISION=1: a stopped task whose owner can finish without another Agent turn.
+    if os.environ.get("MOCK_TASK_DECISION") == "1":
+        TODO_ASKS["todo_task_tests"] = {
+            "outcome": "decide", "verdict": "🤔 要你拍板：测试已通过，是否继续更换缓存方案？",  # i18n-ignore
+            "recommend": "保留当前缓存，下次再评估新方案",  # i18n-ignore
+        }
+        for _session in SESSIONS:
+            if _session["session_id"] == TESTS:
+                _session.update(state="idle", status="idle", pending_interactions=0)
+                ORIG_STATE[TESTS] = ("idle", "idle")
 
     def _plan(pid, state, minutes, tasks):
         return {"id": pid, "conversation": ASK1, "state": state, "created_at": ago(minutes=minutes), "updated_at": ago(minutes=minutes),
@@ -3266,6 +3441,27 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_MARKDOWN=1 (with MOCK_TASKS=1, and MOCK_EXCHANGES=1 for the exchanges): the words as Agents and Persona write them,
+    # with **bold**, `code` and a heading (#2363), in Persona's message to the task, the task's report and the release
+    # notes receipt: drawn rendered, never as raw marks.
+    if os.environ.get("MOCK_MARKDOWN") == "1":
+        _markdown = {
+            "feed_x1": ("text", "**先别动缓存层。**\n1. 网络层的重试和超时先补测试，用 `LocalStubServer`；\n2. 覆盖率按 **80%** 算，生成的代码不算；\n"
+                                "3. 每补完一块就跑一次全量测试。"),
+            "feed_x2": ("text", "## 结果\n**网络层测试补完了**，PR 在 https://github.com/example/weather/pull/45 。\n"
+                                "重试、超时和断网三块都有用例，用 `LocalStubServer` 跑。\n覆盖率从 **52%** 到 **83%**。"),
+            "feed_m7": ("summary", "**整理好了**：这周合并了 7 个 PR，分成新功能、修复和其他三组，写在 `docs/release-notes.md` 里，等你过目。"),
+        }
+        for _f in TASK_FEED.get(ASK1, []):
+            if _f["id"] in _markdown and isinstance(_f.get("body"), dict):
+                _key, _text = _markdown[_f["id"]]
+                _f["body"][_key] = _text
+    # MOCK_TASK_RENAMED=1 (with MOCK_TASKS=1): the release notes task was renamed after its receipt was written (#3036):
+    # the receipt keeps the old name in its body, and is drawn with the to-do's name now.
+    if os.environ.get("MOCK_TASK_RENAMED") == "1":
+        for _t in TODOS_INIT + TODOS:  # TODOS was copied from TODOS_INIT already; a reset copies it again
+            if _t.get("id") == "todo_task_release":
+                _t["title"] = "写本周发布说明"
     # MOCK_SUPERVISION=1: native quiet-round coverage, with synthetic audit and visible promotion receipts only.
     if os.environ.get("MOCK_SUPERVISION") == "1":
         TASK_FEED[ASK1] = []
@@ -3536,6 +3732,8 @@ def tasks_area(h, method, p, raw):
         else:
             BRIEF_ACCEPTED.add(tid)
             h.send_json({"ok": True})
+            if tid in TODO_ASKS:
+                push_todos()  # its ask is gone (MOCK_TODO_ASKS), as the hub's askChanged says
         return True
     if method == "POST" and p.startswith("/api/v1/later/") and p.endswith("/handled"):
         # The Handled button of a question that can wait: the first press takes it out of the queue, a second one is 409.
@@ -3686,6 +3884,46 @@ INTERACTIONS = [
      "tool_name": "ExitPlanMode", "tool_use_id": "toolu_p1",
      "plan": "## 支持 HEIC\n\n1. 用 `sips` 把 HEIC 转成 JPEG，质量 90，保留 EXIF\n2. 转换放到导出前，原文件不动\n3. 已经转过的按内容哈希跳过\n4. 补测试：竖拍、实况照片、没有 EXIF 的图"},
 ]
+
+# MOCK_ASK_LONG=1: Persona's main conversation waits on an ask_user card taller than a phone's dock (#3112): two
+# questions, the first with eight options that have descriptions, so the card has to scroll for the last ones.
+if os.environ.get("MOCK_ASK_LONG") == "1":
+    INTERACTIONS.append({
+        "id": "ix_ask_long", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+        "kind": "question", "created_at": ago(minutes=1), "expires_at": later(minutes=29), "tool_name": "ask_user",
+        "questions": [
+            {"question": "这周先处理哪件事？", "header": "下一步", "multi_select": False, "options": [
+                {"label": "选项 %d" % n, "description": "第 %d 件事的说明：要多长时间、会碰到谁、做完之后接着做什么" % n}
+                for n in range(1, 9)]},
+            {"question": "整理完发给谁？", "header": "发送", "multi_select": True, "options": [
+                {"label": "组里"}, {"label": "老板"}, {"label": "只给我"}]}]})
+# A very long `python3 -c …` script for a Feishu permission card (MOCK_ASK_LONG=perm|agent): taller than the dock on
+# every width, so its buttons have to stay reachable.
+def _long_lark_cmd(verb):
+    return "python3 -c \"import json, subprocess\n" + "".join(
+        "r%d = subprocess.run(['lark-cli', 'im', 'messages', '%s', '--chat-id', 'oc_example_%d', '--page-size', '50'], capture_output=True, text=True)\nprint(json.dumps(json.loads(r%d.stdout)['items'][:5], ensure_ascii=False, indent=2))\n" % (n, verb, n, n)
+        for n in range(1, 13)) + "\""
+
+
+def _long_lark_card(ix_id, machine, session, title, tool, verb, minutes, **extra):
+    cmd = _long_lark_cmd(verb)
+    return {"id": ix_id, "machine_id": machine, "session_id": session, "session_title": title, "kind": "permission",
+            "created_at": ago(minutes=minutes), "expires_at": later(minutes=29), "tool_name": tool, "summary": cmd,
+            "tool_input": {"command": cmd}, **extra}
+
+
+# MOCK_ASK_LONG=perm: the main conversation waits on a long Feishu permission card instead.
+if os.environ.get("MOCK_ASK_LONG") == "perm":
+    INTERACTIONS.append(_long_lark_card("ix_perm_long", "server", ASK1, "Persona", "mcp__lark__run", "list", 1))
+# MOCK_ASK_LONG=agent: two long Feishu permission cards on an agent's chat (the tests session on the MacBook) and no
+# other card there, whose cards a phone and a side panel fold under the composer (PendingCards): the first open, the
+# second behind "1 more".
+if os.environ.get("MOCK_ASK_LONG") == "agent":
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["session_id"] != TESTS]
+    for _ix_id, _tool, _verb, _minutes in (("ix_perm_long_agent", "mcp__lark__run", "list", 2),
+                                           ("ix_perm_long_agent_2", "mcp__lark__send", "send", 1)):
+        INTERACTIONS.append(_long_lark_card(_ix_id, "macbook", TESTS, "补齐网络层的单元测试", _tool, _verb, _minutes,
+                                            cwd="/Users/me/code/weather"))
 
 if os.environ.get("MOCK_SETTINGS_INPUT"):
     INTERACTIONS.append({
@@ -4051,6 +4289,8 @@ MOCK_INTERACTIONS = INTERACTIONS + [
      "tool_name": "Bash", "tool_use_id": "toolu_check",
      "tool_input": {"command": "python3 -m unittest discover", "description": "验证格式转换与元数据保留"}},
 ]
+if os.environ.get("MOCK_ASK_LONG") == "agent":  # only the two long cards on the tests session (see above)
+    MOCK_INTERACTIONS = [x for x in MOCK_INTERACTIONS if x["session_id"] != TESTS or x["id"].startswith("ix_perm_long_agent")]
 # MOCK_SCRIPT_ASK=1: a card on no session (#4059), as `personad ask` run outside herdr sends it (session_id empty).
 if os.environ.get("MOCK_SCRIPT_ASK") == "1":
     MOCK_INTERACTIONS.insert(0, {"id": "ix_script_ask", "machine_id": "macbook", "session_id": "",
@@ -4499,11 +4739,18 @@ def node_action(h, p, body):
         tab = {"w1:p2": "w1:t2", "w1:p3": "w1:t2"}.get(src, "w1:t1" if ws == "w1" else ws + ":t1")
         SPLIT_PANES[mid].append({"pane": "%s:p%d" % (ws, n), "terminal": "pane:%s:p%d" % (ws, n), "tab_id": tab, "workspace_id": ws, "title": "zsh", "cwd": "/home/me/persona"})
     elif area == "panes" and verb == "git":
+        # as the hub answers a node's coded refusal (#1888): a 409 in the request's language, the node's words as detail
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import readiness_mock  # the hub's own catalogs (server/internal/i18n)
+        lang = readiness_mock.lang_of(h.headers.get("Accept-Language", ""))
+        def refuse(code, words):
+            return h.send_json({"error": readiness_mock.t(lang, "rpc-errors." + code, reason=words), "code": code, "delivered": "none", "detail": words}, 409)
         if body.get("workspace_id") == "w2" or str(body.get("pane", "")).startswith("w2:"):
-            return h.send_json({"error": "不是 Git 仓库"}, 400)
+            return refuse("not_a_repository", "the folder is not in a Git repository")
         if body.get("op") == "push":
-            return h.send_json({"error": "推送失败（不会强制推送）：git push: ! [rejected] main -> main (fetch first)"}, 409)
-        return h.send_json({"op": body.get("op"), "message": "已是最新" if body.get("op") == "pull" else "已获取远端更新"})
+            return refuse("push_rejected", "git push: ! [rejected] main -> main (fetch first) (nothing was forced)")
+        outcome, message = ("up_to_date", "Already up to date") if body.get("op") == "pull" else ("fetched", "Fetched")
+        return h.send_json({"op": body.get("op"), "outcome": outcome, "message": message})
     elif area == "panes" and verb == "agent":
         time.sleep(0.6)
     return h.send_json({})
@@ -5187,6 +5434,83 @@ def set_policy(body, pid=None, manager=None):
 def inbox_version(x):
     """What the item holds now (the hub's inboxVersion): it moves when something new comes in."""
     return hashlib.sha256((x["id"] + "\0" + str(x.get("updated_at")) + str(x.get("count"))).encode()).hexdigest()[:16]
+
+
+# Done items older than the list's days, for GET /api/v1/inbox/done (#2200, the inbox's Done by time #2059): made-up
+# Lark chats, mail and GitHub notifications done 4 to 60 days ago, a few a day. MOCK_INBOX_HISTORY=none: a hub without
+# the history (404), as before #2200; =busy: 36 a day from 3 to 60 days ago, as a busy inbox has (Done's day counts, #2969).
+def _history():
+    out = []
+    kinds = [("lark", "dm", "飞书", "示例同事", "周报我交啦"), ("mail", "mail", "个人邮箱", "示例商城", "订单已签收"),
+             ("lark", "group", "飞书", "项目群", "版本号改好了"), ("github", "review_requested", "GitHub", "Alex", "依赖升级已合并")]
+    busy = os.environ.get("MOCK_INBOX_HISTORY") == "busy"
+    for day in range(3, 61) if busy else list(range(4, 8)) + [9, 12, 16, 21, 27, 33, 41, 52, 60]:
+        for i in range(36 if busy else 2 if day > 8 else 3):
+            src, kind, name, sender, preview = kinds[(day + i) % len(kinds)]
+            x = {"id": f"hist:{day}:{i}", "source": src, "kind": kind, "account": "acc1" if src == "mail" else src, "account_name": name,
+                 "title": f"{sender} · {preview}", "sender": sender, "preview": preview, "count": 1, "started_at": ago(days=day, hours=3 + i % 20),
+                 "updated_at": ago(days=day, hours=2 + i % 20), "tier": "fyi", "summary": preview, "done_at": ago(days=day, hours=1 + i % 20, minutes=i), "done_by": "user"}
+            if src == "github":
+                x["connector"] = {"thread": f"example-org/example-repo#{day}", "label": "PR", "url": "https://example.com/pr", "can_reply": False}
+            out.append(x)
+    return out
+
+
+INBOX_HISTORY = [] if os.environ.get("MOCK_INBOX_HISTORY") == "none" else _history()
+
+
+# MOCK_INBOX_HISTORY=busy also has the list's own done items of its last days, as a busy hub lists them (the list holds
+# the done items of 3 days): 2 within the hour (Done's "Just now"), 5 earlier today, 6 yesterday, 4 the day before.
+if os.environ.get("MOCK_INBOX_HISTORY") == "busy":
+    for (_day, _n, _h0) in ((0, 2, 0), (0, 5, 2), (1, 6, 1), (2, 4, 1)):
+        for _i in range(_n):
+            _x = dict(INBOX_HISTORY[_i % 4], id=f"recent:{_day}:{_h0}:{_i}")
+            _done = ago(days=_day, hours=_h0 + (_i % 6 if _h0 else 0), minutes=10 + _i)
+            _x.update(done_at=_done, updated_at=_done, started_at=_done)
+            INBOX.append(_x)
+
+
+def _instant(s):
+    """An RFC 3339 time as an instant: the apps send their own forms ("…Z", "….000Z", "+08:00"), so never compare text."""
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _done_items(all_sources):
+    return [x for x in INBOX + INBOX_HISTORY if x.get("done_at") and (all_sources or "connector" not in x)]
+
+
+def inbox_done(query):
+    """GET /api/v1/inbox/done: done items newest first, keyset-paged on (done_at, id), the list's and the history's.
+    A before without before_id is a moment: the items done before it (a jump to a day, #2967)."""
+    all_sources = (query.get("sources") or [""])[0] == "all"
+    before, before_id = (query.get("before") or [""])[0], (query.get("before_id") or [""])[0]
+    limit = max(1, min(200, int((query.get("limit") or ["50"])[0] or 50)))
+    done = _done_items(all_sources)
+    done.sort(key=lambda x: (_instant(x["done_at"]), x["id"]), reverse=True)
+    if before:
+        done = [x for x in done if (_instant(x["done_at"]), x["id"]) < (_instant(before), before_id)]
+    page = done[:limit]
+    body = {"items": [{k: v for k, v in x.items() if k != "context"} for x in page]}
+    if len(page) == limit and len(done) > limit:
+        body["next"] = {"before": page[-1]["done_at"], "before_id": page[-1]["id"]}
+    return body
+
+
+def inbox_done_days(query):
+    """GET /api/v1/inbox/done/days?tz=: the done items per calendar day in tz, newest day first (#2967); None: a bad zone."""
+    from zoneinfo import ZoneInfo
+    tz = (query.get("tz") or [""])[0]
+    try:
+        zone = ZoneInfo(tz) if tz and tz != "Local" else None
+    except Exception:
+        zone = None
+    if zone is None:
+        return None
+    counts = {}
+    for x in _done_items((query.get("sources") or [""])[0] == "all"):
+        day = _instant(x["done_at"]).astimezone(zone).strftime("%Y-%m-%d")
+        counts[day] = counts.get(day, 0) + 1
+    return {"tz": tz, "days": [{"day": d, "count": counts[d]} for d in sorted(counts, reverse=True)]}
 
 
 def inbox_for(query):
@@ -6109,6 +6433,17 @@ if MOCK_INBOX_EVENTS:
     if MOCK_INBOX_EVENTS == "legacy":
         for _x in INBOX:
             for _k in EVENT_FIELDS: _x.pop(_k, None)
+    # MOCK_EVENT_MUTES=1: some events carry their mute options, so Hand to AI remembers per source (#2121): the two system
+    # notifications (a build failure, a room change) come from one sender, so handing one off preselects that target for the other.
+    # lark:oc_demo1:100 keeps none: InboxHandOffBarTests checks the bar's own last target on it.
+    if os.environ.get("MOCK_EVENT_MUTES") == "1":
+        _event_mutes = {
+            "lark:oc_demo2:200": [{"tag": "chat", "value": "oc_demo2", "name": "发布群"}],
+            "mail:a1:ci:77": [{"tag": "sender", "value": "noreply@example.com", "name": "系统通知"}],
+            "mail:a1:notice:110": [{"tag": "sender", "value": "noreply@example.com", "name": "系统通知"}],
+        }
+        for _x in INBOX:
+            if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
 def _chain_add(x, kind, text, **more):
@@ -7640,6 +7975,15 @@ if os.environ.get("MOCK_WAKES") == "1":
     _k += tool("Bash", {"command": "git commit -am 'lint'"}, "[main 1a2b3c] lint", 7)
     _k.append(it("assistant", "text", 6, text="lint 有两处要改，已经改好提交了。"))
     ITEMS[WAKES] = _k
+    # A wake whose continuation has tools but no new answer yet: the previous answer stays visible until it streams.
+    if os.environ.get("MOCK_WAKE_PENDING") == "1":
+        _pending = [it("user", "text", 40, text="发版前把测试跑一下，好了告诉我")]
+        _pending += tool("Bash", {"command": "xcodebuild test", "description": "跑测试", "run_in_background": True},
+                         "Command running in background with ID: bkt. Output is being written to: /tmp/claude/bkt.output", 39)
+        _pending.append(it("assistant", "text", 38, text="测试已经在后台跑了，结束后我告诉你。"))
+        _pending.append(wake(30, "completed", "跑测试", "bkt", "后台命令完成 · 跑测试"))
+        _pending += tool("Read", {"file_path": "/tmp/claude/bkt.output"}, "Test Suite 'All tests' passed", 29)
+        ITEMS[WAKES] = _pending
     # Alignment regression: short and overflowing Monitor events, each followed by a short answer.
     if os.environ.get("MOCK_WAKE_ALIGNMENT") == "1":
         _k = [it("user", "text", 40, text="检查后台上传的进展"),
@@ -8086,6 +8430,80 @@ if os.environ.get("MOCK_WORK_GROUPS") == "1":
     mock_work_groups()
 
 
+# MOCK_EDIT_DIFF=1 (#2915): one finished turn whose edits read as real diffs: an Edit that changes a word in two lines
+# of a block (context between and around them), a MultiEdit of two pieces, a Write (all additions) and an Edit of a
+# 56-line switch that changes its first and last lines (the unchanged middle folds; past 40 lines, Show All). The first
+# three also have a chat of their own (…2916, …2917, …2918), so each diff ends its chat and a screenshot shows it without
+# scrolling. Made-up code.
+EDITDIFF = "a1f3c2d4-0000-4000-8000-0000000c2915"
+EDITDIFF_ONE = {"Edit": "a1f3c2d4-0000-4000-8000-0000000c2916", "MultiEdit": "a1f3c2d4-0000-4000-8000-0000000c2917",
+                "Write": "a1f3c2d4-0000-4000-8000-0000000c2918"}
+EDITDIFF_SYMBOLS = ["sun.max", "sun.min", "cloud.sun", "cloud", "smoke", "sun.haze", "cloud.fog", "cloud.drizzle", "cloud.rain",
+                    "cloud.heavyrain", "cloud.sleet", "cloud.hail", "cloud.snow", "snowflake", "wind.snow", "cloud.bolt",
+                    "cloud.bolt.rain", "tornado", "hurricane", "tropicalstorm", "thermometer.sun", "thermometer.snowflake",
+                    "wind", "humidity", "sunrise", "sunset", "moon", "moon.stars", "cloud.moon", "cloud.moon.rain",
+                    "sparkles", "aqi.low", "aqi.medium", "aqi.high", "sun.dust", "moon.haze", "cloud.sun.rain",
+                    "cloud.sun.bolt", "cloud.moon.bolt", "rainbow", "drop", "drop.triangle", "flame", "leaf",
+                    "allergens", "umbrella", "snowflake.circle", "wind.circle"]
+EDITDIFF_W = "/Users/me/code/weather/Widget"
+
+
+def mock_edit_diff():
+    def switch(doc, last):
+        cases = ['        case %d: "%s"' % (n, s) for n, s in enumerate(EDITDIFF_SYMBOLS)]
+        return "\n".join(["/// " + doc, "enum ConditionSymbol {", "    static func name(for code: Int) -> String {",
+                          "        switch code {"] + cases + ['        default: "%s"' % last, "        }", "    }", "}"])
+
+    def entry(prefix, temperature):  # short lines: the changed words show without scrolling sideways
+        return ("func makeEntry(at date: Date) -> Entry {\n    let hours = hourly.prefix(%d)\n    let rain = hours.map(\\.chance)\n"
+                "    let temp = current.%s\n    return Entry(date: date, temp: temp, rain: rain)\n}") % (prefix, temperature)
+
+    calls = {
+        "Edit": lambda t: tool("Edit", {"file_path": EDITDIFF_W + "/Provider.swift", "old_string": entry(6, "temperature"),
+                                        "new_string": entry(12, "feelsLike")}, "ok", t),
+        "MultiEdit": lambda t: tool("MultiEdit", {"file_path": EDITDIFF_W + "/RainLevel.swift", "edits": [
+            {"old_string": "enum WidgetSettings {\n    static let refreshMinutes = 30\n}",
+             "new_string": "enum WidgetSettings {\n    static let refreshMinutes = 15\n    static let dryBelow = 0.2\n}"},
+            {"old_string": "    init(chance: Double) {\n        if chance < 0.2 { self = .dry; return }\n        self = chance < 0.6 ? .light : .heavy\n    }",
+             "new_string": "    init(chance: Double) {\n        if chance < WidgetSettings.dryBelow { self = .dry; return }\n        self = chance < 0.6 ? .light : .heavy\n    }"}]},
+            "ok", t),
+        "Write": lambda t: tool("Write", {"file_path": "/Users/me/code/weather/WidgetTests/RainLevelTests.swift", "content": "\n".join([
+            "import Testing", "@testable import WeatherWidget", "", "struct RainLevelTests {",
+            "    @Test func belowTheThresholdIsDry() {", "        #expect(RainLevel(chance: 0.1) == .dry)", "    }", "",
+            "    @Test func aboveItIsLightThenHeavy() {", "        #expect(RainLevel(chance: 0.3) == .light)",
+            "        #expect(RainLevel(chance: 0.8) == .heavy)", "    }", "}"]) + "\n"}, "ok", t),
+    }
+    asks = {"Edit": ("Show 12 hours of rain and the feels-like temperature", "12 hours of rain, and the feels-like temperature."),
+            "MultiEdit": ("Make the dry threshold a setting", "The dry threshold is `WidgetSettings.dryBelow` now."),
+            "Write": ("Add tests for the rain levels", "Two tests for the rain levels.")}
+
+    _d = [it("user", "text", 30, text="Show 12 hours of rain in the widget, make the dry threshold a setting, and test it")]
+    _d.append(it("assistant", "thinking", 29.9, text="The entry builder takes 6 hours; the threshold is a literal in RainLevel."))
+    _d += tool("Read", {"file_path": EDITDIFF_W + "/Provider.swift"}, "func makeEntry(for date: Date) -> WeatherEntry { … }", 29.8)
+    _d += calls["Edit"](29.7) + calls["MultiEdit"](29.6) + calls["Write"](29.5)
+    _d += tool("Edit", {"file_path": EDITDIFF_W + "/ConditionSymbol.swift",
+                        "old_string": switch("One symbol per API code.", "cloud"),
+                        "new_string": switch("One symbol per weather code.", "questionmark.circle")},
+               "ok", 29.4)
+    _d += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -quiet", "description": "Run the widget tests"},
+               "Test Suite 'All tests' passed.\n     Executed 50 tests, with 0 failures (0 unexpected) in 6.8 seconds", 29.3)
+    _d.append(it("assistant", "text", 29, text="Done: the widget shows 12 hours of rain and the feels-like temperature, the dry "
+                                               "threshold is `WidgetSettings.dryBelow`, unknown codes get a question mark, and the "
+                                               "two new tests pass with the other 48."))
+    ITEMS[EDITDIFF] = _d
+    SESSIONS.append(sess("macbook", EDITDIFF, "Rain hours and the dry threshold", "/Users/me/code/weather", "done", "read", "weather", 1,
+                         "diffs", 10, 29, "Done: the widget shows 12 hours of rain."))
+    for n, (name, sid) in enumerate(EDITDIFF_ONE.items()):
+        ask, done = asks[name]
+        ITEMS[sid] = [it("user", "text", 28 - n, text=ask)] + calls[name](27.9 - n) + [it("assistant", "text", 27.8 - n, text=done)]
+        SESSIONS.append(sess("macbook", sid, ask, "/Users/me/code/weather", "done", "read", "weather", 1, "diff-" + name.lower(),
+                             11 + n, 27.8 - n, done))
+
+
+if os.environ.get("MOCK_EDIT_DIFF") == "1":
+    mock_edit_diff()
+
+
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
@@ -8406,12 +8824,48 @@ if os.environ.get("MOCK_CHAT_READ") == "1":
 # MOCK_SELECT_TEXT=1: "Select text" (#3189, SelectTextTests). Your message is plain text with Markdown-looking marks that must
 # stay; the reply has a fence inside a longer fence, a formula with `*`, indented code, a rule and a tab-indented item.
 SELECT_TEXT = "a1f3c2d4-0000-4000-8000-0000005e1ec7"
+SELECT_RICH = "a1f3c2d4-0000-4000-8000-0000005e1ec8"
+SELECT_RICH_REPLY = """## 迁移计划
+
+先把三个页面的数据请求合到一起，再换渲染方式。
+
+| 页面 | 现在 | 改后 | 风险 |
+| --- | --- | --- | --- |
+| 首页 | 4 次请求 | 1 次 | 低 |
+| 价格页 | 3 次请求 | 1 次 | 中：缓存键要改 |
+| 文档页 | 6 次请求 | 2 次 | 低 |
+
+步骤：
+1. 合并首页的请求，跑一遍回归测试
+2. 价格页换成新的缓存键
+3. 文档页最后做
+
+改动大概是这样：
+
+```ts
+export async function load(page: string) {
+  const data = await fetchAll(page)
+  return render(data)
+}
+```
+
+> 价格页的缓存键改了以后，旧缓存要等一天才过期。
+
+做完我会再跑一次首屏时间对比。
+
+**有变化再告诉你**。"""
 if os.environ.get("MOCK_SELECT_TEXT") == "1":
     SESSIONS.append(sess("macbook", SELECT_TEXT, "选择文本", "/Users/me/code/weather", "done", "read", "weather", 1, "select", 2, 1, "Yes"))
     ITEMS[SELECT_TEXT] = [
         it("user", "text", 3, text="Python 里 __init__.py 的 2*3*4 是不是写错了？\n# 不是标题\n- 也不是列表"),
         it("assistant", "text", 2, text="Yes，`2*3*4` 没错，是 **24**。例子：\n\n````md\n```swift\nlet a = x*y*z\n```\n````\n\n"
                                         "公式 $x*y*z$ 照原样。\n\n    indented *code*\n\n* * *\n\n- 一\n\t- tab item"),
+    ]
+    # A long reply with a heading, a table, a list, code and a quote (#603, selecting a lifted message's words in place).
+    SESSIONS.append(sess("macbook", SELECT_RICH, "选择文本 · 长回复", "/Users/me/code/shop", "done", "read", "shop", 1, "select", 2, 1, "迁移计划"))
+    ITEMS[SELECT_RICH] = [
+        it("user", "text", 3, text="三个页面的请求怎么合？"),
+        it("assistant", "text", 2, text=SELECT_RICH_REPLY),
     ]
 
 # MOCK_PORTS=1: an agent running a dev server (docs/operations/ports.md): its session lists the port, its reply links it (and a
@@ -8651,7 +9105,16 @@ def paged_sessions(query):
     Changed fixtures expire cursors/revisions instead of retaining a delta journal.
     """
     rows = out_by_machine(all_sessions())
-    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not query:
+    # ?manager=<id> (feature sessions_manager): that manager's computers' sessions only, in the whole list, the pages
+    # and the counts; one the roster lacks is 404 no_manager. A hub from before the roster (MOCK_MANAGERS=0) ignores it.
+    if "manager" in query and os.environ.get("MOCK_MANAGERS") != "0":
+        named = query["manager"][0].strip()
+        if len(query["manager"]) != 1:  # (an empty value never gets here: parse_qs drops it; the hub answers 400)
+            return {"error": "manager must have exactly one nonempty value", "code": "invalid_query"}, 400
+        if not any(m["id"] == named and not m.get("installing") for m in MANAGERS["list"]):
+            return {"error": "no such manager: %r" % named, "code": "no_manager"}, 404
+        rows = [s for s in rows if s.get("manager") == named]
+    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
     fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
@@ -9393,7 +9856,10 @@ def ext_look_personas():
 # POST /api/v1/looks/uploads makes a package in a temporary directory, as the hub does in personas/u-<hex>; the mock
 # keeps the image as it came for every size and state (the hub scales it and draws the states). DELETE takes it away.
 # MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404); =demo: one uploaded look at start.
+# MOCK_LOOK_UPLOAD_FILES=fail: the looks POST makes are listed but their files answer 503, so the apps' "made but not
+# downloaded" path (Try Again) can be seen.
 UPLOADED_LOOKS = tempfile.mkdtemp(prefix="mock-look-uploads-")
+MADE_LOOKS = set()
 PERSONA_ROOTS.append(UPLOADED_LOOKS)
 UPLOAD_STATES = ("idle", "thinking", "working", "needs_you", "offline")
 
@@ -9468,6 +9934,7 @@ def look_uploads_route(handler, method, p, raw):
             handler.send_json({"error": "这个文件不是 Persona 能读的图片，请用 PNG、JPEG、WebP 或 GIF", "code": "not_image"}, 400)
             return True
         lid = make_uploaded_look(name, image, (body.get("subtitle") or "").strip())
+        MADE_LOOKS.add(lid)
         looks = looks_list()
         out = {"look": next(l for l in looks if l["id"] == lid)}
         _push_live({"type": "personas"})
@@ -10161,9 +10628,21 @@ def mock_size(v):
 GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # MOCK_PERSONAL_AGENTS=1 (#138): a few personal agent conversations, and Remove from list (POST …/hide, …/unhide,
 # GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
-# back. Off: none, as on a hub without the Lark extension.
+# back. Off: none, as on a hub without the Lark extension. =unconfigured (#2613): no conversations, and the only source
+# reports why, as an extension still waiting for its settings does.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
+PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" else "configured" if PERSONAL_AGENTS else "none", "delay": 0.0}
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
+
+def personal_sources():
+    state = PERSONAL_STATE["state"]
+    if state == "none": return []
+    source = {"source": "lark-bridge", "enabled": state not in ("missing", "disabled"),
+              "accounts": [{"accountId": "example", "provider": "muse"}] if state in ("configured", "empty") else []}
+    if state in ("missing", "disabled", "no_accounts"): source["setup"] = state
+    if state == "unconfigured": source["error"] = "Example extension isn't set up yet: fill in its address in the extension's settings."
+    return [source]
+
 # #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
 # (POST /api/v1/assistant/conversations) answer 502 with that code (default assistant_in_doubt, delivered unknown), and
 # every start, failed or not, first takes `delay` seconds (to see a retry spin). n=0&delay=0 puts it back.
@@ -10172,13 +10651,15 @@ def personal_rows():
     now = int(time.time() * 1000)
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
             ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
+    if os.environ.get("MOCK_PERSONAL_UPGRADE"): rows[0] = ("muse", "Upgrade preference fixture", 0.1, 2)
     return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
              "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
             for i, (prov, title, hours, unread) in enumerate(rows)]
 def personal_listed(hidden):
-    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_AGENTS else []
+    return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] == "configured" else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made. GET
-# /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files);
+# /mock/git-write?fail=<code>[&files=a,b] makes the next write refuse with that code (git_conflict lists the files;
+# git_stash_conflicted also leaves them unmerged in the status, as a stash apply that stopped on conflicts does);
 # ?reset=1 starts over; ?gone=1 puts the branch on an upstream deleted on the remote (#1884). The branch's pull request: ?pr=none|review|ready|auto sets it, ?pr_fail=no_gh|not_signed_in makes
 # reading it refuse; POST git/pr opens one, git/pr/merge merges it or sets it to merge when ready.
 def git_write_fresh():
@@ -10270,7 +10751,12 @@ def git_write(h, p, body):
         words = {"git_conflict": "error: Your local changes to the following files would be overwritten by checkout:\n\t" + "\n\t".join(files) +
                                  "\nPlease commit your changes or stash them before you switch branches.\nAborting",
                  "git_push_rejected": " ! [rejected]        widget-hourly -> widget-hourly (fetch first)\nerror: failed to push some refs",
-                 "git_hook_failed": "swiftlint: 2 violations in WeatherWidget/Provider.swift\n  12:5 Line Length Violation\n  30:1 Trailing Whitespace"}.get(code, code)
+                 "git_hook_failed": "swiftlint: 2 violations in WeatherWidget/Provider.swift\n  12:5 Line Length Violation\n  30:1 Trailing Whitespace",
+                 "git_stash_conflicted": "".join("Auto-merging %s\nCONFLICT (content): Merge conflict in %s\n" % (f, f) for f in files) +
+                                         "The stash entry is kept in case you need it again."}.get(code, code)
+        if code == "git_stash_conflicted":
+            w["files"] = [f for f in w["files"] if f["path"] not in files] + [
+                {"path": f, "index": "U", "worktree": "U", "added": 0, "deleted": 0, "binary": False} for f in files]
         return h.send_json({"error": "git %s: %s" % (op, words), "code": code, **({"files": files} if files else {})}, 409)
     out = {}
     if op == "stage":
@@ -10774,10 +11260,26 @@ def mock_denied(p, q):
 
 
 _mock_files_tree = mock_files
+# MOCK_GIT_READ_FAIL=1 (#1889): the first Git status read answers, every later status read and every page of older
+# commits fails as the hub answers for a computer that went offline (503, its own sentence), to see the Git tab say so;
+# GET /mock/git-read?reset=1 lets the next status read answer again.
+GIT_READ_FAIL = {"reads": 0}
+
+
+def mock_git_read_fail(p):
+    if not os.environ.get("MOCK_GIT_READ_FAIL") or not p.startswith("/api/v1/machines/"): return None
+    what = "/".join(p.split("/")[5:])
+    if what == "git/status":
+        GIT_READ_FAIL["reads"] += 1
+        if GIT_READ_FAIL["reads"] == 1: return None
+    elif what != "git/log":
+        return None
+    return {"error": "This computer is offline. Make sure it’s on and connected to the internet and that Persona Link is running, then try again.",
+            "code": "node_unreachable", "delivered": "none"}, 503
 
 
 def mock_files(p, q):
-    answer = mock_denied(p, q) or mock_above_home(p, q) or _mock_files_tree(p, q)
+    answer = mock_git_read_fail(p) or mock_denied(p, q) or mock_above_home(p, q) or _mock_files_tree(p, q)
     if answer and TIME_OFFSET and answer[1] == 200: answer = (mock_offset_times(answer[0]), 200)
     return answer
 
@@ -10911,7 +11413,7 @@ if MOCK_MESSAGING:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import lark_messaging
 
-# MOCK_SENT=1|empty|nodb|forbidden|old (#5278, scripts/mock/sent_ledger_mock.py): GET /api/v1/connectors/sent, the ledger of
+# MOCK_SENT=1|empty|nodb|forbidden|old (#5278, scripts/mock/sent_ledger_mock.py): GET /api/v1/connectors/sent and POST …/{id}/recall, the ledger of
 # what was sent as the user (Settings › Sent as you).
 _sent = None
 if os.environ.get("MOCK_SENT"):
@@ -11505,6 +12007,9 @@ def bump(what, session=None):
 # /mock/say?drop=1: the reply is written and the session list moves, but its push never reaches the page (#3139).
 # /mock/say?preset=markdown: a long reply whose blocks change height as they render (a code block, a table, a list),
 # for StreamingScrollTests: streamed at the hub's pace it shows whether the chat holds still while it grows.
+# /mock/say?preset=repair: what a streamed reply leaves half-written (#2916): a code fence in a numbered list's item, a
+# table arriving row by row, an open **bold** with half a link in it, a ```mermaid fence. &upto=<n> stops the stream after
+# its first n characters and leaves it open (no transcript line), so each moment can be photographed for as long as needed.
 SAY_PRESETS = {
     "markdown": """先说结论：三台机器上的服务都能拿到凭据，但有两处要改配置。下面按顺序列出来。
 
@@ -11550,6 +12055,32 @@ service:
 3. 两边都改完后，我再跑一遍检查，把结果发你。
 
 有问题随时说。""",
+    "repair": """Here is what I found in the release checklist. Two steps:
+
+1. Build the example service with the release flags:
+
+   ```sh
+   make build TARGET=example-service
+   ./scripts/check.sh --strict
+   ```
+
+2. Compare the timings with last week's run:
+
+| Step | Last week | This week |
+| --- | --- | --- |
+| Build | 42 s | 31 s |
+| Tests | 18 s | 12 s |
+| Upload | 9 s | 9 s |
+
+The upload is **no longer the slow step; see [the build notes](https://example.com/build-notes)** for the numbers.
+
+```mermaid
+graph TD
+  A[Build] --> B[Tests]
+  B --> C[Upload]
+```
+
+Tell me if you want the upload sped up too.""",
 }
 
 
@@ -11713,10 +12244,11 @@ def narrate(step, words, answer, steps=8, ms=250, line=True, ask="帮我把网�
     return {"error": "step is start or finish"}
 
 
-def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
+def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False, upto=0):
     """A reply (after `user`'s message, if given) in every conversation an app has open (/mock/say). `stream`: the
     message first, then the reply arrives as growing `delta` text over about 3 s, like the Persona assistant's. `drop`: the
-    transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139)."""
+    transcript grows and the session list says so (updated_at), but the items push is lost: the page has to notice (#3139).
+    `upto` (with `stream`): the reply streams only to its first `upto` characters and stays open there, unwritten."""
     import time
     for send, subscribed in list(LIVE):
         for sid in list(subscribed):
@@ -11731,9 +12263,12 @@ def say(text, user=None, stream=False, steps=10, ms=300, late=0, drop=False):
                     ITEMS[sid] = ITEMS[sid] + asked
                     send({"type": "items", "machine_id": mid, "session_id": sid, "items": asked, **span(asked, before)})
                     user = None
+                shown = text[:upto] if upto > 0 else text
                 for k in range(1, steps + 1):
                     time.sleep(ms / 1000)
-                    send({"type": "delta", "machine_id": mid, "session_id": sid, "text": text[:len(text) * k // steps]})
+                    send({"type": "delta", "machine_id": mid, "session_id": sid, "text": shown[:len(shown) * k // steps]})
+                if upto > 0:
+                    continue  # still being written: a later /mock/say carries it on (or writes it)
                 if late:
                     # As a real hub can: the turn's end clears the stream before the transcript line is read (&late=ms).
                     send({"type": "delta", "machine_id": mid, "session_id": sid, "text": ""})
@@ -11873,6 +12408,67 @@ if MOCK_COMPUTER:
 # seconds a step); an open setup is done a few steps later. Mac Studio is a Mac it is not on for, not installed.
 MOCK_BROWSER = os.environ.get("MOCK_BROWSER", "")
 
+# MOCK_CLIPBOARD=off|on|image (#3064, docs/operations/clipboard.md): the hub shares clipboards. MacBook can, with its switch
+# off / on; with "image" its clipboard holds a picture, else text. Mac Studio can, switched off; the Linux machines have no
+# desktop session (unsupported, reason_code no_display). GET / PUT /api/v1/machines/{mid}/clipboard, GET / PUT
+# …/clipboard/settings, with the hub's errors: 403 clipboard_disabled, 409 clipboard_unsupported, 503 offline, 413
+# too_large (body over 10 MB, text over 4 MiB, an image over 7 MiB), 400 clipboard_bad_image / bad_request, and with
+# MOCK_CLIPBOARD_FAIL=1 502 clipboard_failed. What the phone sends becomes the clipboard; a switch change pushes machines.
+MOCK_CLIPBOARD = os.environ.get("MOCK_CLIPBOARD", "")
+CLIPBOARD = {"macbook": {"kind": "text", "text": "https://example.com/docs/release-notes\n发布说明草稿：本周修复了剪贴板同步的两个问题。"}}
+if MOCK_CLIPBOARD:
+    for _m in MACHINES:
+        if _m["os"] == "linux":
+            _m["clipboard"] = {"supported": False, "enabled": False, "reason": "这台电脑没有桌面会话，所以没有剪贴板。",
+                               "reason_code": "no_display"}
+        else:
+            _m["clipboard"] = {"supported": True, "enabled": _m["id"] == "macbook" and MOCK_CLIPBOARD in ("on", "image")}
+    if MOCK_CLIPBOARD == "image":
+        CLIPBOARD["macbook"] = {"kind": "image", "image": {"mime": "image/png", "data": base64.b64encode(_page_png(480, 300)).decode()}}
+
+
+def clipboard_call(method, path, body):
+    """(answer, status) for …/clipboard and …/clipboard/settings, as the hub answers them; status 204: no body."""
+    mid = path.split("/")[4]
+    machine = next((m for m in MACHINES if m["id"] == mid), None)
+    if machine is None: return {"error": "找不到机器", "code": "not_found"}, 404
+    state = machine.get("clipboard")
+    if state is None: return {"error": "not found", "code": "not_found"}, 404
+    if path.endswith("/settings"):
+        if method == "GET": return state, 200
+        if method != "PUT": return {"error": "method not allowed"}, 405
+        enabled = json.loads(body or b"{}").get("enabled")
+        if not isinstance(enabled, bool): return {"error": "需要 enabled", "code": "bad_request"}, 400
+        state["enabled"] = enabled  # can change while offline or unsupported, as on the hub
+        for send, _ in list(LIVE):
+            try: send({"type": "machines", "machines": out_machines()})
+            except Exception: pass
+        return state, 200
+    if body and len(body) > 10_000_000: return {"error": "太大了", "code": "too_large"}, 413
+    if not state["enabled"]: return {"error": "这台电脑没有打开剪贴板共享", "code": "clipboard_disabled"}, 403
+    if not state["supported"]: return {"error": state.get("reason") or "不支持剪贴板", "code": "clipboard_unsupported"}, 409
+    if not machine.get("online"): return {"error": "电脑不在线", "code": "offline"}, 503
+    if os.environ.get("MOCK_CLIPBOARD_FAIL"): return {"error": "剪贴板正被别的程序占用", "code": "clipboard_failed"}, 502
+    if method == "GET": return CLIPBOARD.get(mid, {"kind": "empty"}), 200
+    if method == "PUT":
+        sent = json.loads(body or b"{}")
+        text, image = sent.get("text"), sent.get("image")
+        if (text is None) == (image is None): return {"error": "需要 text 或 image（只能一个）", "code": "bad_request"}, 400
+        if isinstance(text, str):
+            if len(text.encode()) > 4 << 20: return {"error": "文字太长了", "code": "too_large"}, 413
+            CLIPBOARD[mid] = {"kind": "text", "text": text}
+            return None, 204
+        if not isinstance(image, dict) or image.get("mime") not in ("image/png", "image/jpeg"):
+            return {"error": "只收 PNG 或 JPEG", "code": "clipboard_bad_image"}, 400
+        try: raw = base64.b64decode(image.get("data") or "", validate=True)
+        except Exception: return {"error": "图片不是有效的 base64", "code": "clipboard_bad_image"}, 400
+        if len(raw) > 7 << 20: return {"error": "图片太大了", "code": "too_large"}, 413
+        magic = b"\x89PNG\r\n\x1a\n" if image["mime"] == "image/png" else b"\xff\xd8\xff"
+        if not raw.startswith(magic): return {"error": "图片内容和类型对不上", "code": "clipboard_bad_image"}, 400
+        CLIPBOARD[mid] = {"kind": "image", "image": {"mime": "image/png", "data": image["data"]}}
+        return None, 204
+    return {"error": "method not allowed"}, 405
+
 def mock_usage_windows():
     """GET /api/v1/usage/windows (#2432): two Codex / Claude accounts relative to now; MOCK_USAGE=none has none,
     MOCK_USAGE=stale has the Claude account read two hours ago and out of date (#1906: ultracode's quota line says so)."""
@@ -11885,9 +12481,9 @@ def mock_usage_windows():
         week = (2 * 24 + 3) * 3600
         scoped = {**win("7d", 10080, 100, week), "model": "Fable"}
         return {"accounts": [
-            {"id": "claude-1", "provider": "claude", "name": "work-claude", "plan": "Max", "sampled_at": iso(now - 12), "local": True, "sources": ["Relay"],
+            {"id": "claude-1", "provider": "claude", "name": "work-claude", "plan": "Max", "sampled_at": iso(now - 12), "local": True, "machines": ["MacBook"], "sources": ["Relay"],
              "windows": [win("5h", 300, 86, 55 * 60), win("7d", 10080, 41, week), scoped]},
-            {"id": "codex-1", "provider": "codex", "name": "Codex Pro", "plan": "pro", "sampled_at": iso(now - 190), "local": True,
+            {"id": "codex-1", "provider": "codex", "name": "Codex Pro", "plan": "pro", "sampled_at": iso(now - 190), "local": True, "machines": ["MacBook", "Studio"],
              "windows": [win("5h", 300, 22, 4 * 3600), win("7d", 10080, 63, (3 * 24 + 5) * 3600)]},
             {"id": "codex-3", "provider": "codex", "name": "team-seat-2", "plan": "ChatGPT Plus", "sampled_at": iso(now - 40 * 60), "sources": ["Relay"],
              "windows": [win("5h", 300, 8, 2 * 3600), win("7d", 10080, 31, 4 * 24 * 3600)]},
@@ -12025,7 +12621,7 @@ for _m in MACHINES:
 # engine_hosts / engine_default; the MacBook enables herdr + Herdr App, the Mac Studio herdr + Orca (Paseo found there
 # too); the widget session on the MacBook is live in Herdr App as well (also_open_in). PUT …/engine takes {hosts, default}.
 ENGINE_SETS = os.environ.get("MOCK_ENGINE_SETS") == "1"
-ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "paseo"]
+ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "paseo", "cindy"]
 
 
 def legacy_engine(hosts, default):
@@ -12041,6 +12637,7 @@ if ENGINE_SETS:
         _m["engine"] = legacy_engine(_m["engine_hosts"], _m["engine_default"])
         if _m.get("online"):
             _m["engines"].append({"id": "paseo", "name": "Paseo", "available": _m["id"] == "studio", "version": "0.9"})
+            _m["engines"].append({"id": "cindy", "name": "Cindy", "available": _m["id"] == "studio", "version": "0.1.128"})
             found = [h for h in ENGINE_HOST_IDS if any(e["id"] == h and e["available"] for e in _m["engines"])] or ["herdr"]
             _m["engine_suggested"] = {"hosts": found, "default": found[0]}
     for _s in SESSIONS:
@@ -12353,7 +12950,7 @@ def cua_config(pl):
 
 
 _PLUGIN_VIEW = ["id", "name", "kind", "status", "error", "version", "source", "enabled", "description", "contributes", "needs_setup", "warnings",
-                "auto_upgrade", "auto_upgrade_paused", "upgrade", "upgrade_note", "nodes"]
+                "auto_upgrade", "auto_upgrade_paused", "market", "upgrade", "upgrade_note", "nodes"]
 
 # ---------- MOCK_EXTENSIONS: declarative UI (docs/extensions/extensions.md "Declarative UI") ----------
 # example-gateway draws a page (plugin_page "home") and a section on every launcher's page (launcher_section "panel"),
@@ -12591,6 +13188,8 @@ MARKETS = {
                 "has_token": True, "plugins": 2, "warnings": ["第 3 个扩展：没有 manifest"], "fetched_at": "2026-11-04T05:30:00Z",
                 "added_at": "2026-11-02T08:00:00Z"},
 }
+# Markets removed in this run, by address: adding one again brings back its id.
+_REMOVED_MARKETS = {}
 _NET = lambda hosts: {"key": "network", "title": "访问网络", "detail": hosts + "（hub 暂不拦截别的地址）"}
 CATALOG = [
     {"market": _MARKET_A, "id": "example-gateway", "name": "Example 网关面板", "version": "1.1.0", "description": "在启动器页上显示 Example 网关的余额、Key 和用量。",
@@ -12672,17 +13271,26 @@ _UPGRADE_WHILE_ON = {}
 
 
 def _auto_upgrade_paused(pl):
-    """A market plugin switched off is not upgraded, as the hub says: auto_upgrade_paused, its newer version "off" (its
-    own switch stays); switched on again, both are as before."""
+    """A market plugin is not upgraded while switched off or once its market is removed, as the hub says (#1895): the
+    market it upgrades from, auto_upgrade_paused, and its newer version "off" while switched off or none while the market
+    is gone (its own switch stays); switched on again, or the market added back, both are as before."""
     if pl.get("auto_upgrade") is None:
         return
-    pl["auto_upgrade_paused"] = None if pl["enabled"] else "disabled"
+    m = re.match(r"market:([^/]+)/", pl.get("origin", ""))
+    pl["market"] = m.group(1) if m else None
+    removed = bool(pl["market"]) and pl["market"] not in MARKETS
+    pl["auto_upgrade_paused"] = "market_removed" if removed else None if pl["enabled"] else "disabled"
     up = pl.get("upgrade")
-    if not pl["enabled"] and up and pl["id"] not in _UPGRADE_WHILE_ON:
+    if up and pl["id"] not in _UPGRADE_WHILE_ON and (removed or not pl["enabled"]):
         _UPGRADE_WHILE_ON[pl["id"]] = up
-        pl["upgrade"] = {k: v for k, v in up.items() if k != "added_permissions"} | {
-            "state": "off", "detail": "扩展已关闭，自动升级暂停；重新打开后恢复你原来的设置"}  # i18n-ignore: the hub's words
-    elif pl["enabled"] and pl["id"] in _UPGRADE_WHILE_ON:
+    kept = _UPGRADE_WHILE_ON.get(pl["id"])
+    if removed:  # nothing is offered from a market the hub no longer reads
+        pl["upgrade"] = None
+    elif not pl["enabled"]:
+        if kept:
+            pl["upgrade"] = {k: v for k, v in kept.items() if k != "added_permissions"} | {
+                "state": "off", "detail": "扩展已关闭，自动升级暂停；重新打开后恢复你原来的设置"}  # i18n-ignore: the hub's words
+    elif kept:
         pl["upgrade"] = _UPGRADE_WHILE_ON.pop(pl["id"])
 
 
@@ -12713,10 +13321,12 @@ def _gateway_upgrade(state):
     if state == "disabled":
         up["state"] = "available"
         pl["enabled"], pl["status"] = False, "disabled"
-        _auto_upgrade_paused(pl)
+    _auto_upgrade_paused(pl)
 
 
 _gateway_upgrade(os.environ.get("MOCK_PLUGIN_UPGRADE", "needs_permission"))
+# As it starts, for /mock/reset: a test that installs the update (ExtensionMarketTests, #2988) leaves the next one 1.0.0.
+_GATEWAY_START = copy.deepcopy(PLUGINS["example-gateway"])
 
 
 def upgrades_route(handler, p, req):
@@ -13008,15 +13618,23 @@ def markets_route(handler, p, body):
             handler.send_json({"error": "市场的地址是 https://…、github:owner/repo 或 git:<地址>", "code": "market_failed"}, 400); return True
         if "private" in spec and not req.get("token"):
             handler.send_json({"error": "读不到 %s：找不到（404）：地址不对，或者是私有的，要填 token" % spec, "code": "market_failed"}, 400); return True
-        mid = "%010x" % (abs(hash(spec)) % (16 ** 10))
-        MARKETS[mid] = {"id": mid, "spec": spec, "name": spec.split("/")[-1] or spec, "has_token": bool(req.get("token")), "plugins": 0,
-                        "warnings": [], "fetched_at": "2026-11-04T07:00:00Z", "added_at": "2026-11-04T07:00:00Z"}
+        # The same address gives the same id, as the hub's id is a hash of it: a removed market added again is back (#1895).
+        back = _REMOVED_MARKETS.pop(spec, None)
+        mid = back["id"] if back else "%010x" % (abs(hash(spec)) % (16 ** 10))
+        MARKETS[mid] = back or {"id": mid, "spec": spec, "name": spec.split("/")[-1] or spec, "has_token": bool(req.get("token")), "plugins": 0,
+                                "warnings": [], "fetched_at": "2026-11-04T07:00:00Z", "added_at": "2026-11-04T07:00:00Z"}
+        for pl in PLUGINS.values():
+            _auto_upgrade_paused(pl)
         handler.send_json(MARKETS[mid]); return True
     parts = p.split("/")
     if p.startswith("/api/v1/plugins/-/markets/") and len(parts) >= 7 and parts[6] in MARKETS:
         mid = parts[6]
         if method == "DELETE" and len(parts) == 7:
-            MARKETS.pop(mid); handler.send_json({"ok": True}); return True
+            gone = MARKETS.pop(mid)
+            _REMOVED_MARKETS[gone["spec"]] = gone
+            for pl in PLUGINS.values():
+                _auto_upgrade_paused(pl)
+            handler.send_json({"ok": True}); return True
         if method == "POST" and parts[7:] == ["refresh"]:
             MARKETS[mid]["fetched_at"] = "2026-11-04T07:05:00Z"; handler.send_json(MARKETS[mid]); return True
         if method == "PUT" and parts[7:] == ["token"]:
@@ -13846,6 +14464,9 @@ class H(BaseHTTPRequestHandler):
             if "pr_fail" in q: GIT_W["pr_fail"] = q["pr_fail"][0] or None
             if q.get("gone"): GIT_W.update(upstream="origin/" + GIT_W["branch"], ahead=0, gone=True)
             return self.send_json({"branch": GIT_W["branch"], "ahead": GIT_W["ahead"], "files": len(GIT_W["files"])})
+        if p == "/mock/git-read" and os.environ.get("MOCK_GIT_READ_FAIL"):
+            if q.get("reset"): GIT_READ_FAIL["reads"] = 0
+            return self.send_json(GIT_READ_FAIL)
         if p == "/mock/git-pull" and os.environ.get("MOCK_GIT_PULL"):
             if "mode" in q:
                 GIT_PULL_STATE.update(behind=28, mode=q["mode"][0], pulls=0)
@@ -13917,7 +14538,8 @@ class H(BaseHTTPRequestHandler):
             # the file was rewritten: docs/protocol/protocol.md "Continuity of items"); /mock/reset puts mock-1 back.
             if q.get("history", [""])[0]: HISTORY_NOW["token"] = q["history"][0]
             args = (SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None, q.get("stream", ["0"])[0] == "1",
-                    int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1")
+                    int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1",
+                    int(q.get("upto", ["0"])[0]))
             threading.Thread(target=say, args=args, daemon=True).start()
             return self.send_json({"ok": True})
         if MOCK_LARK and (p.startswith("/api/v1/lark/") or p == "/mock/lark") and fs_get(self, p, q): return  # area: feishu chat page
@@ -13955,6 +14577,11 @@ class H(BaseHTTPRequestHandler):
                 COOKIES_FAILED[0] = True
                 return self.send_json({"error": "读不到这台 Mac 上 ego 的登录，点「再试一次」；还不行就在那台 Mac 上重新打开 ego lite"}, 502)
             return self.send_json(*cookie_call("GET", q, None))
+        if MOCK_CLIPBOARD and p.startswith("/api/v1/machines/") and (p.endswith("/clipboard") or p.endswith("/clipboard/settings")):
+            answer, status = clipboard_call(self.command, p, getattr(self, "last_body", None))
+            if status == 204:
+                self.send_response(204); self.end_headers(); return
+            return self.send_json(answer, status)
         if p.startswith("/api/v1/machines/") and p.endswith("/browser"):  # the plugin ego (MOCK_BROWSER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "browser" not in machine:
@@ -14082,6 +14709,9 @@ class H(BaseHTTPRequestHandler):
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
             NET["delay"], PAGING["on"] = float(os.environ.get("MOCK_DELAY", "0")), False
             HISTORY_NOW["token"] = HISTORY
+            # ExtensionMarketTests' update installed (#2988): example-gateway at 1.0.0 again, its newer version waiting.
+            PLUGINS.pop("example-gateway-next", None); _UPGRADE_WHILE_ON.pop("example-gateway", None)
+            PLUGINS["example-gateway"] = copy.deepcopy(_GATEWAY_START)
             for m in MACHINES:
                 m["engine"] = "herdr"
                 if m["id"] == "lab":
@@ -14248,22 +14878,38 @@ class H(BaseHTTPRequestHandler):
             f = file_read(q.get("path", [""])[0], q.get("cwd", [""])[0], int(q.get("offset", ["0"])[0] or 0), q.get("stream", [""])[0] == "1")
             if not f: return self.send_json({"error": "stat %s: no such file or directory" % q.get("path", [""])[0]}, 404)
             return self.send_json(file_streamed(f, q))
-        # The Lark extension's personal agents (hub agents.go): none here, as on a hub without the Lark extension; the web's sidebar hid
-        # the section only after these answered, and showed "Failed to load personal agents" on the 404 instead.
-        if p == "/api/v1/agents": return self.send_json({"sources": []})
-        if p == "/api/v1/agents/sessions": return self.send_json({"sessions": personal_listed(False), "items": []})
+        # Personal Agent entry fixtures expose setup and sessions consistently, with live availability changes.
+        if p == "/api/v1/agents":
+            time.sleep(PERSONAL_STATE["delay"])
+            return self.send_json({"sources": personal_sources()})
+        if p == "/api/v1/agents/sessions":
+            time.sleep(PERSONAL_STATE["delay"])
+            return self.send_json({"sessions": personal_listed(False), "items": []})
         if p == "/api/v1/agents/hidden": return self.send_json({"sessions": personal_listed(True)})
         if p == "/mock/start-fail":
             START_FAIL.update(n=int(q.get("n", ["1"])[0]), code=q.get("code", ["assistant_in_doubt"])[0],
                               delay=float(q.get("delay", ["0"])[0]))
             return self.send_json(START_FAIL)
         if p == "/mock/personal-agents":
-            if q.get("reset"): PERSONAL_HIDDEN.clear()
-            return self.send_json({"hidden": sorted(PERSONAL_HIDDEN)})
-        if p == "/api/v1/agents/prefs": return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
+            if q.get("reset"):
+                PERSONAL_HIDDEN.clear()
+                PERSONAL_STATE.update(state="configured" if PERSONAL_AGENTS else "none", delay=0.0)
+            state = q.get("state", [PERSONAL_STATE["state"]])[0]
+            if state not in ("configured", "empty", "missing", "disabled", "no_accounts", "none"):
+                return self.send_json({"error": "invalid personal agent fixture state"}, 400)
+            PERSONAL_STATE.update(state=state, delay=min(10.0, max(0.0, float(q.get("delay", [PERSONAL_STATE["delay"]])[0]))))
+            for client in list(CLIENTS.values()):
+                try: client["send"]({"type": "agents", "session_ids": []})
+                except Exception: pass
+            return self.send_json(dict(PERSONAL_STATE, hidden=sorted(PERSONAL_HIDDEN)))
+        if p == "/api/v1/agents/prefs":
+            if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
+            return self.send_json({"pins": [], "view": {}, "sections": [], "assign": {}})
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
+            if os.environ.get("MOCK_LOOK_UPLOAD_FILES") == "fail" and p[len("/api/v1/personas/"):].split("/", 1)[0] in MADE_LOOKS:
+                return self.send_json({"error": "mock: MOCK_LOOK_UPLOAD_FILES=fail"}, 503)
             f = persona_file(p[len("/api/v1/personas/"):])
             if not f: return self.send_json({"error": "no such file"}, 404)
             body = open(f, "rb").read()
@@ -14301,6 +14947,19 @@ class H(BaseHTTPRequestHandler):
             # MOCK_INBOX_DELAY_MS=<ms>: a slow hub, for the inbox refreshing in the background (#1947, docs/operations/testing.md)
             time.sleep(int(os.environ.get("MOCK_INBOX_DELAY_MS", "0")) / 1000)
             return self.send_json(inbox_list(q))
+        if p == "/api/v1/inbox/done/days":
+            # MOCK_INBOX_DAYS=none: a hub with the history but not its day counts (#2200 before #2967)
+            if os.environ.get("MOCK_INBOX_HISTORY") == "none" or os.environ.get("MOCK_INBOX_DAYS") == "none":
+                return self.send_json({"error": "not found"}, 404)
+            other = other_manager(self)
+            if other: return self.send_json(*other[1]) if other[1] else self.send_json({"tz": (q.get("tz") or [""])[0], "days": []})
+            days = inbox_done_days(q)
+            return self.send_json(days) if days else self.send_json({"error": "tz must be a time zone name"}, 400)
+        if p == "/api/v1/inbox/done":
+            if os.environ.get("MOCK_INBOX_HISTORY") == "none": return self.send_json({"error": "not found"}, 404)
+            other = other_manager(self)  # the history is each manager's own: the others have none here
+            if other: return self.send_json(*other[1]) if other[1] else self.send_json({"items": []})
+            return self.send_json(inbox_done(q))
         if p == "/api/v1/inbox/mutes":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -14318,7 +14977,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(t) if t else self.send_json({"error": "no such inbox item"}, 404)
         if p.startswith("/api/v1/inbox/"):
             iid = p[len("/api/v1/inbox/"):]
-            for x in INBOX:
+            for x in INBOX + INBOX_HISTORY:  # an item done long ago: the history's (#2200)
                 if x["id"] == iid: return self.send_json(dict(x, context=x.get("context") or x["preview"]))
         if mail_area(self, "GET", p, q): return
         if p == "/api/v1/mail/accounts": return self.send_json({"accounts": MAIL_ACCOUNTS})
@@ -14694,6 +15353,7 @@ class H(BaseHTTPRequestHandler):
         if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
+        if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -15121,6 +15781,11 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"chats": 6, "people": 9, "inbox": 1})
         if p.startswith("/api/v1/machines/") and p.endswith("/browser/cookies") and MOCK_BROWSER:  # sign-ins in ego (#1304)
             return self.send_json(*cookie_call(self.command, parse_qs(urlparse(self.path).query), self.last_body))
+        if MOCK_CLIPBOARD and p.startswith("/api/v1/machines/") and (p.endswith("/clipboard") or p.endswith("/clipboard/settings")):
+            answer, status = clipboard_call(self.command, p, getattr(self, "last_body", None))
+            if status == 204:
+                self.send_response(204); self.end_headers(); return
+            return self.send_json(answer, status)
         if p.startswith("/api/v1/machines/") and (p.endswith("/browser") or "/browser/" in p):  # the plugin ego (MOCK_BROWSER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "browser" not in machine:
@@ -15204,7 +15869,7 @@ class H(BaseHTTPRequestHandler):
                     except Exception: pass
                 return self.send_json(out_machine(machine))
             engine = body.get("engine")
-            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "paseo") and not any(
+            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "paseo", "cindy") and not any(
                     e["id"] == engine and e["available"] for e in machine["engines"]):
                 return self.send_json({"error": "未知引擎"}, 400)
             if os.environ.get("MOCK_ENGINE_ERROR"): return self.send_json({"error": "暂时无法保存"}, 503)
@@ -16020,6 +16685,18 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         self.send_json({"ok": True})
 
+    _do_post = do_POST
+
+    def do_POST(self):
+        """As the hub: a request that moved a manager's inbox_needs_you tells the apps to read the roster again (at
+        once: the hub waits a second for the counts that change together). Only a request does here: an inbox the
+        mock changes on its own (/mock/… fixtures, timers) moves the roster's number without a push."""
+        before = inbox_needs_you()
+        try:
+            return self._do_post()
+        finally:
+            if inbox_needs_you() != before: _managers_changed()
+
     do_PUT = do_POST
     do_DELETE = do_POST
     do_PATCH = do_POST
@@ -16614,17 +17291,21 @@ def features():
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
+MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
+MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
 MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装码过期了还没装的（码已过期，可以拿新的安装码），和一个过期超过 7 天的（像 hub 一样不在名册里）")
 MOCK_HELP.append("MOCK_MANAGER_COMMANDS=1  设置 › 管理者：新建 / 换个地方装的回答带安装命令（commands.service / docker）；MOCK_MANAGERS=0 是还没有名册的旧 hub（/api/v1/managers 404）")
-MOCK_HELP.append("MOCK_SENT=1|empty|nodb|forbidden|old  Settings > Sent as you (#5278, scripts/mock/sent_ledger_mock.py): 1 is about 70 made-up rows (four ways through the gate, one text of 4000 characters), empty has none, nodb is 503 no_database, forbidden 403, old a hub from before the ledger (404 with no code)")
+MOCK_HELP.append("MOCK_SENT=1|empty|nodb|forbidden|old  Settings > Sent as you (#5278, scripts/mock/sent_ledger_mock.py): 1 is about 70 made-up rows (four ways through the gate, one text of 4000 characters), empty has none, nodb is 503 no_database, forbidden 403, old a hub from before the ledger (404 with no code); POST …/sent/{id}/recall takes back row 66 and refuses row 60 (502 recall_refused), row 54 is already recalled")
 MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a Feishu app and a WeChat account (#5826)")
-MOCK_HELP.append("MOCK_REWIND=1  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
+MOCK_HELP.append("MOCK_REWIND=1|safeguards  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
+MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
+MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 
 
@@ -17615,6 +18296,9 @@ if READINESS or BUILTIN_PRESETS:
         return f + [x for x in extra if x not in f]
 
 READY = {"sc": readiness_mock.SCENARIOS.get(READINESS, {}) if READINESS else {}, "dismissed": False}
+# Optional probe boundaries for #1892: exceed Apple's old 30 s timeout, or refuse the try with an HTTP error.
+READINESS_PROBE_DELAY = float(os.environ.get("MOCK_READINESS_PROBE_DELAY", "0"))
+READINESS_PROBE_ERROR = int(os.environ.get("MOCK_READINESS_PROBE_ERROR", "0"))
 READY_MAIN = "b2e4d6f8-0000-4000-8000-0000000000aa"
 if READINESS:
     _sc = READY["sc"]
@@ -17755,7 +18439,15 @@ if READINESS or BUILTIN_PRESETS:
             return True
         if p == "/api/v1/assistant/readiness" and method == "GET":
             q = parse_qs(urlparse(handler.path).query).get("probe", [""])[0]
-            handler.send_json(ready_state(handler, q in ("1", "true")))
+            probing = q in ("1", "true")
+            if probing and READINESS_PROBE_DELAY:
+                time.sleep(READINESS_PROBE_DELAY)
+            if probing and READINESS_PROBE_ERROR:
+                words = {"zh-Hans": "mock 探针没有回答", "en": "The mock probe did not answer",
+                         "ja": "モックプローブが応答しませんでした"}[lang]
+                handler.send_json({"error": words, "code": "probe_failed", "retryable": True}, READINESS_PROBE_ERROR)
+                return True
+            handler.send_json(ready_state(handler, probing))
             return True
         if p == "/api/v1/assistant/readiness/dismiss" and method == "POST":
             try:
@@ -17808,6 +18500,7 @@ MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|ba
                  "主对话就绪度的场景（#287，docs/operations/testing.md「Readiness scenarios」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
                  "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
                  "MOCK_BUILTIN_PRESETS=1 只加内置供应商预设")
+MOCK_HELP.append("MOCK_READINESS_PROBE_DELAY=<秒> / MOCK_READINESS_PROBE_ERROR=<HTTP 状态>  延迟或拒绝 ?probe=1（#1892，超过旧 30 秒客户端超时 / 显示失败）")
 
 # MOCK_ULTRACODE=1 (#3428, docs/protocol/protocol.md "Claude Code ultracode"): the hub has the `ultracode` feature and the agents show
 # each state of Claude Code's session-only switch: on (the widget, working; its chat has the node's "on" notice), a request

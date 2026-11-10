@@ -6,7 +6,9 @@ Starts scripts/mock/mock_hub.py on a free port with a HOME of its own (MOCK_EXTE
 - a computer of an offline manager is offline with the hub's words and no error_code, its session (there is one) in state
   unknown;
 - each manager keeps its own inbox mutes and rules: one set for another manager covers only its items, and an offline
-  one answers 503 assistant_offline.
+  one answers 503 assistant_offline;
+- the roster's inbox_needs_you is what the merged inbox lists open under "Needs you" for each online manager, absent
+  for an offline or installing one, and follows an item being handled.
 
     python3 scripts/test/test_mock_hub_managers.py
 """
@@ -69,6 +71,22 @@ class MockHubManagersTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b"null")
 
+    def test_personal_agent_entry_states_are_consistent(self):
+        for state in ("configured", "empty", "missing", "disabled", "no_accounts", "none"):
+            with self.subTest(state=state):
+                status, answer = self.call("GET", "/mock/personal-agents?reset=1&state=" + state)
+                self.assertEqual(status, 200, answer)
+                _, sources = self.call("GET", "/api/v1/agents")
+                _, sessions = self.call("GET", "/api/v1/agents/sessions")
+                self.assertEqual(bool(sessions["sessions"]), state == "configured")
+                if state == "none":
+                    self.assertEqual(sources["sources"], [])
+                else:
+                    source = sources["sources"][0]
+                    self.assertEqual(bool(source["accounts"]), state in ("configured", "empty"))
+                    self.assertEqual(source.get("setup"), state if state in ("missing", "disabled", "no_accounts") else None)
+        self.call("GET", "/mock/personal-agents?reset=1")
+
     def test_a_raw_body_post_is_answered(self):
         image = bytes(range(256)) * 4  # not JSON
         status, answer = self.call("POST", "/api/v1/lark/conversations/f1/files?client_id=c1&name=a.png", image, "image/png")
@@ -108,6 +126,54 @@ class MockHubManagersTests(unittest.TestCase):
         self.assertTrue(theirs, "the offline manager's computer has a session to check")
         for s in theirs:
             self.assertEqual((s.get("machine_id"), s.get("state")), ("nas", "unknown"), s)
+
+    def test_sessions_of_one_manager(self):
+        _, everyone = self.call("GET", "/api/v1/sessions")
+        owners = {s["manager"] for s in everyone["sessions"]}
+        self.assertGreater(len(owners), 1, "the mock has sessions of several managers")
+        for mid in sorted(owners):
+            _, answer = self.call("GET", "/api/v1/sessions?manager=" + mid)
+            self.assertEqual([(s["machine_id"], s["session_id"]) for s in answer["sessions"]],
+                             [(s["machine_id"], s["session_id"]) for s in everyone["sessions"] if s["manager"] == mid], mid)
+        status, answer = self.call("GET", "/api/v1/sessions?manager=m-ffffff")
+        self.assertEqual((status, answer.get("code")), (404, "no_manager"))
+        # the header alone filters nothing: this list was never routed by it
+        _, answer = self.call("GET", "/api/v1/sessions", manager="m-3fa21c")
+        self.assertEqual(len(answer["sessions"]), len(everyone["sessions"]))
+
+    def test_the_roster_counts_each_inbox(self):
+        def roster():
+            _, answer = self.call("GET", "/api/v1/managers")
+            return {m["id"]: m for m in answer["managers"]}
+
+        def needs_you(x):  # as the apps count: an open item under "Needs you" (the hub's status, else the tier)
+            status = x.get("status") or (x["tier"] if x.get("tier") in ("fyi", "noise") else "action")
+            return not x.get("done_at") and status == "action"
+
+        def listed():
+            _, answer = self.call("GET", "/api/v1/inbox?sources=all")
+            counts = {}
+            for x in answer["items"]:
+                if needs_you(x):
+                    counts[x["manager"]] = counts.get(x["manager"], 0) + 1
+            return counts, answer["items"]
+
+        managers, (counts, items) = roster(), listed()
+        for mid in ("assistant", "m-3fa21c"):
+            self.assertEqual(managers[mid].get("inbox_needs_you"), counts.get(mid, 0), mid)
+        self.assertGreater(managers["assistant"]["inbox_needs_you"], 0)
+        self.assertGreater(managers["m-3fa21c"]["inbox_needs_you"], 0)  # the other manager's badge has something to show
+        for mid in ("m-8b04d2", "m-c1e9f0"):  # offline, installing
+            self.assertNotIn("inbox_needs_you", managers[mid], mid)
+        mine = next(x for x in items if x["manager"] == "assistant" and needs_you(x))
+        body = json.dumps({"done": True, "items": [{"id": mine["id"]}]}).encode()
+        status, _ = self.call("POST", "/api/v1/inbox/done", body)
+        self.assertEqual(status, 200)
+        try:
+            self.assertEqual(roster()["assistant"]["inbox_needs_you"], counts["assistant"] - 1)
+        finally:
+            self.call("POST", "/api/v1/inbox/done", json.dumps({"done": False, "items": [{"id": mine["id"]}]}).encode())
+        self.assertEqual(roster()["assistant"]["inbox_needs_you"], counts["assistant"])
 
     def test_each_managers_mutes_and_rules(self):
         _, listed = self.call("GET", "/api/v1/inbox?sources=all")

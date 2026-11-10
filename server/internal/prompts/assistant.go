@@ -222,21 +222,22 @@ type Snapshot struct {
 	Awaiting []SnapshotAgent
 	// Muted: agents (or their spaces) the user turned notifications off for that would be in one of the above; in
 	// none of them, as the Live Activity and the Agents badge count none of them (#4562).
-	Muted         []SnapshotAgent
-	Working       []SnapshotAgent
-	Workflows     []SnapshotWorkflow // background workflow runs still running, newest first
-	PhoneOnline   bool
-	KB            string            // RenderKBDigest, "" leaves it out
-	Chats         *SnapshotChats    // nil: Feishu did not answer in time
-	Calendar      *SnapshotCalendar // nil: the calendar did not answer in time
-	Followups     []SnapshotFollowup
-	Routines      []SnapshotRoutine // the daily tasks that are on (at most eight)
-	RoutinesTotal int               // all of them
-	Missed        []SnapshotMiss    // scheduled runs that failed or were skipped since yesterday 18:00, newest first
-	MissedTotal   int               // all of them (Missed is the newest six)
-	Tasks         []SnapshotTask    // tasks opened from assistant conversations (task_plan), newest first
-	Plans         []SnapshotPlan    // plan cards in the main conversation waiting for "Start", newest first (at most five)
-	PlansTotal    int
+	Muted          []SnapshotAgent
+	Working        []SnapshotAgent
+	Workflows      []SnapshotWorkflow // background workflow runs still running, newest first
+	PhoneOnline    bool
+	KB             string             // RenderKBDigest, "" leaves it out
+	Chats          *SnapshotChats     // nil: Feishu did not answer in time
+	Calendar       *SnapshotCalendar  // nil: the calendar did not answer in time
+	Followups      []SnapshotFollowup // the next eight
+	FollowupsTotal int                // all of them
+	Routines       []SnapshotRoutine  // the daily tasks that are on (at most eight)
+	RoutinesTotal  int                // all of them
+	Missed         []SnapshotMiss     // scheduled runs that failed or were skipped since yesterday 18:00, newest first
+	MissedTotal    int                // all of them (Missed is the newest six)
+	Tasks          []SnapshotTask     // tasks opened from assistant conversations (task_plan), newest first
+	Plans          []SnapshotPlan     // plan cards in the main conversation waiting for "Start", newest first (at most five)
+	PlansTotal     int
 	// Asked: the assistant's ask_user questions nobody answered in time, now to-dos waiting for the user's call (#1617),
 	// oldest first.
 	Asked []SnapshotAsked
@@ -247,7 +248,19 @@ type Snapshot struct {
 	// Approvals: open tasks whose finished work waits for the user's nod to go live (merge, deploy, turn on, send),
 	// oldest first: told to the user as one list to approve at once (docs/assistant/todos.md "Delivery").
 	Approvals []SnapshotApproval
+	// Omit: the sections left out to keep the block within its budget (assistant/context.go fitSnapshot).
+	Omit SnapshotOmit
 }
+
+// SnapshotOmit marks the sections a snapshot leaves out for size (#3203). An omitted section still renders its heading
+// and its count, with the tool that lists it, never as empty: the node sends only the sections that changed, so a
+// section that went missing would read as unchanged, and one rendered without its items as "none".
+type SnapshotOmit struct {
+	Muted, Done, Waiting, Working, Unread, Routines, Followups, Asked, KB, OtherChats, Unaccepted, Tasks, Approvals bool
+}
+
+// SnapshotCut is the line a snapshot cut short ends with (assistant/snapshot_cut).
+func SnapshotCut() string { return render("assistant/snapshot_cut", nil) }
 
 // SnapshotApproval is a task held short of live until the user approves: what it is, how far it got, where it is held.
 type SnapshotApproval struct {
@@ -300,6 +313,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 // saying so first (assistant/context). Node puts what changed of it at the start of each message (TurnContext).
 type AssistantContext struct {
 	Main     bool
+	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
 	Owner    string
 	Snapshot string
 }
@@ -407,6 +421,10 @@ type AskTodoAnswer struct {
 	Thread    bool
 	Dropped   bool
 	Several   bool // more than one question was asked
+	// Defaulted: nobody decided by the question's deadline (Deadline, MM-DD HH:MM) and it could be undone, so its
+	// recommended options were taken by default (#3127).
+	Defaulted bool
+	Deadline  string
 }
 
 // AskTodoChoice is one call of the user's: the question as they wrote it ("" for a reply in the topic), the choice, why.
@@ -423,14 +441,19 @@ func RenderAskTodoAnswer(a AskTodoAnswer) string { return render("assistant/ask_
 type Supervise struct {
 	Level   string
 	Entries []SuperviseEntry
+	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
+	// needs_user, told the main conversation.
+	Leader, Escalated bool
 }
 
-// SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed).
+// SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
+// started, escalated).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
 	Minutes         int                // how long it has waited (needs_you) or not moved (stalled)
 	Ask             string             // needs_you: what it asks
+	Recommend       string             // escalated: the option the leader recommends
 	DoneWhen        []string           // what done means
 	Round           int                // reworks so far
 	Machine         string             // where its agent runs (a name)
@@ -445,6 +468,10 @@ type SuperviseEntry struct {
 	Said        string
 	Evidence    []string
 	Step, Steps int
+	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
+	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
+	KeptUntil, Question, Screen string
+	RetriesLeft                 int
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }
@@ -554,6 +581,9 @@ type TaskDone struct {
 	// Delivery: also say how far the work was delivered (assistant.done_needs_delivery, docs/assistant/todos.md "Delivery"): only
 	// live or nothing to ship closes the task.
 	Delivery bool
+	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
+	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
+	Checks bool
 }
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
@@ -599,6 +629,9 @@ type TaskDoneReply struct {
 	Machine, Ask, Text string
 	From               string `json:"from,omitempty"`
 	Source             string `json:"source,omitempty"`
+	// Earlier is the agent's reply in the turn before the user's own follow-up in this session (its report of the
+	// work, when the follow-up only asks whether it is done); never set for a side-conversation turn (#3111).
+	Earlier string `json:"earlier,omitempty"`
 }
 
 func RenderTaskDoneInput(in TaskDoneInput) string { return render("assistant/task_done_input", in) }

@@ -28,13 +28,15 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
   const marketManaged = d.source === "installed" && !d.attached && !d.read_only && !!market;
   const uninstallable = d.source === "installed" && !d.attached && !d.read_only && !!marketOf(d.origin);
   const automatic = d.source === "installed" && !d.attached && !d.read_only && d.auto_upgrade !== undefined;
-  const noUpdates = offline ? t("settings-extensions.manager_offline") : marketManaged && !automatic ? t("settings-extensions.action_unknown") : lifecycleReason(d, false);
+  // Its market was removed: there is nothing to check until the market is added again (#1895).
+  const marketRemoved = d.auto_upgrade_paused === "market_removed";
+  const noUpdates = offline ? t("settings-extensions.manager_offline") : marketRemoved ? t("settings-extensions.market_removed_check") : marketManaged && !automatic ? t("settings-extensions.action_unknown") : lifecycleReason(d, false);
   const noUninstall = offline ? t("settings-extensions.manager_offline") : lifecycleReason(d, true);
   const blocked = busy || offline;
   return (
     <div data-extension-settings={d.id}>
       <section data-extension-section="enabled" aria-label={t("settings-extensions.enable")}>
-        <Group footer={offline ? t("settings-extensions.manager_offline") : editable ? t("settings-extensions.enable_footer") : t(d.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
+        <Group footer={offline ? t("settings-extensions.manager_offline") : editable ? enableFooter(d) : t(d.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
           <Row label={t("settings-extensions.enable")}>
             <Switch on={d.enabled ?? true} onChange={onEnabled} disabled={blocked || !editable} label={t("settings-extensions.enable")} />
           </Row>
@@ -49,7 +51,7 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
         {information}
       </section>
       <section data-extension-section="updates" aria-label={t("settings-extensions.upgrade_title")}>
-        <Updates d={d} manager={manager} busy={blocked} market={market} canCheck={marketManaged && !offline} automatic={automatic} reason={noUpdates} onToggle={onAutoUpgrade} onUpgrade={onUpgrade} onChecked={onChecked} />
+        <Updates d={d} manager={manager} busy={blocked} market={market} canCheck={marketManaged && !offline && !marketRemoved} automatic={automatic} reason={noUpdates} onToggle={onAutoUpgrade} onUpgrade={onUpgrade} onChecked={onChecked} />
       </section>
       <section data-extension-section="danger" aria-label={t("settings-extensions.danger_title")}>
         <Group title={t("settings-extensions.danger_title")} footer={uninstallable && !offline ? t("settings-extensions.market_installed_footer") : noUninstall}>
@@ -60,6 +62,16 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
       </section>
     </div>
   );
+}
+
+/** What the Enabled switch does. A pack's takes its members along only on a hub that says so (#1830). */
+export function enableFooter(d: HubExtensionDetail): string {
+  if (!d.extension_pack?.length) return t("settings-extensions.enable_footer");
+  if (!d.pack_members_follow) return t("settings-extensions.enable_footer_pack_alone");
+  if (d.enabled === false && d.pack_off?.length) {
+    return t("settings-extensions.enable_footer_pack_off", { names: d.pack_off.join(t("settings-extensionmarket.list_separator")) });
+  }
+  return t("settings-extensions.enable_footer_pack");
 }
 
 /** Capabilities follow the full-rights market routes, not a manifest's configuration or arbitrary source URL. */

@@ -28,6 +28,8 @@ struct PersonalAgentListView: View {
                          state: prefs.view.showMode == .unread ? "unread" : "",
                          provider: prefs.view.providerFilter.count == 1 ? prefs.view.providerFilter[0] : "", text: query)
     }
+    /// Why a source lists nothing: its setup state, or its error.
+    private var sourceHints: [String] { sources.compactMap { $0.setupHint ?? $0.error } }
     private var groups: [PersonalAgentGroup] { PersonalAgentArrange.arrange(sessions, prefs: prefs, query: list.page?.paged == true ? "" : query) }
     private var allProviders: [String] {
         var seen: [String] = []
@@ -49,6 +51,17 @@ struct PersonalAgentListView: View {
                         Label("\(a.displayName ?? a.provider): \(e)", systemImage: Theme.Icon.error)
                             .font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
                     }
+                }
+            }
+            // Sources that list nothing (failing, or not set up) while others list Agents: one notice above those Agents, so the
+            // missing ones don't go unnoticed, as on the web (#3098). An empty list shows the same hints on their own, below.
+            if loaded && shownError == nil && !sessions.isEmpty && !sourceHints.isEmpty {
+                Section {
+                    NoticeBanner(text: ([String(localized: "Some personal agents can't be listed right now")] + sourceHints).joined(separator: "\n"),
+                                 lineLimit: nil)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                        .accessibilityIdentifier("personalAgents.sourceNotice")
                 }
             }
             ForEach(groups) { g in
@@ -76,11 +89,10 @@ struct PersonalAgentListView: View {
                     .task(id: paginationArmed) { if paginationArmed { await list.page?.next() } }
             }
             if loaded && sessions.isEmpty && error == nil {
-                let hints = sources.compactMap(\.setupHint)
-                if hints.isEmpty {
+                if sourceHints.isEmpty {
                     Text("No personal agent sessions").foregroundStyle(.secondary)
                 } else {
-                    ForEach(hints, id: \.self) { hint in
+                    ForEach(sourceHints, id: \.self) { hint in
                         Label(hint, systemImage: Theme.Icon.info).foregroundStyle(.secondary)
                     }
                 }
@@ -117,7 +129,8 @@ struct PersonalAgentListView: View {
         .task {
             for await _ in PersonalAgentSync.shared.changes() {
                 await load() // prefs/source status and changed credentials follow the hub; an unchanged row baseline is reused
-                list.page?.invalidate()
+                // a delta only updates rows already shown, so an empty page (a source that started answering) reads afresh
+                if list.page?.rows.isEmpty == true { await list.page?.reload() } else { list.page?.invalidate() }
             }
         }
     }

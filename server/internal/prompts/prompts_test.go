@@ -189,6 +189,7 @@ func TestSmallPrompts(t *testing.T) {
 		RenderJSONOnly("system"):           "system\n\nReply with a single JSON object only, no prose, no code fences.",
 		RenderTranslateMailInput("S", "T"): "主题：S\n\nT",
 		RenderCodexInstructions("mem"):     "mem",
+		SnapshotCut():                      "- 快照到此截断；其余用 agents_list、todo_list、inbox 查",
 	} {
 		if got != want {
 			t.Errorf("got %q, want %q", got, want)
@@ -321,5 +322,20 @@ func TestSnapshotCalendarSaysFinishedMeetingsAreNotListed(t *testing.T) {
 		{Start: now.Add(90 * time.Minute), End: now.Add(120 * time.Minute), Title: "夜间发布会"}}}})
 	if !strings.Contains(got, "夜间发布会") {
 		t.Errorf("a meeting still to come is left out:\n%s", got)
+	}
+}
+
+// The triage's one-line work status is shown to the user as is: in their language when it isn't Chinese, and without
+// the internal ids an Agent's last words carry (#2363).
+func TestAgentTriageLineLanguageAndIDs(t *testing.T) {
+	zh := RenderAgentTriage(AgentTriage{})
+	en := RenderAgentTriage(AgentTriage{Language: "English"})
+	if strings.Contains(zh, "用English写") || !strings.Contains(en, "，用English写。") {
+		t.Fatalf("line language: zh has it %v, en has it %v", strings.Contains(zh, "用English写"), strings.Contains(en, "，用English写。"))
+	}
+	for _, s := range []string{zh, en} {
+		if !strings.Contains(s, "pane id、session id、批次号") {
+			t.Fatal("the line rule must keep internal ids out")
+		}
 	}
 }

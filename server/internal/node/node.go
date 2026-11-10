@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,8 @@ type Node struct {
 
 	// decided: calls another PermissionRequest hook answered (hookdecided.go).
 	decided decisions
+	// questions: AskUserQuestion calls shared by the terminal and the phone (questioncalls.go).
+	questions questionCalls
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).
@@ -55,6 +58,13 @@ type Node struct {
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
 	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
 	claudeStart, claudeReady time.Duration
+	// shellSettle, shellQuiet, shellAsk: when set, how long a start waits at most for a new tab's shell to settle, how
+	// long its screen must stay the same, and how long a startup question may stay on screen, in place of
+	// shellSettleWait, shellQuietFor and shellQuestionWait (tests; shellsettle.go).
+	shellSettle, shellQuiet, shellAsk time.Duration
+	// shellPause: when set, a start pauses this long instead of watching the new tab's shell, the fixed pause before
+	// #2570 (tests whose herdr call traces have no room for the settle wait's reads; shellsettle.go).
+	shellPause time.Duration
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
@@ -77,6 +87,8 @@ type Node struct {
 	engEpoch uint64
 	peer     *rpc.Peer
 	logger   *log.Logger
+	// hubPersonaContracts is connection-local: Attach makes a fresh Node on each reconnect.
+	hubPersonaContracts atomic.Bool
 	// lcu drives amontlabs/lcu for the computer-use plugin when that backend is selected (lcu_mcp.go).
 	lcuMu   sync.Mutex
 	lcuSess *lcuSession
@@ -181,6 +193,8 @@ type Node struct {
 	codexStarting map[string]bool
 	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
 	codexAbandoned map[string][]codexAbandonedStart
+	// keptStarts: the tabs of failed starts kept open for a while, by pane (shellsettle.go keepStartTab); n.mu.
+	keptStarts map[string]keptStart
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -482,6 +496,10 @@ func (n *Node) fetchState(ctx context.Context) bool {
 // writeClaudeConfig writes the files the sessions Persona starts load (hooks, MCP, skills; generatedFiles).
 func (n *Node) writeClaudeConfig() error { return writeGeneratedConfig(n.dir, n.bin) }
 
+// hubSupportsPersonaContracts snapshots the hub capability for one process start.
+// Until the authenticated hub's configuration arrives, keep the legacy MCP alias.
+func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts.Load() }
+
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
@@ -496,6 +514,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
+	}
+	switch method { // sharing the clipboard with the phone (clipshare.go)
+	case "clipboard.get":
+		return clipboardGet(ctx)
+	case "clipboard.set":
+		return clipboardSet(ctx, params)
 	}
 	var p struct {
 		Path             string        `json:"path"`
@@ -535,6 +559,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ThroughSeq       int           `json:"through_seq"`
 		Name             string        `json:"name"`
 		Pane             string        `json:"pane"`      // panes.*: a pane the host lists
+		InPane           string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
 		Direction        string        `json:"direction"` // panes.split: right or down
 		TabID            string        `json:"tab_id"`    // tabs.*
 		Label            string        `json:"label"`     // tabs.rename
@@ -662,13 +687,18 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			n.runtimeHost.setPaseoBridge(n.hostEnabled(proto.EnginePaseo))
 			// Orca's chats come through a bridge the node runs too (orcabridge.go); its terminals, the Orca host.
 			n.runtimeHost.setOrcaBridge(n.hostEnabled(proto.EngineOrca))
+			// Cindy's agents come through its bridge (cindybridge.go).
+			n.runtimeHost.setCindyBridge(n.hostEnabled(proto.EngineCindy))
 		}
 		n.configured()
 		c := n.engineChoice()
 		return map[string]any{"engine": n.engine(), "hosts": c.Hosts, "default": c.Default}, nil
 	case "node.configure":
 		var c struct {
-			ClaudeDirs []string `json:"claude_dirs"`
+			// HubFeatures comes from the authenticated hub through devices.connected. Partial
+			// configuration updates omit it; a full handover without it means an older hub.
+			HubFeatures *[]string `json:"hub_features"`
+			ClaudeDirs  []string  `json:"claude_dirs"`
 			// ClaudeDirsBlocked: patterns of config directories kept out (claudedirs.go); nil leaves them as they are.
 			ClaudeDirsBlocked *[]string          `json:"claude_dirs_blocked"`
 			Codex             *proto.CodexConfig `json:"codex"`
@@ -702,6 +732,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.HubFeatures != nil || c.MachineID != "" {
+			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 		}
 		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
@@ -851,7 +884,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := n.checkStartHost(p.Host); err != nil {
 			return nil, err
 		}
-		ctx := withStartHost(ctx, p.Host)
+		ctx := n.reusingKeptTab(withStartHost(ctx, p.Host), p.InPane)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, err := n.startOnEngineRuntime(ctx, rp)
 			return map[string]any{"session": s}, err
@@ -922,6 +955,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		n.restoreEchoes(a.Echoes)
+		return ok(nil)
+	case "start.keys": // into a failed start's kept tab (startremedy.go, #2570)
+		if err := n.startKeys(ctx, p.Pane, p.Text, p.Keys); err != nil {
+			return nil, err
+		}
 		return ok(nil)
 	case "session.keys":
 		if a, ok := n.agent(p.SessionID); ok {
@@ -1536,6 +1574,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramIDs,
+		Clipboard:          clipboardSupport(),
 	}
 }
 
@@ -1622,14 +1661,24 @@ func writeAtomic(path string, r io.Reader) error {
 	return err
 }
 
+// shellQuote makes s one word that reads back as s in the shells a node runs commands in or types them into: the sh
+// family and fish. Safe characters stay bare; anything else is single-quoted, with each quote and each backslash put
+// outside the quotes, backslash-escaped. Inside single quotes fish still takes \' and \\ as escapes, so a backslash
+// before a quote used to keep the quotes open there and run the rest of a first message as commands (#2867); outside
+// quotes every one of these shells reads \' and \\ alike.
 func shellQuote(s string) string {
 	if s != "" && strings.IndexFunc(s, func(r rune) bool {
 		return !(r == '/' || r == '.' || r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
 	}) < 0 {
 		return s
 	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return "'" + shellQuoteEscapes.Replace(s) + "'"
 }
+
+// shellQuoteEscapes closes shellQuote's quotes around each quote and backslash in the text (one pass, so the
+// replacements are not escaped again): anyShellQuote's scheme (devices/deploy.go) for the sh family and fish, with
+// csh's `!` left as it is.
+var shellQuoteEscapes = strings.NewReplacer(`'`, `'\''`, `\`, `'\\'`)
 
 // herdrVersion is the herdr host's version ("" without one): node.info's herdr_version.
 func (n *Node) herdrVersion(ctx context.Context) string {

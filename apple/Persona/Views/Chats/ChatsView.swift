@@ -205,6 +205,8 @@ struct ChatsView: View {
     @Environment(AppModel.self) private var model
     /// The shell (docs/apple/ios.md「New shell」): its ☰ and Assistant | Agents switch take the navigation bar.
     @Environment(\.shell) private var shell
+    /// A phone's tabs (iPhone Duo open): the switch over the page column, as on Assistant (#2623).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     @State private var path = NavigationPath()
     /// Which space page sits at which depth of `path` (only this view pushes them), so a chat opened from a space
     /// page goes back to it instead of stacking another copy.
@@ -236,6 +238,12 @@ struct ChatsView: View {
     private func barMoved(_ y: ClosedRange<CGFloat>) {}
     #endif
     @State private var showNew = false
+    #if os(iOS)
+    @State private var personalEntry = PersonalAgentEntryModel()
+    private var showsPersonalEntry: Bool { personalEntry.isAvailable(for: model.api) }
+    #else
+    private var showsPersonalEntry: Bool { true }
+    #endif
     /// The ⋯ menu's actions, kept current by the list (not observed: see `AgentsListMenu`).
     @State private var menuActions = AgentsListMenu.Actions()
     @StoredValue("dev.machineFilter") private var machineFilter = ""
@@ -275,10 +283,10 @@ struct ChatsView: View {
         // Closing the search before a push from its results redraws the navigation with it, as when the list was
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
-        SplitNavigation(path: pushing, listKey: "agents.list", destinations: AgentsDestinations()) {
+        SplitNavigation(path: pushing, listKey: "agents.list", destinations: AgentsDestinations(), pageSwitch: pageTabSwitch) {
             AgentsList(path: $path, spaceAt: $spaceAt, query: $query, searching: $searching,
                        searchedBeforePush: $searchedBeforePush, showNew: $showNew, menuActions: menuActions, ownsTop: ownsTop,
-                       beginSearch: beginSearch)
+                       showsPersonalEntry: showsPersonalEntry, beginSearch: beginSearch)
                 #if os(iOS) || os(visionOS)
                 .environment(header)
                 #endif
@@ -313,8 +321,11 @@ struct ChatsView: View {
                         ToolbarItem(placement: .principal) { ConnectionTitle() }
                         // On the Mac the shell shows it, next to its sidebar button (MacShell).
                         ToolbarItem(placement: .topBarLeading) { AgentsListMenu(actions: menuActions) }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button { openFromList(PersonalAgentsRoute()) } label: { Label("Personal Agents", systemImage: Theme.Icon.personalAgents) }
+                        if showsPersonalEntry {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button { openFromList(PersonalAgentsRoute()) } label: { Label("Personal Agents", systemImage: Theme.Icon.personalAgents) }
+                                    .accessibilityIdentifier("agents.personal")
+                            }
                         }
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { showNew = true } label: { Label("New Session [Chats View 58e21b]", systemImage: Theme.Icon.compose) }
@@ -364,11 +375,12 @@ struct ChatsView: View {
                         if model.openChat != nil { DispatchQueue.main.async { takeOpenChat() } }
                         if model.openPersonalAgent != nil { DispatchQueue.main.async { takeOpenPersonalAgent() } }
                     }
-                    // A new tree (RootView swaps the shell and the tabs when the width class changes, which iOS does
-                    // for its snapshots when the app goes to the background: iPhone Duo open, 2026-11-04) starts at the
-                    // list: open the chat that was open, as a launch does (AppModel.init). Back at the list it is
-                    // forgotten (rememberChat(nil) above). A turn later: the split of the tree going away empties
-                    // the paths as it goes, and a push made in the same update did not show.
+                    // A new tree (RootView swaps the shell and the tabs when the width class changes while the app is
+                    // active: iPhone Duo folded or opened; iOS's snapshots on the way to the background did it too
+                    // until #2836, 2026-11-04) starts at the list: open the chat that was open, as a launch does
+                    // (AppModel.init). Back at the list it is forgotten (rememberChat(nil) above). A turn later: the
+                    // split of the tree going away empties the paths as it goes, and a push made in the same update
+                    // did not show.
                     // Still the same chat a turn later: going back runs onAppear before onChange(path) forgets it (#1868).
                     // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
                     if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
@@ -394,6 +406,11 @@ struct ChatsView: View {
             SplitPlaceholder(symbol: Theme.Icon.agents, title: String(localized: "Choose an Agent"),
                              message: String(localized: "Click an agent in the list on the left to open its chat here."))
         }
+        #if os(iOS)
+        .tabActiveTask(id: model.api.map { PersonalAgentEntryModel.Connection($0) }) {
+            await personalEntry.watch(model.api)
+        }
+        #endif
         // While searching the field rises into the bar the shell's floats over: the bar makes way (the field has its
         // own Cancel), as a system search takes the navigation bar, and comes back when the search closes (TestFlight 70:
         // the field was drawn under ☰, the switch and New Session). A result opened closes the search before the push
@@ -581,6 +598,7 @@ private struct AgentsList: View {
     var menuActions: AgentsListMenu.Actions
     /// A phone: the page's own top (`AgentsHeader`), not the system's search.
     var ownsTop: Bool
+    var showsPersonalEntry: Bool
     var beginSearch: () -> Void
 
     @State private var searchClose = SearchCloseWatcher()
@@ -592,6 +610,12 @@ private struct AgentsList: View {
     private var compactTop: Bool { false }
     #endif
     @StoredValue("dev.machineFilter") private var machineFilter = ""
+    @StoredValue("dev.harnessFilter") private var harnessFilter = ""
+    @StoredValue("dev.projectFilter") private var projectFilter = ""
+    @StoredValue("dev.modelFilter") private var modelFilter = ""
+    @StoredValue("dev.pinnedOnly") private var pinnedOnly = false
+    @StoredValue("dev.searchScope") private var searchScope: AgentSearchScope = .all
+    @StoredValue("dev.searchAsCode") private var searchAsCode = false
     /// Several groups of hubs: the one the list shows ("" = all; `HubFilter`).
     @StoredValue(HubFilter.key) private var hubFilter = ""
     @StoredValue("dev.grouping") private var storedGrouping: DevGrouping = .standard // by repository first (#2108)
@@ -711,7 +735,9 @@ private struct AgentsList: View {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
         return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
-                     machine: machineFilter, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
+                     searchScope: searchScope, searchAsCode: searchAsCode,
+                     machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
+                     pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
                      held: model.heldInList, preferences: preferences,
                      pagedGroups: Set(model.sessionLists.lists.filter { $0.value.paged }.keys),
                      listQuery: listQuery)
@@ -1335,7 +1361,7 @@ private struct AgentsList: View {
     #if os(iOS)
     @ViewBuilder private var groupingPills: some View {
         AgentsGroupingMenu()
-        if shell != nil { AgentsPersonalPill { openFromList(PersonalAgentsRoute()) } }
+        if shell != nil, showsPersonalEntry { AgentsPersonalPill { openFromList(PersonalAgentsRoute()) } }
     }
     #endif
 

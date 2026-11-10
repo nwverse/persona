@@ -76,10 +76,12 @@ type ExtensionView struct {
 	Warnings    []string            `json:"warnings,omitempty"`
 
 	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, why that switch does not apply
-	// now ("disabled": the extension is switched off; the switch is kept for when it is on), its newer version and what
-	// happened last with an upgrade.
+	// now ("market_removed": its market is no longer registered; "disabled": the extension is switched off; the switch
+	// is kept either way), the market it upgrades from (kept after that market is removed, so removing a market can say
+	// which extensions stop upgrading), its newer version and what happened last with an upgrade.
 	AutoUpgrade       *bool                 `json:"auto_upgrade,omitempty"`
 	AutoUpgradePaused string                `json:"auto_upgrade_paused,omitempty"`
+	Market            string                `json:"market,omitempty"`
 	Upgrade           *ExtensionUpgrade     `json:"upgrade,omitempty"`
 	UpgradeNote       *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
 	// Nodes: its program on each computer it is switched on for (extension_nodes.go), for a plugin with one.
@@ -174,6 +176,9 @@ type extensions struct {
 	logf, journal func(string, ...any)
 	// stats are how the extensions run (extension_metrics.go).
 	stats *extensionMetrics
+	// switchMu puts the user's Enabled switches one after another (switchExtension, enableChannel): a pack's switch
+	// reads and writes its record of members (#1830). Taken before any registry operation, never inside one.
+	switchMu sync.Mutex
 
 	h    *Manager
 	ctx  context.Context
@@ -214,8 +219,9 @@ type extensions struct {
 	sentLimit sentLimiter
 	// voice is the hub.json entry the built-in voice extension took over (nil without one); voiceID the built-in's id
 	// once registered, "" when there is none (voice_extension.go).
-	voice   *ExtensionConfig
-	voiceID string
+	voice            *ExtensionConfig
+	voiceID          string
+	voiceGatewaySent string
 	// hubRelay is how a relayed manager's extensions reach the hub's API (hub_relay.go).
 	hubRelay hubRelay
 }
@@ -525,6 +531,17 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.nodes.drop(ps.root, c.Old.Record.ID, "")
 	}
 	ps.apply(ctx, c.ID)
+	if ps.voiceID != "" && c.ID != ps.voiceID {
+		next := string(ps.voiceGatewaySpec(ctx))
+		ps.mu.Lock()
+		changedGW := next != ps.voiceGatewaySent
+		ps.mu.Unlock()
+		if changedGW {
+			if vp := ps.reg.Get(ps.voiceID); vp != nil && vp.Record.Enabled {
+				ps.apply(ctx, ps.voiceID)
+			}
+		}
+	}
 	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
 	switch c.Kind {
 	case "removed", "upgraded", "rolled_back": // only the version installed now keeps its packages for computers

@@ -359,6 +359,8 @@ data class Session(
     @SerialName("loop") val loop: LoopInfo? = null,
     /** The goal it works toward, when one is set (docs/integrations/agent-goal.md); older hubs never send it. */
     val goal: GoalInfo? = null,
+    /** The agent's counted task list, as reported by the node. */
+    val plan: PlanInfo? = null,
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("last_text") val lastText: String? = null,
     /** What its last reply asks the user, when its closing words put a question or a decision to them (#5096). */
@@ -414,6 +416,15 @@ data class Session(
      * app-server, where only the effort changes (node/codex_effort.go). Empty for every other session.
      */
     val efforts: List<String> = emptyList(),
+    /**
+     * Claude Code's ultracode as the node last saw it (docs/protocol/protocol.md "Claude Code ultracode"): null is unknown
+     * (no evidence yet, an older node or hub, another agent), not off.
+     */
+    val ultracode: Boolean? = null,
+    /** The node's reason the switch can't be used, was refused or still waits; null when there is none. */
+    @SerialName("ultracode_note") val ultracodeNote: String? = null,
+    /** A change of it waits for the agent's turn to end (or a draft / dialog in the terminal): a queue flag, not the value. */
+    @SerialName("ultracode_pending") val ultracodePending: Boolean = false,
     /** Present on bounded summary rows; absent on legacy complete rows. */
     val waiting: Boolean? = null,
     @SerialName("background_count") val backgroundCountHint: Int? = null,
@@ -607,9 +618,13 @@ data class Question(
 
 @KeepGeneratedSerializer
 @Serializable(with = DialogOptionSerializer::class)
-data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null)
+data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null,
+    /** Ticked at the computer (a multi-select box) when the dialog was read. */
+    @SerialName("checked") val checked: Boolean = false)
 
-/** A terminal dialog the hub parsed (server/internal/screen); answer with Resolution.option. */
+/** A terminal dialog the hub parsed (server/internal/screen). One answer shape for both: a single-choice dialog
+ *  answers with [Resolution.option]; a multi-select one ([multi]) ticks options and sends them all in
+ *  [Resolution.options], its free text in [Resolution.text]. */
 @KeepGeneratedSerializer
 @Serializable(with = ScreenDialogSerializer::class)
 data class ScreenDialog(
@@ -618,6 +633,10 @@ data class ScreenDialog(
     @SerialName("detail") val detail: String? = null,
     @SerialName("options") val options: List<DialogOption> = emptyList(),
     @SerialName("rev") val rev: String = "",
+    /** Options are checkboxes, sent together by the submit row, instead of one answer on tap. */
+    @SerialName("multi") val multi: Boolean = false,
+    /** The submit row's own label ("Submit", or "Next" when another question follows). */
+    @SerialName("submit") val submit: String? = null,
 )
 
 /** Something a permission card asks to fill in before approving (`proto.Field`, a password); see [Interaction.fields]. */

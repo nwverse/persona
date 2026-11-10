@@ -82,9 +82,13 @@ type PlanTask struct {
 	Error     string            `json:"error,omitempty"`
 	ErrorCode string            `json:"error_code,omitempty"`
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
+	// Start: the start being remedied after its agent did not start, or how that ended (start_remedy.go, #2570).
+	Start *StartRemedy `json:"start,omitempty"`
 	// defaulted: Launcher was filled in from a default by an earlier try of this start (startTaskAgent), not named by
 	// whoever planned the task, so a retry may still swap it for one its computer has (launcher_fit.go).
 	defaulted bool
+	// inPane: the kept tab this try starts in (task_retry), "" for a new one.
+	inPane string
 }
 
 // Readonly is a launch constraint, including for older saved plans and card edits.
@@ -146,6 +150,8 @@ func (s *Service) settleDelay(ctx context.Context) time.Duration {
 
 type tasksState struct {
 	mu sync.Mutex
+	// recoverBefore excludes starts admitted by this service before its background loops begin.
+	recoverBefore time.Time
 	// completionMu serializes a resumed turn with committing an earlier judgment.
 	completionMu sync.Mutex
 	// Without a store (unit tests) plans and the feed live here.
@@ -182,7 +188,7 @@ type tasksState struct {
 }
 
 func newTasksState() tasksState {
-	return tasksState{plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
+	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]bool{},
 		outcomes: map[string]time.Time{}, reusing: map[string]bool{}}
 }
@@ -553,7 +559,11 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "views": views, "view_actions": actions, "view_blocks": blocks})
+		cards, cardErr := s.taskCards(r.Context(), items, plans)
+		if cardErr != nil {
+			s.logf("feed: task card projection: %v", cardErr)
+		}
+		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

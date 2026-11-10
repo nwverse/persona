@@ -131,6 +131,7 @@ private fun ChatPage(
     // Read once per source, not on every recomposition: only the first value seeds the collected state.
     val initialSessions = remember(sessionSource) { sessions.sessions.value }
     val sessionList by sessionSource.collectAsStateWithLifecycle(initialSessions)
+    val managerChoice by AssistantManagerChoice.current.collectAsStateWithLifecycle()
     val machines by sessions.machines.collectAsStateWithLifecycle()
     val allRequests by interactions.pending.collectAsStateWithLifecycle()
     val allMessages by sender.outbox.collectAsStateWithLifecycle()
@@ -183,6 +184,32 @@ private fun ChatPage(
     var composerOverlay by remember { mutableStateOf(false) }
     val chromeOverlay = headerOverlay || modeOverlay || composerOverlay
     var requestCollapsed by rememberSaveable { mutableStateOf(false) }
+    val assistantTrays = remember(key) { AssistantTrayState() }
+    var trayReview by remember(key) { mutableStateOf<String?>(null) }
+    var trayApproving by remember(key) { mutableStateOf(false) }
+    var traySending by remember(key) { mutableStateOf(false) }
+    var trayPlan by remember(key) { mutableStateOf<persona.core.contracts.TaskPlan?>(null) }
+    var traySchedule by remember(key) { mutableStateOf<ScheduledTask?>(null) }
+    val traySendIds = remember(chrome.inboxScope, chrome.inboxTrays) { mutableMapOf<AssistantInboxDraft, String>() }
+    val trayDraftSource = remember(chrome.inboxTrays, chrome.inboxScope) {
+        chrome.inboxScope?.let { chrome.inboxTrays?.drafts(it) } ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }
+    val inboxDrafts by trayDraftSource.collectAsStateWithLifecycle(emptyList())
+    var traySchedules by remember(chrome.assistantManagement) { mutableStateOf(emptyList<persona.core.contracts.api.ScheduledTask>()) }
+    LaunchedEffect(chrome.assistantManagement, connection, assistantTrays.expanded) {
+        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Progress) {
+            try { traySchedules = chrome.assistantManagement?.tasks().orEmpty() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* A failed read retains the last confirmed schedule list. */ }
+        }
+    }
+    LaunchedEffect(chrome.inboxTrays, chrome.inboxScope, assistantTrays.expanded) {
+        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Pending) {
+            try { chrome.inboxScope?.let { chrome.inboxTrays?.refresh(it) } }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* Live or cached drafts remain visible. */ }
+        }
+    }
     val machine = machines.firstOrNull { it.id == key.machineId }
     // The cards' taps: the answer in flight, the cards answered here, the unconfirmed ones (persona.core.domain.ChatTaps).
     var taps by remember { mutableStateOf(ChatTaps()) }
@@ -196,7 +223,7 @@ private fun ChatPage(
         .collectAsStateWithLifecycle()
     val taskKeys = remember(taskTodos, key) {
         taskTodos.filter { it.origin == key.sessionId && it.doneAt == null }
-            .flatMap { t -> t.activeAgents.map { SessionKey(it.machineId, it.sessionId) } }.toSet()
+            .flatMap { t -> t.activeAgents.map { GroupKeys.key(SessionKey(it.machineId, it.sessionId), GroupKeys.namespaceOf(key.machineId)) } }.toSet()
     }
     val taskAgentSessions by (tasks?.agentSessions ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<SessionKey, Session>())
@@ -280,6 +307,10 @@ private fun ChatPage(
         awaitNow = java.time.Instant.now()
     }
     val live = isLiveStatus(session?.status) || awaiting
+    // Waiting on you (the hub's state says needs you, or one of this session's requests is pending): the turn is still the
+    // live one (it folds and opens as while it runs), but nothing is at work, so its line reads "Waiting for you" with no
+    // clock, as the header does (web goes by the same state).
+    val waitingOnYou = turnWaitsOnYou(session, key, requests)
     // Which items the lines were last built from: until the first build finishes, the page is still loading, not empty.
     var projectedFrom by remember { mutableStateOf<List<Item>?>(null) }
     val projection by produceState(persona.core.domain.lines.ChatSnapshot(emptyList(), emptyList(), persona.core.domain.lines.TaskIndex()),
@@ -301,12 +332,33 @@ private fun ChatPage(
     val feeds by (tasks?.feeds ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<persona.core.contracts.FeedItem>>()) })
         .collectAsStateWithLifecycle()
     val feed = feeds[key.sessionId].orEmpty()
+    val taskPlans by (tasks?.plans ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, TaskPlan>()) })
+        .collectAsStateWithLifecycle()
+    val taskCardProjection by (tasks?.taskCards ?: remember {
+        kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, List<AssistantTaskCard>>())
+    }).collectAsStateWithLifecycle()
+    var backgroundOpen by rememberSaveable(key.path) { mutableStateOf(false) }
+    val assistantPresentation = remember(projection, snapshot.items, feed, renderStyle) {
+        if (renderStyle.compactToolSummary) {
+            val presentation = persona.core.domain.tasks.AssistantConversation.project(projection.lines, snapshot.items)
+            presentation.copy(background = persona.core.domain.tasks.AssistantLines.lines(presentation.background,
+                persona.core.domain.tasks.AssistantTaskCards.backgroundFeed(feed)))
+        } else persona.core.domain.tasks.AssistantConversation(projection.lines, emptyList())
+    }
     LaunchedEffect(key, tasks) { tasks?.load(key.sessionId); tasks?.loadTodayIfMain(key.sessionId) }
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
     var jumpItem by remember { mutableStateOf<String?>(null) }
-    val lines = remember(projection, search.selected, jumpItem, feed, tasks) {
-        searchVisibleLines(projection.lines, search.selected?.itemId ?: jumpItem)
-            .let { if (tasks != null) persona.core.domain.tasks.AssistantLines.lines(it, feed) else it }.asReversed()
+    val lines = remember(assistantPresentation, search.selected, jumpItem, feed, tasks, taskPlans, taskTodos, taskCardProjection, renderStyle) {
+        searchVisibleLines(assistantPresentation.foreground, search.selected?.itemId ?: jumpItem)
+            .let {
+                when {
+                    tasks == null -> it
+                    renderStyle.compactToolSummary -> persona.core.domain.tasks.AssistantTaskCards.lines(it, feed, taskPlans,
+                        taskTodos, taskCardProjection[key.sessionId].orEmpty())
+                    else -> persona.core.domain.tasks.AssistantLines.lines(it,
+                        persona.core.domain.tasks.SentToAgents.shown(feed))
+                }
+            }.asReversed()
     }
     val searchableItems by produceState(emptyList<Item>(), snapshot.items, timelineVersion, search.visible) {
         if (search.visible) value = withContext(Dispatchers.Default) { timeline.searchItems(snapshot.items) }
@@ -353,14 +405,7 @@ private fun ChatPage(
     // for this: a reply drawn as plain text and then as Markdown grows after the list was placed, and in the reversed
     // list that pushes the question off the top (the newest reply is the one that keeps its place).
     var markdownReadyFor by remember { mutableStateOf<List<Item>?>(null) }
-    LaunchedEffect(snapshot.items) {
-        // Replies render each text part under "<item id>/<part index>" (MessageContent), so prewarm those keys.
-        val items = snapshot.items
-        val (latest, earlier) = withContext(Dispatchers.Default) { markdownPrewarm(items) }
-        latest.forEach { markdownCache.parse(it.key, it.text) }
-        markdownReadyFor = items
-        earlier.forEach { markdownCache.parse(it.key, it.text) }
-    }
+    val markdownSplit = remember { MarkdownPrewarm() }
     DisposableEffect(loader) { onDispose { loader.shutdown() } }
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
@@ -546,24 +591,122 @@ private fun ChatPage(
                 ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
             })
     }
+    LaunchedEffect(snapshot.items) {
+        // Replies render each text part under "<item id>/<part index>" (MessageContent), so prewarm those keys, each with
+        // the source its row parses there (MarkdownText.source): the same key and source, so the row finds the parse.
+        val items = snapshot.items
+        val paths = rowActions.paths?.takeIf { rowActions.openPath != null }
+        val (latest, earlier) = withContext(Dispatchers.Default) {
+            markdownSplit.split(items).let { (latest, earlier) -> latest.map { it.key to it.source(paths) } to earlier.map { it.key to it.source(paths) } }
+        }
+        markdownCache.keep(latest.map { it.first } + earlier.map { it.first })
+        latest.forEach { (id, source) -> markdownCache.parse(id, source) }
+        markdownReadyFor = items
+        earlier.forEach { (id, source) -> markdownCache.parse(id, source) }
+    }
     // A task's detail or the dock's "All", open over the conversation; kept across the host being made again.
     val taskSheet = remember(key) { mutableStateOf<TaskSheet?>(null) }
     LaunchedEffect(tasks, taskKeys, taskTodos, taskSheet.value) {
         val selected = (taskSheet.value as? TaskSheet.Task)?.todoId
         val detailKeys = taskTodos.firstOrNull { it.id == selected }?.activeAgents.orEmpty().map { it.key }
-        tasks?.watchAgents(taskKeys + detailKeys)
+        tasks?.watchAgents(taskKeys.map(GroupKeys::rawKey).toSet() + detailKeys)
     }
     DisposableEffect(tasks, key) { onDispose { tasks?.watchAgents(emptySet()) } }
     // the cards still to answer: one just answered here no longer says what it asked
     val taskCards = remember(allRequests, taps.resolved) { taps.shown(allRequests) }
     val taskHost = tasks?.let { store ->
-        AssistantTaskHost(store, key.sessionId, (sessionList + taskAgentSessions.values).distinctBy { it.key }, { id -> machines.firstOrNull { it.id == id }?.name?.takeIf(String::isNotBlank) ?: id },
-            onOpen = { k -> chrome.onOpenSession?.invoke(k) }, onError = { notice = operationFeedback(it).text.resolve(res) },
+        val namespace = GroupKeys.namespaceOf(key.machineId)
+        val localSessions = sessionList.filter { GroupKeys.namespaceOf(it.machineId) == namespace }
+            .map { it.copy(machineId = GroupKeys.raw(it.machineId)) }
+            .map { base -> base.copy(plan = listOfNotNull(base.plan, taskAgentSessions[base.key]?.plan)
+                .maxByOrNull { parseTime(it.at) ?: java.time.Instant.MIN }) }
+        AssistantTaskHost(store, key.sessionId, (localSessions + taskAgentSessions.values).distinctBy { it.key },
+            { id -> machines.firstOrNull { it.id == GroupKeys.machine(id, namespace) }?.displayName ?: id },
+            onOpen = { k -> chrome.onOpenSession?.invoke(GroupKeys.key(k, namespace)) }, onError = { notice = operationFeedback(it).text.resolve(res) },
             say = { text -> scope.launch { runCatching { sender.send(key, text, UUID.randomUUID().toString()) } } },
-            sheet = taskSheet, machines = machines, pending = taskCards)
+            sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
+            pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
+            onOpenProgress = { assistantTrays.expanded = AssistantTray.Progress },
+            backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true })
+    }
+    fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
+        if (trayApproving || taps.busy || readOnly) return
+        trayApproving = true
+        scope.launch {
+            try {
+                for ((interaction, resolution) in captured) {
+                    val current = interactions.pending.value
+                    val sourceSession = sessions.sessions.value.firstOrNull { it.key == interaction.sessionKey }
+                        ?: taskAgentSessions[GroupKeys.rawKey(interaction.sessionKey)]
+                    if (!taps.canTap(interaction, current, java.time.Instant.now()) || trayApproval(interaction, sourceSession) != resolution) continue
+                    taps = taps.tapped(interaction.id)
+                    try {
+                        val result = submitInteraction { interactions.resolveOutcome(interaction.id, resolution) }
+                        result.submission.haptic?.let(haptics)
+                        taps = taps.answered(interaction.id, result.card)
+                        if (!result.withdraw) notice = result.notice(res, interaction, resolution)
+                    } finally { taps = taps.idle() }
+                }
+            } finally { trayApproving = false }
+        }
+    }
+    fun sendTray(draft: TrayDraft) {
+        if (traySending || readOnly || !canSend) return
+        traySending = true
+        scope.launch {
+            try {
+                when (draft) {
+                    is TrayDraft.Inbox -> {
+                        val accepted = chrome.inboxScope?.let { scopeId ->
+                            chrome.inboxTrays?.send(scopeId, draft.draft, traySendIds.getOrPut(draft.draft) { UUID.randomUUID().toString() })
+                        } == true
+                        if (!accepted) notice = res.getString(R.string.chat_tray_draft_changed)
+                    }
+                    is TrayDraft.Feed -> {
+                        val latest = tasks?.feeds?.value?.get(key.sessionId)?.firstOrNull { it.id == draft.item.id }
+                        if (latest != draft.item || !latest.canSend) notice = res.getString(R.string.chat_tray_draft_changed)
+                        else tasks?.sendMessage(draft.item, draft.text) { notice = operationFeedback(it).text.resolve(res) }
+                    }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
+            finally { traySending = false }
+        }
+    }
+    LaunchedEffect(allRequests, trayReview) { if (allRequests.none { it.id == trayReview }) trayReview = null }
+    trayPlan?.let { plan -> taskHost?.let { host ->
+        JSheet(onDismiss = { trayPlan = null }, title = plan.tasks.firstOrNull()?.title, scrollable = true) {
+            PlanCard(plan, host)
+        }
+    } }
+    traySchedule?.let { schedule ->
+        JSheet(onDismiss = { traySchedule = null }, title = schedule.title, scrollable = true) {
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                Text(schedule.prompt, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                schedule.lastStatus?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
+                schedule.lastError?.let { JNotice(it, status = Status.NeedsYou) }
+                schedule.nextRun?.let { Text(stringResource(R.string.chat_tray_next_run, it), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
+                val machineId = schedule.runMachineId ?: schedule.machineId
+                val sessionId = schedule.runSessionId ?: schedule.lastSessionId ?: schedule.sessionId
+                if (machineId != null && sessionId != null) JButton(stringResource(R.string.chat_task_detail_open_chat), {
+                    traySchedule = null
+                    chrome.onOpenSession?.invoke(GroupKeys.key(GroupKeys.rawKey(SessionKey(machineId, sessionId)), GroupKeys.namespaceOf(key.machineId)))
+                })
+            }
+        }
     }
     // Drawn whatever the composer area shows: a read-only assistant conversation's task cards open their sheet too.
     taskHost?.let { AssistantTaskSheets(it) }
+    if (backgroundOpen) CompositionLocalProvider(LocalAssistantTaskHost provides taskHost) {
+        AssistantBackgroundRecords(assistantPresentation.background, key, loader,
+            onToggle = ::toggle, onFold = ::expand, folding = folding, foldErrors = foldErrors,
+            onFullText = { item -> scope.launch {
+                try { fullText = repository.fullText(key, item.id) }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { if (feedback?.failure(e) != true) notice = operationFeedback(e).text.resolve(res) }
+            } },
+            onDismiss = { backgroundOpen = false })
+    }
     LaunchedEffect(allMessages, submittedDraft) {
         submittedDraft?.let { (id, draft) ->
             if (allMessages.any { it.clientMessageId == id }) {
@@ -595,7 +738,8 @@ private fun ChatPage(
         line.holds(lastUserId)
     }?.let { ChatListEntry(it.contentKey, lastLineAtTop = true) } else null
     ChatListEffects(chatList, messages.asReversed().map { "outbox-${it.clientMessageId}" } + lines.map { it.contentKey },
-        ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty()) &&
+        ready = !snapshot.loading && (snapshot.items.isEmpty() || lines.isNotEmpty() ||
+            (renderStyle.compactToolSummary && projectedFrom === snapshot.items && assistantPresentation.foreground.isEmpty())) &&
             (unreadEntry == null || markdownReadyFor == snapshot.items), entry = unreadEntry,
         rowAliases = lines.associate { it.id to it.contentKey },
         hasOlder = snapshot.hasOlder, loadingOlder = snapshot.loadingOlder,
@@ -668,6 +812,7 @@ private fun ChatPage(
             }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
             BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = linkInset)) {
                 val panelMax = maxHeight * 0.55f
+                val trayMax = maxHeight * AssistantTrayTokens.maximumHeightFraction
                 JPage(
                     title = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled),
                     topBar = {
@@ -699,7 +844,7 @@ private fun ChatPage(
                     },
                     bottomBar = {
                         Column {
-                            ChatSessionStatusLine(status, session, snapshot.turnDurationSeconds, projection.turns.lastOrNull()?.toolCount ?: 0,
+                            if (renderStyle != ChatRenderStyle.Assistant) ChatSessionStatusLine(status, session, snapshot.turnDurationSeconds, projection.turns.lastOrNull()?.toolCount ?: 0,
                                 onDetails = { statusSheet = true }, terminal = terminal, draftSaveError = statusBindings.draftSaveError)
                             AnimatedVisibility(interactionFeedback != null, exit = fadeOut()) {
                                 // Inset like the status line and the composer around it, not edge to edge.
@@ -713,7 +858,9 @@ private fun ChatPage(
                                 nextWaiting(chrome.waiting, key)?.let { next ->
                                     NextWaitingRow(next, { offerNext = false; openRequest?.invoke(next.request.session, next.request.requestId) })
                                 }
-                            if (!readOnly) InteractionPanel(requests, machine, panelMax, taps.busyId, taps.uncertain, { interaction, resolution ->
+                            if (!readOnly && (renderStyle != ChatRenderStyle.Assistant || trayReview != null)) InteractionPanel(
+                                if (renderStyle == ChatRenderStyle.Assistant) taps.shown(allRequests).filter { it.id == trayReview } else requests,
+                                machine, panelMax, taps.busyId, taps.uncertain, { interaction, resolution ->
                                 if (taps.canTap(interaction, allRequests, java.time.Instant.now())) {
                                     taps = taps.tapped(interaction.id)
                                     scope.launch {
@@ -733,7 +880,7 @@ private fun ChatPage(
                                     }
                                 }
                             }, terminal, { overlay = it }, linkVisible = linkVisible,
-                                collapsed = requestCollapsed, onCollapsedChange = { requestCollapsed = it },
+                                collapsed = requestCollapsed, onCollapsedChange = { requestCollapsed = it; if (it) trayReview = null },
                                 blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
                                 terminalHelp = canTerminal, onDiscardLocal = { interaction ->
                                     if (!taps.busy) {
@@ -775,13 +922,31 @@ private fun ChatPage(
                                     ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
                                 // A source that only lets the phone read says so where the typing would be.
                                 if (!canSend && session != null && (requests.isEmpty() || requestCollapsed)) ChatSourceNote(session)
-                                taskHost?.let { AssistantTaskBar(it) }
+                                if (renderStyle == ChatRenderStyle.Assistant && trayReview == null) taskHost?.let { host ->
+                                    val namespace = GroupKeys.namespaceOf(key.machineId)
+                                    val owner = session?.manager ?: managerChoice.shown
+                                    val trayRequests = taps.shown(allRequests).filter { request ->
+                                        GroupKeys.namespaceOf(request.machineId) == namespace &&
+                                            (request.sessionKey == key || request.sessionKey in taskKeys ||
+                                                host.sessions.any { it.key == GroupKeys.rawKey(request.sessionKey) && !it.assistant && (it.manager ?: managerChoice.defaultId) == owner })
+                                    }
+                                    AssistantTrays(host, assistantTrays, trayRequests,
+                                        inboxDrafts.filter { (it.manager ?: managerChoice.defaultId) == owner }, traySchedules,
+                                        maximumHeight = trayMax,
+                                        busy = trayApproving || traySending || taps.busy, enabled = canSend,
+                                        onApprove = ::approveTray, onReview = { interaction ->
+                                            assistantTrays.expanded = null
+                                            trayReview = interaction.id
+                                            requestCollapsed = false
+                                        }, onSend = ::sendTray, onSchedule = { traySchedule = it }, onPlan = { trayPlan = it },
+                                        backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground)
+                                }
                                 val claudeCommands = session?.canTypeClaudeCommands == true
                                 ChatComposer(key, composer, session?.status == "working", sending || submittedDraft != null,
                                     // /clear and /model type into Claude's pane: Claude in a terminal engine only (positive check).
                                     canClear = clearingPane == null && session?.canTypeClaudeCommands == true,
                                     service = composerService, onSend = { send() }, onCommand = { send(it) }, onNotice = { notice = it },
-                                    extraContent = linkContexts.isNotEmpty(), visible = requests.isEmpty() || requestCollapsed,
+                                    extraContent = linkContexts.isNotEmpty(), visible = (renderStyle == ChatRenderStyle.Assistant && trayReview == null) || requests.isEmpty() || requestCollapsed,
                                     enabled = canSend, placeholder = if (canSend) stringResource(R.string.chat_screen_placeholder) else READ_ONLY.text(),
                                     // Permission mode and effort for Claude's sessions, Persona's included; the model for Claude in a pane;
                                     // the effort alone for a Codex thread on its app-server.
@@ -856,7 +1021,7 @@ private fun ChatPage(
                                             contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
-                                        showSourceLabel = line.id in contentSourceLabels)
+                                        showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou)
                                         }
                                     }
                                 }

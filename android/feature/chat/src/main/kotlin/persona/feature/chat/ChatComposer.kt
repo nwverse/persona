@@ -298,18 +298,23 @@ fun ChatComposer(
     val canSend = enabled && state.ready && !sending
     val homeAssistant = LocalHomeChrome.current?.let { it.items.firstOrNull()?.key == it.selected } == true
     val fullToolbar = !homeAssistant || state.focused || hasContent
+    // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
+    // this change, so moving the controls cannot dispose the field and cancel the tap or the IME.
+    val expanded = state.focused || hasContent
     val composerPlaceholder = if (homeAssistant) stringResource(R.string.chat_composer_ask_persona, LocalPersonaName.current) else placeholder
 
     ComposerFrame(
         // Blank space around the field (its padding, beside the buttons) types too: one tap, not a hunt for the line.
         onBlankTap = { if (enabled) { focusRequester.requestFocus(); keyboard?.show() } },
-        expanded = homeAssistant && fullToolbar,
+        expanded = expanded,
         leading = {
             JIconButton(PhIcons.Plus, stringResource(R.string.chat_composer_add), { menu = true }, enabled = !sending && enabled)
-            if (mentions != null && fullToolbar) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), {
-                state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++
-            }, enabled = enabled)
-            if (fullToolbar) leading?.invoke(this)
+            if (expanded) {
+                if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), {
+                    state.beginEdit(); state.value = typeMention(state.value); state.focusRequest++
+                }, enabled = enabled)
+                leading?.invoke(this)
+            }
         },
         trailing = {
             // The mic stays (iOS ShellComposerBar): more can be dictated after what is typed. Send beside it once there is

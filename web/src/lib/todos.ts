@@ -1,6 +1,6 @@
 import { formatDate, t } from "../i18n";
 import { noteItemManager } from "./manager-choice";
-import { reviewState, type Supervision } from "./supervision";
+import { acceptanceStands, reviewState, type Supervision } from "./supervision";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
 import { parseAPIError, retryable } from "./api-errors";
@@ -78,6 +78,44 @@ export interface Todo {
   delivery?: TodoDelivery;
   /** The chat thread the todo is bound to (#5279, docs/assistant/todos.md "Chat thread"); unset while it has none. */
   thread?: TodoThread;
+  /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
+   *  and from hubs before it. */
+  ask?: TodoAsk;
+}
+
+/**
+ * The ask a to-do waits on, as GET /todos carries it: a deployed to-do's "Please verify" (no outcome), or a supervised
+ * task's conclusion — `done`, `cannot` (cannot be done) or `decide` (needs the user's decision, with the option the
+ * supervisor recommends when it has one). `verdict` is the line its Lark card says, in the request's language;
+ * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
+ */
+export interface TodoAsk {
+  outcome?: "done" | "cannot" | "decide" | string;
+  verdict: string;
+  recommend?: string;
+  asked_at: string;
+}
+
+/** What the one button of an ask does: take a decision's recommendation, acknowledge a conclusion that only tells, or
+ *  accept a deployed to-do as verified. */
+export type AskTake = "take" | "ack" | "accept";
+
+/** The ask a to-do waits on, when the hub sent a whole one (a verdict line and a round to answer). */
+export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
+  const a = todo.ask;
+  return a && a.verdict && a.asked_at ? a : undefined;
+}
+
+/** What the ask's button does; none for a decision that recommends nothing: nothing for one tap to take, so it is
+ *  answered in its conversation (or on its Lark card). */
+export function askTake(ask: TodoAsk): AskTake | undefined {
+  if (ask.outcome === "decide") return ask.recommend ? "take" : undefined;
+  return ask.outcome ? "ack" : "accept";
+}
+
+/** The tone of an ask's verdict: a decision waits on the user, what cannot be done is red, done (or deployed) is green. */
+export function askTone(ask: TodoAsk): "attention" | "red" | "green" {
+  return ask.outcome === "decide" ? "attention" : ask.outcome === "cannot" ? "red" : "green";
 }
 
 /** A chat thread a todo is bound to: the channel, the chat and the thread in it name it; the title is only a label. */
@@ -102,7 +140,7 @@ export function heldDelivery(todo: Todo): TodoDelivery | null {
   return d.state === "pr" || d.state === "merged" || d.state === "off" ? d : null;
 }
 
-export type TodoStatus = "done" | "needs_you" | "interrupted" | "usage_limit" | "unread" | "working" | "follow_up" | "not_started" | "failed";
+export type TodoStatus = "done" | "needs_you" | "interrupted" | "usage_limit" | "unread" | "working" | "waiting" | "follow_up" | "not_started" | "failed";
 
 /** Where a status sorts, as the task board orders its sections (lib/task-board.ts): what the user must act on first —
  *  Needs you, Awaiting review (rank 2, see todoRank), Failed to start — then Working, Finished, Stopped, Done (#4896). */
@@ -112,6 +150,7 @@ export const TODO_STATUS_RANK: Record<TodoStatus, number> = {
   usage_limit: 1.5, // after Interrupted, before Awaiting review (todoRank returns 2)
   failed: 3,
   working: 4,
+  waiting: 4.5, // under way like Working, its agent between rounds (#3274)
   not_started: 5,
   unread: 6,
   follow_up: 7,
@@ -127,10 +166,11 @@ export const TODO_TONE_CLASS: Record<(typeof TODO_STATUS_INFO)[TodoStatus]["tone
   off: "text-ink-3",
 };
 
-/** A supervised task whose work was judged finished and waits for the user to accept it (#3124): nothing of it runs or
- *  asks, so it is the user's to review rather than just stopped or finished-unseen (#4896). */
+/** A task that waits for the user's review while nothing of it runs or asks, so it is the user's rather than just stopped
+ *  or finished-unseen (#4896): a supervised one whose work was judged finished (#3124), or an open one whose result
+ *  waits on them — to verify, to acknowledge, or to decide (its `ask`, #2056). */
 export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
-  return reviewState(todo) === "pending_review" && (status === "follow_up" || status === "unread" || status === "not_started");
+  return (reviewState(todo) === "pending_review" || !!openAsk(todo)) && (status === "follow_up" || status === "unread" || status === "not_started");
 }
 
 /** A task's place in the order: its status's rank, Awaiting review right after Needs you. */
@@ -145,6 +185,7 @@ export const TODO_STATUS_INFO: Record<TodoStatus, { label: string; tone: "red" |
   usage_limit: { label: t("lib-usage-limit.short"), tone: "amber" },
   unread: { label: stateName("unread"), tone: "green" },
   working: { label: stateName("working"), tone: "amber" },
+  waiting: { label: stateName("task_waiting"), tone: "amber" },
   follow_up: { label: stateName("follow_up"), tone: "idle" },
   not_started: { label: stateName("not_started"), tone: "off" },
   failed: { label: stateName("failed"), tone: "red" },
@@ -167,8 +208,21 @@ export function isReviewDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "review";
 }
 
-/** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did. */
+/** An open task its supervisor accepted, reopened by the hub when its agent got more work, with nothing of it running
+ *  or asking now: it reads as accepted, not "Follow up" (#3156, docs/assistant/todo-status-sop.md "Accepted tasks"). */
+export function acceptedAtRest(todo: Todo, status: TodoStatus): boolean {
+  return !todo.done_at && acceptanceStands(todo) && (status === "follow_up" || status === "unread" || status === "not_started" || status === "usage_limit");
+}
+
+/** The status a row draws its tone and mark from: Done for an accepted task at rest, else its own. */
+export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
+  return acceptedAtRest(todo, status) ? "done" : status;
+}
+
+/** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
+ *  (or accepted and nothing runs again). */
 export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
+  if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
@@ -192,6 +246,7 @@ export function makeSessionLookup(sessions: Session[] | Record<string, Session[]
  * 2.6 Usage limit: an attached agent is stopped on a subscription usage limit that has not reset yet
  * 3. Unread: an attached agent finished and you have not seen it
  * 4. Working: an attached agent is working or starting
+ * 4.5 Waiting: an attached agent ended its turn but something brings it back (agentWaits, #3274)
  * 5. Follow-up: every attached agent is stopped (seen, not running, failed to start)
  * 6. Not started: no attached agent
  */
@@ -206,6 +261,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   let hasLimit = false;
   let hasUnread = false;
   let hasWorking = false;
+  let hasWaiting = false;
 
   for (const a of active) {
     if (a.start_error) {
@@ -221,6 +277,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
     if (usageLimitAgent(s)) hasLimit = true;
     else if (interruptedAgent(s)) hasInterrupted = true;
     else if (st === "unread") hasUnread = true;
+    else if (s && agentWaits(s)) hasWaiting = true;
     else if (st === "working" || s?.starting) hasWorking = true;
   }
 
@@ -229,7 +286,31 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
   if (hasLimit) return "usage_limit";
   if (hasUnread) return "unread";
   if (hasWorking) return "working";
+  if (hasWaiting) return "waiting";
   return "follow_up";
+}
+
+/** The agent ended its turn, yet something brings it back, so its task waits rather than stopped (#3274; the hub's
+ *  agentWaits): only its background commands, subagents, Monitors or workflows run and will report back
+ *  (background_working), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure
+ *  for it and wakes it (work blocked on anything but the user). */
+export function agentWaits(s: Session): boolean {
+  const st = stateOf(s);
+  if (st === "working") return Boolean(s.background_working);
+  const w = s.work;
+  return st !== "needs_you" && st !== "unread" && w?.phase === "blocked" && (w.on === "agent" || w.on === "external" || w.on === "transient");
+}
+
+/** What a waiting task waits for, in one line: the first waiting agent's own words for it (#3274). */
+export function waitingLine(todo: Todo, lookup?: SessionLookup): string | undefined {
+  for (const a of todo.agents ?? []) {
+    if (a.released_at) continue;
+    const s = lookup?.(a.machine_id, a.session_id);
+    if (!s || !agentWaits(s)) continue;
+    const line = (s.work?.phase === "blocked" ? s.work.line || s.work.wait : undefined)?.trim();
+    if (line) return line;
+  }
+  return undefined;
 }
 
 /** The agent stopped on a model API error (the hub's turn_error): cut off, not finished (#1516). */
