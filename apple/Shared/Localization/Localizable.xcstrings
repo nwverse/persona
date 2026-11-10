@@ -63446,6 +63446,28 @@
       },
       "extractionState": "manual"
     },
+    "Leave Allow Everything?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave Allow Everything?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて許可をやめますか？"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "离开全部放行？"
+          }
+        }
+      }
+    },
     "Leave a comment": {
       "localizations": {
         "en": {
@@ -127410,6 +127432,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "This agent wasn't started with Allow Everything, so it can't be switched back to it from here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This agent wasn't started with Allow Everything, so it can't be switched back to it from here."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このエージェントはすべて許可で起動していないため、切り替えるとここからは戻せません。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个 Agent 不是以全部放行启动的，切走后在这里切不回来。"
+          }
+        }
+      }
     },
     "This agent can't be stopped and closed from the phone": {
       "localizations": {

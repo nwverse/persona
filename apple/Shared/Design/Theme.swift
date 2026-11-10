@@ -848,6 +848,18 @@ nonisolated enum Theme {
         static let gray = Color(light: 0x8E8E93, dark: 0x636366)
     }
 
+    /// A permission mode's tone where the Agents header shows it (#3719), by how much the agent does without asking.
+    /// None is an agent state's color (blue, amber, green), which the same header uses for the state. Asks first is the
+    /// quiet ink (`.secondary`), drawn by the header itself.
+    enum ModeTone {
+        /// Plan Only: it reads and plans, and acts only once the plan is approved.
+        static let plans = Color(light: 0x0E7C86, dark: 0x4FD1C5)
+        /// Auto-Edit and Auto: it acts by itself within limits.
+        static var acts: Color { Hue.purple }
+        /// Allow Everything: nothing is asked, in the warning the new-agent form gives it.
+        static var allowsAll: Color { Theme.danger }
+    }
+
     /// The user's own messages.
     static var userBubble: Color { spec.userBubble }
     static var userBubbleText: Color { spec.userBubbleText }
