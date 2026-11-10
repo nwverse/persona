@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,11 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
 )
+
+// CheckSelfContained is CheckSelfContainedContext without a deadline of the caller's.
+func CheckSelfContained(b []byte) error {
+	return CheckSelfContainedContext(context.Background(), b)
+}
 
 func TestSourceBundleContainmentIntegrityAndSize(t *testing.T) {
 	root := t.TempDir()

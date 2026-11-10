@@ -143,7 +143,7 @@ func TestComputerBrowserSnapshotsUseConnectionLanguage(t *testing.T) {
 	for _, l := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 		c := &client{hub: h, role: roleFull, out: make(chan []byte, 16), acceptLang: l}
 		clients[l] = c
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 	h.broadcastMachines()
 	for l, c := range clients {
