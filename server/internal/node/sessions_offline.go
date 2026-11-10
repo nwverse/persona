@@ -74,6 +74,7 @@ func (n *Node) scanOffline() []proto.Session {
 		others = iota
 		assistants
 		keptOnes
+		desktopOnes // the desktop app's unarchived sessions, whatever their age (claudedesktop.go)
 	)
 	type cand struct {
 		path  string
@@ -86,6 +87,8 @@ func (n *Node) scanOffline() []proto.Session {
 	forked := maps.Clone(n.forked) // "Branch to New Chat"'s copies (fork.go)
 	n.mu.Unlock()
 	own := n.assistantProject()
+	// The desktop app's sessions as its sidebar lists them (claudedesktop.go).
+	desktop := readClaudeDesktopIndex(n.home)
 	for _, p := range files {
 		id := strings.TrimSuffix(filepath.Base(p), ".jsonl")
 		if !validID(id) {
@@ -97,6 +100,10 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		if keep[id] { // the main conversation: listed however long it has been quiet and however busy the machine
 			cands = append(cands, cand{p, st, keptOnes})
+			continue
+		}
+		if desktop.listed(id) { // in the desktop app's sidebar: listed however long it has been quiet, counted on its own
+			cands = append(cands, cand{p, st, desktopOnes})
 			continue
 		}
 		if time.Since(st.ModTime()) > offlineWindow || (st.Size() < 2048 && !forked[id]) {
@@ -116,12 +123,10 @@ func (n *Node) scanOffline() []proto.Session {
 	// Newest first, and only what is listed counts: a session the filters below leave out (a blocked or out-of-scope
 	// directory, a probe that never said anything, an older copy) took one of the 80 and pushed a listed one out.
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].st.ModTime().After(cands[j].st.ModTime()) })
-	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands)}
-	var counted [3]int
+	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands), desktopOnes: maxDesktopOffline}
+	var counted [4]int
 	listed := map[string]bool{}
-	// The desktop app's sessions as its sidebar lists them (claudedesktop.go): left out before a row is counted.
-	desktop := readClaudeDesktopIndex(n.home)
-	shown := map[string]bool{}
+	shown := map[string]bool{} // what the desktop app's rules look at: rows are left out before they are counted
 	for _, c := range cands {
 		id := strings.TrimSuffix(filepath.Base(c.path), ".jsonl")
 		if listed[id] {
@@ -150,7 +155,7 @@ func (n *Node) scanOffline() []proto.Session {
 		// one only had its tail read, and a tail of tool calls under one huge line says nothing; the main conversation is
 		// listed whatever its tail holds. Dropping it left the app and the web with no session for the main chat, and its composer
 		// disabled (#1163: its last turn stopped mid tool call, under a 377 KB line).
-		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !keep[id] && !forked[id] && c.st.Size() <= quickTail {
+		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !keep[id] && !forked[id] && c.count != desktopOnes && c.st.Size() <= quickTail {
 			continue
 		}
 		n.setPath(id, c.path)

@@ -112,6 +112,13 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 	return claudeDesktopEntry{transcript: raw.Transcript, archived: raw.Archived, prior: raw.Prior}
 }
 
+// listed: transcript id is the one an unarchived session of the desktop app runs: the sidebar lists it, so the offline
+// list does whatever its age (up to maxDesktopOffline, the newest first), on a count of its own (#3304).
+func (x claudeDesktopIndex) listed(id string) bool { return x.visible[id] }
+
+// maxDesktopOffline bounds the desktop app's sessions the offline list shows beyond its usual window.
+const maxDesktopOffline = 100
+
 // hidden: the offline list leaves transcript id out as the desktop app's sidebar does. shown are the transcripts the
 // list has shown so far (newest first, so a session's current one comes before its earlier ones).
 func (x claudeDesktopIndex) hidden(id string, shown map[string]bool) bool {

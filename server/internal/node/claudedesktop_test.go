@@ -194,3 +194,51 @@ func TestClaudeDesktopDirsAreMacOnly(t *testing.T) {
 		t.Fatalf("dirs = %v", dirs)
 	}
 }
+
+// The desktop app's sidebar lists its unarchived sessions however long they have been quiet: so does the offline list,
+// on a count of its own, so they don't push the newest other sessions out (#3304). Old ones the app archived, or no
+// entry names, stay out as before.
+func TestDesktopSessionsAreListedWhateverTheirAge(t *testing.T) {
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, third := useDesktopDirs(t)
+	const (
+		oldOpen     = "bbbbbbbb-0000-4000-8000-000000000001"
+		oldArchived = "bbbbbbbb-0000-4000-8000-000000000002"
+		oldUnnamed  = "bbbbbbbb-0000-4000-8000-000000000003"
+		oldSilent   = "bbbbbbbb-0000-4000-8000-000000000004" // opened in the app, nothing said yet
+	)
+	month := 30 * 24 * time.Hour
+	for _, id := range []string{oldOpen, oldArchived, oldUnnamed} {
+		writeEntrypointTranscript(t, dir, id, "claude-desktop-3p", month)
+	}
+	silent := filepath.Join(dir, oldSilent+".jsonl")
+	os.WriteFile(silent, []byte(`{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-01T00:00:00Z"}`+"\n"), 0o600)
+	_ = os.Chtimes(silent, time.Now().Add(-month), time.Now().Add(-month))
+	writeDesktopEntry(t, third, "open", oldOpen, false, nil, "")
+	writeDesktopEntry(t, third, "archived", oldArchived, true, nil, "")
+	writeDesktopEntry(t, third, "silent", oldSilent, false, nil, "")
+	for i := 0; i < 85; i++ { // the newest 80 others stay the newest 80
+		writeEntrypointTranscript(t, dir, fmt.Sprintf("cccccccc-0000-4000-8000-%012d", i), "cli", time.Duration(i+1)*time.Minute)
+	}
+	got := map[string]bool{}
+	others := 0
+	for _, s := range n.scanOffline() {
+		got[s.SessionID] = true
+		if strings.HasPrefix(s.SessionID, "cccccccc") {
+			others++
+		}
+	}
+	for id, want := range map[string]bool{oldOpen: true, oldSilent: true, oldArchived: false, oldUnnamed: false} {
+		if got[id] != want {
+			t.Errorf("%s listed=%v, want %v", id, got[id], want)
+		}
+	}
+	if others != 80 {
+		t.Fatalf("other sessions = %d, want the newest 80", others)
+	}
+}
