@@ -19,10 +19,12 @@ final class PhoneRecordingReceiver {
                 #endif
                 WatchSync.shared.confirmRecording(RecordingReceipt(id: transfer.id, index: transfer.segment?.index, total: transfer.total))
                 RecordingTranscription.shared.enqueue(transfer.id)
+                if RecordingLibrary.shared.entry(transfer.id)?.isRolling == true { RecordingRollingKeeper.shared.schedule() }
             } catch { /* No ack: the watch keeps the original and retries. */ }
         }
         RecordingCapture.shared.onSaved = { RecordingTranscription.shared.enqueue($0) }
         RecordingTranscription.shared.resumePending()
+        RecordingRollingKeeper.shared.schedule()
         // Each transcribed segment is saved, and each save syncs the text to the knowledge base (docs/apple/recording.md).
         RecordingSync.shared.start()
         #if os(iOS)
