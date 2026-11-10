@@ -1,0 +1,14 @@
+{
+  "rule_name": "第 {index} 条规则需要名称",
+  "rule_prompt": "第 {index} 条规则需要提示语",
+  "rule_prompt_long": "第 {index} 条规则的提示语超过 {max} 个字符",
+  "too_many": "最多只能有 {max} 条规则",
+  "duplicate": "规则重复：{name}",
+  "read_only": "只读设备不能修改待办规则",
+  "skipped_done": "事项已完成",
+  "skipped_muted": "事项已静音",
+  "skipped_parent": "事项已经有父项",
+  "skipped_other": "事项正在等待分拣",
+  "no_rule": "没有启用的规则匹配这个来源和类型",
+  "fallback_title": "收件箱跟进"
+}

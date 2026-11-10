@@ -28,6 +28,7 @@ import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { AgentSettings } from "./settings/AgentSettings";
 import { SidebarPagesGroup } from "./settings/SidebarPages";
 import { AgentGroup } from "./settings/AgentGroup";
+import { TodoRulesSettings } from "./settings/TodoRulesSettings";
 import { AssistantSettings } from "./settings/AssistantSettings";
 import { PersonaPicker } from "./assistant/Persona";
 import { Connectors } from "./settings/Connectors";
@@ -277,6 +278,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 </section>
               </>}
               {tab === "agents" && <AgentSections section={at.section} />}
+              {tab === "todos" && <TodoRulesSettings />}
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>

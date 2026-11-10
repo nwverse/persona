@@ -6,6 +6,7 @@
   "name_inbox_agent": "AI twin runs",
   "name_lark_agent": "Lark /agent",
   "name_inbox_judge": "AI twin judge",
+  "name_inbox_todo_rules": "Inbox to-do rules",
   "name_agent_triage": "Session triage",
   "name_agent_delegate": "Answering agents' questions",
   "name_inbox_draft": "Draft replies",

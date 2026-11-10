@@ -4,6 +4,8 @@
   "tab_models": "模型",
   "tab_providers": "模型供应商",
   "tab_agents": "Agent",
+  "tab_todos": "待办",
+  "hint_todos": "按你的规则把收件箱事项变成待办",
   "hint_persona": "Persona 的形象、行为和 Agent 偏好",
   "hint_agents": "Claude Code、Codex、Antigravity 和 omp",
   "tab_model_config": "模型配置",

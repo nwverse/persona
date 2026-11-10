@@ -6,8 +6,8 @@ import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
 
-export type Tab = "general" | "persona" | "notifications" | "models" | "agents" | "channels" | "connectors" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge";
-export const TABS: Tab[] = ["general", "persona", "notifications", "models", "agents", "channels", "connectors", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge"];
+export type Tab = "general" | "persona" | "notifications" | "models" | "agents" | "todos" | "channels" | "connectors" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge";
+export const TABS: Tab[] = ["general", "persona", "notifications", "models", "agents", "todos", "channels", "connectors", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
@@ -37,6 +37,7 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
   notifications: { label: t("settings-nav.tab_notifications"), icon: "bell", hint: t("settings-nav.hint_notifications") },
   models: { label: t("settings-nav.tab_models"), icon: "layers", hint: t("settings-nav.hint_models") },
   agents: { label: t("settings-nav.tab_agents"), icon: "terminal", hint: t("settings-nav.hint_agents") },
+  todos: { label: t("settings-nav.tab_todos"), icon: "todo", hint: t("settings-nav.hint_todos") },
   channels: { label: t("settings-nav.tab_channels"), icon: "chat", hint: t("settings-nav.hint_channels") },
   connectors: { label: t("settings-nav.tab_connectors"), icon: "link", hint: t("settings-nav.hint_connectors") },
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
@@ -49,7 +50,7 @@ export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string
 /** The sidebar (desktop) and the phone's list: the categories in four sections. */
 export const NAV_GROUPS: { title: string; tabs: Tab[] }[] = [
   { title: t("settings-nav.group_personal"), tabs: ["general", "notifications", "shortcuts"] },
-  { title: t("settings-nav.group_assistant"), tabs: ["persona", "models", "agents", "knowledge"] },
+  { title: t("settings-nav.group_assistant"), tabs: ["persona", "models", "agents", "todos", "knowledge"] },
   { title: t("settings-nav.group_connections"), tabs: ["channels", "connectors", "extensions"] },
   { title: t("settings-nav.group_system"), tabs: ["devices", "hub", "managers"] },
 ];

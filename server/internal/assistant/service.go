@@ -116,6 +116,7 @@ type Service struct {
 	minutesMu  sync.Mutex
 	live       contextState      // context.go
 	todos      todoBook          // todos.go
+	todoRules  todoRulesBook     // todo_rules.go: Inbox items turned into to-dos by user rules
 	work       workBook          // agents_work.go: the Agents business
 	reply      replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans      channelsBook      // channels.go
@@ -183,6 +184,7 @@ func New(o Options) *Service {
 	s.todayRoutes()
 	s.briefRoutes()
 	s.todoRoutes()
+	s.todoRuleRoutes()
 	s.agentRoutes()
 	s.workspaceBoardRoutes()
 	s.channelRoutes()

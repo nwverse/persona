@@ -4,6 +4,8 @@
   "tab_models": "モデル",
   "tab_providers": "モデルプロバイダー",
   "tab_agents": "エージェント",
+  "tab_todos": "ToDo",
+  "hint_todos": "ルールに従って受信トレイから ToDo を作成",
   "hint_persona": "Persona の設定、動作、エージェントの設定",
   "hint_agents": "Claude Code、Codex、Antigravity、omp",
   "tab_model_config": "モデル構成",

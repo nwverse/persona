@@ -162,6 +162,7 @@ func (s *Service) admit(ctx context.Context, batch *inboxBatch, todo []*InboxIte
 	came := len(in) - len(failed) // stored; while rows fail, a kick would only triage the undone ones again
 	if came > 0 {
 		s.handInbox(ctx) // a new "Needs you" may be the AI twin's
+		s.todoRulesSoon(ctx)
 	}
 	if behind && came > 0 {
 		// More to sort, and the model is getting through them: the next round comes now.

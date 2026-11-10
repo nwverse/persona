@@ -39,6 +39,7 @@ func (s *Service) triageInbox(ctx context.Context) {
 		b.triaging.Unlock()
 		s.fileFoldersSoon(ctx)
 		s.handInbox(ctx)
+		s.todoRulesSoon(ctx)
 		return
 	}
 	// The pass outlives the caller: a pull to refresh answers before it is done.
@@ -62,6 +63,7 @@ func (s *Service) triageInbox(ctx context.Context) {
 		wg.Wait()
 		s.fileFoldersSoon(ctx) // where the items go (inbox_folders.go), in its own background pass
 		s.handInbox(ctx)
+		s.todoRulesSoon(ctx)
 	}()
 }
 

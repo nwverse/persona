@@ -242,6 +242,8 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/skills
 -                    GET /api/v1/task-plans/{id}
 -                    GET /api/v1/task-trust
+-                    GET /api/v1/todo-rules
+-                    GET /api/v1/todo-rules/decisions
 todos.read           GET /api/v1/todos
 todos.read           GET /api/v1/todos/{id}/decisions
 -                    GET /api/v1/usage
@@ -513,6 +515,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/mutes
 -                    PUT /api/v1/pins
 -                    PUT /api/v1/recordings/{id}
+-                    PUT /api/v1/todo-rules
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread

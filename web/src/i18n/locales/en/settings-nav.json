@@ -4,6 +4,8 @@
   "tab_models": "Models",
   "tab_providers": "Model providers",
   "tab_agents": "Agents",
+  "tab_todos": "To-dos",
+  "hint_todos": "Create to-dos from Inbox items using your rules",
   "hint_persona": "Persona's identity, behavior, and agent preferences",
   "hint_agents": "Claude Code, Codex, Antigravity, and omp",
   "tab_model_config": "Model configuration",

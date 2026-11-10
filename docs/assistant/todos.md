@@ -16,6 +16,16 @@ To-dos belong to the assistant (`todos.go`, `todo_decisions.go`, `todo_sessions.
   `POST /api/v1/sessions` and `POST /api/v1/sessions/{mid}/{sid}/messages` with `todo_id` first ask the assistant (`assistant.todo_handoff`): does the to-do exist, is it done (if handoff is disallowed, it supplies 404/409 and the message, echoed by hub), prepend decisions to the Agent's message and project context for new Agents, all in one call. After handoff, ask assistant to link it (`assistant.todo_link`; assistant determines both linked title and to-do title); workspace renames through hub notify assistant (`todos.space_renamed`). Protocol in `docs/protocol/protocol.md`, "Bus".
 - **When assistant is disconnected** (hub just started, assistant process restarting): to-do APIs return `503 assistant_offline`, "The assistant is temporarily unavailable. Try again later"; create/send with `todo_id` also return 503 (to-do existence unknown). Session-list to-do/quiet markers keep hub's last report (absent in the first second or two after hub starts before assistant reports). Hub emits no events during this period, so automatic linking, marker reconciliation and decision records wait for the next session list or answer after reconnection; workspaces renamed through hub are not migrated.
 
+## Inbox to-do rules
+
+Settings › To-dos lets the user write rules that turn matching Inbox items into to-dos. A rule has a name, an enabled flag, optional source and kind lists, and a plain-language prompt. Empty source or kind lists match every value. The feature is off until at least one rule is saved; the dry-run switch records model decisions without creating or editing to-dos.
+
+After Inbox triage, the assistant manager checks each open, unmuted, unparented item once per `id` and `last` version. Only rules matching the item's source and kind reach the model. The manager uses the `inbox.todo_rules` model purpose (inheriting the Inbox triage connection) with a JSON response containing `is_todo`, a short title, a human summary and a reason. The prompt includes the source, kind and sender and explains why automated notifications, bot reports and announcements need an explicit request for an action the user owns.
+
+When the answer is yes, the manager creates a normal to-do, sets the Inbox item's parent to `{kind: "todo", id: "<todo id>", by: "rule"}`, and stores the model summary as its notes. Later versions with the same connector thread append a new human note to the open to-do. A completed to-do does not absorb later activity. The thread map, version ledger and a bounded decision log are kept in the manager's `inbox_todo_rules` setting and retained for a short period; no separate migration or public marker is written into notes.
+
+The manager serves `GET` and `PUT /api/v1/todo-rules` for the settings and `GET /api/v1/todo-rules/decisions` for the recent log. These routes are forwarded by the hub with the other assistant routes. The log records the item metadata, rule, verdict, reason, to-do id and time, so the user can see why an item was created, appended, skipped or left alone.
+
 ## Permission of a planned task
 
 A writable task that `task_plan` leaves without a `permission` gets one on the hub before the plan is saved, so the

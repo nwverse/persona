@@ -27,11 +27,13 @@ const (
 	ParentSession = "session" // id "<machine>/<session>"
 )
 
-// Who set a parent: a user's is never replaced by one that comes on its own; a connector's replaces continues.
+// Who set a parent: a user's is never replaced by one that comes on its own; a connector's replaces continues, and
+// the manager's to-do rules use their own provenance for automatic links.
 const (
 	ParentByContinues = "continues"
 	ParentByConnector = "connector"
 	ParentByUser      = "user"
+	ParentByRule      = "rule"
 )
 
 // maxParentDepth is how many parents up an item may sit (its parent's parent… counted); maxParentID bounds an id.
@@ -47,10 +49,11 @@ type InboxParent struct {
 }
 
 var (
-	errParentKind  = i18n.ErrEnglish("inbox-errors.parent_kind")
-	errParentID    = i18n.ErrEnglish("inbox-errors.parent_id")
-	errParentCycle = i18n.ErrEnglish("inbox-errors.parent_cycle")
-	errParentDeep  = i18n.ErrEnglish("inbox-errors.parent_deep")
+	errParentKind   = i18n.ErrEnglish("inbox-errors.parent_kind")
+	errParentID     = i18n.ErrEnglish("inbox-errors.parent_id")
+	errParentCycle  = i18n.ErrEnglish("inbox-errors.parent_cycle")
+	errParentDeep   = i18n.ErrEnglish("inbox-errors.parent_deep")
+	errParentExists = i18n.ErrEnglish("inbox-errors.parent_exists")
 )
 
 func knownParentKind(k string) bool {
@@ -123,12 +126,28 @@ func (b *inboxBook) parentFits(id, parent string) error {
 
 // setInboxParent is the user's PUT on an item's parent: p, or nil to take it off.
 func (s *Service) setInboxParent(ctx context.Context, id string, p *InboxParent) (InboxItem, int, error) {
+	return s.setInboxParentBy(ctx, id, p, ParentByUser)
+}
+
+// setInboxParentBy is the internal parent writer used by automatic manager flows. User routes always use
+// ParentByUser; automatic to-do rules keep their provenance in the same parent reference without exposing an
+// implementation marker in the to-do's notes.
+func (s *Service) setInboxParentBy(ctx context.Context, id string, p *InboxParent, by string) (InboxItem, int, error) {
 	b := &s.inbox
 	b.mu.Lock()
 	it, ok := b.items[id]
 	if !ok {
 		b.mu.Unlock()
 		return InboxItem{}, http.StatusNotFound, errNoInboxItem
+	}
+	if by == ParentByRule && p != nil && it.Parent != nil {
+		if it.Parent.Kind == p.Kind && it.Parent.ID == p.ID {
+			out := it.listed()
+			b.mu.Unlock()
+			return out, http.StatusOK, nil
+		}
+		b.mu.Unlock()
+		return InboxItem{}, http.StatusConflict, errParentExists
 	}
 	if p != nil {
 		if err := checkParentRef(p.Kind, p.ID); err != nil {
@@ -145,7 +164,7 @@ func (s *Service) setInboxParent(ctx context.Context, id string, p *InboxParent)
 				return InboxItem{}, http.StatusConflict, err
 			}
 		}
-		p = &InboxParent{Kind: p.Kind, ID: p.ID, By: ParentByUser}
+		p = &InboxParent{Kind: p.Kind, ID: p.ID, By: by}
 	}
 	// Keep the old parent so a failed write puts it back: the answer must not say moved while the row did not.
 	prevParent := it.Parent

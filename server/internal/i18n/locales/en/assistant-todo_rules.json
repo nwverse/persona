@@ -1,0 +1,14 @@
+{
+  "rule_name": "rule {index} needs a name",
+  "rule_prompt": "rule {index} needs a prompt",
+  "rule_prompt_long": "rule {index} prompt is longer than {max} characters",
+  "too_many": "at most {max} rules are allowed",
+  "duplicate": "duplicate rule {name}",
+  "read_only": "a read-only device cannot change to-do rules",
+  "skipped_done": "item is done",
+  "skipped_muted": "item is muted",
+  "skipped_parent": "item already has a parent",
+  "skipped_other": "item is waiting for triage",
+  "no_rule": "no enabled rule matches this source and kind",
+  "fallback_title": "Inbox follow-up"
+}

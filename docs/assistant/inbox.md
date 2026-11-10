@@ -24,6 +24,8 @@ items when deleting a source's data, and GitHub Settings' muted repositories (`i
 Hub still enforces its own boundary: reply-only devices (Watch) may send only text, not change document state or send `/agent …` (which starts an Agent when sent as the user).
 Hub rejects these before forwarding (403; the manager checks too). Connector settings, including credentials, remain hub APIs; only muted repositories belong to the manager.
 
+After triage, the manager may apply the user's Settings › To-dos rules to an Inbox item. Rules match the item's connector source and kind, then ask the configured `inbox.todo_rules` model only for matching open, unmuted and unparented items; the resulting to-do parent and decision log stay manager-owned. See [todos.md](todos.md) "Inbox to-do rules".
+
 **Send once**: replies (mail, connectors, Lark plugin) carry manager-derived `send_id` (use App `client_id` if supplied; otherwise derive from item, text, and changes,
 excluding `last`, like Lark `clientId`). Hub stores it in `sent_messages` (the same table as App sends; the records do not expire). Repeated requests return `already` without resending (safe if a reply is lost in transit
 or the manager restarts and retries). A previous interrupted send (hub stopped or timed out) returns `assistant_in_doubt`, also without resending. Event grouping's `group.append` similarly carries
@@ -451,7 +453,7 @@ An item can have a parent (`parent: {kind, id, by}`), linking an item arriving f
 A parent is another Inbox item (`inbox`), a to-do (`todo`), or Agent session (`session`, ID `<machine>/<session>`). Persona stores, lists, and navigates only; it never guesses parents.
 To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
 
-- **Origin** (`by`): a new event continuing an earlier one from grouping (`continues`), connector `InboxThing.parent` (`connector`), or user-set (`user`).
+- **Origin** (`by`): a new event continuing an earlier one from grouping (`continues`), connector `InboxThing.parent` (`connector`), an automatic Inbox-to-do rule (`rule`), or user-set (`user`).
   Automatic values never overwrite user values; connector values may overwrite `continues`, not vice versa.
 - **Set**: `PUT /api/v1/inbox/{id}/parent {kind, id}`; `null` or `{}` removes it (no DELETE, avoiding collision with `DELETE /api/v1/inbox/mutes/{id}`).
   Item parents must exist (404 otherwise); no cycles, at most 8 ancestor levels (409 otherwise). IDs up to 256 characters, no control characters (400). Return updated item.

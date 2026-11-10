@@ -88,6 +88,7 @@ var modelPurposes = []ModelPurpose{
 	{ID: "inbox.agent", Group: "group_agents", Kind: "launcher", Parent: "agent.new"},
 	{ID: "lark.agent", Group: "group_agents", Kind: "launcher", Parent: "agent.new"},
 	{ID: "inbox.judge", Group: "group_triage", Kind: "api", Parent: "inbox.triage"},
+	{ID: purposeTodoRules, Group: "group_triage", Kind: "api", Parent: "inbox.triage"},
 	{ID: "agent.triage", Group: "group_triage", Kind: "api", Parent: "inbox.triage"},
 	{ID: "inbox.draft", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "translate", Group: "group_processing", Kind: "api", Parent: "kb"},

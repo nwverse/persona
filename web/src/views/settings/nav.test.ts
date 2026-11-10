@@ -85,7 +85,7 @@ describe("settings sidebar groups", () => {
     expect(NAV_GROUPS).toHaveLength(4);
     expect(NAV_GROUPS.map((g) => g.tabs)).toEqual([
       ["general", "notifications", "shortcuts"],
-      ["persona", "models", "agents", "knowledge"],
+      ["persona", "models", "agents", "todos", "knowledge"],
       ["channels", "connectors", "extensions"],
       ["devices", "hub", "managers"],
     ]);

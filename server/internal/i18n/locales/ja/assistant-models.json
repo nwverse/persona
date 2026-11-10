@@ -6,6 +6,7 @@
   "name_inbox_agent": "AI分身の実行",
   "name_lark_agent": "Lark /agent",
   "name_inbox_judge": "AI分身の判定",
+  "name_inbox_todo_rules": "受信トレイの ToDo ルール",
   "name_agent_triage": "セッションの振り分け",
   "name_agent_delegate": "質問の代理回答",
   "name_inbox_draft": "返信の下書き",

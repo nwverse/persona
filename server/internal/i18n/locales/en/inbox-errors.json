@@ -13,6 +13,7 @@
   "parent_id": "parent id must be 1–256 printable characters",
   "parent_cycle": "that parent would make a cycle",
   "parent_deep": "that parent would sit the item too deep (at most 8 levels)",
+  "parent_exists": "the inbox item already has a parent",
   "bulk_limit": "too many items in one request",
   "bulk_done_required": "done and items are required",
   "bulk_action": "action is done, dismiss or reopen",

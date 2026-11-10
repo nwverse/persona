@@ -95,6 +95,7 @@ var storedTerminalTexts = []string{
 	"POST /api/v1/todos",
 	"PATCH /api/v1/todos/{id}",
 	"POST /api/v1/todos/{id}/decisions",
+	"PUT /api/v1/todo-rules",
 	"PUT /api/v1/kb/{kind}/{id}",
 }
 

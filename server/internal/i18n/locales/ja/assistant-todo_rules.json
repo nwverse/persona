@@ -1,0 +1,14 @@
+{
+  "rule_name": "ルール {index} に名前が必要です",
+  "rule_prompt": "ルール {index} にプロンプトが必要です",
+  "rule_prompt_long": "ルール {index} のプロンプトが {max} 文字を超えています",
+  "too_many": "ルールは {max} 件までです",
+  "duplicate": "ルールが重複しています：{name}",
+  "read_only": "読み取り専用デバイスでは ToDo ルールを変更できません",
+  "skipped_done": "項目は完了済みです",
+  "skipped_muted": "項目はミュートされています",
+  "skipped_parent": "項目には既に親があります",
+  "skipped_other": "項目は仕分け待ちです",
+  "no_rule": "このソースと種類に一致する有効なルールがありません",
+  "fallback_title": "受信トレイのフォローアップ"
+}

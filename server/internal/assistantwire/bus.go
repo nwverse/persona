@@ -127,6 +127,9 @@ var Routes = []string{
 	"DELETE /api/v1/task-trust",
 	// The todos (the assistant's todos.go, docs/assistant/todos.md).
 	"GET /api/v1/todos",
+	"GET /api/v1/todo-rules",
+	"PUT /api/v1/todo-rules",
+	"GET /api/v1/todo-rules/decisions",
 	"POST /api/v1/todos",
 	"PATCH /api/v1/todos/{id}",
 	"DELETE /api/v1/todos/{id}",

@@ -6,6 +6,7 @@
   "name_inbox_agent": "AI 分身执行",
   "name_lark_agent": "飞书 /agent",
   "name_inbox_judge": "AI 分身判断器",
+  "name_inbox_todo_rules": "收件箱待办规则",
   "name_agent_triage": "会话分诊",
   "name_agent_delegate": "提问代答",
   "name_inbox_draft": "草拟回复",
