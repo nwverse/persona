@@ -149,7 +149,7 @@ func judgedDelivery(state, gate, unblock string, replies []prompts.TaskDoneReply
 	return d
 }
 
-// deliveryStage is the authoritative stage for a delivery; explicit acceptance may mark it verified.
+// deliveryStage is the stage bar's step a delivery shows at least (reports.go).
 func deliveryStage(state string) string {
 	switch state {
 	case deliveryPR:
@@ -179,8 +179,7 @@ func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery
 		return
 	}
 	cur.Delivery = &d
-	// A delivery judgment can correct an earlier keyword guess; only explicit acceptance is stronger.
-	if stage := deliveryStage(d.State); stage != "" && !cur.Verified {
+	if stage := deliveryStage(d.State); stageIndex(stage) > stageIndex(cur.Stage) {
 		cur.Stage = stage
 	}
 	b.stages[id] = cur

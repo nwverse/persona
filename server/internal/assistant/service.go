@@ -551,7 +551,7 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 	if f := s.ixResolved; f != nil {
 		f(r)
 	}
-	s.taskPlanApproval(r.Interaction.MachineID, r.Interaction.SessionID)
+	s.taskPlanApproval()
 	s.taskAnswered(ctx, r.Interaction, r.Resolution, r.Status)
 	s.cardDecisions(ctx, r.Interaction, r.Resolution, r.Status)
 	// A quiet task's waiting notice may still be in its delay window or queued behind a turn: drop it now unless the

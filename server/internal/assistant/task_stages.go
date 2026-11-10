@@ -9,30 +9,30 @@ import (
 
 // taskPlanApproval uses pending plan cards, not the runtime's working status or words. Snapshot all
 // active agents: answering one plan does not clear another agent's plan on the same task.
-func (s *Service) taskPlanApproval(machine, session string) {
+func (s *Service) taskPlanApproval() {
 	s.tasks.planApprovalMu.Lock()
 	defer s.tasks.planApprovalMu.Unlock()
-	t, ok := s.openTodoOfAgent(machine, session)
-	if !ok {
-		return
-	}
-	pending := false
+	plans := map[SessionRef]bool{}
 	s.fleet.mu.Lock()
 	for _, p := range s.fleet.interactions {
-		if p.claimed || p.ix.Kind != proto.IxPlan {
-			continue
-		}
-		for _, a := range t.Agents {
-			if a.ReleasedAt == nil && a.DismissedAt == nil && a.MachineID == p.ix.MachineID && a.SessionID == p.ix.SessionID {
-				pending = true
-			}
+		if !p.claimed && p.ix.Kind == proto.IxPlan {
+			plans[SessionRef{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID}] = true
 		}
 	}
 	s.fleet.mu.Unlock()
 	s.todos.mu.Lock()
 	changed := false
-	if cur := s.todos.todos[t.ID]; cur != nil && cur.planPending != pending {
-		cur.planPending, changed = pending, true
+	for _, t := range s.todos.todos {
+		pending := false
+		for _, a := range t.Agents {
+			if a.ReleasedAt == nil && a.DismissedAt == nil && plans[SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}] {
+				pending = true
+				break
+			}
+		}
+		if t.planPending != pending {
+			t.planPending, changed = pending, true
+		}
 	}
 	s.todos.mu.Unlock()
 	if changed {
@@ -54,18 +54,18 @@ func (s *Service) taskStageItems(ctx context.Context, p SessionItems) {
 		if current, found := s.todoNow(t.ID); found {
 			t = current
 		}
-		if it.Role == "assistant" && it.Kind == proto.KindText && strings.TrimSpace(it.Text) != "" {
+		if it.Role == "assistant" && it.Kind == proto.KindText && it.FullSize == 0 && strings.TrimSpace(it.Text) != "" {
 			s.advanceTaskReply(ctx, t, p.MachineID, p.SessionID, it.Text)
 		}
 	}
 }
 
-// taskStageSessions sees replies even when no client follows the task's transcript. Unchanged
-// list rows do no stage work; a truncated new reply needs one bounded read before it is evidence.
+// taskStageSessions sees replies even when no client follows the task's transcript.
 func (s *Service) taskStageSessions(ctx context.Context, d DeviceSessions) {
 	if !s.todosLoaded() {
 		return
 	}
+	s.taskPlanApproval()
 	seen := make(map[SessionRef]bool, len(d.Sessions))
 	for _, c := range d.Sessions {
 		ref := SessionRef{MachineID: d.MachineID, SessionID: c.SessionID}
@@ -85,21 +85,17 @@ func (s *Service) taskStageSessions(ctx context.Context, d DeviceSessions) {
 		}
 		s.tasks.stageReplies[ref] = key
 		s.tasks.mu.Unlock()
-		s.taskPlanApproval(d.MachineID, c.SessionID) // restore the live view after reconnect or task linking
 		if t.StageKind == "" {
 			var criteria []string
 			if t.Supervision != nil {
 				criteria = t.Supervision.DoneWhen
 			}
-			s.setTaskStageKind(ctx, t.ID, "", "", taskStageKind(false, c.PermissionMode, criteria, t.PRURL), false)
+			s.setTaskStageKind(ctx, t.ID, "", "", taskStageKind(false, criteria, t.PRURL), false)
 		}
 		if strings.TrimSpace(c.LastText) == "" {
 			continue
 		}
 		if strings.HasSuffix(c.LastText, "…") {
-			if items, read := s.lastTurnItems(ctx, d.MachineID, c.SessionID); read {
-				s.taskStageItems(ctx, SessionItems{MachineID: d.MachineID, SessionID: c.SessionID, Items: items})
-			}
 			continue // a clipped suffix can hide a negation or the change link
 		}
 		s.advanceTaskReply(ctx, t, d.MachineID, c.SessionID, c.LastText)

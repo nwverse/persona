@@ -378,6 +378,7 @@ func (s *Service) todosChanged(ctx context.Context) {
 // linksChanged: which todo an agent works for changed (or a todo's title, or whether it is done): the hub is told
 // (the snapshot's TodoReport: it pushes the session lists that look different now) and the herdr marks follow.
 func (s *Service) linksChanged(ctx context.Context) {
+	s.taskPlanApproval()
 	s.publish(context.WithoutCancel(ctx))
 	s.syncLinkedTodoTokens()
 }

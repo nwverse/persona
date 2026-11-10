@@ -37,24 +37,27 @@ func TestTaskStageMergeRequestLinks(t *testing.T) {
 
 func TestTaskStageKind(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		readonly   bool
-		permission string
-		criteria   []string
-		pr         string
-		want       string
+		name     string
+		readonly bool
+		criteria []string
+		pr       string
+		want     string
 	}{
-		{"unknown is code", false, "", nil, "", "code"},
-		{"read-only", true, "", nil, "", "general"},
-		{"plan permission", false, "plan", nil, "", "general"},
-		{"research", false, "", []string{"Publish the research report"}, "", "general"},
-		{"MR delivery", false, "", []string{"MR merged and deployed"}, "", "code"},
-		{"release", false, "", []string{"Release shipped"}, "", "code"},
-		{"Chinese delivery", false, "", []string{"合并、部署、上线"}, "", "code"},
-		{"MR evidence overrides read-only", true, "plan", []string{"Research report ready"}, "https://example.com/g/r/-/merge_requests/9", "code"},
+		{"unknown is code", false, nil, "", "code"},
+		{"read-only", true, nil, "", "general"},
+		{"research", false, []string{"Publish the research report"}, "", "general"},
+		{"Chinese code", false, []string{"修复登录错误，全部测试通过"}, "", "code"},
+		{"Chinese research", false, []string{"调研并给出方案"}, "", "general"},
+		{"unknown criteria", false, []string{"Everything works"}, "", "code"},
+		{"research with code", false, []string{"Research the bug and implement a fix"}, "", "code"},
+		{"doc review", false, []string{"Doc review complete"}, "", "general"},
+		{"MR delivery", false, []string{"MR merged and deployed"}, "", "code"},
+		{"release", false, []string{"Release shipped"}, "", "code"},
+		{"Chinese delivery", false, []string{"合并、部署、上线"}, "", "code"},
+		{"MR evidence overrides read-only", true, []string{"Research report ready"}, "https://example.com/g/r/-/merge_requests/9", "code"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := taskStageKind(tc.readonly, tc.permission, tc.criteria, tc.pr); got != tc.want {
+			if got := taskStageKind(tc.readonly, tc.criteria, tc.pr); got != tc.want {
 				t.Fatalf("kind = %s, want %s", got, tc.want)
 			}
 		})
@@ -95,16 +98,29 @@ func TestTaskStageClippedProgressReply(t *testing.T) {
 	ctx := context.Background()
 	url := "https://example.com/group/repo/-/merge_requests/73"
 	f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: strings.Repeat("Checked the change. ", 20) + "Merged " + url})
-	d := DeviceSessions{MachineID: "box", Sessions: []proto.Session{{SessionID: "s1", Status: proto.StatusWorking, LastText: "Checked the change. …"}}}
+	f.mu.Lock()
+	reads := f.itemReads
+	f.mu.Unlock()
+	d := DeviceSessions{MachineID: "box", Sessions: []proto.Session{{SessionID: "s1", Status: proto.StatusWorking, LastText: "Merged " + url + "…"}}}
 	s.taskStageSessions(ctx, d)
-	if got := todoNow(s, todo.ID); got.Stage != "merge" || got.PRURL != url {
-		t.Fatalf("clipped reply missed its MR: %+v", got)
+	s.taskStageSessions(ctx, d)
+	f.mu.Lock()
+	gotReads := f.itemReads
+	f.mu.Unlock()
+	if gotReads != reads {
+		t.Fatalf("clipped reply fetched a transcript: %d -> %d", reads, gotReads)
 	}
-	// An unchanged row does not fetch again or accept a different transcript as that reply.
-	f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Deployed and verified"})
-	s.taskStageSessions(ctx, d)
-	if todoNow(s, todo.ID).Stage != "merge" {
-		t.Fatal("unchanged list row was reprocessed")
+	if got := todoNow(s, todo.ID); stageIndex(got.Stage) > stageIndex("develop") || got.PRURL != "" {
+		t.Fatalf("clipped list reply advanced progress: %+v", got)
+	}
+	text := "Merged " + url
+	s.taskStageItems(ctx, SessionItems{MachineID: "box", SessionID: "s1", Items: []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: text, FullSize: len(text) + 100}}})
+	if got := todoNow(s, todo.ID); stageIndex(got.Stage) > stageIndex("develop") || got.PRURL != "" {
+		t.Fatalf("clipped item advanced progress: %+v", got)
+	}
+	s.taskStageItems(ctx, SessionItems{MachineID: "box", SessionID: "s1", Items: []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: text}}})
+	if got := todoNow(s, todo.ID); got.Stage != "merge" || got.PRURL != url {
+		t.Fatalf("complete item missed its MR: %+v", got)
 	}
 }
 
@@ -127,17 +143,103 @@ func TestTaskStageDeliveryPriority(t *testing.T) {
 	if got := todoNow(s, todo.ID); got.Stage != "deploy" {
 		t.Fatalf("link-free deployed reply = %s", got.Stage)
 	}
-	s.setTaskStage(ctx, todo.ID, "verify", url) // an earlier keyword guess
-	s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryMerged})
-	s.advanceTaskReply(ctx, todoNow(s, todo.ID), "box", "s1", "Merged "+url+", deployed and verified")
-	if got := todoNow(s, todo.ID); got.Stage != "merge" {
-		t.Fatalf("delivery lost to keyword guess: %s", got.Stage)
+	s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryLive})
+	s.taskStageSessions(ctx, DeviceSessions{MachineID: "box", Sessions: []proto.Session{{SessionID: "s1", LastText: "交付：已合未上线"}}})
+	if got := todoNow(s, todo.ID); got.Stage != "deploy" {
+		t.Fatalf("old delivery moved deployed progress back: %s", got.Stage)
 	}
-	// Explicit acceptance is stronger than the held delivery and remains so after later delivery writes.
-	s.setTaskStageKind(ctx, todo.ID, "verify", "", "", true)
+	s.setTaskStage(ctx, todo.ID, "verify", url)
 	s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryPR})
 	if got := todoNow(s, todo.ID); got.Stage != "verify" {
+		t.Fatalf("delivery moved verified progress back: %s", got.Stage)
+	}
+	s.setTaskStageKind(ctx, todo.ID, "verify", "", "", true)
+	s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryMerged})
+	if got := todoNow(s, todo.ID); got.Stage != "verify" {
 		t.Fatalf("explicit acceptance lost: %s", got.Stage)
+	}
+	s.setTaskStageKind(ctx, todo.ID, "unverified", "", "", false)
+	if got := s.todoStages(ctx)[todo.ID]; got.Stage != "merge" || got.Verified {
+		t.Fatalf("explicit review did not remove verification: %+v", got)
+	}
+}
+
+func TestTaskStageDeliveryGate(t *testing.T) {
+	for _, tc := range []struct {
+		name, delivery, hub, reply, want string
+		deployed                         bool
+	}{
+		{"confirmed deploy", deliveryMerged, newHub, "Merged and deployed", "deploy", true},
+		{"confirmed verification", deliveryMerged, newHub, "Deployed and verified", "verify", true},
+		{"held deploy", deliveryPR, oldHub, "Deployed and verified", "merge", false},
+		{"delivery caps merge guess", deliveryPR, oldHub, "Merged", "review", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, _, hub, _ := deployService(t)
+			hub.deploy(tc.hub)
+			todo := startedTask(t, s, f)
+			ctx := context.Background()
+			s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/9")
+			s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: tc.delivery})
+			if got := s.advanceTaskReply(ctx, todoNow(s, todo.ID), "box", "s1", tc.reply); got != tc.deployed {
+				t.Fatalf("deployed = %v, want %v", got, tc.deployed)
+			}
+			if got := todoNow(s, todo.ID).Stage; got != tc.want {
+				t.Fatalf("stage = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTaskStagePlanFollowsAgent(t *testing.T) {
+	for _, remaining := range []bool{false, true} {
+		t.Run(map[bool]string{false: "only agent", true: "another pending plan"}[remaining], func(t *testing.T) {
+			s, f := newTaskService(t)
+			old := startedTask(t, s, f)
+			ctx := context.Background()
+			next, err := s.createTodo(ctx, "Next task", "", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.setTaskStage(ctx, old.ID, "develop", "")
+			s.setTaskStage(ctx, next.ID, "develop", "")
+			if remaining {
+				if err := s.linkTodoAgent(ctx, old.ID, "box", "s2", "", "", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ix := proto.Interaction{ID: "moving_plan", MachineID: "box", SessionID: "s1", Kind: proto.IxPlan}
+			s.fleet.mu.Lock()
+			s.fleet.interactions = map[string]*pending{ix.ID: {ix: ix}}
+			if remaining {
+				s.fleet.interactions["remaining_plan"] = &pending{ix: proto.Interaction{ID: "remaining_plan", MachineID: "box", SessionID: "s2", Kind: proto.IxPlan}}
+			}
+			s.fleet.mu.Unlock()
+			s.taskPlanApproval()
+			if got := todoNow(s, old.ID).Stage; got != "plan" {
+				t.Fatalf("original stage = %s", got)
+			}
+			if err := s.linkTodoAgent(ctx, next.ID, "box", "s1", "", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			wantOld := "develop"
+			if remaining {
+				wantOld = "plan"
+			}
+			if got := todoNow(s, old.ID).Stage; got != wantOld {
+				t.Fatalf("old task stage after relink = %s, want %s", got, wantOld)
+			}
+			if got := todoNow(s, next.ID).Stage; got != "plan" {
+				t.Fatalf("new task stage after relink = %s", got)
+			}
+			s.finishInteraction(ix.ID)
+			if got := todoNow(s, next.ID).Stage; got != "develop" {
+				t.Fatalf("new task stage after approval = %s", got)
+			}
+			if got := todoNow(s, old.ID).Stage; got != wantOld {
+				t.Fatalf("old task stage after approval = %s, want %s", got, wantOld)
+			}
+		})
 	}
 }
 
@@ -151,7 +253,7 @@ func TestTaskStagePendingPlan(t *testing.T) {
 	s.fleet.mu.Lock()
 	s.fleet.interactions = map[string]*pending{ix.ID: {ix: ix}}
 	s.fleet.mu.Unlock()
-	s.taskPlanApproval("box", "s1")
+	s.taskPlanApproval()
 	if todoNow(s, todo.ID).Stage != "develop" {
 		t.Fatal("permission guessed as plan")
 	}
@@ -184,7 +286,7 @@ func TestTaskStageReviewVerdict(t *testing.T) {
 		outcome   string
 		want      string
 	}{
-		{"accepted", false, "done", "verify"},
+		{"accepted without verification", false, "done", "merge"},
 		{"owner-check", true, "done", "merge"},
 		{"cannot", false, "cannot", "merge"},
 	} {
@@ -205,8 +307,8 @@ func TestTaskStageReviewVerdict(t *testing.T) {
 			if _, err := s.toolTaskReview(ctx, "conv1", raw); err != nil {
 				t.Fatal(err)
 			}
-			if got := todoNow(s, todo.ID).Stage; got != tc.want {
-				t.Fatalf("stage = %s, want %s", got, tc.want)
+			if got := s.todoStages(ctx)[todo.ID]; got.Stage != tc.want || got.Verified {
+				t.Fatalf("stage = %+v, want %s without verification", got, tc.want)
 			}
 		})
 	}

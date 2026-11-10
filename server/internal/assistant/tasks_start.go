@@ -90,7 +90,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		}
 		t.TodoID = todo.ID
-		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.Permission, t.DoneWhen, todo.PRURL), false)
+		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
 		if s.supervises(ctx, p.Conversation) { // the main conversation or a leader follows up what it hands out (supervise.go)
 			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
 		}

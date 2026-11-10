@@ -23,9 +23,9 @@ What made it into the product is in `docs/assistant/todos.md` ("Delivery") (#330
 
 ## Stage evidence is not runtime state (#3380)
 
-The final handoff alone misses progress while an agent still works or waits on background jobs. Observe assistant replies from session lists and full followed items too, but never use user text, tool output or partial deltas as delivery evidence. Session-list replies are clipped; keep the final transcript read and supervisor reports, and avoid repeating deploy checks for unchanged list rows.
+The final handoff alone misses progress while an agent still works or waits on background jobs. Observe complete assistant replies from session lists and followed items too, but never use user text, tool output or partial deltas as delivery evidence. Skip list snippets ending in an ellipsis and items marked with `FullSize`; never fetch full transcripts in the session-list event queue. Final handoffs and complete followed items supply the missing evidence. Keep list-row deduplication to avoid repeated deploy checks.
 
-A pending plan-approval card is reliable; `working` and a reply mentioning a plan are not. Show plan as a temporary view of a pending `IxPlan`, leaving stored progress forward-only. Explicit delivery judgments can correct keyword guesses; explicit acceptance is stronger again. Non-code tasks should retain their task status rather than an unreachable code-delivery strip.
+A pending plan-approval card is reliable; `working` and a reply mentioning a plan are not. Show plan as a temporary view of a pending `IxPlan`, and recompute it when agent ownership changes, including the old task. Stored progress is forward-only, including delivery writes; only an explicit review can withdraw verification. Run the deploy gate before applying stored delivery to an unconfirmed keyword guess, and never cap a confirmed deploy with old delivery. Record explicit verification only after acceptance is saved, not when a supervisor submits `accepted` while the owner still needs to verify. Default to code unless read-only or the acceptance criteria explicitly describe non-code work without code wording.
 
 ## Not done yet
 

@@ -150,7 +150,7 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
 	s.setTaskStage(ctx, t.ID, "develop", "")
-	s.taskPlanApproval(mid, sid)
+	s.taskPlanApproval()
 	if t.Supervision != nil {
 		s.supervisedWorking(ctx, t)
 	}

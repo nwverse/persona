@@ -184,7 +184,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 			return Todo{}, false, err
 		}
 		t.Supervision = &v
-		s.setTaskStageKind(ctx, t.ID, "", "", taskStageKind(false, c.PermissionMode, v.DoneWhen, t.PRURL), false)
+		s.setTaskStageKind(ctx, t.ID, "", "", taskStageKind(false, v.DoneWhen, t.PRURL), false)
 		return t, false, nil
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
@@ -203,7 +203,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("supervise it: %w", err)
 	}
-	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, c.PermissionMode, doneWhen, todo.PRURL), false)
+	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
 	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)

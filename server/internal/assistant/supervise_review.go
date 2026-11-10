@@ -150,10 +150,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		if verdict == reviewCancelled {
 			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了")
 		}
-		// Accepting an explanation that the task cannot be done is not verifying a delivery.
-		if verdict == reviewAccepted && a.Outcome != outcomeCannot && !a.UserCheck {
-			s.setTaskStageKind(ctx, t.ID, "verify", "", "", true)
-		}
 		carded := false
 		if t.DoneAt == nil {
 			closed, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted)

@@ -204,6 +204,16 @@ func TestSupervisorAcceptedLeavesABigFeatureToTheOwner(t *testing.T) {
 	if n := waitingForOwner(s); n != 1 {
 		t.Fatalf("%d waiting for the owner", n)
 	}
+	ctx := context.Background()
+	if got := s.todoStages(ctx)[todo.ID]; got.Stage != "deploy" || got.Verified {
+		t.Fatalf("waiting for owner: %+v", got)
+	}
+	if ok, err := s.acceptTry(ctx, todo.ID, ""); err != nil || !ok {
+		t.Fatalf("owner acceptance: %v %v", ok, err)
+	}
+	if got := s.todoStages(ctx)[todo.ID]; got.Stage != "verify" || !got.Verified {
+		t.Fatalf("accepted by owner: %+v", got)
+	}
 }
 
 // A task with no supervisor keeps asking the owner: closed by the auto judge, its "Please verify" waits for their "Pass".

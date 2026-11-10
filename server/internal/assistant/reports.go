@@ -150,18 +150,20 @@ func stageOf(text string) (stage, pr string) {
 }
 
 // taskStageKind defaults to code without criteria; a linked change is stronger evidence than a read-only start.
-func taskStageKind(readonly bool, permission string, doneWhen []string, pr string) string {
+// Plan permission alone is not read-only: code tasks start in plan mode to get a plan approved first.
+func taskStageKind(readonly bool, doneWhen []string, pr string) string {
 	if pr != "" {
 		return "code"
 	}
 	criteria := strings.TrimSpace(strings.Join(doneWhen, "\n"))
-	if readonly || permission == "plan" || criteria != "" && !codeTaskWords.MatchString(criteria) {
+	if readonly || criteria != "" && generalTaskWords.MatchString(criteria) && !codeTaskWords.MatchString(criteria) {
 		return "general"
 	}
 	return "code"
 }
 
-var codeTaskWords = lazyre.New(`(?i)\b(PR|MR|merge[ds]?|deploy(?:ed|ment)?|release[ds]?)\b|上线|合并|合入|部署`)
+var codeTaskWords = lazyre.New(`(?i)\b(PR|MR|merge[ds]?|deploy(?:ed|ment)?|release[ds]?|fix(?:ed|es)?|bugs?|implement(?:ed|ation)?|code|tests?|commit(?:ted|s)?|builds?|features?|refactor(?:ed|ing)?)\b|修复|实现|代码|测试|提交|合并|合入|部署|上线|发布|功能|重构|编译`)
+var generalTaskWords = lazyre.New(`(?i)\b(research|investigate|report|plan|triage|cleanup|summary|analysis|doc review)\b|调研|报告|方案|分诊|清理|总结|分析`)
 
 // advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
@@ -173,14 +175,19 @@ func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session
 	if stage == "develop" && pr == "" && !marked {
 		return false // most progress messages carry no new stage evidence
 	}
-	if !marked && t.Delivery != nil {
-		if st := deliveryStage(t.Delivery.State); st != "" {
-			stage = st
-		} else if t.Delivery.State == deliveryNone {
-			stage = "develop"
+	stage, deployed := s.gateDeployStage(ctx, t, stage, pr, machine, session, text)
+	if !marked && !deployed {
+		if cur, ok := s.todoNow(t.ID); ok {
+			t = cur
+		}
+		if t.Delivery != nil {
+			if st := deliveryStage(t.Delivery.State); st != "" {
+				stage = st
+			} else if t.Delivery.State == deliveryNone {
+				stage = "develop"
+			}
 		}
 	}
-	stage, deployed := s.gateDeployStage(ctx, t, stage, pr, machine, session, text)
 	if marked && (stage == deliveryStage(d.State) || d.State == deliveryNone) {
 		d.At = time.Now().UTC()
 		s.setTaskDelivery(ctx, t.ID, d) // a held deploy check takes precedence over the agent's mark
@@ -303,12 +310,6 @@ func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind stri
 	}
 	if cur.Verified {
 		stage = "verify"
-	} else if cur.Delivery != nil {
-		if st := deliveryStage(cur.Delivery.State); st != "" {
-			stage = st
-		} else if cur.Delivery.State == deliveryNone {
-			stage = "develop"
-		}
 	}
 	if pr != "" || cur.PR != "" {
 		kind = "code"
