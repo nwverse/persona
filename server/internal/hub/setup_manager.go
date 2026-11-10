@@ -72,7 +72,7 @@ func (e *setupEnv) noManagerServiceWhy(ctx context.Context) string {
 // which asks for service over a child written there. assistant.external is left alone: the built-in manager runs
 // elsewhere then.
 func freshManagerMode(o *jsonObject, service, force bool) error {
-	a, err := o.object("assistant")
+	a, err := o.Object("assistant")
 	if err != nil {
 		return err
 	}
@@ -80,20 +80,20 @@ func freshManagerMode(o *jsonObject, service, force bool) error {
 		a = &jsonObject{}
 	}
 	var external bool
-	if raw, ok := a.get("external"); ok && json.Unmarshal(raw, &external) == nil && external {
+	if raw, ok := a.Get("external"); ok && json.Unmarshal(raw, &external) == nil && external {
 		return nil
 	}
 	var mode string
-	if raw, ok := a.get("mode"); ok {
+	if raw, ok := a.Get("mode"); ok {
 		_ = json.Unmarshal(raw, &mode)
 	}
 	if !service || mode == AssistantModeService || (mode != "" && !force) {
 		return nil
 	}
-	if err := a.set("mode", AssistantModeService); err != nil {
+	if err := a.Set("mode", AssistantModeService); err != nil {
 		return err
 	}
-	o.setObject("assistant", a)
+	o.SetObject("assistant", a)
 	return nil
 }
 
@@ -103,8 +103,8 @@ func freshManagerMode(o *jsonObject, service, force bool) error {
 func (e *setupEnv) toManagerService(ctx context.Context) (changed bool, err error) {
 	var mode string
 	if raw, err := readHubJSON(e.root); err == nil {
-		if a, err := raw.object("assistant"); err == nil && a != nil {
-			if m, ok := a.get("mode"); ok {
+		if a, err := raw.Object("assistant"); err == nil && a != nil {
+			if m, ok := a.Get("mode"); ok {
 				_ = json.Unmarshal(m, &mode)
 			}
 		}
@@ -125,7 +125,7 @@ func (e *setupEnv) toManagerService(ctx context.Context) (changed bool, err erro
 		}
 	}
 	err = editHubJSON(e.root, func(o *jsonObject) error {
-		a, err := o.object("assistant")
+		a, err := o.Object("assistant")
 		if err != nil {
 			return err
 		}
@@ -133,21 +133,21 @@ func (e *setupEnv) toManagerService(ctx context.Context) (changed bool, err erro
 			a = &jsonObject{}
 		}
 		var external bool
-		if raw, ok := a.get("external"); ok && json.Unmarshal(raw, &external) == nil && external {
+		if raw, ok := a.Get("external"); ok && json.Unmarshal(raw, &external) == nil && external {
 			return errManagerExternal
 		}
 		var mode string
-		if raw, ok := a.get("mode"); ok {
+		if raw, ok := a.Get("mode"); ok {
 			_ = json.Unmarshal(raw, &mode)
 		}
 		if mode == AssistantModeService {
 			return nil
 		}
 		changed, e.prevMode = true, mode
-		if err := a.set("mode", AssistantModeService); err != nil {
+		if err := a.Set("mode", AssistantModeService); err != nil {
 			return err
 		}
-		o.setObject("assistant", a)
+		o.SetObject("assistant", a)
 		return nil
 	})
 	switch {
@@ -166,16 +166,16 @@ func (e *setupEnv) toManagerService(ctx context.Context) (changed bool, err erro
 // hub so that it starts its child again. It says what it did.
 func (e *setupEnv) undoSwitch(ctx context.Context, bin string) string {
 	err := editHubJSON(e.root, func(o *jsonObject) error {
-		a, err := o.object("assistant")
+		a, err := o.Object("assistant")
 		if err != nil || a == nil {
 			return err
 		}
 		if e.prevMode == "" {
-			a.del("mode")
-		} else if err := a.set("mode", e.prevMode); err != nil {
+			a.Del("mode")
+		} else if err := a.Set("mode", e.prevMode); err != nil {
 			return err
 		}
-		o.setObject("assistant", a)
+		o.SetObject("assistant", a)
 		return nil
 	})
 	if err != nil {
@@ -228,7 +228,7 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 		// Nothing runs the built-in manager here unless the user does: a problem, with both ways out.
 		e.report("manager", false, "内置管理者是自己的服务（assistant.mode service），这次没装它（"+e.noManagerServiceWhy(ctx)+"），现在没有东西运行它",
 			"要么自己让它一直运行：personad hub manager-code 拿一个码，PERSONA_MANAGER_CODE=<码> personad manager join --builtin "+
-				hubLocalURL(cfg.Listen)+" 绑定，再一直运行 PERSONA_ASSISTANT_DEPLOY=service "+bin+" assistant；"+
+				managerconf.LocalHubURL(cfg.Listen)+" 绑定，再一直运行 PERSONA_ASSISTANT_DEPLOY=service "+bin+" assistant；"+
 				"要么 personad hub manager-mode child 后重启 hub，让 hub 自己拉起它")
 		return nil
 	}
@@ -252,7 +252,7 @@ func (e *setupEnv) builtinManager(ctx context.Context, cfg *setupConfig) error {
 	// kept a binding that works, or stopped first) is voided after.
 	programBefore, wasActive := e.builtinProgram(), e.builtinActive(ctx)
 	out, err := e.run(ctx, []string{"PERSONA_HOME=" + e.root, managerconf.BuiltinCodeEnv + "=" + code},
-		bin, managerconf.BuiltinInstallArgs(hubLocalURL(cfg.Listen))...)
+		bin, managerconf.BuiltinInstallArgs(managerconf.LocalHubURL(cfg.Listen))...)
 	_ = e.voidCode(ctx, cfg.Config, code)
 	if err != nil {
 		why := lastLine(string(out))

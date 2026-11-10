@@ -72,6 +72,8 @@ export interface GitStatus {
   files: GitFile[];
   stashes?: number;
   commits: GitCommit[];
+  /** The upstream was deleted on the remote: ahead / behind are 0 and mean nothing, a push publishes the branch again. */
+  gone?: boolean;
 }
 
 export interface GitDiff {
@@ -529,18 +531,6 @@ export function languageOf(name: string, firstLine = ""): Lang | null {
   if (!id && firstLine.startsWith("<?xml")) id = "xml";
   if (!id || id === "text") return null;
   return LANGS[id];
-}
-
-/** The language of a Markdown code fence (```swift). */
-export function languageOfFence(name: string): Lang | null {
-  const alias: Record<string, string> = {
-    python3: "py", python: "py", javascript: "js", node: "js", typescript: "ts", bash: "sh", shell: "sh", console: "sh",
-    shellscript: "sh", zsh: "sh", golang: "go", rust: "rs", kotlin: "kt", ruby: "rb", "c++": "cpp", "objective-c": "m",
-    objc: "m", csharp: "cs", "c#": "cs", docker: "dockerfile", make: "mk", makefile: "mk", terraform: "tf", yml: "yaml",
-  };
-  const n = name.trim().toLowerCase();
-  if (!n) return null;
-  return n === "dockerfile" ? LANGS.docker : languageOf("x." + (alias[n] ?? n));
 }
 
 const IDENT = /[A-Za-z0-9_$]/;

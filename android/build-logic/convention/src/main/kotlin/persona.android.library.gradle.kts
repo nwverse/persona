@@ -13,6 +13,15 @@ android {
     sourceSets.getByName("test").resources.srcDir(rootProject.file("build-logic/robolectric"))
     // The core modules' words in Simplified Chinese for code with no resources at hand (CoreTextFallback).
     sourceSets.getByName("test").resources.srcDir(rootProject.file("core/designsystem/src/main/res/values-zh"))
+    // The shared fixtures (spec/fixtures) for JVM unit tests, as persona.jvm.library sets it.
+    testOptions.unitTests.all { test ->
+        val repositoryRoot = providers.gradleProperty("personaRepoRoot")
+            .getOrElse(rootProject.layout.projectDirectory.dir("..").asFile.absolutePath)
+        test.systemProperty("persona.repo.root", repositoryRoot)
+        test.inputs.files(fileTree(File(repositoryRoot, "spec/fixtures")) { include("**/*.json") })
+            .withPropertyName("sharedFixtures")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.toVersion(libs.findVersion("jvm").get().requiredVersion)
         targetCompatibility = JavaVersion.toVersion(libs.findVersion("jvm").get().requiredVersion)

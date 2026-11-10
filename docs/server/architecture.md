@@ -17,9 +17,9 @@ The phone connects to the hub directly: HTTPS / WSS over the public internet (TL
  phone / watch ─┐  HTTPS/WSS (public internet, clients that support pinning)
                 ┤  HTTP/WS (LAN / VPN, compatible with older apps)
                 ┤ ─────────────────────────►  personad hub (HTTP + optional TLS)
-                │                                   │  ├─ mail (IMAP/SMTP, encrypted credentials)
-                │  WS: tool.call ◄──────────────────┤  ├─ interaction queue (questions / plans / permissions)
-                │      (phone data tools)            │  └─ session index, event fan-out
+                │                                   │  ├─ session index, event fan-out, push delivery
+                │  WS: tool.call ◄──────────────────┤  └─ manager (`personad assistant`, the hub's child by default):
+                │      (phone data tools)            │       interactions (questions / plans / permissions), mail (IMAP/SMTP)
                                                     │
                      stdio JSON-RPC over `ssh <host> personad node --stdio`
                      (on the hub machine itself, started directly as a child process)
@@ -42,10 +42,10 @@ A single binary `personad`, four modes:
 
 | Mode | Where it runs | What it does |
 | --- | --- | --- |
-| `hub` | An always-on machine, resident under systemd --user | The app's API, event fan-out, interaction queue, mail, dispatching to each node |
-| `node --stdio` | Every machine, started by the hub over SSH | Relays local herdr / claude / transcript / hooks |
+| `hub` | An always-on machine, resident under systemd --user | The app's API, event fan-out, push delivery, forwarding to the managers (the built-in manager keeps the interactions and mail and connects to the nodes) |
+| `node --stdio` | Every machine, started by the manager over SSH | Relays local herdr / claude / transcript / hooks |
 | `hook <event>` | Called by Claude Code hooks | Hands events to the node; for things a person must decide (questions, plans, permissions) it blocks waiting for the phone's answer |
-| `mcp` | Claude Code MCP (stdio) | Exposes phone data, mail and other tools; calls go node → hub → phone |
+| `mcp` | Claude Code MCP (stdio) | Exposes phone data, mail and other tools; a phone tool's call goes node → manager → hub → phone |
 
 ## Why it is designed this way
 
@@ -123,13 +123,15 @@ Where the business type needs fields of its own, it stays a separate type with t
 4. The node starts tailing the transcript, and events are pushed through the hub to subscribed apps.
 
 ### Answering questions / approving plans
-1. claude calls AskUserQuestion → PreToolUse hook → `personad hook` connects to node.sock and sends an `interaction` → the hub stores it in the interaction queue and pushes it to the app / watch (including a local notification).
-2. The user picks on the phone → hub → node → the hook process outputs `updatedInput.answers` → claude continues.
-3. On timeout (30 minutes by default), or when no app is online, the hook lets it through right away → the TUI shows it as usual, and it can be answered at the computer too.
+1. claude calls AskUserQuestion → PreToolUse hook → `personad hook` connects to node.sock and sends an `interaction` → the node hands it to the manager (`interaction.create`), which records it and has the hub push it to the app / watch (including a local notification).
+2. The user picks on the phone → hub → manager → node → the hook process outputs `updatedInput.answers` → claude continues.
+3. The card waits whether or not an app is online. The hook leaves the question to the terminal (the TUI shows it as usual, and it can be answered at the computer too) on timeout (30 minutes by default),
+   when the node has no connection to its manager, or when a resident node's manager has been away longer than the 10-minute hold (`docs/protocol/protocol.md` "When the manager is away (resident nodes)").
 
 ### Phone data tools
-claude calls the MCP tool `phone_calendar_events` → `personad mcp` → node.sock → hub → finds an online iPhone (WS) → the app queries with EventKit → returns the same way.
-When the app is not online, it returns the error "iPhone is not online, please open Persona".
+claude calls the MCP tool `phone_calendar_events` → `personad mcp` → node.sock → node → manager (`app.call` `phone` / `phone.call`) → hub → a connected iPhone that offers the tool (WS) → the app queries with EventKit → returns the same way.
+When no iPhone is connected, the hub wakes the newest iOS registration that offers the tool with a silent push (only when push is set up; a device at most once per 30 seconds) and waits up to 20 seconds for it to connect
+(`docs/apple/phone-tools.md` "iOS limitations"). If none does, it returns the error "The user's iPhone is not connected and did not wake up in the background: ask them to open the Persona app, then retry."
 
 ### Runtime list origin projection
 

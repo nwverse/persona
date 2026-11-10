@@ -3,10 +3,12 @@
 package hub
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -23,19 +25,151 @@ func syntheticAgentHub(t *testing.T) *Hub {
 		mid := fmt.Sprintf("demo-%d", machine)
 		m := newMachine(h, MachineConfig{ID: mid, Kind: "local"})
 		h.machines, h.byID[mid] = append(h.machines, m), m
-		for i := range 2000 {
-			state := []string{"needs_you", "working", "unread", "idle"}[i%4]
-			m.sessions = append(m.sessions, proto.Session{
-				MachineID: mid, SessionID: fmt.Sprintf("session-%04d", i), Title: fmt.Sprintf("Demo task %04d", i),
-				Cwd: fmt.Sprintf("/demo/project-%02d", i%20), RepoRoot: fmt.Sprintf("/demo/project-%02d", i%20),
-				SpaceID: fmt.Sprintf("space-%02d", i%10), SpaceName: fmt.Sprintf("Demo space %02d", i%10),
-				Agent: []string{"claude", "codex"}[i%2], State: state, Status: proto.StatusIdle,
-				UpdatedAt: time.Unix(1700000000+int64(i), 0), LastText: strings.Repeat("demo preview ", 50),
-				Background: []proto.BackgroundTask{{ID: "demo-task", Kind: "shell", Description: "Demo test run"}},
-			})
-		}
+		m.sessions = syntheticSessions(mid, 2000)
 	}
 	return h
+}
+
+// syntheticSessions are n demo sessions of machine mid, with previews and background tasks.
+func syntheticSessions(mid string, n int) []proto.Session {
+	out := make([]proto.Session, 0, n)
+	for i := range n {
+		state := []string{"needs_you", "working", "unread", "idle"}[i%4]
+		out = append(out, proto.Session{
+			MachineID: mid, SessionID: fmt.Sprintf("session-%04d", i), Title: fmt.Sprintf("Demo task %04d", i),
+			Cwd: fmt.Sprintf("/demo/project-%02d", i%20), RepoRoot: fmt.Sprintf("/demo/project-%02d", i%20),
+			SpaceID: fmt.Sprintf("space-%02d", i%10), SpaceName: fmt.Sprintf("Demo space %02d", i%10),
+			Agent: []string{"claude", "codex"}[i%2], State: state, Status: proto.StatusIdle,
+			UpdatedAt: time.Unix(1700000000+int64(i), 0), LastText: strings.Repeat("demo preview ", 50),
+			Background: []proto.BackgroundTask{{ID: "demo-task", Kind: "shell", Description: "Demo test run"}},
+		})
+	}
+	return out
+}
+
+// indexedMachineHub is one machine with n demo sessions and a paged reader, so every list update or sessions.revs
+// rebuilds the machine's index rows (listCache.machines).
+func indexedMachineHub(n int) (*Hub, *Machine) {
+	h := newTestHub(&testing.T{})
+	m := newMachine(h, MachineConfig{ID: "demo", Kind: "local"})
+	h.machines, h.byID["demo"] = append(h.machines, m), m
+	m.sessions = syntheticSessions("demo", n)
+	h.sessionListIndex()
+	return h, m
+}
+
+// oneRevMachine is indexedMachineHub with the machine's list taken as the manager's lists are: kept with the bytes
+// each session came in (setSessionListRaws) and pushed (takeFleetSessionsFrom). bump does to it what
+// onEvent("sessions.revs") does for a new rev of one session: the machine keeps a copy of its list with that rev,
+// still described by the same bytes. The two copies it hands over in turn are made beforehand, so that what is
+// measured is the hub's reindex, not onEvent's copy.
+func oneRevMachine(n int) (h *Hub, m *Machine, bump func()) {
+	h, m = indexedMachineHub(n)
+	raws := make([]string, len(m.sessions))
+	for i := range m.sessions {
+		b, _ := json.Marshal(m.sessions[i])
+		raws[i] = string(b)
+	}
+	m.setSessionListRaws(m.sessions, raws)
+	h.broadcastSessions(m, m.keptSessions())
+	var lists [2][]proto.Session
+	for i := range lists {
+		lists[i] = slices.Clone(m.sessions)
+		lists[i][0].Rev = int64(i + 1)
+	}
+	next := 0
+	return h, m, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.rawsOf == keptListOf(m.sessions) {
+			m.rawsOf = keptListOf(lists[next])
+		}
+		m.sessions = lists[next]
+		next ^= 1
+	}
+}
+
+// BenchmarkReindexOneRev is one sessions.revs for one working session: what the hub redoes for its paged index
+// (machine.go "sessions.revs" -> reindexSessions) on a machine of 150 and of 2,000 sessions whose list came from
+// the manager with its bytes.
+func BenchmarkReindexOneRev(b *testing.B) {
+	for _, n := range []int{150, 2000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			h, m, bump := oneRevMachine(n)
+			b.ReportAllocs()
+			for b.Loop() {
+				bump()
+				h.reindexSessions(m)
+			}
+		})
+	}
+}
+
+// A sessions.revs of one session on a 150-row machine reindexes it from the kept list and the kept rows
+// (indexKeptLocked): 111,809 B measured, 578,625 B when the list was copied and every row encoded again.
+func TestReindexOneRevAllocation(t *testing.T) {
+	if !isolatedSessionAllocation(t) {
+		return
+	}
+	h, m, bump := oneRevMachine(150)
+	per := allocated(func() {
+		bump()
+		h.reindexSessions(m)
+	})
+	if per > 115_200 {
+		t.Fatalf("a sessions.revs of one session reindexes a 150-row machine in %d allocated bytes", per)
+	}
+}
+
+// BenchmarkIndexWholeList is the paged index's share of a whole-list update (broadcastSessions): the rows come
+// encoded, as the push encodes them for its own clients, and one of them differs from the last update.
+func BenchmarkIndexWholeList(b *testing.B) {
+	for _, n := range []int{150, 2000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			h, m := indexedMachineHub(n)
+			var lists [2][]proto.Session
+			var encoded [2][]sentSession
+			for i := range lists {
+				lists[i] = h.shown("demo", h.decorated(m))
+				lists[i][0].Rev = int64(i + 1)
+				encoded[i] = encodeSessions(lists[i])
+			}
+			b.ReportAllocs()
+			i := 0
+			for b.Loop() {
+				h.sessionsMu.Lock()
+				h.indexSessionsLocked("demo", lists[i], encoded[i])
+				h.sessionsMu.Unlock()
+				i ^= 1
+			}
+		})
+	}
+}
+
+// Indexing a 150-row list of which one row changed keeps the other rows' indexed payloads (indexSessionsLocked):
+// 98,689 B measured, 2,652,067 B when every row was indexed again.
+func TestIndexWholeListAllocation(t *testing.T) {
+	if !isolatedSessionAllocation(t) {
+		return
+	}
+	h, m := indexedMachineHub(150)
+	var lists [2][]proto.Session
+	var encoded [2][]sentSession
+	for i := range lists {
+		lists[i] = h.shown("demo", h.decorated(m))
+		lists[i][0].Rev = int64(i + 1)
+		encoded[i] = encodeSessions(lists[i])
+	}
+	i := 0
+	per := allocated(func() {
+		h.sessionsMu.Lock()
+		h.indexSessionsLocked("demo", lists[i], encoded[i])
+		h.sessionsMu.Unlock()
+		i ^= 1
+	})
+	if per > 101_700 {
+		t.Fatalf("indexing a 150-row list with one changed row allocates %d bytes", per)
+	}
 }
 
 // BenchmarkAgents8000Legacy is the whole list of 8,000 sessions, written to a writer that keeps none of it

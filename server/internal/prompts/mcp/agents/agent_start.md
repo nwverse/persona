@@ -23,9 +23,15 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     "prompt": {
       "type": "string"
     },
+    "attachments": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string" },
+      "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
+    },
     "launcher": {
       "type": "string",
-      "description": "shell command that starts claude (default: the machine's default)"
+      "description": "launcher name, one that machine has (a name it lacks is refused, listing the ones it has); empty: the default, or one the machine has when it lacks the default (claude first; the answer says so)"
     },
     "ultracode": {
       "type": "boolean",
@@ -46,7 +52,7 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     },
     "tier": {
       "type": "string",
-      "description": "Execution tier from the active model profile (strong, standard, fast, bulk, longread or a custom tier). Resolved at actual start. Explicit launcher/model/effort override its defaults."
+      "description": "An Agent preset: one of the tiers the snapshot's 模型档位 line lists for the profile in use, each with what it is for; pick the one whose description fits the work. Resolved before the user is asked, and the card shows it. Explicit launcher/model/effort override its values."
     },
     "effort": {
       "type": "string",

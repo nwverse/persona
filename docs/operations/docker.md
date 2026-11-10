@@ -63,11 +63,11 @@ It shares the hub's data folder (mounted at both of the hub container's paths) a
 
 ## Image
 
-`ghcr.io/<owner>/persona` (the image name follows the repo: `<owner>` is the account or organization that owns the repo, `persona` is the repo name; put it in `PERSONA_IMAGE` in `.env`), linux/amd64 and linux/arm64, built by `.github/workflows/hub-image.yml`:
+`ghcr.io/<owner>/persona` (the image name follows the repo: `<owner>` is the account or organization that owns the repo, `persona` is the repo name; put it in `PERSONA_IMAGE` in `.env`), linux/amd64 and linux/arm64, built by `.github/workflows/release.yml`:
 
 | Tag | When it exists |
 | --- | --- |
-| `<version>` | Push a `v*` tag (`v1.2.0` → `1.2.0`); see `docs/operations/release.md` ("Publishing the hub image") |
+| `<version>` | Push a `v*` tag (`v1.2.0` → `1.2.0`), which also creates the tag's GitHub Release; see `docs/operations/release.md` ("Publishing a release") |
 | `latest` | Same, but prerelease tags (containing `-`, e.g. `v1.3.0-rc1`) don't move it |
 | `edge`, `sha-<commit>` | Run this workflow manually in Actions (current branch) |
 
@@ -169,7 +169,7 @@ The native method also honors these variables (e.g. systemd's `Environment=`), b
 
 Some hosts pay heavily for every `fsync`: a NAS volume on a single SSD formatted btrfs (copy-on-write, metadata kept twice) turns each one into several metadata writes, so how often things are flushed matters more than how many bytes are written. Two flushers dominate:
 
-- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute).
+- **Postgres commits.** With `synchronous_commit=on` every commit waits for its WAL to be flushed, and a hub in everyday use commits often (one measured install: about 125 commits a minute). The manager groups its background writes: each 10 s tick's monitoring samples of all machines go in one commit, token usage reports of several machines that come within 5 s of each other in one, and indexing a knowledge base entity again with nothing changed writes nothing, so the number of machines no longer multiplies these commits.
 - **Health checks.** dockerd rewrites and fsyncs a container's state file on every health check run (about 1 MB a run on btrfs): the postgres check runs every 5 s, the hub's every 30 s.
 
 `compose.yaml` takes all of these from `.env`. Every default is what compose did before, or PostgreSQL's own default, so nothing changes until you set one; Postgres settings take effect when the container is recreated (`docker compose up -d`), health checks and logging likewise.
@@ -335,15 +335,16 @@ When LAN clients need access, you can bind `PERSONA_PORT` to an explicit LAN add
 
 1. On the old machine, stop the hub (`systemctl --user stop personad`) and export the database:
    `docker exec persona-postgres pg_dump -U persona -Fc persona > persona.dump`, and the built-in manager's database in the same server: `docker exec persona-postgres pg_dump -U persona -Fc persona_manager > persona_manager.dump`. Both together are the hub's data ([managers.md](../assistant/managers.md) ("The built-in manager's database")); one without the other loses the manager's data or the hub's.
-2. Copy the actual runtime directory (the new default is `~/.persona`; existing deployments may still use the compatibility directory `~/.persona`) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
+2. Copy the actual runtime directory (`~/.persona` by default; an older deployment may still keep it under the old name: [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md)) to `data/` on the NAS (`bin/` can be left out). In `hub.json`, remove the `kind: local` machine (if that machine should keep running Agents,
    change it to `ssh` or `tailcat`). Leave `database_url` alone (the environment variable overrides it).
 3. `docker compose up -d postgres`, then import: `docker compose exec -T postgres pg_restore -U persona -d persona --clean --if-exists < persona.dump` (and the manager's: `docker compose exec -T postgres createdb -U persona persona_manager`, then the same `pg_restore -d persona_manager < persona_manager.dump`),
    then `docker compose up -d`. The token is unchanged; paired phones only need the address changed to the new one (or scan again).
 
 ## Verification
 
-`.github/workflows/hub-image.yml` builds the image on every PR that touches the server (including `sdk/go`), the web app, or the image, and runs it once with compose: health check, pairing,
-tailcat key, web app, owner of `hub.json`. The workflow passes no `UPDATE_URL`, so the image carries personad for every platform (for a PR, `linux/amd64` only); one built with `UPDATE_URL` carries its own platform's and fetches the others ("Node builds").
+`.github/workflows/release.yml` builds and smoke-tests the image on explicit workflow dispatch: health check, pairing,
+tailcat key, web app, owner of `hub.json`. The workflow passes no `UPDATE_URL`, so the image carries personad for every platform (for the smoke test, `linux/amd64` only); one built with `UPDATE_URL` carries its own platform's and fetches the others ("Node builds").
+The only automatic trigger is a `v*` release tag, which publishes the version image and, for stable releases, `latest`, then creates a GitHub Release for the tag. Manual dispatch publishes only `edge`/`sha-*` images and does not create a GitHub Release. Docker installations use the versioned images, so this release publication exception is retained. PRs and branch pushes do not start the workflow.
 You can do the same locally (OrbStack / Docker Desktop):
 
 ```sh
