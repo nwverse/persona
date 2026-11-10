@@ -491,19 +491,23 @@ struct HeaderModeButton: View, Equatable {
         let mode = session.permissionMode
         let words = String(localized: "Permission Mode: \(SessionModes.modeLabel(mode) ?? SessionModes.unknown)")
         Menu {
-            Section(words) {
-                Picker("Permission Mode", selection: Binding(get: { mode ?? "" }, set: { new in if new != mode { pick(new) } })) {
+            Picker("Permission Mode", selection: Binding(get: { mode ?? "" }, set: { new in if new != mode { pick(new) } })) {
+                // "Permission Mode: …" heads the list, as on the web and Android. The title goes on a section inside the
+                // picker: a `Section` around an inline picker draws none (the Agents menu's Display does it so, #3182).
+                Section {
                     ForEach(SessionModes.listed(SessionModes.switchableModes(session), current: mode)) { o in
                         Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) }.tag(o.id)
                     }
+                } header: {
+                    Text(words)
                 }
-                .pickerStyle(.inline)
-                .disabled(!session.canChangeModes)
-                // Allow Everything where this agent cannot take it while it runs: there, and why (a menu draws no footers).
-                if let o = SessionModes.bypassUnavailable(session) {
-                    Button {} label: { Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) } }
-                        .disabled(true)
-                }
+            }
+            .pickerStyle(.inline)
+            .disabled(!session.canChangeModes)
+            // Allow Everything where this agent cannot take it while it runs: there, and why (a menu draws no footers).
+            if let o = SessionModes.bypassUnavailable(session) {
+                Button {} label: { Label { Text(o.title); Text(o.detail) } icon: { ThemedIcon(o.symbol) } }
+                    .disabled(true)
             }
             if !session.canChangeModes, !session.status.isLive { Text(StateName.notRunning.text) }
         } label: {

@@ -79,6 +79,7 @@ final class HeaderModeShotTests: XCTestCase {
             mode.tap()
             sleep(1)
             shot("menu-can-allow", scheme)
+            assertMenuTitle()
             menuItem(["全部放行", "Allow Everything"]).tap() // i18n-ignore: the test runs in zh-Hans
             XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "going into Allow Everything asks first")
             shot("confirm-allow", scheme)
@@ -90,11 +91,30 @@ final class HeaderModeShotTests: XCTestCase {
             blogMode.tap()
             sleep(1)
             shot("menu-in-allow", scheme)
+            assertMenuTitle()
             menuItem(["只做计划", "Plan Only"]).tap() // i18n-ignore: the test runs in zh-Hans
             XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "leaving Allow Everything with no way back asks first")
             shot("confirm-leave", scheme)
             cancelAlert()
+
+            // An agent not started with Allow Everything: the row is there, disabled, saying why.
+            open(Self.tests, scheme: scheme)
+            let testsMode = app.buttons["chat.permissionMode"]
+            XCTAssertTrue(testsMode.waitForExistence(timeout: 10), "the header's mode")
+            testsMode.tap()
+            sleep(1)
+            shot("menu-cannot-allow", scheme)
+            assertMenuTitle()
         }
+    }
+
+    /// The menu's first line says the mode, "Permission Mode: …", as on the web and Android (the header's button has the
+    /// same words as its VoiceOver label, so it is left out).
+    @MainActor private func assertMenuTitle() {
+        let says = NSPredicate(format: "(label BEGINSWITH %@ OR label BEGINSWITH %@) AND identifier != %@",
+                               "权限模式：", "Permission Mode: ", "chat.permissionMode") // i18n-ignore: the test runs in zh-Hans
+        let title = app.descendants(matching: .any).matching(says).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 3), "the menu's title line")
     }
 
     /// View bodies and main-thread time under twelve rounds of the hub's pushes, with the busy widget agent's chat open
