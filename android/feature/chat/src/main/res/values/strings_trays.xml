@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="chat_tray_pending">Pending</string>
-    <string name="chat_tray_progress">Progress</string>
-    <string name="chat_tray_agents">Agents</string>
+    <string name="chat_tray_entry_needs_you">Needs you</string>
+    <string name="chat_tray_entry_running">In progress</string>
     <string name="chat_tray_items">%1$d items</string>
     <string name="chat_tray_approve_all">Approve all</string>
     <string name="chat_tray_approve">Approve</string>
@@ -19,8 +18,6 @@
     <string name="chat_tray_no_progress">No tasks in progress</string>
     <string name="chat_tray_agent_detail">%1$s · %2$s</string>
     <string name="chat_tray_working">Working</string>
-    <string name="chat_tray_needs_you">Needs you</string>
-    <string name="chat_tray_unread">Done, unread</string>
     <string name="chat_tray_expanded">Expanded</string>
     <string name="chat_tray_collapsed">Collapsed</string>
     <string name="chat_tray_blocked">Blocked</string>
