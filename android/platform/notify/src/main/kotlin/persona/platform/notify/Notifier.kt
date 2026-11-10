@@ -346,9 +346,8 @@ class Notifier @Inject constructor(
 
     fun clear() {
         context.getSystemService(NotificationManager::class.java).activeNotifications
-            .filter { it.id == EVENT_ID && it.tag?.let { tag ->
-                tag == "stopped" || listOf("interaction:", "failure:", "done:", "assistant:", "alert:").any(tag::startsWith)
-            } == true }.forEach { manager.cancel(it.tag, it.id) }
+            .filter { it.id == EVENT_ID && it.tag?.let(NotificationPolicy::cleared) == true }
+            .forEach { manager.cancel(it.tag, it.id) }
     }
 
     fun dismissStopped() = manager.cancel("stopped", EVENT_ID)
