@@ -516,6 +516,43 @@ func (r *Runner) SearchMessages(ctx context.Context, query string, opts SearchOp
 // InspectDocument resolves a document or wiki link to the title and the
 // underlying Drive metadata. It is deliberately read-only and always runs as
 // the lark-cli user identity.
+// DocumentOwner returns the open_id of a document's owner (`drive metas batch_query`). token and docType are the
+// underlying document's, as InspectDocument returns them (a wiki link is unwrapped there).
+func (r *Runner) DocumentOwner(ctx context.Context, token, docType string) (string, error) {
+	if strings.TrimSpace(token) == "" || strings.TrimSpace(docType) == "" {
+		return "", errors.New("document token and type are required")
+	}
+	body, err := json.Marshal(map[string]any{"request_docs": []map[string]string{{"doc_token": token, "doc_type": docType}}})
+	if err != nil {
+		return "", err
+	}
+	out, err := r.execute(ctx, []string{"drive", "metas", "batch_query", "--user-id-type", "open_id", "--data", string(body)}, outputJSON)
+	if err != nil {
+		return "", err
+	}
+	var raw struct {
+		Metas []struct {
+			Token string `json:"doc_token"`
+			Owner string `json:"owner_id"`
+		} `json:"metas"`
+		Failed []struct {
+			Code int `json:"code"`
+		} `json:"failed_list"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return "", cliError(KindOther, errors.New("invalid document metadata JSON"))
+	}
+	for _, meta := range raw.Metas {
+		if meta.Owner != "" {
+			return meta.Owner, nil
+		}
+	}
+	if len(raw.Failed) > 0 {
+		return "", &Error{Kind: KindMissingPermission}
+	}
+	return "", nil
+}
+
 func (r *Runner) InspectDocument(ctx context.Context, link string) (Document, error) {
 	if strings.TrimSpace(link) == "" {
 		return Document{}, errors.New("document URL is required")

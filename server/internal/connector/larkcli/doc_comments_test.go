@@ -229,3 +229,43 @@ func TestWikiSpaceExpansionIsBoundedAndOptionsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnedDocumentKeepsEveryCommentWhenAsked(t *testing.T) {
+	link := "https://example.feishu.cn/docx/doc_example"
+	for _, tc := range []struct {
+		name, options, owner string
+		want                 bool
+	}{
+		{"option off", `{"documents":["` + link + `"]}`, "ou_example_user", false},
+		{"someone else's document", `{"documents":["` + link + `"],"owned_all_comments":true}`, "ou_example_other", false},
+		{"my document", `{"documents":["` + link + `"],"owned_all_comments":true}`, "ou_example_user", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LARKCLI_FAKE_OWNER", tc.owner)
+			c := docTestConnector(t, "comments_owned")
+			if err := c.SetOptions(json.RawMessage(tc.options)); err != nil {
+				t.Fatal(err)
+			}
+			if got := c.pollDocuments(context.Background()); got != tc.want {
+				t.Fatalf("an unmentioned comment kept = %v, want %v", got, tc.want)
+			}
+			if !tc.want {
+				return
+			}
+			things, _ := c.Collect(context.Background())
+			if len(things) != 1 || !strings.Contains(things[0].Preview, "start next week") {
+				t.Fatalf("things = %+v", things)
+			}
+		})
+	}
+}
+
+func TestOwnedAllCommentsRoundTripsThroughOptions(t *testing.T) {
+	c := docTestConnector(t, "comments")
+	if err := c.SetOptions(json.RawMessage(`{"documents":[],"owned_all_comments":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(c.Options()), `"owned_all_comments":true`) {
+		t.Fatalf("options = %s", c.Options())
+	}
+}

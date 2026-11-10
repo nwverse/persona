@@ -112,7 +112,7 @@ Handled by the Lark plugin (formerly hub `inbox_docs.go`). Mentions / comments t
 ### Lark via lark-cli: watched document comments (#2691)
 
 The `larkcli` connector has a separate, read-only document-comment poller. It is enabled only for links the user puts in
-Settings › Connectors › Lark via lark-cli › Watched documents; an empty list watches nothing. Options accept `documents`
+Settings › Connectors › the lark-cli connector's page › Watched documents; an empty list watches nothing. Options accept `documents`
 (`docx`, sheet, Base, or wiki-node links) and `wiki_spaces`. A selected wiki space is expanded through bounded
 `wiki spaces list` / `wiki nodes list` reads, so a space never turns into an unbounded crawl.
 
@@ -122,6 +122,10 @@ Rate limits pause the document poller. A permission or not-found result marks th
 The title, quoted passage (or “Whole document”), latest matching comment text, and a link with the comment id are kept in
 one Inbox item per thread (`kind: "doc"`). A comment that mentions the user by open_id is included, as is a later reply
 when the user has written in that thread; resolved threads are skipped. The connector never replies or changes a comment.
+With `owned_all_comments` (off by default; "All comments on documents I own" in Settings), every new comment and reply from
+someone else on a watched document the user owns comes in too, mention or not. The owner is read once per document with
+`drive metas batch_query` (open_id) and compared with the lark-cli login; a failed read leaves the owner unknown until the
+next round, and only the mention and participation rules apply meanwhile.
 
 The existing document block is used for the detail page (`doc.url`, `doc.link`, `doc.type`, `doc.notice_id`), while the
 quoted passage and comment text are in the item's context. An unreadable watched document appears as a warning in the

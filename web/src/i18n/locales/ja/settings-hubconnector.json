@@ -62,5 +62,14 @@
   "extension_title": "コネクタ {name}",
   "extension_inbox_on": "{name} の新しい項目が受信トレイに届きます。コネクタのページの「受信トレイに追加」と同じスイッチです。",
   "extension_open": "コネクタの設定",
-  "extension_open_hint": "サインイン、状態、受信トレイのその他の設定"
+  "extension_open_hint": "サインイン、状態、受信トレイのその他の設定",
+  "lark_docs": "監視中のドキュメント",
+  "lark_docs_footer": "監視中のドキュメントであなたをメンションしたコメントと、あなたが書き込んだスレッドの新しい返信が受信トレイに入ります。2 分ごとに確認します。",
+  "lark_docs_links": "ドキュメントのリンク",
+  "lark_docs_link_placeholder": "Lark のドキュメント・シート・Base のリンクを貼り付け",
+  "lark_docs_spaces": "Wiki スペース",
+  "lark_docs_space_placeholder": "Wiki スペースのリンクを貼り付け（スペース内のすべてのドキュメント）",
+  "lark_docs_owned": "自分が所有するドキュメントのコメントをすべて受け取る",
+  "lark_docs_owned_sub": "監視中のドキュメントのうち、あなたが所有者のものは、メンションがなくても他の人の新しいコメントと返信がすべて入ります。",
+  "lark_docs_remove": "{link} の監視をやめる"
 }

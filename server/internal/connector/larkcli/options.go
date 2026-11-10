@@ -14,6 +14,8 @@ type InboxOptions struct {
 	InboxAllChats []string `json:"inbox_all_chats"`
 	Documents     []string `json:"documents"`
 	WikiSpaces    []string `json:"wiki_spaces"`
+	// OwnedAllComments: every comment on a watched document the user owns (DocumentOptions).
+	OwnedAllComments bool `json:"owned_all_comments"`
 }
 
 func (c *Connector) Options() json.RawMessage {
@@ -36,9 +38,10 @@ func (c *Connector) Options() json.RawMessage {
 		documents.WikiSpaces = []string{}
 	}
 	b, _ := json.Marshal(InboxOptions{
-		InboxAllChats: ids,
-		Documents:     documents.Documents,
-		WikiSpaces:    documents.WikiSpaces,
+		InboxAllChats:    ids,
+		Documents:        documents.Documents,
+		WikiSpaces:       documents.WikiSpaces,
+		OwnedAllComments: documents.OwnedAllComments,
 	})
 	return b
 }

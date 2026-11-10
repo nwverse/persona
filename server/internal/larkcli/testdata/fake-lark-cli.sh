@@ -143,6 +143,11 @@ JSON
         cat "$base/document_inspect.json"
         exit 0
         ;;
+      metas)
+        # The owner is LARKCLI_FAKE_OWNER, someone else by default.
+        printf '{"ok":true,"data":{"metas":[{"doc_token":"doc_example","doc_type":"docx","owner_id":"%s"}]}}\n' "${LARKCLI_FAKE_OWNER:-ou_example_other}"
+        exit 0
+        ;;
       +list-comments)
         case "$scenario" in
           comments_unreadable)
@@ -176,6 +181,9 @@ JSON
             ;;
           comments|success)
             cat "$base/comments_initial.json"
+            ;;
+          comments_owned)
+            cat "$base/comments_unmentioned.json"
             ;;
           *)
             cat "$base/replies_empty.json"

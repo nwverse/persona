@@ -29,7 +29,7 @@ Discord (the user's own bot, extension, #917): the first step (D1) is the `disco
 | `larkcli` | Lark via lark-cli | In the hub (`connector/larkcli`), enabled by `lark.cli` | Device-flow `Login` from the App | @me, direct chats and replies in topics the user participates in, plus watched document comments (`kind: "doc"`; #2691), all through bounded polling and rule-based tiers | `larkcli_chats/messages/search` (read-only) | Chat Inbox replies use `lark-cli im +messages-reply` / `+messages-send` as the bot; document comments are read-only | Uses the user's lark-cli login on the hub machine |
 | `mail` | Mail | In the hub (`extmgr/mail_connector.go`) | `Archive` (UID per account) | The hub's own Inbox blocks | `mail_accounts/search/read` | `mail_send` (gated) | Its own API: password / Gmail and Outlook OAuth (`/api/v1/mail/…`) |
 
-`larkcli`'s connector options are `inbox_all_chats`, the watched `documents` links, and `wiki_spaces` shown in Settings. An empty options object
+`larkcli`'s connector options are `inbox_all_chats`, the watched `documents` links, `wiki_spaces` and `owned_all_comments` (documents and spaces are edited on the connector's page in Settings). An empty options object
 does not admit every chat or watch any document; the connector's `doc` Inbox items are read-only and use the user's lark-cli identity.
 
 ### Interfaces: one manifest, dispatched by declaration

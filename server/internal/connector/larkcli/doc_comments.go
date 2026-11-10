@@ -43,6 +43,9 @@ type DocumentOptions struct {
 	WikiSpaces     []string `json:"wiki_spaces"`
 	DocumentLinks  []string `json:"-"` // source-compatible alias for the settings label
 	WikiSpaceLinks []string `json:"-"`
+	// OwnedAllComments keeps every new comment and reply on a watched document the user owns, not only those that
+	// mention the user or answer a thread the user wrote in. Off by default.
+	OwnedAllComments bool `json:"owned_all_comments"`
 }
 
 func (o DocumentOptions) normalized() DocumentOptions {
@@ -62,7 +65,7 @@ func (o DocumentOptions) normalized() DocumentOptions {
 	if spaces == nil {
 		spaces = []string{}
 	}
-	return DocumentOptions{Documents: documents, WikiSpaces: spaces, DocumentLinks: documents, WikiSpaceLinks: spaces}
+	return DocumentOptions{Documents: documents, WikiSpaces: spaces, DocumentLinks: documents, WikiSpaceLinks: spaces, OwnedAllComments: o.OwnedAllComments}
 }
 
 func uniqueOptions(values []string) []string {
@@ -89,6 +92,7 @@ func parseDocumentOptions(raw json.RawMessage) (DocumentOptions, error) {
 		DocumentLinks  json.RawMessage `json:"document_links"`
 		WikiSpaces     json.RawMessage `json:"wiki_spaces"`
 		WikiSpaceLinks json.RawMessage `json:"wiki_space_links"`
+		Owned          *bool           `json:"owned_all_comments"`
 	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return DocumentOptions{}, fmt.Errorf("options: %v", err)
@@ -113,7 +117,7 @@ func parseDocumentOptions(raw json.RawMessage) (DocumentOptions, error) {
 			return DocumentOptions{}, fmt.Errorf("options.wiki_space_links: %v", err)
 		}
 	}
-	o := DocumentOptions{Documents: uniqueOptions(documents), WikiSpaces: uniqueOptions(spaces)}
+	o := DocumentOptions{Documents: uniqueOptions(documents), WikiSpaces: uniqueOptions(spaces), OwnedAllComments: wire.Owned != nil && *wire.Owned}
 	if len(o.Documents) > maxWatchedDocuments {
 		return DocumentOptions{}, fmt.Errorf("options.documents has more than %d links", maxWatchedDocuments)
 	}
@@ -171,6 +175,10 @@ type watchedDocument struct {
 	Seen       map[string]string
 	Things     map[string]connector.InboxThing
 	Unreadable bool
+	// Token is the underlying document's token (a wiki link unwrapped); Owner its owner's open_id, read once when
+	// OwnedAllComments is on.
+	Token string
+	Owner string
 	// RetryAt is when an unreadable document is probed again.
 	RetryAt time.Time
 }
@@ -369,6 +377,7 @@ func (c *Connector) pollDocumentsRound(ctx context.Context) bool {
 		if skip {
 			continue
 		}
+		c.lookUpOwner(ctx, doc)
 		changed, err := c.pollDocument(ctx, doc, auth.OpenID, c.lang(ctx))
 		if scopes, ok := scopeError(err); ok {
 			// The login lacks a comment scope: every document would fail the same way, so none is marked and the
@@ -425,6 +434,9 @@ func (c *Connector) syncWatched(resolved map[string]watchedDocument) {
 			c.docs.docs[link] = old
 		}
 		old.Canonical, old.Title, old.Type = metadata.Canonical, metadata.Title, metadata.Type
+		if metadata.Token != "" {
+			old.Token = metadata.Token
+		}
 		if old.Seen == nil {
 			old.Seen = map[string]string{}
 		}
@@ -459,6 +471,7 @@ func (c *Connector) resolveWatched(ctx context.Context) map[string]watchedDocume
 		}
 		if err == nil {
 			metadata.Canonical = documentFirstNonEmpty(info.CanonicalURL, info.URL)
+			metadata.Token = info.Token
 			metadata.Title = documentFirstNonEmpty(info.Title, link)
 			metadata.Type = normalizeDocumentType(documentFirstNonEmpty(info.Type, metadata.Type))
 		} else if adapter.KindOf(err) == adapter.KindMissingPermission {
@@ -501,6 +514,7 @@ func (c *Connector) resolveWatched(ctx context.Context) map[string]watchedDocume
 				}
 				if err == nil {
 					metadata.Canonical = documentFirstNonEmpty(info.CanonicalURL, info.URL)
+					metadata.Token = info.Token
 					metadata.Title = documentFirstNonEmpty(info.Title, metadata.Title, link)
 					metadata.Type = normalizeDocumentType(documentFirstNonEmpty(info.Type, metadata.Type))
 				} else if adapter.KindOf(err) == adapter.KindMissingPermission {
@@ -704,6 +718,9 @@ func (c *Connector) consumeComment(doc *watchedDocument, comment adapter.Comment
 		events = append(events, commentEvent{ID: id, UserID: reply.UserID, Content: reply.Content, At: wireTime(reply.UpdateTime, reply.CreateTime), Mention: rawMentions(reply.Content, me)})
 	}
 	participated := comment.UserID == me
+	c.docs.mu.Lock()
+	ownedAll := c.docs.options.OwnedAllComments && me != "" && doc.Owner == me
+	c.docs.mu.Unlock()
 	for _, event := range events {
 		if event.UserID == me {
 			participated = true
@@ -732,7 +749,7 @@ func (c *Connector) consumeComment(doc *watchedDocument, comment adapter.Comment
 		if event.UserID == me {
 			continue
 		}
-		if !event.Mention && !participated {
+		if !event.Mention && !participated && !ownedAll {
 			continue
 		}
 		if candidate == nil || event.At.After(candidate.At) {
@@ -779,6 +796,8 @@ func (c *Connector) documentThing(doc *watchedDocument, comment adapter.Comment,
 	notice := "reply"
 	if event.Mention {
 		notice = "mention"
+	} else if event.Root {
+		notice = "comment" // a new comment on a document the user owns (OwnedAllComments)
 	}
 	commentURL := commentLink(doc.URL, comment.ID)
 	docBlock, _ := json.Marshal(map[string]any{
@@ -1051,4 +1070,23 @@ func documentFirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// lookUpOwner reads a watched document's owner once, when OwnedAllComments is on. A failure leaves it unknown for
+// the next round; the document's comments are still kept by the mention and participation rules meanwhile.
+func (c *Connector) lookUpOwner(ctx context.Context, doc *watchedDocument) {
+	c.docs.mu.Lock()
+	need := c.docs.options.OwnedAllComments && doc.Owner == "" && doc.Token != "" && doc.Type != ""
+	token, docType := doc.Token, doc.Type
+	c.docs.mu.Unlock()
+	if !need {
+		return
+	}
+	owner, err := c.runner.DocumentOwner(ctx, token, docType)
+	if err != nil || owner == "" {
+		return
+	}
+	c.docs.mu.Lock()
+	doc.Owner = owner
+	c.docs.mu.Unlock()
 }
