@@ -208,20 +208,12 @@ func (h *Manager) addChatRule(ctx context.Context, row db.SentAsUser) (rule conn
 	return rule, true, nil
 }
 
-// removeChatRule drops the rule with id (connector.UserRule.ID) and applies that at once, without a restart: the next
-// write into the chat is asked about again. false when there was none. The rule is taken out of the gate first, and
-// when the store then fails to drop it the error says so (errRuleStillStored): the rule is off for now (the user asked
-// for that), still stored, and comes back at the next start unless the removal is asked for again.
-func (h *Manager) removeChatRule(ctx context.Context, id string) (bool, error) {
-	h.userRules.mu.Lock()
-	defer h.userRules.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, chatRuleStoreTime)
-	defer cancel()
-	return h.removeLocked(ctx, id)
-}
-
-// removeChatRuleKey is removeChatRule for the rule that chatRuleKey names (what the API gives a client). It returns the
-// rule it dropped, for the audit; the whole of it, reading the store included, is held to chatRuleStoreTime.
+// removeChatRuleKey drops the rule that chatRuleKey names (what the API gives a client) and applies that at once,
+// without a restart: the next write into the chat is asked about again. had is false when there was none. The rule is
+// taken out of the gate first, and when the store then fails to drop it the error says so (errRuleStillStored): the
+// rule is off for now (the user asked for that), still stored, and comes back at the next start unless the removal is
+// asked for again. It returns the rule it dropped, for the audit; the whole of it, reading the store included, is held
+// to chatRuleStoreTime.
 func (h *Manager) removeChatRuleKey(ctx context.Context, key string) (rule connector.UserRule, had bool, err error) {
 	h.userRules.mu.Lock()
 	defer h.userRules.mu.Unlock()

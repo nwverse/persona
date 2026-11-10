@@ -121,6 +121,8 @@ private fun TaskDetailSheet(todoId: String, host: AssistantTaskHost, onDismiss: 
             }
         }
         Spacer(Modifier.height(Tokens.Space.l))
+        TaskOwnerDecision(todo, host)
+        TaskLifecycleDetails(todo, host)
         val failure = todo.startFailure
         when {
             shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)
@@ -306,7 +308,7 @@ internal fun PlanEditSheet(plan: TaskPlan, host: AssistantTaskHost, onDismiss: (
 }
 
 /** The permission modes a planned task can start with (iOS PlanEditSheet). */
-private val PlanPermissions = listOf("default", "acceptEdits", "plan", "bypassPermissions")
+internal val PlanPermissions = listOf("default", "acceptEdits", "plan", "auto", "bypassPermissions")
 
 /** An agent's state as the design system draws it. */
 internal val AgentState.designStatus: Status get() = when (this) {

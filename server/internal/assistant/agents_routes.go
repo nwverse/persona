@@ -51,6 +51,9 @@ func (s *Service) agentRoutes() {
 		if in.ReplyReminder == nil {
 			in.ReplyReminder = prev.ReplyReminder
 		}
+		if in.TransientRetry == nil {
+			in.TransientRetry = prev.TransientRetry // an app that does not know it (#3208) leaves it as it was
+		}
 		switch {
 		case in.ReplyReminderMinutes == 0:
 			in.ReplyReminderMinutes = prev.ReplyReminderMinutes

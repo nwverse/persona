@@ -14,6 +14,12 @@ nonisolated enum WatchFaceTokens {
     /// Behind the complication where the face shows a background (watchOS tints or drops it on others).
     static let background = Color.black
 
+    /// The Meeting Recording complication (docs/apple/recording.md「Apple Watch」): the system's red of a recording, its
+    /// symbol (`Theme.Icon.recording`, which the extension doesn't build) and the circular face's glyph size.
+    static let recording = Color.red
+    static let recordingSymbol = "waveform.circle.fill"
+    static let recordingGlyph = Font.system(size: 26, weight: .semibold)
+
     /// `-openWatchItem complication`: every family at a 46 mm face's sizes, on a mock face's grey.
     static let previewSpacing: CGFloat = 8
     static let previewCircular: CGFloat = 50

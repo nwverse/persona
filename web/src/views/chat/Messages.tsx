@@ -116,7 +116,7 @@ function injectedIcon(n: Injected): { name: IconName; tone: string } {
 }
 
 /** A message Persona typed in for the model (a task's notice, a scheduled run…): one centered line, never its words.
- *  A task's opens the task; a scheduled run's shows what the task asks. docs/protocol/protocol.md "Messages Persona injects". */
+ *  A task's opens the task; a scheduled run's shows what the task asks. docs/protocol/protocol.md "Messages injected by Persona". */
 export function InjectedHint({ msg, sid }: { msg: UserMessage; sid: string }) {
   const n = msg.injected!;
   const todos = useStore((s) => s.todos);

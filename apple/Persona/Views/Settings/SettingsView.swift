@@ -11,7 +11,7 @@ struct SettingsView: View {
     @State private var showPair = false
     @State private var storage: Int64?
     @State private var plugins: [HubExtension]?
-    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI 插槽」).
+    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI slots」).
     @State private var pluginLink: LinkTarget?
     @StoredValue(TranslationPrefs.enabledKey) private var translating = false
     @StoredValue(TranslationPrefs.targetKey) private var translateTarget = TranslationPrefs.defaultTarget
@@ -75,7 +75,7 @@ struct SettingsView: View {
                 if !model.isDemo { ChecklistSettingsRow() }
 
                 #if os(iOS) || os(visionOS)
-                // The plugins' cards and pages (docs/extensions/extensions.md「UI 插槽」): at the top, where the main navigation's
+                // The plugins' cards and pages (docs/extensions/extensions.md「UI slots」): at the top, where the main navigation's
                 // entries are on an iPhone (the Mac has them in its sidebar).
                 ExtensionSlotsSettingsSection(link: $pluginLink)
                 #endif
@@ -156,6 +156,12 @@ struct SettingsView: View {
                             SettingsRow(title: String(localized: "Devices"), symbol: Theme.Icon.credentials, tint: Theme.Hue.gray)
                         }
                         .settingsListRow(SettingsPage.devices)
+                        #if os(iOS)
+                        NavigationLink(value: SettingsPage.health) {
+                            SettingsRow(title: String(localized: "Health"), symbol: Theme.Icon.health, tint: Theme.accent)
+                        }
+                        .settingsListRow(SettingsPage.health)
+                        #endif
                         NavigationLink(value: SettingsPage.notifications) {
                             SettingsRow(title: String(localized: "Notifications"), symbol: Theme.Icon.notifications, tint: Theme.needsYou)
                         }
@@ -237,6 +243,23 @@ struct SettingsView: View {
                                     .textSelection(.enabled)
                             }
                         }
+                        // The last time New Chat did not bring the new-conversation page, as labels (#2189): only once there was one.
+                        if let check = UserDefaults.standard.string(forKey: NewChatCheck.defaultsKey) {
+                            if AppStyle.current.usesBeautifulUI {
+                                BUIListRow(String(localized: "Last New Chat Check"), detail: check, detailLines: 4)
+                                    .accessibilityIdentifier("settings-new-chat-check")
+                            } else {
+                                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                                    Text("Last New Chat Check")
+                                    Text(check)
+                                        .font(Theme.Font.code)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("settings-new-chat-check")
+                            }
+                        }
                     }
                     .bareListRow()
                 } header: {
@@ -253,7 +276,7 @@ struct SettingsView: View {
             #endif
             .themedPage()
             .pageToolbar {
-                    // As a sheet over the shell (docs/apple/ios.md「新外壳」): ChatGPT's × to close it.
+                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ChatGPT's × to close it.
                     if shell != nil || inSheet {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
@@ -407,6 +430,9 @@ struct SettingsView: View {
             p.append(ModelLaunchersRoute())
             if let n = d.string(forKey: "openModelLauncher") { p.append(ModelLauncherRoute(name: n)) }
         }
+        #if os(iOS)
+        if d.bool(forKey: "openWorkoutReports") { p = NavigationPath(); p.append(SettingsPage.health) }
+        #endif
         guard !p.isEmpty else { return }
         Self.debugOpened = true
         model.settingsPath = p
@@ -455,6 +481,9 @@ struct SettingsView: View {
 
 /// The pages of Settings that are not routes of their own elsewhere.
 enum SettingsPage: Hashable {
+    #if os(iOS)
+    case health
+    #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
     case triage
@@ -470,17 +499,17 @@ enum SettingsPage: Hashable {
     /// the id; nil: the default's).
     case plugins
     case plugin(String, manager: String? = nil)
-    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「声明式 UI」), titled until its View says
+    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「Declarative UI」), titled until its View says
     /// otherwise; `manager`: the plugin's (nil: the default's).
     case pluginPage(plugin: String, ui: String, title: String, manager: String? = nil)
-    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「扩展市场」).
+    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
     case pluginMarkets
     /// Settings › Channels, and one channel by its id (docs/extensions/channels.md).
     case channels
     case channel(String)
-    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「Connecting to hub through SSH」).
     case sshTunnel(String)
     case inAppTunnel(String)
     /// Settings › hub › Local Proxy of one paired hub (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
@@ -541,6 +570,9 @@ private struct SettingsDestinations: ViewModifier {
         case .connector(let id, let manager):
             if id == "imessage" { MessagesConnectorView(manager: manager) } else { HubConnectorView(id: id, manager: manager) }
         case .feishuBot: FeishuBotView()
+        #if os(iOS)
+        case .health: WorkoutReportSettingsView()
+        #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
         case .translation: TranslationSettingsView()
@@ -632,7 +664,7 @@ struct PhoneDataView: View {
     var body: some View {
         List {
             Section {
-                ForEach(PhoneDataSource.allCases) { s in
+                ForEach(PhoneDataSource.onThisDevice) { s in
                     HStack(spacing: Theme.Space.m) {
                         SourceIcon(source: s)
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
@@ -666,7 +698,7 @@ struct PhoneDataView: View {
     }
 
     private func refresh() {
-        for s in PhoneDataSource.allCases { statuses[s] = PhoneAuthorization.status(s) }
+        for s in PhoneDataSource.onThisDevice { statuses[s] = PhoneAuthorization.status(s) }
     }
 
     private func set(_ s: PhoneDataSource, _ on: Bool) async {
@@ -902,7 +934,7 @@ struct PairView: View {
     var start: Start = .scan
     @State private var url = ""
     @State private var token = ""
-    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「Connecting to hub through SSH」).
     @State private var ssh: SSHRoute?
     #if os(macOS)
     @State private var editingSSH = false

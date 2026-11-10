@@ -1,4 +1,4 @@
-// The banner over the inbox list while new items wait for triage (#1773, docs/assistant/inbox.md "The waiting-for-triage banner"): how many, from
+// The banner over the inbox list while new items wait for triage (#1773, docs/assistant/inbox.md "Waiting-for-triage banner"): how many, from
 // where, and why — the hub's reason, else the state's words (lib/inbox.ts triageBanner). "Set up" opens the model
 // settings of "Triage" when no model is set up; the other states only say why. Not dismissable: it goes when triage is
 // ok again (the list's next pull). The same words, place and tone as iOS and Android.

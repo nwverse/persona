@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -52,8 +53,9 @@ fun SettingsScreen(
     onBack: (() -> Unit)? = null,
     /** Opens a page by key (one AI use of "Model configuration"); without it such pages open inside this one. */
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)? = null,
+    onClose: (() -> Unit)? = null,
 ) {
-    SettingsContent(services.bound(), initialPage, onPhoneData, onDemo, onExitDemo, onOpen, onBack, onNavigate)
+    SettingsContent(services.bound(), initialPage, onPhoneData, onDemo, onExitDemo, onOpen, onBack, onNavigate, onClose)
 }
 
 @Composable
@@ -66,6 +68,7 @@ private fun SettingsContent(
     onOpen: ((SettingsPage) -> Unit)?,
     onBack: (() -> Unit)?,
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
+    onClose: (() -> Unit)?,
 ) {
     var page by rememberSaveable(initialPage) { mutableStateOf(settingsPageFromInitialPage(initialPage)?.toInitialPage() ?: initialPage) }
     var purposeManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
@@ -75,6 +78,8 @@ private fun SettingsContent(
     var connectorManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var channel by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var manager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    /** `ssh:<hub id>` or `proxy:<hub id>`: a hub's tunnel page under Settings › Hubs. */
+    var tunnelPage by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
     var provider by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
     var providerStep by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
@@ -274,6 +279,7 @@ private fun SettingsContent(
         "plugins" -> extension?.let { id -> ExtensionPage(services.extensions.takeUnless { services.demo }, id, onBack = { extension = null },
                 manager = extensionManager,
                 machines = services.sessions.machines,
+                launchers = services.providers.takeUnless { services.demo }?.let { p -> { p.launchers() } },
                 onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext)) } }) }
             ?: ExtensionsPage(services.extensions.takeUnless { services.demo }, back,
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
@@ -320,7 +326,11 @@ private fun SettingsContent(
             // A chat opens by its ids in the hub's group, as every other page's link to one does.
             onChat = onNavigate?.let { navigate -> { machine, session -> navigate(persona.core.navigation.ChatRoute(machine, session)) } })
         "hub-update" -> HubUpdatePage(hubUpdates, machines, back, online = connection == ConnectionState.Online, onMachine = onNavigate)
-        "hubs" -> HubsScreen(services.hubs ?: HubGroups.None, services.addHub?.let { { page = "hubs-add" } }, back, deviceFeedback)
+        "hubs" -> tunnelPage?.takeIf { services.tunnels != null }?.let { opened ->
+            HubTunnelPage(services.tunnels!!, opened.substringAfter(':'),
+                if (opened.startsWith("ssh:")) TunnelKind.Ssh else TunnelKind.Proxy, onBack = { tunnelPage = null })
+        } ?: HubsScreen(services.hubs ?: HubGroups.None, services.addHub?.let { { page = "hubs-add" } }, back, deviceFeedback,
+            tunnels = services.tunnels, onTunnel = { hubId, kind -> tunnelPage = (if (kind == TunnelKind.Ssh) "ssh:" else "proxy:") + hubId })
         // Adding a hub is the pairing page with an adding service; it returns to the hub list.
         "hubs-add" -> PairingScreen(services.addHub ?: services.pairing, services.sessions,
             onReady = { page = "hubs" }, onDiagnostics = { open(SettingsPage.Diagnostics) }, diagnostics = services.diagnostics,
@@ -361,7 +371,9 @@ private fun SettingsContent(
             MessagesConnectorPage(connectorsService, onBack = back)
         } else if (page.startsWith("connector/")) {
             HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
-        } else JListPage(title = stringResource(R.string.settings_title)) {
+        } else JListPage(title = stringResource(R.string.settings_title), actions = {
+            onClose?.let { close -> JIconButton(PhIcons.X, stringResource(persona.core.designsystem.R.string.designsystem_close), close, raised = true) }
+        }) {
             if (services.demo) {
                 item { JNotice(stringResource(R.string.settings_demo_notice), title = stringResource(R.string.settings_demo_mode)) }
                 onExitDemo?.let { exit ->
@@ -373,14 +385,14 @@ private fun SettingsContent(
                 selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
                 onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
             item {
-                HubCard(name = "Persona hub", connected = paired && connection == ConnectionState.Online,
+                HubCard(name = stringResource(persona.core.designsystem.R.string.designsystem_brand_persona), connected = paired && connection == ConnectionState.Online,
                     statusText = if (paired) connection.label() else stringResource(R.string.settings_not_paired),
                     facts = if (paired) machines.count { it.online }.let { online ->
                         listOf(stringResource(R.string.settings_hub_computers_online) to pluralStringResource(R.plurals.settings_hub_computers_count, online, online),
                             stringResource(R.string.settings_hub_address) to (services.hubAddress ?: stringResource(R.string.settings_not_provided)))
                     } else emptyList(),
                     busy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
-                    modifier = Modifier.padding(top = Tokens.Space.m), onClick = { open(SettingsPage.Diagnostics) })
+                    modifier = Modifier.testTag("settings-hub-card").padding(top = Tokens.Space.m), onClick = { open(SettingsPage.Diagnostics) })
             }
             item { JSectionHeader(stringResource(R.string.settings_section_connection)) }
             // The hub list is the one row a single hub group adds to settings (docs/android/android.md"Multiple hubs").
@@ -495,6 +507,7 @@ private fun SettingsContent(
     BackHandler(page == "managers" && manager != null) { manager = null }
     BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
     BackHandler(page == "hubs-add") { page = "hubs" }
+    BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
     if (confirmDisconnect) JDialog(
         onDismiss = { confirmDisconnect = false }, title = stringResource(R.string.settings_disconnect_title),
         text = stringResource(R.string.settings_disconnect_text),

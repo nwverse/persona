@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// A routine's facts card, the `brief` feed item (docs/protocol/protocol.md "Conversation feed", #2320): read from the shapes
+/// A routine's facts card, the `brief` feed item (docs/protocol/protocol.md "Tasks and the chat feed", #2320): read from the shapes
 /// every hub since the item has written (and a newer one), with the buttons' requests and what each answer turns them into.
 @MainActor
 struct BriefCardTests {

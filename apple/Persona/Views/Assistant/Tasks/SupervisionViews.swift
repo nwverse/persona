@@ -63,7 +63,8 @@ struct ReviewChecklist: View {
     }
 }
 
-/// One criterion: met (a check), missing (a cross) or not reviewed yet (a clock), with its evidence or gap below.
+/// One criterion: met (a check), missing (a cross), not reviewed yet (a clock) or added after a standing acceptance and
+/// not checked (a dash), with its evidence or gap below.
 private struct CriterionRow: View {
     var item: ReviewCheckItem
 
@@ -96,6 +97,7 @@ private struct CriterionRow: View {
         case .met: Theme.Icon.done
         case .missing: Theme.Icon.unmet
         case .open: Theme.Icon.time
+        case .unchecked: Theme.Icon.notChecked
         }
     }
 
@@ -103,7 +105,7 @@ private struct CriterionRow: View {
         switch item.mark {
         case .met: Theme.positive
         case .missing: Theme.danger
-        case .open: .secondary
+        case .open, .unchecked: .secondary
         }
     }
 
@@ -112,6 +114,7 @@ private struct CriterionRow: View {
         case .met: String(localized: "Met")
         case .missing: String(localized: "Missing")
         case .open: String(localized: "Not reviewed yet")
+        case .unchecked: String(localized: "Not checked")
         }
     }
 }
@@ -193,7 +196,7 @@ struct ReportFeedLine: View {
             }
             .buttonStyle(.plain)
             .disabled(item.ref.flatMap { store.todos[$0] } == nil)
-            Text(ReviewText.reportLine(kind: kind, text: item.text ?? "", step: item.step, steps: item.steps))
+            Text(ExchangeText.linked(ReviewText.reportLine(kind: kind, text: ExchangeText.withoutHeadingMarks(item.text ?? ""), step: item.step, steps: item.steps)))
                 .font(Theme.Font.body)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)

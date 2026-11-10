@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addSection, agentPath, arrangeSessions, assignSection, blockView, emptyPrefs, groupSessions, isDefaultView, mergeMessages, normalizePrefs, pendingOutgoing, removeSection, resetView, setView, setupHints, toggleProvider, togglePin, totalUnread, viewOf, type AgentMessage, type AgentSession, type Outgoing } from "./agents";
+import { addSection, agentPath, arrangeSessions, assignSection, blockView, emptyPrefs, isDefaultView, mergeMessages, normalizePrefs, pendingOutgoing, removeSection, resetView, setView, setupHints, toggleProvider, togglePin, totalUnread, viewOf, type AgentMessage, type AgentSession, type Outgoing } from "./agents";
 
 const s = (id: string, provider: string, rank: number, unread = 0, title = id): AgentSession => ({ id, source: "lark-bridge", sessionKey: id, provider, title, canSend: true, unreadCount: unread, rankTimeMs: rank });
 const m = (id: string, pos: number, role = "assistant", text = id, t = pos * 1000): AgentMessage => ({ externalId: id, role, blocks: [{ type: "text", text }], createTimeMs: t, position: pos });
@@ -7,22 +7,6 @@ const m = (id: string, pos: number, role = "assistant", text = id, t = pos * 100
 describe("agentPath", () => {
   it("encodes the whole id, '/' and ':' included", () => {
     expect(agentPath("lark-bridge:agent:grok_bot:a1:u-1/")).toBe("/agents/sessions/lark-bridge%3Aagent%3Agrok_bot%3Aa1%3Au-1%2F");
-  });
-});
-
-describe("groupSessions", () => {
-  const list = [s("a", "muse", 5, 1), s("b", "grok_bot", 9, 2), s("c", "grok_bot", 3, 0, "Weekly report"), s("d", "muse", 1, 4)];
-  it("groups by provider, the most recent group and session first, with unread sums", () => {
-    const g = groupSessions(list);
-    expect(g.map((x) => x.provider)).toEqual(["grok_bot", "muse"]);
-    expect(g[0].sessions.map((x) => x.id)).toEqual(["b", "c"]);
-    expect(g[1].unread).toBe(5);
-    expect(totalUnread(list)).toBe(7);
-  });
-  it("filters by title or provider", () => {
-    expect(groupSessions(list, "weekly").flatMap((x) => x.sessions.map((y) => y.id))).toEqual(["c"]);
-    expect(groupSessions(list, "MUSE").flatMap((x) => x.sessions.map((y) => y.id))).toEqual(["a", "d"]);
-    expect(groupSessions(list, "grok bot")).toHaveLength(1);
   });
 });
 
@@ -79,6 +63,7 @@ describe("arrangeSessions", () => {
   it("sorts by unread or name and can skip grouping", () => {
     expect(ids(arrangeSessions(list, { ...emptyPrefs(), view: { group: "none", sort: "unread" } }, "", now))).toEqual([["b", "a", "c", "d"]]);
     expect(ids(arrangeSessions(list, { ...emptyPrefs(), view: { group: "none", sort: "name" } }, "", now))).toEqual([["a", "b", "c", "d"]]);
+    expect(totalUnread(list)).toBe(4);
   });
   it("filters by show mode, providers and query", () => {
     const flat = (v: object, q = "") => ids(arrangeSessions(list, { ...emptyPrefs(), view: { group: "none", ...v } }, q, now)).flat();
@@ -86,6 +71,8 @@ describe("arrangeSessions", () => {
     expect(flat({ show: "sendable" })).toEqual(["a", "b", "c"]);
     expect(flat({ providers: ["muse"] })).toEqual(["a", "d"]);
     expect(flat({}, "char")).toEqual(["c"]);
+    expect(flat({}, "MUSE")).toEqual(["a", "d"]); // the provider, whatever the case
+    expect(flat({}, "grok bot")).toEqual(["b", "c"]); // its label
   });
   it("custom sections come after pins; removing one frees its sessions", () => {
     let p = addSection(emptyPrefs(), "工作", "w");
@@ -114,6 +101,11 @@ describe("arrangeSessions", () => {
 });
 
 describe("setupHints", () => {
+  it("gives a failing source's own reason, and prefers a setup hint", () => {
+    expect(setupHints([{ source: "a", enabled: true, error: "Not configured yet" }])).toEqual(["Not configured yet"]);
+    expect(setupHints([{ source: "b", enabled: true, setup: "no_accounts", error: "x" }])).not.toContain("x");
+  });
+
   it("says what to do for each source that is not set up, nothing for a ready one", () => {
     const h = setupHints([
       { source: "a", enabled: false, setup: "disabled" },

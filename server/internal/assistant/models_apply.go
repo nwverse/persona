@@ -9,7 +9,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // ---- what a node call runs on ----
@@ -27,7 +26,7 @@ func (s *Service) applyModel(ctx context.Context, id string, params map[string]a
 	if b.Model != "" && strings.HasPrefix(b.Provider, "launcher.") && !proto.ValidModelID(b.Model) {
 		// Configured before a launcher's model was held to the model id rule (#1644; Model configuration refuses it as
 		// an edit now): the launcher's own default, rather than every run of this purpose failing, the main chat's too.
-		s.logf("model config %s: %q is no model id, running %s's default", id, textfmt.Clip(b.Model, 80), b.Provider)
+		s.logf("model config %s: %q is no model id, running %s's default", id, clip(b.Model, 80), b.Provider)
 		b.Model = ""
 	}
 	if model, _ := params["model"].(string); strings.TrimSpace(model) != "" {

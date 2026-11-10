@@ -1,6 +1,6 @@
 package node
 
-// Background commands that only wait (#6045, docs/protocol/agent-states.md "Waiting in the background"). An agent whose turn
+// Background commands that only wait (#6045, docs/protocol/agent-states.md "Unified states"). An agent whose turn
 // ended is Working while its background commands run (#2935); many of them only wait for something: a sleep, a loop
 // that checks CI every half minute, gh … --watch, tail -f. Those show apart from real work. Claude Code runs each
 // background command in a shell of its own under the session's claude, sourcing its shell snapshot

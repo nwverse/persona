@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 )
 
-// The api extension point (docs/extensions/extensions.md "App API"): a plugin serves a part of the app's API under
+// The api extension point (docs/extensions/extensions.md "App endpoints"): a plugin serves a part of the app's API under
 // /api/v1/<prefix>/ on its HTTP side. The hub authenticates the request, then hands it over: before its own routes for
 // a prefix being moved out of the hub (migratablePrefixes: the plugin's wins), after them otherwise (a plugin cannot
 // take the hub's own API). It adds the plugin's features to the hub's and passes its events (api.broadcast) to the

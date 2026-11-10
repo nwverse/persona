@@ -148,7 +148,7 @@ export class LarkReceiptMissing extends Error {
 
 /**
  * Sends one attachment. A picture needs its message id back; a file may come back without one (it was taken, so it
- * must not be sent again: docs/extensions/lark-attachments.md "A successful file receipt may leave out message_id").
+ * must not be sent again: docs/extensions/lark-attachments.md "Limits and regression coverage").
  */
 export async function sendLarkAttachment(feed: string, a: LarkAttachment, clientID: string, route: LarkAttachmentRoute = {}, ol?: number,
   manager?: string): Promise<{ message_id?: string }> {

@@ -59,7 +59,7 @@ final class ChatReenterTests: XCTestCase {
     }
 
     /// The same, when its transcript was replaced while it was away (a new history token: the chat starts over from the
-    /// hub's latest page while it lands, docs/protocol/protocol.md "Item continuity").
+    /// hub's latest page while it lands, docs/protocol/protocol.md "Continuity of items").
     @MainActor func testATabbedChatWhoseTranscriptWasReplacedComesBack() throws {
         try reenterAtTop(tabbed, turns: 0, newHistory: true)
     }

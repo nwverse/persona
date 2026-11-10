@@ -70,7 +70,7 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 
 // snapshotTask is one task in the snapshot, in state st: its lead agent's (taskLead) last words, the step it is on
 // while it works (or has said nothing yet: an agent that only runs tools, #1583) and its running subagents, as the
-// task cards show them (docs/assistant/unified-entry.md "Progress on task cards").
+// task cards show them (docs/assistant/unified-entry.md "Task cards").
 func snapshotTask(t Todo, st string, agents []proto.Session, now time.Time) prompts.SnapshotTask {
 	task := prompts.SnapshotTask{ID: t.ID, Title: t.Title, State: taskStateLabel(st)}
 	last := taskLead(st, agents)
@@ -147,7 +147,7 @@ func taskLead(st string, agents []proto.Session) proto.Session {
 	return latest
 }
 
-// taskState follows docs/assistant/todos.md "How the state is computed"(clients compute the same). One more for the
+// taskState follows docs/assistant/todos.md "State calculation rules"(clients compute the same). One more for the
 // assistant: an agent a usage limit stopped until its reset (usage_limit.go) is not interrupted for the user to
 // continue. It waits for the reset (its CLI or the manager goes on then), and a "Continue" before it is refused at once.
 func taskState(t Todo, agents []proto.Session) string {

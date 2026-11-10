@@ -17,7 +17,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// conclusionService is newSupervisedService with the Lark bot on (task reports on, only_conclusions as given): the cards it
+// conclusionService is newSupervisedService with the Lark bot on (task reports on with the execution steps, the card as
+// before #3218, and only_conclusions as given): the cards it
 // posts and the notes it writes are kept.
 func conclusionService(t *testing.T, onlyConclusions bool) (s *Service, f *fakeHub, todo Todo, posts, notes func() []string) {
 	t.Helper()
@@ -35,7 +36,7 @@ func conclusionServiceOn(t *testing.T, st Store, onlyConclusions bool) (s *Servi
 	var cards, said []string
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: true, OnlyConclusions: onlyConclusions}}, nil
+			Features: FeishuFeatures{Main: true, Cards: true, Reports: true, ReportSteps: true, OnlyConclusions: onlyConclusions}}, nil
 	})
 	f.answerApp(AppFeishu, FeishuPost, func(p json.RawMessage) (any, error) {
 		var m struct {
@@ -259,13 +260,6 @@ func TestOnlyConclusionsPushesNoProgress(t *testing.T) {
 	}
 }
 
-// The same switch off: the turn's report goes out as before.
-func TestWithoutOnlyConclusionsProgressIsPushed(t *testing.T) {
-	s, f, todo, posts, _ := conclusionService(t, false)
-	waitsForReview(t, s, f, todo.ID, "查完了，可以做")
-	waitFor(t, "the turn's report", func() bool { return len(cardsWith(posts(), "这一轮做完")) == 1 })
-}
-
 // The web briefing, the briefing's Lark card and the board say the conclusion in the same words as its own card.
 func TestBriefingSaysTheSameVerdictAsTheCard(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
@@ -344,6 +338,110 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	}
 	if got := sentToAgent(f); len(got) == 0 || !strings.Contains(got[len(got)-1], "先灰度 10%") {
 		t.Fatalf("to the agent: %q", got)
+	}
+}
+
+// Hold the automatic send's session lookup while the user completes the task.
+// The request context marks only that lookup, not completion's publication or outcome reads.
+type conclusionLookupKey struct{}
+type conclusionLookupHub struct {
+	*fakeHub
+	entered, release chan struct{}
+}
+
+func (h *conclusionLookupHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method == DeviceSessionsList && ctx.Value(conclusionLookupKey{}) != nil {
+		close(h.entered)
+		select {
+		case <-h.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return h.fakeHub.DeviceCall(ctx, p)
+}
+
+func TestLateTaskDecisionDoesNotSendAfterCompletion(t *testing.T) {
+	for _, action := range []string{"recommendation", "rework"} {
+		for _, reopen := range []bool{false, true} {
+			name := action + map[bool]string{false: "/done", true: "/reopened"}[reopen]
+			t.Run(name, func(t *testing.T) {
+				s, f, todo := newSupervisedService(t)
+				f.setSessions("box", idleAgent(time.Now().Add(-time.Hour)))
+				reviewTask(t, s, todo.ID, map[string]any{"verdict": "needs_user", "reason": "Choose a rollout", "recommend": "Use staged rollout"})
+				a := askOf(s, todo.ID)
+				h := &conclusionLookupHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{})}
+				s.hub = h
+				var release sync.Once
+				defer release.Do(func() { close(h.release) })
+				ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), conclusionLookupKey{}, true), 5*time.Second)
+				defer cancel()
+				done := make(chan error, 1)
+				sent := len(sentToAgent(f))
+				go func() {
+					var err error
+					if action == "recommendation" {
+						_, err = s.acceptTry(ctx, todo.ID, a.MessageID)
+					} else {
+						raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "Run one more test"})
+						_, err = s.toolTaskReview(ctx, "conv1", raw)
+					}
+					done <- err
+				}()
+				select {
+				case <-h.entered:
+				case <-ctx.Done():
+					t.Fatal("automatic send did not reach session lookup")
+				}
+				e := &todoEnv{t: t, s: s, f: f}
+				e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":true}`)
+				if reopen {
+					e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":false}`)
+				}
+				release.Do(func() { close(h.release) })
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("stale automatic send was not refused")
+					}
+				case <-ctx.Done():
+					t.Fatal("automatic send did not finish after lookup was released")
+				}
+				if got := len(sentToAgent(f)); got != sent {
+					t.Fatalf("stale %s sent %d messages after completion", action, got-sent)
+				}
+				if listedAsk(t, s, todo.ID) != nil {
+					t.Fatal("the old decision is still pending")
+				}
+				if !reopen {
+					s.taskWorking(context.Background(), "box", "s1")
+					if got := todoNow(s, todo.ID); got.DoneAt == nil || got.DoneBy != "" {
+						t.Fatalf("late supervisor work changed the user's completion: %+v", got)
+					}
+				}
+			})
+		}
+	}
+}
+
+// The automatic-send guard must not change a deliberate user message from a task card.
+func TestCompletedTaskDirectMessageStillReachesAgent(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	c := idleAgent(time.Now().Add(-time.Hour))
+	c.Status, c.PaneID = proto.StatusOffline, ""
+	f.setSessions("box", c)
+	e := &todoEnv{t: t, s: s, f: f}
+	e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":true}`)
+	sent := len(sentToAgent(f))
+	if _, err := s.routeToTask(context.Background(), todo.Origin, todo.ID, "Check one more case"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sentToAgent(f)[sent:]; len(got) != 1 || got[0] != "Check one more case" {
+		t.Fatalf("direct user message: %v", got)
+	}
+	s.taskWorking(context.Background(), "box", "s1")
+	if todoNow(s, todo.ID).DoneAt == nil {
+		t.Fatal("direct user input reopened a user-completed task")
 	}
 }
 

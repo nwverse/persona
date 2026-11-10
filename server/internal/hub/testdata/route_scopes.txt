@@ -152,6 +152,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/imessage/chats/{id}/messages
 inbox.read           GET /api/v1/inbox
 inbox.read           GET /api/v1/inbox/done
+inbox.read           GET /api/v1/inbox/done/days
 inbox.read           GET /api/v1/inbox/folders
 inbox.read           GET /api/v1/inbox/mutes
 inbox.read           GET /api/v1/inbox/policies
@@ -184,6 +185,8 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/claude-dirs
 -                    GET /api/v1/machines/{mid}/claude-live-replies
 -                    GET /api/v1/machines/{mid}/claude-settings
+-                    GET /api/v1/machines/{mid}/clipboard
+-                    GET /api/v1/machines/{mid}/clipboard/settings
 -                    GET /api/v1/machines/{mid}/codex-settings
 -                    GET /api/v1/machines/{mid}/computer
 -                    GET /api/v1/machines/{mid}/computer/apps
@@ -226,6 +229,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/ops/{id}
 -                    GET /api/v1/personas
 -                    GET /api/v1/personas/{id}/{file...}
+-                    GET /api/v1/phone/write-queue
 -                    GET /api/v1/pins
 -                    GET /api/v1/recordings
 agents.read          GET /api/v1/sessions
@@ -300,6 +304,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/feishu/notices/action
 -                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
+-                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
 -                    POST /api/v1/assistant/places
@@ -413,6 +418,9 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/model-profiles/{id}/apply
 notify               POST /api/v1/notify
 -                    POST /api/v1/phone/runtime-cli
+-                    POST /api/v1/phone/write-queue/{id}/cancel
+-                    POST /api/v1/recordings/{id}/minutes
+-                    POST /api/v1/recordings/{id}/minutes/todos
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach
@@ -493,6 +501,8 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/claude-dirs/blocked
 -                    PUT /api/v1/machines/{mid}/claude-live-replies
 -                    PUT /api/v1/machines/{mid}/claude-settings
+-                    PUT /api/v1/machines/{mid}/clipboard
+-                    PUT /api/v1/machines/{mid}/clipboard/settings
 -                    PUT /api/v1/machines/{mid}/codex-settings
 -                    PUT /api/v1/machines/{mid}/computer
 -                    PUT /api/v1/machines/{mid}/engine

@@ -20,9 +20,23 @@ import (
 // there by the bot itself (no lark-cli, nothing to approve per message). Changes within reportDelay are one card:
 // what needs the user's decision on top (each with its own answerable card below it), then each task with its stage
 // (plan → develop → review → merge → deploy → verified), a line of what happened and links to its page, its PR and its agent.
+// That is the card with report_steps on; off (the default) only goal-level changes go out (#3218, below).
 // The bot's reports switch turns it off (on by default). With only_conclusions on (#1226) the card carries only how tasks
 // ended (closed, did not start): a finished turn, waiting and interrupted stay in the task list and the briefing, and a
 // decision waiting still gets its own answerable card. A supervised task's review sends its conclusion card instead (conclusion.go).
+
+// Goal-level reports (#3218): by default the card is not a log of the work. A finished turn, an interruption, a closing
+// by the judge and the stage moving on are execution steps and are not pushed; what is pushed is a change of the task's
+// goal: reached (the conclusion card, conclusion.go, or the "Please verify" card of deployed work), waiting on the owner
+// (the decision's own answerable card) and stuck (it did not start, or its turns were cut off reportStuckAfter times in a
+// row). A stuck task's card says the goal, where it is now and one line of evidence with a link: no agent's words, no
+// stage bar. The bot's report_steps switch brings back the card as it was.
+
+// reportStuckAfter is how many interrupted turns in a row, with no finished one between, make a task stuck.
+const reportStuckAfter = 3
+
+// goalCardMaxItems bounds the stuck card; the rest are counted in a line pointing to the to-do list.
+const goalCardMaxItems = 10
 
 // reportDelay is how long a change waits for others before the card goes out (reportBook.delay overrides it).
 const reportDelay = time.Minute
@@ -137,7 +151,9 @@ type reportItem struct {
 	text    string
 	ix      *proto.Interaction
 	at      time.Time
-	tries   int // sends already attempted for this change (0: the first send is pending)
+	tries   int  // sends already attempted for this change (0: the first send is pending)
+	cuts    int  // interrupted turns in a row so far, this one included (interrupted only)
+	cutOff  bool // these cuts make the task stuck: the one reaching reportStuckAfter, or a later one replacing it unsent
 }
 
 type reportBook struct {
@@ -147,8 +163,9 @@ type reportBook struct {
 	timer   *time.Timer
 	stages  map[string]todoStage // by todo id (reportStagesKey)
 	loaded  bool
-	delay   time.Duration // 0: reportDelay (the tests' is shorter)
-	retry   time.Duration // 0: reportRetryDelay (the tests' is shorter)
+	delay   time.Duration  // 0: reportDelay (the tests' is shorter)
+	retry   time.Duration  // 0: reportRetryDelay (the tests' is shorter)
+	cuts    map[string]int // by todo id: interrupted turns in a row (a finished or closed one resets it)
 }
 
 type todoStage struct {
@@ -170,7 +187,20 @@ func (s *Service) taskReport(t Todo, state, machine string, session [2]string, t
 	if b.pending == nil {
 		b.pending = map[string]*reportItem{}
 	}
-	b.pending[t.ID] = &reportItem{todo: t.ID, state: state, machine: machine, session: session, text: text, ix: ix, at: time.Now()}
+	it := &reportItem{todo: t.ID, state: state, machine: machine, session: session, text: text, ix: ix, at: time.Now()}
+	switch state {
+	case reportInterrupted:
+		if b.cuts == nil {
+			b.cuts = map[string]int{}
+		}
+		b.cuts[t.ID]++
+		it.cuts = b.cuts[t.ID]
+		prev := b.pending[t.ID]
+		it.cutOff = it.cuts == reportStuckAfter || prev != nil && prev.cutOff // a stuck card still unsent is not lost
+	case reportDone, reportClosed:
+		delete(b.cuts, t.ID)
+	}
+	b.pending[t.ID] = it
 	if b.timer == nil {
 		d := b.delay
 		if d <= 0 {
@@ -294,7 +324,14 @@ func (s *Service) sendReports() {
 		if t.Quiet && f.Sync && it.state != reportClosed {
 			continue // told in the main conversation, whose turns the chat mirrors (sync); closing is not told there
 		}
-		if f.OnlyConclusions && !reportConclusion(it.state) {
+		if !f.ReportSteps {
+			if it.state == reportNeeds && it.ix != nil {
+				asks = append(asks, it) // the decision is the push: its own answerable card
+			}
+			if !it.stuck() {
+				continue // an execution step: a turn ended, was cut off once, or the judge closed it (#3218)
+			}
+		} else if f.OnlyConclusions && !reportConclusion(it.state) {
 			if it.state == reportNeeds && it.ix != nil {
 				asks = append(asks, it) // the decision itself still reaches the owner
 			}
@@ -315,7 +352,14 @@ func (s *Service) sendReports() {
 		}
 		return keep[i].todo < keep[j].todo // identical timestamps stay in a stable, repost-safe order
 	})
-	cards, fallbacks := s.reportCards(ctx, keep)
+	var cards []*feishubot.Card
+	var fallbacks []string
+	if f.ReportSteps {
+		cards, fallbacks = s.reportCards(ctx, keep)
+	} else {
+		c, fb := s.goalCard(ctx, keep)
+		cards, fallbacks = []*feishubot.Card{c}, []string{fb}
+	}
 	// A notifications companion takes the report (feishu_companions.go); the decisions' own cards, which answer for
 	// the owner, still go to the chat below.
 	if s.divertNotices(ctx, "report", cards, fallbacks) {
@@ -340,6 +384,59 @@ func (s *Service) postReportAsks(items []*reportItem) {
 			s.feishuInteractionAlways(*it.ix)
 		}
 	}
+}
+
+// stuck: the change says the task's goal is stuck — it did not start, or its turns were cut off reportStuckAfter times in
+// a row (told once, on the turn that makes it so).
+func (it *reportItem) stuck() bool {
+	return it.state == reportFailed || it.state == reportInterrupted && it.cutOff
+}
+
+// goalCard is the goal-level card for stuck tasks: for each, the goal, where it is now and one line of evidence with its
+// link (#3218). items are sorted; past goalCardMaxItems a line counts the rest.
+func (s *Service) goalCard(ctx context.Context, items []*reportItem) (*feishubot.Card, string) {
+	l, web := s.botLang(ctx), s.webBase(ctx)
+	title := i18n.T(l, "assistant-reports.goal_stuck_title", i18n.Args{"n": len(items)})
+	c := feishubot.NewCard("🎯 "+title, feishubot.Red, title)
+	var titles []string
+	for i, it := range items {
+		if i == goalCardMaxItems {
+			c.HR()
+			c.Markdown(i18n.T(l, "assistant-reports.goal_more", i18n.Args{"n": len(items) - i}))
+			break
+		}
+		t, _ := s.todoNow(it.todo)
+		if i > 0 {
+			c.HR()
+		}
+		titles = append(titles, clip(oneLine(t.Title), 40))
+		c.Markdown(goalLines(l, web, t, it))
+	}
+	return c, i18n.T(l, "assistant-reports.goal_summary", i18n.Args{"title": title,
+		"tasks": clip(strings.Join(titles, i18n.T(l, "assistant-tasks.list_sep")), reportFallbackMax)})
+}
+
+// goalLines are a stuck task's three lines: its goal, where it is now, and the evidence — the error in a line and a link
+// (the agent's conversation, else the task's page).
+func goalLines(l i18n.Lang, web string, t Todo, it *reportItem) string {
+	now := i18n.T(l, "assistant-reports.goal_now_failed")
+	if it.state == reportInterrupted {
+		now = i18n.T(l, "assistant-reports.goal_now_cut", i18n.Args{"n": it.cuts})
+	}
+	link := todoLink(web, t.ID)
+	if it.session[1] != "" && web != "" {
+		link = sessionLink(web, it.session[0], it.session[1], false)
+	}
+	evidence := feishubot.EscapeMarkdown(clip(oneLine(it.text), 80))
+	if link != "" {
+		a := "[" + i18n.T(l, "assistant-reports.goal_open") + "](" + link + ")"
+		evidence = strings.TrimSpace(evidence + " " + a)
+	}
+	if evidence == "" {
+		evidence = i18n.T(l, "assistant-reports.goal_no_evidence")
+	}
+	return i18n.T(l, "assistant-reports.goal_lines", i18n.Args{"goal": feishubot.EscapeMarkdown(clip(oneLine(t.Title), 80)),
+		"now": now, "evidence": evidence})
 }
 
 // reportConclusion says a report state tells how a task ended (closed by the judge, or did not start), the lines
@@ -368,6 +465,9 @@ func (s *Service) requeueReports(items []*reportItem) {
 	var gaveUp []string
 	for _, it := range items {
 		if cur, ok := b.pending[it.todo]; ok && cur.at.After(it.at) {
+			if it.cutOff && cur.state == reportInterrupted {
+				cur.cutOff = true // the newer cut still tells the stuck task the failed batch carried
+			}
 			continue // a newer change of this todo arrived meanwhile
 		}
 		if it.tries >= reportMaxRetries {

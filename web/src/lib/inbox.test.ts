@@ -247,7 +247,7 @@ describe("小工具", () => {
     expect(withToken("/api/v1/lark/media/k?size=48", "jd_x")).toBe("/api/v1/lark/media/k?size=48&token=jd_x");
     expect(withToken("https://example.com/a.png", "jd_x")).toBe("https://example.com/a.png");
     expect(withToken(undefined, "jd_x")).toBeUndefined();
-    // under a reverse proxy's sub-path (docs/web/web.md "Sub-path")
+    // under a reverse proxy's sub-path (docs/web/web.md "Subpaths")
     expect(withToken("/api/v1/lark/media/k", "jd_x", "/persona")).toBe("/persona/api/v1/lark/media/k?token=jd_x");
     expect(withToken("https://example.com/a.png", "jd_x", "/persona")).toBe("https://example.com/a.png");
   });
@@ -344,6 +344,41 @@ describe("列表状态", () => {
     fetcher.mockResolvedValueOnce(ok({ items: [dm] }));
     await reloadInbox();
     expect(getInbox().triage).toBeNull();
+  });
+
+  it("a 304 keeps the list it validates, the marks laid over it again", async () => {
+    const tagged = (body: unknown, etag: string) => ({ ok: true, status: 200, headers: new Headers({ ETag: etag }), text: async () => JSON.stringify(body) });
+    const notModified = { ok: false, status: 304, headers: new Headers(), text: async () => "" };
+    const ready: InboxTriage = { state: "ok", waiting: 0 };
+    const sent = (i: number) => new Headers(fetcher.mock.calls[i][1].headers).get("If-None-Match");
+    expect(sent(0)).toBe('W/"i1-"'); // no validator yet: one no list has
+    fetcher.mockResolvedValueOnce(tagged({ items: [dm, mail], triage: ready }, 'W/"i1-aa"'));
+    await reloadInbox();
+    expect(sent(1)).toBe('W/"i1-"');
+    let finish: (v: unknown) => void = () => {};
+    fetcher.mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const marked = setDone(dm, true);
+    fetcher.mockResolvedValueOnce(notModified);
+    await reloadInbox();
+    expect(sent(3)).toBe('W/"i1-aa"');
+    expect(ids(getInbox().items)).toEqual([dm.id, mail.id]);
+    expect(getInbox().items[0].done_by).toBe("user"); // the mark still out, over the kept list
+    expect(getInbox().triage).toEqual(ready);
+    expect(getInbox().error).toBe("");
+    finish(ok({ ...dm, done_at: at(0), done_by: "user" }));
+    expect(await marked).toBe(true);
+    // The list changed: a full answer with a new validator replaces the kept one; one without forgets it.
+    fetcher.mockResolvedValueOnce(tagged({ items: [mail], triage: ready }, 'W/"i1-bb"'));
+    await reloadInbox();
+    expect(sent(4)).toBe('W/"i1-aa"');
+    expect(ids(getInbox().items)).toEqual([mail.id]);
+    fetcher.mockResolvedValueOnce(ok({ items: [dm] }));
+    await reloadInbox();
+    expect(sent(5)).toBe('W/"i1-bb"');
+    fetcher.mockResolvedValueOnce(ok({ items: [dm] }));
+    await reloadInbox();
+    expect(sent(6)).toBe('W/"i1-"');
+    expect(ids(getInbox().items)).toEqual([dm.id]);
   });
 
   it("拉列表；请求进行中再要一次会在之后补一次", async () => {

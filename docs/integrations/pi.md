@@ -78,7 +78,7 @@ It does not connect to old nodes; it connects automatically after node restarts 
 ### Automatic updates
 
 personad embeds this package at build time (the extension, companion, and `runtime-sdk` in `integrations/pi`; `persona-pi-runtime` in `internal/runtimepkg`).
-The package carried by node is the version to run (see `docs/integrations/runtimes.md`, “Automatic updates,” for the general approach). Only installations from the package store (pi loads `<store>/current/pi`) update:
+The package carried by node is the version to run (see `docs/integrations/runtimes.md`, “Auto-update (optional)”, for the general approach). Only installations from the package store (pi loads `<store>/current/pi`) update:
 
 - **Extension** (pi terminals, `pi --mode rpc`, pi-web server process): reports its package hash when connecting to node. If node carries a different package, it fetches, verifies, and installs it as the new `current` (replacing the symlink by rename),
   then waits until **all sessions in this process are between turns and none has a card on the phone**, stops its connection, and has each session run `/persona-reload` on itself. The extension registers this command,

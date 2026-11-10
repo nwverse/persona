@@ -20,7 +20,7 @@ import persona.core.designsystem.PersonaTheme
 import java.io.ByteArrayInputStream
 
 /**
- * An HTML file previewed in the file viewer (docs/android/android.md "File viewer"; web `lib/html-preview.ts`, iOS #1297): the
+ * An HTML file previewed in the file viewer (docs/android/android.md "Files and Git in chat"; web `lib/html-preview.ts`, iOS #1297): the
  * page goes into a WebView with no address (it can't reach the app, files or the hub), scripts and the network off
  * until the user turns them on for this file from ⋯. Pure parts here; [HtmlFile] draws.
  */

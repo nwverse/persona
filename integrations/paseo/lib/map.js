@@ -13,6 +13,25 @@ export const SESSION_LABEL = 'persona.session'
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** Persona's permission modes (proto.PermissionModes): Claude Code's, which Paseo's Claude providers take as they are. */
 export const MODES = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']
+/**
+ * Persona's modes for the providers Paseo words differently: Codex has auto, auto-review and full-access, and only
+ * full access means the same as bypassPermissions (no prompts for edits, commands or the network).
+ */
+export const CODEX_MODES = { bypassPermissions: 'full-access' }
+
+/** Persona's permission mode in Paseo's words for a provider (undefined: Paseo has no such mode there). */
+export function paseoMode(root, mode) {
+  if (root === 'claude') return MODES.includes(mode) ? mode : undefined
+  if (root === 'codex') return CODEX_MODES[mode]
+  return undefined
+}
+
+/** Paseo's permission mode in Persona's words for a provider (undefined: Persona has no such mode). */
+export function personaMode(root, mode) {
+  if (root === 'claude') return MODES.includes(mode) ? mode : undefined
+  if (root === 'codex') return Object.keys(CODEX_MODES).find((ours) => CODEX_MODES[ours] === mode)
+  return undefined
+}
 /** A launcher name (the node's nameRe: what a shell function may be called). */
 export const LAUNCHER_NAME = /^[A-Za-z_][A-Za-z0-9_-]*$/
 /** A session id the node takes (runtimeIDRe). */
@@ -152,7 +171,7 @@ export function rowStatus(agent) {
 // ---- spaces ----
 
 /**
- * The Paseo project of a placement (docs/integrations/paseo.md "Which sessions show"): a repository's checkout and all its worktrees, as
+ * The Paseo project of a placement (docs/integrations/paseo.md "Which sessions appear"): a repository's checkout and all its worktrees, as
  * in Paseo's sidebar. The placement's projectKey is Paseo's project record id (its buildProjectPlacementForWorkspace),
  * not the project's own key. Undefined without a placement.
  */
@@ -234,7 +253,7 @@ export function projectSpaces(placed, canon = (p) => p) {
 }
 
 /**
- * The runtime.sessions row of an agent (docs/integrations/runtimes.md "List"), undefined for one not listed.
+ * The runtime.sessions row of an agent (docs/integrations/runtimes.md "What to implement"), undefined for one not listed.
  * @param {object} agent - an AgentSnapshotPayload
  * @param {{ project?: object, roots?: Record<string, string>, labels?: Record<string, string>, lastText?: string,
  *   spaceId?: string, spaceName?: string }} [o]
@@ -272,7 +291,8 @@ export function agentRow(agent, o = {}) {
   if (row.agent === RUNTIME && o.labels?.[agent.provider]) row.agent_label = o.labels[agent.provider]
   const model = agent.model ?? agent.runtimeInfo?.model
   if (typeof model === 'string' && model) row.model = model
-  if (root === 'claude' && MODES.includes(agent.currentModeId)) row.permission_mode = agent.currentModeId
+  const mode = personaMode(root, agent.currentModeId)
+  if (mode) row.permission_mode = mode
   const effort = agent.effectiveThinkingOptionId ?? agent.thinkingOptionId
   if (EFFORTS.includes(effort)) row.effort = effort
   const t = transcriptOf(agent, roots)

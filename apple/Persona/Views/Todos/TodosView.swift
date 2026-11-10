@@ -16,7 +16,13 @@ struct TodosView: View {
     @State private var creatingNotes = ""
     /// The New To-Do sheet's notes mic (#2188).
     @State private var dictation = Dictation()
-    @State private var expandedDone = false
+    /// Folded sections the user opened (Other open, Shelved, Done start folded), and merged rows opened to their members.
+    @State private var unfolded: Set<TodoSection> = []
+    @State private var openedGroups: Set<String> = []
+    /// Restores from Shelved kept on this device (`TodoRestores`), and the moment the sections are read at: a minute's
+    /// tick moves to-dos across the 24 h / 48 h lines while the page stays open.
+    @State private var restored = TodoRestores.load()
+    @State private var clock = Date.now
     /// A to-do opened from the calendar (and, in DEBUG screenshots, `-openTodoTitled <text>`: the first whose title has it).
     @State private var pushed: TodoDetailRoute?
     /// List or calendar, and the calendar's day / week / month (#2029): each device keeps its own.
@@ -26,17 +32,11 @@ struct TodosView: View {
     @State private var quickAdd: TodoCalendarSlot?
     @Environment(\.tabIsActive) private var inFront
 
-    private var allTodos: [TodoItem] {
+    /// The list by status section (#3206, docs/assistant/todo-status-sop.md), related to-dos merged into one row. A
+    /// search narrows the to-dos first, then places what is left.
+    private var triaged: TodoTriageResult {
         let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
-        return TodosLogic.sortTodos(store.todos, lookup: lookup)
-    }
-
-    private var openList: [TodoItem] {
-        allTodos.filter { !$0.isDone && matchesQuery($0) }
-    }
-
-    private var doneList: [TodoItem] {
-        allTodos.filter { $0.isDone && matchesQuery($0) }
+        return TodoTriageLogic.triageTodos(store.todos.filter(matchesQuery), lookup: lookup, now: clock, restored: restored)
     }
 
     private func matchesQuery(_ todo: TodoItem) -> Bool {
@@ -86,7 +86,7 @@ struct TodosView: View {
             await store.refresh()
             #if DEBUG
             // `-showDoneTodos YES`: the Done section starts open (screenshots of done todos).
-            if UserDefaults.standard.bool(forKey: "showDoneTodos") { expandedDone = true }
+            if UserDefaults.standard.bool(forKey: "showDoneTodos") { unfolded = [.other, .shelved, .done] }
             if let match = UserDefaults.standard.string(forKey: "openTodoTitled"),
                let todo = store.todos.first(where: { $0.title.contains(match) }) {
                 pushed = TodoDetailRoute(id: todo.id)
@@ -97,7 +97,9 @@ struct TodosView: View {
     }
 
     private var list: some View {
-        List {
+        let result = triaged
+        let openEmpty = [TodoSection.waiting, .working, .justDone, .pr].allSatisfy { result.groups($0).isEmpty }
+        return List {
             Section {
                 searchRow
             }
@@ -105,70 +107,25 @@ struct TodosView: View {
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
 
-            if openList.isEmpty && doneList.isEmpty {
+            if result.isEmpty {
                 emptySection
             } else {
-                if !openList.isEmpty {
-                    Section {
-                        ForEach(openList) { todo in
-                            NavigationLink(value: TodoDetailRoute(id: todo.id)) {
-                                TodoRow(todo: todo, onToggleDone: { store.toggleDone(todo) })
-                            }
-                            .swipeActions(edge: .leading) {
-                                Button {
-                                    store.toggleDone(todo)
-                                } label: {
-                                    Label("Done [Extension System Presentation c0b3fb]", systemImage: Theme.Icon.done)
-                                }
-                                .tint(Theme.positive)
-                            }
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    Task { do { try await store.delete(id: todo.id) } catch { AppModel.shared.show(error) } }
-                                } label: {
-                                    Label("Delete", systemImage: Theme.Icon.delete)
-                                }
-                            }
-                        }
-                    } header: {
-                        HStack(spacing: Theme.Space.sm) {
-                            Text("Open · \(openList.count)")
-                                .font(Theme.Font.sectionHeader)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                Section {
+                    Text("\(result.open) open · \(result.shelved) shelved · \(result.finished) done")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("todos.summary")
                 }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: Theme.Space.flush, leading: Theme.Space.page, bottom: Theme.Space.flush, trailing: Theme.Space.page))
+                .listRowSeparator(.hidden)
 
-                if !doneList.isEmpty {
-                    Section {
-                        DisclosureGroup(isExpanded: $expandedDone) {
-                            ForEach(doneList) { todo in
-                                NavigationLink(value: TodoDetailRoute(id: todo.id)) {
-                                    TodoRow(todo: todo, onToggleDone: { store.toggleDone(todo) })
-                                }
-                                .swipeActions(edge: .leading) {
-                                    Button {
-                                        store.toggleDone(todo)
-                                    } label: {
-                                        Label("Reopen", systemImage: Theme.Icon.undo)
-                                    }
-                                    .tint(Theme.accent)
-                                }
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        Task { do { try await store.delete(id: todo.id) } catch { AppModel.shared.show(error) } }
-                                    } label: {
-                                        Label("Delete", systemImage: Theme.Icon.delete)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text("Done · \(doneList.count)")
-                                    .font(Theme.Font.sectionHeader)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                ForEach(TodoSection.allCases, id: \.self) { section in
+                    let groups = result.groups(section)
+                    if !groups.isEmpty {
+                        sectionView(section, groups: groups, count: result.todoCounts[section] ?? groups.count,
+                                    folded: section.startsFolded && !isUnfolded(section, openEmpty: openEmpty))
                     }
                 }
             }
@@ -176,6 +133,139 @@ struct TodosView: View {
         .themedPage()
         .refreshable {
             await store.refresh()
+        }
+        .task(id: inFront) {
+            // a minute's tick moves to-dos across the 24 h / 48 h lines while the page is in front
+            while inFront, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                clock = .now
+            }
+        }
+    }
+
+    /// A folded section is open when the user opened it, while searching, or (Other open) when nothing above it shows.
+    private func isUnfolded(_ section: TodoSection, openEmpty: Bool) -> Bool {
+        unfolded.contains(section) || !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (section == .other && openEmpty)
+    }
+
+    @ViewBuilder private func sectionView(_ section: TodoSection, groups: [TodoTriageGroup], count: Int, folded: Bool) -> some View {
+        Section {
+            if !folded {
+                if section == .shelved {
+                    Text("No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(groups) { group in
+                    groupRows(group)
+                }
+            }
+        } header: {
+            if section.startsFolded {
+                Button {
+                    withAnimation(Theme.Motion.state) {
+                        if unfolded.contains(section) { unfolded.remove(section) } else { unfolded.insert(section) }
+                    }
+                } label: {
+                    HStack(spacing: Theme.Space.s) {
+                        sectionTitle(section, count: count)
+                        Spacer(minLength: Theme.Space.s)
+                        ThemedIcon(folded ? Theme.Icon.disclosure : Theme.Icon.expand)
+                            .font(Theme.Font.label)
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(folded ? Text("Collapsed") : Text("Expanded"))
+                .accessibilityIdentifier("todos.section.\(section.rawValue)")
+            } else {
+                sectionTitle(section, count: count)
+                    .accessibilityIdentifier("todos.section.\(section.rawValue)")
+            }
+        }
+    }
+
+    private func sectionTitle(_ section: TodoSection, count: Int) -> some View {
+        Text("\(section.title) · \(count)")
+            .font(Theme.Font.sectionHeader)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+
+    /// A row: the group's lead, then "N related" opening the others under it.
+    @ViewBuilder private func groupRows(_ group: TodoTriageGroup) -> some View {
+        todoRow(group.lead, triage: group.triage[group.lead.id])
+        if !group.related.isEmpty {
+            let opened = openedGroups.contains(group.key)
+            Button {
+                withAnimation(Theme.Motion.state) {
+                    if opened { openedGroups.remove(group.key) } else { openedGroups.insert(group.key) }
+                }
+            } label: {
+                HStack(spacing: Theme.Space.xs) {
+                    ThemedIcon(opened ? Theme.Icon.expand : Theme.Icon.disclosure)
+                    Text("\(group.related.count) related")
+                        .lineLimit(1)
+                }
+                .font(Theme.Font.captionStrong)
+                .foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(opened ? Text("Expanded") : Text("Collapsed"))
+            .accessibilityIdentifier("todos.related.\(group.key)")
+            if opened {
+                ForEach(group.related) { member in
+                    todoRow(member, triage: group.triage[member.id])
+                        .padding(.leading, Theme.Space.l)
+                }
+            }
+        }
+    }
+
+    private func todoRow(_ todo: TodoItem, triage: TodoTriage?) -> some View {
+        NavigationLink(value: TodoDetailRoute(id: todo.id)) {
+            TodoRow(todo: todo, triage: triage, onToggleDone: { store.toggleDone(todo) },
+                    onRestore: triage?.section == .shelved ? { restore(todo) } : nil)
+        }
+        .swipeActions(edge: .leading) {
+            if triage?.section == .shelved {
+                Button {
+                    restore(todo)
+                } label: {
+                    Label("Restore", systemImage: Theme.Icon.restoreShelved)
+                }
+                .tint(Theme.accent)
+            } else if todo.isDone {
+                Button {
+                    store.toggleDone(todo)
+                } label: {
+                    Label("Reopen", systemImage: Theme.Icon.undo)
+                }
+                .tint(Theme.accent)
+            } else {
+                Button {
+                    store.toggleDone(todo)
+                } label: {
+                    Label("Done [Extension System Presentation c0b3fb]", systemImage: Theme.Icon.done)
+                }
+                .tint(Theme.positive)
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                Task { do { try await store.delete(id: todo.id) } catch { AppModel.shared.show(error) } }
+            } label: {
+                Label("Delete", systemImage: Theme.Icon.delete)
+            }
+        }
+    }
+
+    /// Restore from Shelved: counts as activity now, so it goes back to its section until another 48 hours pass.
+    private func restore(_ todo: TodoItem) {
+        withAnimation(Theme.Motion.layout) {
+            clock = .now
+            restored = TodoRestores.restore([todo.id], now: clock)
         }
     }
 
@@ -272,8 +362,13 @@ struct TodosView: View {
 struct TodoRow: View {
     @Environment(AppModel.self) private var model
     @Environment(\.tabIsActive) private var inFront
+    @Environment(\.openURL) private var openURL
     var todo: TodoItem
+    /// Its place on the list by status (#3206); nil where the row is drawn outside it.
+    var triage: TodoTriage? = nil
     var onToggleDone: () -> Void
+    /// Set for a shelved row: one tap brings it back.
+    var onRestore: (() -> Void)? = nil
 
     var body: some View {
         let lookup = TodosLogic.makeSessionLookup(AppModel.shared.allSessions(inFront: inFront))
@@ -312,7 +407,7 @@ struct TodoRow: View {
                     StatusDot(state: urgent?.status ?? (status == .done ? .idle : .unknown), size: Theme.Size.dotS)
                     Text(todo.statusLabel(status))
                         .font(Theme.Font.labelStrong)
-                        .foregroundStyle(status.todoTone.text)
+                        .foregroundStyle(todo.shownState(status).todoTone.text)
                     if !activeAgents.isEmpty {
                         Text("· \(activeAgents.count) agents")
                             .font(Theme.Font.caption)
@@ -323,6 +418,37 @@ struct TodoRow: View {
                 }
 
                 TodoPlanLine(todo: todo)
+
+                if triage?.section == .pr, let pr = todo.prLink {
+                    HStack(spacing: Theme.Space.s) {
+                        Button {
+                            openURL(pr)
+                        } label: {
+                            Label(todo.prLabel ?? String(localized: "View PR"), systemImage: Theme.Icon.pullRequest)
+                                .lineLimit(1)
+                        }
+                        .font(Theme.Font.captionStrong)
+                        .foregroundStyle(Theme.accent)
+                        .buttonStyle(.borderless)
+                        if let last = triage?.last, last > .distantPast {
+                            Text("Last moved \(Fmt.relative(last))")
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+
+                if let onRestore {
+                    Button(action: onRestore) {
+                        Label("Restore", systemImage: Theme.Icon.restoreShelved)
+                            .lineLimit(1)
+                    }
+                    .font(Theme.Font.captionStrong)
+                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("todos.restore")
+                }
 
                 if let reason = todo.closedReason {
                     Text(reason)

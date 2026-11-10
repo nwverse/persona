@@ -134,12 +134,12 @@ import UIKit
 /// The sidebar stays built while closed (hidden): building it on the first frame of a drag was most of that frame.
 /// While the finger moves only `DrawerPageMotion` reads the progress (the sidebar and the tab bar are moved by UIKit,
 /// `AssistantDrawer.applyToUIKit`), and it changes nothing but transforms and opacities: the corners, shadow and edge
-/// line are fixed shapes faded in, not redrawn per frame. docs/operations/testing.md「侧边栏拖动」has the numbers.
+/// line are fixed shapes faded in, not redrawn per frame. docs/operations/testing.md「Sidebar dragging」has the numbers.
 struct AssistantDrawerLayout<Sidebar: View, Page: View>: View {
     let drawer: AssistantDrawer
     /// The page is at its root (nothing pushed): only then does a drag open the sidebar.
     var enabled: Bool
-    /// Behind the sidebar: the system's grouped gray, or the shell's near-white (docs/apple/ios.md「新外壳」).
+    /// Behind the sidebar: the system's grouped gray, or the shell's near-white (docs/apple/ios.md「New shell」).
     var backdrop: Color = Color(.secondarySystemBackground)
     /// The shell's Assistant | Agents strip: a drag sideways may page between them instead (`DrawerPan`).
     var pager: ShellPager? = nil
@@ -700,7 +700,7 @@ struct AssistantSidebar: View {
     var openSettings: (() -> Void)?
     /// The drawer it is in (nil as a column). The drawer's sidebar stays built while closed: closing it clears the search.
     var drawer: AssistantDrawer?
-    /// The shell's drawer (docs/apple/ios.md「新外壳」) also lists Inbox and Machines, and ends in New Chat + Settings like ChatGPT's;
+    /// The shell's drawer (docs/apple/ios.md「New shell」) also lists Inbox and Machines, and ends in New Chat + Settings like ChatGPT's;
     /// so does the iPad's column (docs/apple/ios.md「iPad」), whose tab bar has no Inbox or Settings.
     var openInbox: (() -> Void)? = nil
     var openTodos: (() -> Void)? = nil
@@ -711,6 +711,9 @@ struct AssistantSidebar: View {
     var onOpenExtension: ((ExtensionNavRoute) -> Void)? = nil
     /// Health: the health space's page (docs/assistant/health.md); nil leaves the row out.
     var openHealth: (() -> Void)? = nil
+    /// Meeting Recording (docs/apple/recording.md「Meeting recordings」): starts recording a meeting and opens Recordings;
+    /// while something records, opens it. nil leaves the row out (the Mac records nothing).
+    var startMeeting: (() -> Void)? = nil
     private var isShell: Bool { openInbox != nil }
     @State private var query = ""
     @State private var searchOpen = false
@@ -808,8 +811,9 @@ struct AssistantSidebar: View {
         // Paint the entire column with it too, including the title, actions and unused space.
         .background(Theme.pageBackground)
         #endif
-        // Which conversations the tasks started: read again as the sidebar comes out and when a conversation came or went.
-        .task(id: out ? all.count : -1) { if out { await taskChats.refresh(model.api) } }
+        // Which conversations the tasks started: read again as the sidebar comes out, when a conversation came or went, and
+        // for another manager's page.
+        .task(id: out ? "\(all.count)|\(model.assistantManagerID ?? "")" : "") { if out { await taskChats.refresh(model.api) } }
         .confirmClose($ending)
         .renameSessionAlert($renaming)
         .sheet(item: $autoList) { route in
@@ -924,6 +928,7 @@ struct AssistantSidebar: View {
         if let openInbox, let onMachines {
             // The shell's: the places to go (the main conversation is the row above them, `mainItem`).
             VStack(alignment: .leading, spacing: 0) {
+                meetingRow
                 action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.actionCount, run: openInbox)
                 if TodoStore.shared.isSupported {
                     action(String(localized: "To-dos"), Theme.Icon.todo, id: "sidebar-todos", count: TodoStore.shared.badgeCount, run: { (openTodos ?? openInbox)() })
@@ -953,6 +958,7 @@ struct AssistantSidebar: View {
     private var phoneActions: some View {
         VStack(alignment: .leading, spacing: 0) {
             action(String(localized: "New Chat [Quick Actions ea4b29]"), Theme.Icon.conversation, id: "sidebar-new", run: newConversation)
+            meetingRow
             action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, run: openRoutines)
             action(String(localized: "Knowledge"), Theme.Icon.knowledge, run: openKnowledge)
             if let openHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", run: openHealth) }
@@ -960,7 +966,19 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// The extensions' pages on the main navigation (nav_page, docs/extensions/extensions.md「UI 插槽」): one row each, its icon,
+    /// First among the places: one tap from the drawer records the meeting in the room; while a recording runs, the row
+    /// says so and opens it.
+    @ViewBuilder private var meetingRow: some View {
+        #if os(iOS)
+        if let startMeeting {
+            let recording = RecordingCapture.shared.state != .idle
+            action(recording ? String(localized: "Recording… Open") : String(localized: "Meeting Recording"),
+                   Theme.Icon.recording, id: "sidebar-meeting-recording", run: startMeeting)
+        }
+        #endif
+    }
+
+    /// The extensions' pages on the main navigation (nav_page, docs/extensions/extensions.md「UI slots」): one row each, its icon,
     /// title and badge, in the hub's order. Nothing with a hub without slots.
     @ViewBuilder private var extensionRows: some View {
         if let onOpenExtension, ExtensionSlots.shared.available {
@@ -1134,7 +1152,7 @@ struct AssistantSidebar: View {
         // The main conversation is the list's first row (`mainItem`): not here, and not in Auto Chats (`isPinned`).
         // Those Persona opened by itself are in Auto Chats (#3264); with a hub that does not say, the scheduled tasks' ones
         // are on Scheduled Tasks, under each task (#2838). The open one keeps its row.
-        let split = AutoConversations(all.filter { !isPinned($0) }, tasks: taskChats.known, current: current,
+        let split = AutoConversations(all.filter { !isPinned($0) }, tasks: taskChats.known(on: model.api), current: current,
                                       hubSays: model.hubFeatures.contains(AutoConversationSource.feature))
         let rest = AssistantSidebarGroups.newestFirst(split.mine)
         if rest.isEmpty && split.auto.isEmpty {
@@ -1176,7 +1194,7 @@ struct AssistantSidebar: View {
         archivedRow(archived)
     }
 
-    /// Auto Chats (#3264, docs/protocol/protocol.md「侧边栏」): the conversations Persona opened by itself (Inbox's AI twin, scheduled
+    /// Auto Chats (#3264, docs/protocol/protocol.md「Sidebar」): the conversations Persona opened by itself (Inbox's AI twin, scheduled
     /// tasks, Lark /agent…) in one row, closed at first. Open, a row for each source with its count (and All); each
     /// opens All Chats filtered to it. Closed, it still says how many wait for the user (or that one works, or is unread),
     /// as a conversation's row does.
@@ -1208,7 +1226,7 @@ struct AssistantSidebar: View {
         .accessibilityValue(autoOpen ? String(localized: "Expanded") : String(localized: "Collapsed [Assistant Sidebar e64447]"))
         .accessibilityIdentifier("sidebar-auto")
         if autoOpen {
-            ForEach(split.bySource(tasks: taskChats.known), id: \.source) { g in
+            ForEach(split.bySource(tasks: taskChats.known(on: model.api)), id: \.source) { g in
                 sourceRow(g.source.name, symbol: g.source.symbol, count: g.sessions.count, needsYou: g.needsYou, working: g.working,
                           id: g.source.id) { autoList = AutoConversationsRoute(source: g.source.id) }
             }
@@ -1341,7 +1359,7 @@ struct AssistantSidebar: View {
         .padding(.bottom, Theme.Space.xs)
     }
 
-    /// A conversation's title on one line. A 「1101 | 修复 | 主题」 title (docs/assistant/assistant.md「对话标题」) has its day and
+    /// A conversation's title on one line. A 「1101 | 修复 | 主题」 title (docs/assistant/assistant.md「Chat titles」) has its day and
     /// kind in the secondary color: the topic is what the eye finds, and what a narrow drawer cuts at the end.
     @ViewBuilder private func titleText(_ title: String, named: Bool) -> some View {
         if named, let t = ConversationTitle(title) {
@@ -1528,7 +1546,7 @@ struct AssistantSidebar: View {
                 }
                 .buttonStyle(.plain)
                 .surface(interactive: true, in: .circle)
-                // The plugins' entries are in Settings (docs/extensions/extensions.md「UI 插槽」, badges): their badges add up here, unless the
+                // The plugins' entries are in Settings (docs/extensions/extensions.md「UI slots」, badges): their badges add up here, unless the
                 // sidebar lists the entries itself.
                 .overlay(alignment: .topTrailing) { if onOpenExtension == nil { ExtensionSettingsBadge() } }
                 .accessibilityLabel("Settings")

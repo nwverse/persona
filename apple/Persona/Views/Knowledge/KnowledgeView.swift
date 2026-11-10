@@ -352,7 +352,7 @@ struct KBEntryLink<Label: View>: View {
 }
 
 /// The six kinds as chips with their icon (and how many, once loaded), all in sight: no sideways scroll view (the
-/// navigation stack can take one at the top of a page for the page's own and inset it, docs/lessons/ios.md「布局与组件」, and
+/// navigation stack can take one at the top of a page for the page's own and inset it, docs/lessons/ios.md「`Layout` and components」, and
 /// Events was off the edge). Chips that do not fit drop their icons, then go to a second row.
 struct KBKindBar: View {
     @Binding var kind: KBKind
@@ -818,7 +818,7 @@ struct KnowledgeDetailView: View {
 
     // MARK: Facts
 
-    /// A doc's, meeting's or event's when and link: the document opens in the app (CLAUDE.md「链接在 App 内打开」).
+    /// A doc's, meeting's or event's when and link: the document opens in the app (CLAUDE.md「Links open inside the app」).
     private func factsSection(_ f: ItemFacts) -> some View {
         Section {
             if let at = f.at {
