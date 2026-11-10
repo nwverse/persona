@@ -118,6 +118,28 @@ struct TodoTriageTests {
         #expect(at(todo("t", updated: 100, agents: ["idle"])).section == .other)
     }
 
+    /// #3331: the assistant's Progress entry counts by the same bucket as the To-dos page's "Not done".
+    @Test func bucketMatchesTheHeaderCountShelvedAndAcceptedAreNotOpen() {
+        let stale = todo("stale", updated: 100, agents: ["old"])
+        let accepted = todo("accepted", agents: ["idle"]) { $0.reopenedAt = ago(4); $0.supervision = acceptedReopened() }
+        let open = todo("open", agents: ["idle"])
+        let done = todo("done", done: 3)
+        #expect(TodoTriageLogic.bucket(stale, lookup: lookup, now: now) == .shelved)
+        #expect(TodoTriageLogic.bucket(stale, lookup: lookup, now: now, restoredAt: ago(1)) == .open)
+        #expect(TodoTriageLogic.bucket(accepted, lookup: lookup, now: now) == .closed)
+        #expect(TodoTriageLogic.bucket(open, lookup: lookup, now: now) == .open)
+        #expect(TodoTriageLogic.bucket(done, lookup: lookup, now: now) == .closed)
+        let all = [stale, accepted, open, done]
+        let header = TodoTriageLogic.triageTodos(all, lookup: lookup, now: now, restored: [:])
+        let rows = all.map { ActionTrayContent.TaskRow(id: $0.id, state: .followup, createdAt: $0.createdAt,
+                                                       bucket: TodoTriageLogic.bucket($0, lookup: lookup, now: now)) }
+        let tray = ActionTrayContent(tasks: rows, own: [], taskAgents: [])
+        #expect(tray.count(.progress) == header.open)
+        // shelved ones are left out of the tray; the accepted and the closed are listed after the open
+        #expect(tray.progress.first?.id == "task:open")
+        #expect(Set(tray.progress.map(\.id)) == ["task:open", "task:accepted", "task:done"])
+    }
+
     @Test func ownTodoWithoutAgentsOrDueAheadNeverShelves() {
         #expect(at(todo("t", updated: 100, origin: nil)).section == .other)
         #expect(at(todo("t", updated: 100, agents: ["old"]) { $0.dueDate = "2026-12-01" }).section == .other)

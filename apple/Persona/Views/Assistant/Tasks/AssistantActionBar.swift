@@ -19,6 +19,8 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
         var id: String
         var state: TaskState
         var createdAt: Date?
+        /// Where it stands by the To-dos page's rule (`TodoTriageLogic.bucket`, #3331); nil reads it from `state`.
+        var bucket: TodoBucket? = nil
     }
 
     enum Row: Equatable, Sendable, Identifiable {
@@ -50,13 +52,16 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
     /// `own`: the agents no task stands for (`TasksStore.agents(of:)`); `taskAgents`: the agents of its tasks.
     /// `plans`: the conversation's plans; the open ones are the To Start tray.
     init(tasks: [TaskRow], own: [DockAgent], taskAgents: [DockAgent], plans: [TaskPlan] = []) {
-        // Closed is done or failed to start; a task stopped between rounds (followup) is still open and counted.
+        // Open, shelved and closed by the To-dos page's rule (#3331), so Progress counts what its "Not done" counts: a task
+        // stopped between rounds (followup) is open; shelved ones are left out (the To-dos page folds them); a task
+        // accepted by its review is closed. Without a bucket, closed is done or failed to start.
         let finished: Set<TaskState> = [.done, .failed]
-        let live = tasks.filter { !finished.contains($0.state) }.sorted { a, b in
+        let bucket = { (t: TaskRow) in t.bucket ?? (finished.contains(t.state) ? .closed : .open) }
+        let live = tasks.filter { bucket($0) == .open }.sorted { a, b in
             if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
             return (a.createdAt ?? .distantPast) > (b.createdAt ?? .distantPast)
         }
-        let done = tasks.filter { finished.contains($0.state) }.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+        let done = tasks.filter { bucket($0) == .closed }.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
         progress = (live + done).map { .task(id: $0.id, state: $0.state) }
         going = live.count
         pending = live.filter { $0.state == .needsYou }.map { .task(id: $0.id, state: $0.state) }
@@ -150,8 +155,18 @@ struct AssistantActionBar: View {
 
     static func content(_ conversation: String) -> ActionTrayContent {
         let store = TasksStore.shared
-        let tasks = store.tasks(of: conversation)
-        let rows = tasks.map { ActionTrayContent.TaskRow(id: $0.id, state: store.state($0), createdAt: $0.createdAt) }
+        let model = AppModel.shared
+        // the main conversation watches every task (docs/assistant/unified-entry.md): its Progress is the To-dos page's
+        // "Not done", whatever conversation a to-do came from (#3331)
+        let isMain = model.assistantMain?.sessionID == conversation
+        let tasks = isMain ? store.todos.values.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) } : store.tasks(of: conversation)
+        let lookup = TodosLogic.makeSessionLookup(model.allSessions(inFront: true))
+        let restored = TodoRestores.load()
+        let now = Date.now
+        let rows = tasks.map {
+            ActionTrayContent.TaskRow(id: $0.id, state: store.state($0), createdAt: $0.createdAt,
+                                      bucket: TodoTriageLogic.bucket($0, lookup: lookup, now: now, restoredAt: restored[$0.id]))
+        }
         let open: [TodoItem] = tasks.filter { $0.doneAt == nil }
         let sessions: [Session] = open.flatMap { store.sessions($0) }
         // DockAgent.going keeps the agents going on (waiting or working), never Persona's own conversations.

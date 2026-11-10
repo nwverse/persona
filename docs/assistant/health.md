@@ -215,7 +215,12 @@ measurements are omitted; route coordinates are not uploaded. Pace charts requir
 measured splits and are not generated from the aggregate-only payload.
 
 The device atomically stores its HealthKit cursor with a bounded upload outbox.
-Failed uploads are retried on the next foreground visit. The assistant stores a
+Failed uploads are retried on the next foreground visit, except a report the hub
+rejects as invalid (HTTP 400, 413 or 422): the same data gets the same answer, so
+the device drops it and keeps going, and Settings → Health says some workouts were
+skipped. Without that, one bad report would hold back every later workout. The hub
+accepts end times up to a day past its own clock, so ordinary clock drift between
+the phone and the hub is never a rejection. The assistant stores a
 workout UUID receipt in PostgreSQL so retries, restarts, and deletion of an old task
 do not recreate it. Turning the switch off clears the local pending uploads; already
 accepted reports may still complete. Re-enabling starts a new consent window.

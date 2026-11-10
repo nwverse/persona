@@ -241,7 +241,7 @@ fun AssistantScreen(
         action.help?.let { readinessHelp = it; return }
         if (action == ReadinessActionId.TestAssistant) { scope.launch { mainReadiness.refresh(probe = true) }; return }
         val machine = readiness?.steps?.firstOrNull { it.id == ReadinessStep.COMPUTER }?.machine
-        action.destination(launcher, machine)?.let(navigator::navigate)
+        action.destination(launcher, machine, managerChoice.shown)?.let(navigator::navigate)
     }
     val onMain = active != null && active == snapshot.mainSession
     val shownCompaction = if (onMain) snapshot.conversations.firstOrNull { it.key == active }?.compaction else null

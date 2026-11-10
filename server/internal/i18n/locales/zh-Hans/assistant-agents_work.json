@@ -34,6 +34,7 @@
   "limit_again_line": "自动继续了 {n} 次，又碰到用量上限",
   "limit_again_ask": "额度重置后已经自动继续了 {n} 次，每次都又碰到用量上限：{error}",
   "risky_line": "等「{wait}」以后要「{then}」，等你同意",
+  "task_approved_line": "等「{wait}」，任务已授权，好了就去「{then}」",
   "risky_ask": "它在等「{wait}」，等到以后要「{then}」。要它去做吗？",
   "header_risky": "要不要做",
   "wakes_line": "等「{wait}」叫了 {n} 次还没好",

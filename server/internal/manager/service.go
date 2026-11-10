@@ -282,7 +282,7 @@ func cmdUninstall(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	fmt.Fprintf(e.stdout, "%s\n", e.uninstallDatabase(ctx, dir, c, purge))
-	fmt.Fprintf(e.stdout, "目录 %s 留着；在 App 里删掉这个管理者，hub 才不再认它的 token。\n", dir)
+	fmt.Fprintf(e.stdout, "目录 %s 留着；在 App 里删掉这个助手，hub 才不再认它的 token。\n", dir)
 	return nil
 }
 

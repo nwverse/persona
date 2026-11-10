@@ -159,7 +159,10 @@ func (m *Machine) rememberClaudeDirs(params json.RawMessage) {
 	if json.Unmarshal(params, &p) != nil || m.d.opts.Store == nil {
 		return
 	}
-	// On the node's read loop: bounded like state.put (nodeStoreWait); a later claude.dirs event adds what was missed.
+	// On the node's read loop: the store calls are bounded like state.put's (nodeStoreWait), and the wait for
+	// claudeDirsMu counts against that bound, but the wait itself is not cut short: a blocked-patterns save holds the
+	// lock for its store calls, which only its request's context bounds. Dirs missed come again only with the node's
+	// next report (nodeStoreWait).
 	ctx, cancel := m.storeCtx()
 	defer cancel()
 	// Held across the reads and the write: a setBlockedClaudeDirs in between would have its pruning undone.

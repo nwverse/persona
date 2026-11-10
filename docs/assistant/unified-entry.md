@@ -323,13 +323,13 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879); Progress counts every open task, To Start shows the plans waiting for Start (#3162) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
+| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879); Progress counts the open tasks by the To-dos page's rule (`TodoTriageLogic.bucket`, shelved left out; the main chat counts every to-do, #3331), To Start shows the plans waiting for Start (#3162) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
 - **Action bar on iPhone and iPad (#2879)**: the dock's row becomes three entries, **Pending** (tasks that ask, then the
-  main chat's own waiting Agents), **Progress** (tasks going on, waiting first, then finished ones; the count is the ones
-  going on) and **Agents** (the chat's own Agents and its tasks' Agents, waiting first). One tray at a time rises above
+  main chat's own waiting Agents), **Progress** (tasks going on, waiting first, then finished ones; the count is the To-dos
+  page's "Not done" rule, shelved ones left out, #3331) and **Agents** (the chat's own Agents and its tasks' Agents, waiting first). One tray at a time rises above
   the bar; its row opens task details or the Agent's page as a pill did, and Progress' All opens the board. The entries
   are the dock's capsule (`DockCapsule`, shared with the Mac dock's All): caption medium (13 pt at the default text
   size, Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind

@@ -25,6 +25,7 @@ import persona.core.designsystem.primaryAction
 import androidx.navigation3.runtime.NavKey
 import persona.core.navigation.AddComputerRoute
 import persona.core.navigation.ModelProviderRoute
+import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.SettingsPage
 import persona.core.navigation.SettingsPageRoute
 
@@ -60,7 +61,7 @@ internal fun mainStepStateLabel(state: String): Int = when (state) {
 internal fun ReadinessActionId.settingsDestination(launcher: String?, machine: String? = null): NavKey? = when (this) {
     ReadinessActionId.AddComputer -> AddComputerRoute()
     ReadinessActionId.ConfirmComputer -> AddComputerRoute(confirm = machine.orEmpty())
-    ReadinessActionId.ConnectModel -> SettingsPageRoute(SettingsPage.Providers)
+    ReadinessActionId.ConnectModel -> ModelPurposeRoute("assistant")
     ReadinessActionId.EditProvider -> launcher?.takeIf(String::isNotBlank)?.let(::ModelProviderRoute) ?: SettingsPageRoute(SettingsPage.Providers)
     else -> null
 }

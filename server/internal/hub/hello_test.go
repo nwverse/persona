@@ -38,9 +38,9 @@ func TestHealthSourceDisclosure(t *testing.T) {
 			if len(body) != 5 {
 				t.Fatalf("public health leaked metadata: %v", body)
 			}
-		} else if len(body) != 12 || body["version"] != h.version || body["features"] == nil || body["protocol"] == nil ||
-			body["min_app_build"] == nil || body["update"] == nil {
-			// version, features, and the update fields (channel, build, protocol, min_app_build, update)
+		} else if len(body) != 13 || body["version"] != h.version || body["features"] == nil || body["protocol"] == nil ||
+			body["min_app_build"] == nil || body["update"] == nil || body["commit"] == nil {
+			// version, features, the update fields (channel, build, protocol, min_app_build, update) and the commit
 			t.Fatalf("LAN health lost legacy fields: %v", body)
 		}
 	}
