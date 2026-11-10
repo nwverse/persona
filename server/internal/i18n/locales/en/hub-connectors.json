@@ -9,7 +9,6 @@
   "expired": "The lark-cli login has expired",
   "login_guide": "Run lark-cli auth login --domain all on the hub machine",
   "missing_permission": "lark-cli is missing permission: {scope}",
-  "permission_guide": "Ask the Lark app administrator to grant the missing permission, then sign in again",
   "rate_limited": "lark-cli is rate limited; try again later",
   "error": "lark-cli could not read Lark",
   "expiry_reminder": "Login expires in {count} day(s); run lark-cli auth login on the hub machine",

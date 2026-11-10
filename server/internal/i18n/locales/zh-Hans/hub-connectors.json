@@ -9,7 +9,6 @@
   "expired": "lark-cli 的登录已过期",
   "login_guide": "请在 hub 机器运行 lark-cli auth login --domain all",
   "missing_permission": "lark-cli 缺少权限：{scope}",
-  "permission_guide": "请让 Lark 应用管理员授予缺少的权限，然后重新登录",
   "rate_limited": "lark-cli 受到频率限制，请稍后再试",
   "error": "lark-cli 无法读取飞书",
   "expiry_reminder": "登录还有 {count} 天过期，请在 hub 机器运行 lark-cli auth login",

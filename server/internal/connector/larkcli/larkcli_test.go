@@ -166,11 +166,32 @@ func TestInboxPollKeepsRulesGroupsAndDetectsOwnReply(t *testing.T) {
 	if dm := items["larkcli:chat:oc_example_dm"]; dm.Tier != connector.TierAction || dm.Done != "" {
 		t.Fatalf("direct item = %+v", dm)
 	}
+	if group.Title != "Example Group" || len(group.Tags) != 1 || group.Tags[0].Name != "Example Group" {
+		t.Fatalf("group title/tag changed = %+v", group)
+	}
 	if topic := items["larkcli:chat:oc_example_group:thread:omt_topic_two"]; topic.Thread == "" {
 		t.Fatal("seeded topic reply was dropped")
 	}
 	if _, ok := items["larkcli:chat:oc_example_group:thread:omt_topic_three"]; ok {
 		t.Fatal("unmentioned topic and own-only message entered the Inbox")
+	}
+}
+
+func TestInboxP2PTitleUsesOtherSender(t *testing.T) {
+	c := inboxTestConnector(t, "inbox_p2p")
+	if _, err := c.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items := inboxThings(t, c)
+	dm, ok := items["larkcli:chat:oc_example_dm"]
+	if !ok {
+		t.Fatalf("direct item missing: %#v", items)
+	}
+	if dm.Title != "Example Peer" || len(dm.Tags) != 1 || dm.Tags[0].Name != "Example Peer" {
+		t.Fatalf("direct title/tag = %+v", dm)
+	}
+	if dm.Done != connector.DoneReplied {
+		t.Fatalf("own reply was not observed = %+v", dm)
 	}
 }
 
