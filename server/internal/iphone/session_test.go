@@ -629,3 +629,39 @@ func TestWriteFinishingAtTheDeadlineIsUncertain(t *testing.T) {
 		t.Fatalf("phone got %v: the tap must not be sent again", ops)
 	}
 }
+
+func TestSimulatorSessionHealthAndReconnect(t *testing.T) {
+	m, p := testManager(t, Record{Transport: TransportSimulator})
+	m.browse = func(context.Context, time.Duration, func([]Service) bool) ([]Service, error) {
+		t.Error("a Simulator device was looked for on the network")
+		return nil, nil
+	}
+	healthEvery = 20 * time.Millisecond
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.dials[0]; got.Host != "" || got.Source != TransportSimulator {
+		t.Fatalf("dialed %+v", got)
+	}
+	waitFor(t, func() bool {
+		for _, op := range p.ops() {
+			if op == "device_info" {
+				return true
+			}
+		}
+		return false
+	}) // the health probe runs as for a phone
+	p.lastLink().drop("simulator shut down")
+	if _, err := call(t, m, "screenshot", time.Second); err != nil || p.dialCount() < 2 {
+		t.Fatalf("after a drop: %v, dials %d", err, p.dialCount())
+	}
+	// Unreachable (simulator not booted): the bridge's reason, not "not found on the network".
+	p.mu.Lock()
+	p.dialErr = &Error{Code: "service_unavailable", Message: "simulator not booted"}
+	p.mu.Unlock()
+	p.lastLink().drop("gone")
+	_, err := call(t, m, "tap", 150*time.Millisecond)
+	if Code(err) != CodeUnreachable || !strings.Contains(err.Error(), "simulator not booted") || Sent(err) != "no" {
+		t.Fatalf("got %v", err)
+	}
+}

@@ -84,7 +84,10 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 		fmt.Fprintln(w, "UDID\tNAME\tiOS\tPAIRED\tUSB\tADDRESS")
 		for _, d := range devices {
 			addr := d.ManualAddress
-			if addr == "" && d.Paired {
+			switch {
+			case d.Transport == TransportSimulator:
+				addr = "(simulator)"
+			case addr == "" && d.Paired:
 				addr = "(Bonjour)"
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", d.UDID, d.Name, d.OSVersion, yesNo(d.Paired), yesNo(d.USB), addr)
@@ -139,7 +142,11 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 		if name == "" {
 			name = rec.UDID
 		}
-		fmt.Fprintf(stdout, "Paired %s. The node finds it on the same Wi-Fi by Bonjour; elsewhere set its address with: %s phone address %s <host>\n", name, clitext.CommandName(), rec.UDID)
+		if rec.Simulator() {
+			fmt.Fprintf(stdout, "Paired %s, a Simulator device on this computer.\n", name)
+			return 0
+		}
+		fmt.Fprintf(stdout, "Paired %s. The node finds it on the same Wi-Fi by Bonjour; elsewhere set its address with: %s iphone address %s <host>\n", name, clitext.CommandName(), rec.UDID)
 		return 0
 	case "forget":
 		if len(rest) != 1 {
