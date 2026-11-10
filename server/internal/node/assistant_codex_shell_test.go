@@ -68,3 +68,45 @@ func TestCodexShellZsh(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexShellBashFallback(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	if err := os.Mkdir(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fake := "#!/bin/sh\nprintf '%s\\0' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte(fake), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, launcher string
+		flags          []string
+	}{
+		{name: "plain", launcher: "codex"},
+		{name: "command", launcher: "command codex -m 'model with spaces'", flags: []string{"-m", "model with spaces"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			args := []string{"-c", "model_provider=\"test provider\"", ""}
+			cmd := exec.CommandContext(ctx, bash, append([]string{"--noprofile", "--norc", "-c", codexShell(tt.launcher), "persona"}, args...)...)
+			cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}
+			// Include stderr so a zsh-only syntax diagnostic cannot pass with a successful exit.
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("launcher failed: %v: %s", err, out)
+			}
+			want := append(append([]string{}, tt.flags...), "app-server")
+			want = append(want, args...)
+			got := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("arguments = %q, want %q", got, want)
+			}
+		})
+	}
+}
