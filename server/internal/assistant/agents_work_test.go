@@ -21,6 +21,11 @@ import (
 // it, its cards and their answers, the switches. The hub's machine "box" is the fake's; what the hub shows of it is
 // the hub's tests' (hub/agents_link_test.go).
 
+// workStarted is workStartedObserved for a turn that just began.
+func (s *Service) workStarted(ctx context.Context, machine, sid string, now time.Time) {
+	s.workStartedObserved(ctx, machine, sid, now, true)
+}
+
 // The unit tests read the snapshot right after a change.
 func init() { workPublishDelay = 0 }
 

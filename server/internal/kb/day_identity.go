@@ -44,7 +44,7 @@ func (e *Engine) DayWithIdentity(chatID, day string) (msgs []DayMessage, prev, n
 		err = ErrNotFound
 		return
 	}
-	zone := time.Local
+	zone := s.zoneLocked()
 	raw, readErr := os.ReadFile(s.path(KindChat, chatID, "messages", zoneFile))
 	if readErr != nil && !os.IsNotExist(readErr) {
 		err = readErr

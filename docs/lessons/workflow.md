@@ -44,6 +44,9 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   do your fix in `git worktree add --detach /tmp/x origin/main`.
 - Database migration numbers are split into ranges per lane (00x1…); before picking a number, check `server/internal/db/migrations/` in every worktree and `schema_migrations` in the `persona_test` database:
   another lane's unmerged migration may already hold the number (2026-10-30, 0051 collided; switched to 0061).
+- Open PRs hold numbers too (`gh pr list --state open --json number,files`), and while a PR waits others merge: #1852's
+  migration went 0443 → 0451 → 0453 in a day. Check the number again right before merging. A data fix that merges under a
+  number databases already recorded never runs there, so keep the code that copes with the old rows as a backstop.
 - A migration already on the default branch is frozen (`scripts/ci/migration_freeze.py`, also from `scripts/check-fast.sh`): editing, deleting or renaming it fails. A comment-only or whitespace-only change passes. Repair an applied migration by adding a new one.
 - On 2026-11-01 `ios/` was renamed to `apple/` (the iOS, watch and macOS Apps and shared code are in the same XcodeGen project): when rebasing an old branch / worktree,
   files newly created under `ios/` must be moved to `apple/` by hand (git follows the rename for changes to existing files).
@@ -112,7 +115,7 @@ SDK synchronization intentionally replaces only the selected SDK subtree (#1471)
 
 ## Temporary test hubs
 
-- Historical note (2026-11-03, #277; superseded by the no-compatibility cutover on 2026-11-06): docs call the product Persona, but historical paths, signing profiles, databases / data volumes, protocol fields, bundle IDs, cache keys and source evidence must not be blindly replaced. When docs show `personad` / `~/.persona`, state that the old `personad` / `~/.persona` remain compatible; describe env var precedence only for new entry points that are already implemented; a standalone wording PR is not proof that the runtime migration is done.
+- Historical note (2026-11-03, #277; superseded by the no-compatibility cutover on 2026-11-06): docs call the product Persona, but historical paths, signing profiles, databases / data volumes, protocol fields, bundle IDs, cache keys and source evidence must not be blindly replaced. When docs show `personad` / `~/.persona`, state that the old names remain compatible; describe env var precedence only for new entry points that are already implemented; a standalone wording PR is not proof that the runtime migration is done.
 
 - To verify on a real machine without touching the production hub: on the hub machine, start a copy with a different HOME (`HOME=/tmp/x personad hub`, with another listen port in hub.json
   and a separate database); the `kind: local` machine is a node started from the same binary, and the different HOME keeps it away from the production node's socket and config. Drop the database and delete the directory afterwards.

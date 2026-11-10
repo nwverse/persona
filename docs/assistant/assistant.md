@@ -161,7 +161,7 @@ Benefits: clear ownership; assistant crashes / hangs don't bring down hub, and v
 - Assistant-only tools doing hub work: hub-owned `persona_settings` entries (triage rules, muted config directories) return through `app.tool` (mail and source-specific triage rules belong to the manager's extensions; hub forwards `extensions.hub_call settings.*`). Lark tools belong to its connector plugin, never the assistant.
 
 **No longer in hub**: `findAgent` / `machineByName`. The assistant resolves Agents and machines over the bus (`devices.list` / `sessions.list`) and keeps `conversationName` after moving the Lark bot; extmgr keeps its own `machineByName` (`extmgr/machines.go`).
-The text helpers have one implementation (`server/internal/textfmt`): the hub aliases `clip`, `oneLine`, `planTitle` (`hub/tools_shared.go`), the assistant also `firstLine`, `ago`, `short`, `agentLabel`, `stateNames` (`assistant/text.go`).
+The text helpers have one implementation (`server/internal/textfmt`): the hub aliases `clip`, `oneLine`, `planTitle` (`hub/tools_shared.go`), the assistant also `firstLine`, `ago`, `short`, `agentLabel`, `stateNames` (`assistant/text.go`); `kb`, `extmgr` and `usagesource` alias `Clip`, `Cut` (no ellipsis) and `Short` the same way.
 
 Observable differences:
 
@@ -439,7 +439,7 @@ Current main chat's first message on 11-01 after 46 idle hours: 254k rewritten, 
 **Implementation**:
 
 - Before each message, node requests a hub snapshot (`assistant.context`, parallel with process startup), compares sections (unindented header plus indented lines) against the last sent snapshot for this chat,
-  and includes only changes and time in `<persona-context>` (`prompts/assistant/turn_context.md`; old nodes / history use `<persona-context>`, readers recognize both, #3182) as the first text block. Prior content is remembered in node memory,
+  and includes only changes and time in `<persona-context>` (`prompts/assistant/turn_context.md`; readers also recognize the old name's tag, which old nodes and history carry: [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), #3182) as the first text block. Prior content is remembered in node memory,
   cleared after compaction (`compact_boundary`; Codex `contextCompaction`), so the next message is full; node restart also sends one full snapshot. App, web, titles, and knowledge base remove it in
   transcript parsing (`transcript.ContextRe`), hiding it from users. Scheduled tasks, Lark `/agent`, and post-restart lost-background-task explanations all use `assistant.send`
   and include it too.

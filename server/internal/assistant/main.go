@@ -183,7 +183,7 @@ func moveFiles(home string, logf func(string, ...any)) {
 }
 
 // moveConfig takes the manager's sections out of the hub.json in hubDir into its manager.json, once
-// (managerconf.Move), says what it did, and reads the configuration the extensions, connectors and bots run with
+// (managerconf.MoveExcept), says what it did, and reads the configuration the extensions, connectors and bots run with
 // (extmgr.LoadConfig), which run hands on as it is. A failed move, or a configuration that does not read, is an error
 // the manager does not start with: it would run without its sections, the user's gate rules (lark_gate,
 // connector_gate) among them, and the node would fall back to its own, which let every read through. Whatever starts
