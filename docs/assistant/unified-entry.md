@@ -186,6 +186,29 @@ to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-tra
   The failure receipt collapses to one red line, "‘xx’ failed to start; see the task card above" (tap to open the task). Without a full card (earlier-day tasks shown only as a line), keep the cause and Retry as before.
   API: `POST /api/v1/todos/{id}/retry` under "To-dos" in `docs/protocol/protocol.md`.
 
+### Interrupted receipts after the fact (#3834)
+
+A turn the model service cut off gets an `interrupted` receipt (#1516). The hub, not the apps, says what became of it and
+keeps one outage from filling the chat:
+
+- **Resolution**: on every feed read the hub works out `resolution` for each interrupted receipt from its to-do: `cancelled`
+  (the to-do was cancelled, or removed), `rerouted` (cancelled and dispatched again as a new task with the same title from the
+  same chat, or another agent linked to it after the interruption), `accepted` (closed by review), `done` (closed otherwise),
+  `resumed` (one of its agents started a turn after the interruption, or a later receipt of the same task exists), else
+  `pending`. When a to-do changes or one of its agents starts a turn, the hub sends the receipts whose body changed again as
+  `assistant_feed` (same id), so a card turns grey without a reload. The hub follows a chat's interrupted receipts for 48 hours.
+- **Batch**: an interrupted receipt with the same `cause` (`model_error`, `rate_limited`, `auth`, `model_route`, `no_output`,
+  from the error text) as one written in the same chat less than 10 minutes earlier joins that one's batch: it names the first
+  receipt in `group`. The first receipt carries `batch` (`total`, `pending`, `resolved`, `machine` when all ran on one
+  computer, and `tasks` with each task's resolution), recomputed on every read; a page read with `since` after the first
+  receipt still brings it along.
+- **Drawing** (all three clients, `interruptLook`): a receipt that names another in `group` is not drawn; a batch is one card,
+  "<computer> <cause>, N tasks interrupted → handled a / pending b", opening to each task with its result, each opening the
+  task; a handled single receipt is a grey line "“<title>” was interrupted · <result>" that opens the task; a pending one is
+  the red card as before. Only a batch with something pending, or a pending receipt, uses the danger color. In the main chat,
+  where receipts are otherwise left out (#3700), these interruption records are drawn; the pending task keeps its row in
+  **Needs you**, which stays where it is answered. A receipt from a hub before #3834 has no `resolution` and is drawn as ever.
+
 ### Routing
 
 - By default, messages go to Persona, which decides whether to answer, start a task, or forward to an existing task with `agent_send`. A follow-up that only asks about work a task has already done (how far it got, its conclusion, a PR link, why it stopped) is answered from the snapshot and `agent_read`, not sent to the agent: a send queues behind its turn or resumes a closed agent, and the user waits for that extra turn (#2124). The snapshot's line for tasks and the `agent_read` tool description say the same, so the assistant is not pointed at `agent_send` there. When the input contains text, a gray label above it says "Persona decides who handles this."

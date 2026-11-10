@@ -498,6 +498,12 @@ extension ChatLines {
     /// The lines with what the hub added to an assistant conversation (docs/assistant/unified-entry.md) among them: an item
     /// goes at the end of the exchange it happened in — before the first message sent after it — so a plan card or a
     /// receipt follows the answer of its turn instead of splitting it; what came after the last message goes last.
+    /// What of the feed the cached lines depend on: each item's id, and a receipt's body too, which the hub sends again
+    /// changed (an interrupted receipt resolved or batched, #3834).
+    static func feedKey(_ feed: [FeedItem]) -> [String] {
+        feed.map { $0.kind == .receipt ? "\($0.id)#\($0.body.hashValue)" : $0.id }
+    }
+
     static func mergeFeed(_ lines: [ChatLine], _ feed: [FeedItem]) -> [ChatLine] {
         guard !feed.isEmpty else { return lines }
         var out: [ChatLine] = []

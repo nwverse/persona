@@ -516,6 +516,10 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
 
+### 4.8.1 Records of interruptions
+
+A chat record of something that went wrong (an interrupted task, #3834) says what became of it once that is known: a grey line with the result ("Cancelled", "Dispatched again", "Resumed", "Accepted", "Done"), never a red card that outlives the problem. Several records with one cause in a short time are one card that counts handled and pending and opens to each item. The danger color is only for what is still pending. The hub works out the result and the grouping; the clients only draw them (principle 4; `docs/assistant/unified-entry.md`, "Interrupted receipts after the fact").
+
 ### 4.9 Sharing a conversation publicly
 
 Sharing an Agent session follows the user-control rules: everything that widens exposure (more messages, work

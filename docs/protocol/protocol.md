@@ -2903,6 +2903,11 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 //   only when the linked live to-do is pending_review; once done it shows the existing green completion card without the hint.
 //   interrupted (#1516): the Agent's turn was interrupted by a model service error; summary is "The model service errored and was interrupted", error is the original error text; clients draw it in red with "Continue".
 //   A turn with no reply, no tool calls and no error (the model service returned 200 with empty content, #2349) is also interrupted, with error "This turn produced no output: …"
+//   Interrupted receipts after the fact (#3834, docs/assistant/unified-entry.md "Interrupted receipts after the fact"): "cause":"model_error|rate_limited|auth|model_route|no_output",
+//   "resolution":"pending|cancelled|rerouted|resumed|accepted|done" (worked out by the hub on every read; a changed one is sent again as assistant_feed with the same id),
+//   "group":"<feed id>" on a receipt that joined an earlier one's batch (same cause, same chat, within 10 minutes; clients don't draw it on its own),
+//   and on a batch's first receipt "batch":{"cause","machine"?,"total","pending","resolved","tasks":[{"receipt","todo_id","title","resolution","at"}]}.
+//   Clients draw a batch as one card and a handled receipt as a grey line; a receipt without resolution (an older hub) is drawn as before.
 // routed: {"text":"…"} (the note sent to the Agent when the supervisor sends work back is also a routed);
 //         "interrupted":true when the assistant stopped the Agent's turn first and then told it (agent_interrupt with then, #5112); clients that don't know it show an ordinary line to the task
 //         "from":"assistant" when Persona wrote it (agent_send with task, agent_interrupt's then, a rework; #1542): the apps fold it (a line, or the task card's

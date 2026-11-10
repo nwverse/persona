@@ -17,6 +17,9 @@ import {
   feedNotice,
   getFeedState,
   receiptState,
+  interruptLook,
+  type InterruptBatch,
+  type InterruptResolution,
   isToday,
   sentByPersona,
   later,
@@ -638,6 +641,8 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     // the dispatched tasks themselves, each opening its own task (its Agent's chat), never the whole In progress tray (#3700)
     if (item.kind === "plan") return plan?.state === "started" ? <DispatchHint tasks={plan.tasks.map((task) => ({ todo: task.todo_id, title: task.title }))} /> : null;
     if (item.kind === "task") return planned ? null : <DispatchHint tasks={[{ todo: item.ref, title }]} />;
+    // an interrupted receipt the hub worked out stays as its record (#3834): one card for a batch, a grey line once handled
+    if (item.kind === "receipt" && interruptLook(item)) return <ReceiptCard item={item} />;
     if (item.kind === "review" || item.kind === "receipt" || item.kind === "report") return null;
     if (item.kind === "message" && !cardSent(item) && !cardFiled(item)) return null;
   }
@@ -736,8 +741,88 @@ export function AnsweredLine({ item, title, onOpenTask }: { item: FeedItem; titl
 
 function ReceiptCard({ item }: { item: FeedItem }) {
   const state = receiptState(item);
+  const look = interruptLook(item);
+  if (look?.kind === "hidden") return null;
+  if (look?.kind === "batch") return <InterruptBatchCard batch={look.batch} />;
+  if (look?.kind === "resolved") return <InterruptHandledLine todoId={item.ref} title={field(item, "title") ?? t("assistant-tasks.task_fallback")} resolution={look.resolution} />;
   if (state === "interrupted") return <InterruptedReceipt item={item} />;
   return <OutcomeReceipt item={item} failed={state === "failed"} />;
+}
+
+/** The words for how an interrupted task was dealt with, as the hub said (#3834). */
+function resolutionLabel(r: InterruptResolution): string {
+  return t(`assistant-tasks.interrupt_resolution_${r}`);
+}
+
+/** The words for what cut a batch off (the hub's `cause`; one it doesn't know reads as a model service error). */
+function causeLabel(cause: string): string {
+  const known = ["model_error", "rate_limited", "auth", "model_route", "no_output"];
+  return t(`assistant-tasks.interrupt_cause_${known.includes(cause) ? cause : "model_error"}`);
+}
+
+/** An interrupted task that was dealt with since (#3834): a grey line, its result in words; it opens the task. */
+function InterruptHandledLine({ todoId, title, resolution }: { todoId?: string; title: string; resolution: Exclude<InterruptResolution, "pending"> }) {
+  const known = useStore((s) => s.todos.some((x) => x.id === todoId));
+  const text = t("assistant-tasks.interrupt_handled", { title, result: resolutionLabel(resolution) });
+  const body = (
+    <>
+      <Icon name="info" size={13} className="shrink-0" />
+      <span className="min-w-0 truncate">{text}</span>
+    </>
+  );
+  return known && todoId ? (
+    <button type="button" data-interrupt="handled" onClick={() => openTask(todoId)} className="flex max-w-full items-center gap-1.5 self-start text-left text-[13px] text-ink-2 hover:text-ink">
+      {body}
+    </button>
+  ) : (
+    <div data-interrupt="handled" className="flex max-w-full items-center gap-1.5 self-start text-[13px] text-ink-2">{body}</div>
+  );
+}
+
+/** Several tasks one outage cut off (#3834): one card, its cause, how many are handled and how many still pending; it
+ *  opens to each task and its result. Red only while one is pending. */
+export function InterruptBatchCard({ batch }: { batch: InterruptBatch }) {
+  const [open, setOpen] = useState(false);
+  const todos = useStore((s) => s.todos);
+  const pending = batch.pending > 0;
+  const cause = causeLabel(batch.cause);
+  const title = batch.machine
+    ? t("assistant-tasks.interrupt_batch_title_on", { machine: batch.machine, cause, count: batch.total })
+    : t("assistant-tasks.interrupt_batch_title", { cause, count: batch.total });
+  const counts = pending ? t("assistant-tasks.interrupt_batch_counts", { resolved: batch.resolved, pending: batch.pending }) : t("assistant-tasks.interrupt_batch_all");
+  return (
+    <div data-interrupt="batch" data-pending={pending || undefined} className={cx("flex flex-col rounded-card", pending ? "bg-red-tint" : "bg-field")}>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex items-start gap-3 p-4 text-left">
+        <Icon name="info" size={18} stroke={2.4} className={cx("shrink-0", pending ? "text-red" : "text-ink-3")} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className={cx("text-[14.5px] font-semibold", !pending && "text-ink-2")}>{title}</div>
+          <div className="text-[13px] text-ink-2">{counts}</div>
+        </div>
+        <Icon name="chevronRight" size={14} stroke={2.2} className="mt-1 shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : "none" }} />
+      </button>
+      <Collapse open={open} lazy>
+        <div className="flex flex-col gap-0.5 px-3 pb-3" data-testid="interrupt-batch-tasks">
+          {batch.tasks.map((task) => {
+            const known = todos.find((x) => x.id === task.todo_id);
+            const waiting = task.resolution === "pending";
+            return (
+              <button
+                key={task.receipt}
+                type="button"
+                disabled={!known}
+                onClick={() => known && openTask(known.id)}
+                className="flex min-w-0 items-center gap-2 rounded-control px-2 py-1.5 text-left text-[13px] enabled:hover:bg-hover"
+              >
+                <span className="min-w-0 flex-1 truncate">{known?.title || task.title}</span>
+                <span className={cx("shrink-0 whitespace-nowrap", waiting ? "font-medium text-red" : "text-ink-2")}>{resolutionLabel(task.resolution)}</span>
+                {known && <Icon name="chevronRight" size={12} className="shrink-0 text-ink-3" />}
+              </button>
+            );
+          })}
+        </div>
+      </Collapse>
+    </div>
+  );
 }
 
 /** A task the model service cut off (#1516): red, why in words, "Continue" while it is still cut off; once its agent went on,
