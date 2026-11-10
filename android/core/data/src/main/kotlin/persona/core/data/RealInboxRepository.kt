@@ -24,6 +24,16 @@ enum class LarkWindowSyncState { Cached, Syncing, Complete, Incomplete, Failed }
 /** How many of the done history's records [RealInboxRepository] keeps for changes to them (#2974). */
 private const val PAGED_BACK_KEPT = 2_000
 
+/**
+ * Window snapshots over this are skipped before reading (old versions cached whole traversed histories); new ones are
+ * trimmed under it, less [WINDOW_SNAPSHOT_ENVELOPE_BYTES] for the cursors and flags around the messages.
+ */
+internal const val WINDOW_SNAPSHOT_MAX_BYTES = 512L * 1024
+private const val WINDOW_SNAPSHOT_ENVELOPE_BYTES = 4L * 1024
+
+/** With a hub, polling only backs up its invalidation events. */
+private const val HUB_INBOX_POLL_MILLIS = 300_000L
+
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class RealInboxRepository(
     private val connection: InboxAssistantConnection,
@@ -206,12 +216,18 @@ class RealInboxRepository(
                 quietly { refresh() }
             }
         }
-        // Polling remains a fallback for hubs without invalidation events.
+        // Polling is the fallback for missed or absent invalidation events. Snapshot subscribers include the shell and
+        // capsule even with no inbox page shown, so with a hub (which refreshes on InboxEvent and reconnect) the poll is
+        // slow and starts one interval after going visible; a transport without a hub event stream polls every 15 s.
+        val pollMillis = if (hubConnection == null) 15_000L else HUB_INBOX_POLL_MILLIS
         scope.launch {
             current.subscriptionCount.map { it > 1 }.distinctUntilChanged().collectLatest { visible ->
-                if (visible) while (isActive) {
-                    try { if (online()) refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                    delay(15_000)
+                if (visible) {
+                    if (hubConnection != null) delay(pollMillis)
+                    while (isActive) {
+                        try { if (online()) refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                        delay(pollMillis)
+                    }
                 }
             }
         }
@@ -750,7 +766,9 @@ class RealInboxRepository(
     private fun windowKey(window: Window) = "${window.source.scope}:lark:${window.feedId}:${window.around}"
     private suspend fun restoreWindow(window: Window) = window.lock.withLock {
         if (window.restored) return@withLock
-        snapshots.restore<JsonObject>(windowKey(window))?.let { data ->
+        // Old versions cached whole traversed histories. A cache is only a first-paint hint: leave an oversized
+        // file untouched and fetch the latest page, with older history available through its server cursor.
+        withContext(Dispatchers.IO) { snapshots.restore<JsonObject>(windowKey(window), WINDOW_SNAPSHOT_MAX_BYTES) }?.let { data ->
             val raw = data.array("messages").map { it.jsonObject }
             val positions = raw.mapNotNull { it.number("position") }
             if (window.around == null || positions.isNotEmpty() && window.around in positions.min()..positions.max()) {
@@ -1073,9 +1091,15 @@ class RealInboxRepository(
         sync.update { it + (window.feedId to if (window.state.value.verified) LarkWindowSyncState.Complete else LarkWindowSyncState.Cached) }
         if (!window.state.value.verified) return
         val start = window.around?.let { anchor -> window.raw.indexOfFirst { (it.number("position") ?: Long.MAX_VALUE) >= anchor } }
-        val offset = if (start != null && start >= 0) (start - 40).coerceIn(0, (window.raw.size - 80).coerceAtLeast(0))
+        var offset = if (start != null && start >= 0) (start - 40).coerceIn(0, (window.raw.size - 80).coerceAtLeast(0))
             else (window.raw.size - 80).coerceAtLeast(0)
-        val cached = window.raw.drop(offset).take(80)
+        var cached = window.raw.drop(offset).take(80)
+        // A snapshot over the restore limit would never be read back: drop its oldest messages until it fits.
+        val sizes = cached.map { it.toString().encodeToByteArray().size.toLong() }
+        var bytes = sizes.sum()
+        var dropped = 0
+        while (dropped < sizes.size && bytes > WINDOW_SNAPSHOT_MAX_BYTES - WINDOW_SNAPSHOT_ENVELOPE_BYTES) bytes -= sizes[dropped++]
+        if (dropped > 0) { offset += dropped; cached = cached.drop(dropped) }
         snapshots.save(windowKey(window), buildJsonObject {
             put("messages", JsonArray(cached))
             put("older_cursor", if (offset > 0) cached.firstOrNull()?.optional("position") else older)
