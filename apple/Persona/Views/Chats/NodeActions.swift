@@ -89,7 +89,7 @@ extension APIClient {
         do {
             return try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
         } catch var error as APIError {
-            error.showsNodeReason = true
+            if error.status == 502 && error.code == "internal" { error.showsNodeReason = true }
             throw error
         }
     }

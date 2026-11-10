@@ -113,6 +113,19 @@ struct APIErrorTests {
         }
     }
 
+    @Test func nodeMenuHubInternalFailuresStayGeneric() async throws {
+        let api = APIClient(config: .demo, transport: { _ in
+            throw APIError(status: 503, message: "private hub exception", fields: ["code": "internal"])
+        })
+        do {
+            _ = try await api.nodeAction(machine: "m", "worktree/create", ["branch": "x"])
+            Issue.record("expected the hub to refuse before calling the node")
+        } catch let error as APIError {
+            #expect(error.errorDescription?.contains("HTTP 503") == true)
+            #expect(error.errorDescription?.contains("private") == false)
+        }
+    }
+
     @Test func anOrdinaryPostStillHidesInternalExceptions() async throws {
         let api = APIClient(config: .demo, transport: { _ in
             throw APIError(status: 502, message: "private internal exception", fields: ["code": "internal"])
