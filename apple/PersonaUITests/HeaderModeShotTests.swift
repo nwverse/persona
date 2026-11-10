@@ -57,6 +57,18 @@ final class HeaderModeShotTests: XCTestCase {
         }
     }
 
+    /// The largest accessibility text size (the UI change self-check): the second row with its mode, and the folded bar.
+    @MainActor func testLargestTextShots() throws {
+        guard phase == "after", !isPad else { throw XCTSkip("the header after the change, on iPhone") }
+        let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        for scheme in ["light", "dark"] {
+            open(Self.blog, scheme: scheme, extra: largest)
+            shot("bypass-waiting-ax", scheme)
+            open(Self.blog, scheme: scheme, folded: true, extra: largest)
+            shot("folded-ax", scheme)
+        }
+    }
+
     /// The menu, and the confirmations for going into Allow Everything and for leaving it with no way back.
     @MainActor func testModeMenuShots() throws {
         guard phase == "after", !isPad else { throw XCTSkip("the mode menu is the change itself (iPhone shots)") }
