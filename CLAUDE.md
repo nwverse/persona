@@ -105,7 +105,7 @@ This is a public open-source repository; everyone and every Agent maintains it t
   user control, consistency first, model and product separate, checkable rules), each with how to check it. They apply to UI,
   settings and defaults, and how numbers are counted; acceptance criteria and the PR template's self-check are written against them.
 - **Read the spec first**: before adding or changing any UI or interaction (any client, watch and web included), read
-  `docs/design/PRINCIPLES.md` and the sections of `docs/design/DESIGN_SYSTEM.md` your change touches. Follow it; it wins over
+  `docs/design/PRINCIPLES.md` and the sections of `docs/design/DESIGN_SYSTEM.md` your change touches. Follow them; they win over
   habits copied from other screens. Known gaps against Apple's guidelines are in `docs/design/HIG_AUDIT.md`; don't add new ones.
 - **Say what you followed**: a PR that changes UI or interactions lists the principles and rules it followed, and for every
   deviation the reason. Run the "UI change self-check" in `docs/design/DESIGN_SYSTEM.md` and put the result in the PR.
