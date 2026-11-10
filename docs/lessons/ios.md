@@ -1522,3 +1522,15 @@ A worktree's display name and its Agents' conversation names are different comma
   `FleetIntentsTests.sayingYesNeedsUnlock`). The policy covers the whole intent, so its other replies wait for the unlock too.
   Ask Claude and Give an Agent a Task still send messages from a locked phone; changing that is a separate decision.
 - An entry that never shows the plan in full approves plans in `acceptEdits`, never `bypassPermissions`.
+
+## A caret written into streamed Markdown lands in whatever block is open (2026-11-10, #2916)
+
+- `StreamingText` appended ` ▍` to the block being written. Inside an open fence it was a line of code, in a table a cell's text; on a
+  line that closes a fence or a `$$` block (`` ``` ▍``, `$$ ▍`) it kept the line from closing it, and `$$x$$ ▍` was no longer a formula.
+  Ask where the text ends (`StreamRepair.end`) before writing anything after it.
+- A render queue chained from unstructured `Task`s is not cancelled with the view's `.task`: each half-written ```mermaid source of a
+  streaming reply was drawn in turn. Jobs with their own waiters and a cancellation handler let one nobody waits for be dropped
+  (`MarkdownRenderer`). Keep MarkdownUI's inline image loads uncancelled: `InlineText` stores whatever a cancelled load returns, and
+  `MathInlineImages` returns the TeX source as a picture on an error.
+- Keys that change at every delta in a shared memo that empties itself when full (`TextMemo`) wipe everyone else's entries every few
+  seconds; give them their own small memo (`StreamTail`).

@@ -1052,7 +1052,7 @@ struct RecapDrawer: View {
     }
 }
 
-/// The assistant's answer while it is still being generated, with a blinking caret.
+/// The assistant's answer while it is still being generated, with a caret after its words (`StreamTail`).
 struct StreamingText: View {
     var text: String
 
@@ -1069,12 +1069,31 @@ struct StreamingText: View {
                 StreamChunk(text: chunk).equatable()
                     .padding(.top, i == 0 ? 0 : StreamChunks.gap(after: parts.done[i - 1], before: chunk))
             }
-            Markdown(MarkdownMemo.content(parts.tail + " ▍"))
+            Markdown(StreamTail.content(parts.tail))
                 .markdownTheme(.persona)
                 .padding(.top, parts.done.last.map { StreamChunks.gap(after: $0, before: parts.tail) } ?? 0)
         }
         .markdownSoftBreakMode(.lineBreak) // as the finished reply (`AssistantText`)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The block of a streaming reply still being written, as it is drawn (#2916): made whole for the moment
+/// (`StreamRepair`: no `**` or half a link showing raw and then snapping), with the caret only where it is prose (inside a
+/// code fence, a table or a formula it was drawn as code, a cell or TeX), and an unfinished ```mermaid or ```math fence as
+/// plain code until it closes (a half-written diagram was sent to the renderer at every draw: a spinner, or "Couldn't draw
+/// this"). Only this block changes; the finished ones (`StreamChunk`) are drawn as before.
+nonisolated enum StreamTail {
+    /// Its own small memo: a tail is a new text at every delta, and in `MarkdownMemo` they filled it every half minute
+    /// and wiped the finished replies' entries with them.
+    private static let memo = TextMemo<MarkdownContent>(limit: 32)
+
+    static func content(_ tail: String) -> MarkdownContent {
+        memo(tail) { tail in
+            var shown = StreamRepair.repair(StreamRepair.plainOpenFence(tail) { RenderedFence.kind($0) != nil })
+            if StreamRepair.end(of: tail) == .text { shown += " ▍" }
+            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(ReplyBreaks.apply(shown))))
+        }
     }
 }
 

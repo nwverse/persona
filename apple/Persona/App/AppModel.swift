@@ -440,7 +440,7 @@ final class AppModel {
     nonisolated static func prepare(_ event: ServerEvent) {
         switch event {
         // The block being written (the finished ones are memoized as they finish).
-        case .delta(_, let text): _ = MarkdownMemo.content(StreamChunks.split(text).tail + " ▍")
+        case .delta(_, let text): _ = StreamTail.content(StreamChunks.split(AssistantCardText.replacingCards(text)).tail)
         case .interaction(let interaction):
             if let plan = interaction.plan { _ = MarkdownMemo.content(plan) }
         default: break
