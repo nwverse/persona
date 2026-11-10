@@ -537,7 +537,8 @@ struct ExtensionActionButton<Content: View>: View {
 }
 
 /// A field of an extension's View: text, a secret (typed in hidden, never filled in for you), a number, a switch, a
-/// choice.
+/// choice; UI version 6's date, time and date-and-time (the system's pickers), several choices, and text of several
+/// lines; with its `detail` (UI version 6) as a line of help under it.
 struct ExtensionFieldItem: View {
     @Environment(\.extensionFieldFocus) private var focus
     @Environment(\.extensionDisplayedRevision) private var displayed
@@ -561,7 +562,37 @@ struct ExtensionFieldItem: View {
 
     var body: some View {
         Group {
+            // Fields without a detail are laid out as they always were.
+            if let d = field.detail, !d.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                    input
+                    Text(d).font(Theme.Font.label).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                input
+            }
+        }
+        .disabled(!model.fieldsEnabled)
+        .accessibilityIdentifier("plugin-ui-field-\(name)")
+        .onDisappear { secretDraft = "" }
+        .onChange(of: displayed) { _, _ in secretDraft = "" }
+        .onChange(of: field.kind) { _, _ in secretDraft = "" }
+        .onChange(of: phase) { _, phase in if phase != .active { secretDraft = "" } }
+        .onTabVisibility(appear: {}, disappear: { secretDraft = "" })
+    }
+
+    @ViewBuilder private var input: some View {
             switch field.kind {
+            case "date", "time", "datetime":
+                ExtensionDateField(field: field, label: label, value: text)
+            case "multichoice":
+                ExtensionMultiChoiceField(field: field, label: label, value: text)
+            case "multiline":
+                labeled {
+                    TextField(field.placeholder ?? "", text: text, axis: .vertical)
+                        .lineLimit(3...8)
+                        .modifier(ExtensionFieldFocus(binding: focus, key: field.key ?? name))
+                }
             case "toggle":
                 Toggle(isOn: Binding(get: { model.values[name] == "true" }, set: { model.values[name] = $0 ? "true" : "false" })) {
                     Text(label).lineLimit(2)
@@ -593,14 +624,6 @@ struct ExtensionFieldItem: View {
                         .autocorrectionDisabled()
                 }
             }
-        }
-        .disabled(!model.fieldsEnabled)
-        .accessibilityIdentifier("plugin-ui-field-\(name)")
-        .onDisappear { secretDraft = "" }
-        .onChange(of: displayed) { _, _ in secretDraft = "" }
-        .onChange(of: field.kind) { _, _ in secretDraft = "" }
-        .onChange(of: phase) { _, phase in if phase != .active { secretDraft = "" } }
-        .onTabVisibility(appear: {}, disappear: { secretDraft = "" })
     }
 
     /// The label above the field.
