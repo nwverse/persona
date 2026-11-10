@@ -296,6 +296,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var doneAt: Date?
     var createdAt: Date?
     var updatedAt: Date?
+    /// When it was last reopened (by the user, or by the hub when its agent got more work); nil from older hubs.
+    var reopenedAt: Date?
     var origin: String?
     var planID: String?
     /// The task's agent did not start, and why: the hub ended the todo there (it is done, #1077).
@@ -318,6 +320,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// The main conversation supervises it (#3124, `Supervision.swift`): what done means, its reviews, its agent's
     /// latest report. Nil for a todo that is not supervised, from an older hub, or when it does not decode.
     var supervision: TaskSupervision?
+    /// The current owner decision or verification round; malformed asks never hide the task.
+    var ask: TodoAsk?
     /// When it is due (#1683, docs/assistant/todos.md "Due date, reminder, priority"): a moment, or a day ("yyyy-MM-dd",
     /// due by its end in the user's time zone); at most one. Nil from a hub without them.
     var dueAt: Date?
@@ -327,10 +331,12 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     var remindedAt: Date?
     /// "high" or "low"; nil is normal.
     var priority: String?
+    /// Where its finished work stands (`delivery`, docs/assistant/todos.md "Delivery"); nil from a hub without it.
+    var delivery: TodoDelivery?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority
-        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", planID = "plan_id", startError = "start_error",
+        case id, title, notes, origin, agents, spaces, quiet, stage, supervision, priority, ask, delivery
+        case doneAt = "done_at", createdAt = "created_at", updatedAt = "updated_at", reopenedAt = "reopened_at", planID = "plan_id", startError = "start_error",
              doneBy = "done_by", doneReason = "done_reason", prURL = "pr_url", dueAt = "due_at", dueDate = "due_date",
              remindAt = "remind_at", remindedAt = "reminded_at"
     }
@@ -339,7 +345,8 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
          origin: String? = nil, planID: String? = nil, startError: String? = nil, doneBy: String? = nil, doneReason: String? = nil,
          agents: [Agent] = [], spaces: [Space]? = nil, quiet: Bool = false, stage: String? = nil, prURL: String? = nil,
          supervision: TaskSupervision? = nil, dueAt: Date? = nil, dueDate: String? = nil, remindAt: Date? = nil,
-         remindedAt: Date? = nil, priority: String? = nil) {
+         remindedAt: Date? = nil, priority: String? = nil, ask: TodoAsk? = nil, reopenedAt: Date? = nil,
+         delivery: TodoDelivery? = nil) {
         self.id = id
         self.title = title
         self.notes = notes
@@ -362,6 +369,9 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         self.remindAt = remindAt
         self.remindedAt = remindedAt
         self.priority = priority
+        self.ask = ask
+        self.reopenedAt = reopenedAt
+        self.delivery = delivery
     }
 
     init(from decoder: Decoder) throws {
@@ -391,13 +401,45 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
         remindAt = (try? c.decodeIfPresent(Date.self, forKey: .remindAt)) ?? nil
         remindedAt = (try? c.decodeIfPresent(Date.self, forKey: .remindedAt)) ?? nil
         priority = (try? c.decodeIfPresent(String.self, forKey: .priority)) ?? nil
+        ask = (try? c.decodeIfPresent(TodoAsk.self, forKey: .ask)) ?? nil
+        // New (#3206): absent from older hubs; one that does not decode is as if there were none.
+        reopenedAt = (try? c.decodeIfPresent(Date.self, forKey: .reopenedAt)) ?? nil
+        delivery = (try? c.decodeIfPresent(TodoDelivery.self, forKey: .delivery)) ?? nil
     }
 
+    /// An ended task cannot keep an old decision card alive.
+    var openAsk: TodoAsk? { doneAt == nil && ask?.askedAt.isEmpty == false ? ask : nil }
     var activeAgents: [Agent] { agents.filter(\.isActive) }
     /// The hub ended it because its agent did not start.
     var failedToStart: Bool { !(startError ?? "").isEmpty }
     /// The hub marked it done because its task's work was judged finished; reopening undoes it.
     var autoDone: Bool { doneAt != nil && doneBy == "auto" }
+}
+
+/// Where a task's finished work stands (`delivery`): `live`, `pr`, `merged`, `off` or `none`, what holds it and who
+/// can unhold it. Kept as the hub sent it; a state this build does not know is just not one of those.
+nonisolated struct TodoDelivery: Codable, Hashable, Sendable {
+    var state: String
+    var gate: String?
+    var unblock: String?
+    var at: Date?
+
+    enum CodingKeys: String, CodingKey { case state, gate, unblock, at }
+
+    init(state: String, gate: String? = nil, unblock: String? = nil, at: Date? = nil) {
+        self.state = state
+        self.gate = gate
+        self.unblock = unblock
+        self.at = at
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? ""
+        gate = (try? c.decodeIfPresent(String.self, forKey: .gate)) ?? nil
+        unblock = (try? c.decodeIfPresent(String.self, forKey: .unblock)) ?? nil
+        at = (try? c.decodeIfPresent(Date.self, forKey: .at)) ?? nil
+    }
 }
 
 /// The agents of quiet tasks (#1731, `TodoItem.quiet`): the main conversation tells the user about them, so the island,
@@ -519,6 +561,7 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
     init(todo: TodoItem, agents: [AgentState]) {
         if todo.failedToStart { self = .failed; return }
         if todo.doneAt != nil { self = .done; return }
+        if todo.openAsk != nil { self = .needsYou; return }
         let has = Set(agents)
         if has.contains(.needsYou) { self = .needsYou }
         else if has.contains(.unread) { self = .unread }

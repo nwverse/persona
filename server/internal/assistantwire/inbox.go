@@ -20,6 +20,7 @@ import (
 var InboxRoutes = []string{
 	"GET /api/v1/inbox",
 	"GET /api/v1/inbox/done",
+	"GET /api/v1/inbox/done/days",
 	"GET /api/v1/inbox/{id}",
 	"POST /api/v1/inbox/{id}/done",
 	"POST /api/v1/inbox/{id}/draft",
@@ -63,6 +64,10 @@ const (
 
 	// EventInboxChanged (the manager tells the extension manager, one way): InboxChanged.
 	EventInboxChanged = "inbox.changed"
+	// EventInboxNeedsYou (the manager tells the hub, one way): InboxNeedsYou, after each handshake and whenever the
+	// inbox changes. The hub keeps the number for the roster (GET /api/v1/managers inbox_needs_you) and reads nothing
+	// else of the inbox; a hub from before it drops the event.
+	EventInboxNeedsYou = "inbox.needs_you"
 )
 
 // The manager asks the extension manager about the inbox's sources (AppInbox).
@@ -277,8 +282,9 @@ type InboxAgentConfig struct {
 	// MaxAgeHours: items whose newest message is older are not handed over (default 24), so turning this on does
 	// not start an agent for every old item.
 	MaxAgeHours int `json:"max_age_hours,omitempty"`
-	// Rules is manager.json's inbox.agent.rules: no longer read (the judge only links items to tasks; what the twin takes
-	// on is set by inbox policies). Kept so older hub.json files still parse.
+	// Rules is manager.json's inbox.agent.rules: the file default for the settings key `inbox.agent_rules`
+	// (extmgr/self_settings.go inboxAgentRules). The database value wins once set; without either, what the twin takes on
+	// is set by inbox policies. Kept so older hub.json files still parse.
 	Rules string `json:"rules,omitempty"`
 }
 
@@ -289,6 +295,12 @@ type InboxRepoMutes struct {
 	Set   bool     `json:"set,omitempty"`
 	Add   bool     `json:"add,omitempty"`
 	Repos []string `json:"repos,omitempty"`
+}
+
+// InboxNeedsYou is EventInboxNeedsYou's params: how many open items are in "Needs you" (status action; the ones not
+// triaged yet count), the connectors' among them: the number the apps' Inbox badge shows of this manager's list.
+type InboxNeedsYou struct {
+	Count int `json:"count"`
 }
 
 // InboxChanged is EventInboxChanged's params: the items that changed and were stored (the extension manager tells the

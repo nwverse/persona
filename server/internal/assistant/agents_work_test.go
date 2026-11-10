@@ -141,6 +141,20 @@ func TestTransientErrors(t *testing.T) {
 		"OAuth token has expired. Please obtain a new token":                                                                                       false,
 		"Invalid API key · Please run /login":                                                                                                      false,
 		"There's an issue with the selected model (x). It may not exist":                                                                           false,
+		// #3208: what a "Continue" can fix, and what it cannot.
+		"API Error: Connection lost mid-response": true,
+		"API Error: 502 Bad Gateway":              true,
+		"API Error: 504 Gateway Timeout":          true,
+		"API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}": true,
+		"API Error: read ECONNRESET":                         true,
+		"API Error: connect ECONNREFUSED 127.0.0.1:443":      true,
+		"API Error: upstream request timed out after 4000ms": true,
+		"API Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"bad\"}}": false,
+		"API Error: 400 upstream rejected the request":                                                           false,
+		"Prompt is too long": false,
+		"API Error: input exceeds the context window of this model": false,
+		"API Error: 403 {\"error\":\"forbidden\"} from upstream":    false,
+		"API Error: Request was aborted.":                           false,
 	} {
 		if got := transientError(text); got != want {
 			t.Errorf("transientError(%q) = %v, want %v", text, got, want)
@@ -237,7 +251,7 @@ func TestTransientErrorIsContinued(t *testing.T) {
 	if e.WakeAt == nil || e.Work.On != proto.WaitTransient || len(f.sentToAgents()) != 0 {
 		t.Fatalf("entry %+v, sent %v", e, f.sentToAgents())
 	}
-	if d := time.Until(*e.WakeAt); d < 25*time.Second || d > 35*time.Second {
+	if d := time.Until(*e.WakeAt); d < 10*time.Second || d > 20*time.Second {
 		t.Fatalf("first retry in %v", d)
 	}
 	if w, ok := reportOf(t, s, "s1"); !ok || w.WakeAt == nil || !w.TurnAt.Equal(turnEnd) {
@@ -248,8 +262,8 @@ func TestTransientErrorIsContinued(t *testing.T) {
 	if len(f.sentToAgents()) != 0 {
 		t.Fatal("sent before the backoff")
 	}
-	s.workTick(ctx, time.Now().Add(31*time.Second))
-	s.workTick(ctx, time.Now().Add(32*time.Second))
+	s.workTick(ctx, time.Now().Add(16*time.Second))
+	s.workTick(ctx, time.Now().Add(17*time.Second))
 	if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: 继续" {
 		t.Fatalf("sent %v", got)
 	}
@@ -265,11 +279,11 @@ func TestTransientErrorIsContinued(t *testing.T) {
 			break
 		}
 		s.workTick(ctx, time.Now().Add(time.Hour))
-		if i > 5 {
+		if i > 7 {
 			t.Fatal("never stopped retrying")
 		}
 	}
-	if got := f.sentToAgents(); len(got) != 3 {
+	if got := f.sentToAgents(); len(got) != 5 {
 		t.Fatalf("继续 sent %d times: %v", len(got), got)
 	}
 	e = entryOf(t, s, "s1")
@@ -557,7 +571,7 @@ func TestSummarizeWork(t *testing.T) {
 
 func TestTriageOff(t *testing.T) {
 	s, f := workService(t)
-	s.work.switches = &TriageSwitches{}
+	s.work.switches = &TriageSwitches{TransientRetry: new(false)}
 	f.setSessions("box", apiErrorTurn("s1", "API Error: 503 upstream"))
 	s.workTurnEnded(context.Background(), "box", "s1")
 	if _, ok := s.workEntry([2]string{"box", "s1"}); ok {
@@ -637,14 +651,14 @@ func TestTriageSwitches(t *testing.T) {
 		t.Fatal("setup")
 	}
 	ctx := context.Background()
-	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
+	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true, TransientRetry: new(false)}); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.workCards()) != 0 || entryOf(t, s, "s1").InteractionID != "" {
 		t.Fatal("card stayed with decide off")
 	}
 	if entryOf(t, s, "s2").WakeAt != nil {
-		t.Fatal("retry stayed with auto_continue off")
+		t.Fatal("retry stayed with transient_retry off")
 	}
 	s.workTick(ctx, time.Now().Add(time.Hour))
 	if got := f.sentToAgents(); len(got) != 0 {
@@ -694,6 +708,9 @@ func TestGoldenAgentTriage(t *testing.T) {
 	golden(t, "agent_wake.approved", renderWake(agentWake{Attempt: 1, Wait: "CI 通过", Then: "push 到 beta", Approved: "push 到 beta"}))
 	golden(t, "agent_triage_input.approved", prompts.RenderAgentTriageInput(prompts.AgentTriageInput{Now: "2026-01-02 09:00 Fri",
 		Agent: "修登录", Machine: "示例电脑", Reply: "CI 还在跑", ApprovedWait: "CI 通过", ApprovedThen: "push 到 beta"}))
+	golden(t, "agent_wake.task_approved", renderWake(agentWake{Attempt: 1, Wait: "发布质检跑完", Then: "推进后续发布", Approved: "推进后续发布", ApprovedByTask: true}))
+	golden(t, "agent_triage_input.task_approved", prompts.RenderAgentTriageInput(prompts.AgentTriageInput{Now: "2026-01-02 09:00 Fri",
+		Agent: "修登录", Machine: "示例电脑", Reply: "质检还在跑", ApprovedWait: "发布质检跑完", ApprovedThen: "推进后续发布", ApprovedByTask: true}))
 	golden(t, "agent_answer", renderAnswer([]agentAnswerItem{{"用哪个方案？", "用 D4"}, {"要不要推到 beta？", "先不推"}}))
 }
 

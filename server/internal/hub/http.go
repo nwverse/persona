@@ -75,6 +75,7 @@ func (h *Hub) routes() http.Handler {
 	h.lookUploadRoutes(api)
 	// usage windows (#2432): the manager's (devices_routes.go)
 	h.usageRoutesRelayed(api)
+	h.transferRoutesRelayed(api) // computer to computer file transfers, the manager's (devices_routes.go)
 	h.inboxRoutesRelayed(api)
 	// the extensions', connectors', bots', mail's, Cua's and ego's: the manager's (extensions_link.go)
 	h.extensionRoutesRelayed(api)
@@ -611,9 +612,13 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 }
 
 func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
+	named, ok := h.sessionsManager(w, r) // ?manager=<id>: that manager's computers only (sessions_list.go)
+	if !ok {
+		return
+	}
 	_, lookup := r.URL.Query()["session_id"]
 	if lookup || sessionlist.Enabled(r.URL.Query()) {
-		h.pagedSessions(w, r)
+		h.pagedSessions(w, r, named)
 		return
 	}
 	mid := r.URL.Query().Get("machine_id")
@@ -626,10 +631,11 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 	// sessions, a copy of all the lists and the whole answer in one buffer were most of what an answer allocated.
 	var lists []stampedList
 	for _, m := range h.machinesNow() {
-		if mid != "" && m.cfg.ID != mid || em != "" && h.machineOwner(m.cfg.ID) != em {
+		owner := h.machineOwner(m.cfg.ID)
+		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), h.machineOwner(m.cfg.ID)})
+		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), owner})
 	}
 	writeSessionLists(w, lists)
 }

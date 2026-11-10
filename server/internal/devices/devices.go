@@ -99,6 +99,8 @@ type Devices struct {
 	opts Options
 	logf func(format string, args ...any)
 
+	transfers transfers // computer to computer file transfers running or just over (transfer.go)
+
 	mu    sync.Mutex
 	cfg   devicewire.Config
 	got   bool          // a config came from the hub
@@ -122,12 +124,16 @@ type Devices struct {
 	byID      map[string]*Machine
 	warm      *savedWarm // taken at start, for the machines when they come
 
-	fleet    fleet
-	tailcat  tailcatDialer
-	engines  engineChoices
-	links    linkSet
-	stopping atomic.Bool
-	workers  sync.WaitGroup
+	fleet   fleet
+	tailcat tailcatDialer
+	engines engineChoices
+	// clipboard: the machines the user turned clipboard sharing on for (clipboard.go).
+	clipboard clipboardSwitches
+	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
+	fileTransfer fileTransferSwitches
+	links        linkSet
+	stopping     atomic.Bool
+	workers      sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]
@@ -382,6 +388,20 @@ func (d *Devices) startMachines(ctx context.Context) {
 			old.mu.Lock()
 			for id := range old.watched { // what the hub watches is watched again on the new connection
 				m.watched[id], m.lastSeq[id] = true, old.lastSeq[id]
+			}
+			// So are the manager's own follows (Follow: a channel's turn), and a follow the old node did not take
+			// stays unsettled: the assistant keeps its mark and never asks again.
+			for id := range old.followed {
+				if m.followed == nil {
+					m.followed = map[string]bool{}
+				}
+				m.followed[id], m.lastSeq[id] = true, old.lastSeq[id]
+				if old.unsettled[id] {
+					if m.unsettled == nil {
+						m.unsettled = map[string]bool{}
+					}
+					m.unsettled[id] = true
+				}
 			}
 			old.mu.Unlock()
 		} else {
@@ -853,6 +873,7 @@ func (d *Devices) Follow(ctx context.Context, machine, session string, on bool) 
 		m.followed[session] = true
 	} else {
 		delete(m.followed, session)
+		m.forgetSeqLocked(session)
 	}
 	m.mu.Unlock()
 	var err error

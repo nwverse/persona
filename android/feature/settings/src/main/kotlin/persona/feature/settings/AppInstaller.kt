@@ -100,6 +100,23 @@ internal object AppInstaller {
         finally { gate.unlock() }
     }
 
+    suspend fun pendingSessions(context: Context): Set<Int> = withContext(Dispatchers.IO) {
+        context.packageManager.packageInstaller.mySessions
+            .filter { it.appPackageName == context.packageName && it.isSealed }
+            .mapTo(mutableSetOf()) { it.sessionId }
+    }
+
+    /** Only an explicit confirmation may cancel sealed sessions; never include a newer session. */
+    suspend fun cancelPending(context: Context, confirmed: Set<Int>) = withContext(Dispatchers.IO) {
+        check(gate.tryLock()) { "Another installation is being prepared" }
+        try {
+            val installer = context.packageManager.packageInstaller
+            installer.mySessions.filter {
+                it.sessionId in confirmed && it.appPackageName == context.packageName && it.isSealed
+            }.forEach { installer.abandonSession(it.sessionId) }
+        } finally { gate.unlock() }
+    }
+
     private fun requireNewerVersion(context: Context, update: AppUpdate) {
         val installed = context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
         check(update.versionCode > installed) { "Update version must be newer than installed version" }

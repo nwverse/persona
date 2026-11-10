@@ -61,11 +61,11 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 	}
 	s.work.mu.Lock()
 	if a, ok := s.work.approved[[2]string{machine, c.SessionID}]; ok {
-		in.ApprovedWait, in.ApprovedThen = a.wait, a.then
+		in.ApprovedWait, in.ApprovedThen, in.ApprovedByTask = a.wait, a.then, a.task != ""
 	}
 	s.work.mu.Unlock()
 	var out triageOut
-	if err := s.purposeModel("agent.triage").JSON(ctx, prompts.RenderAgentTriage(prompts.AgentTriage{Owner: s.owner(ctx)}),
+	if err := s.purposeModel("agent.triage").JSON(ctx, prompts.RenderAgentTriage(prompts.AgentTriage{Owner: s.owner(ctx), Language: answerLanguage(s.hello(ctx).Locale)}),
 		prompts.RenderAgentTriageInput(in), &out); err != nil {
 		return nil, false, err
 	}

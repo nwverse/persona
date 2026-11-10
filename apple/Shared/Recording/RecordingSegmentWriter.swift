@@ -13,6 +13,9 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         let url: URL
         let start: Double
         let duration: Double
+        /// Wall-clock time of the segment's first sample, taken from the audio buffers rather than when the segment
+        /// is reported (callbacks can run late, and stop() reports several at once).
+        let startedAt: Date
     }
 
     enum RecorderError: LocalizedError {
@@ -33,6 +36,7 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
     private var fileFrames: AVAudioFramePosition = 0
     private var index: Int
     private var segmentStart: Double
+    private var fileStartedAt = Date()
 
     // Shared with readers on other threads.
     private struct Shared {
@@ -106,6 +110,19 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         shared.withLock { $0.running = true }
     }
 
+    /// Closes the segment being written now, while paused (a phone call): an app killed before the recording resumes keeps
+    /// it, rather than losing up to a whole segment. The next buffer opens the next one. Nil if nothing was written since.
+    @discardableResult
+    func cut() -> Segment? {
+        queue.sync { closeFile() }
+    }
+
+    /// Whether a notification's object is this writer's engine: `.AVAudioEngineConfigurationChange` comes from every engine
+    /// in the process (dictation's, a voice call's), and only this one's changes concern the recording.
+    func owns(_ object: ObjectIdentifier?) -> Bool {
+        object == ObjectIdentifier(engine)
+    }
+
     /// Stops recording and finalizes the last segment; returns it (nil if nothing was written since the last one).
     @discardableResult
     func stop() -> Segment? {
@@ -122,12 +139,16 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw RecorderError.noInput }
         converter = AVAudioConverter(from: inFormat, to: outFormat)
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buffer, _ in
-            self?.process(buffer)
+        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buffer, when in
+            // `when` is the first sample's host time; without it, assume the buffer just finished filling.
+            let late = when.isHostTimeValid
+                ? AVAudioTime.seconds(forHostTime: mach_absolute_time()) - AVAudioTime.seconds(forHostTime: when.hostTime)
+                : Double(buffer.frameLength) / buffer.format.sampleRate
+            self?.process(buffer, startedAt: Date().addingTimeInterval(-max(0, late)))
         }
     }
 
-    private func process(_ buffer: AVAudioPCMBuffer) {
+    private func process(_ buffer: AVAudioPCMBuffer, startedAt: Date) {
         guard let converter, buffer.frameLength > 0 else { return }
         let ratio = outFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
@@ -148,7 +169,7 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
             $0.level = $0.level * 0.6 + level * 0.4
         }
         let box = BufferBox(buffer: out)
-        queue.async { [weak self] in self?.write(box.buffer) }
+        queue.async { [weak self] in self?.write(box.buffer, startedAt: startedAt) }
     }
 
     private static func level(of buffer: AVAudioPCMBuffer) -> Float {
@@ -164,10 +185,21 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
 
     // MARK: - Writer (queue)
 
-    private func write(_ buffer: AVAudioPCMBuffer) {
+    /// Writes converted 16 kHz audio as if it came from the tap; for tests, which have no microphone.
+    func append(_ buffer: AVAudioPCMBuffer, startedAt: Date) {
+        let frames = AVAudioFramePosition(buffer.frameLength)
+        shared.withLock { $0.frames += frames }
+        let box = BufferBox(buffer: buffer)
+        queue.sync { write(box.buffer, startedAt: startedAt) }
+    }
+
+    private func write(_ buffer: AVAudioPCMBuffer, startedAt: Date) {
         var offset: AVAudioFrameCount = 0
         while offset < buffer.frameLength {
-            if file == nil { openFile() }
+            if file == nil {
+                openFile()
+                fileStartedAt = startedAt.addingTimeInterval(Double(offset) / RecordingAudioSpec.sampleRate)
+            }
             guard file != nil else { return }
             let segmentFrames = shared.withLock { $0.segmentFrames }
             if fileFrames >= segmentFrames, let segment = closeFile() {
@@ -219,7 +251,7 @@ nonisolated final class RecordingSegmentWriter: @unchecked Sendable {
             return nil
         }
         let duration = Double(fileFrames) / RecordingAudioSpec.sampleRate
-        let segment = Segment(index: index, url: url, start: segmentStart, duration: duration)
+        let segment = Segment(index: index, url: url, start: segmentStart, duration: duration, startedAt: fileStartedAt)
         shared.withLock { $0.finished.append(segment) }
         index += 1
         segmentStart += duration

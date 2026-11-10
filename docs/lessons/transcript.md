@@ -17,7 +17,14 @@ The generic screenshot mock folds tool calls without production's `fold.supervis
 review hidden in such a fold falsely makes the entire synthetic round quiet. Emit the same retained evidence as
 production when testing this case; do not disable folding or force-open the UI to make the screenshot pass.
 
-## Display provenance is not a model role (#2130)
+## Wake continuations use the ordinary execution summary (#2796)
+
+A wake before new assistant text must not cut the segment holding the previous answer: doing so shows the pre-wake
+narration again outside the folded summary. Keep the previous answer in place until new words arrive and put wake
+notices, new tools and narration in the same inspectable summary. Remove the separate wake-chip/drawer path rather
+than leaving it appended after the answer. Cover the interval between wake and new text in both the line model and
+the shared sync fixture, not only the final completed turn.
+
 
 Persona's `conversation_send` relay is model input with role `user`, not the user's own words. Its existing `from`
 field belongs to runtime peer messages, not Persona conversation ids. Prefer structured source metadata; an older-server

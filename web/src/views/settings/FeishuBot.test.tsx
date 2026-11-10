@@ -117,6 +117,24 @@ describe("Feishu bot dialog", () => {
     expect(calls.update[1].body).toEqual({ features: { only_conclusions: true } });
   });
 
+  it("hides execution steps for a hub from before it", async () => {
+    await open(saved());
+    expect(document.body.querySelector(`[role="switch"][aria-label="${t("settings-feishubot.feature_report_steps_title")}"]`)).toBeNull();
+  });
+
+  it("execution steps: off by default, and only conclusions waits for it", async () => {
+    const named = (key: string) => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t(key)}"]`);
+    const steps = () => named("settings-feishubot.feature_report_steps_title");
+    const onlyConclusions = () => named("settings-feishubot.feature_only_conclusions_title")!;
+    await open(saved({ features: { ...saved().features, report_steps: false, only_conclusions: false } }));
+    expect(steps()!.getAttribute("aria-checked")).toBe("false");
+    expect(onlyConclusions().disabled).toBe(true);
+    await act(async () => steps()!.click());
+    expect(calls.update[0].body).toEqual({ features: { report_steps: true } });
+    await act(async () => calls.update[0].resolve(saved({ features: { ...saved().features, report_steps: true, only_conclusions: false } })));
+    expect(onlyConclusions().disabled).toBe(false);
+  });
+
   it("switches the workbench on its own, off by default", async () => {
     const workbench = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_workbench_title")}"]`)!;
     await open(saved({ features: { ...saved().features, workbench: false } }));

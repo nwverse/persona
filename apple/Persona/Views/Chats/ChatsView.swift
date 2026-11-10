@@ -375,11 +375,12 @@ struct ChatsView: View {
                         if model.openChat != nil { DispatchQueue.main.async { takeOpenChat() } }
                         if model.openPersonalAgent != nil { DispatchQueue.main.async { takeOpenPersonalAgent() } }
                     }
-                    // A new tree (RootView swaps the shell and the tabs when the width class changes, which iOS does
-                    // for its snapshots when the app goes to the background: iPhone Duo open, 2026-11-04) starts at the
-                    // list: open the chat that was open, as a launch does (AppModel.init). Back at the list it is
-                    // forgotten (rememberChat(nil) above). A turn later: the split of the tree going away empties
-                    // the paths as it goes, and a push made in the same update did not show.
+                    // A new tree (RootView swaps the shell and the tabs when the width class changes while the app is
+                    // active: iPhone Duo folded or opened; iOS's snapshots on the way to the background did it too
+                    // until #2836, 2026-11-04) starts at the list: open the chat that was open, as a launch does
+                    // (AppModel.init). Back at the list it is forgotten (rememberChat(nil) above). A turn later: the
+                    // split of the tree going away empties the paths as it goes, and a push made in the same update
+                    // did not show.
                     // Still the same chat a turn later: going back runs onAppear before onChange(path) forgets it (#1868).
                     // Not over a personal agent's conversation asked for (#4519): that one is what the app came up for.
                     if path.isEmpty, model.openChat == nil, model.openPersonalAgent == nil, model.selectedTab == .chats,
@@ -609,6 +610,12 @@ private struct AgentsList: View {
     private var compactTop: Bool { false }
     #endif
     @StoredValue("dev.machineFilter") private var machineFilter = ""
+    @StoredValue("dev.harnessFilter") private var harnessFilter = ""
+    @StoredValue("dev.projectFilter") private var projectFilter = ""
+    @StoredValue("dev.modelFilter") private var modelFilter = ""
+    @StoredValue("dev.pinnedOnly") private var pinnedOnly = false
+    @StoredValue("dev.searchScope") private var searchScope: AgentSearchScope = .all
+    @StoredValue("dev.searchAsCode") private var searchAsCode = false
     /// Several groups of hubs: the one the list shows ("" = all; `HubFilter`).
     @StoredValue(HubFilter.key) private var hubFilter = ""
     @StoredValue("dev.grouping") private var storedGrouping: DevGrouping = .standard // by repository first (#2108)
@@ -728,7 +735,9 @@ private struct AgentsList: View {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
         return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
-                     machine: machineFilter, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
+                     searchScope: searchScope, searchAsCode: searchAsCode,
+                     machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
+                     pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
                      held: model.heldInList, preferences: preferences,
                      pagedGroups: Set(model.sessionLists.lists.filter { $0.value.paged }.keys),
                      listQuery: listQuery)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -71,6 +72,9 @@ type BusHub struct {
 	legacySaid bool
 	svc        *Service
 	ctx        context.Context // Serve's
+	// httpH serves the hub's http.request for httpOf (httpHandler), under mu.
+	httpH  http.Handler
+	httpOf *Service
 
 	// helloed is closed once the first hello's answer is kept (setHello): the hub's calls and events can come in on
 	// their own goroutines before that answer is, and what they need of it (the hub's kb settings, its machines)
@@ -244,6 +248,13 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 		go func() {
 			if b.client.Wait(ctx) == nil {
 				svc.Resync(context.WithoutCancel(ctx))
+			}
+		}()
+		// The inbox's "Needs you" count, which the hub keeps of this connection only (inbox_store.go): what is stored
+		// is read now if nothing read it yet, so the roster has the number before the first round.
+		go func() {
+			if b.client.Wait(ctx) == nil && svc.inboxReady(context.WithoutCancel(ctx)) == nil {
+				svc.tellInboxNeedsYou()
 			}
 		}()
 		// The conversations the channels follow (channels_handler.go).
@@ -451,6 +462,22 @@ func (b *BusHub) service() *Service {
 	return b.svc
 }
 
+// httpHandler serves the hub's http.request for s: s's routes, with the machines' and the nodes' routes that are the
+// manager's in front (devices.go, fleet_routes.go). Built once per service, not per request: the two ServeMuxes and
+// their twenty routes were 0.1 ms and 33 KB of every relayed request. Their handlers read everything when they run.
+func (b *BusHub) httpHandler(s *Service) http.Handler {
+	d := b.opts.Devices
+	if d == nil {
+		return s
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.httpOf != s || b.httpH == nil {
+		b.httpH, b.httpOf = s.fleetHandler(d.Handler(s)), s
+	}
+	return b.httpH
+}
+
 func (b *BusHub) request(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	b.waitHello(ctx)
 	s := b.service()
@@ -466,11 +493,7 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if err := decode(&p); err != nil {
 			return nil, err
 		}
-		var h http.Handler = s
-		if d := b.opts.Devices; d != nil {
-			h = s.fleetHandler(d.Handler(s)) // the machines' and the nodes' routes that are the manager's (devices.go, fleet_routes.go)
-		}
-		return serveHTTP(ctx, h, p, s.lang)
+		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
 	case assistantwire.MethodTools:
 		return map[string]any{"tools": s.Tools(ctx)}, nil
 	case assistantwire.MethodTool:
@@ -642,6 +665,11 @@ func (w *recorder) Lang() i18n.Lang {
 }
 
 func (w *recorder) Header() http.Header { return w.header }
+
+// Grow makes room for n more bytes of body: a route that knows its answer's size and writes it in pieces
+// (writeInboxItems) then fills one buffer instead of growing it step by step.
+func (w *recorder) Grow(n int) { w.body.Grow(n) }
+
 func (w *recorder) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -824,4 +852,33 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		return fmt.Errorf("unknown event")
 	}
 	return nil
+}
+
+// HubBuild is what the running hub says it is: its version and the commit it was built from (GET /api/v1/health, from
+// where the assistant reaches it; a public address does not say either, which reads as "").
+func (b *BusHub) HubBuild(ctx context.Context) (version, commit string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(b.opts.Hub, "/")+"/api/v1/health", nil)
+	if err != nil {
+		return "", "", err
+	}
+	c := b.opts.HTTPClient
+	if c == nil {
+		c = &http.Client{Timeout: 10 * time.Second}
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("health answered %d", resp.StatusCode)
+	}
+	var h struct {
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&h); err != nil {
+		return "", "", err
+	}
+	return h.Version, h.Commit, nil
 }
