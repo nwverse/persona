@@ -34,9 +34,7 @@ func paseoEngineHello() map[string]any {
 func TestRuntimeLaunchers(t *testing.T) {
 	n, _ := runtimeNode(t)
 	host := dialRuntime(t, n, paseoEngineHello())
-	n.eng.mu.Lock() // Paseo's providers are offered where it is an enabled host (TestEngineRuntimeProvidersNeedTheHostEnabled)
-	n.eng.set = &proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EnginePaseo}, Default: proto.EngineHerdr}
-	n.eng.mu.Unlock()
+	enablePaseo(n)
 	raw, err := nodeCall(t, n, "launchers.list", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +244,7 @@ func TestRuntimeNativeModelsAndModelControl(t *testing.T) {
 	hello["caps"].(map[string]any)["model"] = true
 	hello["caps"].(map[string]any)["models"] = true
 	host := dialRuntime(t, n, hello)
+	enablePaseo(n)
 	host.mu.Lock()
 	host.answer = func(method string, params json.RawMessage) (any, error) {
 		if method == "launchers.models" {

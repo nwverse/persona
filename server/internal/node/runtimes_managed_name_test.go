@@ -81,10 +81,15 @@ func TestEngineRuntimeProvidersNeedTheHostEnabled(t *testing.T) {
 	if got := names(); len(got) != 1 || got[0] != "claude" || n.runtimeOf("cc-relay") != nil {
 		t.Fatalf("Paseo not enabled: listed %v", got)
 	}
-	n.eng.mu.Lock()
-	n.eng.set = &proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EnginePaseo}, Default: proto.EngineHerdr}
-	n.eng.mu.Unlock()
+	enablePaseo(n)
 	if got := names(); len(got) != 2 || got[1] != "cc-relay" || n.runtimeOf("cc-relay") == nil {
 		t.Fatalf("Paseo enabled: listed %v", got)
 	}
+}
+
+// enablePaseo makes Paseo one of n's hosts: its runtime's providers are offered and started only then.
+func enablePaseo(n *Node) {
+	n.eng.mu.Lock()
+	n.eng.set = &proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EnginePaseo}, Default: proto.EngineHerdr}
+	n.eng.mu.Unlock()
 }
