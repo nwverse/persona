@@ -290,7 +290,7 @@ internal fun KnowledgeDetailScreen(
             // The Persona page shows the current assistant's main conversation; another assistant's opens by itself.
             model.handoffs.collect { handoff ->
                 val main = handoff.main
-                if (main == null || handoff.owner == AssistantManagerChoice.current.value.shown) navigator.selectTab(AppTab.Persona)
+                if (main == null) navigator.selectTab(AppTab.Persona)
                 else navigator.navigate(ChatRoute(main.machineId, main.sessionId, ConversationKind.Assistant))
             }
         }

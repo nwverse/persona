@@ -381,8 +381,10 @@ internal fun AgentsScreen(
                 // Three cases, as iOS: a search with no result (no New session, which read as if the agents were gone), no
                 // sessions at all, and a quick filter with nothing left (Show all).
                 when {
-                    // An offline assistant with nothing the hub still keeps of it: out of reach, not a first run.
-                    assistant.offline != null && page.allCount == 0 && page.settings.query.isEmpty() -> JAssistantOffline(assistant)
+                    // An offline assistant with nothing the hub still keeps of it (no agent, no computer): out of reach, not a first run;
+                    // with a computer online it can start a session now.
+                    assistant.offline != null && page.allCount == 0 && page.settings.query.isEmpty() &&
+                        page.machines.isEmpty() && page.settings.machineFilter.isEmpty() -> JAssistantOffline(assistant)
                     page.allCount == 0 && page.settings.query.isNotEmpty() -> JEmptyState(
                         stringResource(R.string.agents_empty_search_title, page.settings.query),
                         stringResource(R.string.agents_empty_search_hint), icon = PhIcons.MagnifyingGlass)

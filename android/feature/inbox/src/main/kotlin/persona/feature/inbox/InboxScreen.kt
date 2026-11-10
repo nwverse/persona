@@ -427,7 +427,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 val filtered = query.isNotEmpty() || source.isNotEmpty() || kind.isNotEmpty() || section.isNotEmpty()
                 when {
                     // The hub's list leaves out an assistant that is offline: its inbox is not empty, it is out of reach.
-                    assistant.offline != null -> JAssistantOffline(assistant)
+                    // With items kept, a search or filter that finds none is "no match", not offline.
+                    assistant.offline != null && snapshot.records.isEmpty() && snapshot.interactions.isEmpty() -> JAssistantOffline(assistant)
                     !filtered && failedEmpty -> JEmptyState(stringResource(R.string.inbox_empty_failed_title), stringResource(R.string.inbox_empty_failed_text), action = {
                         JButton(stringResource(R.string.inbox_retry), { refresh() }, enabled = !refreshing, kind = JButtonKind.Secondary)
                     })

@@ -232,8 +232,8 @@ fun TodosScreen(
             }
 
             if (filtered.isEmpty()) {
-                // The hub's list leaves out an assistant that is offline: its to-dos are out of reach, not none.
-                if (assistant?.offline != null) item(key = "offline") { JAssistantOffline(assistant) }
+                // The hub's list leaves out an assistant that is offline: its to-dos are out of reach, not none (a search that finds nothing among kept ones is "no match").
+                if (assistant?.offline != null && todos.isEmpty()) item(key = "offline") { JAssistantOffline(assistant) }
                 else item(key = "empty") {
                     JEmptyState(
                         title = stringResource(if (query.isBlank()) R.string.agents_todos_empty else R.string.agents_todos_no_match),

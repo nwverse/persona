@@ -65,8 +65,22 @@ class PlanOwnerTest {
         // Work current: the default's plan names none, so it goes to the default.
         AssistantManagerChoice.choose("hub", "m-work", "assistant")
         store.dismissPlan(TaskPlan("p2", "main"), onError = { throw it })
-        // A conversation no page listed: as before, nothing named.
+        // A conversation no page listed and no row names: as before, nothing named.
         store.dismissPlan(TaskPlan("p3", "elsewhere"), onError = { throw it })
         assertEquals(listOf("start" to "m-work", "dismiss" to null, "dismiss" to null), api.named)
+    }
+
+    @Test fun aConversationNoListRegisteredNamesItsOwnSessionsManager() {
+        // After a restart the registry is empty: the session row's manager is what names the plan's assistant.
+        val api = Api()
+        val store = TasksStore(api, Connection(), CoroutineScope(Dispatchers.Unconfined))
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        store.startPlan(TaskPlan("p1", "work-main"), remember = false, onError = { throw it }, manager = "m-work")
+        store.dismissPlan(TaskPlan("p2", "work-main"), onError = { throw it }, manager = "m-work")
+        // Its own row wins over a stale registry entry; none known: the registry, then nothing.
+        AssistantManagerChoice.noteItem(listOf("assistant", "conversations", "x"), "m-old")
+        store.dismissPlan(TaskPlan("p3", "x"), onError = { throw it }, manager = "m-work")
+        store.dismissPlan(TaskPlan("p4", "x"), onError = { throw it })
+        assertEquals(listOf("start" to "m-work", "dismiss" to "m-work", "dismiss" to "m-work", "dismiss" to "m-old"), api.named)
     }
 }

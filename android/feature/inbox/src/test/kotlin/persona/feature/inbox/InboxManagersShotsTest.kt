@@ -17,6 +17,7 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
@@ -188,6 +189,26 @@ class InboxManagersShotsTest {
         rule.waitForIdle()
         see("周报")
         gone("助手 离线")
+    }
+
+    /** An offline assistant whose items the list still has: a search that finds none says "no results", not "offline". */
+    @Test fun aSearchOverAnOfflineAssistantsKeptItemsFindsNoneNotOffline() {
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                CompositionLocalProvider(LocalManagerRoster provides roster) {
+                    Box(Modifier.testTag("shot").width(400.dp).height(900.dp).background(PersonaTheme.palette.background)) {
+                        InboxScreen(OneInbox(InboxSnapshot(records = records)), navigator)
+                    }
+                }
+            }
+        }
+        AssistantManagerChoice.pick("m-8b04d2")
+        rule.waitForIdle()
+        see("物业通知")
+        rule.onNode(androidx.compose.ui.test.hasSetTextAction()).performTextInput("zzzz")
+        rule.waitForIdle()
+        see("没有找到")
+        gone("家里 离线")
     }
 
     /** The same in English and Japanese (the words every client shares), Glass light: `inbox-offline-<language>.png`. */

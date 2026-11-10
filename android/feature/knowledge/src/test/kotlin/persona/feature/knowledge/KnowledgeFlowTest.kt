@@ -304,18 +304,28 @@ class KnowledgeOwnerTest {
             val connection = object : KnowledgeConnection { override val current = MutableStateFlow<KnowledgeRepository?>(repository) }
             val main = FakeMainSender()
             val messages = FakeMessages()
-            val detail = KnowledgeDetailViewModel(KnowledgeKind.Projects, "weather", connection, main, "assistant", FakeConversations(), messages)
+            val conversations = FakeConversations()
+            val detail = KnowledgeDetailViewModel(KnowledgeKind.Projects, "weather", connection, main, "assistant", conversations, messages)
             store.put("detail", detail)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { detail.page.collect() }
             runCurrent()
-            // Another assistant made current: the default's page names the default (none on the wire), not the new one.
+            // The default's own page while it is current: the main queue, and the Persona page shows it (no conversation to open).
+            var handoff: KnowledgeHandoff? = null
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { detail.handoffs.collect { handoff = it } }
+            detail.ask("先问这个", "项目"); runCurrent()
+            assertEquals(1, main.sent.size)
+            assertEquals(KnowledgeHandoff("assistant", null), handoff)
+            // Another assistant made current: the default's page names the default (none on the wire), not the new one,
+            // and its question goes to the default's main conversation, opened in place (Persona's page shows the new one's).
             AssistantManagerChoice.choose("hub", "m-work", "assistant")
             detail.saveTags(KnowledgeUpdate(tags = listOf("iOS"))); runCurrent()
             assertEquals(listOf("", ""), repository.reads)
             assertEquals(listOf(""), repository.saves)
             detail.ask("下一步呢？", "项目"); runCurrent()
             assertEquals(1, main.sent.size)
-            assertTrue(messages.sent.isEmpty())
+            assertEquals(listOf("assistant"), conversations.asked)
+            assertEquals(SessionKey("server", "work-main"), messages.sent.single().first)
+            assertEquals(KnowledgeHandoff("assistant", SessionKey("server", "work-main")), handoff)
         } finally {
             backgroundScope.cancel()
             store.clear()

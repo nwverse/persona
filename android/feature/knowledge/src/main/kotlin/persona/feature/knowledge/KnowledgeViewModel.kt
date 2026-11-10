@@ -191,7 +191,8 @@ internal class KnowledgeDetailViewModel(
             try {
                 checkCurrent(repository)
                 // The data layer owns durable delivery, offline queueing and deduplication.
-                val other = owner?.takeIf { it != AssistantManagerChoice.current.value.defaultId }
+                // Not the assistant shown now (the default's entry after a switch too): its own main conversation, opened in place.
+                val other = owner?.takeIf { it != AssistantManagerChoice.current.value.shown }
                 val main = if (other == null) { sender.sendToMain(text, messageId); null } else {
                     val key = checkNotNull(conversations) { "managers unavailable" }.mainConversationOf(other)
                     checkCurrent(repository)

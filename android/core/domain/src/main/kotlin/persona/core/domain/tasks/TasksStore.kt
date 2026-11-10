@@ -390,22 +390,24 @@ class TasksStore(
             { it.agentState.priority }).thenByDescending { it.updatedAt.orEmpty() })
 
     /** [edits] is "Edit": the plan's tasks as the user changed them, by index (null: as planned). */
-    fun startPlan(plan: TaskPlan, remember: Boolean, onError: (Throwable) -> Unit, edits: List<PlanTask>? = null) = act(plan.id, onError) {
-        val p = withContext(planOwner(plan)) { if (edits == null) api.startPlan(plan.id, remember) else api.startPlan(plan.id, remember, edits) }
+    fun startPlan(plan: TaskPlan, remember: Boolean, onError: (Throwable) -> Unit, edits: List<PlanTask>? = null, manager: String? = null) = act(plan.id, onError) {
+        val p = withContext(planOwner(plan, manager)) { if (edits == null) api.startPlan(plan.id, remember) else api.startPlan(plan.id, remember, edits) }
         _plans.update { it + (p.id to p) }; reloadTodos()
     }
 
-    fun dismissPlan(plan: TaskPlan, onError: (Throwable) -> Unit) = act(plan.id, onError) {
-        val p = withContext(planOwner(plan)) { api.dismissPlan(plan.id) }; _plans.update { it + (p.id to p) }
+    fun dismissPlan(plan: TaskPlan, onError: (Throwable) -> Unit, manager: String? = null) = act(plan.id, onError) {
+        val p = withContext(planOwner(plan, manager)) { api.dismissPlan(plan.id) }; _plans.update { it + (p.id to p) }
     }
 
     /**
      * A plan's routes (`task-plans/<id>/…`) name no conversation, so the hub would take them to the default manager: they
      * name the manager of the plan's conversation (the one a page listed it under), whichever assistant is current, as
-     * every other request about another assistant's thing does (docs/assistant/managers.md "Clients"). None for the default's.
+     * every other request about another assistant's thing does (docs/assistant/managers.md "Clients"). The conversation's own
+     * session row says it ([manager]; it survives a restart, a list's registry doesn't), else the manager a page listed it under.
+     * None for the default's.
      */
-    private fun planOwner(plan: TaskPlan): kotlin.coroutines.CoroutineContext =
-        AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", plan.conversation))?.let(::RequestManager)
+    private fun planOwner(plan: TaskPlan, manager: String?): kotlin.coroutines.CoroutineContext =
+        (manager ?: AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", plan.conversation)))?.let(::RequestManager)
             ?: kotlin.coroutines.EmptyCoroutineContext
 
     /**

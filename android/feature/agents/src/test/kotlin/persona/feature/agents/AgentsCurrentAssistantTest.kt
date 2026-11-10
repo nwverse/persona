@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performScrollToKey
+import androidx.compose.ui.test.performTextInput
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
@@ -57,7 +58,8 @@ class AgentsCurrentAssistantTest {
         Interaction("c6", "laptop", "s5", kind = "permission", manager = "m-2", sessionTitle = "Work source task"),
     ))
 
-    private fun model(tasks: persona.core.domain.tasks.TasksStore? = null, only: (Session) -> Boolean = { true }): AgentsViewModel {
+    private fun model(tasks: persona.core.domain.tasks.TasksStore? = null, only: (Session) -> Boolean = { true },
+                      extraMachines: List<Machine> = emptyList()): AgentsViewModel {
         val stored = MutableStateFlow<Preferences>(emptyPreferences())
         return AgentsViewModel(object : SessionsRepository {
             override val sessions = MutableStateFlow(listOf(
@@ -74,7 +76,7 @@ class AgentsCurrentAssistantTest {
                 Machine("laptop", "Work computer", online = true, manager = "m-2"),
                 Machine("far~g0123abcd", "Elsewhere computer", online = true, manager = "assistant"),
                 Machine("old", "Old computer", online = true, manager = "m-gone"),
-            ).filter { machine -> machine.id != "far~g0123abcd" || only(Session("far~g0123abcd", "s3")) })
+            ).filter { machine -> machine.id != "far~g0123abcd" || only(Session("far~g0123abcd", "s3")) } + extraMachines)
             override suspend fun refresh() = Unit
         }, object : InteractionCenter {
             override val pending = requests
@@ -215,6 +217,36 @@ class AgentsCurrentAssistantTest {
         rule.waitForIdle()
         assertTrue(shown("No to-dos yet"))
         assertFalse(shown("is offline"))
+    }
+
+    /** Offline reads as offline only when nothing is kept: a kept computer (or to-do) means the page has something to do or find. */
+    @Test fun anOfflineAssistantWithAKeptComputerOrTodoIsNotJustOffline() {
+        val away = ManagerRoster(roster.managers + HubManager("m-3", "Home", online = false,
+            lastSeen = java.time.Instant.now().minusSeconds(3 * 3600).toString()), "assistant")
+        // The hub still keeps one of Home's computers, with no agent yet.
+        val model = model(only = { it.machineId != "far~g0123abcd" }, extraMachines = listOf(Machine("nas", "Home NAS", online = true, manager = "m-3")))
+        var todos by androidx.compose.runtime.mutableStateOf(false)
+        AssistantManagerChoice.choose("hub", "m-3", "assistant")
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true) {
+                CompositionLocalProvider(LocalManagerRoster provides away) {
+                    if (todos) TodosScreen(listOf(Todo("t1", "Water the plants")), emptyList(), null, onBack = null, onOpenTodo = {},
+                        assistant = persona.core.designsystem.currentAssistant())
+                    else AgentsScreen(model, Nowhere, AgentsMetadata())
+                }
+            }
+        }
+        fun shown(text: String) = rule.onAllNodesWithText(text, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        rule.waitUntil(5_000) { model.page.value.loaded && model.page.value.allCount == 0 }
+        rule.onNode(androidx.compose.ui.test.hasScrollToKeyAction()).performScrollToKey("empty")
+        rule.waitUntil(5_000) { shown("Start your first coding session") }
+        assertFalse(shown("Home is offline"))
+        rule.runOnIdle { todos = true }
+        rule.waitForIdle()
+        // A to-do is kept: a search with no hit is "no match", not offline.
+        rule.onNode(androidx.compose.ui.test.hasSetTextAction()).performTextInput("zzz")
+        rule.waitUntil(5_000) { shown("No matching to-dos") }
+        assertFalse(shown("Home is offline"))
     }
 
     /** Records whose name each new to-do was asked under ("": the default's, none named). */
