@@ -308,10 +308,19 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "docs/operations/config.md": {
+      "reason": "Published upgrade, storage identity or compatibility documentation retained for existing installations.",
+      "tokens": [
+        "JARVIS_"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "docs/operations/docker.md": {
       "reason": "Published upgrade, storage identity or compatibility documentation retained for existing installations.",
       "tokens": [
         "jarvis",
+        "jarvis_default",
         "jarvis_manager"
       ],
       "path_tokens": [],
@@ -847,6 +856,7 @@
         "jarvis-pi-runtime",
         "jarvis-ports",
         "jarvis-user-package",
+        "mcp__jarvis__ask_user",
         "mcp__jarvis__lark_agent_reply"
       ],
       "path_tokens": [],

@@ -8,6 +8,7 @@
   "launcher_not_on_machine": "{machine} 上没有启动器 {launcher}，没有启动任何 Agent。这台电脑能用的启动器：{launchers}",
   "launcher_swapped": "{launcher} 不在 {machine} 上，改用 {to}（它的默认模型）",
   "start_identity_conflict": "启动响应未确认所请求电脑上的会话身份。",
+  "start_interrupted": "Hub 在此任务的 Agent 启动途中重启了，之前的请求仍可能完成。请等电脑重新连接后检查会话，再决定是否重试，以免重复启动 Agent。",
   "failed_start": "没开起来：{reason}",
   "task_failed_title": "「{name}」没开起来",
   "task_failed_title_health": "任务没开起来",
@@ -27,6 +28,7 @@
   "outcome_question": "做完的结论",
   "outcome_pitfall": "踩过的坑",
   "adopt_notes": "收编：{agent} · {machine} · {cwd}",
+  "dispatch_notes": "由 {from_machine} 上的 {from} 派出（dispatch_start）：{machine} · {cwd}",
   "adopt_failed": "收编没成功：{reason}",
   "interrupt_summary": "停下 {agent} · {machine}",
   "start_remedy_notice": "没开起来：「{title}」。{reason}"

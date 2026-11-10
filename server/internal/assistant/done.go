@@ -282,6 +282,15 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 	}
 	in := taskDoneInput{Owner: s.owner(ctx), Language: answerLanguage(s.hello(ctx).Locale), Delivery: s.doneNeedsDelivery(ctx),
 		Title: t.Title, Notes: t.Notes, Replies: replies}
+	in.Deployed = func(d TodoDelivery) TodoDelivery {
+		pr := ""
+		for _, r := range replies {
+			if prs := prLink.FindAllString(r.Text, -1); len(prs) > 0 {
+				pr = prs[len(prs)-1]
+			}
+		}
+		return s.gateDelivery(ctx, t, d, pr)
+	}
 	if t.Supervision != nil {
 		in.Criteria = t.Supervision.DoneWhen
 		// Spot-checking on: the judge checks each criterion too, so a task that passes can close without task_review.
@@ -307,6 +316,8 @@ type taskDoneInput struct {
 	Criteria []string                // a supervised task's done_when
 	Replies  []prompts.TaskDoneReply // its agents' last replies
 	Checks   bool                    // also check each criterion and the delivery (supervise_sample.go)
+	// Deployed checks a delivery said live against the running hub (gateDelivery); nil: as judged.
+	Deployed func(TodoDelivery) TodoDelivery
 }
 
 // taskDoneWithoutModel is the verdict given before any model is asked: a reply from a side conversation with no
@@ -362,10 +373,16 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 		if !strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryLive) {
 			d.State = cmp.Or(strings.ToLower(strings.TrimSpace(out.Delivery)), deliveryNone) // live only on the judge's own word, never the agent's line alone
 		}
+		if in.Deployed != nil {
+			d = in.Deployed(d)
+		}
 		c.AutoCheck = autoCheckOf(in.Criteria, out.Checks, d.State)
 	}
 	if in.Delivery {
 		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
+		if in.Deployed != nil {
+			d = in.Deployed(d) // live only when the running hub has the work (deploy_check.go)
+		}
 		d.At = time.Now()
 		c.Delivery = &d
 		if c.Verdict == verdictDone && !deliveryClosable(d.State) {

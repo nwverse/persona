@@ -1,5 +1,5 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
-import { useManagerOffline } from "../ManagerParts";
+import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
 import { LinkManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -19,7 +19,7 @@ import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotic
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, type TaskIndex } from "../../lib/tasks";
+import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -88,7 +88,7 @@ import { AssistantFace, AssistantLauncherChip, CompactionStrip, useAssistantMenu
 import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
-import { MAIN_TITLE, conversationTitle } from "../assistant/conversations";
+import { conversationTitle } from "../assistant/conversations";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
@@ -211,6 +211,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const archivedHere = useArchived(mid, sid);
   // its manager offline (several managers): nothing can be sent, wherever it was opened from; the page's own word first
   const ownerOffline = useManagerOffline(session?.manager);
+  // the main conversation is titled with the current assistant's name once there are several
+  const mainTitle = useAssistantTitle();
   const offlineLine = offline ?? ownerOffline;
   // Virtual subagent transcript views read their execution metadata from the complete parent snapshot.
   const parentSid = subagentParent(sid);
@@ -227,9 +229,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const interactions = useStore((s) => s.interactions.filter((i) => i.machine_id === mid && i.session_id === sid));
   const answered = useStore((s) => Object.values(s.answered).filter((a) => a.ix.machine_id === mid && a.ix.session_id === sid));
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => d.ix.machine_id === mid && d.ix.session_id === sid));
-  // the list as pushed: its updated_at is what tells the page it fell behind (useTranscript)
+  // the list as pushed: its updated_at and rev are what tell the page it fell behind (useTranscript); a subagent has no rev
   const viewed = readOnly ? (listed?.find((a) => a.session_id === sid) ?? null) : null;
-  const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, cache: mainCache, assistant });
+  const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, rev: readOnly ? undefined : session?.rev, cache: mainCache, assistant });
   const trNow = useRef(tr);
   trNow.current = tr;
   const railChat = useRef(`${mid}/${sid}`);
@@ -348,7 +350,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const noRowBlock = useMemo(() => (refusedNoRow ? { label: t(gone ? "chat-chatview.session_gone" : "chat-chatview.connecting") } : undefined), [refusedNoRow, gone]);
   // A Persona conversation without a title yet is "New chat", as All chats and the sidebar call it, not its folder's name (#1697)
   const named = session ?? archivedHere;
-  const title = isMain ? MAIN_TITLE : named ? (assistant ? conversationTitle(named) : sessionTitle(named)) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
+  const title = isMain ? mainTitle : named ? (assistant ? conversationTitle(named) : sessionTitle(named)) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
   const canFork = Boolean(session?.can_fork) && !readOnly;
   // "Rewind to here" (#2436): offered on your messages of a session in a terminal; off with a reason while it cannot. Live
   // (chat-actions.ts): it changes with every turn, and in `actions` it would render every message's actions again.
@@ -978,7 +980,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
-  const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
+  const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
   // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, the running bar shows no time (#3534)
   const [clocks, setClocks] = useState(0);

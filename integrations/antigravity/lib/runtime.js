@@ -4,6 +4,7 @@ import { contextWrapped } from '../../runtime-sdk/lib/compat.js'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createRuntime, interactionId, page, snippet, summaryOf } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
@@ -171,7 +172,7 @@ export function createAgyRuntime(options = {}) {
     const rejectOpt = opts.find((o) => o.kind === 'reject_once') || opts.find((o) => o.kind === 'reject_always')
 
     // A request that crossed the interrupt on the wire: ACP wants every pending one answered 'cancelled'.
-    if (cancelling.has(rawId)) return { outcome: { outcome: 'cancelled' } }
+    if (cancelling.has(rawId) || archived.has(rawId)) return { outcome: { outcome: 'cancelled' } }
     if (shouldBypassPermission(rawId) && allowAlwaysOpt) {
       return { outcome: { outcome: 'selected', optionId: allowAlwaysOpt.optionId } }
     }
@@ -245,6 +246,23 @@ export function createAgyRuntime(options = {}) {
     return `agy:${rawId}`
   }
 
+  function readConversationStates() {
+    const path = join(agyDir, 'conversation_summaries.db')
+    if (!existsSync(path)) return new Map()
+    let db
+    try {
+      db = new DatabaseSync(path, { readOnly: true })
+      db.exec('PRAGMA query_only = 1; PRAGMA busy_timeout = 50')
+      const rows = db.prepare('SELECT conversation_id, status, not_fully_idle, killed, step_count FROM conversation_summaries').all()
+      return new Map(rows.map((row) => [row.conversation_id, row]))
+    } catch {
+      // A missing or unavailable native summary cannot establish that a text reply ended the turn.
+      return new Map()
+    } finally {
+      db?.close()
+    }
+  }
+
   function syncTranscriptAppend(rawId) {
     const pid = toPersonaId(rawId)
     const bDir = brainDirOf(rawId)
@@ -266,6 +284,7 @@ export function createAgyRuntime(options = {}) {
 
   async function listSessions() {
     const { convs, cwdByConv } = readCacheMetadata()
+    const states = readConversationStates()
     const brainRoot = join(agyDir, 'brain')
     const seenIds = new Set(Object.keys(convs))
     if (existsSync(brainRoot)) {
@@ -317,7 +336,7 @@ export function createAgyRuntime(options = {}) {
       const steps = readTranscriptSteps(brainDirOf(rawId), false)
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
-      let status = running ? 'working' : transcriptStatus(steps)
+      let status = running ? 'working' : transcriptStatus(steps, Date.now(), states.get(rawId))
       if (!hasTranscript && completedTurns.has(pid) && !running) status = 'done'
       const title =
         sessionTitles.get(rawId) ||
@@ -443,6 +462,7 @@ export function createAgyRuntime(options = {}) {
     const pid = toPersonaId(params.session_id)
     completedTurns.delete(pid)
     const rawId = toAgyId(pid)
+    if (archived.has(rawId)) throw new Error('Antigravity session is closed')
     const cwd = sessionCwds.get(rawId) || home
     const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
     if (isAsst) assistants.add(pid)
@@ -486,7 +506,9 @@ export function createAgyRuntime(options = {}) {
     const prevPromise = prevTurn?.promise || Promise.resolve()
     const promise = prevPromise
       .catch(() => {})
-      .then(() => acp.prompt(rawId, blocks))
+      .then(() => {
+        if (!archived.has(rawId)) return acp.prompt(rawId, blocks)
+      })
       .catch((err) => log(`agy prompt error (${pid}): ${err.message}`))
       .finally(() => {
         // The turn is over: a card still waiting has nothing to answer for any more.
@@ -523,6 +545,7 @@ export function createAgyRuntime(options = {}) {
   async function close(params) {
     const rawId = toAgyId(params.session_id)
     archived.add(rawId)
+    await interrupt(params)
     await acp.closeSession(rawId)
     rt.sessionsChanged()
   }

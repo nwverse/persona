@@ -101,12 +101,14 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 	if err != nil {
 		return nil, err
 	}
+	instructions := instructionsDigest(cwd)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", launcher, err)
 	}
 	started = true
 	p := &assistantProc{id: id, agent: "codex", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}),
-		born: time.Now(), lastActive: time.Now(), model: execution, fingerprint: n.executionFingerprint(launcher, execution)}
+		born: time.Now(), lastActive: time.Now(), model: execution, fingerprint: n.executionFingerprint(launcher, execution),
+		instructions: instructions}
 	c := &codexConn{n: n, p: p, key: key, memDir: memDir, pending: map[int64]chan codexReply{}, asks: map[string]context.CancelFunc{}, files: map[string][]string{},
 		nameGates: nameGates}
 	p.cx = c
@@ -141,11 +143,17 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 		if wasSpare {
 			n.spare = nil
 		}
+		var recovery *assistantTurnRecovery
 		if p.id != "" && n.procs[p.id] == p {
 			delete(n.procs, p.id)
+			recovery = n.recoveries[p.id] // do not confuse a replaced process's late exit with the current one
 		}
 		n.mu.Unlock()
 		if wasSpare || p.id == "" {
+			return
+		}
+		if recovery != nil {
+			n.finishAssistantRecoveryOnExit(p, recovery)
 			return
 		}
 		n.emitDelta(p.id, "")

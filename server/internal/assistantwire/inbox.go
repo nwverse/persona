@@ -64,6 +64,10 @@ const (
 
 	// EventInboxChanged (the manager tells the extension manager, one way): InboxChanged.
 	EventInboxChanged = "inbox.changed"
+	// EventInboxNeedsYou (the manager tells the hub, one way): InboxNeedsYou, after each handshake and whenever the
+	// inbox changes. The hub keeps the number for the roster (GET /api/v1/managers inbox_needs_you) and reads nothing
+	// else of the inbox; a hub from before it drops the event.
+	EventInboxNeedsYou = "inbox.needs_you"
 )
 
 // The manager asks the extension manager about the inbox's sources (AppInbox).
@@ -291,6 +295,12 @@ type InboxRepoMutes struct {
 	Set   bool     `json:"set,omitempty"`
 	Add   bool     `json:"add,omitempty"`
 	Repos []string `json:"repos,omitempty"`
+}
+
+// InboxNeedsYou is EventInboxNeedsYou's params: how many open items are in "Needs you" (status action; the ones not
+// triaged yet count), the connectors' among them: the number the apps' Inbox badge shows of this manager's list.
+type InboxNeedsYou struct {
+	Count int `json:"count"`
 }
 
 // InboxChanged is EventInboxChanged's params: the items that changed and were stored (the extension manager tells the

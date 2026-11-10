@@ -712,3 +712,18 @@ either one.
   presses nothing. Saying "update Claude Code" sent the user after a fix that didn't exist.
 - To check that a key really arrives, run a control: a plain Enter on the empty prompt left the queue as it was, while `ctrl+enter`
   (herdr's key name, or the CSI u bytes `ESC [13;5u`) sent it. Confirm in the transcript (`queue-operation remove`), not only on screen.
+
+## Antigravity planner message completion can be progress narration (#3389)
+
+A text-only `PLANNER_RESPONSE` with `status: DONE` can precede more reasoning and tools. It closes that message, not the
+conversation turn. Read `conversation_summaries.db` in read-only mode. `CASCADE_RUN_STATUS_RUNNING` or `not_fully_idle`
+keeps the conversation working; an idle summary must cover the latest meaningful transcript step before its reply counts as
+done. Missing or unavailable summaries leave text-only replies unknown. Test the gap after narration and before the next tool
+step, plus stale idle summaries, actual completion and unavailable stores, through the normal runtime inventory protocol.
+
+## Runtime close is independent of terminal access (#3507)
+
+A runtime can implement `session.close` while exposing no terminal controls. Carry its declared close capability to the
+session row and use it in the web menu and confirmation. Antigravity must cancel its active prompt and withdraw permissions
+before closing. A queued prompt or late permission request must respect closure. Test through the runtime protocol, including
+a native agent that rejects `session/close`, and republish the closed inventory after a node reconnect.

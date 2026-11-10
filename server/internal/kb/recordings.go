@@ -128,11 +128,14 @@ type Recording struct {
 	MinutesState string      `json:"minutes_state,omitempty"`
 	MinutesAsked bool        `json:"minutes_asked,omitempty"` // the user asked for minutes: a meeting whatever its kind
 	// MinutesRev is the revision minutes.json was made from (0: none, or asked to be made again); MinutesVersion counts
-	// the minutes written; MinutesFails the unusable answers for MinutesFailRev (failed after minutesTries).
-	MinutesRev     int64 `json:"minutes_rev,omitempty"`
-	MinutesVersion int   `json:"minutes_version,omitempty"`
-	MinutesFails   int   `json:"minutes_fails,omitempty"`
-	MinutesFailRev int64 `json:"minutes_fail_rev,omitempty"`
+	// the minutes written; MinutesFails the unusable answers for MinutesFailRev (failed after minutesTries), and
+	// MinutesTimeouts its tries that ran out of time, the next not before MinutesRetryAt (minutes_timeout.go).
+	MinutesRev      int64     `json:"minutes_rev,omitempty"`
+	MinutesVersion  int       `json:"minutes_version,omitempty"`
+	MinutesFails    int       `json:"minutes_fails,omitempty"`
+	MinutesFailRev  int64     `json:"minutes_fail_rev,omitempty"`
+	MinutesTimeouts int       `json:"minutes_timeouts,omitempty"`
+	MinutesRetryAt  time.Time `json:"minutes_retry_at,omitzero"`
 	// MinutesAsks counts the user's requests: minutes made from before the latest one don't settle it.
 	MinutesAsks int `json:"minutes_asks,omitempty"`
 	Tagging

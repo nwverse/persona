@@ -20,6 +20,7 @@
   "stage_verify": "Verified",
   "stage_pr": "PR",
   "stage_pr_n": "PR #{n}",
+  "stage_mr_n": "MR !{n}",
   "stage_pr_label": "Open {pr} on {host} in a new tab",
   "delete_title": "Delete to-do",
   "delete_confirm": "Delete \"{title}\"? Linked agents aren't affected.",
@@ -217,5 +218,19 @@
   "ask_ok": "OK",
   "ask_answer": "Answer in chat",
   "ask_answer_hint": "Nothing is recommended, so answer it in the conversation it came from.",
-  "ask_failed": "Not done: {error}"
+  "ask_failed": "Not done: {error}",
+  "summary_triage": "{open} open · {shelved} shelved · {done} done",
+  "grouping_label": "Group to-dos by",
+  "grouping_status": "Status",
+  "grouping_folder": "Folder",
+  "section_just_done": "Just finished",
+  "section_pr": "PR to merge",
+  "section_other": "Other open",
+  "section_shelved": "Shelved",
+  "section_done": "Done",
+  "shelved_hint": "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.",
+  "related": "{count} related",
+  "pr_idle": "last moved {age}",
+  "restore": "Restore",
+  "restored": "Back in the list"
 }
