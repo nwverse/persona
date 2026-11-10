@@ -253,7 +253,9 @@ struct MachineDetailView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("machine.engine")
             .card(padding: 0)
-            Text("Only sessions in the selected engine are shown.").font(Theme.Font.label).foregroundStyle(.secondary)
+            Text(machine.engineHosts?.isEmpty == true ? String(localized: "Shows the desktop apps' sessions.")
+                 : String(localized: "Only sessions in the selected engine are shown."))
+                .font(Theme.Font.label).foregroundStyle(.secondary)
                 .padding(.horizontal, Theme.Space.xs)
         }
     }
