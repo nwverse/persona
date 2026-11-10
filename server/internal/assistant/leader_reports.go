@@ -1,0 +1,281 @@
+package assistant
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// What the leaders report up (docs/design/proposals/owner-at-a-glance.md "Leaders report up", #3485): for each task a
+// leader supervises, the hub tells the extensions granted leaders.read (leader.report) when it
+//
+//   - reached its goal: its latest review accepted it;
+//   - needs the owner's decision: its latest review says needs_user;
+//   - is stuck: by the To-dos SOP (todo_triage.go) it sits in Waiting on you, or stopped unfinished (PR to merge, Other
+//     open, Shelved), and nothing of it moved for leaderStuckAfter.
+//
+// They are read off the ledger (reviews, the to-dos, their agents' sessions), never asked of a model, and progress is
+// never reported. Each is told once: what was told is kept in the assistant's store (assistant.leader_reports), saved
+// before the report is queued, so a restart or a replay of the same ledger tells nothing again. A review is told by its
+// time; a stuck task at most once per leaderStuckAfter. Only tasks of a current leader are reported: once a direction
+// ended, its tasks' signals are the main conversation's again, as before.
+
+const leaderReportsKey = "assistant.leader_reports"
+
+const (
+	// leaderStuckAfter: a task that did not move this long is stuck; it is told so at most this often.
+	leaderStuckAfter = 24 * time.Hour
+	// leaderReportsEvery: how often the ledger is read for stuck tasks besides after each change.
+	leaderReportsEvery = 10 * time.Minute
+	// leaderReportsKeep: how long a told review is remembered (a review older than this is never told again either).
+	leaderReportsKeep = 30 * 24 * time.Hour
+)
+
+// leaderReportBook is what was told: review reports by key (kind, to-do, review time), and each to-do's last stuck
+// report. A key the book has is never told again.
+type leaderReportBook struct {
+	mu     sync.Mutex
+	loaded bool
+	told   leaderReportsTold
+	run    sync.Mutex // one sync at a time
+}
+
+type leaderReportsTold struct {
+	Reviews map[string]time.Time `json:"reviews"`
+	Stuck   map[string]time.Time `json:"stuck"`
+	// Since: when reports started on this hub; a review from before it is history, not news.
+	Since time.Time `json:"since"`
+}
+
+func (s *Service) leaderReportsLocked(ctx context.Context) bool {
+	b := &s.lreports
+	if b.loaded {
+		return true
+	}
+	var told leaderReportsTold
+	found := false
+	if st := s.store(); st != nil {
+		var err error
+		if found, err = st.Setting(ctx, leaderReportsKey, &told); err != nil {
+			s.logf("load leader reports: %v", err)
+			return false
+		}
+	}
+	fresh := !found || told.Since.IsZero()
+	if fresh {
+		told.Since = time.Now().UTC()
+	}
+	if told.Reviews == nil {
+		told.Reviews = map[string]time.Time{}
+	}
+	if told.Stuck == nil {
+		told.Stuck = map[string]time.Time{}
+	}
+	b.told, b.loaded = told, true
+	if fresh { // kept at once: from now on is news, whatever happens before the first report
+		if err := s.saveLeaderReportsLocked(ctx); err != nil {
+			s.logf("save leader reports: %v", err)
+		}
+	}
+	return true
+}
+
+func (s *Service) saveLeaderReportsLocked(ctx context.Context) error {
+	st := s.store()
+	if st == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return st.PutSetting(ctx, leaderReportsKey, s.lreports.told)
+}
+
+// leaderReportsLoop reads the ledger every leaderReportsEvery for tasks that got stuck meanwhile (the changes of the
+// to-dos are read as they come: directionsSync runs it).
+func (s *Service) leaderReportsLoop(ctx context.Context) {
+	t := time.NewTicker(leaderReportsEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.leaderReportsSync(ctx, time.Now(), true)
+		}
+	}
+}
+
+// leaderReportsSync tells what the leaders' tasks reached or need since the ledger was last read, and with stuckToo
+// which are stuck (that asks the agents' machines for their sessions: the loop's, not each change's).
+func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo bool) {
+	if !s.todoEventsOn() || !s.todosLoaded() {
+		return
+	}
+	b := &s.lreports
+	b.run.Lock()
+	defer b.run.Unlock()
+	b.mu.Lock()
+	ok := s.leaderReportsLocked(ctx) // read (and started) before anything else, so Since is the first read's
+	b.mu.Unlock()
+	if !ok {
+		return
+	}
+	cfg := s.settings(ctx)
+	var leads []string
+	for _, id := range cfg.Leaders {
+		if id != "" && id != cfg.Main {
+			leads = append(leads, id)
+		}
+	}
+	if len(leads) == 0 {
+		return
+	}
+	s.todos.mu.RLock()
+	var tasks []Todo
+	for _, t := range s.todos.todos {
+		if t.Supervision != nil && slices.Contains(leads, t.Supervision.Supervisor) {
+			tasks = append(tasks, copyTodoLocked(t))
+		}
+	}
+	s.todos.mu.RUnlock()
+	if len(tasks) == 0 {
+		return
+	}
+	slices.SortFunc(tasks, func(a, b Todo) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	var asks map[string]todoAsk
+	look, reached := triageLookup(nil), map[string]bool{}
+	if stuckToo {
+		asks = s.todoAsks(ctx)
+		look, reached = s.leaderSessions(ctx, tasks)
+	}
+	l, loc := s.lang(ctx), s.location(ctx)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.leaderReportsLocked(ctx) {
+		return
+	}
+	told := &b.told
+	var out []assistantwire.LeaderReportEvent
+	for _, t := range tasks {
+		lead := t.Supervision.Supervisor
+		if r := triageLatestReview(t.Supervision); r != nil && !r.At.Before(told.Since) && now.Sub(r.At) < leaderReportsKeep {
+			kind := ""
+			switch {
+			case r.Verdict == reviewAccepted && t.Supervision.State == reviewAccepted:
+				kind = assistantwire.LeaderReached
+			case r.Verdict == reviewNeedsUser && t.Supervision.State == reviewNeedsUser && t.DoneAt == nil:
+				kind = assistantwire.LeaderDecision
+			}
+			key := kind + "|" + t.ID + "|" + r.At.UTC().Format(time.RFC3339Nano)
+			if _, done := told.Reviews[key]; kind != "" && !done {
+				told.Reviews[key] = now
+				out = append(out, leaderReport(key, lead, kind, t, leaderReportText(l, kind, t, r.Note, ""), r.At))
+			}
+		}
+		if !reached[t.ID] {
+			continue // an agent's machine could not be asked: it may be running, not stuck
+		}
+		lt := listedTodo{Todo: t}
+		if a, ok := asks[t.ID]; ok {
+			lt.Ask = &a
+		}
+		tr := triageTodo(lt, look, now, time.Time{}, loc)
+		stuck := !tr.Last.IsZero() && now.Sub(tr.Last) >= leaderStuckAfter && t.DoneAt == nil &&
+			slices.Contains([]string{triageWaiting, triagePR, triageOther, triageShelved}, tr.Section)
+		if last, ok := told.Stuck[t.ID]; stuck && (!ok || now.Sub(last) >= leaderStuckAfter) {
+			told.Stuck[t.ID] = now
+			key := "stuck|" + t.ID + "|" + now.UTC().Format(time.RFC3339Nano)
+			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section), now))
+		}
+	}
+	// Forget what can no longer be told again: reviews past keeping, stuck marks of to-dos gone or no longer stuck long.
+	for k, at := range told.Reviews {
+		if now.Sub(at) > leaderReportsKeep {
+			delete(told.Reviews, k)
+		}
+	}
+	for id, at := range told.Stuck {
+		if now.Sub(at) > leaderReportsKeep {
+			delete(told.Stuck, id)
+		}
+	}
+	if len(out) == 0 {
+		return
+	}
+	if err := s.saveLeaderReportsLocked(ctx); err != nil {
+		s.logf("save leader reports: %v (not told: they would be told again)", err)
+		b.loaded = false // read the book again next time, as it is in the store
+		return
+	}
+	for _, r := range out {
+		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
+	}
+}
+
+// leaderSessions finds the sessions of the tasks' agents as the apps get them, asking each machine once; reached says,
+// by to-do id, whether every machine its agents are on answered.
+func (s *Service) leaderSessions(ctx context.Context, tasks []Todo) (triageLookup, map[string]bool) {
+	lists := map[string][]proto.Session{}
+	failed := map[string]bool{}
+	reached := map[string]bool{}
+	for _, t := range tasks {
+		ok := true
+		for _, a := range t.Agents {
+			if a.ReleasedAt != nil || a.DismissedAt != nil {
+				continue
+			}
+			if _, asked := lists[a.MachineID]; !asked && !failed[a.MachineID] {
+				list, err := s.sessions(ctx, a.MachineID)
+				if err != nil {
+					failed[a.MachineID] = true
+				} else {
+					lists[a.MachineID] = list
+				}
+			}
+			ok = ok && !failed[a.MachineID]
+		}
+		reached[t.ID] = ok
+	}
+	return func(machine, id string) (proto.Session, bool) {
+		for _, c := range lists[machine] {
+			if c.SessionID == id {
+				return c, true
+			}
+		}
+		return proto.Session{}, false
+	}, reached
+}
+
+// leaderReport is one report, named by its key.
+func leaderReport(key, lead, kind string, t Todo, text string, at time.Time) assistantwire.LeaderReportEvent {
+	sum := sha256.Sum256([]byte(key))
+	return assistantwire.LeaderReportEvent{ID: "lrep_" + hex.EncodeToString(sum[:8]), Leader: lead, Kind: kind, Todo: t.ID,
+		Text: clip(text, assistantwire.LeaderReportTextMost), Link: t.PRURL, At: at.UTC()}
+}
+
+// leaderReportText is a report's line in the owner's language: the task, and why (the review's note for a decision;
+// where it is stuck).
+func leaderReportText(l i18n.Lang, kind string, t Todo, note, section string) string {
+	task := clip(oneLine(t.Title), 120)
+	switch kind {
+	case assistantwire.LeaderReached:
+		return i18n.T(l, "assistant-reports.leader_reached", i18n.Args{"task": task})
+	case assistantwire.LeaderDecision:
+		if note = clip(oneLine(note), 160); note != "" {
+			return i18n.T(l, "assistant-reports.leader_decision_why", i18n.Args{"task": task, "why": note})
+		}
+		return i18n.T(l, "assistant-reports.leader_decision", i18n.Args{"task": task})
+	}
+	if section == triageWaiting {
+		return i18n.T(l, "assistant-reports.leader_stuck_waiting", i18n.Args{"task": task})
+	}
+	return i18n.T(l, "assistant-reports.leader_stuck_stopped", i18n.Args{"task": task})
+}

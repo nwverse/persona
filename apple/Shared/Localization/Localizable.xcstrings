@@ -38503,6 +38503,50 @@
         }
       }
     },
+    "Couldn't save the notification change, so it was undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save the notification change, so it was undone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知設定の変更は保存されなかったため、元に戻しました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知开关的更改没有保存，已改回原样。"
+          }
+        }
+      }
+    },
+    "Couldn't save the pin change, so it was undone." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't save the pin change, so it was undone."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ピン留めの変更は保存されなかったため、元に戻しました。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "置顶的更改没有保存，已改回原样。"
+          }
+        }
+      }
+    },
     "Couldn't save the rule: %@" : {
       "localizations" : {
         "en" : {
@@ -56939,6 +56983,29 @@
       },
       "extractionState" : "manual"
     },
+    "In Progress [Action Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In Progress"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        }
+      }
+    },
     "In Screen & System Audio Recording in the same place (Screen Recording on older macOS), turn on Cua Driver too" : {
       "localizations" : {
         "en" : {
@@ -71482,6 +71549,29 @@
       },
       "extractionState" : "manual"
     },
+    "Needs You [Action Bar]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Needs You"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要対応"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要你处理"
+          }
+        }
+      }
+    },
     "Needs You [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -80477,6 +80567,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "没什么事"
+          }
+        }
+      }
+    },
+    "Nothing in progress right now" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing in progress right now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "進行中のものはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现在没有进行中的事"
           }
         }
       }
@@ -148671,13 +148784,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldd"
+            "value" : "%lld天"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldd"
+            "value" : "%lld日"
           }
         }
       }
@@ -148694,13 +148807,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldh"
+            "value" : "%lld小时"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldh"
+            "value" : "%lld時間"
           }
         }
       }
@@ -148717,13 +148830,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldm"
+            "value" : "%lld分钟"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldm"
+            "value" : "%lld分"
           }
         }
       }
@@ -148740,13 +148853,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "now"
+            "value" : "刚刚"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "now"
+            "value" : "今"
           }
         }
       }
