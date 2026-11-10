@@ -14,6 +14,14 @@ import kotlin.math.abs
 internal fun percent(used: Number?, total: Number?): Double? =
     if (used != null && total != null && total.toDouble() > 0) used.toDouble() * 100 / total.toDouble() else null
 
+/**
+ * The live machine list (pushed over the WebSocket) sees a computer come and go before the next metrics poll does:
+ * where it has the computer, its online state wins, so a computer that just dropped off is not shown Online with its
+ * last numbers (#3730).
+ */
+internal fun MachineMetrics.live(machine: Machine?): MachineMetrics =
+    if (machine == null || machine.online == online) this else copy(online = machine.online)
+
 internal fun MachineMetrics.current(now: Long): MetricSample? =
     latest?.takeIf { online && now - it.t in 0..30 }
 
