@@ -15,8 +15,9 @@ final class QuickActionsTests: XCTestCase {
     /// `opening`: a chat opened at launch (it goes on the menu), else Persona's.
     @MainActor private func launch(opening session: String? = nil) {
         app = XCUIApplication()
-        app.launchArguments = ["-demo.on", "YES", "-probes", "YES", "-newAssistant", "YES"]
-            + (session.map { ["-openSession", $0] } ?? ["-dev.openChat", "", "-tab", "assistant"])
+        // not with -newAssistant, which puts Persona in front after -openSession opened the chat
+        app.launchArguments = ["-demo.on", "YES", "-probes", "YES"]
+            + (session.map { ["-openSession", $0] } ?? ["-newAssistant", "YES", "-dev.openChat", "", "-tab", "assistant"])
         app.launchPinned()
         if session == nil {
             XCTAssertTrue(app.buttons["assistant-sidebar-button"].firstMatch.waitForExistence(timeout: 15), "no shell")
