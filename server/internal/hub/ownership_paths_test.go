@@ -336,7 +336,7 @@ func TestTheHubAsksTheMachinesManager(t *testing.T) {
 	if !strings.Contains(a.log(), devicewire.MethodUpdateNodes) || !strings.Contains(b.log(), devicewire.MethodUpdateNodes) {
 		t.Fatal("each manager redeploys its own machines")
 	}
-	if got := h.localMachine("mb").blockedClaudeDirs(context.Background()); !slices.Equal(got, []string{"b-blocked"}) ||
+	if got := h.localMachine("mb").claudeDirsState(context.Background()).Blocked; !slices.Equal(got, []string{"b-blocked"}) ||
 		strings.Contains(a.log(), "claude-dirs") {
 		t.Fatalf("mb's claude dirs: %v", got)
 	}

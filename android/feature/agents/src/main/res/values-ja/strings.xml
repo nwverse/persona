@@ -30,6 +30,7 @@
     <string name="agents_action_new_session">新規セッション</string>
     <string name="agents_action_list_settings">リスト設定</string>
     <string name="agents_search_placeholder">スペース、セッション、最新メッセージを検索</string>
+    <string name="agents_action_search">検索</string>
     <string name="agents_requests_title">判断待ち</string>
     <plurals name="agents_requests_more">
         <item quantity="other">ほか%1$d件</item>
@@ -286,6 +287,10 @@
     <string name="agents_new_use_directory">このディレクトリを使用</string>
     <string name="agents_new_retry_check">結果を再確認</string>
     <string name="agents_new_start">チャットを開始</string>
+    <string name="agents_new_recent">最近</string>
+    <string name="agents_new_recent_separator">" · "</string>
+    <string name="agents_new_recent_remove">最近から削除</string>
+    <string name="agents_new_recent_clear">最近の設定をすべて消去</string>
     <string name="agents_mode_follow">ランチャーに従う</string>
     <string name="agents_mode_default">毎回確認</string>
     <string name="agents_mode_accept_edits">ファイルを自動編集</string>
@@ -421,6 +426,8 @@
     <string name="agents_todo_active_agents">対応中のエージェント</string>
     <string name="agents_todo_no_agents">割り当てられたエージェントはありません</string>
     <string name="agents_todo_no_agents_hint">下の「エージェントに任せる」をタップして割り当てます。</string>
+    <string name="agents_todo_no_agents_done_hint">エージェントに任せるには、まず再開してください。</string>
+    <string name="agents_todo_hand_off_failed">引き継げませんでした：%1$s</string>
     <string name="agents_todo_session_short">セッション%1$s</string>
     <string name="agents_todo_not_listed">（現在のアクティブな一覧にありません）</string>
     <string name="agents_todo_remove_agent">外す</string>
@@ -439,6 +446,7 @@
     <string name="agents_handoff_directory">作業ディレクトリ</string>
     <string name="agents_handoff_mode_default">デフォルト（default）</string>
     <string name="agents_handoff_mode_bypass">すべて許可（bypassPermissions）</string>
+    <string name="agents_handoff_mode_named">%1$s（%2$s）</string>
     <string name="agents_handoff_pick_agent">既存のエージェントを選択</string>
     <string name="agents_handoff_no_agents">実行中のエージェントはありません</string>
     <string name="agents_handoff_no_agents_hint">今すぐタスクを割り当てられるアクティブなエージェントはありません。</string>

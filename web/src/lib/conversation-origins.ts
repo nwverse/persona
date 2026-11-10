@@ -1,4 +1,4 @@
-// Where an assistant conversation comes from (docs/protocol/protocol.md "Where assistant conversations come from", #3264): the user's own (the app, a
+// Where an assistant conversation comes from (docs/protocol/protocol.md "Origin of assistant chats", #3264): the user's own (the app, a
 // channel's /new) stay in the sidebar's "Recent"; the ones the hub opened by itself (the inbox's AI twin, a scheduled task,
 // conversation_new, a plugin's /agent…) fold into one "Automatic" row, split by origin. Pure functions, tested without a DOM.
 import { t } from "../i18n";

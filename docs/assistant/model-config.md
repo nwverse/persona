@@ -14,7 +14,7 @@ The home page has five category rows and a separate **Lark /agent** row, showing
 | Agents | `agent.new` | New Agents, AI twin execution, Lark `/agent` unless separately configured |
 | Information processing | `kb` | Translation, reply drafting, knowledge organization and session compaction, project organization and action-item extraction, chat titles and Agent label names |
 | Information screening | `inbox.triage` | Inbox triage and summaries, importance assessment, deciding whether a reply or Agent handoff is needed |
-| Question delegation | `agent.delegate` | First assesses whether to answer an Agent's question on the user's behalf (#3029, `docs/assistant/assistant.md`, “The assistant answers questions first”). Added as the fifth category on 2026-11-05: this assessment must be more accurate than triage and must not follow information screening's cheap model. If never selected, it uses information screening's connection with the model changed to Opus 5.5 (`claude-opus-5-5`; if that connection is not for Claude models, it keeps its own model). Change the provider or model here. “Inherited From” shows the actual connection name and model (`inheritedLabel`; before 2026-11-06 it always said “Model uses Opus 5.5,” which was wrong for non-Claude connections or a manually changed model). Explicitly selecting a connection hides the inheritance source |
+| Question delegation | `agent.delegate` | First assesses whether to answer an Agent's question on the user's behalf (#3029, `docs/assistant/assistant.md`, “Assistant answers questions first”). Added as the fifth category on 2026-11-05: this assessment must be more accurate than triage and must not follow information screening's cheap model. If never selected, it uses information screening's connection with the model changed to Opus 5.5 (`claude-opus-5-5`; if that connection is not for Claude models, it keeps its own model). Change the provider or model here. “Inherited From” shows the actual connection name and model (`inheritedLabel`; before 2026-11-06 it always said “Model uses Opus 5.5,” which was wrong for non-Claude connections or a manually changed model). Explicitly selecting a connection hides the inheritance source |
 
 “Triage and summary” currently runs as one call, entirely under information screening; categories do not split it into two calls. persona gets no separate model override. A voice plugin's upstream audio model stays within that plugin's scope, outside the four launcher / text-API categories; text tasks handed from voice to the main chat use the main-chat model. This does not take over external Claude Code Skills or users' existing external sessions.
 
@@ -104,9 +104,10 @@ Quota returns `503 assistant_offline`; plugins needing “Information screening�
 Choosing the launcher and model for a new Agent is part of Agents and belongs to the **manager** (assistant process, `docs/assistant/agent-work.md`, “Responsibilities”). Before `POST /api/v1/sessions`, hub asks it for
 `agents.start_params`; before sending to a stopped session whose launcher is unknown, hub asks for `agents.resume_params`. Agents dispatched by the assistant itself (`agents_start`, tasks) already live there.
 It resolves from its own model configuration (`applyModel agent.new`: category choices, overlaid by the launcher / model / thinking effort selected for this run, and the execution fingerprint). The app's effective result, saving, and inheritance remain unchanged.
+Agents is the one launcher purpose with no computer, so the result is then held to what the target computer has (#2640, `docs/server/launcher-health.md`, "A launcher the computer doesn't have"): a default it lacks gives way to `claude` (or its first launcher), a launcher picked for this run that it lacks is refused (400) with the ones it has.
 Label names (purpose `agent.title`) and session triage (`agent.triage`) also call models there.
 
-When the manager is disconnected, hub waits only if it has just started and the manager has never connected (at most until 60 seconds after startup). Once it has connected and is now absent, hub does not wait: the manager connects computers (`docs/server/machines.md`, “Who connects computers”),
+When the manager is disconnected, hub waits only if it has just started and the manager has never connected (at most until 60 seconds after startup). Once it has connected and is now absent, hub does not wait: the manager connects computers (`docs/server/machines.md`, “Who connects to computers”),
 so creating or resuming sessions is impossible without it and returns `503 assistant_offline` (previously hub could apply “Model Settings › Agents” itself and still start them). AI twin execution opens on the assistant side through `assistant.start`, so resolution already happens there; Agents opened from Lark bot cards also live on the assistant side (it owns channels).
 
 ## Main-chat runtime (#2455)
@@ -120,7 +121,7 @@ so creating or resuming sessions is impossible without it and returns `503 assis
 
 ## Importing providers from ~/.zshrc (#2455)
 
-`GET /api/v1/launchers/import?machine=` previews; `POST` confirms (see `docs/protocol/protocol.md`, “Model providers and purpose configuration,” for the API). The manager calls that machine's node `launchers.zshrc` (`assistant/models_import.go`), gets aliases that invoke claude and their environment variables, then merges them with the pure function `mergeZshrcAliases` (same file):
+`GET /api/v1/launchers/import?machine=` previews; `POST` confirms (see `docs/protocol/protocol.md`, “Model providers and per-purpose configuration” for the API). The manager calls that machine's node `launchers.zshrc` (`assistant/models_import.go`), gets aliases that invoke claude and their environment variables, then merges them with the pure function `mergeZshrcAliases` (same file):
 
 - One `ANTHROPIC_BASE_URL + key` group (`ANTHROPIC_AUTH_TOKEN` first, using bearer; otherwise `ANTHROPIC_API_KEY`) is one provider. Name and other settings come from the first alias; every alias's `ANTHROPIC_MODEL` is merged into `models`. Entries without a gateway address (ordinary Claude Code) are skipped.
 - Model names ending in `[1m]` lose the suffix and record a context window of 1000000 (node adds the suffix back at startup according to the window).
@@ -222,7 +223,7 @@ Saving one item:
 Only `assistant` may write `runtime` (see “Main-chat runtime”).
 
 “Information screening” (`inbox.triage`) also governs plugins: plugins using the Inbox without their own fallback require it to be callable before they can be enabled. With such plugins enabled, a change making it unusable returns 422 `triage_model_in_use`,
-listing plugin names (clearing a selection still saves normally if fallback to `manager.json`'s `ai` / `inbox.triage_ai` or automatic selection remains callable; `docs/extensions/extensions.md`, “General Inbox rules”).
+listing plugin names (clearing a selection still saves normally if fallback to `manager.json`'s `ai` / `inbox.triage_ai` or automatic selection remains callable; `docs/extensions/extensions.md`, “General rules for the Inbox”).
 
 Send to `PUT /api/v1/model-config/purposes/{id}` or the compatible `PATCH` endpoint. The five category configurations, Lark /agent, the extensions' own purposes, and independent plugins are writable; other legacy purposes or task IDs return 400 (purpose models are read-only; edit the owning category). Missing fields are unchanged, `null` clears a selection, and nonempty values override. Success returns the same structure as a single-item GET. Only supported fields may be selected; a revision mismatch returns 409, and unknown purposes are not created ad hoc.
 

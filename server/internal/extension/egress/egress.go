@@ -91,7 +91,7 @@ type Proxy struct {
 	// Upstream is the proxy the hub itself goes out through for u (nil, nil: straight). Default: the hub's
 	// environment (HTTPS_PROXY / HTTP_PROXY / NO_PROXY).
 	Upstream func(u *url.URL) (*url.URL, error)
-	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Observability").
+	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Egress").
 	OnDecision func(ext, host string, allowed bool)
 	// LocalAddrs are this machine's addresses (nil: its interfaces); tests replace it.
 	LocalAddrs func() []net.IP
@@ -111,7 +111,10 @@ type Proxy struct {
 	active        map[string]map[*ioLease]struct{}
 	runtimeActive map[string]int
 	runtimeTotal  int
-	runtimeSlots  chan struct{} // shared by every runtimeListener (runtimeSlotsPerProxy)
+	runtimeSlots  chan struct{}     // shared by every runtimeListener (runtimeSlotsPerProxy)
+	lastGood      map[string]string // CONNECT host:port → responding address; bounded by connectCacheMost
+	connectWait   time.Duration     // tests may shorten the client first-flight wait
+	connectBudget time.Duration     // tests may shorten the per-address response budget
 }
 
 // Start listens on loopback (an unused port).
@@ -434,6 +437,9 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			return
 		}
 		defer finish()
+		if r.Method == http.MethodConnect {
+			ctx = context.WithValue(ctx, connectDialKey{}, true)
+		}
 		r = r.WithContext(ctx)
 		if fixed != "" && r.URL.Host == "" && r.URL.Path == RuntimeFetchPath {
 			p.runtimeFetch(w, r, fixed)
@@ -595,7 +601,7 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 	if len(ok) == 0 {
 		return nil, last
 	}
-	return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) })
+	return p.dialResolved(ctx, host, port, ok)
 }
 
 // fromEnvironment is the hub's own proxy for u, from its environment.
@@ -681,6 +687,9 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, dial func() (net.
 		far.Close()
 		return
 	}
+	client := near
+	stopNear := context.AfterFunc(r.Context(), func() { _ = client.Close() })
+	defer stopNear()
 	if r.Method == http.MethodConnect {
 		_, err = near.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 	} else {
@@ -697,6 +706,23 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, dial func() (net.
 		far.Close()
 		return
 	}
+	if plan, ok := far.(*connectPlan); ok {
+		// Detach from net/http's connReader before probing with deadlines: a
+		// timeout through that reader cancels the request, even after Hijack.
+		pending := make([]byte, buf.Reader.Buffered())
+		_, _ = io.ReadFull(buf.Reader, pending)
+		near = prependConnect(near, pending)
+		buf = nil
+		near, far, err = p.prepareConnect(r.Context(), near, plan)
+		if err != nil {
+			p.logf("egress CONNECT %s: %v", r.Host, err)
+			client.Close()
+			return
+		}
+	}
+	server := far
+	stopFar := context.AfterFunc(r.Context(), func() { _ = server.Close() })
+	defer stopFar()
 	// The extension ending its side (EOF) only half-closes the far end: the reply still on its way comes back, as
 	// the hub's other relays keep a half-close. Both close once the far end is done, or on an error either way.
 	var once sync.Once
@@ -830,7 +856,7 @@ func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn
 	if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
 		return p.connectVia(ctx, up, target)
 	}
-	return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) })
+	return p.dialResolved(ctx, host, port, ok)
 }
 
 // resolveAll is host's addresses (itself, for an IP).

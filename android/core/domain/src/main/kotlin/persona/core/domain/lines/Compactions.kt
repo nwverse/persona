@@ -50,8 +50,17 @@ private val silent = setOf("tool_result", "turn_duration", "unknown")
  * it — and they are no rows of their own. A summary whose boundary is on an older page stands in for it. Ids, texts and
  * the order of everything else stay as they were.
  */
-fun foldCompactions(items: List<LineItem>): List<LineItem> {
-    if (items.none { it.isBoundary() || it.isNotice(ContinuedNotice) }) return items
+fun foldCompactions(items: List<LineItem>): List<LineItem> = foldCompactions(items, hasCompactions(items))
+
+/** [items] have a compaction for [foldCompactions] to fold: without one, it returns them as they are. */
+internal fun hasCompactions(items: List<LineItem>): Boolean = items.any { it.isBoundary() || it.isNotice(ContinuedNotice) }
+
+/**
+ * [foldCompactions] on part of a chat ([ChatLinesMemo]): [compacting] is [hasCompactions] of the whole chat, since even
+ * a part without a boundary changes when it folds (a "Compact context" waits past the silent items after it).
+ */
+internal fun foldCompactions(items: List<LineItem>, compacting: Boolean): List<LineItem> {
+    if (!compacting) return items
     val out = ArrayList<LineItem>(items.size)
     var open: Int? = null // the boundary in `out` the notes after it still join
     var held: LineItem? = null // a "Compact context" waiting for the boundary after it

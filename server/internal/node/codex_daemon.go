@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-// Codex panes on a shared app-server (docs/integrations/codex.md "Sessions on a daemon"). From 0.163 a plain `codex` runs its thread on
+// Codex panes on a shared app-server (docs/integrations/codex.md "Sessions on the daemon"). From 0.163 a plain `codex` runs its thread on
 // the shared daemon (<CODEX_HOME>/app-server-control/app-server-control.sock) and its TUI is one client of it; the
 // node keeps a connection to every app-server it finds (codex_remote.go). A herdr pane whose thread is loaded on one is
 // joined — Persona becomes a second client of that thread, asking it for nothing and changing none of its settings —

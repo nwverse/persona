@@ -4,7 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import IOKit.ps
 
-// The UIKit names the shared code uses, as thin AppKit stand-ins (docs/apple/mac.md「做法」). Only what the shared code
+// The UIKit names the shared code uses, as thin AppKit stand-ins (docs/apple/mac.md「Approach」). Only what the shared code
 // actually calls is here; anything a page needs beyond this is a sign the page wants its own Mac version.
 
 typealias UIColor = NSColor

@@ -27,7 +27,7 @@ func (s *Service) workspaceBoardSettingsRoutes() {
 }
 
 // workspaceBoardEnabled is the stored switch; before anyone set it, a board that was already used counts as on, so an
-// upgrade does not take away a board someone keeps (docs/web/workspace-board.md "Switch"). It is not written back: the first
+// upgrade does not take away a board someone keeps (docs/web/workspace-board.md "Toggle"). It is not written back: the first
 // explicit change is what gets stored.
 func (s *Service) workspaceBoardEnabled(ctx context.Context) (bool, error) {
 	st := s.store()

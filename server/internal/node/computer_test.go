@@ -199,7 +199,7 @@ func TestComputerCall(t *testing.T) {
 
 // The real Cua Driver on this Mac (PERSONA_CUA_E2E=1, on a Mac with it set up and Calculator allowed to be clicked):
 // 6 × 7 in Calculator through run_steps, then the window read under the same session, its screenshot written to
-// PERSONA_CUA_SHOT when set (docs/extensions/computer-use.md "How to verify").
+// PERSONA_CUA_SHOT when set (docs/extensions/computer-use.md "Verification").
 func TestCuaEndToEnd(t *testing.T) {
 	if os.Getenv("PERSONA_CUA_E2E") == "" {
 		t.Skip("needs Cua Driver on this Mac: PERSONA_CUA_E2E=1")

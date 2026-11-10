@@ -15,9 +15,6 @@ import (
 
 // ---- the handover ----
 
-// devicesConfig is what the hub hands the manager now.
-func (h *Hub) devicesConfig() devicewire.Config { return h.devicesConfigFor(devicesOwner) }
-
 // devicesConfigFor is what the hub hands manager id: the machines it carries (ownership.go); the mesh's members
 // only to the carrier.
 func (h *Hub) devicesConfigFor(id string) devicewire.Config {
@@ -309,7 +306,7 @@ func (c MachineConfig) forMesh() MachineConfig {
 
 // linkPingTimes are the heartbeats of the Persona Links the hub relays: hub.json's link section (config_link.go), else
 // link.PingEvery and PingTimeout; tests set their own (h.linkPing). set: not the defaults, the manager is told them
-// (devicesConfig) and tells Persona Link.
+// (devicesConfigFor) and tells Persona Link.
 func (h *Hub) linkPingTimes() (every, timeout time.Duration, set bool) {
 	if h.linkPing[0] > 0 {
 		return h.linkPing[0], h.linkPing[1], true

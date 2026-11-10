@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Feishu documents in the inbox (docs/assistant/inbox.md「云文档」): a sheet / Base / docx that @'d the user or commented to
+// Feishu documents in the inbox (docs/assistant/inbox.md「Docs: mentions in sheets, bases, and documents」): a sheet / Base / docx that @'d the user or commented to
 // them. The rows about the user show with their status columns, each a menu that moves the status in the document;
 // the AI twin's draft can propose moves, made when it is sent.
 
@@ -120,6 +120,7 @@ struct InboxDocIcon: View {
 /// document itself one tap away.
 struct InboxDocDetailView: View {
     var item: InboxItem
+    @Environment(AppModel.self) private var model
     @Environment(\.feishuOpen) private var feishuOpen
 
     var body: some View {
@@ -137,7 +138,7 @@ struct InboxDocDetailView: View {
                 .padding(.vertical, Theme.Space.xs)
                 if let doc, let url = URL(string: doc.url) {
                     Button {
-                        feishuOpen?(.doc(url: url.absoluteString, title: item.title))
+                        feishuOpen?(.doc(url: url.absoluteString, title: item.title, manager: model.linkManager(item.manager)))
                     } label: {
                         Label("Open \(doc.typeName) [Inbox Doc Views 4f91d8]", systemImage: Theme.Icon.openDocument).lineLimit(1)
                     }

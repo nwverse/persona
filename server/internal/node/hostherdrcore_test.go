@@ -152,6 +152,24 @@ func TestHerdrCoreSendChecksForADialogThenSends(t *testing.T) {
 	assertTrace(t, hc.trace(), []string{call("terminal.read", map[string]any{"terminal": "t1", "lines": 0})})
 }
 
+// terminal.send pastes the text: an escape in it that would end the paste and press keys after it goes in inert, from a
+// send and from any other prompt.
+func TestHerdrCoreSendCannotEndItsPaste(t *testing.T) {
+	withSubmitGrace(t, 50*time.Millisecond)
+	n, hc := hcSession(t)
+	hc.setScreen("t1", screenFixture(t, "claude-2.1.312-typed-162.txt"))
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello\x1b[201~\x1b[Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.prompt(context.Background(), "herdr-core:t1", "go on\x1b[201~\x1b[Z\u009b"); err != nil {
+		t.Fatal(err)
+	}
+	assertTrace(t, hc.trace("terminal.send"), []string{
+		call("terminal.send", map[string]any{"terminal": "t1", "text": "hello<ESC>[201~<ESC>[Z"}),
+		call("terminal.send", map[string]any{"terminal": "t1", "text": "go on<ESC>[201~<ESC>[Z<U+009B>"}),
+	})
+}
+
 // herdr-core refusing the text (nothing typed) is a refusal the app can retry: a dialog for blocked, else not_delivered.
 func TestHerdrCoreSendRefusedByHerdrCore(t *testing.T) {
 	n, hc := hcSession(t)

@@ -29,8 +29,13 @@ type fleetDevs struct {
 	machines map[string]*fleetNode
 	order    []string
 	usage    assistantwire.UsageSummary
+	capacity proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
+	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
+	// Notification Center (confirm; LinkRang).
+	linkDesktop bool
+	confirmed   map[string]bool
 }
 
 type fleetNode struct {
@@ -195,10 +200,48 @@ func (d *fleetDevs) Usage() assistantwire.UsageSummary {
 	return d.usage
 }
 
+func (d *fleetDevs) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.capacity
+}
+
 func (d *fleetDevs) SetAttention(a link.Attention) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.attention = append(d.attention, a)
+}
+
+// confirm is the Persona Link desktop's app confirming it handed these cards' notifications to Notification Center.
+func (d *fleetDevs) confirm(cards ...string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.confirmed == nil {
+		d.confirmed = map[string]bool{}
+	}
+	for _, c := range cards {
+		d.confirmed[c] = true
+	}
+}
+
+// LinkRang is the devices' (internal/devices LinkRang): true once the desktop's app confirmed card, false at once
+// without a desktop, and when the time is up or ctx ends.
+func (d *fleetDevs) LinkRang(ctx context.Context, card string, within time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
+	for {
+		d.mu.Lock()
+		on, rang := d.linkDesktop, d.confirmed[card]
+		d.mu.Unlock()
+		if !on || rang {
+			return rang
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 // handedAttention is every summary handed over so far.

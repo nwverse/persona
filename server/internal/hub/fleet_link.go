@@ -44,8 +44,10 @@ type fleetCache struct {
 	muted        map[string][]string                 // machine → its sessions whose pushes are off, as the manager said
 	live         *assistantwire.FleetLive            // the assistant's
 	lives        map[string]*assistantwire.FleetLive // the other managers' (manager_state.go)
-	elicitation  bool                                // what fleet.clients said last
+	clients      assistantwire.Clients               // what fleet.clients said last
 	clientsSent  bool
+	// clientsSend holds one fleet.clients from working out what is true to telling it (fleetClientsChanged).
+	clientsSend sync.Mutex
 }
 
 func init() {
@@ -392,21 +394,48 @@ func (h *Hub) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.
 
 // ---- what the hub tells the manager of the apps ----
 
-// fleetClientsChanged tells the manager what the connected apps can take now, when it changed (fleet.clients).
+// fleetClientsChanged tells the managers what the apps can take now, when it changed (fleet.clients): an app that
+// takes MCP forms and links is connected, or a phone that registered for them would be pushed one (#2433). It runs
+// after an app connects, says hello or goes, and after the devices or their settings change. One at a time, each with
+// what is true then, so an older state never overtakes a newer one.
 func (h *Hub) fleetClientsChanged() {
-	el := h.hasElicitationClient()
 	f := &h.reported
+	f.clientsSend.Lock()
+	defer f.clientsSend.Unlock()
+	c := assistantwire.Clients{Elicitation: h.hasElicitationClient(), ElicitationPush: h.push.pushesElicitation(h.desktopOnline())}
 	f.mu.Lock()
-	same := f.clientsSent && f.elicitation == el
-	f.elicitation, f.clientsSent = el, true
+	same := f.clientsSent && f.clients == c
+	f.clients, f.clientsSent = c, true
 	f.mu.Unlock()
 	if !same {
-		if err := h.notifyManagers(assistantwire.EventClients, assistantwire.Clients{Elicitation: el}); err != nil {
+		if err := h.notifyManagers(assistantwire.EventClients, c); err != nil {
 			f.mu.Lock()
 			f.clientsSent = false
 			f.mu.Unlock()
 		}
 	}
+}
+
+// clientsSettle runs on a manager connection's first word after its handshake, as mutesSettle does, and tells it what
+// the apps can take now (fleet.clients). The hub says it again only when it changes, and at a handshake only to the
+// assistant: a manager connected since would not know a phone takes MCP forms by push, which seldom changes (#2433).
+// After the first word it lands after the hello's answer.
+func (h *Hub) clientsSettle(c *busConn) {
+	if c == nil || c.ident.Role != bus.RoleManager || !c.clientsSettled.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		h.fleetClientsChanged() // a change not told yet goes to every manager
+		f := &h.reported
+		f.clientsSend.Lock()
+		defer f.clientsSend.Unlock()
+		f.mu.Lock()
+		clients := f.clients
+		f.mu.Unlock()
+		if h.busCurrent(c) {
+			_ = c.peer.Notify(assistantwire.EventClients, clients)
+		}
+	}()
 }
 
 // fleetConnected: the manager's handshake went through: it is told what of the apps it needs.
@@ -520,7 +549,7 @@ func (h *Hub) mutesSettle(c *busConn) {
 // (it answers them as the hub did); while it is not connected they are answered 503 assistant_offline. A device
 // that may only answer is held to a card's own choices first, here.
 func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
-	api.HandleFunc("POST /api/v1/interactions/{id}/resolve", h.withClientOp("resolve", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("POST /api/v1/interactions/{id}/resolve", h.withoutTerminalControls(h.withClientOp("resolve", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 		if err != nil {
 			writeBodyErr(w, err, err)
@@ -543,18 +572,18 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		h.forwardOwned(w, r, h.byInteraction)
-	}))
+	})))
 	// Body client_id uses the same durable operation receipts as resolve.
 	api.HandleFunc("POST /api/v1/interactions/{id}/choose", h.withReplyReceipt("choose", h.serveChoose))
 	// "Change answer": a question the assistant answered gets the user's answer (assistant/fleet_delegate.go); a device that may
 	// only answer cards does not send agents messages.
-	api.HandleFunc("POST /api/v1/interactions/{id}/reanswer", func(w http.ResponseWriter, r *http.Request) {
+	api.HandleFunc("POST /api/v1/interactions/{id}/reanswer", h.withoutTerminalControls(func(w http.ResponseWriter, r *http.Request) {
 		if answerOnly(r) {
 			writeErr(w, http.StatusForbidden, errors.New("this device can only answer with a card's own choices"))
 			return
 		}
 		h.forwardOwned(w, r, h.byRequest) // answered already: no longer pending, the request names its manager
-	})
+	}))
 	api.HandleFunc("GET /api/v1/interactions/history", func(w http.ResponseWriter, r *http.Request) {
 		if h.requestHasElicitation(r) {
 			r.Header.Set(assistantwire.ElicitationHeader, "1")
@@ -629,7 +658,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) error {
 		if !ok || cmp.Or(ix.Manager, assistantwire.AssistantID) != from {
 			return &rpc.Error{Code: devicewire.CodeNoDevice, Message: "an input push is for a pending card the manager reported"}
 		}
-		h.notifyInteraction(from, ix, n.Subtitle)
+		h.notifyInteraction(from, ix, n.Subtitle, n.LinkCovered)
 		return nil
 	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {

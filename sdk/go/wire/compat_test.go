@@ -80,7 +80,7 @@ func TestCompatBuiltinLookAcceptsExactAliasesOnly(t *testing.T) {
 	loadOnce.Do(loadSchemas)
 	definition, file := resolve("#/$defs/BuiltinLook", "manifest.schema.json")
 	check := checker{}
-	check.check(definition, "jarvis", file, "$")
+	check.check(definition, "jarvis", file)
 	if len(check.errs) == 0 {
 		t.Fatal("legacy value was added to the canonical schema")
 	}

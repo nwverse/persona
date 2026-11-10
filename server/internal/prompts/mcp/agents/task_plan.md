@@ -46,7 +46,7 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
           },
           "launcher": {
             "type": "string",
-            "description": "launcher name; empty: the default"
+            "description": "launcher name, one that machine has (a name it lacks is refused, listing the ones it has); empty: the default, or one the machine has when it lacks the default (claude first; the why says so)"
           },
           "model": {
             "type": "string",
@@ -58,9 +58,10 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
               "default",
               "acceptEdits",
               "plan",
+              "auto",
               "bypassPermissions"
             ],
-            "description": "permission mode; empty: the default for writable tasks. readonly=true always uses plan, overriding this field"
+            "description": "permission mode; empty: the default for writable tasks (the user's default permission mode, else Claude Code's default mode on that computer). readonly=true always uses plan, overriding this field"
           },
           "ultracode": {
             "type": "boolean",

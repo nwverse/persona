@@ -78,7 +78,7 @@ nonisolated struct RepoPlace: Equatable, Sendable {
     }
 }
 
-/// By Repository (docs/apple/ios.md「Agents 的分组」): every agent under its machine, its repository (`RepoPlace`) and the
+/// By Repository (docs/apple/ios.md「Information architecture」): every agent under its machine, its repository (`RepoPlace`) and the
 /// working tree in it, as Orca's projects with the machine above them. Plain data, unit-tested apart from the list
 /// (`AgentRepoTreeTests`); the list orders the agents inside a tree (`AgentListOrder`).
 nonisolated struct RepoTree {

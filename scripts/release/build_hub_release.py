@@ -35,6 +35,11 @@ def package_release(binary, bin_dir, out, platforms, version, build, sha, root):
         return manifest
 
 
+def build_tags(root):
+    """The -tags value every program is built with: server/build-tags.txt (server/internal/buildtags)."""
+    return (root / 'server/build-tags.txt').read_text().strip()
+
+
 def write_json(path, value):
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value, indent=2) + '\n')
@@ -86,18 +91,19 @@ def main():
         run(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', str(webdist)], root)
         run(['go', 'run', './internal/webasset/precompress', 'internal/hub/webdist'], root / 'server')
         run(['go', 'generate', './internal/runtimepkg'], root / 'server')
+        tags = build_tags(root)
         flags = (f'-s -w -X main.version={version} -X main.channel=release '
                  f'-X main.build={args.build} -X main.commit={sha} -X main.updateURL={args.update_url}')
         bin_dir = out / 'bin'
         bin_dir.mkdir(exist_ok=True)
         binary = bin_dir / 'personad-linux-amd64'
         env = dict(os.environ, GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
-        run(['go', 'build', '-tags', 'public', '-trimpath', '-ldflags', flags,
+        run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
              '-o', str(binary), './cmd/personad'], root / 'server', env)
         platforms = ['linux-amd64']
         if args.publish_nodes or args.publish_managers:
             darwin = bin_dir / 'personad-darwin-arm64'
-            run(['go', 'build', '-tags', 'public', '-trimpath', '-ldflags', flags,
+            run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
                  '-o', str(darwin), './cmd/personad'], root / 'server',
                 dict(os.environ, GOOS='darwin', GOARCH='arm64', CGO_ENABLED='0'))
             platforms.append('darwin-arm64')

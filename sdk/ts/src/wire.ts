@@ -412,7 +412,7 @@ export interface LookAvatar {
 }
 
 /**
- * An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+ * An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
  */
 export interface LookPalette {
   primary?: string;
@@ -454,8 +454,8 @@ export interface LookDot {
 }
 
 /**
- * A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
- * app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+ * A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+ * package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
  */
 export interface LookItem {
   id: string;
@@ -4616,6 +4616,8 @@ export interface KBDetail {
   links?: KBEntry[];
   moments?: KBMomentRef[];
   segments?: KBRecordingSegment[];
+  /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
+  minutes?: unknown;
 }
 
 /**
@@ -4657,12 +4659,24 @@ export interface KBDayResult {
   messages: KBDayMessage[];
   prev: string;
   next: string;
+  /**
+   * available means ledger matching ran, not that unmarked messages are human-authored. missing_scope requires
+   * sent.read; unavailable means the service cannot provide provenance. Older hosts omit this field: treat absence as
+   * unavailable.
+   */
+  sent_origin: string;
 }
 
 export interface KBDayMessage {
   /** The message's first line in the day's file, from 1. */
   n: number;
   text: string;
+  /** Present only for a unique match in the sent-as-user ledger, with sent.read. */
+  sent_by?: string;
+  /** The matching ledger row. */
+  sent_ledger_id?: number;
+  /** When this matched send was recalled; the archive may still contain its text. */
+  recalled_at?: string;
 }
 
 /**

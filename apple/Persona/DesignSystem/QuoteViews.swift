@@ -297,11 +297,14 @@ struct UserBubbleBody: View {
     var text: String
     /// The paths in `text`: linked where they are there on the machine (`PathText`).
     var paths: [PathRef] = []
+    /// The comment blocks the message led with (`MessageComments.inBubble`), and the plain quote before them.
+    var comments: [MessageComment] = []
+    var lead: String?
     /// The new conversation layout (#1666, `ChatLayout`): the user's box is pale blue under the primary text color.
     @Environment(\.chatLayout) private var layout
 
     var body: some View {
-        if quotes.isEmpty {
+        if quotes.isEmpty, comments.isEmpty, lead == nil {
             words.padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m)
                 .background(fill, in: .rect(cornerRadius: Theme.Radius.bubble, style: .continuous))
         } else {
@@ -321,9 +324,11 @@ struct UserBubbleBody: View {
 
     private var quoted: some View {
         WidestColumn {
-            if !quotes.isEmpty {
+            if !quotes.isEmpty || !comments.isEmpty || lead != nil {
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     ForEach(quotes) { QuoteBlock(ref: $0) }
+                    if let lead { QuoteBlock(ref: .quote(lead, from: "", msg: "")) }
+                    ForEach(Array(comments.enumerated()), id: \.offset) { i, c in CommentQuote(comment: c, number: i + 1) }
                 }
                 .padding(.horizontal, Theme.Space.s)
                 .padding(.top, Theme.Space.s)
@@ -347,7 +352,7 @@ struct QuoteFlashMark: Equatable {
 }
 
 /// Plain text (a message you sent) with the paths that are there on the conversation's machine as underlined links
-/// (docs/apple/ios.md「文件查看器」); a tap opens the file viewer at the path's line (`PathLinkURL`, the chat's `openURL`). Until
+/// (docs/apple/ios.md「File viewer」); a tap opens the file viewer at the path's line (`PathLinkURL`, the chat's `openURL`). Until
 /// the machine answers, and outside a chat, the text as it is: the same words in the same place.
 struct PathText: View {
     @Environment(AppModel.self) private var model: AppModel?

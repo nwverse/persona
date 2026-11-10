@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Sending into a terminal safely (docs/protocol/protocol.md「发消息」): the node refuses a message — nothing typed — when the
+// Sending into a terminal safely (docs/protocol/protocol.md「Sending messages」): the node refuses a message — nothing typed — when the
 // computer's Claude input box holds a draft or a dialog has the keyboard. Each pending message carries its id as
 // client_msg_id, so a retry after a lost response is not typed twice. A refused one goes again under a new id: the
 // hub answers an id it refused with that refusal, without asking the computer again (#6425).
@@ -22,14 +22,24 @@ extension AppModel {
     /// no answer at all (no network, the hub out of reach, a timeout): then it waits and goes again by itself, which
     /// the same id makes safe too.
     func sendPending(_ key: SessionKey, _ msg: PendingMessage, clearDraft: String? = nil) async -> SendOutcome {
+        noteFailure(key, msg.id, nil)
         // Restored outbox entries wait for metadata; opaque IDs do not identify a writable source.
         guard let session = session(key) else { return .waiting }
-        guard session.canSend else { return .failed }
-        guard msg.mayHaveArrived != true else { return .failed }
-        guard let api = api(key.group) else { return .failed }
+        guard session.canSend else {
+            noteFailure(key, msg.id, session.sourceSubtitle ?? String(localized: "This session is view-only"))
+            return .failed
+        }
+        guard msg.mayHaveArrived != true else {
+            noteFailure(key, msg.id, String(localized: "It may have reached the computer already. Check the chat before sending it again."))
+            return .failed
+        }
+        guard let api = api(key.group) else {
+            noteFailure(key, msg.id, String(localized: "Can't reach the hub"))
+            return .failed
+        }
         let socket = socket(key.group)
         do {
-            // The message's id is its op id too (docs/protocol/protocol.md「操作回执」): however often it arrives, the hub
+            // The message's id is its op id too (docs/protocol/protocol.md「Operation receipts」): however often it arrives, the hub
             // types it once. Through a short drop (a hub restart) it keeps trying with that id instead of going to
             // the outbox's clock; once the drop's grace is over the outbox takes it (flushOutbox).
             let launcher = assistantLaunchers[key], model = assistantModels[key]
@@ -41,21 +51,30 @@ extension AppModel {
         } catch let e as APIError where e.code == "input_draft" {
             Haptics.attention()
             markRefused(key, msg.id)
+            noteFailure(key, msg.id, e.shown ?? e.localizedDescription)
             sendRefusal = SendRefusal(key: key, messageID: msg.id, draft: e.fields["draft"] ?? "", clearable: e.fields["clearable"])
             return .failed
         } catch let e as APIError where e.fields["delivered"] == "unknown" || e.code == OpReceipt.unknownCode || e.code == "op_id_reused" {
             // op_id_reused: this id went once with other words (Clear and Send's clear_draft, then a resend of the
             // waiting message without it); what became of that try is the op's to say, as for an unknown outcome.
-            toast = Toast(String(localized: "It may have reached the computer already. Check the chat before sending it again."), style: .error)
+            let reason = String(localized: "It may have reached the computer already. Check the chat before sending it again.")
+            noteFailure(key, msg.id, reason)
+            toast = Toast(reason, style: .error)
             if let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) { chat(key).pending[i].mayHaveArrived = true }
             return .failed
         } catch where error.isOffline || error.isTimeout || error.isGap {
             return .waiting
         } catch {
             if (error as? APIError)?.fields["delivered"] == "none" { markRefused(key, msg.id) } // a dialog open, say
+            noteFailure(key, msg.id, error.shown ?? error.localizedDescription)
             show(error)
             return .failed
         }
+    }
+
+    private func noteFailure(_ key: SessionKey, _ id: UUID, _ reason: String?) {
+        guard let i = chat(key).pending.firstIndex(where: { $0.id == id }) else { return }
+        chat(key).pending[i].failure = reason
     }
 
     /// The hub answered this message's id with a refusal it keeps: the next try goes with a new id (`retry`).
@@ -99,16 +118,37 @@ extension AppModel {
         }
     }
 
-    nonisolated static func marks(_ drafts: [SessionKey: String], _ contexts: [SessionKey: [ContextRef]]) -> Set<SessionKey> {
-        Set(drafts.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.keys)
-            .union(contexts.filter { !$0.value.isEmpty }.keys)
+    private static let commentsName = "composer-comments"
+
+    static func savedComments() -> [SessionKey: [MessageComment]] {
+        let list = StateCache.load(commentsName, as: [SavedComments].self) ?? []
+        return Dictionary(list.map { ($0.key, $0.comments) }, uniquingKeysWith: { a, _ in a })
     }
 
-    /// `draftMarks` from the drafts and quotes, set only when it differs.
+    func saveComments() {
+        commentWriter.run { [weak self] in
+            guard let self else { return }
+            StateCache.save(Self.commentsName, self.composerComments.filter { !$0.value.isEmpty }.map { SavedComments(key: $0.key, comments: $0.value) })
+        }
+    }
+
+    nonisolated static func marks(_ drafts: [SessionKey: String], _ contexts: [SessionKey: [ContextRef]],
+                                  _ comments: [SessionKey: [MessageComment]] = [:]) -> Set<SessionKey> {
+        Set(drafts.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.keys)
+            .union(contexts.filter { !$0.value.isEmpty }.keys)
+            .union(comments.filter { !$0.value.isEmpty }.keys)
+    }
+
+    /// `draftMarks` from the drafts, quotes and comments, set only when it differs.
     func markDrafts() {
-        let now = Self.marks(drafts, composerContexts)
+        let now = Self.marks(drafts, composerContexts, composerComments)
         if now != draftMarks { draftMarks = now }
     }
+}
+
+private nonisolated struct SavedComments: Codable, Sendable {
+    var key: SessionKey
+    var comments: [MessageComment]
 }
 
 private nonisolated struct SavedContexts: Codable, Sendable {

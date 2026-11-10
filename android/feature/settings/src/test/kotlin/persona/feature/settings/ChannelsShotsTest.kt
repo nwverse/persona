@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -191,7 +192,8 @@ class ChannelsShotsTest {
     private fun assertSettingsEntryOrder() {
         // With a navigation host, the removed introduction row used to be present.
         rule.onAllNodesWithText("助手").assertCountEquals(0)
-        rule.onAllNodesWithText("Persona").assertCountEquals(0)
+        // The brand card is Persona too; only a separate legacy navigation entry is forbidden.
+        rule.onAllNodes(hasText("Persona") and !hasTestTag("settings-hub-card")).assertCountEquals(0)
         rule.onAllNodesWithText("认识 Persona").assertCountEquals(0)
         rule.onNode(hasText("连接器") and hasClickAction()).performScrollTo()
         rule.onAllNodesWithText("渠道").assertCountEquals(2) // Its own section header and its one clickable row.

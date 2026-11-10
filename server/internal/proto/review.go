@@ -37,7 +37,7 @@ type GitReview struct {
 	Head *GitReviewHead `json:"head,omitempty"` // absent before the first commit
 	// Files in path order; the ones file.read refuses are listed without their diff.
 	Files []GitReviewFile `json:"files"`
-	// Truncated: more files changed than listed (MaxReviewFiles).
+	// Truncated: more files changed than listed (the node's maxReviewFiles, node/gitreview.go).
 	Truncated bool `json:"truncated,omitempty"`
 }
 

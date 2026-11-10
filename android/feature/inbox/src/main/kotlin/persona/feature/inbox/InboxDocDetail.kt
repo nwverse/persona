@@ -32,7 +32,7 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.InboxItemUiRoute
 import persona.core.navigation.Navigator
 
-// A Feishu document's notice in the inbox (docs/assistant/inbox.md "Cloud documents", #2323): a sheet / Base / docx that @'d the user or
+// A Feishu document's notice in the inbox (docs/assistant/inbox.md "Docs: mentions in sheets, bases, and documents", #2323): a sheet / Base / docx that @'d the user or
 // commented to them. It has no chat behind it, so it opens its own page: what happened, the rows about the user, and
 // "Open document" in the app's Feishu document reader. The same page is where an item of a shape this app does not know opens,
 // instead of the mail page (which can only fail for it).

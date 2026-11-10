@@ -145,15 +145,20 @@ nonisolated struct ExtensionSettingsPolicy {
         guard let entryMarket = catalog.markets.first(where: { $0.id == market }), entryMarket.error?.isEmpty != false else {
             throw APIError(status: 0, message: String(localized: "The extension market is unavailable. Check its source and try again."))
         }
-        guard let entry = catalog.plugins.first(where: { $0.market == market && $0.pluginID == id }) else {
+        // A renamed extension is in its market under its new ID (#2511).
+        guard let entry = catalog.plugins.first(where: { $0.market == market && $0.pluginID == id })
+            ?? catalog.plugins.first(where: { $0.market == market && $0.renameFrom == id }) else {
             throw APIError(status: 0, message: String(localized: "This extension is no longer listed in its market."))
         }
         if let problem = entry.problem, !problem.isEmpty { throw APIError(status: 0, message: problem) }
         let upgrades = try await api.pluginUpgrades()
         globalAuto = upgrades.auto
         let next = upgrades.upgrades.first { $0.id == id && $0.market == market }
+        // A version under a new ID is never installed automatically: it waits for the owner's confirmation.
+        let renamed = entry.pluginID != id
         candidate = entry.upgradable == true ? (next ?? ExtensionUpgrade(id: id, name: entry.name, market: market,
-            from: detail.plugin.version ?? entry.installed ?? "", to: entry.version, state: "off")) : nil
+            from: detail.plugin.version ?? entry.installed ?? "", to: entry.version, state: renamed ? "needs_permission" : "off",
+            renameTo: renamed ? entry.pluginID : nil)) : nil
         checked = true
         return candidate
     }
@@ -166,7 +171,7 @@ nonisolated struct ExtensionSettingsPolicy {
         do {
             guard let candidate = try await checkedCandidate(refresh: false) else { error = nil; return }
             let next = try await api().previewCatalogExtension(market: candidate.market, plugin: id)
-            guard next.manifest.id == id, next.upgrade == true, next.market == candidate.market,
+            guard next.upgrades(id), next.upgrade == true, next.market == candidate.market,
                   next.from == detail?.plugin.version else {
                 throw APIError(status: 0, message: String(localized: "This manager does not provide this action."))
             }
@@ -181,7 +186,7 @@ nonisolated struct ExtensionSettingsPolicy {
         busy = true
         defer { busy = false }
         if let problem = preview.confirmationProblem(at: .now) { error = problem; return false }
-        guard preview.manifest.id == id, preview.market == policy?.market, preview.from == detail?.plugin.version else {
+        guard preview.upgrades(id), preview.market == policy?.market, preview.from == detail?.plugin.version else {
             error = String(localized: "This manager does not provide this action.")
             return false
         }

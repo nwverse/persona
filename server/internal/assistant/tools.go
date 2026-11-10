@@ -32,7 +32,7 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review",
+	"conversation_new", "conversation_send", "task_plan", "task_review", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete"}
 
 // Tools are the assistant's tools (assistant.tools).
@@ -91,7 +91,7 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	// Health stays in the health space (docs/assistant/health.md "Isolation"): it writes nothing to the knowledge base,
+	// Health stays in the health space (docs/assistant/health.md "How directories and memory are isolated"): it writes nothing to the knowledge base,
 	// nor changes or starts what is imported into it (kb_history_status only reads).
 	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
 		if space, _ := s.selfSpace(ctx, self); space == SpaceHealth {
@@ -109,6 +109,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTaskPlanFrom(ctx, machine, self, args)
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
+	case "task_start_screen": // a failed start's kept tab (start_remedy.go)
+		return s.toolTaskStartScreen(ctx, self, args)
+	case "task_start_keys":
+		return s.toolTaskStartKeys(ctx, self, args)
+	case "task_retry":
+		return s.toolTaskRetry(ctx, self, args)
 	case "task_review":
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
@@ -148,7 +154,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body, Asked: true})
-		s.channelsPushed(machine, self, a.Title, a.Body) // the Feishu bot and the channels with pushes on (channels.go)
+		// The Feishu bot and the channels with pushes on (channels_handler.go).
+		s.channelsPushed(machine, self, a.Title, a.Body)
 		s.promoteSupervision(self)
 		return "Notification sent.", nil
 	case "conversations_list":
@@ -323,6 +330,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", fmt.Errorf("%w; no agent was started", err)
 		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort)} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
 		tier, runs := strings.TrimSpace(a.Tier), ""
@@ -343,12 +351,30 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				}
 			}
 		}
+		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
+		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
+		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+		if err := s.applyModel(ctx, "agent.new", run); err != nil {
+			return "", err
+		}
+		swapped, err := s.fitLauncher(ctx, am, own, run)
+		if err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if swapped != "" {
+			a.Launcher, _ = run["launcher"].(string)
+			a.Model, _ = run["model"].(string)
+			a.Effort, _ = run["effort"].(string)
+			tier, runs = "", "" // the tier's launcher is not what runs
+		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
 		}
 		switch { // the user sees what it will run on before saying yes
+		case swapped != "":
+			where += " · " + swapped
 		case runs != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
@@ -392,6 +418,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if runs != "" {
 			note = " Preset " + tier + ": runs on " + runs + "." + note
+		}
+		if swapped != "" {
+			note = " Note: " + swapped + "." + note
 		}
 		if branch != "" { // the machine's engine makes the worktree (herdr's or Orca's own), the agent starts in it
 			wt, err := s.newWorktree(sctx, am.ID, a.Cwd, branch)

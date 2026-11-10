@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_tray_pending">Pending</string>
+    <string name="chat_tray_progress">Progress</string>
+    <string name="chat_tray_agents">Agents</string>
+    <string name="chat_tray_items">%1$d items</string>
+    <string name="chat_tray_approve_all">Approve all</string>
+    <string name="chat_tray_approve">Approve</string>
+    <string name="chat_tray_review">Review</string>
+    <string name="chat_tray_send">Send</string>
+    <string name="chat_tray_drafts">Sent on your behalf · Only after you tap</string>
+    <string name="chat_tray_quiet">Supervision and schedules · Quiet unless needed</string>
+    <string name="chat_tray_plan_review">Review the plan before starting</string>
+    <string name="chat_tray_background">Background records</string>
+    <string name="chat_tray_next_run">Next run: %1$s</string>
+    <string name="chat_tray_interval">Every %1$d min</string>
+    <string name="chat_tray_daily">Daily</string>
+    <string name="chat_tray_once">Once</string>
+    <string name="chat_tray_no_progress">No tasks in progress</string>
+    <string name="chat_tray_agent_detail">%1$s · %2$s</string>
+    <string name="chat_tray_working">Working</string>
+    <string name="chat_tray_needs_you">Needs you</string>
+    <string name="chat_tray_unread">Done, unread</string>
+    <string name="chat_tray_expanded">Expanded</string>
+    <string name="chat_tray_collapsed">Collapsed</string>
+    <string name="chat_tray_blocked">Blocked</string>
+    <string name="chat_tray_planned">Planned</string>
+    <string name="chat_tray_steps">%1$d / %2$d steps</string>
+    <string name="chat_tray_draft_changed">The draft changed. Review the latest version before sending.</string>
+    <string name="chat_tray_caught_up">All caught up</string>
+    <string name="chat_tray_accept">Accept</string>
+    <string name="chat_tray_finish_now">Finish now</string>
+    <string name="chat_tray_follow_recommendation">Follow recommendation</string>
+    <string name="chat_tray_finish_failed">Couldn\'t finish this task. Try again.</string>
+    <string name="chat_tray_recommended">Recommended: %1$s</string>
+    <string name="chat_tray_accept_changed">The acceptance request changed. Review the latest round.</string>
+    <string name="chat_tray_cancelled">Cancelled</string>
+    <string name="chat_tray_pr_number">PR #%1$s</string>
+    <string name="chat_tray_done">Completed</string>
+    <string name="chat_tray_accepted">Accepted</string>
+    <string name="chat_tray_in_progress">In progress</string>
+</resources>

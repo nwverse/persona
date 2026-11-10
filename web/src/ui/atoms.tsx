@@ -246,8 +246,9 @@ export function Kbd({ children }: { children: React.ReactNode }) {
 /** Folds its children up and down: the grid's row runs between 0fr and 1fr in CSS (no heights measured in JS), with
  *  a fade. `lazy`: the children mount when it opens and stay while it closes, so they go down with the height instead of
  *  vanishing, then unmount (a long trace costs nothing while folded). Once closed, the content is inert. A chat list holds
- *  the clicked row still while the height runs (`anchoredScroll`, #1124). */
-export function Collapse({ open, children, className = "", lazy = false }: { open: boolean; children: React.ReactNode; className?: string; lazy?: boolean }) {
+ *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
+ *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed. */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean }) {
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
@@ -284,7 +285,7 @@ export function Collapse({ open, children, className = "", lazy = false }: { ope
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className="min-h-0 overflow-hidden [contain:layout_paint]">{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 ${unclipped && shown && !moving ? "" : "overflow-hidden [contain:layout_paint]"} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
     </div>
   );
 }
@@ -729,6 +730,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
   const accel = accelLabel(it);
   const detailId = `${useId()}-detail`;
   const label = rowLabel(it, asking ? it.key : null);
+  const detail = asking && it.confirmDetail ? it.confirmDetail : it.detail;
   return (
     <button
       ref={refCb}
@@ -739,23 +741,23 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
       aria-haspopup={it.children ? "menu" : undefined}
       aria-keyshortcuts={it.accel}
       aria-checked={it.radio ? Boolean(it.checked) : undefined}
-      aria-describedby={it.detail ? detailId : undefined}
+      aria-describedby={detail ? detailId : undefined}
       onMouseEnter={onHover}
       onClick={onChoose}
       className={cx(
         "relative z-10 flex w-full items-center gap-2 rounded-[6px] px-2 pointer-coarse:min-h-11 text-left text-[12.5px] disabled:opacity-40",
-        it.wrap || it.detail ? "min-h-8 py-1.5" : "h-8",
+        it.wrap || detail ? "min-h-8 py-1.5" : "h-8",
         it.danger ? "text-red" : "text-ink",
         asking && "bg-red-tint font-medium",
       )}
     >
       {it.state && <StatusMark state={it.state} />}
       {it.icon && <Icon name={it.icon} size={14} className={it.danger ? "" : "text-ink-3"} />}
-      {it.detail ? (
+      {detail ? (
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
           <span className="block break-words">{label}</span>
-          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{it.detail}</span>
+          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{detail}</span>
         </span>
       ) : (
         <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}</span>

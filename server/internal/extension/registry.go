@@ -55,9 +55,12 @@ type Record struct {
 	Remote            *Remote         `json:"remote,omitempty"`
 	// DisabledContributions are the contributions the user switched off ("<point>/<id>", docs/extensions/extensions.md "Contribution switches"):
 	// they do not take effect while the rest of the extension runs. A connector's switch is the connector's own.
-	DisabledContributions []string  `json:"disabled_contributions,omitempty"`
-	InstalledAt           time.Time `json:"installed_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	DisabledContributions []string `json:"disabled_contributions,omitempty"`
+	// PackOff, on an extension pack, are the members switching the pack off switched off (docs/extensions/extensions.md
+	// "Dependencies, exports and packs", #1830): switching the pack back on turns these on again and no others.
+	PackOff     []string  `json:"pack_off,omitempty"`
+	InstalledAt time.Time `json:"installed_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Remote is a plugin that runs elsewhere and is reached on these sockets.
@@ -105,6 +108,8 @@ type Extension struct {
 	Schema   *Schema
 	// Dir is the package's directory ("" for one installed from remote: or a hub.json plugin).
 	Dir string
+	// L10n are the package's translations of its manifest's text (l10n.go), read with it; never changed after.
+	L10n Translations
 	// Problem is why it cannot run on this hub (engines, a missing package); it is then not started.
 	Problem  string
 	Warnings []string
@@ -344,6 +349,10 @@ func (r *Registry) fromRow(row Record) *Extension {
 		if !hasManifest(p.Dir) {
 			p.problemErr = i18n.Err("extension-status.package_missing", i18n.Args{"path": p.Dir})
 			p.Problem = p.problemErr.Error()
+		} else {
+			var warnings []string
+			p.L10n, warnings = ReadTranslations(p.Dir)
+			p.Warnings = append(p.Warnings, warnings...)
 		}
 	}
 	if w, err := CheckEngines(m, r.build); err != nil {
@@ -413,6 +422,7 @@ func snapshotExtension(p *Extension) *Extension {
 		out.Record.Granted.Storage = &storage
 	}
 	out.Record.DisabledContributions = slices.Clone(p.Record.DisabledContributions)
+	out.Record.PackOff = slices.Clone(p.Record.PackOff)
 	if p.Record.Remote != nil {
 		remote := *p.Record.Remote
 		out.Record.Remote = &remote

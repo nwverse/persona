@@ -50,21 +50,6 @@ export function ThinkingCard({ item, durationMs, live, scope = "" }: { item?: It
   );
 }
 
-/** A thought's opening as one row of a live group's preview (cindy's ThinkingActivityRow). */
-export function ThinkingLine({ item }: { item: Item }) {
-  const text = (item.text ?? "").trim().replace(/\s+/g, " ");
-  return (
-    <div className="flex w-full min-w-0 items-center gap-1.5 px-2 py-[3px]" data-thinking-line>
-      <span className={STATUS_SLOT}>
-        <Icon name="spark" size={13} />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-[length:var(--chat-secondary)] text-thinking-ink italic" title={text}>
-        {text}
-      </span>
-    </div>
-  );
-}
-
 function LiveThinking() {
   // the clock runs from when this card saw the thinking start
   const [since] = useState(Date.now);

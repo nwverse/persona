@@ -51,7 +51,7 @@ nonisolated struct ModelPurpose: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// The hub stopped calling a connection after the upstream said its quota is used up or it is busy, until `until`
-/// (docs/assistant/model-config.md「上游限流」).
+/// (docs/assistant/model-config.md「Upstream rate limits」).
 nonisolated struct ModelLimit: Codable, Hashable, Sendable {
     var reason: String // quota | busy
     var until: Date
