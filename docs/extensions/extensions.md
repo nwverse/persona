@@ -1944,7 +1944,7 @@ Cards in assistant replies use the same components and renderer as extension Vie
 - **```` ```persona-view ````**: a View (`{"sections": […]}`) in a code block, or a component directly (`{"type": "metric", …}`). When hub.json has `assistant.persona_view: true`, the assistant prompt teaches it to write these
   (`prompts/assistant/claude_md.md`); off by default, to be enabled once every client can draw UI version 3.
 - **```` ```persona-card ````** (#886, old format) still renders: clients **convert it to components** before drawing. The rules are documented in `sdk/go/wire/personacard.go` (the Go reference implementation), consistently across all four clients;
-  `schema/extension/examples/persona-card/` contains cases (card → expected View; `null` means it cannot be drawn and stays a code block), used by each client's tests:
+  `schema/extension/examples/persona-card/` contains cases (card → expected View; `null` means it cannot be drawn and stays a code block; iOS shows such a card in words, see below), used by each client's tests:
   - Cannot draw: `stat` without `value`; `stacked_bar` with no parts, negative values or a sum of 0; `line` with fewer than two points; `bar` with no points; `ring` with fewer than two parts (after the remainder), negative values or a sum of 0.
   - One section; the card's `title` is the section title (a `stat`'s `title` is its `metric`'s `label`); `subtitle` is a leading paragraph of secondary text. Numbers use thousands separators and at most one decimal place (`2,250`, `7.5`), followed by a space and the unit.
   - `stat` → `metric {label: title or "Value", value, detail: note}`.
@@ -1952,8 +1952,12 @@ Cards in assistant replies use the same components and renderer as extension Vie
     one point per series with `title` or "Total" as its label; then one `row {title: label, subtitle: note, value}` per part. Use `total`'s unit, or the card's if absent.
   - `ring` (#3061, one day's total and its parts; `stacked_bar` is for comparing days or people) → one `donut` chart, one series with a point per part (beyond 8 parts, the first seven plus "Other"),
     `center` the total with its unit (left out past 20 characters), `detail: note`; then one `row` per part. When `total` is more than the parts' sum, a "Remaining" part (total minus the sum) comes last.
-    Use `total`'s unit, or the card's if absent. iOS draws `donut` / `pie` with `RingChart` (ring, total in the hole, legend with shares); an app that does not know `ring` keeps the code block.
+    Use `total`'s unit, or the card's if absent. iOS draws `donut` / `pie` with `RingChart` (ring, total in the hole, legend with shares); an app that does not know `ring` keeps the code block
+    (iOS from #3397 shows it in words instead, below).
   - `line` / `bar` → when there is a `value`, start with `metric {label: Current, value}`; one chart of this kind, one series (the last 120 points), with `note` as `detail`.
+
+  On iOS, a card that parses but cannot be drawn (a type the app does not know yet, or one missing what its type needs) is shown in words rather than its JSON (#3397):
+  the title, then the subtitle, `value`, one `label: value unit` line per part and point, `Total: …` and the note. A block that does not parse, or has none of these, stays a code block.
 
 ### Compatibility
 
@@ -2621,7 +2625,7 @@ Views, components, actions, responses, placements and context all use schema-gen
 - Assistant cards (#1860, "Assistant cards"): both ```` ```persona-view ```` and ```` ```persona-card ```` are in `PersonaCard.swift` (`AssistantCardBlock`):
   `persona-card` converts to components under `sdk/go/wire/personacard.go` rules (`ExtensionPersonaCard.view()`, number formatting like `Number`; `PersonaCardTests` compares every field of every case in
   `schema/extension/examples/persona-card/`), `persona-view` is a View or one component; both draw in a card with `ExtensionViewStack`,
-  with no model, so rows, buttons, fields, search, filters and more are inactive; links still work. Undrawable content remains a code block.
+  with no model, so rows, buttons, fields, search, filters and more are inactive; links still work. Undrawable content remains a code block (iOS shows an undrawable persona-card in words, #3397).
 - Screenshots: `example-gateway` in the `MOCK_EXTENSIONS=1` mock hub has a "Notes (components v3)" page (`-openExtension example-gateway -openExtensionPage notes`),
   `GET /mock/invalidate` syncs one note and sends `ui.invalidate`; UI test `ExtensionV3Tests` (list, filters, more, search to empty state, push note page, edit/save/pop, invalidate),
   unit tests `ExtensionUIv3Tests`, `PersonaCardTests`. `MOCK_EXTENSION_CARDS=1` with `ExtensionAssistantCardTests` checks in a real assistant chat that
@@ -3198,7 +3202,7 @@ connecting to the upstream of the selected model. `config.default` specifies the
 | `id`, `name` | `a-z0-9_-`; model-id prefix and display name |
 | `url` | Session WebSocket: `wss://<host>/v1/live` |
 | `dialect` | `live` (default): public GPT-Live protocol; `codex`: the dialect Codex uses with `gpt-live-1-codex` (below); `fake`: development only, no service connection (no `url`), app-typed text goes unchanged to main chat, text for the model returns unchanged as its caption, enabling real-hub/real-Agent end-to-end runs without GPT-Live. `fake` allowed only in manager.json |
-| `key` / `key_file` / `key_command` | Credentials sent as `Authorization: Bearer`: inline value, file's first line, or first line printed by command (`sh -c`). Command runs for every conversation, immediately using credentials renewed elsewhere; it has 20 s, and a background process the command leaves holding its output is not waited for past 1 s. Credentials only on the hub machine (manager.json 0600 or separate file) |
+| `key` / `key_file` / `key_command` | Credentials sent as `Authorization: Bearer`: inline value, file's first line, or first line printed by command (`sh -c`). Command runs for every conversation, immediately using credentials renewed elsewhere; it has 20 s, a background process the command leaves holding its output is not waited for past 1 s, and on Linux and macOS whatever it leaves running is stopped once it exits. Credentials only on the hub machine (manager.json 0600 or separate file) |
 | `ssh` | When the hub cannot reach the service, connect through this machine (`ssh -W host:port <machine>`, TLS still end-to-end); hub must have passwordless SSH access. The service's model and voice lists reuse one ssh connection per machine, closed after 90 s idle |
 | `models`, `default_model` | Listed models; if omitted, live dialect reads service `GET <url>/models`, codex dialect uses `gpt-live-1-codex` |
 | `tools` | Live dialect: declare Persona function tools in `session.start` (knowledge-base search, list Agents, send to Agent, hand to main chat). Some services delegate only when tools are declared (`docs/lessons/voice.md`, "Other behavior"); the public GPT-Live API rejects `session.tools`. **Unset (auto, the default since #1420)**: declared; when the service refuses them before `session.started` (an `error` naming `session.tools` or saying "tools", one about an unknown or unsupported field that names no other field, or a close whose reason says "tools"), the extension starts the session again once without them, logs it, and remembers it for that upstream until the extension restarts (a refused key, a handshake failure or a dropped socket never counts). `true` / `false`: always / never, with no fallback. Full devices (`X-Persona-Role` `full` or absent) declare all four; calls from other extensions declare only `ask_persona` (hand to main chat, their only capability); protocol 2 calls bound to a chat declare knowledge-base search, list Agents and `delegate_task` (hand to bound chat, `docs/assistant/voice.md` 4.4) |

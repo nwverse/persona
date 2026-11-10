@@ -99,6 +99,8 @@ struct AssistantView: View {
             }
             .modifier(SidebarTopFill(shown: columns != .detailOnly))
             .navigationSplitViewStyle(.balanced)
+            // The line beside the history: dragged wider, narrower or closed, remembered (#2624).
+            .modifier(SplitDividerHandle(columns: $columns, key: "assistant.list"))
             #endif
         } else {
             // The sidebar takes the whole height, like ChatGPT's: the tab bar fades away as it comes out
