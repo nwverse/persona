@@ -532,8 +532,8 @@ func (f *File) findOlder(id string) (proto.Item, bool) {
 }
 
 // claudeLineUUID is the uuid of line n (1-based, starts as in window) of a Claude transcript, which names the line's
-// items by it; "" when it has none or cannot be read. The caller knows the file is not a Codex rollout: a substring
-// test of the line would also match a Claude tool input shaped like a rollout line.
+// items by it; "" when it has none or cannot be read. The caller knows the file is not a Codex rollout, so the line is
+// not tested again.
 func claudeLineUUID(fh *os.File, starts []int64, n int) string {
 	if n < 1 || n >= len(starts) {
 		return ""

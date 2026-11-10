@@ -59,7 +59,7 @@ func TestFullOfUnknownIDLoadsNothing(t *testing.T) {
 }
 
 // A Claude line can hold a tool input shaped like a Codex rollout line; it is still a Claude line whose uuid names its
-// items, so a stale "line5#0" loads nothing there either.
+// items, so a stale "line5#0" loads nothing there either, while its own item and the later lines' items are found.
 func TestFullOfStaleIDOfLineWithCodexShapedInputLoadsNothing(t *testing.T) {
 	defer func(w int64) { windowBytes = w }(windowBytes)
 	f, _ := windowedClaude(t, 0)
@@ -82,6 +82,12 @@ func TestFullOfStaleIDOfLineWithCodexShapedInputLoadsNothing(t *testing.T) {
 	}
 	if g.base != base || len(g.items) != items {
 		t.Fatalf("Full(line5#0) parsed back: base %d -> %d, items %d -> %d", base, g.base, items, len(g.items))
+	}
+	if got, err := g.Full("a4#0"); err != nil || got.ToolName != "mcp__x__y" || got.Seq != 5 {
+		t.Fatalf("Full(a4#0) of the line with the Codex-shaped input: %+v, %v", got, err)
+	}
+	if got, err := g.Full("a5#0"); err != nil || got.Text != "answer 5" || got.Seq != 6 {
+		t.Fatalf("Full(a5#0) of the line after it: %+v, %v", got, err)
 	}
 }
 
