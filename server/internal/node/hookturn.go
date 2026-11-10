@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Turn state from Persona's own hooks (docs/protocol/agent-states.md "Turn signals from hooks").
+// Turn state from Persona's own hooks (docs/protocol/agent-states.md "Hook turn signals").
 //
 // A session that runs Persona's hooks tells the node when a turn starts (UserPromptSubmit) and ends (Stop). Counting them
 // is a stronger sign than anything the node can read off the terminal or the transcript: a turn is open while prompts

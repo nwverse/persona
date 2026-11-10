@@ -405,7 +405,7 @@ func (h *Hub) notifyComputerCode(by principal, machine string) {
 	}, "", "alert", "10", func(d Device) bool { return d.Credential != by.ID && d.CredentialID != by.ID })
 }
 
-// Pairing receipts (docs/protocol/protocol.md "Pairing receipt pushes"): aps.category picks the notification's buttons
+// Pairing receipts (docs/protocol/protocol.md "Computer pairing codes"): aps.category picks the notification's buttons
 // ("Not you? Revoke", "My computer" / "Not mine"), and the ids those buttons act on are only in `pair`, never in the alert text.
 const (
 	pairCategoryReceipt = "pair_receipt"

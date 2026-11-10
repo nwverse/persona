@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Inbox menu (docs/apple/mac.md「菜单和快捷键」): the toolbar's Clear All (⇧⌘E) for the open items in view, and its
+/// The Inbox menu (docs/apple/mac.md「Menus and shortcuts」): the toolbar's Clear All (⇧⌘E) for the open items in view, and its
 /// Rules, while the inbox is the section on screen (the list presents their sheets). Many items ask first, in the list
 /// (`confirming`).
 struct MacInboxMenu: Commands {

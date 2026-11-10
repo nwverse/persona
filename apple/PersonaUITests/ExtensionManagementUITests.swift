@@ -217,7 +217,10 @@ final class ExtensionManagementUITests: XCTestCase {
         let attach = app.buttons["shell-composer-add"]
         XCTAssertTrue(attach.waitForExistence(timeout: 15), app.debugDescription)
         attach.tap()
-        // A native Menu does not keep the SwiftUI Button's identifier: find it by its visible title.
+        // The iPhone's + is a panel (AttachSheet): extension prompts are in its More tab.
+        let more = app.buttons["attach-tab-more"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 5), app.debugDescription)
+        more.tap()
         let prompt = app.buttons["整理示例周报"].firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5), app.debugDescription)
         try shot(app, "prompt-menu")

@@ -13,6 +13,38 @@
     <string name="inbox_close">Close</string>
     <string name="inbox_expand">Expand</string>
     <string name="inbox_collapse">Collapse</string>
+    <string name="inbox_mark_done">Mark as done</string>
+    <string name="inbox_group_agents">Agents waiting on you</string>
+    <string name="inbox_group_mail">Mail · %1$s</string>
+    <string name="inbox_group_just">Just now</string>
+    <string name="inbox_group_today">Today</string>
+    <string name="inbox_group_yesterday">Yesterday</string>
+    <string name="inbox_group_week">7+ days ago</string>
+    <string name="inbox_group_month">1+ month ago</string>
+    <string name="inbox_grouping_source">By source</string>
+    <string name="inbox_grouping_time">By time</string>
+    <string name="inbox_jump_to">Jump to</string>
+    <string name="inbox_fold_all">Collapse all</string>
+    <string name="inbox_unfold_all">Expand all</string>
+    <string name="inbox_select_all">Select all</string>
+    <string name="inbox_deselect_all">Deselect all</string>
+    <string name="inbox_end_selection">End selection</string>
+    <string name="inbox_pick_group">Select all in %1$s</string>
+    <string name="inbox_load_older">Show older</string>
+    <string name="inbox_loading_older">Loading…</string>
+    <string name="inbox_older_failed">Couldn’t load older items</string>
+    <plurals name="inbox_selected_count">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <plurals name="inbox_group_picked">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <plurals name="inbox_picked_folded">
+        <item quantity="one">%1$d selected, %2$d in collapsed groups</item>
+        <item quantity="other">%1$d selected, %2$d in collapsed groups</item>
+    </plurals>
     <string name="inbox_source_lark">Lark</string>
     <string name="inbox_source_mail">Mail</string>
     <string name="inbox_moments">Moments</string>
@@ -181,6 +213,7 @@
     <string name="inbox_mute_tag_sender">Sender</string>
     <string name="inbox_mutes_title">Muted</string>
     <string name="inbox_mutes_failed">Couldn\'t read what is muted</string>
+    <string name="inbox_mutes_offline">Offline: its mutes show here once it is back.</string>
     <string name="inbox_mutes_empty_title">Nothing muted</string>
     <string name="inbox_mutes_empty_text">Long-press an item in the Inbox to mute its repository, conversation or sender.</string>
     <string name="inbox_unmute">Unmute</string>
@@ -212,6 +245,7 @@
     <string name="inbox_policy_failed">Couldn\'t save the rule: %1$s</string>
     <string name="inbox_rules_title">Rules</string>
     <string name="inbox_rules_failed">Couldn\'t load the rules: %1$s</string>
+    <string name="inbox_rules_offline">Offline: its rules show here once it is back.</string>
     <string name="inbox_rules_empty_title">No rules</string>
     <string name="inbox_rules_empty_text">Long-press an item in the Inbox and pick a rule for its conversation, sender or repository.</string>
     <string name="inbox_rules_remove_failed">Couldn\'t remove the rule: %1$s</string>

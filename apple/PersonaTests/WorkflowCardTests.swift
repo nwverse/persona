@@ -192,9 +192,8 @@ struct WorkflowCardTests {
         return i
     }
 
-    /// A Workflow call whose run the hub lists is its card: out of BeautifulUI's chips, and in view under its folded
-    /// work line (running or ended); one the hub no longer lists folds with the rest.
-    @Test func aListedRunsCallStaysOutOfTheChipsAndTheFold() {
+    /// Listed Workflow calls keep their own card inside the manually opened work summary.
+    @Test func aListedRunsCallStaysOutOfChipsButInsideTheFold() {
         let items = [
             item(1, .text, role: "user", text: "审一遍"),
             item(2, .toolUse, tool: "Grep", id: "g"), item(3, .toolResult, role: "user", text: "ok", id: "g"),
@@ -205,13 +204,12 @@ struct WorkflowCardTests {
         let blocks = ChatStore.rebuild(items, settled: nil).blocks
         func lines(listed: Set<String>, open: Bool) -> ChatLines {
             ChatLines(openWork: open ? ["w-1#0"] : [], chipRuns: true,
-                      foldsIntoRun: { !WorkflowCallCard.staysOut($0, listed: listed) },
-                      showsFolded: { c, _ in WorkflowCallCard.staysOut(c, listed: listed) })
+                      foldsIntoRun: { !WorkflowCallCard.staysOut($0, listed: listed) })
         }
-        // Folded: the card stays in view after the work line.
+        // Folded: even listed workflow calls stay inside the summary.
         let folded = lines(listed: ["wf"], open: false).build(blocks, live: nil)
-        let out = folded.compactMap { if case .agentOut(_, let c) = $0.content { c.use.toolUseID } else { nil } }
-        #expect(out == ["wf"])
+        #expect(folded.count == 3)
+        #expect(!folded.contains { if case .agentOut = $0.content { true } else { false } })
         // Open: a step of its own between the other calls, which stay single (no run of one chip).
         let open = lines(listed: ["wf"], open: true).build(blocks, live: nil)
         let steps = open.compactMap { line -> String? in

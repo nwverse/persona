@@ -64,7 +64,7 @@ nonisolated extension Interaction {
 
 nonisolated extension Interaction {
     /// A card on no session (#4059): `personad ask` run outside herdr, or before the pane's agent hooked in, has no
-    /// session the node could tie it to (docs/integrations/script-cli.md「归属」).
+    /// session the node could tie it to (docs/integrations/script-cli.md「Attribution」).
     var isSessionless: Bool { sessionID.isEmpty }
 
     /// Whether the app may answer it: a sessionless card always (no session source says no); else as its session's source

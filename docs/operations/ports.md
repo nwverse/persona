@@ -72,7 +72,7 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
   it is reloaded when taken out (unless it is still loading), otherwise you'd see the page as it was when last closed (2026-11-05, #1934). The refresh button in the top bar (`link-reload`) uses `reloadFromOrigin`
   to fetch again; native Lark pages don't have it.
 - The Mac App uses the same code; the sandbox needs `com.apple.security.network.server` (listening on loopback only).
-- Android (#2144): `core/hub/PortForwarder.kt` likewise listens on 127.0.0.1 and ::1 with one WebSocket per connection; see `docs/android/android.md` ("Port forwarding").
+- Android (#2144): `core/hub/PortForwarder.kt` likewise listens on 127.0.0.1 and ::1 with one WebSocket per connection; see `docs/android/android.md` ("Terminal and links").
 
 ### hub (`server/internal/hub/ports.go`) and streams (`server/internal/streams`)
 

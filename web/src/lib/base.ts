@@ -1,5 +1,5 @@
 // Where the hub's page is under this origin: "" at the root, "/<prefix>" when a reverse proxy serves the hub under a
-// sub-path. The hub writes it into index.html's <base> from the proxy's X-Forwarded-Prefix (docs/web/web.md "Sub-path"), so
+// sub-path. The hub writes it into index.html's <base> from the proxy's X-Forwarded-Prefix (docs/web/web.md "Subpaths"), so
 // the bundle's relative assets load from there; everything the page builds from a root path (the API, the WebSocket,
 // images and downloads, its own routes) puts BASE in front.
 export function baseOf(href: string | null | undefined): string {

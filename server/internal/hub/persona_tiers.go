@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 )
 
-// The tier a tiered persona shows (docs/apple/persona.md "Tiered looks"): the level of the user on the board the package names,
+// The tier a tiered persona shows (docs/apple/persona.md "Tiered avatars"): the level of the user on the board the package names,
 // read every 10 minutes (with the board's ETag, so an unchanged board is a 304). Who the user is on the board is their
 // GitHub login: the GitHub connector's account, or hub.json's personas.github_login. No login (not signed in, not on
 // the board): the default tier. The board out of reach: the tier stays as it was. The tier last seen is kept in

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """android_scroll_perf.py <serial> <package> <out.json> [styles...]: scroll the Agents list, a conversation and the
 inbox in each interface style (glass / brief / board) on a debug build, 10 runs per scenario, and record
-dumpsys gfxinfo for every run (docs/android/android.md, "Performance of UI styles").
+dumpsys gfxinfo for every run (docs/android/android.md, "Interface style performance").
 
 Each run: open the page through the debug entry (debug.style, debug.automation: no frame-drop fallback), wait, reset
 gfxinfo, fling up and down twice, then read the summary (total / janky frames, percentiles) and the framestats rows

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """End-to-end check of the to-dos' calendar on the web (#2029, docs/assistant/todos.md "Calendar"): List | Calendar
 switches and is kept in the address, the week / month / day show the mock's to-dos (due today at 10:00, 16:00 and two
-at 18:00), a block opens the to-do beside the calendar, a click on the empty axis makes a to-do due there, and the bar
-under the calendar goes back to the list. On a phone's width the week is the day. The page runs in zh-CN, as the other
+at 18:00), a block opens the to-do beside the calendar, a click on the empty axis makes a to-do due there, a to-do
+dragged to another time, onto the All day row or to another day of the month is saved there (#2045; a mouse at desktop
+width, a held touch at a phone's; Escape and a failed save put it back), and the bar under the calendar goes back to the
+list. On a phone's width the week is the day. The page runs in zh-CN, as the other
 web e2e checks, so the selectors use the Chinese labels.
 
 Needs a running web page against the fake hub, and Playwright for Python:
@@ -50,6 +52,132 @@ def until(check, what):
             return
         time.sleep(0.2)
     raise AssertionError("timed out: " + what)
+
+
+def local_time(page, iso):
+    """An ISO moment as the page's clock reads it: "HH:MM"."""
+    return page.evaluate("(s) => { const d = new Date(s); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') }", iso)
+
+
+def today_plus(page, days):
+    """A day as the hub writes due_date, `days` after the page's today."""
+    return page.evaluate("(n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }", days)
+
+
+def drag(page, cdp, size, frm, to, hold=True, between=None):
+    """Drags from frm to to (x, y): a mouse at desktop width, a held touch (CDP touch events) at a phone's. between runs
+    with the pointer at `to`, before it lets go."""
+    if size == "wide":
+        page.mouse.move(*frm)
+        page.mouse.down()
+        for i in range(1, 9):
+            page.mouse.move(frm[0] + (to[0] - frm[0]) * i / 8, frm[1] + (to[1] - frm[1]) * i / 8)
+        if between:
+            between()
+        page.mouse.up()
+        return
+    def touch(kind, x, y):
+        points = [] if kind == "touchEnd" else [{"x": x, "y": y, "id": 1}]
+        cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": points})
+    touch("touchStart", *frm)
+    if hold:
+        page.wait_for_timeout(600)  # held still: a drag, not a swipe
+    for i in range(1, 9):
+        touch("touchMove", frm[0] + (to[0] - frm[0]) * i / 8, frm[1] + (to[1] - frm[1]) * i / 8)
+    if between:
+        between()
+    touch("touchEnd", *to)
+
+
+def drag_checks(page, hub, token, size, theme, shot, tag):
+    """#2045: on the day's axis, onto the All day row, in the month; Escape and a failed save leave it where it was."""
+    expect(page.get_by_role("dialog")).to_have_count(0)  # New to-do has closed
+    cdp = page.context.new_cdp_session(page)
+    original = next(t for t in todos(hub, token) if t["id"] == "todo_weather")["due_at"]
+    weather = page.locator('[data-testid="todo-calendar-entry"][data-todo-id="todo_weather"]')
+    ghost = page.locator('[data-testid="todo-calendar-drop"]')
+    page.evaluate(f"document.querySelector('[data-testid=\"todo-calendar-axis\"] .overflow-y-auto').scrollTop = {9 * HOUR}")
+    column = page.locator('[data-testid="todo-calendar-column"]').first
+    box, col = weather.bounding_box(), column.bounding_box()
+    frm = (box["x"] + box["width"] / 2, box["y"] + 10)
+    to = (frm[0], col["y"] + 14.25 * HOUR + 10 + 4)  # its top edge just past 14:15
+
+    def seen():
+        expect(ghost).to_be_visible()
+        expect(page.locator('[data-testid="todo-calendar-drop-time"]')).to_have_text("14:15")
+        shot("drag")
+    drag(page, cdp, size, frm, to, between=seen)
+    until(lambda: local_time(page, next(t for t in todos(hub, token) if t["id"] == "todo_weather")["due_at"]) == "14:15", "due at 14:15 on the hub")
+    expect(ghost).to_have_count(0)
+    expect(weather).to_be_visible()
+    assert abs(weather.bounding_box()["y"] - (col["y"] + 14.25 * HOUR + 1)) < 3, weather.bounding_box()
+    assert "id=todo_weather" not in page.url, "the drag did not open the to-do: " + page.url
+    expect(page.get_by_role("dialog")).to_have_count(0)  # nor offer a new one where it ended
+    ok(f"{tag}: a to-do dragged on the axis is due at the quarter hour it lands on")
+
+    # a touch that moves at once is the page's: it scrolls, nothing moves
+    if size == "narrow":
+        box = weather.bounding_box()
+        drag(page, cdp, size, (box["x"] + 20, box["y"] + 10), (box["x"] + 20, box["y"] - 3 * HOUR), hold=False)
+        page.wait_for_timeout(300)
+        assert local_time(page, next(t for t in todos(hub, token) if t["id"] == "todo_weather")["due_at"]) == "14:15"
+        ok(f"{tag}: a swipe that starts on a to-do still scrolls")
+        page.evaluate(f"document.querySelector('[data-testid=\"todo-calendar-axis\"] .overflow-y-auto').scrollTop = {12 * HOUR}")
+
+    # a failed save says so and puts it back
+    page.route("**/api/v1/todos/todo_weather", lambda route: route.fulfill(status=500, content_type="application/json", body='{"error": "the hub could not save it"}')
+               if route.request.method == "PATCH" else route.fallback())
+    box, col = weather.bounding_box(), column.bounding_box()
+    drag(page, cdp, size, (box["x"] + box["width"] / 2, box["y"] + 10), (box["x"] + box["width"] / 2, col["y"] + 17 * HOUR + 10))
+    expect(page.get_by_text("没能改期")).to_be_visible()
+    shot("drag-failed")
+    expect(weather).to_be_visible()
+    assert abs(weather.bounding_box()["y"] - (col["y"] + 14.25 * HOUR + 1)) < 3, "back where it was"
+    page.unroute("**/api/v1/todos/todo_weather")
+    ok(f"{tag}: a failed save says so and the to-do goes back")
+
+    if size == "wide":  # Escape (a keyboard's)
+        box = weather.bounding_box()
+        drag(page, cdp, size, (box["x"] + 20, box["y"] + 10), (box["x"] + 20, box["y"] + 3 * HOUR), between=lambda: page.keyboard.press("Escape"))
+        page.wait_for_timeout(300)
+        assert local_time(page, next(t for t in todos(hub, token) if t["id"] == "todo_weather")["due_at"]) == "14:15"
+        assert "id=todo_weather" not in page.url, page.url
+        ok(f"{tag}: Escape puts it back")
+
+    # onto the All day row: due that day
+    all_day = page.locator('[data-testid="todo-calendar-all-day"]').first.bounding_box()
+    box = weather.bounding_box()
+    drag(page, cdp, size, (box["x"] + 20, box["y"] + 10), (all_day["x"] + all_day["width"] / 2, all_day["y"] + all_day["height"] / 2))
+    until(lambda: next(t for t in todos(hub, token) if t["id"] == "todo_weather").get("due_date") == today_plus(page, 0), "due today, all day")
+    ok(f"{tag}: onto the All day row it is due that day")
+
+    # the month: onto another day, as a whole
+    page.get_by_role("radio", name="月", exact=True).click()
+    expect(page.locator('[data-testid="todo-calendar-month"]')).to_be_visible()
+    target = today_plus(page, 2)
+    cells = page.locator('[data-testid="todo-calendar-month-day"]')
+    stamp = page.evaluate("(k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).getTime() }", target)
+    cell = page.locator(f'[data-testid="todo-calendar-month-day"][data-day="{stamp}"]')
+    if cell.count() == 0:  # the month ends before it: the day before instead
+        target = today_plus(page, -2)
+        stamp = page.evaluate("(k) => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d).getTime() }", target)
+        cell = page.locator(f'[data-testid="todo-calendar-month-day"][data-day="{stamp}"]')
+    assert cells.count() >= 28
+    chip = page.locator('[data-testid="todo-calendar-month"] [data-testid="todo-calendar-entry"][data-todo-id="todo_weather"]')
+    box, dest = chip.bounding_box(), cell.bounding_box()
+
+    def over():
+        expect(cell.locator('[data-testid="todo-calendar-drop"]')).to_be_visible()
+        shot("drag-month")
+    drag(page, cdp, size, (box["x"] + box["width"] / 2, box["y"] + box["height"] / 2), (dest["x"] + dest["width"] / 2, dest["y"] + dest["height"] - 8), between=over)
+    until(lambda: next(t for t in todos(hub, token) if t["id"] == "todo_weather").get("due_date") == target, "due on the day it was dropped on")
+    expect(cell.locator('[data-testid="todo-calendar-entry"][data-todo-id="todo_weather"]')).to_be_visible()
+    ok(f"{tag}: in the month it moves to the day it is dropped on")
+
+    call(hub, token, "PATCH", "/api/v1/todos/todo_weather", {"due_at": original})
+    page.get_by_role("radio", name="日", exact=True).click()
+    expect(page.locator('[data-testid="todo-calendar"]')).to_have_attribute("data-mode", "day")
+    cdp.detach()
 
 
 def run(browser, base, hub, token, size, theme, shots):
@@ -122,6 +250,8 @@ def run(browser, base, hub, token, size, theme, shots):
     expect(page.locator(f'[data-testid="todo-calendar-entry"][data-todo-id="{new["id"]}"]')).to_be_visible()
     call(hub, token, "DELETE", f"/api/v1/todos/{new['id']}")
     ok(f"{tag}: a click on the axis makes a to-do due there")
+
+    drag_checks(page, hub, token, size, theme, shot, tag)
 
     # Those without a due date: the bar goes back to the list.
     page.locator('[data-testid="todo-calendar-undated"]').click()

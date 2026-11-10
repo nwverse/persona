@@ -1,6 +1,6 @@
 import XCTest
 
-/// The base of the performance UI tests (#5730, docs/operations/testing.md "Performance UI tests"): every page and main transition
+/// The base of the performance UI tests (#5730, docs/operations/testing.md "Jank measurement"): every page and main transition
 /// of the iPhone app measured with `XCTHitchMetric` (and the scroll / navigation signposts where they apply) against a
 /// mock hub loaded with heavy data. Each suite expects its own mock (`scripts/app/perf-test.sh` starts one per suite
 /// with the env flags listed on the suite) at `TEST_RUNNER_PERSONA_PERF_HUB=http://127.0.0.1:<port>`; without it the

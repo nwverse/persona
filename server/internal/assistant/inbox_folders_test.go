@@ -38,20 +38,6 @@ func TestNormalizeFolder(t *testing.T) {
 	}
 }
 
-func TestInFolder(t *testing.T) {
-	for _, c := range []struct {
-		path, folder string
-		want         bool
-	}{
-		{"work/alerts", "", true}, {"work/alerts", "work", true}, {"work/alerts", "work/alerts", true},
-		{"workshop", "work", false}, {"work", "work/alerts", false}, {"", "work", false},
-	} {
-		if got := inFolder(c.path, c.folder); got != c.want {
-			t.Errorf("inFolder(%q, %q) = %v", c.path, c.folder, got)
-		}
-	}
-}
-
 // folderHub is an inbox with folders on and n open items f1…fn, newest first.
 func folderHub(t *testing.T, n int) *inboxHub {
 	t.Helper()

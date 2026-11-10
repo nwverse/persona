@@ -12,6 +12,35 @@
     <string name="inbox_close">关闭</string>
     <string name="inbox_expand">展开</string>
     <string name="inbox_collapse">收起</string>
+    <string name="inbox_mark_done">标为已处理</string>
+    <string name="inbox_group_agents">Agent 在等你</string>
+    <string name="inbox_group_mail">邮件 · %1$s</string>
+    <string name="inbox_group_just">刚刚处理</string>
+    <string name="inbox_group_today">今天</string>
+    <string name="inbox_group_yesterday">昨天</string>
+    <string name="inbox_group_week">7 天前</string>
+    <string name="inbox_group_month">1 个月前</string>
+    <string name="inbox_grouping_source">按来源</string>
+    <string name="inbox_grouping_time">按时间</string>
+    <string name="inbox_jump_to">跳到</string>
+    <string name="inbox_fold_all">全部折叠</string>
+    <string name="inbox_unfold_all">全部展开</string>
+    <string name="inbox_select_all">全选</string>
+    <string name="inbox_deselect_all">取消全选</string>
+    <string name="inbox_end_selection">结束选择</string>
+    <string name="inbox_pick_group">选中「%1$s」整组</string>
+    <string name="inbox_load_older">加载更早的</string>
+    <string name="inbox_loading_older">正在加载…</string>
+    <string name="inbox_older_failed">没加载到更早的</string>
+    <plurals name="inbox_selected_count">
+        <item quantity="other">已选 %1$d 项</item>
+    </plurals>
+    <plurals name="inbox_group_picked">
+        <item quantity="other">已选 %1$d</item>
+    </plurals>
+    <plurals name="inbox_picked_folded">
+        <item quantity="other">已选 %1$d 项（含折叠的 %2$d 项）</item>
+    </plurals>
     <string name="inbox_source_lark">飞书</string>
     <string name="inbox_source_mail">邮件</string>
     <string name="inbox_moments">公司圈</string>
@@ -168,6 +197,7 @@
     <string name="inbox_mute_tag_sender">发件人</string>
     <string name="inbox_mutes_title">已静音</string>
     <string name="inbox_mutes_failed">读不到已静音的列表</string>
+    <string name="inbox_mutes_offline">离线中：它回来后这里会显示它的静音。</string>
     <string name="inbox_mutes_empty_title">没有静音的</string>
     <string name="inbox_mutes_empty_text">在收件箱里长按一条，可以静音它的仓库、会话或发件人。</string>
     <string name="inbox_unmute">取消静音</string>
@@ -199,6 +229,7 @@
     <string name="inbox_policy_failed">规则没保存成功：%1$s</string>
     <string name="inbox_rules_title">规则</string>
     <string name="inbox_rules_failed">规则没加载出来：%1$s</string>
+    <string name="inbox_rules_offline">离线中：它回来后这里会显示它的规则。</string>
     <string name="inbox_rules_empty_title">还没有规则</string>
     <string name="inbox_rules_empty_text">在收件箱里长按一条内容，为它的会话、发件人或仓库设规则。</string>
     <string name="inbox_rules_remove_failed">规则没移除成功：%1$s</string>

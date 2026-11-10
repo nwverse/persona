@@ -25,7 +25,7 @@ const (
 // widgetKinds are the components a widget draws; the rest are left out, or drawn as text (markdown, empty, loading).
 var widgetKinds = []string{"metric", "stat_grid", "progress", "chart", "text", "row"}
 
-// FitWidget makes a View an extension drew for a widget into one the family draws (docs/extensions/extensions.md "System-level places"):
+// FitWidget makes a View an extension drew for a widget into one the family draws (docs/extensions/extensions.md "System-level placements"):
 // first as any view (Fit), then held to a widget's subset — a metric, a stat_grid, a progress, a chart, a few lines of
 // text, a few rows, nothing to tap (a tap opens the widget's page), no search, filter or more — cutting what is too
 // long rather than refusing it. A complication (accessory_*) draws one metric, progress or line of text, the first.

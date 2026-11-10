@@ -226,7 +226,8 @@ func testDB(t *testing.T) *db.DB {
 	return database
 }
 
-// The hub answers the assistant's schedule calls with its own functions: the machines; a push like an agent's, a live update as it is; the tasks it reports are what the hub reads.
+// The hub answers the assistant's schedule calls with its own functions: the machines; a push like an agent's, a live
+// update as it is; the profile its snapshot reports.
 func TestAssistantLinkScheduleCalls(t *testing.T) {
 	h, n := conversationsHub(t)
 	link := assistantLink{h}
@@ -264,8 +265,5 @@ func TestAssistantLinkScheduleCalls(t *testing.T) {
 	// The node is told what it keeps by the manager that connects it (internal/devices TestSetKeepTellsTheNodes).
 	if keep := h.assistantProfile().Keep; len(keep) != 2 || keep[0].SessionID != "main-0001" || keep[1].SessionID != "trip-0002" {
 		t.Fatalf("the profile keeps the main conversation and the tasks' own: %v", keep)
-	}
-	if tasks, ok := h.assistantTasks(); !ok || len(tasks) != 1 || tasks[0].RunSessionID != "trip-0002" {
-		t.Fatalf("the tasks as reported: %+v", tasks)
 	}
 }

@@ -23,10 +23,6 @@ type planTaskIn struct {
 	TodoID string `json:"todo_id"`
 }
 
-func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
-	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
-}
-
 // toolTaskPlanFrom is task_plan from the conversation sessionID running on machine (where its attachments are).
 func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID string, args json.RawMessage) (string, error) {
 	var in struct {

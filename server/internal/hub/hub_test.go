@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/identity"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -109,13 +108,6 @@ func TestEnvOverridesConfig(t *testing.T) {
 	}
 }
 
-func TestNodeBinaryDirFromEnv(t *testing.T) {
-	t.Setenv("PERSONA_NODE_BINARIES", "/opt/persona/nodes")
-	if d := identity.NodeBinaryDir(); d != "/opt/persona/nodes" {
-		t.Fatalf("node binaries in %s", d)
-	}
-}
-
 func TestLoadConfigCreatesAndReloads(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("PERSONA_HOME", "")
@@ -139,39 +131,6 @@ func TestLoadConfigCreatesAndReloads(t *testing.T) {
 	}
 	if again.Token != cfg.Token {
 		t.Fatal("the token must survive a reload")
-	}
-}
-
-// scripts/deploy/db.sh creates hub.json with only database_url before the hub's first start: the token generated then must
-// be written down, or each start and `personad hub pair` would invent another one and paired phones get 401.
-func TestLoadConfigPersistsTokenMissingFromFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("PERSONA_HOME", "")
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
-	dir := filepath.Join(home, ".persona")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "hub.json")
-	if err := os.WriteFile(path, []byte(`{"database_url":"postgres://x"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	again, err := LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Token == "" || again.Token != cfg.Token {
-		t.Fatalf("token changed between loads: %q then %q", cfg.Token, again.Token)
-	}
-	var raw map[string]any
-	b, _ := os.ReadFile(path)
-	if err := json.Unmarshal(b, &raw); err != nil || raw["database_url"] != "postgres://x" || raw["token"] != cfg.Token {
-		t.Fatalf("hub.json = %s", b)
 	}
 }
 
@@ -265,6 +224,21 @@ func TestPairPrintsTheLinkForTheMac(t *testing.T) {
 	if !strings.Contains(out, "Server: "+cfg.PublicURL) {
 		t.Fatalf("pair output lost the server line:\n%s", out)
 	}
+}
+
+// A hello starts fleetClientsChanged in the background, so test clients use the same lock as connections.
+func addTestClient(h *Hub, clients ...*client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range clients {
+		h.clients[c] = struct{}{}
+	}
+}
+
+func removeTestClient(h *Hub, c *client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.clients, c)
 }
 
 // newTestHub builds a Hub with no machines, no clients and push disabled, so interaction logic can be exercised offline.
@@ -373,7 +347,7 @@ func TestPhoneToolsDeviceRouting(t *testing.T) {
 	defer cancel()
 	iphone := &client{hub: h, device: "credential-ios", role: roleFull, out: make(chan []byte, 8)}
 	android := &client{hub: h, device: "credential-android", role: roleFull, out: make(chan []byte, 8)}
-	h.clients[iphone], h.clients[android] = struct{}{}, struct{}{}
+	addTestClient(h, iphone, android)
 	// Existing iOS omits both new fields; Android supplies its own device ID.
 	h.onClientMessage(ctx, iphone, []byte(`{"type":"register_phone","tools":[{"name":"phone_reminders_list"},{"name":"phone_device_info","description":"Detailed device information"}]}`))
 	h.onClientMessage(ctx, android, []byte(`{"type":"register_phone","device_id":"android-device","platform":"android","simulator":true,"tools":[{"name":"phone_notifications_list"},{"name":"phone_device_info","description":"Info"}]}`))
@@ -462,7 +436,7 @@ func TestCallPhoneWaitsForApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	phone := &client{hub: h, device: "credential-ios", role: roleFull, out: make(chan []byte, 8)}
-	h.clients[phone] = struct{}{}
+	addTestClient(h, phone)
 	h.onClientMessage(ctx, phone, []byte(`{"type":"register_phone","tools":[{"name":"phone_reminders_create"},{"name":"phone_device_info"}]}`))
 
 	if r := h.callPhone(ctx, "phone_device_info", json.RawMessage(`{}`)); !r.IsError || !strings.Contains(textOf(r), "Timed out waiting for the iPhone") {

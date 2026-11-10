@@ -415,7 +415,7 @@ struct ShellNeedsYou: View {
     }
 }
 
-/// The pages the shell pushes onto the Assistant page by value (docs/apple/ios.md「新外壳」), and what those push in turn: the
+/// The pages the shell pushes onto the Assistant page by value (docs/apple/ios.md「New shell」), and what those push in turn: the
 /// inbox (its items and Feishu pages), the machines (a machine, its agents). One stack, values only: a value pushed on
 /// top of a view-based push lands under it (docs/lessons/ios.md).
 struct ShellDestinations: ViewModifier {
@@ -446,6 +446,6 @@ struct ShellDestinations: ViewModifier {
 }
 
 extension EnvironmentValues {
-    /// The Persona conversation is in the shell (docs/apple/ios.md「新外壳」): neutral bubbles, the shell's composer, modes in it.
+    /// The Persona conversation is in the shell (docs/apple/ios.md「New shell」): neutral bubbles, the shell's composer, modes in it.
     @Entry var shellChat = false
 }
