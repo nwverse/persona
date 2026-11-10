@@ -8508,7 +8508,8 @@ if os.environ.get("MOCK_EDIT_DIFF") == "1":
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
 # MOCK_CARDS=1: the main conversation ends with a health answer drawn as cards (#886, ```persona-card): a stacked bar
-# with a rest, a stat with a note, a line and bars, and a block the app cannot read (stays a code block).
+# with a rest, a stat with a note, a line and bars, a ring, a type the app does not know (shown in words, #3397) and a block the
+# app cannot read (stays a code block).
 if os.environ.get("MOCK_CARDS") == "1":
     _card = lambda d: "```persona-card\n" + json.dumps(d, ensure_ascii=False) + "\n```"
     _days = ["10/28", "10/29", "10/30", "10/31", "11/1", "11/2", "11/3"]
@@ -8525,7 +8526,13 @@ if os.environ.get("MOCK_CARDS") == "1":
                    "points": [{"label": d, "value": v} for d, v in zip(_days, [6.5, 7.2, 5.8, 7.9, 6.1, 8.4, 7.0])]}),
             _card({"type": "bar", "title": "近 7 天活动能量", "unit": "千卡",
                    "points": [{"label": d, "value": v} for d, v in zip(_days, [420, 380, 510, 460, 120, 530, 272])]}),
-            _card({"type": "pie", "segments": [{"label": "a", "value": 1}]}),
+            _card({"type": "ring", "title": "今日热量", "unit": "kcal", "total": {"value": 2250},
+                   "segments": [{"label": "早餐", "value": 555, "note": "已吃"}, {"label": "午餐", "value": 900},
+                                {"label": "晚餐", "value": 750}], "note": "还能吃 45 kcal"}),
+            _card({"type": "sunburst", "title": "本周饮食", "unit": "kcal", "total": {"value": 14200},
+                   "segments": [{"label": "主食", "value": 6100}, {"label": "蛋白质", "value": 4300}, {"label": "蔬果", "value": 2600}],
+                   "rest": {"label": "零食", "value": 1200}}),
+            "```persona-card\n{\"type\": \"stat\", \"title\": \"步\n```",
         ])),
     ]
 # The health space's conversations (docs/assistant/health.md "Charts", #3140): the numbers in each answer come with the charts its
