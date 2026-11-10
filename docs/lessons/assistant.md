@@ -185,3 +185,12 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   — a state that cannot be told still tries, the owner asked — and let a live run this chat sent into that conversation
   win (`channel.Run.Seen` false: the turn may just not be read as working yet), or a `/stop` sent right after the message
   stops nothing.
+
+- **A table row is split at every unescaped `|`, inside a code span too** (#3852). GFM cuts a cell at a pipe the row did
+  not escape, so `| `a || b` | 或 |` really is a row with four cells while its header has two; GFM draws only the
+  header-width cells and ignores the excess, and `answerTables` (`feishubot/answer.go`) built a row the same way, by
+  looping over the header's columns alone, so everything past the header's width — here "b`" and "或" — never reached
+  the card, with nothing said. The rich-text fallback kept those words, so the same answer read differently as a card
+  and as a refused card's text. Those words are still the row's: keep the surplus cells in the last column, joined with
+  " | " and with empty ones skipped (a trailing `||` adds no junk), clipped and escaped like any other cell. When
+  changing how a table row is laid out, compare its card with its fallback.
