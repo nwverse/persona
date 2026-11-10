@@ -133,7 +133,7 @@ Decisions the user has made for this task ("Decision records"):
 ### 5. todo_supervision table
 Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-entry.md`, "Supervision"), one row each; unsupervised to-dos have no row:
 - `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE).
-- `supervisor` (text, NOT NULL): supervisor, the chat that created it.
+- `supervisor` (text, NOT NULL): supervisor, the chat that created it. With Agent tasks on (#3617, `docs/assistant/unified-entry.md` "Agent tasks") a to-do another chat or the user opened can have one too: the main chat or a leader, with `done_when` empty unless given.
 - `done_when` (jsonb, NOT NULL, DEFAULT '[]'): acceptance criteria (string array); `expect_minutes` (integer, NOT NULL, DEFAULT 0): expected minutes.
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).
@@ -149,7 +149,7 @@ Link/release semantics:
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/todos` | All to-dos (`created_at` descending; the apps sort them themselves), each with `due_at` / `due_date`, `remind_at`, `reminded_at`, `priority`, `project` when set, and `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending); a to-do waiting for the owner also has `ask` ("Waiting for the owner") |
+| GET | `/api/v1/todos` | All to-dos (`created_at` descending; the apps sort them themselves), each with `due_at` / `due_date`, `remind_at`, `reminded_at`, `priority`, `project` when set, and `spaces` and `agents` lists (removed rows filtered out; active first by `linked_at` descending, previously involved after by `released_at` descending); a to-do waiting for the owner also has `ask` ("Waiting for the owner"), an open one nobody works on `orphaned` ("Nobody is working on this") |
 | POST | `/api/v1/todos` | Create `{"title", "notes"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?, "kind"?}` → `{"todo": Todo}`; `kind` `concern` records one of the owner's concerns ("Concerns"; without the hub's database 503), `todo` or none a to-do, anything else 400; nonempty `title` required (400); `due_at` / `remind_at` RFC 3339, `due_date` `YYYY-MM-DD`, `priority` `high` / `normal` / `low` / `""`, `project` a knowledge-base project's slug or name (stored as its slug), anything else (or both due fields, or no such project) 400; read-only role (watch) 403 |
 | PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?}` → `{"todo": Todo}`; only supplied fields change, `null` (or `""`) clears a due date or reminder, `""` takes it out of its project; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; `"done": true` on an open concern 409 (only its report closes it, "Concerns"); missing 404; read-only role 403 |
 | POST | `/api/v1/todos/retitle` | Give short titles to task to-dos previously named from the prompt's first line ("To-do titles") → `{"dry_run", "todos": [{"id", "old_title", "new_title"}]}`; `?dry_run=1` lists without changes; read-only role 403 |
@@ -262,6 +262,7 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 | 5 | Follow up | All linked active Agents are stalled (`idle` seen, `offline` not running, or launch failed) with nothing to bring them back |
 | 6 | Not started | No linked active Agents |
 
+- **Nobody is working on this** is not a row of this table: the hub works it out, since it needs to know whether the Agents' computers are connected and whether a wake is pending, and sends it as `orphaned` on the to-do ("Nobody is working on this"). A client that shows it puts it ahead of Interrupted and Follow up; one that does not shows the row above as before.
 - To-do list ordering: unfinished first (same state by `created_at` descending), completed collapsed at bottom.
 - Completion means the task is over: its Agents' sessions no longer say they currently work for it; **Reopen** to continue. A chat-dispatched task the hub completed (auto-completed or accepted by its supervisor) also reopens when one of its Agents starts a turn again (sent more with `agent_send`, or by the user; see "Close Agents for completed tasks", #5892). Cancelled tasks stay closed when their Agent works again; only an explicit **Reopen** resumes their task tracking and supervision (#1851).
 - **A hub restart during startup** (#3251, `assistant/tasks_recover.go`): a task start keeps the assistant busy from before its goroutine is launched until linking, failure bookkeeping or entering a retained-tab remedy has finished. The built-in manager therefore waits for it before switching binaries, subject to its existing 30-minute maximum (`docs/assistant/managers.md`). After a forced restart or crash, before its background loops begin, the assistant reads saved to-dos and plans. A started plan updated within `taskStartTimeout` (5 minutes) before this service was created, with an open task that has no agent, start error or recorded start remedy, is marked failed with an explicit restart reason. This includes read-only / plan-mode tasks and reused topic to-dos, whose plan relationship is saved in `ReuseTodo` instead of the to-do’s `PlanID`. The plan keeps the error, the conversation gets a failed receipt, and the supervisor receives an urgent failed-start signal (other tasks use the ordinary failure notification). Completed or cancelled tasks, any task with an agent, recorded remedies, older plans and starts admitted by the new service are left alone. The window uses the plan's saved update time, so approving an old draft or retrying a failed start can still qualify; historical dangling work is not replayed on deployment.
@@ -288,6 +289,8 @@ curl -X POST '<hub address>/api/v1/todos/retitle' -H 'Authorization: Bearer <tok
 ## Automatic completion
 
 Tasks dispatched from assistant chats (to-dos created by `task_plan`, nonempty `origin`) are automatically marked done by assistant, without individual user taps (except tasks supervised by main chat: completion judgment moves to "Pending review", and supervisor must accept with `task_review`, `done_by = review`, see `docs/assistant/unified-entry.md`, "Supervision"). Manually created to-dos (empty `origin`) never auto-complete; only user marking done counts.
+
+With Agent tasks on (#3617, off by default; `docs/assistant/unified-entry.md` "Agent tasks"), an Agent started from an app's New Agent or by `agent_start` from any chat is on a quiet, supervised to-do with a nonempty `origin`, so it is judged here like the main chat's own tasks: an app's Agent gets its to-do at the first turn end that did work, and that stop is the first one judged. A manually created to-do an Agent is linked to gets a supervisor then, but still never auto-completes.
 
 **When judged**: all task Agents stop (none working, waiting for user or carrying pending cards), at the same point assistant sends the done receipt to chat (`taskTurnEnded` in `assistant/tasks_follow.go`; one receipt and one judgment per stretch of work). The receipt's `done` is the end of that stretch, not of the task: the apps draw it "<task> stopped, not done yet" while the to-do is open and as done once it is, and the "Today" card lists as finished only to-dos that are done (#6153).
 
@@ -373,7 +376,7 @@ links do not count, and an Agent linked to an open to-do can still receive follo
 unaffected. Direct chat messages and `agent_send` still work; a user-completed to-do stays done until explicitly reopened,
 while a hub-completed task reopens on new work as described below.
 
-After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent no longer occupies a herdr tab:
+After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent no longer occupies a herdr tab (with Agent tasks on, `docs/assistant/unified-entry.md` "Agent tasks", that includes the Agents started from an app or another chat, whose to-dos have an `origin` too):
 assistant checks every minute (`assistant/tasks_close.go`, reading hub's App-facing session list through `sessions.list`); once task completion and Agent inactivity both reach 3 minutes (`taskCloseIdle`, measured from the later of completion time and last activity), ask node to close it (`session.retire`, `node/retire.go`):
 close its pane (whole tab if it is the only pane, same as **Close** on phone), exiting the Agent process with it.
 
@@ -404,6 +407,36 @@ Agents linked to no task (user-created, `agent_start`, inspection sessions such 
 Every tab Persona opens for an Agent carries the herdr pane token `persona_tab` (the session id when known). Once a minute node looks at such panes with no Agent in them: when only shells are in front and the screen has not changed for 10 minutes (`shellTabIdle`; any output or typing restarts the wait), it closes the pane (the whole tab when it is the only one). The session is untouched: the next message resumes it as above.
 Never closed: panes without the token (tabs the user opened, the pane picked for **Run Agent Here**), panes where another program is in front, a session being started or resumed, assistant chats. herdr does not keep pane tokens across a herdr server restart, so tabs opened before one are left alone.
 
+## Closed sessions archive themselves
+
+#3618 (`assistant/agent_archive_auto.go`). Closing an Agent leaves its session in the lists as stopped, so after a few weeks most of the list is closed sessions of finished tasks and the Agents that matter are hard to find. Every five minutes, in the loop that closes Agents, the manager archives a session when all of these hold:
+
+- it is **closed**: its tab is gone and it runs in no host: no `pane_id`, no `host`, and it is neither working nor starting. The status does not decide it. A closed session reads `offline`, but just as often `interrupted` with state `unknown`: a node that restarts marks the sessions it had running in a pane as interrupted so the apps offer **Continue**, the mark stays until a message resumes the session, and the unified state has no value for it. Some keep the `idle` or `unknown` their host last reported. A session another tool lists (`source_kind`) counts as closed only when that tool says `offline`;
+- it has been **idle for `archive_closed_days`** (assistant setting, default 3, `0` turns the pass off, 0–3650, `GET` / `PUT /api/v1/assistant`), counted from the latest of its last step, the moment its latest to-do was done, and the last time its archive state changed (so a session the user restored is not taken straight back);
+- it is **on no to-do, or every to-do it is on is done**.
+
+It uses the archive the apps use ("Agent session archives" in `docs/protocol/protocol.md`): the session moves under Archived, nothing is deleted, the tool that owns it is asked to archive it too where it can, and new activity (a message resumes it) restores it for good. At most 20 sessions are archived per pass, so a long backlog clears over a few passes.
+
+Never archived by this pass: a session still in a host (a pane or an engine host), including one whose state the host cannot tell (`unknown`); one working, starting, or with background commands, subagents, workflows, a `/loop` or a server running; one with a card waiting for the user or queued input; one the manager is to wake or continue, or that waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set); one linked to an open to-do; an assistant conversation; a review's reviewer; a subagent's row; a session another tool owns (`source_kind` set: archiving it would also move it in that tool); with no to-do, one whose last reply asks the user something nobody answered (`awaits_reply`). Computers that are not connected are skipped, and nothing runs until the to-dos are loaded, since they say which sessions open tasks count on. Each candidate is looked at again just before its archive is written.
+
+## Nobody is working on this
+
+#3618 (`assistant/tasks_orphan.go`). An open task can lose its Agent without anyone noticing: the Agent ended on a model error nothing retries and its tab was closed, the user closed the tab, or the computer went offline. The task then still reads as in progress. Once a minute the manager looks at every open to-do that has Agents; the to-do is **orphaned** when every active Agent on it is gone and nothing pending brings one back.
+
+An Agent is gone when its computer is not connected, the computer no longer lists the session, or the session is closed in the sense of "Closed sessions archive themselves" (no pane and no host, not working or starting, whatever its status reads: `offline`, `interrupted`, `idle` or `unknown`). It is not gone, whatever its status, when it is an assistant conversation, is starting, has a card waiting or queued input, has a wake or continuation pending or waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set), or waits out a subscription usage limit.
+
+`GET /api/v1/todos` then carries `orphaned: {"reason", "since"}` on the to-do, and the apps are told to read the to-dos again (`{"type":"todos"}`) when it appears, changes reason or goes. `since` is when the manager first saw it so (it restarts with the manager). `reason` is the first that applies to any of its Agents:
+
+| `reason` | Meaning |
+| --- | --- |
+| `error` | An Agent is closed and its last turn ended on a model error (`turn_error`) that nothing is set to retry |
+| `offline` | An Agent's computer is not connected. Reported only after the computer has been away for 10 minutes, so a dropped link or a node restart flags nothing |
+| `closed` | The Agents' tabs are closed, by the user or by the idle rule ("Close Agents for completed tasks"), and nothing is set to wake them |
+
+Not orphaned: a done to-do; one with no Agent yet (not started, or its start failed: "Remedying a start"); a supervised task waiting for its review or for the user's decision, which waits on them and not on an Agent. A to-do whose computer is connected but could not be asked this minute keeps what was found before.
+
+The assistant's snapshot says it on the task's line, and a supervised task's supervisor gets the `orphaned` signal once (`docs/assistant/unified-entry.md`, "Supervision": the supervisor loop's signals). Clients that do not know the field show the to-do as before; showing it on the task card and row is each client's own work.
+
 ## Decision records
 
 The costliest long-task mistake is an Agent forgetting a decision already made: asking again or silently overturning it (#1618). Decisions scattered across Agent chats disappear when switching Agents or compacting, so collect them by to-do:
@@ -428,7 +461,7 @@ Something the owner raises in the main conversation and wants an answer to is a 
 - **Never closes on its own**: the hub's judge ("Automatic completion"), a review or cancellation, a failed start, `todo_complete` and `PATCH {"done": true}` (an app, an extension) all leave it open (the PATCH answers 409, the tool says to report instead). The store refuses each of them for `kind = concern`, and memory refuses a row that would close one without `done_by = reported`. Reopened (`PATCH {"done": false}`, `todo_reopen`), it needs another report; deleting it stays the owner's choice.
 - **Extensions**: `todo.changed` carries `kind: "concern"` (created, reopened, closed by its report), and each report is a `todo.decision` with `source: "reported"`, so a work-log extension can keep the concern in its record and show its answer.
 - `todo_list {kind: "concern"}` lists the open concerns; `todo_list` / `todo_get` mark them `concern`.
-- Clients: `kind` is on the to-do's JSON (left out for others), `done_by` `reported` on a closed one; clients that do not know them show it as a to-do. The SOP rule (an open concern sits in Working while a task of it runs, else in Other open, labelled Concern and not folded) and the secretary's prompt (P1) come later; until P1 the main conversation records and reports concerns only when told to.
+- Clients: `kind` is on the to-do's JSON (left out for others), `done_by` `reported` on a closed one; clients that do not know them show it as a to-do. The SOP rule (an open concern sits in Working while a task of it runs, else in Other open, labelled Concern and not folded) is on the hub (`todo_triage.go`: never shelvable, #3610, so a leader's stuck report and the counts see it right); the clients follow with W1 / I1 / A1 (#3582), and the shared fixtures with them. The secretary's prompt (P1, #3609) has the main conversation record a concern whenever the owner raises one, and report it only after telling the owner the outcome.
 
 ## Questions nobody answered
 
