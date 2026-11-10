@@ -155,8 +155,8 @@ func (k *assistantKeeper) adopt(n *Node) []*assistantProc {
 				p.mu.Lock()
 				busy := p.busy
 				p.mu.Unlock()
-				if !busy && pending == nil {
-					r = nil // the turn succeeded between handover and adoption; there is nothing left to recover
+				if r.finished || (!busy && pending == nil) {
+					r = nil // a result completed between handover and adoption; there is nothing left to recover
 				} else {
 					r.pending, r.running, r.done, r.proc = nil, false, nil, p
 				}

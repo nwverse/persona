@@ -578,6 +578,28 @@ func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
 	}
 }
 
+func TestAssistantSuccessBeforeAdoptionDoesNotMigrateRecovery(t *testing.T) {
+	k := newAssistantKeeper()
+	a, b := assistantNode(t), assistantNode(t)
+	a.keeper, b.keeper = k, k
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := keptProc(t, a, id, "claude")
+	p.busy = true
+	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
+	a.recoveries = map[string]*assistantTurnRecovery{id: r}
+	a.handOverAssistants()
+	a.clearAssistantRecovery(p) // success is recorded, but the result handler has not cleared busy yet
+	if adopted := k.adopt(b); len(adopted) != 1 {
+		t.Fatalf("the live conversation was not adopted: %+v", adopted)
+	}
+	p.mu.Lock()
+	p.busy = false
+	p.mu.Unlock()
+	if b.recoveries[id] != nil {
+		t.Fatal("adoption migrated a recovery whose successful result had already arrived")
+	}
+}
+
 func TestAssistantSuccessOnTheOldNodeClearsTheAdoptedRecovery(t *testing.T) {
 	k := newAssistantKeeper()
 	a, b := assistantNode(t), assistantNode(t)

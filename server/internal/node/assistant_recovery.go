@@ -15,12 +15,13 @@ import (
 // A failed Claude turn is recovered before its idle state reaches the manager and the scheduled-run watcher. The
 // budget belongs to the conversation, not assistantProc: selecting another model restarts that process.
 type assistantTurnRecovery struct {
-	retried map[string]bool // one same-model continuation per model
-	used    map[string]bool // models this request has already tried, never selected again
-	proc    *assistantProc  // working-status placeholder while a model switch has no registered process
-	done    chan struct{}   // non-nil while runAssistantRecovery can still send; cleared after its final state update
-	running bool
-	pending *assistantPendingFailure
+	retried  map[string]bool // one same-model continuation per model
+	used     map[string]bool // models this request has already tried, never selected again
+	proc     *assistantProc  // working-status placeholder while a model switch has no registered process
+	done     chan struct{}   // non-nil while runAssistantRecovery can still send; cleared after its final state update
+	running  bool
+	finished bool // a result completed while handover still owned the process; adopt must not migrate it
+	pending  *assistantPendingFailure
 }
 
 // assistantPendingFailure is a new turn result that arrived while its recovery send was still returning. It is not a
@@ -102,6 +103,9 @@ func (n *Node) clearAssistantRecovery(p *assistantProc) {
 	}
 	n.mu.Lock()
 	if n.recoveryClosed && n.procs[p.id] != p {
+		if r := n.recoveries[p.id]; r != nil && (r.proc == nil || r.proc == p) {
+			r.finished = true // the result handler may clear busy only after adopt has inspected it
+		}
 		owner := p.ownerOr(n)
 		n.mu.Unlock()
 		if owner != n { // the result handler read the old owner before adoption; finish on the current one
@@ -182,6 +186,7 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		// No new goroutine runs on the ended connection. The keeper carries this failure and the remaining budget to
 		// the next Node, even when the result arrives after the process map has already handed over.
 		r.pending = &assistantPendingFailure{text: result, kinds: kinds}
+		r.finished = false
 		r.proc = p
 		n.mu.Unlock()
 		p.mu.Lock()
