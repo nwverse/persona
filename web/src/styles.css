@@ -72,6 +72,11 @@
   --shadow-overlay: 0 0 0 1px var(--line), 0 8px 28px #0001;
   --shadow-nav-preview: 0 12px 40px #00000014;
   --shadow-inset-field: inset 0 1px 2px #0000001f;
+  /* The on/off switch (ui/atoms.tsx Switch, #3675): iOS's green and a translucent grey track (a little darker than iOS's in light), so the off track shows on
+     every background; the knob is white with a soft shadow and no ring. */
+  --switch-on: #34c759;
+  --switch-off: #78788033;
+  --shadow-knob: 0 2px 4px #00000026, 0 1px 1px #0000000f;
 }
 
 .dark {
@@ -116,6 +121,9 @@
   --shadow-overlay: 0 0 0 1px var(--line-strong), 0 8px 28px #00000057;
   --shadow-nav-preview: 0 12px 40px #00000060;
   --shadow-inset-field: inset 0 1px 2px #0006;
+  --switch-on: #30d158;
+  --switch-off: #78788052;
+  --shadow-knob: 0 2px 4px #00000066, 0 1px 1px #00000033;
 }
 
 /* Source messages share the chat's typography and neutral surfaces in every theme. */
@@ -202,6 +210,10 @@
 
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-link: cubic-bezier(0.16, 1, 0.3, 1);
+  --sidebar-fold-open: 250ms;
+  --sidebar-fold-close: 200ms;
+  --sidebar-fold-open-ease: ease-out;
+  --sidebar-fold-close-ease: ease-in;
 
   --font-sans: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
@@ -445,6 +457,15 @@ select:not([multiple], [size], .appearance-none) {
   --seg-track: color-mix(in srgb, var(--ink) 7%, transparent); --seg-dur: 200ms;
 }
 @theme inline { --color-seg-track: var(--seg-track); }
+@theme inline { --color-switch-on: var(--switch-on); --color-switch-off: var(--switch-off); --shadow-knob: var(--shadow-knob); }
+/* The switch's keyboard focus ring follows its pill (the rule for every button rounds to 6 px) and stands clear of the
+   track; a mouse click shows none (:focus-visible). Forced colors drop the fills, so the track and knob get system colors. */
+.switch:focus-visible { border-radius: 9999px; outline-offset: 2px; }
+@media (forced-colors: active) {
+  .switch { border: 1px solid ButtonText; }
+  .switch > span { background: ButtonText; }
+  .switch[aria-checked="true"] > span { background: Highlight; }
+}
 .status-mark { --mark-size: var(--mark-dot); --mark-spin-size: var(--mark-spin); display: inline-block; flex-shrink: 0; box-sizing: border-box; width: var(--mark-size); height: var(--mark-size); border-radius: 9999px; }
 .status-mark[data-size="sm"] { --mark-size: var(--mark-dot-sm); --mark-spin-size: var(--mark-spin-sm); }
 .status-mark[data-shape="dot"] { background: var(--mark-color); }

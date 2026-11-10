@@ -64,6 +64,28 @@ The split is one pure function per client: web `assistantEntries` (`web/src/lib/
 which entry every case goes to (Apple: `AssistantEntriesFixtureTests`). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
+### Background activity in In progress (#3588)
+
+A task's row and a hand-opened Agent's row use the **existing Working spinner** whenever background commands,
+Monitor, workflows or subagents are active. They do not use separate gear, workflow or subagent icons in the tray.
+Their state text is Working, even when the parent turn ended to wait for that work. The subtitle names the activity:
+`Background tasks running: N`, `Subagents running: N`, or `Background workflow · <phase> · <done>/<started>+`,
+using the same phase and counts as the Agent's running footer. Mixed activity remains explicit; multiple workflows
+show the newest run plus the number of other runs. The `+` means more agents may still start, not a fixed planned total.
+Only a genuine wait with no background activity retains the waiting clock. Pending questions and decisions still win
+and put the task in Needs you; finished and released bindings never contribute activity to an open task.
+
+The existing pure entry functions carry derived `activity` alongside each running row. They sum distinct active
+Agent bindings, so activity on a non-lead Agent is not lost and duplicate bindings do not inflate counts. Session list
+summaries use `background_tasks_count`, `running_subagents`, `running_workflows` and `workflow_progress` (the
+compact projection in `docs/protocol/protocol.md`, "Summary rows"); complete Session responses use their
+existing `background`, `subagents` and `workflows` arrays. Missing fields on older hubs retain a generic activity line
+rather than fabricate phase or progress. Newer summary revisions win over cached chat detail, including same-state
+phase/count updates and completion; a row projection is not installed as an open chat's complete state.
+
+Apple clients can decode the two additive summary fields using their existing Workflow DTO, apply the same spinner
+and subtitle rules, and replay the extended shared fixtures. No new endpoint, task storage or model call is required.
+
 ### Progress tray: one task, one row (#2878)
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
@@ -256,10 +278,11 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
   Completion is about the assigned task and its `done_when`, not whichever side question the Agent answered last. A known peer, cross-conversation or inspection turn cannot enter pending review on its answer alone. Only a fresh, successful `report_to_supervisor` done call with evidence tied to this task can establish the completion candidate from such a turn; the supervisor must still verify it. Unknown-source fallbacks never imply that a new question replaced a finished task. Ordinary delivery turns continue through the existing judge without requiring that tool.
   Ordinary `agent_send` from a conversation other than the task's supervisor carries a `side-conversation` context marker; the supervisor's instructions and explicit task handoffs retain their existing behavior.
 - **Supervisor loop** (`server/internal/assistant/supervise_signals.go`, no model calls): every 30 seconds, inspect supervised tasks plus task events and derive signals:
-  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start.
+  `review` pending review, `idle` stopped unfinished, `needs_you` waiting for an answer over 3 minutes (immediately for quiet tasks, since the user received no push), `stalled` working without progress (no session update) for more than max(20 minutes, estimate × 1.5), `interrupted` by model-service error, `failed` to start, `orphaned` when nobody works on it any more (below).
   The same signal for the same task is reported only once within the same state segment. A second guard suppresses an unchanged summary for the same task, Agent and signal kind for 30 minutes, regardless of new turn timestamps or elapsed-minute counters. Its hashed fingerprints and timestamps live in Postgres settings (`assistant.supervision_dedup`), survive manager restarts, and are reserved before dispatch; failed dispatch and queue admission release the reservation. An unreadable or unwritable reservation is retried rather than treated as empty history. Changed evidence, questions, summary, task, Agent or status can wake again. Signals from multiple tasks are combined into **one "📋 督办" (supervision) message** in the main chat (`prompts/assistant/supervise.md`: task, signal, criteria, question, Agent's last text, links, and handling instructions).
   The first waits 15 seconds to coalesce; subsequent messages are at most one per 10 minutes, with a 2-minute minimum for decision-waiting signals such as `needs_you` / `idle` / `interrupted` / `failed`. If the main chat is running, queue between turns ("Supervision message" above the input); replace any queued, undelivered supervision message with the merged one.
   Supervised tasks no longer emit "🔔 任务…" (task notices) from `quiet.go`; all appear in supervision messages. Tasks started by other chats are unchanged.
+  **`orphaned`** (#3618, `server/internal/assistant/tasks_orphan.go`): every Agent of the open task is closed or its computer is offline, and no wake, continuation, card or queued input is pending for any of them (`docs/assistant/todos.md`, "Nobody is working on this"). The message says why (closed after a model error with the error, closed, computer offline) and the instructions give three ways out: send the Agent a message to resume it, start another Agent and cancel this task, or close the task. One state segment is the same set of Agents with no new step from any of them, so the signal is told once however the reason changes meanwhile (a closed Agent's computer going to sleep), and again only after an Agent worked and was lost again. It is a decision-waiting signal (2-minute minimum), is dropped from a waiting message once an Agent is back, and is never raised for a task waiting for review or for the user.
 - **Levels and visibility** (#1988): `info` reports update task progress only and never wake the assistant. Other automatic signals are `triage`: they wake it but the web folds the whole turn into a muted supervision record by default, including the input, trace and answer. Expanding the record reveals the original content; transcripts are never deleted. Older supervision messages default to triage too. The fold ends at the next genuine user message, so that user's exchange remains visible.
   `supervision_finish {visibility: silent|user, summary}` gives the assistant an explicit disposition. Silent means finish without a user-facing reply; user explicitly reveals the turn without adding a push. Successful `notify_user`, `ask_user`, and user-facing `task_review` conclusions also promote it, monotonically: a later silent disposition cannot hide them. Server work folds preserve promotion via `fold.supervision_user`.
   Native clients need corresponding whole-turn folding, promotion and `checking` receipt rendering; this change modifies server and web only.
@@ -360,6 +383,33 @@ and told to the apps (`direction_offer`). The owner's taps:
 
 Each records the direction `by: "user"`, so the hub never files it under another project itself (one made without a project stays so until the owner picks one); `leader.changed` follows as for any change. The apps' strip, the ⋯ items and
 the New agent field come with W1 / I1 / A1.
+
+**New agent goes under a leader (#3608).** Work is handed to a leader three ways, and each makes the leader the task's
+`supervisor`, so its signals go to the leader (`digestTo`) and the leader reviews it:
+
+- **The main chat hands a plan to a leader**: `task_plan` with `supervisor` (main chat only, a current leader; the
+  plan's tasks carry it, `PlanTask.supervisor`). The plan card stays in the main chat and each task's card goes into
+  the leader's conversation too; a leader that ended before the owner pressed Start leaves the tasks to the main chat.
+- **The owner starts an agent by hand** (`agent_route.go`): the New agent sheet asks `POST /api/v1/assistant/route/agent`
+  for its **Under** field (the leader of the kb project that owns the directory; else the leader `assistant.route`
+  matches the prompt to, prompt `assistant/route_agent.md`, 2 s; else Persona), and once the agent runs,
+  `POST /api/v1/assistant/agents/{mid}/{sid}/supervisor` makes it that conversation's supervised task (as
+  `agent_supervise` does for the main chat; the card goes into that conversation). Called again with another
+  conversation, it moves the task there (**Move to…**) and its card follows (the old conversation keeps its history).
+- **A leader hands out its own** `task_plan`, as before.
+
+A plan of a leader's (its own, or one the main chat handed to it) that waits for the owner's Start is a `decision`
+report (`leader.report` with `plan`, told once), as the owner ruled after H1. The waiting plans are read from the plans
+themselves every 10 minutes and right after a leader's plan is made, not on every change.
+
+**Names and progress (#3679).** A direction is shown by its `name` (`direction_progress.go`): the one the owner gave
+it (`PUT /api/v1/assistant/directions/{id}/name`, or Start direction's offered name) or the secretary gave it
+(`direction_name`, main chat only), else its kb project's name, else its title without the `MMDD | kind | ` prefix.
+`leader.changed` and `GET /api/v1/assistant/leaders` carry it. Besides the hub's own reached / decision / stuck
+reports, a leader writes its direction's progress itself with `leader_progress` (leaders only): what was reached, what
+is being done and where it is stuck, what the owner has to do, and evidence links; it goes to the extensions as
+`leader.report` kind `progress` and the latest stays on the direction (listed by `GET /api/v1/assistant/leaders`).
+It never messages the owner: the work-log card shows it.
 
 ## Data and APIs (hub)
 
