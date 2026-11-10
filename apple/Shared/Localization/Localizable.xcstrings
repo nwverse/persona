@@ -1,6 +1,86 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Just Finished": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Just finished" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "刚做完待看" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "完了したばかり" } }
+      }
+    },
+    "PR to Merge": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "PR to merge" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "PR 待合并" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "マージ待ちのPR" } }
+      }
+    },
+    "Other Open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Other open" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "其余没完成" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "その他の未完了" } }
+      }
+    },
+    "Shelved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Shelved" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "搁置" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "保留" } }
+      }
+    },
+    "Done [To-do Sections]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Done" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "已完成" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "完了" } }
+      }
+    },
+    "Not checked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Not checked: added after the task was accepted" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "验收后追加，未单独核对" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "受け入れ後に追加、個別の確認なし" } }
+      }
+    },
+    "%lld open · %lld shelved · %lld done": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%1$lld open · %2$lld shelved · %3$lld done" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "没完成 %1$lld · 搁置 %2$lld · 已完成 %3$lld" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "未完了%1$lld · 保留%2$lld · 完了%3$lld" } }
+      }
+    },
+    "%lld related": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "%lld related" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "相关 %lld 项" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "関連 %lld 件" } }
+      }
+    },
+    "Last moved %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Last moved %@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "%@动过" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "最終更新 %@" } }
+      }
+    },
+    "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "超过 48 小时没有进展、也没有 Agent 在跑。不计入没完成，数据都还在。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "48時間進展がなく、動いているエージェントもありません。未完了には数えません。データは削除されていません。" } }
+      }
+    },
     "A call or another app paused the recording. Open Persona to continue it." : {
       "extractionState" : "manual",
       "localizations" : {
