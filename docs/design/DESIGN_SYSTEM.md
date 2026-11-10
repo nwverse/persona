@@ -462,6 +462,7 @@ Drawn as Telegram draws them (#2984), with one look on every platform: the web a
 | Long press on a message | lifted menu with an action bar |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
+| Long press / trailing swipe on an extension's row or tile | its extra actions (`.extensionRowActions`, UI version 6): the menu has them all, usual ones first and destructive ones red and last; the swipe has those marked `swipe`, the destructive one at the edge, never run by a full swipe; one with `confirm` asks in an alert with Cancel; VoiceOver has them as the row's actions |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 

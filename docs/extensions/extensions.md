@@ -2232,8 +2232,8 @@ A hub picture that fails to load may have outlived its token, so the page is dra
 A row's extra actions open from a right click, a half-second press on a touch screen and the … button at its end (no swipe on the web).
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
-**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, and the styles
-(the 45 icons, named colors, `title` / `headline`; see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls, the styles
+(the 45 icons, named colors, `title` / `headline`) and row actions; see "App: Settings › Extensions" below. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
 
@@ -2679,6 +2679,9 @@ Views, components, actions, responses, placements and context all use schema-gen
   a row's icon in its color on the design system's `IconTile`, a metric's icon before its label, an empty state's mark, and a badge as a soft tint of the color behind words in the text's
   own color (a tone, when it has one, wins). `text` takes `title` and `headline` (heading levels for VoiceOver). Unit tests `ExtensionStylesTests` read the schema's names; screenshots of
   `showcase › styles` with `ExtensionShowcaseShotsUITests`.
+- UI version 6's row actions (#827, `ExtensionRowActions.swift`): a row's `actions` in a long press's menu (a right click on the Mac), usual ones first and destructive ones red and last,
+  with their icons; those with `swipe` also under a swipe from the trailing edge (the destructive one at the edge, a full swipe runs none); one with `confirm` asks in an alert with **Cancel**
+  (a stream page asks in its own way); VoiceOver has them as the row's actions; on a card without a page they are left out. Screenshots of `showcase › row-actions`.
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.
