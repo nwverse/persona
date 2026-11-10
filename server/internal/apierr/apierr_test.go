@@ -23,15 +23,19 @@ type langWriter struct {
 
 func (w langWriter) Lang() i18n.Lang { return w.lang }
 
+// A start the node refused on its request, with nothing to name: a launcher that cannot be read-only, a directory whose
+// name cannot be typed into a terminal. The hub words both, for a session's start_error and an HTTP answer.
 func TestReadonlyStartRefusalLocalization(t *testing.T) {
-	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
-		want := i18n.T(lang, "rpc-errors.readonly_unsupported")
-		if got := Sentence(lang, "readonly_unsupported", nil); got != want || got == "" {
-			t.Fatalf("%s task refusal = %q, want %q", lang, got, want)
-		}
-		body := LocalizedBody(http.StatusConflict, "readonly_unsupported", errors.New("node diagnostic"), lang)
-		if body["error"] != want {
-			t.Fatalf("%s HTTP refusal = %v, want %q", lang, body, want)
+	for _, code := range []string{"readonly_unsupported", "directory_untypable"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			want := i18n.T(lang, "rpc-errors."+code)
+			if got := Sentence(lang, code, nil); got != want || got == "" || got == "rpc-errors."+code {
+				t.Fatalf("%s %s task refusal = %q, want %q", lang, code, got, want)
+			}
+			body := LocalizedBody(http.StatusConflict, code, errors.New("node diagnostic"), lang)
+			if body["error"] != want {
+				t.Fatalf("%s %s HTTP refusal = %v, want %q", lang, code, body, want)
+			}
 		}
 	}
 }
@@ -242,6 +246,7 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		{"peer long", &rpc.Error{Code: "peer_too_long", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_too_long"},
 		{"peer command", &rpc.Error{Code: "peer_command", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.peer_command"},
 		{"peer unconfirmed", &rpc.Error{Code: "peer_unconfirmed", Message: "node's own words", Data: json.RawMessage(`{"delivered":"unknown"}`)}, "rpc-errors.peer_unconfirmed"},
+		{"untypable directory", &rpc.Error{Code: "directory_untypable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.directory_untypable"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()

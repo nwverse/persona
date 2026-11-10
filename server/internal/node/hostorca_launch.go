@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/orcart"
 )
 
@@ -26,7 +28,16 @@ func (h *orcaHost) CreateSlot(ctx context.Context, space, cwd, label string) (*h
 	return h.createTerminal(ctx, space, cwd, label)
 }
 
+// directoryUntypable refuses a start in a directory whose name a shell's line editor would act on (createTerminal); the
+// hub words it in the user's language.
+const directoryUntypable = "directory_untypable"
+
 func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string) (*host.Created, error) {
+	// Run types `cd -- <cwd>` into the shell's line editor, which acts on a control character even inside the quotes
+	// (a tab completes and closes the quoted word, a line break runs the line): such a directory gets no terminal.
+	if strings.ContainsFunc(cwd, unicode.IsControl) {
+		return nil, host.Mark(refusal(directoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
+	}
 	trees, _, _, err := h.c.Worktrees(ctx, "")
 	if err != nil {
 		return nil, orcaErr(err)

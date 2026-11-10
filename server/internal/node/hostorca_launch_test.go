@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,6 +210,39 @@ func TestOrcaResumesAnOfflineSession(t *testing.T) {
 	}
 	if c := o.Trace("terminal.create", "terminal.send"); len(c) != 0 {
 		t.Errorf("Orca was asked %v", c)
+	}
+}
+
+// A directory whose name holds a control character is refused before Orca opens a terminal: Run types `cd -- <cwd>`
+// into the shell's line editor, which acts on a tab (completion) or a line break even inside the quotes (#2867).
+func TestOrcaRefusesADirectoryItCannotType(t *testing.T) {
+	fake := orcarttest.New(t)
+	root := t.TempDir()
+	fake.SetWorktrees(orcarttest.Worktree("wt-1", root, "refs/heads/main"))
+	h := newOrcaHost(&orcart.Client{MetaPath: fake.MetaPath})
+	for _, name := range []string{"a\tb", "a\nb", "a\x1bb", "a\x7fb"} {
+		dir := mkdir(t, filepath.Join(root, name))
+		if created, err := h.CreateSpace(context.Background(), dir, "tab1"); created != nil || !errors.Is(err, host.ErrNotDelivered) || refusalCode(err) != directoryUntypable {
+			t.Errorf("CreateSpace(%q) = %v, %v", name, created, err)
+		}
+		if created, err := h.CreateSlot(context.Background(), "wt-1", dir, "tab1"); created != nil || !errors.Is(err, host.ErrNotDelivered) || refusalCode(err) != directoryUntypable {
+			t.Errorf("CreateSlot(%q) = %v, %v", name, created, err)
+		}
+	}
+	if c := fake.Trace("terminal.create", "terminal.send"); len(c) != 0 {
+		t.Errorf("Orca was asked %v", c)
+	}
+	// A name that only looks unusual still opens a terminal and is typed quoted.
+	dir := mkdir(t, filepath.Join(root, `it's a \dir`))
+	created, err := h.CreateSpace(context.Background(), dir, "tab1")
+	if err != nil {
+		t.Fatalf("CreateSpace: %v", err)
+	}
+	if err := h.Run(context.Background(), created.Pane, "echo hello"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if w := fake.Writes(); len(w) != 1 || !strings.HasPrefix(w[0].Text, "cd -- "+shellQuote(dir)+" && echo hello") {
+		t.Errorf("typed %v", w)
 	}
 }
 

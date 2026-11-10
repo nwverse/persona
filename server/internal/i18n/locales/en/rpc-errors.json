@@ -22,5 +22,6 @@
   "peer_unreachable": "Couldn’t reach this Claude session’s message channel (it may have just restarted or quit). Try again shortly, or continue it on the computer.",
   "peer_too_long": "The message is too long for the message channel. Split it into shorter messages.",
   "peer_unconfirmed": "The message was handed to this Claude session, but it hasn’t taken it yet: it may be waiting for approval on the computer, or it was dropped as a repeat. Check on the computer before sending it again.",
-  "peer_command": "The message channel only delivers plain messages and doesn’t run slash commands. Type the command on the computer."
+  "peer_command": "The message channel only delivers plain messages and doesn’t run slash commands. Type the command on the computer.",
+  "directory_untypable": "This directory’s name contains a control character, such as a tab or a line break, so the agent can’t be started in it from here. Rename the directory or choose another one."
 }

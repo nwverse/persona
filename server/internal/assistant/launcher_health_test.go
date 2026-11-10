@@ -495,6 +495,7 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 		&rpc.Error{Code: proto.CodeNodeOutdated, Message: "node too old"},
 		&rpc.Error{Code: "ultracode_unsupported", Message: "Claude Code 版本太旧"},
 		&rpc.Error{Code: "readonly_unsupported", Message: "This launcher cannot enforce read-only mode"},
+		&rpc.Error{Code: "directory_untypable", Message: "a directory name with a tab"},
 	} {
 		s.recordStartFailure(ctx, "l4", "work", err)
 		if r, ok := s.launcherHealth(ctx, "l4", "work"); ok {
