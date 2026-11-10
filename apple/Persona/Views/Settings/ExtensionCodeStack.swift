@@ -77,7 +77,10 @@ struct CodeBlockStack: View {
         }
         ForEach(blocks) { b in
             block(b)
-            if case .gap(let id) = b, id.hasPrefix("gap:"), let lines = model.fileLines[String(id.dropFirst(4))] {
+            // Lines that came for a component (a native stream page's), drawn under it; a diff with `context` shows its
+            // own in its gaps.
+            if case .gap(let id) = b, id.hasPrefix("gap:"), let lines = model.fileLines[String(id.dropFirst(4))],
+               diffs[lines.path]?.context == nil {
                 CodeFileBlock(code: .init(key: "context:" + id, path: lines.path,
                                          text: lines.lines.joined(separator: "\n"), startLine: lines.start),
                               model: model, link: $link, fills: false)
@@ -153,7 +156,7 @@ struct CodeBlockStack: View {
             .padding(.horizontal, Theme.Space.page)
             .id(Self.diffAnchor(d.path))
         case .hunk(_, let d, let i, let header):
-            CodeHunkHeader(header: header, expand: d.expand.map { a in { run(a, ["path": d.path, "hunk": String(i), "direction": "up"]) } })
+            CodeHunkHeader(header: header, expand: d.context != nil ? nil : d.expand.map { a in { run(a, ["path": d.path, "hunk": String(i), "direction": "up"]) } })
                 .padding(.horizontal, Theme.Space.page)
         case .diffLine(_, let key, let d, let line, let language, let digits):
             CodeDiffRow(line: line, language: language, digits: digits,
@@ -215,6 +218,10 @@ struct CodeBlockStack: View {
             .accessibilityIdentifier("code-diff-folded-\(key)")
         case .reviewTools(_, let files, let viewed, let open):
             reviewTools(files: files, viewed: viewed, open: open)
+        case .gapBar(_, let key, let d, let g, let hidden, let first, let last, let header):
+            CodeGapBar(name: "code-gap-\(key)-\(g.at)", hidden: hidden, first: first, last: last, header: header,
+                       busy: state.gapBusy.contains(CodePageState.gapKey(key, g.at))) { way in showGap(d, key: key, g, way) }
+                .padding(.horizontal, Theme.Space.page)
         case .inlineComposer(let id, let d, let anchor):
             inlineComposer(id: id, d: d, anchor: anchor)
         case .threadTitle(_, let title, let resolved):
@@ -340,6 +347,35 @@ struct CodeBlockStack: View {
         .font(Theme.Font.caption)
         .padding(.leading, Theme.Space.page)
         .padding(.trailing, Theme.Space.s)
+    }
+
+    /// More of a gap's lines: those already here at once, the rest asked of the extension's `context` (the new side,
+    /// `to` "end" when the file's length is not known yet); nothing more shows when none come.
+    private func showGap(_ d: ExtensionDiffComponent, key: String, _ g: CodeReview.Gap, _ way: CodeReview.Reveal) {
+        let r = CodeReview.reveal(g, shown: state.shown(key, g.at), way)
+        let cache = state.lineCaches[d.path]
+        guard let context = d.context, cache?.has(r.need.from, r.need.to) != true else {
+            withAnimation(Theme.Motion.state) { state.setShown(key, g.at, r.shown) }
+            return
+        }
+        state.setGapBusy(key, g.at, true)
+        Task {
+            let o = await model.quiet(context, with: ["path": d.path, "side": "new", "from": String(r.need.from),
+                                                      "to": r.need.to.map(String.init) ?? "end"])
+            state.setGapBusy(key, g.at, false)
+            guard let lines = o.lines, lines.path == d.path else {
+                if o.error != nil { ExtensionOutcome.show(o, app: app, link: $link) }
+                return
+            }
+            state.put(lines)
+            var shown = r.shown
+            // All of a file whose length was not known: as far as it goes.
+            if shown.top == Int.max {
+                let last = state.lineCaches[d.path]?.total ?? (lines.start + lines.lines.count - 1)
+                shown.top = max(0, last - g.from + 1)
+            }
+            withAnimation(Theme.Motion.state) { state.setShown(key, g.at, shown) }
+        }
     }
 
     /// The next open thread: its diff unfolded, scrolled to.
@@ -764,7 +800,18 @@ struct CodeFileBlock: View {
     }
 
     func tap(_ i: Int) -> Bool { false }
-    func menu(_ i: Int) -> UIMenu? { file.menu(i) }
+
+    /// The file's line menu, and a link to the line when the extension gives `line_url` (UI version 5).
+    func menu(_ i: Int) -> UIMenu? {
+        guard let menu = file.menu(i), let link = CodeReview.lineLink(code.lineUrl, start: i + (code.startLine ?? 1)) else {
+            return file.menu(i)
+        }
+        return menu.replacingChildren(menu.children + [
+            UIAction(title: String(localized: "Copy Link to Line"), image: UIImage(systemName: Theme.Icon.link)) { _ in
+                UIPasteboard.general.url = link
+            },
+        ])
+    }
 }
 
 // MARK: Narrow pages

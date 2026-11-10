@@ -235,6 +235,77 @@ struct CodeHunkHeader: View {
     }
 }
 
+/// Lines hidden between a diff's hunks (UI version 5's `context`): the ways to show more of them, how many there are,
+/// and the next hunk's header. A few are shown all at once; the first gap is over the first hunk (only up), the last
+/// under the last one (only down).
+struct CodeGapBar: View {
+    /// Its buttons' accessibility identifiers start with it.
+    var name: String
+    var hidden: Int
+    var first: Bool
+    var last: Bool
+    var header: String?
+    var busy: Bool
+    var show: (CodeReview.Reveal) -> Void
+
+    private var ways: [CodeReview.Reveal] {
+        hidden <= CodeReview.step ? [.all] : (first ? [] : [.down]) + (last ? [] : [.up]) + [.all]
+    }
+
+    var body: some View {
+        HStack(spacing: Theme.Space.flush) {
+            ForEach(ways, id: \.self) { way in
+                Button { show(way) } label: {
+                    ThemedIcon(icon(way))
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.wellS)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.accent)
+                .disabled(busy)
+                .accessibilityLabel(label(way))
+                .accessibilityIdentifier("\(name)-\(word(way))")
+            }
+            if busy { ProgressView().controlSize(.small).padding(.trailing, Theme.Space.xs) }
+            Text(hidden == Int.max ? String(localized: "Show to the End of the File") : String(localized: "\(hidden) hidden lines"))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .layoutPriority(1)
+            if let header, !header.isEmpty {
+                Text(verbatim: header).font(Theme.Font.code).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    .padding(.leading, Theme.Space.s)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(Theme.Font.caption)
+        .background(Theme.Fill.chip)
+    }
+
+    private func icon(_ way: CodeReview.Reveal) -> String {
+        switch way {
+        case .up: Theme.Icon.up
+        case .down: Theme.Icon.down
+        case .all: Theme.Icon.unfoldLines
+        }
+    }
+
+    private func label(_ way: CodeReview.Reveal) -> String {
+        switch way {
+        case .up: String(localized: "Show Lines Above")
+        case .down: String(localized: "Show Lines Below")
+        case .all: String(localized: "Show All Lines")
+        }
+    }
+
+    private func word(_ way: CodeReview.Reveal) -> String {
+        switch way {
+        case .up: "up"
+        case .down: "down"
+        case .all: "all"
+        }
+    }
+}
+
 // MARK: Diff file header
 
 /// What happened to a file, as a word and a color: added / modified / deleted / renamed.

@@ -295,6 +295,8 @@ extension Theme {
         static let forward = "chevron.forward"
         static let expand = "chevron.down"
         static let collapse = "chevron.up"
+        /// All of the lines hidden between a diff's hunks shown at once (UI version 5's `context`, #827).
+        static let unfoldLines = "arrow.up.and.down"
         /// Holding the mic: slide this way to drop what was heard, or up to keep dictating hands-free (`DictationHold`).
         static let slideToCancel = back
         static let slideToLock = collapse

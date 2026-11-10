@@ -154,6 +154,35 @@ nonisolated extension ExtensionComponent {
     @ObservationIgnored private var viewedAttempts = 0
     @ObservationIgnored private var viewedAttempt: [String: Int] = [:]
 
+    // MARK: Hidden lines (UI version 5's `context`)
+
+    /// The lines of each file that came, by path: a gap shown again needs no request.
+    private(set) var lineCaches: [String: CodeReview.LineCache] = [:]
+    /// What is shown of each gap, by diff key and gap.
+    private(set) var gapShown: [String: CodeReview.Shown] = [:]
+    /// The gaps whose lines are on their way.
+    private(set) var gapBusy: Set<String> = []
+
+    static func gapKey(_ key: String, _ at: Int) -> String { key + "#" + String(at) }
+
+    func shown(_ key: String, _ at: Int) -> CodeReview.Shown { gapShown[Self.gapKey(key, at)] ?? CodeReview.Shown() }
+
+    func setShown(_ key: String, _ at: Int, _ s: CodeReview.Shown) {
+        gapShown[Self.gapKey(key, at)] = s
+        version += 1
+    }
+
+    func setGapBusy(_ key: String, _ at: Int, _ busy: Bool) {
+        if busy { gapBusy.insert(Self.gapKey(key, at)) } else { gapBusy.remove(Self.gapKey(key, at)) }
+    }
+
+    /// Lines that came for a file (its new side).
+    func put(_ lines: ExtensionUIStreamFileLines) {
+        guard lines.side == nil || lines.side == "new" else { return }
+        lineCaches[lines.path, default: CodeReview.LineCache()].put(start: lines.start, lines.lines, total: lines.total)
+        version += 1
+    }
+
     func setWhitespace(_ on: Bool) {
         whitespace = on
         UserDefaults.standard.set(on, forKey: Self.whitespaceKey)
@@ -196,6 +225,10 @@ enum CodePageBlock: Identifiable {
     case diffLine(id: String, key: String, diff: ExtensionDiffComponent, line: CodeDiffLine, language: SyntaxLanguage?, digits: Int)
     case diffPair(id: String, key: String, diff: ExtensionDiffComponent, left: CodeDiffLine?, right: CodeDiffLine?, language: SyntaxLanguage?, digits: Int)
     case diffNote(id: String, text: String)
+    /// Lines hidden between hunks (UI version 5's `context`): how many, the way to show more of them (down, up, all;
+    /// the first gap only up, the last only down), the next hunk's header.
+    case gapBar(id: String, key: String, diff: ExtensionDiffComponent, gap: CodeReview.Gap, hidden: Int, first: Bool,
+                last: Bool, header: String?)
     /// A diff folded at first because it is generated, big or viewed: why, and a way to show it (UI version 5).
     case diffFolded(id: String, key: String, note: String)
     /// Over a page of diffs (UI version 5): how many are viewed, the threads still open (by their blocks' ids, in
@@ -217,7 +250,7 @@ enum CodePageBlock: Identifiable {
              .treeEmpty(let id), .code(let id, _), .diffHeader(let id, _, _, _), .hunk(let id, _, _, _),
              .diffLine(let id, _, _, _, _, _), .diffPair(let id, _, _, _, _, _, _), .diffNote(let id, _),
              .diffLoad(let id, _), .diffMore(let id, _, _), .inlineThread(let id, _, _), .inlineComposer(let id, _, _),
-             .diffFolded(let id, _, _), .reviewTools(let id, _, _, _),
+             .diffFolded(let id, _, _), .reviewTools(let id, _, _, _), .gapBar(let id, _, _, _, _, _, _, _),
              .threadTitle(let id, _, _), .comment(let id, _), .reply(let id, _, _), .composer(let id, _), .gap(let id):
             id
         }
@@ -349,7 +382,11 @@ enum CodePageBlock: Identifiable {
             out.append(.diffNote(id: "ws:" + key, text: String(localized: "Only whitespace changed")))
             return out
         }
-        let digits = CodeGutter.digits(numbered.flatMap { $0 })
+        // UI version 5's `context`: the lines between hunks are asked of the extension (`expand` is not used then); a file
+        // added whole has none hidden.
+        let cache = state.lineCaches[d.path]
+        let gaps = d.context != nil && d.status != "added" ? CodeReview.gaps(hunks, total: cache?.total) : []
+        let digits = max(CodeGutter.digits(numbered.flatMap { $0 }), gaps.isEmpty ? 0 : String(cache?.total ?? 0).count)
         let oneSided = d.status == "added" || d.status == "deleted"
             || numbered.allSatisfy { $0.allSatisfy { $0.kind != .context && $0.kind != .del } }
             || numbered.allSatisfy { $0.allSatisfy { $0.kind != .context && $0.kind != .add } }
@@ -371,9 +408,40 @@ enum CodePageBlock: Identifiable {
             if state.composing == anchor { out.append(.inlineComposer(id: "ic:\(key):\(a.side)\(a.line)", diff: d, anchor: anchor)) }
             return out
         }
+        // A gap's unchanged lines, as any other (side by side: on both sides).
+        func unchanged(_ lines: [CodeDiffLine], _ tag: String) -> [CodePageBlock] {
+            lines.flatMap { l -> [CodePageBlock] in
+                let id = "gl:\(key):\(tag):\(l.new ?? 0)"
+                let row: CodePageBlock = look == .split && !oneSided
+                    ? .diffPair(id: id, key: key, diff: d, left: l, right: l, language: language, digits: digits)
+                    : .diffLine(id: id, key: key, diff: d, line: l, language: language, digits: digits)
+                return [row] + after(l)
+            }
+        }
+        /// The gap before hunk `i` (`i` = the hunks' count: after the last): its lines shown, the bar for the rest.
+        func gap(_ i: Int, header: String?) -> [CodePageBlock] {
+            guard i < gaps.count else { return [] }
+            let g = gaps[i]
+            let r = CodeReview.rows(g, shown: state.shown(key, g.at), cache: cache)
+            var out = unchanged(r.top, "\(i)t")
+            if r.hidden > 0 {
+                out.append(.gapBar(id: "gap-bar:\(key):\(i)", key: key, diff: d, gap: g, hidden: r.hidden, first: i == 0,
+                                   last: i == hunks.count, header: header))
+            }
+            out += unchanged(r.bottom, "\(i)b")
+            return out
+        }
         for (hi, h) in hunks.enumerated() {
-            out.append(.hunk(id: "hk:\(key):\(hi)", diff: d, index: hi,
-                             header: h.header?.isEmpty == false ? h.header! : "@@ -\(h.oldStart) +\(h.newStart) @@"))
+            let header = h.header?.isEmpty == false ? h.header! : "@@ -\(h.oldStart) +\(h.newStart) @@"
+            if gaps.isEmpty {
+                out.append(.hunk(id: "hk:\(key):\(hi)", diff: d, index: hi, header: header))
+            } else {
+                let g = gap(hi, header: h.header)
+                // Nothing hidden over it and nothing shown: its header as before.
+                let bare = !g.contains { if case .gapBar = $0 { true } else { false } }
+                    && !g.contains { if case .diffLine = $0 { true } else if case .diffPair = $0 { true } else { false } }
+                out += bare ? [.hunk(id: "hk:\(key):\(hi)", diff: d, index: hi, header: header)] : g
+            }
             let lines = numbered[hi]
             // A file added or removed whole has one side only: side by side would leave half the column empty.
             if look == .split, !oneSided {
@@ -390,7 +458,8 @@ enum CodePageBlock: Identifiable {
                 }
             }
         }
-        if d.expand != nil { out.append(.diffMore(id: "more:" + key, diff: d, index: hunks.count - 1)) }
+        if !gaps.isEmpty { out += gap(hunks.count, header: nil) }
+        else if d.expand != nil { out.append(.diffMore(id: "more:" + key, diff: d, index: hunks.count - 1)) }
         for (i, t) in (d.threads ?? []).enumerated() where !placed.contains(i) {
             out.append(.inlineThread(id: threadID(key, t, i), diff: d, thread: t))
         }

@@ -656,9 +656,9 @@ extension APIClient {
         return v
     }
 
-    /// Sends an action that does not hold the page (UI version 5's `mark_viewed`): nothing waits for it, its answer's
-    /// `items` or view are drawn, an answer with neither draws nothing, and only a failure is told (the page puts back
-    /// what it showed at once).
+    /// Sends an action that does not hold the page (UI version 5's `mark_viewed`, a diff's `context`): nothing waits for
+    /// it, its answer's `items` or view are drawn, an answer with neither draws nothing, its `lines` come back for the
+    /// page, and only a failure is told (the page puts back what it showed at once).
     func quiet(_ action: ExtensionAction, with chosen: [String: String]) async -> Outcome {
         let sent = chosen.merging(action.values ?? [:]) { _, own in own }
         if let stream, stream.supported != false {
@@ -670,7 +670,8 @@ extension APIClient {
         do {
             let r = try await call(action.id, values: sent)
             if let v = r.view { show(v, keeping: values) } else if let items = r.items, !items.isEmpty { replace(items) }
-            return Outcome()
+            // A diff's hidden lines (`context`): for the page to keep, nothing drawn again.
+            return Outcome(lines: r.lines.map { ExtensionUIStreamFileLines(path: $0.path, side: $0.side, start: $0.start, lines: $0.lines, total: $0.total) })
         } catch {
             return Outcome(error: error.localizedDescription)
         }

@@ -197,6 +197,89 @@ struct ExtensionCodeReviewTests {
     }
 }
 
+// MARK: Hidden lines and line links
+
+extension ExtensionCodeReviewTests {
+    private static let hunks = [ExtensionHunk(oldStart: 5, newStart: 5, lines: [" a", " b", "-c", "+C", " d"]),
+                                ExtensionHunk(oldStart: 30, newStart: 30, lines: [" x", "+y", " z"])]
+
+    @Test func theGapsBetweenHunks() {
+        let g = CodeReview.gaps(Self.hunks, total: nil)
+        #expect(g == [.init(at: 0, from: 1, to: 4, delta: 0), .init(at: 1, from: 9, to: 29, delta: 0), .init(at: 2, from: 33, to: nil, delta: -1)])
+        #expect(CodeReview.gaps(Self.hunks, total: 40).last?.to == 40, "the end once the file's length is known")
+        #expect(CodeReview.gaps([ExtensionHunk(oldStart: 1, newStart: 0, lines: ["-gone"])], total: nil).isEmpty, "a file that is gone has none")
+    }
+
+    @Test func showingMoreOfAGap() {
+        let middle = CodeReview.Gap(at: 1, from: 9, to: 29, delta: 0)
+        let down = CodeReview.reveal(middle, shown: .init(), .down)
+        #expect(down.shown == .init(top: 20, bottom: 0) && down.need.from == 9 && down.need.to == 28)
+        let up = CodeReview.reveal(middle, shown: .init(), .up)
+        #expect(up.shown == .init(top: 0, bottom: 20) && up.need.from == 10 && up.need.to == 29)
+        let rest = CodeReview.reveal(middle, shown: down.shown, .up)
+        #expect(rest.shown == .init(top: 20, bottom: 1) && rest.need.from == 29 && rest.need.to == 29, "never past what is shown")
+        let all = CodeReview.reveal(middle, shown: .init(), .all)
+        #expect(all.shown.top == 21 && all.need.from == 9 && all.need.to == 29)
+        let end = CodeReview.reveal(.init(at: 2, from: 33, to: nil, delta: -1), shown: .init(), .up)
+        #expect(end.shown.top == 20 && end.need.to == 52, "the last gap only goes down")
+    }
+
+    @Test func aGapsRowsComeFromTheLinesThatCame() {
+        var cache = CodeReview.LineCache()
+        cache.put(start: 30, (30...40).map { "line \($0)" }, total: 40)
+        #expect(cache.has(33, nil) && !cache.has(1, 4))
+        let last = CodeReview.Gap(at: 2, from: 33, to: nil, delta: -1)
+        let r = CodeReview.rows(last, shown: .init(top: 20, bottom: 0), cache: cache)
+        #expect(r.top.map(\.new) == Array(33...40) && r.top.first?.old == 32 && r.top.allSatisfy { $0.kind == .context })
+        #expect(r.hidden == 0 && r.bottom.isEmpty)
+        let middle = CodeReview.Gap(at: 1, from: 9, to: 29, delta: 0)
+        #expect(CodeReview.rows(middle, shown: .init(top: 0, bottom: 2), cache: cache).bottom.map(\.new) == [], "lines that did not come are not drawn")
+        var past = CodeReview.LineCache()
+        past.put(start: 41, [], total: nil)
+        #expect(past.total == 40, "asked past the end: there is none")
+    }
+
+    @Test func aLineLinkIsHTTPSOnly() {
+        #expect(CodeReview.lineLink("https://example.com/o/r/blob/abc/a.go#L{start}-L{end}", start: 12)?.absoluteString
+                == "https://example.com/o/r/blob/abc/a.go#L12-L12")
+        #expect(CodeReview.lineLink("http://example.com/a.go#L{start}", start: 1) == nil)
+        #expect(CodeReview.lineLink(nil, start: 1) == nil)
+    }
+
+    @Test func aDiffWithContextShowsItsGaps() throws {
+        let v = try Self.view()
+        let state = CodePageState(marks: CodeViewedMarks(saved: []))
+        func blocks() -> [CodePageBlock] { CodePageBlocks.of(v, sections: Self.mains(v), state: state, look: .unified, canComment: true) }
+        let key = "diff:src/upload/client.go"
+        // client.go's first hunk starts at line 20: 19 lines over it, few enough to show all at once.
+        guard case .gapBar(_, _, _, let g, let hidden, true, false, _)? = blocks().first(where: { if case .gapBar(_, key, _, _, _, _, _, _) = $0 { true } else { false } })
+        else { Issue.record("no gap over client.go's first hunk"); return }
+        #expect(g.from == 1 && g.to == 19 && hidden == 19)
+        #expect(!blocks().contains { if case .diffMore(_, let d, _) = $0 { d.path == "src/upload/client.go" } else { false } }, "with context, no expand")
+        // The lines came: shown, the bar gone.
+        state.put(ExtensionUIStreamFileLines(path: "src/upload/client.go", side: "new", start: 1, lines: (1...19).map { "l\($0)" }))
+        state.setShown(key, 0, CodeReview.reveal(g, shown: .init(), .all).shown)
+        let after = blocks()
+        #expect(after.filter { if case .diffLine(let id, _, _, _, _, _) = $0 { id.hasPrefix("gl:\(key):0t") } else { false } }.count == 19)
+        #expect(!after.contains { if case .gapBar(_, key, _, let g, _, _, _, _) = $0 { g.at == 0 } else { false } })
+    }
+
+    @Test func contextLinesComeBackQuietly() async throws {
+        let hub = FakeHub()
+        let page = try String(contentsOf: Self.snapshot, encoding: .utf8)
+        hub.on("POST", Self.path) { r in
+            let body = try JSON.decoder.decode([String: JSONValue].self, from: r.body ?? Data())
+            if body["action"] != nil { return Data(#"{"lines":{"path":"src/upload/client.go","side":"new","start":1,"lines":["a","b"],"total":90}}"#.utf8) }
+            return Data(#"{"view":\#(page)}"#.utf8)
+        }
+        let m = ExtensionViewModel(plugin: "forge", ui: "review", deps: .init(api: { hub.client }))
+        await m.load()
+        let context = try #require(try Self.diff(#require(m.view), "src/upload/client.go").context)
+        let o = await m.quiet(context, with: ["path": "src/upload/client.go", "side": "new", "from": "1", "to": "19"])
+        #expect(o.lines?.lines == ["a", "b"] && o.lines?.total == 90 && m.running == nil)
+    }
+}
+
 @MainActor private final class Recorded {
     var count = 0
 }

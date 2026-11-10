@@ -4,7 +4,8 @@ import XCTest
 /// snapshot (schema/extension/examples/showcase/code-review-v5.json), through the mock hub's showcase extension
 /// (`MOCK_EXTENSIONS=1`, `TEST_RUNNER_PERSONA_EXTENSIONS_HUB`): the toolbar over the diffs (viewed so far, the open
 /// threads, display options), a viewed file folded at first and saying why, a file checked viewed folding and counted,
-/// the open threads' button unfolding the next one's file, a rename's similarity. In both styles (each launch passes
+/// the open threads' button unfolding the next one's file, the lines over a hunk asked of the extension (`context`;
+/// the mock makes them up), a rename's similarity. In both styles (each launch passes
 /// `-ui.style`), light and dark; with `PERSONA_SHOTS`, screenshots. `PERSONA_REVIEW_BEFORE=1`: only the screenshots, for
 /// an app from before (the same steps, nothing checked).
 final class ExtensionCodeReviewUITests: XCTestCase {
@@ -68,6 +69,15 @@ final class ExtensionCodeReviewUITests: XCTestCase {
             XCTAssertTrue(whitespace.waitForExistence(timeout: 5), app.debugDescription)
             shot(app, "options-" + look)
             whitespace.tap()
+
+            // client.go's 19 lines over its first hunk, asked of the extension (`context`) and shown.
+            let gap = app.buttons["code-gap-diff:src/upload/client.go-0-all"]
+            for _ in 0..<4 where !gap.exists { app.swipeDown() }
+            if !gap.exists { app.buttons["code-diff-folded-diff:src/upload/client.go"].tap() } // folded when checked viewed
+            XCTAssertTrue(gap.waitForExistence(timeout: 5), app.debugDescription)
+            gap.tap()
+            XCTAssertTrue(text(app, "src/upload/client.go: line 19").waitForExistence(timeout: 5), app.debugDescription)
+            shot(app, "context-" + look)
 
             // A rename says how alike it is.
             let limits = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "相似 96%")).firstMatch

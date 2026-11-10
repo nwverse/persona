@@ -18625,6 +18625,8 @@ def mock_showcase(handler, ui, body):
     request = json.loads(body) if body else {}
     if ui == "controls":
         return _showcase_controls(handler, view, request)
+    if request.get("action") == "context":
+        return _showcase_context(handler, request.get("values") or {})
     if request.get("action"):
         handler.send_json({"toast": "快照测试不执行写操作"})
     else:
@@ -18666,6 +18668,17 @@ def _showcase_controls(handler, view, request):
         if when is not None and bool(c.get("on")) == when:
             c["action"]["confirm"] = words
     handler.send_json({"items": [changed]} if changed else {"view": view})
+    return True
+
+
+def _showcase_context(handler, values):
+    """A diff's hidden lines (UI version 5's `context`, #827): made-up lines of a 90-line file, as many as asked."""
+    total = 90
+    start = max(1, int(values.get("from") or 1))
+    to = values.get("to")
+    end = total if to in (None, "", "end") else min(total, int(to))
+    lines = [f"// {values.get('path', 'file')}: line {n}" for n in range(start, end + 1)]
+    handler.send_json({"lines": {"path": values.get("path", ""), "side": "new", "start": start, "lines": lines, "total": total}})
     return True
 
 

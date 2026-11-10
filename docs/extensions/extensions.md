@@ -2681,8 +2681,11 @@ Views, components, actions, responses, placements and context all use schema-gen
   the mark changes at once and is sent quietly (`ExtensionViewModel.quiet`: nothing waits, an empty answer draws nothing, a failure puts the mark back); without it the mark is kept on the
   device by `path` + `revision` (or a digest of the lines), at most 5,000 (`CodeViewedMarks`). The tree ticks viewed files. Over the diffs: "Viewed x / y", "N unresolved" (each tap unfolds
   and scrolls to the next open thread; drafts don't count) and a ⋯ menu with **Ignore Whitespace** (kept for every page). A rename shows its similarity. An action's `items` replace their
-  components without drawing the page again, and a page drawn again keeps diffs loaded since. Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots ›
-  code-review-v5`).
+  components without drawing the page again, and a page drawn again keeps diffs loaded since. Hidden lines (`context`): between hunks a bar says how many lines are hidden, with the next hunk's
+  header, and shows 20 more down or up, or all (a few: all at once; the first gap only up, the last only down, to the end of the file once its length is known); the lines are asked quietly for the
+  new side (`to` "end" when the length is not known yet), kept per file so showing more of a gap that came needs no request, and `expand` is not used then. `code.line_url` adds **Copy Link to
+  Line** to the code viewer's line menu (https only). Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots › code-review-v5`; the mock answers
+  `context` with made-up lines of a 90-line file).
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.
