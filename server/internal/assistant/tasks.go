@@ -95,7 +95,8 @@ type PlanTask struct {
 	Attachments []string `json:"attachments,omitempty"`
 	Mentioned   []string `json:"mentioned,omitempty"`
 	AttachFrom  string   `json:"attach_from,omitempty"`
-	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
+	// Set once started: the todo the task is, and why its agent did not start. TodoID is cleared when another plan
+	// takes over that to-do; ReuseTodo keeps the historical target. ErrorCode and ErrorArgs: the start's
 	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
 	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
 	TodoID    string            `json:"todo_id,omitempty"`
@@ -255,6 +256,31 @@ func (s *Service) loadPlan(ctx context.Context, id string) (*TaskPlan, error) {
 		return nil, err
 	}
 	return planFromRow(*row), nil
+}
+
+// conversationPlans reads persisted plans, or snapshots the storeless plans, without relying on list order.
+func (s *Service) conversationPlans(ctx context.Context, conversation string) ([]*TaskPlan, error) {
+	var plans []*TaskPlan
+	if st := s.store(); st != nil {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			plans = append(plans, planFromRow(row))
+		}
+	} else {
+		s.tasks.mu.Lock()
+		defer s.tasks.mu.Unlock()
+		for _, plan := range s.tasks.plans {
+			if plan.Conversation == conversation {
+				cp := *plan
+				cp.Tasks = append([]PlanTask(nil), plan.Tasks...)
+				plans = append(plans, &cp)
+			}
+		}
+	}
+	return plans, nil
 }
 
 func planFromRow(row db.TaskPlanRow) *TaskPlan {

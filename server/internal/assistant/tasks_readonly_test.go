@@ -433,3 +433,134 @@ func TestReadonlyTaskExitPlanModeAfterRestart(t *testing.T) {
 		})
 	}
 }
+
+// A topic can outlive several plans; only its current task may control plan approval.
+func TestReusedWritableTaskExitPlanModeKeepsApproval(t *testing.T) {
+	for _, backend := range []string{"memory", "database", "restart"} {
+		for _, retired := range []string{"released", "dismissed"} {
+			t.Run(backend+"/"+retired, func(t *testing.T) {
+				ctx := context.Background()
+				var store Store
+				if backend != "memory" {
+					store = taskRecoveryDatabase(t)
+				}
+				s, f := newTaskServiceOn(t, store)
+				f.ownModels = true
+				e := &todoEnv{t: t, s: s, f: f}
+				todo, err := s.createTodo(ctx, "Inspect and then fix", "", "reuse-chat", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				task := readonlyTestTask("")
+				task.ReuseTodo = todo.ID
+				if _, err := s.toolTaskPlan(ctx, "reuse-chat", readonlyTaskArgs(t, task)); err != nil {
+					t.Fatal(err)
+				}
+				oldPlan := readonlyFeedPlan(t, s, "reuse-chat")
+				waitFor(t, "readonly task dispatch", func() bool {
+					cur, _ := s.todoNow(todo.ID)
+					s.tasks.mu.Lock()
+					defer s.tasks.mu.Unlock()
+					return len(cur.Agents) == 1 && !s.tasks.reusing[todo.ID]
+				})
+				cur, _ := s.todoNow(todo.ID)
+				oldAgent := cur.Agents[0]
+				if retired == "dismissed" {
+					e.must("DELETE", "/api/v1/todos/"+todo.ID+"/agents/"+oldAgent.MachineID+"/"+oldAgent.SessionID, "")
+				} else {
+					other := e.create("Another task")
+					e.must("PUT", "/api/v1/todos/"+other.ID+"/agents/"+oldAgent.MachineID+"/"+oldAgent.SessionID, "")
+				}
+				task.Readonly, task.Permission = false, "bypassPermissions"
+				result, err := s.toolTaskPlan(ctx, "reuse-chat", readonlyTaskArgs(t, task))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.startPlan(ctx, planIDRe.FindString(result), nil, false); err != nil {
+					t.Fatal(err)
+				}
+				var agent TodoAgent
+				waitFor(t, "writable task dispatch", func() bool {
+					cur, _ := s.todoNow(todo.ID)
+					for _, a := range cur.Agents {
+						if a.active() && a.SessionID != oldAgent.SessionID {
+							agent = a
+							return true
+						}
+					}
+					return false
+				})
+				cur, _ = s.todoNow(todo.ID)
+				if cur.PlanID != "" {
+					t.Fatalf("expected a reused topic to-do without PlanID, got %+v", cur)
+				}
+				if _, err := s.loadPlan(ctx, oldPlan.ID); err != nil {
+					t.Fatalf("historical plan was lost: %v", err)
+				}
+				if backend == "restart" {
+					s, _ = newTaskServiceOn(t, store)
+				}
+				callCtx, cancel := context.WithCancel(ctx)
+				defer cancel()
+				ix := proto.Interaction{ID: "reused-writable-exit", MachineID: agent.MachineID,
+					SessionID: agent.SessionID, Kind: proto.IxPlan, ToolName: "ExitPlanMode", Resumable: true}
+				done := make(chan proto.Resolution, 1)
+				go func() {
+					r, err := s.nodeInteraction(callCtx, ix)
+					if err != nil {
+						t.Error(err)
+					}
+					done <- r
+				}()
+				waitFor(t, "writable plan approval card", func() bool {
+					select {
+					case r := <-done:
+						t.Fatalf("writable reused session was auto-resolved: %+v", r)
+					default:
+					}
+					s.fleet.mu.Lock()
+					defer s.fleet.mu.Unlock()
+					return s.fleet.interactions[ix.ID] != nil
+				})
+				approve := true
+				if err := s.resolve(ix.ID, proto.Resolution{Approve: &approve}); err != nil {
+					t.Fatal(err)
+				}
+				if r := <-done; r.Approve == nil || !*r.Approve {
+					t.Fatalf("writable user approval was lost: %+v", r)
+				}
+				// A subsequent read-only takeover must still deny ExitPlanMode without a card.
+				e.s = s
+				e.must("DELETE", "/api/v1/todos/"+todo.ID+"/agents/"+agent.MachineID+"/"+agent.SessionID, "")
+				task.Readonly = true
+				if _, err := s.toolTaskPlan(ctx, "reuse-chat", readonlyTaskArgs(t, task)); err != nil {
+					t.Fatal(err)
+				}
+				writableSession := agent.SessionID
+				waitFor(t, "new readonly task dispatch", func() bool {
+					cur, _ := s.todoNow(todo.ID)
+					for _, a := range cur.Agents {
+						if a.active() && a.SessionID != writableSession {
+							agent = a
+							return true
+						}
+					}
+					return false
+				})
+				if backend == "restart" {
+					s, _ = newTaskServiceOn(t, store)
+				}
+				denyCtx, stop := context.WithTimeout(ctx, time.Second)
+				defer stop()
+				ix.ID, ix.MachineID, ix.SessionID = "reused-readonly-exit", agent.MachineID, agent.SessionID
+				r, err := s.nodeInteraction(denyCtx, ix)
+				if err != nil || r.Approve == nil || *r.Approve || !strings.Contains(r.Feedback, "read-only") || r.Mode != "" {
+					t.Fatalf("current readonly task lost its restriction: %+v, error = %v", r, err)
+				}
+				if cards := s.workCards(); len(cards) != 0 {
+					t.Fatalf("current readonly task created approval cards: %+v", cards)
+				}
+			})
+		}
+	}
+}

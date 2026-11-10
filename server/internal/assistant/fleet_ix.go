@@ -182,34 +182,14 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	// Deny before registering a card, so the agent can return its findings without a workflow approval.
 	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" {
 		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
-			var plans []*TaskPlan
-			if todo.PlanID != "" {
-				plan, err := s.loadPlan(ctx, todo.PlanID)
-				if err != nil {
-					return proto.Resolution{}, err
-				}
-				plans = append(plans, plan)
-			} else if st := s.store(); st != nil {
-				// A reused topic to-do has no PlanID; its plan carries the binding instead.
-				rows, err := st.TaskPlans(ctx, todo.Origin)
-				if err != nil {
-					return proto.Resolution{}, err
-				}
-				for _, row := range rows {
-					plans = append(plans, planFromRow(row))
-				}
-			} else {
-				s.tasks.mu.Lock()
-				for _, plan := range s.tasks.plans {
-					if plan.Conversation == todo.Origin {
-						cp := *plan
-						cp.Tasks = append([]PlanTask(nil), plan.Tasks...)
-						plans = append(plans, &cp)
-					}
-				}
-				s.tasks.mu.Unlock()
+			plans, err := s.conversationPlans(ctx, todo.Origin)
+			if err != nil {
+				return proto.Resolution{}, err
 			}
 			for _, plan := range plans {
+				if plan.State != planStarted {
+					continue
+				}
 				for _, task := range plan.Tasks {
 					if task.TodoID == todo.ID && task.Readonly {
 						approve := false
