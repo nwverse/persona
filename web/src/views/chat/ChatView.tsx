@@ -64,7 +64,7 @@ import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-con
 import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
-import { navRailTicks, type NavRailSource } from "../../lib/nav-rail";
+import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
 import { containsInput, indexedNavTicks, userInputRevision } from "../../lib/user-input-index";
 import { useUserInputs } from "./useUserInputs";
 import { NavRail } from "./NavRail";
@@ -113,6 +113,8 @@ const NO_FEED: FeedItem[] = [];
 const NO_PANES: Session[] = [];
 // the assistant has no subagents: one array, so the chat context does not change with every render
 const NO_SUBAGENTS: Subagent[] = [];
+// no fine pointer: the rail draws nothing, so its ticks are not read
+const NO_RAIL_TICKS: NavRailTick[] = [];
 /** Going to a search hit: how long the rows that hold it get to open before the line it is on stands in, when to give
  *  up, and how long it stays lit (Android: 3 s). */
 const FIND_MS = 400;
@@ -892,7 +894,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
   // Only lightweight positions are fetched for navigation; older transcript bodies wait for a selection.
-  const loadedRailTicks = useMemo(() => navRailTicks(lines), [lines]);
+  const loadedRailTicks = useMemo(() => (fine ? navRailTicks(lines) : NO_RAIL_TICKS), [fine, lines]);
   const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
   const inputIndex = useUserInputs(mid, sid, tr.history, inputRevision, fine && !tr.loading, tr.reload);
   const railTicks = useMemo(() => inputIndex ? indexedNavTicks(inputIndex, lines, tr.items) : loadedRailTicks, [inputIndex, lines, tr.items, loadedRailTicks]);
