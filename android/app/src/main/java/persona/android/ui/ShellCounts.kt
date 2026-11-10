@@ -8,6 +8,10 @@ import persona.core.contracts.api.ManagerRoster
 import persona.core.contracts.api.waiting
 import persona.core.domain.inbox.InboxInteraction
 import persona.core.domain.sort.AgentPreferences
+import persona.core.domain.sort.needsYouBadge
+import persona.core.domain.sort.needsYouCards
+import persona.core.domain.sort.needsYouRows
+import persona.core.domain.sort.needsYouWaiting
 import persona.feature.inbox.InboxRecord
 
 /**
@@ -35,6 +39,16 @@ internal class ShellCounts(
     /** A session the switcher's badges count: not quiet, not muted. */
     fun countsSession(session: Session): Boolean =
         !session.quiet && !mutes.mutes(session.key.path, session.spaceName?.let { "${session.machineId}/$it" })
+
+    /**
+     * The Agents tab's badge (#3580): the current assistant's agents waiting for the user, each session once however many
+     * cards it has, and each card on no session, less quiet and muted ones (spec/fixtures/needs-you), the number iOS and
+     * the web read. [requests] are its cards outside its own conversations.
+     */
+    fun agentsWaiting(requests: List<Interaction>): Int {
+        val waiting = needsYouWaiting(sessions.filter { current.ownsOn(it.machineId, it.manager) })
+        return needsYouBadge(needsYouRows(needsYouCards(requests, byKey), waiting), byKey, mutes)
+    }
 
     /** The current assistant's open to-dos, quiet ones left out: the sidebar's count beside To-dos. */
     fun todos(todos: List<Todo>): Int = todos.count { !it.isDone && !it.quiet && current.owns(it.manager) }

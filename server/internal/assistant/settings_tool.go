@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -64,10 +67,29 @@ func (s *Service) ownSettings() []ownSetting {
 			set: s.setStartRequestedTasks},
 		{Setting: Setting{Key: "assistant.recording_days", Title: "录音在知识库里保留", Actions: getSet,
 			About: "how many days the phone's and watch's recording transcripts stay in the knowledge base (kind recordings); older " +
-				"ones are deleted from it (the audio and the recordings on the phone are not touched). 14 by default",
+				"transcripts are deleted from it, and the phone deletes its local recordings too (audio and text). " +
+				"Meeting minutes follow assistant.minutes_days instead. 14 by default",
 			Value: "a whole number of days, 1–365"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
 			set: s.setRecordingDays},
+		{Setting: Setting{Key: "assistant.minutes_days", Title: "Keep meeting minutes", Actions: getSet,
+			About: "how many days a meeting recording's minutes stay in the knowledge base. Past assistant.recording_days its " +
+				"transcript, summary and live log are deleted and only the minutes (and the recording's metadata) stay, still " +
+				"searchable and readable with kb_get, until this many days after the meeting; then the rest goes too. Never " +
+				"fewer than assistant.recording_days for finite windows. 0 (or forever) keeps minutes until the user deletes them, " +
+				"which is the default",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.minutesDays(ctx)), nil
+			},
+			set: s.setMinutesDays},
+		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
+			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
+				"default) only records and makes minutes afterwards; listener follows the meeting in a session and answers questions " +
+				"on the phone's screen; participant also says the answers aloud. Applies to recordings started from now on",
+			Value: "off, listener or participant"},
+			get: func(ctx context.Context) (string, error) { return s.meetingAttendanceDefault(ctx), nil },
+			set: s.setMeetingAttendanceDefault},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
 			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
 				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
@@ -98,6 +120,17 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
 			set: s.setInterjectBackground},
+		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
+			About: "off (the default): only tasks the main conversation or a leader hands out are supervised; an agent started from an " +
+				"app or by agent_start from another conversation is on no task. on: every agent Persona starts gets a quiet to-do (no " +
+				"pushes or badges for it) supervised by the conversation that started it when that is the main conversation or a leader, " +
+				"else by the main conversation: an app's agent once a turn of it did work (edits, commands), a to-do the user made when " +
+				"an agent is linked to it, and report_to_supervisor from an agent on any open to-do reaches its supervisor. Agents " +
+				"started by hand in a terminal are left alone. Costs model calls (the done judge, supervision turns). Applies from the " +
+				"next start, turn end and report",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
+			set: s.setAgentTasks},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -169,6 +202,9 @@ func (s *Service) listSettings(ctx context.Context, own []ownSetting) (string, e
 	return b.String(), nil
 }
 
+// settingCardWait is how long a change's approval card waits for the user before it expires (and changes nothing).
+var settingCardWait = 15 * time.Minute
+
 // ownSettingAction reads one of the assistant's settings, or changes it once the user approves on the phone.
 func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage) (string, error) {
 	switch action {
@@ -194,14 +230,17 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	now := time.Now().UTC()
 	r, err := s.ask(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: change.card(l), ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)})
+		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)})
 	if err != nil {
 		return "", err
 	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
+	switch { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
+	case r.UserAllowed():
+		return change.apply(ctx)
+	case r.UserDenied():
+		return "The user declined the change: nothing changed.", nil
 	}
-	return change.apply(ctx)
+	return prompts.RenderSettingUnanswered(), nil
 }
 
 func orNone(s string) string {
@@ -217,7 +256,8 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"assistant.interject_background": "title_interject_background", "model_profiles.tiers": "title_model_tiers"}
+	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "model_profiles.tiers": "title_model_tiers",
+	"assistant.meeting_attendance_default": "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -318,6 +358,80 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 		}}, nil
 }
 
+// minutesDaysLabel spells out the forever sentinel instead of showing a misleading zero-day retention.
+func minutesDaysLabel(l i18n.Lang, days int) string {
+	if days == 0 {
+		return i18n.T(l, "assistant-settings_tool.minutes_forever")
+	}
+	return i18n.T(l, "assistant-settings_tool.minutes_days_value", i18n.Args{"days": days})
+}
+
+// setMinutesDays compares the saved setting, not its recording_days floor. A finite value below that floor is saved
+// for when recording_days becomes shorter. Unset and 0 both mean forever; the card names the effective before/after.
+func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var days int
+	var word string
+	forever := json.Unmarshal(v, &word) == nil && strings.EqualFold(strings.TrimSpace(word), "forever")
+	if !forever && (strings.TrimSpace(string(v)) == "null" || json.Unmarshal(v, &days) != nil || days < minMinutesDays || days > maxMinutesDays) {
+		return nil, i18n.Err("assistant-profile.bad_minutes_days")
+	}
+	cur := s.settings(ctx)
+	saved, recording := minutesDaysSetting(cur), recordingDaysOf(cur)
+	before, after := kb.MinutesDaysFor(saved, recording), kb.MinutesDaysFor(days, recording)
+	args := func(l i18n.Lang) i18n.Args {
+		return i18n.Args{"before": minutesDaysLabel(l, before), "after": minutesDaysLabel(l, after),
+			"saved": minutesDaysLabel(l, days), "previous": minutesDaysLabel(l, saved)}
+	}
+	if days == saved {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.minutes_unchanged", args(s.lang(ctx)))}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		if after == before {
+			return i18n.T(l, "assistant-settings_tool.change_minutes_days_saved", args(l))
+		}
+		return i18n.T(l, "assistant-settings_tool.change_minutes_days", args(l))
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MinutesDays = &days; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.kbWake() // a shorter retention prunes now
+			return i18n.T(s.lang(ctx), "assistant-settings_tool.minutes_applied", args(s.lang(ctx))), nil
+		}}, nil
+}
+
+// setMeetingAttendanceDefault changes the role meeting recordings pre-select; the card names the roles in the
+// user's language.
+func (s *Service) setMeetingAttendanceDefault(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var role string
+	if err := json.Unmarshal(v, &role); err != nil || !slices.Contains(meetingRoles, strings.TrimSpace(role)) {
+		return nil, errors.New("value must be off, listener or participant")
+	}
+	role = strings.TrimSpace(role)
+	before := s.meetingAttendanceDefault(ctx)
+	if role == before {
+		return &ownChange{summary: "assistant.meeting_attendance_default is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	name := func(l i18n.Lang, role string) string { return i18n.T(l, "assistant-settings_tool.meeting_role_"+role) }
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_meeting_attendance_default", i18n.Args{"before": name(l, before), "after": name(l, role)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MeetingAttendanceDefault = &role; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.meeting_attendance_default is %s for meeting recordings started from now on.", role), nil
+		}}, nil
+}
+
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": before, "after": after})
@@ -356,6 +470,13 @@ func (s *Service) setInterjectBackground(ctx context.Context, v json.RawMessage)
 		"assistant.interject_background is %v from the next message on.")
 }
 
+func (s *Service) setAgentTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.agentTasks, "assistant.agent_tasks is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_agent_tasks", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AgentTasks },
+		"assistant.agent_tasks is %v from the next start, turn end and report on (to-dos made before keep what they have).")
+}
+
 // launchers are the launchers of the assistant's machine, as the apps list them.
 func (s *Service) launchers(ctx context.Context) ([]proto.Launcher, error) {
 	machine := s.settings(ctx).MachineID
@@ -364,7 +485,15 @@ func (s *Service) launchers(ctx context.Context) ([]proto.Launcher, error) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return s.machineLaunchers(cctx, machine)
+	ls, err := s.assistantLaunchers(cctx, machine)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]proto.Launcher, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, l.Launcher)
+	}
+	return out, nil
 }
 
 func (s *Service) getLauncher(ctx context.Context) (string, error) {
@@ -381,7 +510,7 @@ func (s *Service) getLauncher(ctx context.Context) (string, error) {
 	return b.String(), nil
 }
 
-// setLauncher writes the launcher into Model configuration › Main chat, keeping its model and effort.
+// setLauncher writes the launcher into Model configuration › Main chat, inheriting its own default model and effort.
 func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var name string
 	if err := json.Unmarshal(v, &name); err != nil || strings.TrimSpace(name) == "" {
@@ -389,9 +518,6 @@ func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChang
 	}
 	name = strings.TrimSpace(name)
 	before := s.launcherNow(ctx)
-	if name == before {
-		return &ownChange{summary: "启动器没有变化"}, nil
-	}
 	ls, err := s.launchers(ctx)
 	if err != nil {
 		return nil, err
@@ -401,16 +527,32 @@ func (s *Service) setLauncher(ctx context.Context, v json.RawMessage) (*ownChang
 		known = known || l.Name == name
 	}
 	if !known {
-		return nil, fmt.Errorf("no launcher %q on the assistant's machine (get lists them)", name)
+		return nil, fmt.Errorf("no launcher %q on the assistant's machine (get lists them): %w", name, i18n.Err("assistant-models.err_provider_unsupported"))
+	}
+	if name == before {
+		return &ownChange{summary: "启动器没有变化"}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
-	rec, err := s.modelRecord(ctx, "assistant")
+	providers := s.modelProviders(ctx)
+	p, err := s.modelPurpose(ctx, "assistant", providers)
 	if err != nil {
 		return nil, err
 	}
-	rec.Binding.Provider = "launcher." + name
+	provider, _ := json.Marshal("launcher." + name)
+	binding, err := patchModel(p.Override, modelPatch{Provider: provider})
+	if err != nil {
+		return nil, err
+	}
+	base, _, err := s.modelBaseline(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateModel(ctx, p, mergeModel(base, binding), providers); err != nil {
+		return nil, err
+	}
+	rec := modelRecord{Revision: p.Revision, Binding: binding}
 	return &ownChange{cardText: func(l i18n.Lang) string {
 		return i18n.T(l, "assistant-settings_tool.change_launcher", i18n.Args{"before": before, "after": name})
 	},

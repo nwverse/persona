@@ -467,6 +467,9 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	if err := reg.AddBuiltin(egoManifest(h), "", false); err != nil { // the same, for ego lite (browser.go)
 		h.logf("plugin ego: %v", err)
 	}
+	if err := reg.AddBuiltinTranslated(iphoneManifest(h), "", false, iphoneTranslations()); err != nil { // the same, for paired iPhones (iphone.go)
+		h.logf("plugin iphone: %v", err)
+	}
 	if err := reg.AddBuiltin(imessageManifest(h), "", false); err != nil { // which Mac's Messages (imessage_extension.go)
 		h.logf("plugin imessage: %v", err)
 	}
@@ -577,6 +580,9 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if c.ID == egoExtensionID && ps.h != nil {
 		ps.h.browserChanged(ctx)
+	}
+	if c.ID == iphoneExtensionID && ps.h != nil {
+		ps.h.iphoneChanged(ctx)
 	}
 	if c.ID == imessageExtensionID && ps.h != nil {
 		ps.h.applyIMessage() // its Mac changed, or it went on or off (imessage_extension.go)

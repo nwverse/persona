@@ -204,7 +204,7 @@ private fun PersonaRootContent(
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                SnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
+                persona.core.designsystem.JAppSnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp))
             }
         }
     }
@@ -424,7 +424,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val shownPending = pending.filter(counts::owned)
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
-    val agentNeeds = agentRequests.count(counts::countsCard)
+    // The Agents tab counts its waiting agents, one per session (ShellCounts.agentsWaiting), as iOS and the web do.
+    val agentNeeds = counts.agentsWaiting(agentRequests)
     // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
     // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current

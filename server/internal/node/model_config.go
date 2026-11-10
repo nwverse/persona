@@ -17,6 +17,9 @@ type modelExecution struct {
 	UseEffort   bool
 	Fingerprint string
 	Ultracode   *bool `json:"-"` // explicit TUI start request; never a default or execution fingerprint
+	// PlanThen: the permission mode a start in plan mode goes on in once its plan is approved (planthen.go); never
+	// part of a fingerprint.
+	PlanThen string `json:"-"`
 	// Runtime: the assistant's runtime, proto.AssistantRuntimeAgentSDK or "" (the CLI; "cli" reads as ""). Omitted
 	// when empty so a fingerprint from before #2455 stays the same.
 	Runtime string `json:",omitempty"`

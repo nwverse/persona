@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 )
@@ -34,14 +35,58 @@ func TestScrubText(t *testing.T) {
 		{"on build-box.example.net and Studio and studio.local", "on <machine> and <machine> and <machine>.local"},
 		{"InboxViewModelLoadMoreItemsUseCaseImpl failed", "InboxViewModelLoadMoreItemsUseCaseImpl failed"},
 		{"session expired", "session expired"},
+		// a secret's name with a prefix: db_password, PGPASSWORD, aws_secret_access_key, X-Auth-Token
+		{"db_password=hunter2 PGPASSWORD=hunter3 private_key=abc123 x_auth_token=zzz1234",
+			"db_password=" + Redacted + " PGPASSWORD=" + Redacted + " private_key=" + Redacted + " x_auth_token=" + Redacted},
+		{"aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws_secret_access_key=" + Redacted},
+		{"MYSQL_PWD=pw1 GITHUB_TOKEN: ghx1 X-Auth-Token: abc1", "MYSQL_PWD=" + Redacted + " GITHUB_TOKEN: " + Redacted + " X-Auth-Token: " + Redacted},
+		{`{"ssh_passphrase": "s3same", "aws_credentials": "c1"}`, `{"ssh_passphrase": "` + Redacted + `", "aws_credentials": "` + Redacted + `"}`},
+		// not secrets: a bare "key" inside a word or after a prefix is a name like any other, and only names that end in
+		// a secret's name count (sort_key, max_tokens and PASSWORD_FILE are not secrets)
+		{"keyboard: x monkey=3 sort_key=name max_tokens=4096 PASSWORD_FILE=/run/x", "keyboard: x monkey=3 sort_key=name max_tokens=4096 PASSWORD_FILE=/run/x"},
 	}
 	for _, c := range cases {
 		if got := s.Text(c.in); got != c.want {
 			t.Errorf("Text(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+	// A rune whose lowercase has another byte length (U+0130, the Kelvin sign) must not stop mixed-case names from
+	// being hidden, nor shift where they are cut out.
+	mac := NewScrubber("Alices-MacBook-Pro")
+	for in, want := range map[string]string{
+		"on Alices-MacBook-Pro":                       "on <machine>",
+		"\u0130stanbul on Alices-MacBook-Pro":         "\u0130stanbul on <machine>",
+		"5 \u212A on ALICES-MACBOOK-PRO.local":        "5 \u212A on <machine>.local",
+		"\u023A Alices-MacBook-Pro \u0130 x":          "\u023A <machine> \u0130 x", // one grows, one shrinks: same total length
+		"\u212A\u0130\u0130 alices-macbook-pro x":     "\u212A\u0130\u0130 <machine> x",
+		"\u212Bngstr\u00F6m Alices-MacBook-Pro\u0130": "\u212Bngstr\u00F6m <machine>\u0130",
+	} {
+		got := mac.Text(in)
+		if got != want || !utf8.ValidString(got) {
+			t.Errorf("Text(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := NewScrubber("kiln-box").Text("on \u212Ailn-Box"); got != "on <machine>" { // the Kelvin sign folds to k
+		t.Errorf("Kelvin sign: %q", got)
+	}
 	if got := s.Message(`send "the user's words" and 「日本語」 'it''s' failed`); strings.Contains(got, "words") || strings.Contains(got, "日本語") {
 		t.Errorf("quoted spans stay: %q", got)
+	}
+	// a quoted body with a newline in it is still the user's content
+	multiline := []struct{ in, want string }{
+		{"send \"hello there\nmy secret plan\" failed", `send "<redacted>" failed`},
+		{"post “first line\nsecond line” failed", `post "<redacted>" failed`},
+		{"title 「一行\n二行」 bad", `title "<redacted>" bad`},
+		{"run `ls\nrm -rf x` failed", `run "<redacted>" failed`},
+		// two quotes on separate lines stay two spans, and the text between them stays
+		{"open \"a.txt\" failed\nthen \"b.txt\" failed", "open \"<redacted>\" failed\nthen \"<redacted>\" failed"},
+		// apostrophes in prose do not pair across lines
+		{"it's broken\nwe're done", "it's broken\nwe're done"},
+	}
+	for _, c := range multiline {
+		if got := s.Message(c.in); got != c.want {
+			t.Errorf("Message(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 
@@ -64,6 +109,29 @@ func TestScrubReportLimits(t *testing.T) {
 	}
 	if _, ok := r.Tags["Bad Key"]; ok || r.Tags["screen"] != "inbox" {
 		t.Fatalf("tags: %v", r.Tags)
+	}
+}
+
+func TestScrubCrumbLevelAndTime(t *testing.T) {
+	r := wire.ErrorReport{Breadcrumbs: []wire.ErrorBreadcrumb{
+		{Category: "nav", Level: "/home/alice", Time: "token=abcdefghijk me@example.com"},
+		{Category: "nav", Level: "Info", Time: "2026-11-06T10:00:00.123+01:00"},
+		{Category: "nav", Level: "warning", Time: "2026-11-06T09:00:00Z"},
+		{Category: "nav", Level: "debug", Time: "2026-11-06 09:00:00"},
+		{Category: "nav"},
+	}}
+	NewScrubber().Report(&r)
+	want := []struct{ level, time string }{
+		{"", ""},
+		{"info", "2026-11-06T09:00:00.123Z"},
+		{"warning", "2026-11-06T09:00:00Z"},
+		{"debug", ""},
+		{"", ""},
+	}
+	for i, w := range want {
+		if c := r.Breadcrumbs[i]; c.Level != w.level || c.Time != w.time {
+			t.Errorf("crumb %d: level %q time %q, want %q %q", i, c.Level, c.Time, w.level, w.time)
+		}
 	}
 }
 
