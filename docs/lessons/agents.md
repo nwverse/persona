@@ -773,3 +773,6 @@ Reasoning effort and speed are independent. Read `serviceTiers` rather than deri
 and keep the advertised native ID. `thread/read` omits speed even when `thread/resume` and settings notifications
 report it. Preserve acknowledged speed through metadata refreshes, show missing state as unknown, and use a dedicated
 node RPC so an older node cannot silently ignore a billable setting in `session.modes`.
+
+Persona-owned Codex conversations use a separate stdio connection. Share catalog parsing across both transports and
+include the owned connection in session projection, setting routing and native notifications.

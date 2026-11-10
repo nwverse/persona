@@ -41,7 +41,7 @@ afterEach(async () => {
 });
 
 async function openSpeed() {
-  await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('button[title="Thinking effort"]')!.click());
   const row = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((e) => e.textContent?.startsWith("Speed"));
   expect(row).toBeDefined();
   await act(async () => row!.click());
@@ -70,4 +70,13 @@ it("offers Standard as the reversible choice when Fast is active", async () => {
   expect(choices.find((e) => e.textContent?.startsWith("Fast"))?.getAttribute("aria-checked")).toBe("true");
   await act(async () => choices.find((e) => e.textContent?.startsWith("Standard"))!.click());
   expect(fetcher).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ body: JSON.stringify({ service_tier: "default" }) }));
+});
+
+it("offers the same speed submenu in a Persona conversation running Codex", async () => {
+  await act(async () => root.render(<ModeChips session={{ ...session, assistant: true }} assistant />));
+  await openSpeed();
+  const fast = [...document.querySelectorAll<HTMLElement>("[role=menuitemradio]")].find((element) => element.textContent?.startsWith("Fast"));
+  expect(fast).toBeDefined();
+  await act(async () => fast!.click());
+  expect(fetcher).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ body: JSON.stringify({ service_tier: "priority" }) }));
 });

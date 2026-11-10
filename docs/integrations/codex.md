@@ -429,7 +429,7 @@ A new local Codex launched inside Orca must keep that terminal’s hook environm
 
 ## Speed
 
-The web composer's effort menu includes a Speed submenu for writable app-server threads whose current model advertises
+The web composer's effort menu includes a Speed submenu for Persona conversations running Codex and writable external app-server threads whose current model advertises
 `serviceTiers` through `model/list`. Standard sends `default`; Fast uses the advertised tier ID, currently `priority`.
 The submenu explains increased usage or cost before selection. It is independent of reasoning effort and takes effect
 on subsequent turns. Settings > Agents > Codex also exposes the native `service_tier` default for new sessions.

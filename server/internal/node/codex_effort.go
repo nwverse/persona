@@ -78,6 +78,19 @@ func (c *codexRemote) defaultEffort(model string) string {
 func (c *codexRemote) loadModels() {
 	ctx, cancel := context.WithTimeout(c.ctx, 20*time.Second)
 	defer cancel()
+	models, err := readCodexModels(ctx, c.wire.call)
+	if err != nil {
+		c.n.logf("codex %s: model/list: %v; threads offer every effort level", c.spec.ID, err)
+		return
+	}
+	c.mu.Lock()
+	c.models = models
+	c.mu.Unlock()
+	c.n.notifyCodex()
+}
+
+// Both external and Persona-owned app-servers advertise the same model metadata.
+func readCodexModels(ctx context.Context, call func(context.Context, string, any, any) error) (map[string]codexModelEfforts, error) {
 	models := map[string]codexModelEfforts{}
 	cursor := ""
 	for page := 0; page < 20; page++ {
@@ -97,9 +110,8 @@ func (c *codexRemote) loadModels() {
 			} `json:"data"`
 			NextCursor *string `json:"nextCursor"`
 		}
-		if err := c.wire.call(ctx, "model/list", params, &res); err != nil {
-			c.n.logf("codex %s: model/list: %v; threads offer every effort level", c.spec.ID, err)
-			return
+		if err := call(ctx, "model/list", params, &res); err != nil {
+			return nil, err
 		}
 		for _, m := range res.Data {
 			e := []string{}
@@ -119,10 +131,7 @@ func (c *codexRemote) loadModels() {
 		}
 		cursor = *res.NextCursor
 	}
-	c.mu.Lock()
-	c.models = models
-	c.mu.Unlock()
-	c.n.notifyCodex()
+	return models, nil
 }
 
 // codexEffortNow is the effort a thread is shown with: the phone's choice still waiting for a turn/start, else what

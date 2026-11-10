@@ -43,6 +43,12 @@ func (n *Node) codexSpeedRow(s *proto.Session) {
 // Speed is a separate RPC so an older node cannot silently ignore it in modes.
 // There is no optimistic or next-message fallback for a billable speed choice.
 func (n *Node) setCodexSpeed(ctx context.Context, id, tier string) error {
+	n.mu.Lock()
+	proc := n.procs[id]
+	n.mu.Unlock()
+	if proc != nil && proc.agent == "codex" && proc.cx != nil {
+		return proc.cx.setSpeed(ctx, tier)
+	}
 	c, thread, ok := n.codexEffortThread(id)
 	if !ok {
 		return fmt.Errorf("this session does not support Codex speed changes")
