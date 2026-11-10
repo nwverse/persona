@@ -5,16 +5,16 @@
 package closeout
 
 import (
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 var (
-	blockRe = regexp.MustCompile(`(?s)<closeout\b([^>]*)>(.*?)</closeout>`)
-	attrRe  = regexp.MustCompile(`([a-z_]+)\s*=\s*"([^"]*)"`)
+	blockRe = lazyre.New(`(?s)<closeout\b([^>]*)>(.*?)</closeout>`)
+	attrRe  = lazyre.New(`([a-z_]+)\s*=\s*"([^"]*)"`)
 )
 
 // Example is the form an agent is asked to write, as the prompts show it.

@@ -22,6 +22,11 @@ nonisolated struct RecordingActivityAttributes: ActivityAttributes {
         var title: String
         var meeting: Bool
         var marks: Int
+        /// Persona attends the meeting (#2981): `listener` or `participant` (`MeetingAttendance`), nil when it doesn't.
+        /// Said under the name, so anyone who sees the phone knows, with Ask Persona and a way to turn it off.
+        var persona: String? = nil
+        /// Persona's latest answer in this meeting (the hub posts no notification for answers), cut short to fit.
+        var answer: String? = nil
 
         var runningSinceDate: Date? { runningSince.map { Date(timeIntervalSince1970: $0) } }
     }

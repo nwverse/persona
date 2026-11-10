@@ -2736,7 +2736,8 @@ def managers_route(h, method, p):
 # POST /mock/meeting_attendance switches that (only the keys sent): {"feed": "ok"|"busy"|"unavailable"|"not_allowed",
 # "answer": "ok"|"slow"|"fail", "answer_seconds": 3, "kb_read_only": false}: busy leaves `fed` behind with no problem,
 # unavailable / not_allowed report attendee_unavailable / attendee_not_allowed, slow answers a question that many seconds
-# after it was asked (202 meanwhile), fail fails it with model_unavailable. GET /mock/meeting_attendance reads back the
+# after it was asked (202 meanwhile), fail fails it with model_unavailable; "on" and "default" switch the feature and
+# meeting_attendance_default for a UI test (the iPhone's MeetingAttendanceUITests). GET /mock/meeting_attendance reads back the
 # modes, every recording's live log and its asks; POST /mock/recording_minutes forgets them too.
 MEETING_ATTENDANCE = os.environ.get("MOCK_NO_MEETING_ATTENDANCE") != "1"
 MEETING_ROLES = ("off", "listener", "participant")
@@ -2925,12 +2926,19 @@ def meeting_ask(h, st, body, rec):
 def recordings_route(h, method, p):
     """The hub's recording sync, and its copy in the knowledge base (KB["recordings"])."""
     if p == "/mock/meeting_attendance":
+        global MEETING_ATTENDANCE
         with MEETING_LOCK:
             if method == "POST":
-                MEETING_MODE.update({k: v for k, v in json.loads(h.last_body or b"{}").items() if k in MEETING_MODE})
-            return h.send_json({"mode": MEETING_MODE, "live": {k: {"attendance": v["role"], "attending_session": v["session"],
-                                                                     "segments": v["segments"], "fed": v["fed"], "asks": v["asks"]}
-                                                                 for k, v in MEETING_LIVE.items()}}) or True
+                body = json.loads(h.last_body or b"{}")
+                MEETING_MODE.update({k: v for k, v in body.items() if k in MEETING_MODE})
+                # A UI test's hub of its own: "on": false is a hub without attending (from its next hello), "default"
+                # the role meeting_attendance_default says.
+                if "on" in body: MEETING_ATTENDANCE = bool(body["on"])
+                if body.get("default") in MEETING_ROLES: ASSISTANT_CONFIG["meeting_attendance_default"] = body["default"]
+            return h.send_json({"mode": MEETING_MODE, "on": MEETING_ATTENDANCE, "default": ASSISTANT_CONFIG["meeting_attendance_default"],
+                                "live": {k: {"attendance": v["role"], "attending_session": v["session"],
+                                             "segments": v["segments"], "fed": v["fed"], "asks": v["asks"]}
+                                         for k, v in MEETING_LIVE.items()}}) or True
     if p == "/mock/recording_minutes" and method == "POST":
         # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
         RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
@@ -3943,6 +3951,50 @@ if MOCK_TASKS:
         _cut_at = ago(minutes=_cut)
         ITEMS[ASK1] = [x for x in ITEMS[ASK1] if (x.get("ts") or "") <= _cut_at]
         TASK_FEED[ASK1] = [x for x in TASK_FEED[ASK1] if x["at"] <= _cut_at]
+    # MOCK_INTERRUPTS=1: one model-service outage cut four tasks off within minutes (#3834); the hub batched three of
+    # them (one cancelled, one dispatched again, one still pending) and a fourth with another cause was resumed since.
+    # =legacy: the same receipts as a hub from before #3834 wrote them (no cause, group, resolution or batch); =handled: the
+    # pending one was resumed too, so the batch is all handled (grey).
+    _interrupts = os.environ.get("MOCK_INTERRUPTS", "")
+    if _interrupts:
+        _gw = "API Error: 502 Bad Gateway"
+        _cut_tasks = [("todo_cut_login", "修登录页的崩溃", 9, "cancelled"), ("todo_cut_deps", "升级依赖到最新版", 8.5, "rerouted"),
+                      ("todo_cut_tests", "补网络层的单元测试", 8, "resumed" if _interrupts == "handled" else "pending")]
+        _now_iso = ago()
+        for _tid, _title, _min, _res in _cut_tasks:
+            _todo = dict(_task_todo(_tid, _title, "", "macbook", "", "/Users/me/code/example", _min + 20, ""), agents=[])
+            if _res in ("cancelled", "rerouted"):
+                _todo.update(done_at=_now_iso, done_by="cancelled", cancelled_at=_now_iso)
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+        _again = dict(_task_todo("todo_cut_deps2", "升级依赖到最新版", "", "macbook", "", "/Users/me/code/example", 5, ""), agents=[])
+        _solo = dict(_task_todo("todo_cut_docs", "整理周报", "", "studio", "", "/Users/me/code/example", 40, ""), agents=[])
+        for _todo in (_again, _solo):
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+        _head = "feed_cut_1"
+        _bodies = []
+        for _i, (_tid, _title, _min, _res) in enumerate(_cut_tasks):
+            _b = {"title": _title, "state": "interrupted", "machine": "MacBook", "summary": "模型服务出错，中断了", "error": _gw}
+            if _interrupts != "legacy":
+                _b.update(cause="model_error", resolution=_res)
+                if _i:
+                    _b["group"] = _head
+            _bodies.append(_b)
+        if _interrupts != "legacy":
+            _open = sum(1 for _c in _cut_tasks if _c[3] == "pending")
+            _bodies[0]["batch"] = {"cause": "model_error", "machine": "MacBook", "total": 3, "pending": _open, "resolved": 3 - _open,
+                                   "tasks": [{"receipt": "feed_cut_%d" % (_i + 1), "todo_id": _tid, "title": _title,
+                                              "resolution": _res, "at": ago(minutes=_min)}
+                                             for _i, (_tid, _title, _min, _res) in enumerate(_cut_tasks)]}
+        for _i, ((_tid, _title, _min, _res), _b) in enumerate(zip(_cut_tasks, _bodies)):
+            TASK_FEED[ASK1].append(_feed("feed_cut_%d" % (_i + 1), _min, "receipt", _tid, _b))
+        _solo_body = {"title": "整理周报", "state": "interrupted", "machine": "Studio", "summary": "模型服务出错，中断了",
+                      "error": "API Error: 429 Too Many Requests"}
+        if _interrupts != "legacy":
+            _solo_body.update(cause="rate_limited", resolution="resumed")
+        TASK_FEED[ASK1].append(_feed("feed_cut_solo", 30, "receipt", "todo_cut_docs", _solo_body))
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_TASKS_REVIEW=1: open tasks awaiting Persona's review, with and without explicit criteria (#4893).
     if os.environ.get("MOCK_TASKS_REVIEW") == "1":
         for _n, _title in [(3, "整理发布说明"), (0, "检查任务清单")]:

@@ -392,18 +392,9 @@ func (s *Service) machineLauncherRoutes() {
 			apierr.Write(w, http.StatusNotFound, errUnknownMachine)
 			return
 		}
-		var list []ConfiguredLauncher
-		var err error
-		if r.URL.Query().Get("purpose") == "assistant" {
-			list, err = s.assistantLaunchers(ctx, mid)
-		} else {
-			var ls []proto.Launcher
-			ls, err = s.machineLaunchers(ctx, mid)
-			discovered := make([]ConfiguredLauncher, 0, len(ls))
-			for _, l := range ls {
-				discovered = append(discovered, ConfiguredLauncher{Launcher: l})
-			}
-			list = sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[mid])
+		list, err := s.pickerLaunchers(ctx, mid)
+		if err == nil && r.URL.Query().Get("purpose") == "assistant" { // the main chat's menu, and the scheduled tasks' that follow it
+			list, err = s.assistantLaunchersOf(ctx, mid, list)
 		}
 		if err != nil {
 			apierr.Call(w, err)

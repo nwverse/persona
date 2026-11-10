@@ -50,7 +50,8 @@ internal fun nextWaiting(waiting: List<WaitingRequest>, here: SessionKey): NextW
 /** "N more waiting for you · Next: <agent> · <what it asks> ›", under the answer's notice; a tap opens that chat with that card first. */
 @Composable
 internal fun NextWaitingRow(next: NextWaiting, onOpen: () -> Unit, modifier: Modifier = Modifier) {
-    val text = pluralStringResource(R.plurals.chat_next_waiting, next.count, next.count, next.request.who, next.request.what)
+    val text = pluralStringResource(R.plurals.chat_next_waiting, next.count, next.count,
+        next.request.who.ifBlank { stringResource(R.string.chat_next_waiting_agent) }, next.request.what)
     ChatHint(text, PhIcons.Hand, PersonaTheme.palette.needsYou.dot, onOpen,
         modifier.padding(horizontal = Tokens.Space.m).testTag("chat-next-waiting"),
         onClickLabel = stringResource(R.string.chat_next_waiting_open))
