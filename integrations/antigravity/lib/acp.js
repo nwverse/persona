@@ -102,6 +102,18 @@ export class AgyAcpClient extends EventEmitter {
     })
   }
 
+  /** Send a JSON-RPC notification (no id, no answer). False when no agy process is running to take it. */
+  notify(method, params) {
+    if (!this.proc || !this.proc.stdin.writable) return false
+    try {
+      this._send({ jsonrpc: '2.0', method, params })
+      return true
+    } catch (err) {
+      this.log(`agy acp: could not send ${method}: ${err.message}`)
+      return false
+    }
+  }
+
   async call(method, params, timeoutMs = 60_000) {
     await this.ensureStarted()
     return this._rawCall(method, params, timeoutMs)
@@ -201,8 +213,11 @@ export class AgyAcpClient extends EventEmitter {
     return this.call('session/prompt', { sessionId, prompt: promptBlocks }, 0)
   }
 
+  // ACP's session/cancel is a notification: the agent ends the running session/prompt with stopReason 'cancelled' and
+  // answers nothing else (sent as a request, an agent that follows the spec rejects it and keeps running). With no agy
+  // process there is no turn to cancel.
   async cancel(sessionId) {
-    return this.call('session/cancel', { sessionId }, 10_000)
+    this.notify('session/cancel', { sessionId })
   }
 
   async closeSession(sessionId) {
