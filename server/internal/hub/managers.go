@@ -83,6 +83,10 @@ type managerInfo struct {
 	// NeedsUpdate: it is online with a build from before manager.json (no config.own in its hello): the hello no
 	// longer carries the manager's defaults, so it runs on its built-in ones until it is updated.
 	NeedsUpdate bool `json:"needs_update,omitempty"`
+	// InboxNeedsYou: how many open items of its inbox are in "Needs you", as it last said on this connection
+	// (inbox.needs_you). Absent: not known (it is away or being installed, a build from before it reported one, or
+	// its stored items could not be read).
+	InboxNeedsYou *int `json:"inbox_needs_you,omitempty"`
 }
 
 // defaultManager is the manager the entries that belong to none go to (Siri, the shortcuts, the assistant page as
@@ -131,6 +135,7 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 	for _, p := range h.busRoster() {
 		live[p.ID] = p
 	}
+	needsYou := h.inboxNeedsYou()
 	out := []managerInfo{}
 	for _, b := range idents {
 		if b.Role != bus.RoleManager {
@@ -143,6 +148,7 @@ func (h *Hub) managerList(ctx context.Context) ([]managerInfo, error) {
 			m.Online, m.Since = true, &since
 			m.Host, m.OS, m.Arch, m.Deploy, m.Version = p.Host, p.OS, p.Arch, p.Deploy, p.Version
 			m.NeedsUpdate = !slices.Contains(p.Capabilities, assistantwire.CapabilityConfigOwn)
+			m.InboxNeedsYou = needsYou[b.ID]
 		}
 		out = append(out, m)
 	}
@@ -179,6 +185,12 @@ func (h *Hub) builtinManager(id string) bool {
 // anyway.
 func (h *Hub) managersChanged() {
 	h.ownersChanged() // the default may be another one now (ownership.go)
+	h.tellManagers()
+}
+
+// tellManagers is managersChanged's push alone: what the roster says of a manager moved (its inbox's "Needs you"
+// count), not who is in it or which is the default, so nothing kept of those is forgotten.
+func (h *Hub) tellManagers() {
 	b := []byte(`{"type":"managers"}`)
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -187,6 +199,40 @@ func (h *Hub) managersChanged() {
 			c.queue(b)
 		}
 	}
+}
+
+// The inbox's "Needs you" count of each manager (docs/assistant/managers.md "What the hub keeps of each manager"): the
+// inbox is the manager's, so it counts and says the number (inbox.needs_you, after its handshake and on every change),
+// and the hub keeps the last one of the connection for the roster. A number that differs from the one before tells
+// the apps to read the roster again.
+func init() {
+	handleBusEvent(assistantwire.EventInboxNeedsYou, func(h *Hub, c *busConn, params json.RawMessage) {
+		var p assistantwire.InboxNeedsYou
+		if json.Unmarshal(params, &p) != nil || p.Count < 0 || c.ident.Role != bus.RoleManager {
+			return
+		}
+		h.bus.mu.Lock()
+		same := c.inboxNeedsYou != nil && *c.inboxNeedsYou == p.Count
+		c.inboxNeedsYou = &p.Count
+		h.bus.mu.Unlock()
+		if !same {
+			h.tellManagers()
+		}
+	})
+}
+
+// inboxNeedsYou is the count each connected manager reported on its connection, by id; none for one that has not.
+func (h *Hub) inboxNeedsYou() map[string]*int {
+	out := map[string]*int{}
+	h.bus.mu.Lock()
+	defer h.bus.mu.Unlock()
+	for id, c := range h.bus.current {
+		if c.inboxNeedsYou != nil {
+			n := *c.inboxNeedsYou
+			out[id] = &n
+		}
+	}
+	return out
 }
 
 // newInstallCode makes a one-time code for manager id (a new one, or one moving to another place) and keeps its hash.

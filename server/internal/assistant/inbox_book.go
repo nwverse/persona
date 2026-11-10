@@ -21,6 +21,7 @@ type inboxBook struct {
 	loaded      atomic.Bool             // what the database keeps was read: until then nothing is taken or written
 	running     sync.Mutex              // one collection applied at a time
 	saving      sync.Mutex              // snapshots and writes in the same order
+	needsYouMu  sync.Mutex              // the "Needs you" count is counted and told to the hub in one go (tellInboxNeedsYou)
 	mark        map[string]uint64       // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
 	filing      map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
 	epoch       string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running

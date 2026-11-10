@@ -128,6 +128,9 @@ type busConn struct {
 	presence busPresence
 	replaced bool // a newer connection of the identity took over
 	ended    bool
+	// inboxNeedsYou is the inbox's "Needs you" count it reported on this connection (inbox.needs_you, managers.go);
+	// nil: none yet. It goes with the connection, so the roster never shows the count of a manager that is away.
+	inboxNeedsYou *int
 
 	// roster is the managers event on its way to it (sendRoster): the newest list, its number and the one sent last.
 	roster struct {

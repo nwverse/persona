@@ -249,6 +249,13 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 				svc.Resync(context.WithoutCancel(ctx))
 			}
 		}()
+		// The inbox's "Needs you" count, which the hub keeps of this connection only (inbox_store.go): what is stored
+		// is read now if nothing read it yet, so the roster has the number before the first round.
+		go func() {
+			if b.client.Wait(ctx) == nil && svc.inboxReady(context.WithoutCancel(ctx)) == nil {
+				svc.tellInboxNeedsYou()
+			}
+		}()
 		// The conversations the channels follow (channels_handler.go).
 		go svc.channelsReconnected(context.WithoutCancel(ctx))
 		// Turns the hub sent as it connected can be taken before this answer is kept (events come on their own

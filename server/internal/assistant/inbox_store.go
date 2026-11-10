@@ -58,6 +58,7 @@ func (s *Service) inboxReady(ctx context.Context) error {
 		return errInboxUnavailable
 	}
 	b.loaded.Store(true)
+	s.tellInboxNeedsYou() // the hub was told none while it was unread
 	return nil
 }
 
@@ -249,4 +250,27 @@ func (s *Service) inboxChanged(ctx context.Context, items []assistantwire.InboxC
 		items = []assistantwire.InboxChangedItem{}
 	}
 	s.hub.InboxChanged(ctx, assistantwire.InboxChanged{Items: items})
+	s.tellInboxNeedsYou()
+}
+
+// tellInboxNeedsYou tells the hub how many open items are in "Needs you" (EventInboxNeedsYou), for the roster's
+// inbox_needs_you: after every change (inboxChanged), once what is stored was first read (inboxReady), and after each
+// handshake (BusHub.onHello). Nothing is told while the stored items are unread: the hub then shows no number. Counted
+// and told under one lock, so two changes at once reach the hub in the order they were counted.
+func (s *Service) tellInboxNeedsYou() {
+	b := &s.inbox
+	if !b.loaded.Load() {
+		return
+	}
+	b.needsYouMu.Lock()
+	defer b.needsYouMu.Unlock()
+	n := 0
+	b.mu.Lock()
+	for _, it := range b.items {
+		if it.status() == StatusAction {
+			n++
+		}
+	}
+	b.mu.Unlock()
+	_ = s.hub.Tell(assistantwire.EventInboxNeedsYou, assistantwire.InboxNeedsYou{Count: n}) // an error: not connected, told at the handshake
 }

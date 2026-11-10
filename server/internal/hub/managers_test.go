@@ -523,3 +523,111 @@ func TestHubSaysWhichSectionsAreTheManagers(t *testing.T) {
 		t.Fatalf("said %q for a hub.json without them", logs.String())
 	}
 }
+
+// A manager says how many of its inbox's open items are in "Needs you" (inbox.needs_you): the roster has the number
+// while that connection is up, the apps are told to read the roster again when it differs from the one before and
+// not when it is the same, and a manager that said none, one that went away and one that connects again have none.
+func TestManagersRosterHasInboxNeedsYou(t *testing.T) {
+	h, srv, _ := managersHub(t)
+	app := &client{device: "test-device-2", out: make(chan []byte, 64)}
+	h.mu.Lock()
+	h.clients[app] = struct{}{}
+	h.mu.Unlock()
+	h.onClientMessage(context.Background(), app, []byte(`{"type":"client_hello","features":["managers"]}`))
+	<-app.out // client_hello_ack
+	pushes := func() int {
+		t.Helper()
+		n := 0
+		for {
+			select {
+			case raw := <-app.out:
+				if string(raw) != `{"type":"managers"}` {
+					t.Fatalf("got %s", raw)
+				}
+				n++
+			case <-time.After(150 * time.Millisecond):
+				return n
+			}
+		}
+	}
+	needsYou := func(id string) *int {
+		t.Helper()
+		var list managersReply
+		if code := managersDo(t, h, srv, "GET", "/api/v1/managers", nil, &list); code != 200 {
+			t.Fatalf("list: %d", code)
+		}
+		m, ok := list.find(id)
+		if !ok {
+			t.Fatalf("no %s in %+v", id, list)
+		}
+		return m.InboxNeedsYou
+	}
+	is := func(id string, want int) func() bool {
+		return func() bool { n := needsYou(id); return n != nil && *n == want }
+	}
+	connect := func(id, name string) *rawBus {
+		t.Helper()
+		r := dialRawBus(t, srv, busToken(t, h, id, name))
+		if err := r.call(assistantwire.MethodHello, map[string]any{"id": id}, nil); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	say := func(r *rawBus, params any) {
+		t.Helper()
+		if err := r.peer.Notify(assistantwire.EventInboxNeedsYou, params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	work, home := connect("m-abc123", "工作"), connect("m-def456", "家")
+	if n := needsYou("m-abc123"); n != nil {
+		t.Fatalf("a manager that said none: %d", *n)
+	}
+	pushes() // the two connected
+
+	say(work, assistantwire.InboxNeedsYou{Count: 3})
+	eventually(t, 5*time.Second, "the roster has the count", is("m-abc123", 3))
+	if n := needsYou("m-def456"); n != nil {
+		t.Fatalf("another manager's count: %d", *n)
+	}
+	if n := pushes(); n != 1 {
+		t.Fatalf("a new count pushed %d times", n)
+	}
+	// The same number again, and what is no count (negative, not a number), tell the apps nothing and change nothing.
+	say(work, assistantwire.InboxNeedsYou{Count: 3})
+	say(work, map[string]any{"count": -1})
+	say(work, map[string]any{"count": "many"})
+	say(home, assistantwire.InboxNeedsYou{Count: 0}) // none in "Needs you" is a count: 0, not absent
+	eventually(t, 5*time.Second, "the roster has the other's count", is("m-def456", 0))
+	if n := needsYou("m-abc123"); n == nil || *n != 3 {
+		t.Fatalf("after the same and bad counts: %v", n)
+	}
+	if n := pushes(); n != 1 {
+		t.Fatalf("only the other manager's first count is news: pushed %d times", n)
+	}
+	var raw struct {
+		Managers []map[string]any `json:"managers"`
+	}
+	managersDo(t, h, srv, "GET", "/api/v1/managers", nil, &raw)
+	for _, m := range raw.Managers {
+		_, has := m["inbox_needs_you"]
+		if want := m["id"] == "m-abc123" || m["id"] == "m-def456"; has != want {
+			t.Fatalf("inbox_needs_you present %v: %v", has, m)
+		}
+	}
+
+	// It goes with the connection: gone while the manager is away, and not back until it says it again.
+	_ = work.ws.CloseNow()
+	eventually(t, 5*time.Second, "a manager away has no count", func() bool { return needsYou("m-abc123") == nil })
+	pushes()
+	work = connect("m-abc123", "工作")
+	if n := needsYou("m-abc123"); n != nil {
+		t.Fatalf("a new connection that said none: %d", *n)
+	}
+	pushes()
+	say(work, assistantwire.InboxNeedsYou{Count: 1})
+	eventually(t, 5*time.Second, "the new connection's count", is("m-abc123", 1))
+	if n := pushes(); n != 1 {
+		t.Fatalf("the new connection's count pushed %d times", n)
+	}
+}
