@@ -415,6 +415,9 @@
     <string name="chat_work_thought">思考</string>
     <string name="chat_content_copy">コピー</string>
     <string name="chat_content_show_all">すべて表示</string>
+    <string name="chat_content_copied">コピーしました</string>
+    <string name="chat_content_quote_more">すべて表示</string>
+    <string name="chat_content_quote_less">折りたたむ</string>
     <string name="chat_content_full_text">全文</string>
     <string name="chat_content_image">チャットの画像</string>
     <plurals name="chat_content_collapse_steps">

@@ -95,10 +95,10 @@ final class MeetingAttendanceUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.alerts.firstMatch.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "在屏幕上回答")).firstMatch.exists,
                       app.debugDescription)
-        field.typeText("Mac 上的录音现在谁在跟？")
+        field.typeText("上次评审定的导出上限是多少？")
         try shot(app, "ask-typed")
         app.alerts.firstMatch.buttons.matching(NSPredicate(format: "label == %@", "提问")).firstMatch.tap()
-        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "还没有定负责人")).firstMatch
+        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "回归测试由 Bo 负责")).firstMatch
         scrollTo(answer, in: app)
         XCTAssertTrue(answer.waitForExistence(timeout: 20), app.debugDescription)
         XCTAssertFalse(app.buttons["meeting-stop-speaking"].exists, "listening in, nothing is said aloud")
@@ -120,7 +120,7 @@ final class MeetingAttendanceUITests: XCTestCase {
         let ask = app.buttons["meeting-ask"]
         scrollTo(ask, in: app)
         ask.tap()
-        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "周五前完成")).firstMatch
+        let answer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "回归测试由 Bo 负责")).firstMatch
         scrollTo(answer, in: app)
         XCTAssertTrue(answer.waitForExistence(timeout: 25), app.debugDescription)
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "上周定的长录音测试谁负责")).firstMatch.exists,
@@ -161,9 +161,9 @@ final class MeetingAttendanceUITests: XCTestCase {
         XCTAssertTrue(limits.exists, "what Persona may say in front of others")
     }
 
-    /// The shared mock goes back to a hub without attending, so the next class sees what it always did.
+    /// The shared mock goes back to how it starts (attending on, the default off), so the next class sees what it always did.
     override func tearDownWithError() throws {
-        if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] { try attendance(hub, on: false, default: "off") }
+        if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] { try attendance(hub, on: true, default: "off") }
     }
 
     // MARK: Helpers
@@ -187,17 +187,18 @@ final class MeetingAttendanceUITests: XCTestCase {
         wait(for: [done], timeout: 5)
     }
 
-    /// What the mock hub holds about meetings (`GET /mock/meeting`).
+    /// What the mock hub holds about meetings (`GET /mock/meeting_attendance`): each recording's role, live log and asks.
     private struct Meeting {
         var json: [String: Any]
-        func role(_ id: String) -> String? { ((json["attendance"] as? [String: Any])?[id] as? [String: Any])?["attendance"] as? String }
-        func lines(_ id: String) -> [[String: Any]] { (json["live"] as? [String: Any])?[id] as? [[String: Any]] ?? [] }
-        func asks(_ id: String) -> [[String: Any]] { (json["asks"] as? [String: Any])?[id] as? [[String: Any]] ?? [] }
+        private func live(_ id: String) -> [String: Any]? { (json["live"] as? [String: Any])?[id] as? [String: Any] }
+        func role(_ id: String) -> String? { live(id)?["attendance"] as? String }
+        func lines(_ id: String) -> [[String: Any]] { live(id)?["segments"] as? [[String: Any]] ?? [] }
+        func asks(_ id: String) -> [[String: Any]] { live(id)?["asks"] as? [[String: Any]] ?? [] }
         var defaultRole: String? { json["default"] as? String }
     }
 
     private func meeting(_ hub: String) throws -> Meeting {
-        let data = try Data(contentsOf: URL(string: hub + "/mock/meeting")!)
+        let data = try Data(contentsOf: URL(string: hub + "/mock/meeting_attendance")!)
         return Meeting(json: try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:])
     }
 
