@@ -682,6 +682,13 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 - On the first commit a child's `useLayoutEffect` runs before React attaches its parent's ref, so a child that reads `parentRef.current` there gets `null` and the column renders without its width. Pass the column's `id` (`useId`) and look it up with `document.getElementById` instead.
 - Modules mocked by `AppShellRenders.test` (for example `views/SidePanel`) expose only the exports the mock defines, so a new shell component that imports a constant from such a module fails with `No "X" export is defined on the mock`. Shared layout constants (`CHAT_MIN`, `PANEL_MIN`) belong in `lib/layout.ts`.
 
+## Rows that keep their memo across pushes (2026-11-10, #2914)
+
+- `memo` helps only when the row's props keep their identity. A value rebuilt on every push (the "By to-do" tree from `buildTodoTree`, the rail's ticks from the chat lines) breaks it even when nothing changed. Share the rebuilt value with the previous one (`shareTree`, `stabilizeLines`), or cache the result per input object in a `WeakMap`. Store the parts the result was read from next to it and check them, because callers and tests can change a line in place.
+- A prop that every row receives but only one row uses (the open row's key, the list of computers) re-renders all of them when it changes. Pass the open row's key only to the branch that holds it ("" elsewhere), and pass a lookup that keeps its identity while the labels it returns stay the same.
+- A shortcut on text must give the same result as the full pass. `navRailExcerpt` reads only the head of a long answer, and only when no comment or link runs past the cut. Its test compares it with the whole-text excerpt on random Markdown; removing either check must make that test fail.
+- `querySelectorAll` on the chat scroller searches every message's markup. The line wrappers (`[data-line]`) are direct children of `[data-chat-content]`, so read those children instead.
+
 ## Manual mail drafts belong to their manager and item (#1252)
 
 - The merged Inbox can contain the same item id under two managers. Scope retained drafts and the live form's React key to both owner and item; resolve an omitted owner to the roster default so explicit and implicit default stamps share one draft. The mail body's open-reply key also needs the owner, or switching managers can leave the previous reply template open. Exercise late send failures after unmount while another owner's same-id draft is open, and verify recipients, account and reply headers as well as text through mocked sends.
