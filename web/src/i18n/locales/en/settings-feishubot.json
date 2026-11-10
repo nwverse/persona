@@ -26,6 +26,8 @@
   "status_error": "Couldn't read the bot's status: {error}",
   "title": "Lark bot",
   "footer": "Messaging this bot in Lark is talking to Persona. It only answers you once paired, and stays quiet in groups.",
+  "larkcli_row": "Read as me (lark-cli)",
+  "larkcli_footer": "Reading as you with lark-cli collects messages that mention you and your direct chats.",
   "status_unreadable": "Status unavailable",
   "error_with": "{what}: {error}",
   "test_sent": "Sent a test message to Lark",

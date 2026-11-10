@@ -5,6 +5,7 @@
 import { ChannelLink } from "./Channels";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
+import { connectorSummary, connectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
 import { ago } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -13,11 +14,13 @@ import {
   featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus,
 } from "../../lib/feishu-bot";
 import { Button, copyText, cx, Dialog, IconButton, Spinner, toast } from "../../ui/atoms";
+import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { Group, Pill, Row, Switch } from "./SettingsParts";
 
 const controlClass = "h-8 rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
 const dotClass = { green: "bg-green", red: "bg-red", orange: "bg-orange" } as const;
+const connectorDotClass = { green: "bg-green", orange: "bg-orange", red: "bg-red", idle: "bg-line-strong" } as const;
 
 const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail: string }[] = [
   { key: "main", icon: "spark", title: t("settings-feishubot.feature_main_title"), detail: t("settings-feishubot.feature_main_detail") },
@@ -55,13 +58,13 @@ function useBot() {
   return { status, setStatus, loading, error, setError, load };
 }
 
-export function FeishuBot({ onChannel }: { onChannel?: (id: string) => void } = {}) {
+export function FeishuBot({ onChannel, larkcli, onOpen }: { onChannel?: (id: string) => void; larkcli?: HubConnector | null; onOpen?: (id: string) => void } = {}) {
   const bot = useBot();
   const [open, setOpen] = useState(() => new URLSearchParams(location.search).get("connector") === "feishu-bot");
   const tone = botTone(bot.status);
   return (
     <>
-      <Group title={t("settings-feishubot.title")} footer={t("settings-feishubot.footer")}>
+      <Group title={t("settings-feishubot.title")} footer={larkcli ? <>{t("settings-feishubot.footer")} {t("settings-feishubot.larkcli_footer")}</> : t("settings-feishubot.footer")}>
         <button type="button" onClick={() => setOpen(true)} className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left transition-colors hover:bg-hover">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint text-accent-ink">
             <Icon name="send" size={16} />
@@ -76,10 +79,30 @@ export function FeishuBot({ onChannel }: { onChannel?: (id: string) => void } = 
           {bot.status && <Pill tone={tone}>{botSummary(bot.status)}</Pill>}
           <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
         </button>
+        {larkcli && <LarkCliRow connector={larkcli} onOpen={onOpen} />}
       </Group>
       {onChannel && <ChannelLink id="feishu" onOpen={onChannel} />}
       {open && <FeishuBotDialog bot={bot} onClose={() => setOpen(false)} />}
     </>
+  );
+}
+
+function LarkCliRow({ connector, onOpen }: { connector: HubConnector; onOpen?: (id: string) => void }) {
+  const tone = connectorTone(connector);
+  return (
+    <button type="button" onClick={() => onOpen?.("larkcli")} className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-2.5 text-left transition-colors hover:bg-hover">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-surface shadow-hairline">
+        <BrandMark brand="lark" size={32} fit="tile" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] text-ink">{t("settings-feishubot.larkcli_row")}</span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12.5px] text-ink-2">
+          <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", connectorDotClass[tone])} />
+          <span className="truncate">{connectorSummary(connector)}</span>
+        </span>
+      </span>
+      <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+    </button>
   );
 }
 

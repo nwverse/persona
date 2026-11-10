@@ -26,6 +26,8 @@
   "status_error": "ボットの状態を読み込めませんでした：{error}",
   "title": "Lark ボット",
   "footer": "Lark でこのボットに個別チャットすると、Persona と話せます。ボットはペアリングしたあなたにだけ応答し、グループでは応答しません。",
+  "larkcli_row": "自分として読む（lark-cli）",
+  "larkcli_footer": "自分として読む（lark-cli）では、あなたへのメンションと個別チャットを収集します。",
   "status_unreadable": "状態を取得できません",
   "error_with": "{what}：{error}",
   "test_sent": "Lark にテストメッセージを送信しました",

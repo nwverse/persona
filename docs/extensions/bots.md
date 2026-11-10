@@ -16,7 +16,7 @@ the assistant can't approve anything on its own (`docs/extensions/channels.md` (
 
 Code: `server/internal/feishubot` (long connection, REST, events and message content, cards), `server/internal/hub/bots*.go` (pairing, routing, transport: events on the long connection are handed to the assistant; `assistant_channels.go` is the `feishu.*` the hub gives the assistant),
 `server/internal/assistant/feishu*.go` (targets, commands, sending into chats, cards, pushes, sync: Lark's side of the shared pipeline);
-prompt `server/internal/prompts/bot/message.md`; the App page `apple/Persona/Views/Settings/FeishuBotView.swift` (**Settings › Connectors › Lark Bot**).
+prompt `server/internal/prompts/bot/message.md`; the App page `apple/Persona/Views/Settings/FeishuBotView.swift` (**Settings › Connectors › Lark Bot**). On web Settings › Connectors, the lark-cli status appears in this Lark group.
 
 ## How it differs from Lark `/agent`
 
