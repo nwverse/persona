@@ -37,6 +37,16 @@ final class ReportFoldUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", s)).firstMatch
     }
 
+    @MainActor private func reveal(_ result: XCUIElement) {
+        for _ in 0..<4 {
+            if result.isHittable && result.frame.minY > app.frame.height * 0.25 { return }
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.35))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.8))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        XCTAssertTrue(result.isHittable)
+    }
+
     @MainActor func testCompletedToolResultsAreCollapsedUntilOpened() throws {
         launch(fresh: true)
         let result = see(app.buttons.matching(identifier: "chat.subagent-result")
@@ -51,8 +61,8 @@ final class ReportFoldUITests: XCTestCase {
         see(text("结算回归：42 个用例全部通过"), "the report's heading")
         see(text("用时 1 分 48 秒"), "the tool result")
         shot("open")
-        app.swipeDown()
-        result.tap()
+        reveal(result)
+        result.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: text("用时 1 分 48 秒"))
         waitForExpectations(timeout: 5)
 

@@ -25,7 +25,7 @@ def deliveries(items, agents):
         if worker.get("id"):
             task["task_id"] = worker["id"]
         if not receipt and item.get("text"):
-            task["detail"] = item["text"][:4096]
+            task["detail"] = item["text"].encode("utf-8")[:4096].decode("utf-8", "ignore")
         item["task"] = task
         if receipt:
             running = item
@@ -43,6 +43,7 @@ def deliveries(items, agents):
         pointer = copy.deepcopy(completed)
         pointer.update(id=completed["id"] + "-status", seq=seq + 1)
         pointer.pop("text", None)
+        pointer.pop("full_size", None)
         pointer["task"].pop("detail", None)
         output.append(pointer)
     return output

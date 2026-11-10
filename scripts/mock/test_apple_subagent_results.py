@@ -24,6 +24,16 @@ class AppleSubagentFixtureTests(unittest.TestCase):
         self.assertNotIn("text", result[-1])
         self.assertNotIn("detail", result[-1]["task"])
 
+    def test_compatibility_preview_has_a_byte_budget(self):
+        source = [
+            {"id": "use", "seq": 1, "kind": "tool_use", "tool_name": "Agent", "tool_use_id": "a"},
+            {"id": "report", "seq": 2, "kind": "tool_result", "tool_use_id": "a", "text": "🧪" * 4096, "full_size": 16384},
+        ]
+        result = deliveries(source, [])
+        self.assertLessEqual(len(result[1]["task"]["detail"].encode("utf-8")), 4096)
+        self.assertEqual(result[1]["full_size"], 16384)
+        self.assertNotIn("full_size", result[-1])
+
 
 if __name__ == "__main__":
     unittest.main()

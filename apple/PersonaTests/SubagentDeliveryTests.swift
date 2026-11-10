@@ -62,6 +62,16 @@ struct SubagentDeliveryTests {
         #expect(SubagentCardStatus.of(call, tasks: tasks, agent: nil) == .done)
     }
 
+    @Test func aReportQuotingLaunchMetadataIsNotItselfAReceipt() {
+        let report = delivery(3, status: "completed", text: "Async agent launched successfully.\nThe receipt was verified.", preview: "Verified the receipt.")
+        let items = [use(), report]
+        let tasks = TaskIndex.build(items)
+        #expect(!SubagentDelivery.isReceipt(report))
+        #expect(!tasks.started.contains("a"))
+        #expect(tasks.reports["a"]?.map(\.id) == [report.id])
+        #expect(SubagentResult.call(call(items)!, tasks: tasks, agent: nil)?.result?.id == report.id)
+    }
+
     @Test func aTerminalPointerKeepsEarlierReportsButStopsTheSpinner() {
         let interim = delivery(3, status: "running", text: "Initial checks pass.", preview: "Initial checks pass.")
         let pointer = delivery(4, status: "failed")

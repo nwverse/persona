@@ -10,8 +10,7 @@ extension EnvironmentValues {
     @Entry var subagentParent: SessionKey? = nil
 }
 
-/// How a subagent is doing, as its card says it (#5602, the web's `AgentStatus`): by its call's result, a background
-/// one by its notice.
+/// A subagent's authoritative task status, with legacy call-result and background-notice fallbacks.
 nonisolated enum SubagentCardStatus: Equatable, Sendable {
     case running, done, failed, stopped
 

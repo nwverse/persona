@@ -173,9 +173,6 @@ nonisolated struct Turn: Identifiable, Hashable, Sendable {
     }
 }
 
-/// Background tasks and the calls that started them: a notice names its call by tool_use_id, or only by the task id
-/// the call's result announced ("running in background with ID: …", "Monitor started (task …"). Built with the
-/// rows; a call outside the loaded items is simply not found.
 nonisolated enum SubagentDelivery {
     static func isTerminal(_ status: String?) -> Bool {
         switch status {
@@ -185,6 +182,9 @@ nonisolated enum SubagentDelivery {
     }
 
     static func isReceipt(_ item: Item) -> Bool {
+        if let task = item.task, task.kind == "agent" {
+            guard task.status == "running" || task.status == "waiting", task.detail == nil else { return false }
+        }
         let text = item.text ?? ""
         return text.hasPrefix("Async agent launched successfully") || text.contains("moved to the background (ID:")
     }
@@ -195,6 +195,9 @@ nonisolated enum SubagentDelivery {
     }
 }
 
+/// Background tasks and the calls that started them: a notice names its call by tool_use_id, or only by the task id
+/// the call's result announced ("running in background with ID: …", "Monitor started (task …"). Built with the
+/// rows; a call outside the loaded items is simply not found.
 nonisolated struct TaskIndex: Equatable, Sendable {
     /// A call's notices, oldest first, by the call's tool_use_id.
     var notes: [String: [TaskNote]] = [:]
@@ -234,6 +237,7 @@ nonisolated struct TaskIndex: Equatable, Sendable {
                     }
                     if let task = note.taskID { byTask[task] = id }
                 }
+                if it.task?.kind == "agent", !SubagentDelivery.isReceipt(it) { continue }
                 guard let id = it.toolUseID, let text = it.text, text.contains("background") || text.contains("Monitor started") || text.contains("agentId"),
                       let m = text.firstMatch(of: launched) else { continue }
                 // A subagent that ran to its end says its agentId under its report too (to go on with SendMessage):
