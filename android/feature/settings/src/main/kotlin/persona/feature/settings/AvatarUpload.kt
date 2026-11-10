@@ -290,8 +290,8 @@ private fun AvatarCropBox(model: AvatarUploadModel) {
             drawImage(bitmap, srcOffset = androidx.compose.ui.unit.IntOffset(left, top), srcSize = IntSize(side, side),
                 dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()), filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
             val circle = Path().apply { addOval(Rect(Offset.Zero, Size(size.width, size.height))) }
-            clipPath(circle, ClipOp.Difference) { drawRect(palette.scrim) }
-            drawCircle(palette.onMediaBackdrop, radius = size.minDimension / 2f - ring / 2f, style = Stroke(ring))
+            clipPath(circle, ClipOp.Difference) { drawRect(palette.cropOutside) }
+            drawCircle(palette.cropEdge, radius = size.minDimension / 2f - ring / 2f, style = Stroke(ring))
         }
     }
 }
