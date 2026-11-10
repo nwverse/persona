@@ -155,6 +155,9 @@ type Meta struct {
 	// Background holds background shells / agents that have not reported back (see trackBackground).
 	Background []proto.BackgroundTask
 	bgPending  map[string]proto.BackgroundTask // tool_use_id → started, waiting for the tool result with its id
+	// fgBash: foreground Bash calls waiting for their result, which may say it was moved to the background by hand
+	// (Ctrl+B, or a message sent mid-turn: node/assistant_interject.go).
+	fgBash map[string]proto.BackgroundTask
 	// Workflows are the workflow runs the session launched (the Workflow tool), oldest first, at most workflowsKept:
 	// what the transcript says (launched, the notification that it ended); the node adds the progress from disk.
 	Workflows []proto.Workflow

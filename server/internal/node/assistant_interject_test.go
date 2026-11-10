@@ -115,3 +115,33 @@ func TestAssistantInterjects(t *testing.T) {
 		}
 	}
 }
+
+// A headless conversation lists the background work its transcript names, a command backgrounded by hand included:
+// a Lark turn that ends meanwhile is held for the turn that work starts, instead of closing on the first answer.
+func TestAssistantSessionsListBackgroundWork(t *testing.T) {
+	n := codexTestNode(t)
+	n.paths = map[string]string{}
+	id := "0e000000-0000-4000-8000-0000000000c1"
+	fakeAssistant(n, id, "")
+	path := filepath.Join(t.TempDir(), id+".jsonl")
+	lines := []string{
+		`{"type":"user","uuid":"u0","timestamp":"2099-01-01T00:00:00Z","message":{"role":"user","content":"run it"}}`,
+		`{"type":"assistant","uuid":"a1","timestamp":"2099-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"python3 slow.py","description":"Run a slow test"}}]}}`,
+		`{"type":"user","uuid":"u1","timestamp":"2099-01-01T00:00:05Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"Command was manually backgrounded by user with ID: beg3p1s7d. Output is being written to: /tmp/tasks/beg3p1s7d.output."}]}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n.mu.Lock()
+	n.paths[id] = path
+	n.mu.Unlock()
+	for _, s := range n.assistantSessions() {
+		if s.SessionID == id {
+			if len(s.Background) != 1 || s.Background[0].ID != "beg3p1s7d" {
+				t.Fatalf("background: %+v", s.Background)
+			}
+			return
+		}
+	}
+	t.Fatal("the conversation is not listed")
+}

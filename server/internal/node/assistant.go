@@ -765,6 +765,9 @@ func (n *Node) assistantSessions() []proto.Session {
 				s.Title, s.Model, s.LastText, s.Rev = m.title, m.model, snippet(m.lastText), st.Size()
 				s.PermissionMode, s.Effort = n.currentModes(p.id, m)
 				setContext(&s, m)
+				// Background shells outlive the turn, as in a pane's session: a channel run (Lark) waits for the turn
+				// they start, and a list shows them (channel.Background).
+				n.setBackground(&s, m)
 				s.ModelFallback = m.modelFallback
 				untitled(&s, m)
 				if !busy {
