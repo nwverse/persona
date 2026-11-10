@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -43,15 +44,29 @@ func typedLaunchers(list []proto.Launcher) []agentLauncher {
 	return out
 }
 
-func otherAgentCommand(launcher, resume, prompt string) string {
+// otherAgentCommand is the launcher's command line, with the first message as its argument (typedArg), for a pane whose
+// shell is shells.
+func otherAgentCommand(launcher, resume, prompt string, shells ...string) string {
 	cmd := launcher
 	if resume != "" {
 		cmd += " resume " + shellQuote(resume)
 	}
 	if prompt != "" {
-		cmd += " " + shellQuote(prompt)
+		cmd += " " + shellQuote(typedArg(prompt, shells...))
 	}
 	return cmd
+}
+
+// typedArg is text to quote on a command line that may be typed into the shell (typedstart.go), whose line editor acts
+// on keys inside quotes too: its controls inert (^U or ^C would edit the line), a tab as a space (it completes the
+// quoted word, closes the quote and leaves the rest to the shell), and outside the sh family (takesAssign) a line
+// break as a space (csh ends the command at one, quote open or not).
+func typedArg(text string, shells ...string) string {
+	text = strings.ReplaceAll(inertControls(text), "\t", " ")
+	if !takesAssign(shells...) {
+		text = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(text)
+	}
+	return text
 }
 
 // startOtherAgent opens a new tab in ws (a new space when ""), runs the launcher there (resuming a session when
@@ -74,7 +89,13 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 	// A Codex wrapper is told to herdr as Codex (hostherdr.go); a compatible CLI is herdr's to detect. The node's
 	// directory in front, the assistant's environment left out (agentenv.go).
 	shells := paneShells(ctx, created)
-	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(launcher, resume, prompt))
+	// The first message keeps its line breaks only in a start file: typed out, the line may meet csh, which runs each
+	// line on its own (typedArg), and Orca does not say which shell it opened.
+	argShells := shells
+	if !n.typesStartFile(launch, shells...) {
+		argShells = nil
+	}
+	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(launcher, resume, prompt, argShells...))
 	// Not in the agent sandbox (agentsandbox.go).
 	n.notePaneStart(launcher)
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(cmd, shellQuote, shells...), shells...) // typedstart.go

@@ -51,7 +51,7 @@ func TestManagerBotConflicts(t *testing.T) {
 func TestManagerBotReportsRefreshRoster(t *testing.T) {
 	h := newTestHub(t)
 	asked := &client{device: "example-device", out: make(chan []byte, 64)}
-	h.clients[asked] = struct{}{}
+	addTestClient(h, asked)
 	h.onClientMessage(context.Background(), asked, []byte(`{"type":"client_hello","features":["managers"]}`))
 	<-asked.out
 	c := &busConn{ident: db.BusIdentity{ID: "m-work"}}
