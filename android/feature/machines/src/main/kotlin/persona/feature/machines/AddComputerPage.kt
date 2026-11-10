@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.Machine
 import persona.core.contracts.api.ComputerCode
@@ -36,7 +37,11 @@ internal fun AddComputerPage(api: ComputerPairing?, machines: StateFlow<List<Mac
     if (confirm == null && canAdd == null) { JListPage(title = stringResource(R.string.machines_onb_title), onBack = onBack, largeTitle = false) { item { JLoading() } }; return }
     val model = remember(api, confirm) { AddComputerModel(api, machines, confirm) }
     val state by model.state.collectAsState()
+    // Every assistant's computers (the hub's list): the add's own one, and the ones in the way, whoever's they are.
     val listed by machines.collectAsState()
+    // A new computer is the current assistant's (docs/assistant/managers.md "Clients"); not while it is offline.
+    val assistant = currentAssistant()
+    val offline = assistant.offlineForAdding()
     val scope = rememberCoroutineScope()
     LaunchedEffect(model) { model.run() }
     val machine = state.machine(listed)
@@ -50,8 +55,9 @@ internal fun AddComputerPage(api: ComputerPairing?, machines: StateFlow<List<Mac
     val relink = canAdd == true && machine?.errorCode == "never_connected"
     val bar: @Composable RowScope.() -> Unit = {
         when (stage) {
-            AddStage.Form -> JButton(stringResource(R.string.machines_onb_next), { scope.launch { model.add() } }, Modifier.weight(1f),
-                enabled = state.name.isNotBlank(), loading = state.busy)
+            AddStage.Form -> if (offline != null) JButton(stringResource(R.string.machines_onb_close), onBack, Modifier.weight(1f), kind = JButtonKind.Secondary)
+                else JButton(stringResource(R.string.machines_onb_next), { scope.launch { model.add(assistant) } }, Modifier.weight(1f),
+                    enabled = state.name.isNotBlank() && state.removing == null, loading = state.busy)
             AddStage.Joined -> {
                 JButton(stringResource(R.string.machines_onb_reject), { scope.launch { model.answer(false) } }, Modifier.weight(1f), kind = JButtonKind.Secondary,
                     enabled = state.answering == null, loading = state.answering == AddOutcome.Rejected)
@@ -73,13 +79,19 @@ internal fun AddComputerPage(api: ComputerPairing?, machines: StateFlow<List<Mac
         Row(Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.s), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), content = bar)
     }) {
         when (stage) {
-            AddStage.Form -> form(state, model::setOs, model::setName)
+            // The current assistant offline: nothing to fill in, only why (as the web's dialog says it).
+            AddStage.Form -> if (offline != null) item("assistant-offline") {
+                JNotice(stringResource(R.string.machines_onb_assistant_offline, offline.shownName), Modifier.padding(top = Tokens.Space.s))
+            } else form(state, model::setOs, model::setName)
             AddStage.Waiting -> state.code?.let { code -> waiting(state, code, shown, relink = confirm != null, onOs = model::setOs) }
             AddStage.Expired -> item("expired") { JEmptyState(stringResource(R.string.machines_onb_expired), stringResource(R.string.machines_onb_expired_hint), icon = PhIcons.ClockCountdown) }
-            AddStage.Joined -> item("joined") {
-                val about = listOfNotNull(machine?.system?.name?.takeIf { it.isNotBlank() } ?: machine?.os, machine?.hostname).joinToString(" · ")
-                JEmptyState(stringResource(R.string.machines_onb_joined, shown),
-                    listOf(about, stringResource(R.string.machines_onb_joined_hint)).filter { it.isNotBlank() }.joinToString("\n"), icon = PhIcons.Desktop)
+            AddStage.Joined -> {
+                item("joined") {
+                    val about = listOfNotNull(machine?.system?.name?.takeIf { it.isNotBlank() } ?: machine?.os, machine?.hostname).joinToString(" · ")
+                    JEmptyState(stringResource(R.string.machines_onb_joined, shown),
+                        listOf(about, stringResource(R.string.machines_onb_joined_hint)).filter { it.isNotBlank() }.joinToString("\n"), icon = PhIcons.Desktop)
+                }
+                placedUnder(state)
             }
             AddStage.Connected -> item("connected") { JEmptyState(stringResource(R.string.machines_onb_confirmed, shown), stringResource(R.string.machines_onb_confirmed_hint), icon = PhIcons.CheckCircle) }
             AddStage.Gone -> item("gone") {
@@ -94,7 +106,34 @@ internal fun AddComputerPage(api: ComputerPairing?, machines: StateFlow<List<Mac
                     icon = PhIcons.Desktop)
             }
         }
-        state.error?.let { error -> item("error") { JInlineStatus(error.text(), Modifier.padding(top = Tokens.Space.m), tone = InlineTone.Failed) } }
+        val blocking = if (state.tooMany && stage == AddStage.Form) inTheWay(listed) else emptyList()
+        if (blocking.isNotEmpty()) inTheWay(blocking, state.removing) { id -> scope.launch { model.remove(id) } }
+        else state.error?.let { error -> item("error") { JInlineStatus(error.text(), Modifier.padding(top = Tokens.Space.m), tone = InlineTone.Failed) } }
+    }
+}
+
+/**
+ * The computers keeping a new one from being added (the hub takes 3 waiting, whichever assistant's): what the hub's
+ * refusal means, then each with how it stands and Remove (as the web's AddComputer lists them).
+ */
+private fun LazyListScope.inTheWay(machines: List<Machine>, removing: String?, onRemove: (String) -> Unit) {
+    item("in-the-way") {
+        val never = machines.all { it.errorCode == "never_connected" }
+        JNotice(pluralStringResource(if (never) R.plurals.machines_onb_too_many_never else R.plurals.machines_onb_too_many_waiting, machines.size, machines.size),
+            Modifier.padding(top = Tokens.Space.m, bottom = Tokens.Space.s))
+    }
+    items(machines.size, key = { "in-the-way:${machines[it].id}" }) { index ->
+        val m = machines[index]
+        JGroupItem(GroupPosition.of(index, machines.size)) {
+            JRow(m.displayName, subtitle = stringResource(when {
+                m.errorCode == "never_connected" -> R.string.machines_onb_never_connected
+                m.online -> R.string.machines_onb_waiting_confirm
+                else -> R.string.machines_status_offline
+            }), leadingIcon = PhIcons.Desktop, chevron = false, trailing = {
+                JButton(stringResource(R.string.machines_onb_remove), { onRemove(m.id) }, kind = JButtonKind.Secondary, size = JButtonSize.Small,
+                    enabled = removing == null, loading = removing == m.id)
+            })
+        }
     }
 }
 
@@ -131,6 +170,14 @@ private fun LazyListScope.waiting(state: AddComputerState, code: ComputerCode, s
         JInlineStatus(stringResource(R.string.machines_onb_waiting, shown) + "  " + stringResource(R.string.machines_onb_expires, clockText(state.secondsLeft)),
             Modifier.padding(top = Tokens.Space.l), tone = InlineTone.Busy)
     }
+    placedUnder(state)
+}
+
+/** The hub put the computer under another assistant than the current one (or, an older hub, under its own): said plainly. */
+private fun LazyListScope.placedUnder(state: AddComputerState) {
+    state.placedUnder()?.let { name -> item("placed-under") {
+        JNotice(stringResource(R.string.machines_onb_added_under, name), Modifier.padding(top = Tokens.Space.m))
+    } }
 }
 
 @Composable
