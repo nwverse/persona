@@ -300,8 +300,9 @@ type feishuBotView struct {
 	NudgeAfter  int           `json:"nudge_after"`           // minutes before the one nudge under an unanswered card, 0 off
 	// Target and Agents are the assistant's (feishu.view): where the chat's messages go now, the agents bound to
 	// threads of the chat; left out while it is not connected.
-	Target string                      `json:"target,omitempty"`
-	Agents []assistantwire.FeishuAgent `json:"agents,omitempty"`
+	Target  string                      `json:"target,omitempty"`
+	Agents  []assistantwire.FeishuAgent `json:"agents,omitempty"`
+	LarkCLI *larkCLIBotView             `json:"larkcli,omitempty"`
 }
 
 type botOwnerView struct {
@@ -340,7 +341,9 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 	for _, c := range s.TopicChats {
 		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat()})
 	}
+	botAppID := appID
 	b.mu.Unlock()
+	v.LarkCLI = h.larkCLIView(ctx, botAppID)
 	if chat, err := h.feishuChatView(ctx); err == nil {
 		v.Target, v.Agents = chat.Target, chat.Agents
 	}
@@ -594,6 +597,16 @@ func (h *Manager) updateBot(ctx context.Context, enabled *bool, appID, secret, d
 	h.auditBot(ctx, records...)
 	if reconnect {
 		h.restartBot()
+	}
+	if creds {
+		syncCtx := h.ctx
+		if syncCtx == nil {
+			syncCtx = context.Background()
+		}
+		if err := h.syncLarkCLIProfile(syncCtx); err != nil {
+			h.logf("larkcli profile sync: %v", err)
+		}
+		h.refreshLarkCLIConnector(syncCtx)
 	}
 	h.sendReport()
 	return nil

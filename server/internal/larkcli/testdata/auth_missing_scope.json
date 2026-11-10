@@ -1,5 +1,6 @@
 {
   "appId": "cli_example",
+  "brand": "lark",
   "missingScopes": ["search:message"],
   "identities": {
     "user": {

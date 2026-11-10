@@ -1,22 +1,29 @@
 package larkcli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 const defaultTimeout = 15 * time.Second
+
+const loginTimeout = 10 * time.Minute
 
 // Config controls the executable and profile. It contains no credentials.
 type Config struct {
@@ -134,6 +141,206 @@ func (r *Runner) AuthStatus(ctx context.Context) (AuthStatus, error) {
 		return AuthStatus{}, cliError(KindOther, errors.New("invalid auth status JSON"))
 	}
 	return raw.result(r.now()), nil
+}
+
+// ConfigInfo is the public, non-secret part of one lark-cli profile. The CLI
+// has emitted both JSON and key/value output across its releases, so callers
+// should use AppID and ignore the original presentation.
+type ConfigInfo struct {
+	AppID string
+	Brand string
+}
+
+// ConfigShow reads the selected profile's app binding. It never returns the
+// app secret or any other credential material.
+func (r *Runner) ConfigShow(ctx context.Context) (ConfigInfo, error) {
+	out, err := r.execute(ctx, []string{"config", "show"}, outputRaw)
+	if err != nil {
+		return ConfigInfo{}, err
+	}
+	return parseConfigInfo(out), nil
+}
+
+// InitProfile creates or updates a named profile. The secret is written only
+// to stdin; it is never put in argv, an error, or a log.
+func (r *Runner) InitProfile(ctx context.Context, name, appID, secret, brand string) error {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(appID) == "" || secret == "" {
+		return errors.New("lark-cli profile initialization needs a name, app id and secret")
+	}
+	args := []string{"config", "init", "--name", name, "--app-id", appID, "--app-secret-stdin", "--brand", brand}
+	_, err := r.executeInput(ctx, args, outputRaw, "", []byte(secret))
+	return err
+}
+
+// AuthLogout signs the selected profile out. lark-cli owns the credential
+// store; this method only asks it to remove the login.
+func (r *Runner) AuthLogout(ctx context.Context) error {
+	_, err := r.execute(ctx, []string{"auth", "logout"}, outputRaw)
+	return err
+}
+
+// LoginInfo is the device-flow link printed by lark-cli auth login.
+type LoginInfo struct {
+	URL      string
+	UserCode string
+}
+
+// LoginProcess is a blocking lark-cli auth login process. lark-cli itself
+// performs the device-flow polling; Persona only exposes its link and watches
+// the process until it exits.
+type LoginProcess struct {
+	mu     sync.Mutex
+	info   LoginInfo
+	err    error
+	ready  chan struct{}
+	done   chan struct{}
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+// StartLogin starts `auth login --domain all` without --no-wait. The command
+// has its own ten-minute lifetime so the HTTP request that began the login may
+// finish while the process continues in the background.
+func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
+	bin, err := r.binary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	loginCtx, cancel := context.WithTimeout(context.Background(), loginTimeout)
+	p := &LoginProcess{ready: make(chan struct{}), done: make(chan struct{}), cancel: cancel}
+	argv := r.profileArgs([]string{"auth", "login", "--domain", "all"})
+	cmd := exec.CommandContext(loginCtx, bin, argv...)
+	cmd.Env = cliEnv(bin)
+	// lark-cli may launch a child process of its own. Killing only the shell
+	// wrapper leaves that child holding stdout open, so terminate the whole
+	// process group on cancellation or timeout.
+	cmd.SysProcAttr = osproc.GroupAttr()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, cliError(KindOther, err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return nil, cliError(KindOther, err)
+	}
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, cliError(KindOther, err)
+	}
+	finished := make(chan struct{})
+	go func(pid int) {
+		select {
+		case <-loginCtx.Done():
+			select {
+			case <-finished:
+				return
+			default:
+				_ = osproc.StopGroup(pid, true)
+			}
+		case <-finished:
+		}
+	}(cmd.Process.Pid)
+	var readers sync.WaitGroup
+	read := func(in io.Reader) {
+		defer readers.Done()
+		s := bufio.NewScanner(io.LimitReader(in, 1<<20))
+		for s.Scan() {
+			p.line(s.Text())
+		}
+	}
+	readers.Add(2)
+	go read(stdout)
+	go read(stderr)
+	go func() {
+		readers.Wait()
+		err := cmd.Wait()
+		p.mu.Lock()
+		if loginCtx.Err() == context.DeadlineExceeded {
+			p.err = &Error{Kind: KindTimeout}
+		} else if err != nil && loginCtx.Err() == nil {
+			p.err = cliError(KindOther, err)
+		}
+		p.mu.Unlock()
+		close(finished)
+		cancel()
+		close(p.done)
+	}()
+	// The URL is normally printed immediately. A short independent wait keeps
+	// a malformed or very old CLI from making the request hang forever.
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-p.ready:
+		return p, nil
+	case <-p.done:
+		return p, p.startError()
+	case <-timer.C:
+		p.Cancel()
+		return nil, &Error{Kind: KindTimeout}
+	}
+}
+
+func (r *Runner) profileArgs(args []string) []string {
+	argv := make([]string, 0, len(args)+2)
+	if r.cfg.Profile != "" {
+		argv = append(argv, "--profile", r.cfg.Profile)
+	}
+	return append(argv, args...)
+}
+
+func (p *LoginProcess) line(line string) {
+	if info, ok := parseLoginInfo(line); ok {
+		p.mu.Lock()
+		if p.info.URL == "" {
+			p.info = info
+			p.once.Do(func() { close(p.ready) })
+		}
+		p.mu.Unlock()
+	}
+}
+
+func (p *LoginProcess) startError() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.err != nil {
+		return p.err
+	}
+	return errors.New("lark-cli did not provide a device verification link")
+}
+
+// Info returns the URL and user code after StartLogin has observed them.
+func (p *LoginProcess) Info() LoginInfo {
+	if p == nil {
+		return LoginInfo{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.info
+}
+
+// Poll reports whether the process exited. It never returns command output.
+func (p *LoginProcess) Poll() (bool, error) {
+	if p == nil {
+		return true, errors.New("no lark-cli login process")
+	}
+	select {
+	case <-p.done:
+		p.mu.Lock()
+		err := p.err
+		p.mu.Unlock()
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
+// Cancel stops the process and is safe to call more than once.
+func (p *LoginProcess) Cancel() {
+	if p != nil && p.cancel != nil {
+		p.cancel()
+	}
 }
 
 // ListChats calls the recent chat shortcut. It includes both group and direct
@@ -341,6 +548,7 @@ const (
 	outputVersion outputMode = iota
 	outputAuth
 	outputJSON
+	outputRaw
 )
 
 type commandResult struct {
@@ -357,15 +565,15 @@ func (r *Runner) execute(ctx context.Context, args []string, mode outputMode) ([
 }
 
 func (r *Runner) executeAs(ctx context.Context, args []string, mode outputMode, identity string) ([]byte, error) {
+	return r.executeInput(ctx, args, mode, identity, nil)
+}
+
+func (r *Runner) executeInput(ctx context.Context, args []string, mode outputMode, identity string, input []byte) ([]byte, error) {
 	bin, err := r.binary(ctx)
 	if err != nil {
 		return nil, err
 	}
-	argv := make([]string, 0, len(args)+5)
-	if r.cfg.Profile != "" {
-		argv = append(argv, "--profile", r.cfg.Profile)
-	}
-	argv = append(argv, args...)
+	argv := r.profileArgs(args)
 	switch mode {
 	case outputAuth:
 		argv = append(argv, "--json")
@@ -387,6 +595,9 @@ func (r *Runner) executeAs(ctx context.Context, args []string, mode outputMode, 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
+	}
 	err = cmd.Run()
 	result := commandResult{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
 	if cctx.Err() != nil {
@@ -399,6 +610,71 @@ func (r *Runner) executeAs(ctx context.Context, args []string, mode outputMode, 
 		return nil, cliError(KindOther, err)
 	}
 	return result.stdout, nil
+}
+
+func parseConfigInfo(raw []byte) ConfigInfo {
+	var value any
+	if json.Unmarshal(raw, &value) == nil {
+		var out ConfigInfo
+		findConfigFields(value, &out)
+		if out.AppID != "" {
+			return out
+		}
+	}
+	return ConfigInfo{AppID: firstRegex(raw, configAppIDPattern), Brand: firstRegex(raw, configBrandPattern)}
+}
+
+func findConfigFields(value any, out *ConfigInfo) {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, value := range v {
+			switch strings.ToLower(strings.ReplaceAll(key, "_", "")) {
+			case "appid":
+				if s, ok := value.(string); ok && out.AppID == "" {
+					out.AppID = strings.TrimSpace(s)
+				}
+			case "brand":
+				if s, ok := value.(string); ok && out.Brand == "" {
+					out.Brand = strings.TrimSpace(s)
+				}
+			}
+			findConfigFields(value, out)
+		}
+	case []any:
+		for _, item := range v {
+			findConfigFields(item, out)
+		}
+	}
+}
+
+var (
+	configAppIDPattern = regexp.MustCompile(`(?i)["']?app[_-]?id["']?\s*[:=]\s*["']?([A-Za-z0-9_.-]+)`)
+	configBrandPattern = regexp.MustCompile(`(?i)["']?brand["']?\s*[:=]\s*["']?([A-Za-z0-9_-]+)`)
+	loginURLPattern    = regexp.MustCompile(`https://[^\s"'<>]+`)
+)
+
+func firstRegex(raw []byte, re *regexp.Regexp) string {
+	match := re.FindSubmatch(raw)
+	if len(match) == 2 {
+		return strings.TrimRight(string(match[1]), ".,;)")
+	}
+	return ""
+}
+
+func parseLoginInfo(line string) (LoginInfo, bool) {
+	for _, candidate := range loginURLPattern.FindAllString(line, -1) {
+		candidate = strings.TrimRight(candidate, ".,;)")
+		u, err := url.Parse(candidate)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			continue
+		}
+		code := u.Query().Get("user_code")
+		if code == "" {
+			continue
+		}
+		return LoginInfo{URL: candidate, UserCode: code}, true
+	}
+	return LoginInfo{}, false
 }
 
 func (r *Runner) binary(ctx context.Context) (string, error) {

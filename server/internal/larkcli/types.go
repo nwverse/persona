@@ -14,9 +14,10 @@ const MinimumVersion = "1.0.72"
 // GrantedScopes and MissingScopes are best-effort because older CLI releases did
 // not include both fields.
 type AuthStatus struct {
+	AppID            string    `json:"app_id,omitempty"`
+	Brand            string    `json:"brand,omitempty"`
 	LoggedIn         bool      `json:"logged_in"`
 	Expired          bool      `json:"expired"`
-	AppID            string    `json:"app_id,omitempty"`
 	UserName         string    `json:"user_name,omitempty"`
 	OpenID           string    `json:"open_id,omitempty"`
 	TokenStatus      string    `json:"token_status,omitempty"`

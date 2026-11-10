@@ -65,6 +65,9 @@ type Connector struct {
 	gatewayAvailable func(context.Context) bool
 	inboxPoll        time.Duration
 	inboxPageLimit   int
+
+	mu      sync.Mutex
+	pending *adapter.LoginProcess
 }
 
 // New creates the built-in connector from the configured CLI runner.
@@ -94,8 +97,22 @@ func NewWithRunner(r *adapter.Runner) *Connector {
 func (c *Connector) ID() string   { return ID }
 func (c *Connector) Name() string { return Name }
 
+// Profile is the effective profile used by every lark-cli invocation.
+func (c *Connector) Profile() string {
+	if c == nil {
+		return ""
+	}
+	if c.profile != "" {
+		return c.profile
+	}
+	if c.runner != nil {
+		return c.runner.Profile()
+	}
+	return ""
+}
+
 func (c *Connector) Manifest() connector.Manifest {
-	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapEvents, connector.CapInbox, connector.CapOptions}, Kinds: []string{"dm", "bot", "mention", "group"}}
+	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapEvents, connector.CapInbox, connector.CapOptions, connector.CapLogin}, Kinds: []string{"dm", "bot", "mention", "group"}}
 }
 
 func (c *Connector) Tools() []proto.Tool {
@@ -135,7 +152,7 @@ func (c *Connector) Status(ctx context.Context) connector.Status {
 	missing := append([]string(nil), auth.MissingScopes...)
 	missing = append(missing, missingRequiredScopes(auth.GrantedScopes)...)
 	if missing = uniqueScopes(missing); len(missing) > 0 {
-		return c.statusMissingScopes(ctx, st, missing)
+		return c.statusMissingScopes(ctx, st, missing, auth.AppID, auth.Brand)
 	}
 	st.State = connector.StateOK
 	now := c.currentTime()
@@ -252,7 +269,7 @@ func (c *Connector) statusError(ctx context.Context, st connector.Status, err er
 	if e, ok := err.(*adapter.Error); ok {
 		switch kind {
 		case adapter.KindMissingPermission:
-			return c.statusMissingScopes(ctx, st, e.MissingScopes)
+			return c.statusMissingScopes(ctx, st, e.MissingScopes, "", "")
 		case adapter.KindNotLoggedIn:
 			return c.statusNotSignedIn(ctx, st)
 		case adapter.KindExpired:
@@ -293,12 +310,126 @@ func (c *Connector) statusExpired(ctx context.Context, st connector.Status) conn
 	return st
 }
 
-func (c *Connector) statusMissingScopes(ctx context.Context, st connector.Status, scopes []string) connector.Status {
+func (c *Connector) statusMissingScopes(ctx context.Context, st connector.Status, scopes []string, appID, brand string) connector.Status {
 	st.State = connector.StateNoPermission
-	args := i18n.Args{"scope": strings.Join(scopes, ", ")}
+	st.MissingScopes = uniqueScopes(scopes)
+	args := i18n.Args{"scope": strings.Join(st.MissingScopes, ", ")}
 	st.Error = i18n.T(c.lang(ctx), "hub-connectors.missing_permission", args)
 	st.Guide = []string{i18n.T(c.lang(ctx), "hub-connectors.login_guide", i18n.Args{"command": c.loginCommand()})}
+	st.GuideURL = permissionURL(appID, brand)
 	return st
+}
+
+func permissionURL(appID, brand string) string {
+	if strings.TrimSpace(appID) == "" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(brand), "lark") {
+		return "https://open.larksuite.com/app/" + appID + "/auth"
+	}
+	return "https://open.feishu.cn/app/" + appID + "/auth"
+}
+
+// LoginStep starts and polls lark-cli's blocking device login. The process is
+// kept independently of the HTTP request so the app can poll after the start
+// response has returned.
+func (c *Connector) LoginStep(ctx context.Context, step string, _ map[string]string) (connector.Prompt, error) {
+	switch step {
+	case "":
+		return c.startLogin(ctx)
+	case "device":
+		return c.pollLogin(ctx)
+	default:
+		return connector.Prompt{}, fmt.Errorf("unknown step %q", step)
+	}
+}
+
+func (c *Connector) startLogin(ctx context.Context) (connector.Prompt, error) {
+	if c == nil || c.runner == nil {
+		return connector.Prompt{}, &adapter.Error{Kind: adapter.KindNotInstalled}
+	}
+	c.cancelPending()
+	p, err := c.runner.StartLogin(ctx)
+	if err != nil {
+		return connector.Prompt{}, err
+	}
+	c.mu.Lock()
+	c.pending = p
+	c.mu.Unlock()
+	return c.loginPrompt(p.Info(), ""), nil
+}
+
+func (c *Connector) pollLogin(ctx context.Context) (connector.Prompt, error) {
+	c.mu.Lock()
+	p := c.pending
+	c.mu.Unlock()
+	if p == nil {
+		return connector.Prompt{Step: "device", Error: i18n.T(c.lang(ctx), "hub-connectors.login_restart")}, nil
+	}
+	done, err := p.Poll()
+	if !done {
+		return c.loginPrompt(p.Info(), ""), nil
+	}
+	c.mu.Lock()
+	if c.pending == p {
+		c.pending = nil
+	}
+	c.mu.Unlock()
+	if err != nil {
+		return c.loginPrompt(p.Info(), c.loginError(ctx, err)), nil
+	}
+	// The blocking CLI is the source of truth for completion. Read status once
+	// here so connector status and the app's completed prompt change together.
+	auth, statusErr := c.runner.AuthStatus(ctx)
+	if statusErr != nil {
+		return c.loginPrompt(p.Info(), c.loginError(ctx, statusErr)), nil
+	}
+	if !auth.LoggedIn {
+		return c.loginPrompt(p.Info(), i18n.T(c.lang(ctx), "hub-connectors.login_not_complete")), nil
+	}
+	account := auth.UserName
+	if account == "" {
+		account = auth.OpenID
+	}
+	return connector.Prompt{Done: true, Account: account}, nil
+}
+
+func (c *Connector) loginPrompt(info adapter.LoginInfo, err string) connector.Prompt {
+	return connector.Prompt{Step: "device", Kind: connector.PromptDeviceCode, URL: info.URL, UserCode: info.UserCode, Interval: 2, Error: err}
+}
+
+func (c *Connector) loginError(ctx context.Context, err error) string {
+	if adapter.KindOf(err) == adapter.KindTimeout {
+		return i18n.T(c.lang(ctx), "hub-connectors.login_timeout")
+	}
+	return i18n.T(c.lang(ctx), "hub-connectors.login_failed")
+}
+
+func (c *Connector) cancelPending() {
+	c.mu.Lock()
+	p := c.pending
+	c.pending = nil
+	c.mu.Unlock()
+	if p != nil {
+		p.Cancel()
+	}
+}
+
+// Run gives Registry a lifecycle hook so a manager shutdown cancels a pending
+// device login and never leaves lark-cli running after the connector stops.
+func (c *Connector) Run(ctx context.Context) {
+	<-ctx.Done()
+	c.cancelPending()
+}
+
+// Logout cancels a pending login and asks lark-cli to remove the selected
+// profile's user login.
+func (c *Connector) Logout(ctx context.Context) error {
+	if c == nil || c.runner == nil {
+		return &adapter.Error{Kind: adapter.KindNotInstalled}
+	}
+	c.cancelPending()
+	return c.runner.AuthLogout(ctx)
 }
 
 func (c *Connector) loginCommand() string {
