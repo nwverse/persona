@@ -1,0 +1,116 @@
+import XCTest
+
+/// UI version 5's code review (#827, docs/extensions/extensions.md "UI version 5: code review") on the schema's shared
+/// snapshot (schema/extension/examples/showcase/code-review-v5.json), through the mock hub's showcase extension
+/// (`MOCK_EXTENSIONS=1`, `TEST_RUNNER_PERSONA_EXTENSIONS_HUB`): the toolbar over the diffs (viewed so far, the open
+/// threads, display options), a viewed file folded at first and saying why, a file checked viewed folding and counted,
+/// the open threads' button unfolding the next one's file, a rename's similarity. In both styles (each launch passes
+/// `-ui.style`), light and dark; with `PERSONA_SHOTS`, screenshots. `PERSONA_REVIEW_BEFORE=1`: only the screenshots, for
+/// an app from before (the same steps, nothing checked).
+final class ExtensionCodeReviewUITests: XCTestCase {
+    private let env = ProcessInfo.processInfo.environment
+    private var before: Bool { env["PERSONA_REVIEW_BEFORE"] == "1" }
+
+    @MainActor func testTheReviewToolbarViewedMarksAndFolds() throws {
+        guard let hub = env["PERSONA_EXTENSIONS_HUB"] else { throw XCTSkip("Needs MOCK_EXTENSIONS=1 (PERSONA_EXTENSIONS_HUB)") }
+        continueAfterFailure = false
+        for style in ["glass", "beautiful"] { for scheme in ["light", "dark"] {
+            let look = scheme + "-" + style
+            let app = XCUIApplication()
+            let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+            app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-ui.style", style, "-ui.scheme", scheme,
+                                   "-openExtension", "showcase", "-openExtensionPage", "snapshots"]
+            app.launchPersona()
+            dismissSystemAlerts(wait: 4)
+            let row = app.buttons["plugin-ui-action-snapshot-code-review-v5"]
+            XCTAssertTrue(row.waitForExistence(timeout: 20), app.debugDescription)
+            for _ in 0..<8 where !row.isHittable { app.swipeUp() }
+            row.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["extension-ui-ready"].waitForExistence(timeout: 15), app.debugDescription)
+            // A phone has the tree first, the diffs one step in.
+            let all = app.buttons["code-open-main"]
+            if all.waitForExistence(timeout: 5) { all.tap() }
+            XCTAssertTrue(text(app, "src/upload/retry.go").waitForExistence(timeout: 10), app.debugDescription)
+            shot(app, "diffs-" + look)
+            if before {
+                app.swipeUp()
+                shot(app, "diffs-more-" + look)
+                app.terminate()
+                continue
+            }
+
+            // The toolbar: retry.go is viewed (the extension's mark), two threads are open (one is a draft).
+            let viewed = app.descendants(matching: .any)["code-review-viewed"]
+            XCTAssertTrue(viewed.waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertTrue(viewed.label.contains("1 / 5"), viewed.label)
+            let open = app.buttons["code-review-unresolved"]
+            XCTAssertTrue(open.exists && open.label.contains("2"), open.debugDescription)
+            // Viewed, so folded at first, saying why.
+            let retryFolded = app.buttons["code-diff-folded-diff:src/upload/retry.go"]
+            XCTAssertTrue(retryFolded.exists, app.debugDescription)
+
+            // client.go checked viewed: counted, and folded.
+            let box = app.descendants(matching: .any)["code-diff-viewed-src/upload/client.go"]
+            XCTAssertTrue(box.waitForExistence(timeout: 5), app.debugDescription)
+            box.tap()
+            XCTAssertTrue(app.buttons["code-diff-folded-diff:src/upload/client.go"].waitForExistence(timeout: 5), app.debugDescription)
+            XCTAssertTrue(viewed.label.contains("2 / 5"), viewed.label)
+            shot(app, "viewed-" + look)
+
+            // The open threads' button: the first is on retry.go, which unfolds to show it.
+            open.tap()
+            XCTAssertTrue(retryFolded.waitForNonExistence(timeout: 5), app.debugDescription)
+            shot(app, "thread-" + look)
+
+            // The display options: whitespace.
+            app.buttons["code-review-options"].tap()
+            let whitespace = app.buttons["忽略空白"].exists ? app.buttons["忽略空白"] : app.switches["忽略空白"]
+            XCTAssertTrue(whitespace.waitForExistence(timeout: 5), app.debugDescription)
+            shot(app, "options-" + look)
+            whitespace.tap()
+
+            // A rename says how alike it is.
+            let limits = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "相似 96%")).firstMatch
+            for _ in 0..<6 where !limits.exists { app.swipeUp() }
+            XCTAssertTrue(limits.exists, app.debugDescription)
+            shot(app, "renamed-" + look)
+            // Back as it was for the next run: client.go not viewed, whitespace shown.
+            box.tap()
+            app.buttons["code-review-options"].tap()
+            whitespace.tap()
+            app.terminate()
+        } }
+    }
+
+    @MainActor private func text(_ app: XCUIApplication, _ t: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", t)).firstMatch
+    }
+
+    /// The notification question and the icon change note are SpringBoard's.
+    @MainActor private func dismissSystemAlerts(wait: TimeInterval = 1) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        var deadline = Date.now.addingTimeInterval(wait)
+        while Date.now < deadline {
+            let alert = springboard.alerts.firstMatch
+            guard alert.waitForExistence(timeout: 0.5) else { continue }
+            guard let label = ["允许", "Allow", "好", "OK"].first(where: { alert.buttons[$0].exists }) else {
+                XCTFail("a system alert nobody answers:\n\(springboard.debugDescription)")
+                return
+            }
+            alert.buttons[label].tap()
+            deadline = Date.now.addingTimeInterval(1.5)
+        }
+    }
+
+    @MainActor private func shot(_ app: XCUIApplication, _ name: String) {
+        let png = app.screenshot()
+        let a = XCTAttachment(screenshot: png)
+        a.name = name
+        a.lifetime = .keepAlways
+        add(a)
+        if let dir = env["PERSONA_SHOTS"] {
+            try? png.pngRepresentation.write(to: URL(fileURLWithPath: dir)
+                .appendingPathComponent("code-review-\(before ? "before" : "after")-\(name).png"))
+        }
+    }
+}

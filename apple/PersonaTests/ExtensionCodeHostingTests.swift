@@ -154,7 +154,7 @@ struct ExtensionCodeHostingTests {
         else { Issue.record("the comment box follows the line it was opened on") }
 
         // Folding a file leaves its header only.
-        state.toggle(diff: "diff:src/upload/retry.go", collapsed: false)
+        state.toggle(diff: "diff:src/upload/retry.go", initially: false)
         blocks = CodePageBlocks.of(v, sections: mains, state: state, look: .unified, canComment: true)
         #expect(!blocks.contains { if case .diffLine(_, _, let d, _, _, _) = $0 { d.path == "src/upload/retry.go" } else { false } })
         #expect(blocks.contains { if case .diffHeader(_, _, let d, true) = $0 { d.path == "src/upload/retry.go" } else { false } })

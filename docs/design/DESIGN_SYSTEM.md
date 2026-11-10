@@ -401,6 +401,11 @@ Search may take query operators and scopes; they live inside the search field.
 - Focus: the `switch` class rounds the focus outline to the pill and offsets it 2 px; it shows on keyboard focus only (`:focus-visible`), never after a click. Forced colors draw the track border and knob in system colors.
 - Why green and not the accent: an on/off switch reads as iOS's, and one color on every page; the accent stays for selection and links. Pill-shaped chips that toggle a mode (botmux, find bar's match case) are not switches of this kind.
 
+### 3.7.2 Tick boxes (iOS)
+
+- `.toggleStyle(.tickBox)` (`TickBoxToggleStyle` in `apple/Persona/DesignSystem/Components.swift`): a box, ticked (`Theme.Icon.checkedBox`, positive) or not (`Theme.Icon.uncheckedBox`, secondary), beside a short label. Tapping the box or the label flips it, and VoiceOver reads it as the toggle it is.
+- Only for a mark the user sets on one item among many, where a switch would outweigh the item: a file marked viewed in a code review (#827). Settings keep `Toggle`'s switch.
+
 ### 3.8 Chips, badges, avatars, marks
 
 `Chip` (look neutral, tint or outline), `CountBadge` (99+ cap), `LinkBadge`, `Monogram`, `AgentMark`, `BrandMark`, `SessionAvatar`, `ThreadAvatar`. Chips are text-only and read as their text. Decorative marks are hidden from VoiceOver when adjacent text names them. Sources are in `apple/Persona/DesignSystem/Components.swift` and neighbors.

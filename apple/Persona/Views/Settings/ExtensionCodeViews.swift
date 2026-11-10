@@ -32,6 +32,15 @@ enum CodeDiffInk {
         }
     }
 
+    /// The words that changed inside a changed line (UI version 5), over the line's fill.
+    static func emphasis(_ k: CodeDiffLine.Kind) -> Color {
+        switch k {
+        case .add: Theme.Diff.addEmphasis
+        case .del: Theme.Diff.delEmphasis
+        case .context, .note: .clear
+        }
+    }
+
     static func markColor(_ k: CodeDiffLine.Kind) -> Color {
         switch k {
         case .add: Theme.Diff.add
@@ -53,11 +62,30 @@ enum CodeDiffInk {
 
 /// A line's text colored by the file's language (the viewer's lexer, one line at a time), plain without one.
 enum CodeLineInk {
+    /// A diff line's text, highlighted, with the words that changed (`CodeDiffLine.changed`) on its kind's emphasis.
+    @MainActor static func text(_ l: CodeDiffLine, language: SyntaxLanguage?) -> Text {
+        guard !l.changed.isEmpty else { return text(l.text, language: language) }
+        var out = attributed(l.text, language: language) ?? AttributedString(l.text)
+        let u = l.text.utf16
+        for r in l.changed {
+            guard let lo = u.index(u.startIndex, offsetBy: r.lowerBound, limitedBy: u.endIndex),
+                  let hi = u.index(u.startIndex, offsetBy: r.upperBound, limitedBy: u.endIndex),
+                  lo < hi, let range = Range(lo..<hi, in: out) else { continue }
+            out[range].backgroundColor = CodeDiffInk.emphasis(l.kind)
+        }
+        return Text(out)
+    }
+
     @MainActor static func text(_ s: String, language: SyntaxLanguage?) -> Text {
-        guard let language, !s.isEmpty, s.utf8.count <= CodeDocument.maxLineBytes else { return Text(verbatim: s) }
+        attributed(s, language: language).map { Text($0) } ?? Text(verbatim: s)
+    }
+
+    /// The line's syntax colors, or nil when it has none (no language, empty, too long, no tokens).
+    @MainActor private static func attributed(_ s: String, language: SyntaxLanguage?) -> AttributedString? {
+        guard let language, !s.isEmpty, s.utf8.count <= CodeDocument.maxLineBytes else { return nil }
         let doc = CodeDocument(text: s, language: language)
         doc.highlight { _ in }
-        guard let tokens = doc.tokens(0), !tokens.isEmpty else { return Text(verbatim: s) }
+        guard let tokens = doc.tokens(0), !tokens.isEmpty else { return nil }
         var out = AttributedString(s)
         let utf8 = s.utf8
         for t in tokens {
@@ -68,7 +96,7 @@ enum CodeLineInk {
             guard let r = Range(lo..<hi, in: out) else { continue }
             out[r].foregroundColor = Color(uiColor: color)
         }
-        return Text(out)
+        return out
     }
 }
 
@@ -88,7 +116,7 @@ struct CodeDiffRow: View {
                 .foregroundStyle(CodeDiffInk.markColor(line.kind))
                 .padding(.horizontal, Theme.Space.xs)
                 .accessibilityHidden(true)
-            CodeLineInk.text(line.text, language: language)
+            CodeLineInk.text(line, language: language)
                 .foregroundStyle(line.kind == .note ? Color.secondary : Color.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
@@ -150,7 +178,7 @@ struct CodeDiffPairRow: View {
             .foregroundStyle(.tertiary)
             .frame(width: CodeGutter.width(digits), alignment: .trailing)
             if let l {
-                CodeLineInk.text(l.text, language: language)
+                CodeLineInk.text(l, language: language)
                     .foregroundStyle(l.kind == .note ? Color.secondary : Color.primary)
                     .textSelection(.enabled)
             }
@@ -258,7 +286,8 @@ struct CodeChangeCounts: View {
     }
 }
 
-/// A diff's file header: folding, the path (an old one before it when renamed), what happened, how much.
+/// A diff's file header: folding, the path (an old one before it when renamed), what happened, how much. In a code
+/// review (UI version 5) also how alike a renamed file is, a generated file said, and the box that marks it viewed.
 struct CodeDiffFileHeader: View {
     var path: String
     var oldPath: String?
@@ -266,9 +295,32 @@ struct CodeDiffFileHeader: View {
     var additions: Int?
     var deletions: Int?
     var folded: Bool
+    var similarity: Int? = nil
+    var generated = false
+    /// Marked viewed (nil: no box, as on the session's review page).
+    var viewed: Bool? = nil
+    var setViewed: (Bool) -> Void = { _ in }
     var toggle: () -> Void
 
     var body: some View {
+        if let viewed {
+            HStack(spacing: Theme.Space.flush) {
+                fold
+                Toggle(isOn: Binding(get: { viewed }, set: setViewed)) {
+                    Text("Viewed").font(Theme.Font.caption).lineLimit(1)
+                }
+                .toggleStyle(.tickBox)
+                .foregroundStyle(viewed ? Theme.positive : Color.secondary)
+                .padding(.trailing, Theme.Space.m)
+                .accessibilityIdentifier("code-diff-viewed-\(path)")
+            }
+            .background(Theme.Fill.chip)
+        } else {
+            fold.background(Theme.Fill.chip)
+        }
+    }
+
+    private var fold: some View {
         Button(action: toggle) {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(folded ? Theme.Icon.disclosure : Theme.Icon.expand)
@@ -281,7 +333,14 @@ struct CodeDiffFileHeader: View {
                     if let oldPath, !oldPath.isEmpty, oldPath != path {
                         Text(oldPath).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                     }
-                    Text(path).font(Theme.Font.code).foregroundStyle(Color.primary).lineLimit(1).truncationMode(.head)
+                    Text(path).font(Theme.Font.code).foregroundStyle(viewed == true ? Color.secondary : Color.primary)
+                        .lineLimit(1).truncationMode(.head)
+                    if similarity != nil || generated {
+                        HStack(spacing: Theme.Space.s) {
+                            if let similarity { Text("\(similarity)% similar").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1) }
+                            if generated { Chip(text: String(localized: "Generated"), compact: true) }
+                        }
+                    }
                 }
                 Spacer(minLength: Theme.Space.s)
                 CodeChangeCounts(additions: additions, deletions: deletions)
@@ -291,9 +350,10 @@ struct CodeDiffFileHeader: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .background(Theme.Fill.chip)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([path, CodeFileStatus.word(status)].compactMap { $0 }.joined(separator: String(localized: ", ")))
+        .accessibilityLabel([path, CodeFileStatus.word(status), similarity.map { String(localized: "\($0)% similar") },
+                             generated ? String(localized: "Generated") : nil]
+            .compactMap { $0 }.joined(separator: String(localized: ", ")))
         .accessibilityValue(folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { toggle() }
@@ -308,6 +368,8 @@ struct CodeTreeRowView: View {
     var selected: Bool
     /// Drilling in (iPhone): a directory has a chevron and no arrow.
     var drills = false
+    /// A file marked viewed (UI version 5): its name quieter, a tick after it.
+    var viewed = false
     var tap: () -> Void
 
     var body: some View {
@@ -328,7 +390,11 @@ struct CodeTreeRowView: View {
                 ThemedIcon(n.isDir ? Theme.Icon.folder : Theme.Icon.file)
                     .foregroundStyle(n.isDir ? Theme.accent : Color.secondary)
                     .scaledFrame(width: Theme.Size.iconS, height: Theme.Size.iconS)
-                Text(n.name).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(1).truncationMode(.middle)
+                Text(n.name).font(Theme.Font.secondary).foregroundStyle(viewed ? Color.secondary : Color.primary)
+                    .lineLimit(1).truncationMode(.middle)
+                if viewed {
+                    ThemedIcon(Theme.Icon.done).font(Theme.Font.caption).foregroundStyle(Theme.positive)
+                }
                 Spacer(minLength: Theme.Space.xs)
                 if let c = n.entry?.comments, c > 0 {
                     Label("\(c)", systemImage: Theme.Icon.message).labelStyle(.titleAndIcon)
@@ -369,6 +435,7 @@ struct CodeTreeRowView: View {
         if let a = n.entry?.additions { parts.append(String(localized: "\(a) lines added")) }
         if let d = n.entry?.deletions { parts.append(String(localized: "\(d) lines removed")) }
         if let c = n.entry?.comments, c > 0 { parts.append(String(localized: "\(c) comments")) }
+        if viewed { parts.append(String(localized: "Viewed")) }
         return parts.joined(separator: String(localized: ", "))
     }
 }

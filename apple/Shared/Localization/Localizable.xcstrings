@@ -1,6 +1,72 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld / %lld viewed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld / %2$lld viewed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已看 %1$lld / %2$lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "確認済み %1$lld / %2$lld"
+          }
+        }
+      }
+    },
+    "%lld unresolved": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld unresolved"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未解决 %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未解決 %lld"
+          }
+        }
+      }
+    },
+    "%lld%% similar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld%% similar"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "相似 %lld%%"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "類似度 %lld%%"
+          }
+        }
+      }
+    },
     "Background workflow": {
       "extractionState": "manual",
       "localizations": {
@@ -45023,6 +45089,28 @@
       },
       "extractionState": "manual"
     },
+    "Display Options": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Display Options"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示选项"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "表示オプション"
+          }
+        }
+      }
+    },
     "Display name (optional)": {
       "localizations": {
         "en": {
@@ -53407,6 +53495,28 @@
       },
       "extractionState": "manual"
     },
+    "Generated": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generated"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "生成的文件"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "生成ファイル"
+          }
+        }
+      }
+    },
     "Generated file, folded": {
       "localizations": {
         "en": {
@@ -54187,6 +54297,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Goes to the next one": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Goes to the next one"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跳到下一个"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "次へ移動します"
+          }
+        }
+      }
     },
     "Good afternoon [Assistant View 552594]": {
       "localizations": {
@@ -57336,6 +57468,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Ignore Whitespace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ignore Whitespace"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "忽略空白"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "空白を無視"
+          }
+        }
+      }
     },
     "Image %lld [Composer Parts 0d2e3a]": {
       "localizations": {
@@ -62262,6 +62416,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Large change, folded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Large change, folded"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改动较多，先收起了"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "変更が多いため折りたたみました"
+          }
+        }
+      }
     },
     "Lark": {
       "shouldTranslate": true,
@@ -85494,6 +85670,28 @@
         }
       }
     },
+    "Only whitespace changed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only whitespace changed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只改了空白"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "空白のみの変更"
+          }
+        }
+      }
+    },
     "Per-Computer Keys": {
       "extractionState": "manual",
       "localizations": {
@@ -85999,6 +86197,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Show": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "表示"
+          }
+        }
+      }
     },
     "Shows the desktop apps' sessions.": {
       "localizations": {
@@ -142086,6 +142306,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Viewed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Viewed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已看"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "確認済み"
+          }
+        }
+      }
     },
     "Viewing Subagent": {
       "localizations": {

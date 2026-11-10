@@ -44,6 +44,8 @@ extension Theme {
         /// Some of a group picked (the inbox's Select, #2059).
         static let partlyChecked = "minus.circle.fill"
         static let uncheckedBox = "square"
+        /// A box ticked: a file marked viewed in a code review (`TickBoxToggleStyle`), a done to-do in a document.
+        static let checkedBox = "checkmark.square.fill"
         static let todo = "checklist"
         /// Recent, or waiting to come back (reconnecting, last used).
         static let recent = "clock.arrow.circlepath"

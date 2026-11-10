@@ -2674,6 +2674,15 @@ Views, components, actions, responses, placements and context all use schema-gen
   `GET /mock/invalidate` syncs one note and sends `ui.invalidate`; UI test `ExtensionV3Tests` (list, filters, more, search to empty state, push note page, edit/save/pop, invalidate),
   unit tests `ExtensionUIv3Tests`, `PersonaCardTests`. `MOCK_EXTENSION_CARDS=1` with `ExtensionAssistantCardTests` checks in a real assistant chat that
   `persona-view` and old `persona-card` share the renderer, actions are not tappable, links remain, and saves light/dark screenshots. Four-client showcase comparison depends on #1852, not replaceable by notes screenshots.
+- UI version 5's code review (#827, "UI version 5: code review"), drawn in parts (pages send 4 until all of version 6 is drawn too, so the hub strips these fields for iOS meanwhile).
+  Reading (`ExtensionCodeReview.swift`, the code page): the words that changed in a removed and added pair on a stronger fill (PersonaKit's `LineDiff` word comparison, worked out once per hunk);
+  generated files and lockfiles (by the extension's `generated` or the web's path list), changes over 400 lines and viewed files start folded with a line saying why and **Show**; a generated
+  file without hunks is not loaded by itself. Each diff's header has a **Viewed** tick box (`.toggleStyle(.tickBox)`): checked, the file folds; unchecked, it stays as it is. With `mark_viewed`
+  the mark changes at once and is sent quietly (`ExtensionViewModel.quiet`: nothing waits, an empty answer draws nothing, a failure puts the mark back); without it the mark is kept on the
+  device by `path` + `revision` (or a digest of the lines), at most 5,000 (`CodeViewedMarks`). The tree ticks viewed files. Over the diffs: "Viewed x / y", "N unresolved" (each tap unfolds
+  and scrolls to the next open thread; drafts don't count) and a ⋯ menu with **Ignore Whitespace** (kept for every page). A rename shows its similarity. An action's `items` replace their
+  components without drawing the page again, and a page drawn again keeps diffs loaded since. Unit tests `ExtensionCodeReviewTests`, UI test `ExtensionCodeReviewUITests` (`showcase › snapshots ›
+  code-review-v5`).
 - UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
   Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
   their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.

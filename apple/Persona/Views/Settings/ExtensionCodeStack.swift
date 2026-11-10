@@ -46,6 +46,15 @@ struct CodeBlockStack: View {
                     withAnimation(Theme.Motion.layout) { proxy.scrollTo(Self.diffAnchor(path), anchor: .top) }
                     state.scrollTo = nil
                 }
+                .onChange(of: state.jump) { _, id in
+                    guard let id else { return }
+                    state.jump = nil
+                    // After the diff it is in has unfolded and been laid out.
+                    Task { @MainActor in
+                        await Task.yield()
+                        withAnimation(Theme.Motion.layout) { proxy.scrollTo(Self.threadAnchor(id), anchor: .center) }
+                    }
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: Theme.Space.flush) { rows }
@@ -53,6 +62,7 @@ struct CodeBlockStack: View {
     }
 
     static func diffAnchor(_ path: String) -> String { "diff-anchor:" + path }
+    static func threadAnchor(_ id: String) -> String { "thread-anchor:" + id }
 
     @ViewBuilder private var rows: some View {
         if let lookPicker {
@@ -133,8 +143,11 @@ struct CodeBlockStack: View {
                 .padding(.horizontal, Theme.Space.page).padding(.vertical, Theme.Space.s)
         case .diffHeader(_, let key, let d, let folded):
             CodeDiffFileHeader(path: d.path, oldPath: d.oldPath, status: d.status, additions: d.additions,
-                               deletions: d.deletions, folded: folded) {
-                withAnimation(Theme.Motion.state) { state.toggle(diff: key, collapsed: d.collapsed == true && !(d.hunks ?? []).isEmpty) }
+                               deletions: d.deletions, folded: folded,
+                               similarity: d.status == "renamed" ? d.similarity : nil,
+                               generated: CodeReview.isGenerated(d.path, said: d.generated),
+                               viewed: state.isViewed(d), setViewed: { setViewed(d, key: key, $0) }) {
+                withAnimation(Theme.Motion.state) { state.toggle(diff: key, initially: state.initiallyFolded(d)) }
             }
             .clipShape(UnevenRoundedRectangle(topLeadingRadius: Theme.Radius.control, topTrailingRadius: Theme.Radius.control))
             .padding(.horizontal, Theme.Space.page)
@@ -181,7 +194,27 @@ struct CodeBlockStack: View {
             .background(Theme.Fill.chip)
             .padding(.horizontal, Theme.Space.page)
         case .inlineThread(let id, _, let t):
-            inlineThread(id: id, t)
+            inlineThread(id: id, t).id(Self.threadAnchor(id))
+        case .diffFolded(_, let key, let note):
+            Button {
+                withAnimation(Theme.Motion.state) { state.setFolded(key, false, initially: true) }
+            } label: {
+                HStack(spacing: Theme.Space.s) {
+                    Text(note).foregroundStyle(.secondary)
+                    Text("Show").foregroundStyle(Theme.accent)
+                }
+                .font(Theme.Font.caption)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(Theme.Space.m)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .background(Theme.Fill.chip.opacity(0.5))
+            .padding(.horizontal, Theme.Space.page)
+            .accessibilityIdentifier("code-diff-folded-\(key)")
+        case .reviewTools(_, let files, let viewed, let open):
+            reviewTools(files: files, viewed: viewed, open: open)
         case .inlineComposer(let id, let d, let anchor):
             inlineComposer(id: id, d: d, anchor: anchor)
         case .threadTitle(_, let title, let resolved):
@@ -223,7 +256,9 @@ struct CodeBlockStack: View {
             }
             .padding(.horizontal, Theme.Space.s)
         } else {
-            CodeTreeRowView(row: row, selected: t.selected == n.path, drills: drills) { tapTree(tree: tree, node: n, t: t) }
+            CodeTreeRowView(row: row, selected: t.selected == n.path, drills: drills, viewed: !n.isDir && viewedFile(n.path, entry: n.entry)) {
+                tapTree(tree: tree, node: n, t: t)
+            }
                 .padding(.horizontal, Theme.Space.s)
         }
     }
@@ -242,6 +277,91 @@ struct CodeBlockStack: View {
             // No action: the page shows the file's diff (scrolled to it; the phone opens the diffs first).
             state.scrollTo = n.path
             if drills { openMain?() }
+        }
+    }
+
+    /// A file in the tree marked viewed: its diff's mark when the page has its diff, else the tree's.
+    private func viewedFile(_ path: String, entry: CodeTreeEntry?) -> Bool {
+        if let d = diffs[path] { return state.isViewed(d) }
+        return entry?.viewed == true
+    }
+
+    /// The page's diffs by path, for the tree's viewed marks.
+    private var diffs: [String: ExtensionDiffComponent] {
+        var out: [String: ExtensionDiffComponent] = [:]
+        for case .diff(let d) in (model.view?.sections ?? []).flatMap(\.items) where out[d.path] == nil { out[d.path] = d }
+        return out
+    }
+
+    // MARK: Code review (UI version 5)
+
+    /// Over a page of diffs: how many are viewed, the threads still open (a tap goes to the next one), and the
+    /// page's display options in a menu (docs/design/DESIGN_SYSTEM.md "List controls": display is never a chip).
+    private func reviewTools(files: Int, viewed: Int, open: [(block: String, diff: String, folded: Bool)]) -> some View {
+        HStack(spacing: Theme.Space.m) {
+            if files > 1 {
+                HStack(spacing: Theme.Space.s) {
+                    ProgressView(value: Double(viewed), total: Double(files))
+                        .tint(Theme.positive)
+                        .scaledFrame(width: Theme.Size.box56)
+                    Text("\(viewed) / \(files) viewed").monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(String(localized: "\(viewed) / \(files) viewed"))
+                .accessibilityIdentifier("code-review-viewed")
+            }
+            if !open.isEmpty {
+                Button { jump(open) } label: {
+                    Label { Text("\(open.count) unresolved") } icon: { ThemedIcon(Theme.Icon.message) }
+                        .labelStyle(.titleAndIcon)
+                        .lineLimit(1)
+                        .scaledFrame(minHeight: Theme.Size.tapTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.cautionText)
+                .accessibilityHint(String(localized: "Goes to the next one"))
+                .accessibilityIdentifier("code-review-unresolved")
+            }
+            Spacer(minLength: 0)
+            Menu {
+                Toggle(String(localized: "Ignore Whitespace"), isOn: Binding(get: { state.whitespace }, set: { on in
+                    withAnimation(Theme.Motion.state) { state.setWhitespace(on) }
+                }))
+            } label: {
+                ThemedIcon(Theme.Icon.more)
+                    .foregroundStyle(.secondary)
+                    .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                    .contentShape(.rect)
+            }
+            .accessibilityLabel(String(localized: "Display Options"))
+            .accessibilityIdentifier("code-review-options")
+        }
+        .font(Theme.Font.caption)
+        .padding(.leading, Theme.Space.page)
+        .padding(.trailing, Theme.Space.s)
+    }
+
+    /// The next open thread: its diff unfolded, scrolled to.
+    private func jump(_ open: [(block: String, diff: String, folded: Bool)]) {
+        state.lastJump = (state.lastJump + 1) % open.count
+        let t = open[state.lastJump]
+        if state.isFolded(t.diff, initially: t.folded) {
+            withAnimation(Theme.Motion.state) { state.setFolded(t.diff, false, initially: t.folded) }
+        }
+        state.jump = t.block
+    }
+
+    /// Marked viewed or not at once (and folded when checked); sent with the extension's `mark_viewed` when it has
+    /// one, put back when that fails.
+    private func setViewed(_ d: ExtensionDiffComponent, key: String, _ v: Bool) {
+        let mark = withAnimation(Theme.Motion.state) { state.setViewed(d, key: key, v) }
+        guard let action = d.markViewed, !action.id.isEmpty else { return }
+        Task {
+            let o = await model.quiet(action, with: ["path": d.path, "viewed": v ? "true" : "false"])
+            guard o.error != nil else { return }
+            withAnimation(Theme.Motion.state) { state.viewedFailed(d.path, attempt: mark.attempt, before: mark.before) }
+            ExtensionOutcome.show(o, app: app, link: $link)
         }
     }
 
