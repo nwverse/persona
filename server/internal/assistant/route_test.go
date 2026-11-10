@@ -209,17 +209,6 @@ func doRoute(t *testing.T, s *Service, method, path, body string, role string) (
 	return rec.Code, out
 }
 
-func (s *Service) directionOf(id string) *direction {
-	b := &s.directions
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !s.directionsLocked(context.Background()) || b.m[id] == nil {
-		return nil
-	}
-	cp := *b.m[id]
-	return &cp
-}
-
 // The owner's taps: Start direction takes the offer, Make it a direction a quick chat, End direction takes it out; each
 // is recorded as the owner's, with no phone approval; Just a quick chat drops the offer.
 func TestDirectionEndpoints(t *testing.T) {
@@ -327,4 +316,24 @@ func TestGoldenRoute(t *testing.T) {
 		Leaders:  []prompts.RouteLeader{{ID: "lead_a", Title: "Infra", Project: "infra"}, {ID: "lead_b", Title: "Docs"}},
 		Projects: []string{"Example app", "Infra"}}))
 	golden(t, "route_input.empty", prompts.RenderRouteInput(prompts.RouteInput{Sentence: "What's on my calendar today?"}))
+}
+
+// A direction made again keeps the name it was given; Start's offered name never replaces one given before.
+func TestDirectionMadeAgainKeepsItsName(t *testing.T) {
+	s, _ := directionRouteEnv(t, "side1")
+	if code, _ := doRoute(t, s, http.MethodPost, "/api/v1/assistant/directions/side1/make", `{"title":"Infra"}`, ""); code != 200 {
+		t.Fatalf("make: %d", code)
+	}
+	if err := s.setDirectionName(context.Background(), "side1", "基建", directionByUser); err != nil {
+		t.Fatal(err)
+	}
+	doRoute(t, s, http.MethodPost, "/api/v1/assistant/directions/side1/end", "", "")
+	s.directionsSync(context.Background())
+	code, out := doRoute(t, s, http.MethodPost, "/api/v1/assistant/directions/side1/make", `{"title":"Other"}`, "")
+	if code != 200 || !strings.Contains(string(out["leader"]), `"name":"基建"`) {
+		t.Fatalf("made again: %d %s", code, out["leader"])
+	}
+	if d := s.directionOf("side1"); d == nil || d.Name != "基建" || d.EndedAt != nil {
+		t.Fatalf("record: %+v", d)
+	}
 }

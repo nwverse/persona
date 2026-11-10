@@ -116,8 +116,32 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | `PUT /api/v1/subscriptions/{id}` | `{revision, label?, recipe?, to_inbox?, to_kb?, interval_seconds?, daily_at?, triage_rules?, fallback_tier?}`; 409 `conflict` at another revision, 422 `interval_too_short` |
 | `POST /api/v1/subscriptions/{id}/run` | 202: runs as soon as the connector's limits allow, also while it is off |
 | `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items |
+| `POST /api/v1/subscriptions/-/ui` | the pages below, with an extension page's request and answer; every device may draw them, actions need full access |
 
 A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature only once subscriptions deliver (`features.deliver`, #2039), so the apps show their entry rows only then; it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
+
+### Pages
+
+The manager draws the subscription pages (#2041) as declarative UI in `server/internal/subscriptionsui`, served by
+`POST /api/v1/subscriptions/-/ui` with the request and answer of an extension page (`context`, `state`, `action`, `values`;
+[extensions.md](extensions.md) "Declarative UI"). Every app draws them with the renderer it already has and adds only entry rows.
+Unlike an extension page, every device may draw them: a device without full access sees the same pages with a line saying it
+can only view, switches disabled, fields shown as values and the buttons that change something left out; an action from it
+is 403 `read_only_device`.
+
+| Page (`state.p`) | What it shows |
+| --- | --- |
+| list (none) | Needs attention (`failing`, `needs_recipe`), on, off, then per connector the sources that can be subscribed: at least one subscribable tool and no subscription yet, from cached catalogs only. `{"ext": id}` or `{"c": id}` narrows it to one extension or connector |
+| `source` | The two destination switches, the interval, the state and the last and next pull, the recipe, triage rules, what happens without a triage model, Pull Now, and Turn Off and Delete Stored Content. A failing, paused or unconnected one starts with what is wrong and when it tries again. For a source not subscribed yet (`c`, `s`): the extension's own recipe (the switches create the subscription) or Choose a Tool |
+| `recipe` | What it does in plain words (made from the recipe, never by a model), the field table, and on request a dry run with its items and the five checks |
+| `tools`, `setup` | The source's subscribable tools and the refused ones with their reason; a tool's arguments drawn from its `input_schema` (`{{since}}` for a date-time), a dry run with `items_path` left empty, field pickers from its `paths` preselected by name, kind and grouping, then Try and Save |
+| `runs`, `interval`, `fallback`, `rules`, `raw` | The last runs; pickers that apply at once (the page stays and the choice moves); triage rules; the recipe's JSON |
+
+- A switch that is off carries the confirmation of what turning it on does: what is pulled, how often, that it is kept on the hub,
+  and which model triages or summarizes it. Turning one off asks nothing.
+- All text is the manager's, in the request's language (en, zh-Hans, ja); the service gives only codes, localized here.
+- An app below UI version 6 gets the hub's usual downgrade (a switch becomes a row that turns it on or off); a source icon only
+  version 6 has is drawn as an older one, never as none.
 
 ## Follow-up behavior
 

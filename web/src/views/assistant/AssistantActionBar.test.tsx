@@ -69,13 +69,39 @@ const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assi
 const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
 
 describe("Assistant Needs you / In progress trays", () => {
+  it("uses the Working mark and live subtitle for background work, with a clock only after all work ends", () => {
+    act(() => entry("running").click());
+    const row = host.querySelector("[data-task-slot]")!;
+    const session: Session = { machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", status: "working", state: "working", updated_at: at,
+      waiting: true, background_working: true, background_count: 2, background_tasks_count: 2 };
+    act(() => upsertSession(session));
+    expect(host.querySelector("[data-task-slot]")).toBe(row);
+    expect(row.querySelector('[data-task-mark="working"]')).not.toBeNull();
+    expect(row.querySelector('[data-task-mark="waiting"]')).toBeNull();
+    expect(row.textContent).toContain(t("assistant-tasks.background_tasks_running", { count: 2 }));
+    const workflow = { task_id: "wf", status: "running", running: true, phase: "Adversarial review", agents_done: 5, agents_started: 6 };
+    act(() => upsertSession({ ...session, background_tasks_count: 0, background_count: 1, running_workflows: 1, workflow_progress: workflow }));
+    expect(row.textContent).toContain("Adversarial review · 5/6+");
+    expect(row.querySelector('[data-task-mark="working"]')).not.toBeNull();
+    act(() => upsertSession({ ...session, background_tasks_count: 0, background_count: 0, running_subagents: 3 }));
+    expect(row.textContent).toContain(t("assistant-tasks.subagents_count_running", { count: 3 }));
+    expect(row.textContent).not.toContain("Adversarial review");
+    act(() => upsertSession({ ...session, state: "idle", status: "idle", background_working: false, background_count: 0,
+      background_tasks_count: 0, work: { phase: "blocked", on: "external", wait: "Wait for deployment", line: "Wait for deployment" } }));
+    expect(row.querySelector('[data-task-mark="waiting"]')).not.toBeNull();
+    expect(row.querySelector('[data-task-mark="working"]')).toBeNull();
+    expect(row.textContent).toContain("Wait for deployment");
+    expect(row.textContent).not.toContain(t("assistant-tasks.background_tasks_running", { count: 2 }));
+    expect(writes).toEqual([]);
+  });
+
   it("keeps two entries in order, collapses by default and replaces conversation cards with one hint", () => {
     expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
     expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);
     expect(host.querySelector("section")).toBeNull();
     expect(host.querySelectorAll("[data-dispatch-hint]")).toHaveLength(1);
     expect(host.textContent).not.toContain("Demo result");
-    act(() => (host.querySelector("[data-dispatch-hint]") as HTMLButtonElement).click());
+    act(() => entry("running").click());
     expect(entry("running").getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelectorAll("[data-task-slot]")).toHaveLength(1);
     expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("2");
@@ -83,6 +109,42 @@ describe("Assistant Needs you / In progress trays", () => {
     // the task's agent is in its row, not a row of its own
     expect(host.querySelector("[data-running-agent]")).toBeNull();
     expect(host.textContent).not.toContain("Demo agent");
+  });
+
+  it("names the one dispatched task and opens its Agent in the side panel, not the In progress tray (#3700)", () => {
+    const hint = host.querySelector<HTMLButtonElement>("[data-dispatch-hint]")!;
+    expect(hint.tagName).toBe("BUTTON");
+    expect(hint.textContent).toBe(`${t("assistant-tasks.dispatch_single", { title: "Demo task" })}· ${t("assistant-tasks.dispatch_open")}`);
+    act(() => hint.click());
+    // the task's own panel, which shows its Agent's chat (TaskPanel), and no tray opened
+    expect(getPanel()).toMatchObject({ kind: "task", todo: "tray-task" });
+    expect(host.querySelector("section")).toBeNull();
+    expect(entry("running").getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("lists each of several dispatched tasks, each opening its own task, and leaves an unstarted one without a link", async () => {
+    const many: TaskPlan = { id: "tray-plan-many", conversation, state: "started", created_at: at, tasks: [
+      { title: "First task", prompt: "a", cwd: "/demo", machine: "demo", todo_id: "tray-task" },
+      { title: "Second task", prompt: "b", cwd: "/demo", machine: "demo", todo_id: "second-task" },
+      { title: "Failed task", prompt: "c", cwd: "/demo", machine: "demo", error: "machine offline" },
+    ] };
+    getFeedState().plans[many.id] = many;
+    try {
+      act(() => root.render(<StrictMode><AssistantActionBar conversation={conversation} /><FeedLineView item={{ id: "many-event", conversation, at, kind: "plan", ref: many.id }} simplified /></StrictMode>));
+      const hint = host.querySelector("[data-dispatch-hint]")!;
+      expect(hint.getAttribute("data-dispatch-hint")).toBe("3");
+      expect(hint.textContent).toContain(t("assistant-tasks.dispatch_many", { count: 3 }));
+      const links = [...hint.querySelectorAll<HTMLElement>("[data-dispatched-task]")];
+      // the to-do's current title wins over the plan's; a task that did not start is shown but cannot be opened
+      expect(links.map((el) => [el.tagName, el.textContent])).toEqual([["BUTTON", "Demo task"], ["BUTTON", "Second task"], ["SPAN", "Failed task"]]);
+      act(() => links[1]!.click());
+      expect(getPanel()).toMatchObject({ kind: "task", todo: "second-task" });
+      act(() => links[0]!.click());
+      expect(getPanel()).toMatchObject({ kind: "task", todo: "tray-task" });
+      expect(host.querySelector("section")).toBeNull();
+    } finally {
+      delete getFeedState().plans[many.id];
+    }
   });
 
   it("updates the same row while it runs, opens the task, and drops it once it is accepted", () => {

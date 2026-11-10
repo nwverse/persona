@@ -46,7 +46,7 @@ func (s *Service) digestTo(cfg Settings, g superviseSignal) string {
 		return g.To
 	}
 	switch g.Kind {
-	case sigEscalated, sigFailed, sigStarted:
+	case sigEscalated, sigFailed, sigStarted, sigLeaderStuck:
 		return cfg.Main
 	}
 	t, ok := s.todoNow(g.Todo)
