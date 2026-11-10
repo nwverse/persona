@@ -177,6 +177,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
 	}
+	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
 		if ix.Resumable { // its hook's earlier attempt left the card pending: it is answered too
 			_ = s.resolveRemembered(ix.ID, r, false)
@@ -461,6 +462,7 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 	}
 	if p != nil {
 		r.Values = declaredValues(p.ix, r.Values)
+		r = honest(p.ix, r)
 	}
 	if p != nil && p.persisting != nil {
 		attempt := p.persisting
@@ -778,7 +780,7 @@ func (s *Service) askHub(ctx context.Context, ix proto.Interaction) (proto.Resol
 	if m, ok := s.fleetMachine(ix.MachineID); ok {
 		ix.MachineID = m.ID
 	}
-	return s.waitInteraction(ctx, ix)
+	return s.waitInteraction(ctx, s.ownCard(ctx, ix))
 }
 
 // ---- "Always allow in this session" (#2202, docs/assistant/assistant.md "Always allow in this session") ----
@@ -789,6 +791,57 @@ func (s *Service) askHub(ctx context.Context, ix proto.Interaction) (proto.Resol
 
 // maxAlwaysKeys bounds what one card may name (a file change's paths, a gated command's calls).
 const maxAlwaysKeys = 32
+
+// Whether a card's "Always allow" is kept is the manager's word (proto.Interaction.AlwaysHonored, #3590), never a
+// node's: the apps offer it only where it is.
+
+// nodeCard is a node's card as the apps get it. On an assistant conversation only the manager keeps Always (its
+// agent is given no session rule): honored when the manager will remember the keys the card names (remembering is a
+// conversation's store), not when it names keys it will not (too many, a card with fields, no store) or is a health
+// conversation's (confirmed each time). Any other node card keeps the apps' own rule (an Agents session's agent keeps
+// it itself). A node names no tool for people, and has no say in either: only the manager's own cards do.
+func nodeCard(ix proto.Interaction, remembers, health bool) proto.Interaction {
+	ix.AlwaysHonored, ix.ToolTitle = nil, ""
+	if ix.Kind != proto.IxPermission || ix.SessionID == "" || (len(ix.AlwaysKeys) == 0 && !health) {
+		return ix
+	}
+	kept := remembers && !health && alwaysCard(ix)
+	ix.AlwaysHonored = &kept
+	return ix
+}
+
+// honest is r without an Always the card does not keep (AlwaysHonored false): an older app, or one that does not
+// read the field, may still send it, and the answer's history must not say "always allowed" for a grant no one keeps.
+func honest(ix proto.Interaction, r proto.Resolution) proto.Resolution {
+	if ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
+		r.Always = false
+	}
+	return r
+}
+
+// ownCard is a permission card the manager asks itself (its tools', the extensions', the hub's persona_settings): its
+// Always is kept only where the card says what it keeps (AlwaysLabel: the apps a computer may use, LCU's own scopes),
+// nowhere else, and the tool gets its name for people when the catalog has one.
+func (s *Service) ownCard(ctx context.Context, ix proto.Interaction) proto.Interaction {
+	if ix.Kind != proto.IxPermission {
+		return ix
+	}
+	kept := strings.TrimSpace(ix.AlwaysLabel) != ""
+	ix.AlwaysHonored = &kept
+	if ix.ToolTitle == "" {
+		ix.ToolTitle = toolTitle(s.lang(ctx), ix.ToolName)
+	}
+	return ix
+}
+
+// toolTitle is one of the manager's own tools by its name for people ("iPhone control"), "" for any other.
+func toolTitle(l i18n.Lang, tool string) string {
+	key := "assistant-tool_titles." + strings.ReplaceAll(tool, ".", "_")
+	if tool == "" || !i18n.Has(key) {
+		return ""
+	}
+	return i18n.T(l, key)
+}
 
 func alwaysCard(ix proto.Interaction) bool {
 	return ix.Kind == proto.IxPermission && ix.SessionID != "" && len(ix.AlwaysKeys) > 0 &&

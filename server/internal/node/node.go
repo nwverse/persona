@@ -514,6 +514,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.handleUpdate(ctx, method, params)
 	}
 	switch method {
+	case "session.share_projection":
+		return n.shareProjection(ctx, params)
 	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
@@ -536,6 +538,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Offset           int64         `json:"offset"`
 		Stream           bool          `json:"stream"`
 		SessionID        string        `json:"session_id"`
+		CreationID       string        `json:"creation_id"`
+		Incarnation      string        `json:"incarnation"`
 		Cwd              string        `json:"cwd"`
 		Launcher         string        `json:"launcher"`
 		AgentType        string        `json:"agent_type"`
@@ -585,6 +589,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		PermissionMode string          `json:"permission_mode"`
 		PlanThen       string          `json:"plan_then"` // session.start in plan mode: the mode after its plan (planthen.go)
 		Effort         string          `json:"effort"`
+		ServiceTier    string          `json:"service_tier"`
 		Ultracode      *bool           `json:"ultracode"`
 		DismissLost    bool            `json:"dismiss_lost"`
 		ResumeOnly     bool            `json:"resume_only"`
@@ -633,6 +638,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if method == "session.retire" { // before the runtimes: a session another tool owns is refused, not handed on
 		closed, err := n.retire(ctx, p.SessionID)
 		return map[string]any{"closed": closed}, err
+	}
+	if method == "session.speed" {
+		return ok(n.setCodexSpeed(ctx, p.SessionID, p.ServiceTier))
 	}
 	if method == "session.ultracode" {
 		return ok(n.setUltracode(ctx, p.SessionID, p.Ultracode, p.DismissLost))
@@ -881,6 +889,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
 	case "session.start":
+		if p.CreationID != "" && p.ResumeSessionID == "" && p.SessionID != "" {
+			if _, exists := n.state.get(p.SessionID); exists {
+				return nil, errors.New("creation identifier requires a new session")
+			}
+			if n.transcriptPath(p.SessionID) != "" {
+				return nil, errors.New("creation identifier cannot adopt existing history")
+			}
+		}
 		if !wantsUltracode(p.Ultracode) {
 			p.Ultracode = nil // off is what a new process is anyway: as if left out (no checks, no command)
 		}
@@ -910,7 +926,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID}
 		if p.ResumeSessionID == "" {
 			if s, err, ok := n.runtimeStart(ctx, rp); ok { // a runtime's launcher
-				return map[string]any{"session": s}, err
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 			}
 		}
 		if err := n.checkStartHost(p.Host); err != nil {
@@ -919,15 +935,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ctx := n.reusingKeptTab(withStartHost(ctx, p.Host), p.InPane)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, err := n.startOnEngineRuntime(ctx, rp)
-			return map[string]any{"session": s}, err
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
 		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") && launcherAgentType(p.Launcher) != ompAgent {
 			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode})
-			return map[string]any{"session": s}, err
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 		}
 		s, err := n.start(ctx, p.Cwd, p.Launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, p.PermissionMode, p.Effort, tab, "", p.AgentType, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode})
-		return map[string]any{"session": s}, err
+		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err

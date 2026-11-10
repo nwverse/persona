@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0x3466a82d75945e36
+const sessionWireLayout = 0x310a6c5aab9c9bb4
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout
 
@@ -115,6 +115,10 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.integer(`"context_tokens":`, int64(s.ContextTokens), true)
 	w.integer(`"context_window":`, int64(s.ContextWindow), true)
 	w.strs(`"efforts":`, s.Efforts)
+	w.str(`"service_tier":`, s.ServiceTier, true)
+	if len(s.ServiceTiers) > 0 {
+		w.value(`"service_tiers":`, s.ServiceTiers)
+	}
 	w.boolean(`"started_by_persona":`, s.StartedByPersona, false)
 	w.boolean(`"assistant":`, s.Assistant, false)
 	w.boolean(`"archived":`, s.Archived, true)

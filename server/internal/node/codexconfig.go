@@ -16,6 +16,7 @@ import (
 var codexSettings = []ClaudeSetting{
 	{Key: "model", Title: "模型", Detail: "没指定模型时 Codex 用哪个，比如 gpt-5.5", Type: "string", Default: ""},
 	{Key: "model_reasoning_effort", Title: "思考强度", Detail: "越高越慢、越仔细", Type: "enum", Options: codexEffortLevels, Default: "medium"},
+	{Key: "service_tier", Title: "Speed", Detail: "Fast increases usage. Applies to new Codex sessions on supported models.", Type: "enum", Options: []string{"default", "fast"}, Default: "default"},
 	{Key: "model_reasoning_summary", Title: "思考摘要", Detail: "把模型的思考整理成摘要显示，也可以不显示", Type: "enum", Options: []string{"auto", "concise", "detailed", "none"}, Default: "auto"},
 	{Key: "model_verbosity", Title: "回答详细程度", Detail: "回答写多长", Type: "enum", Options: []string{"low", "medium", "high"}, Default: "medium"},
 	{Key: "approval_policy", Title: "什么时候问你", Detail: "执行命令前要不要先问你，也可以一律不问", Type: "enum", Options: []string{"untrusted", "on-failure", "on-request", "never"}, Default: "on-request"},
@@ -41,6 +42,10 @@ func (n *Node) getCodexSettings() ([]ClaudeSetting, error) {
 	out := make([]ClaudeSetting, len(codexSettings))
 	for i, s := range codexSettings {
 		if v, ok := vals[s.Key]; ok {
+			// Both spellings occur in native configurations.
+			if s.Key == "service_tier" && v == "priority" {
+				v = "fast"
+			}
 			s.Value = v
 		}
 		out[i] = s

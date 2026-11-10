@@ -28,6 +28,8 @@ extension Theme {
         static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
         static let byState = "circle.grid.2x1"
+        /// Agents grouped by the app they run in (the Agents list's By App, #3756).
+        static let byApp = "macwindow"
         static let muted = "bell.slash.fill"
         static let notifications = "bell.badge"
         /// The hours this device's notifications keep quiet (Settings › Notifications).
@@ -451,6 +453,8 @@ extension Theme {
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
         static let phone = "iphone"
+        /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
+        static let phoneControl = "iphone.radiowaves.left.and.right"
         static let watch = "applewatch"
         static let handoff = "iphone.and.arrow.forward"
         /// The default web browser (open a link outside the app).

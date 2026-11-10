@@ -72,6 +72,7 @@
     <string name="inbox_kind_group">グループ</string>
     <string name="inbox_kind_at_all">\@全員</string>
     <string name="inbox_kind_cc">CC</string>
+    <string name="inbox_kind_agent">エージェント</string>
     <string name="inbox_compose_mail">メールを作成</string>
     <string name="inbox_filter">絞り込み</string>
     <string name="inbox_filter_on">絞り込み（オン）</string>

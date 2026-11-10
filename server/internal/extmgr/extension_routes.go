@@ -80,7 +80,8 @@ func (ps *extensions) switched(ctx context.Context, id string, warnings []string
 func (ps *extensions) detail(ctx context.Context, p *extension.Extension) ExtensionDetail {
 	m := p.Full
 	l := ps.h.contextLang(ctx)
-	form := p.L10n.Schema(l, p.Schema) // the form's text in the request's language (#897); p.Schema is shared
+	form := p.L10n.Schema(l, p.Schema)  // the form's text in the request's language (#897); p.Schema is shared
+	form = withoutIPhonePhones(p, form) // each iPhone's own consent, never set from a form (iphone.go)
 	d := ExtensionDetail{ExtensionView: ps.view(ctx, p), Publisher: m.Publisher, Homepage: m.Homepage, Origin: p.Record.Origin,
 		PreviousVersion: p.Record.PreviousVersion, ReadOnly: p.ReadOnly(), Form: form, Permissions: extension.ExplainWith(l, m, ps.reg.Config(p)),
 		Contributions: ps.contributionViews(p), Depends: ps.reg.DependenciesContext(ctx, m), ExtensionPack: m.ExtensionPack}
@@ -261,6 +262,13 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 				return
 			}
 		}
+		// The iPhones that consented are each iPhone's own word, kept as stored (iphone.go).
+		kept, err := h.keepIPhonePhones(p, in.Config)
+		if err != nil { // never the request's own phones: refused, not passed on
+			writeExtensionResponseError(w, r, http.StatusInternalServerError, "internal", err)
+			return
+		}
+		in.Config = kept
 		// Secrets bound to the old configuration go first (the voice extension's key, moved to another host:
 		// voice_extension.go); said in the answer, an error's too.
 		cleared, err := ps().reg.SetConfigClearing(r.Context(), p.Record.ID, in.Config, actor(r))

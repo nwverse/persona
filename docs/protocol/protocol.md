@@ -26,6 +26,18 @@ The web client may send `"replaces":"<this browser's previous device id>"`: once
 - Requests may send `Accept-Language: zh-Hans|en|ja` (the full list a browser sends is also accepted; the first entry is taken and falls back per [i18n.md](i18n.md)): human-readable text in that response (`error`, status descriptions) uses that language. `code` does not change; clients still branch on `code`. Without it, the user's language is used (see `client_hello.locale` in "Client capabilities and heartbeat").
 - Every response carries `X-Request-Id`. A request may send `X-Client-Request-Id` (4–32 hex characters / `-`), and the hub then uses it (`docs/server/server.md`, "Operations").
 
+### Agent session sharing
+
+The trusted ownership, catalog/selection/preview, one-time capability, tokenless
+management and independent anonymous HTTP contract is in
+[Agent session sharing](../server/agent-sharing.md). Manager hello capability
+`agent_sharing.v1` negotiates these routes; node capabilities `share_projection.v1`
+and `creation_receipt.v1` negotiate complete source projection and durable new-start
+receipts. Unlike ordinary legacy API routes, sharing management never accepts URL
+tokens or a default manager, and the public route never inherits login credentials.
+An explicitly configured independent HTTP **or** HTTPS origin is supported; HTTP
+requires the localized transport warning and explicit risk acknowledgement.
+
 ### Agent session archives
 
 Hubs advertising `agent_session_archives` in hello / health relay recoverable archives for Agent sessions to their owning manager: every runtime the lists show (Claude Code, Codex, the Codex App, Orca, Paseo, DSH, opencode, pi…), since the record is the manager's own. Persona's own conversations use their existing assistant API. Archiving does not move or delete the source transcript.
@@ -619,6 +631,25 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                                "findings":"the reviewer's report","error":"why it failed","session_id":"<reviewer>","worktree":"<its copy>",
                                "started_at":"...","ended_at":"..."},
                 "updated_at":"..."},
+ // The task's brief (#3822, docs/assistant/unified-entry.md "Briefs"): what was asked when the work was handed out, never rewritten; absent on a to-do with none.
+ // Clients that don't know it show the to-do as usual.
+ "brief":{"id":"brief_…","created_at":"...",
+          "request":{"text":"the owner's message, verbatim","truncated":false,"at":"...","conversation":"<chat id>","message_id":"<item id>"},   // absent when the owner did not ask for it
+          "started_by":"owner|assistant|leader|routine|hub|unknown",
+          "trigger":"supervision|followup|routine|conversation|notice|meeting|wake","trigger_title":"…","reason":"why it was started",   // when not the owner
+          "conversation":"<chat id>","goal":"one sentence","done_when":["…"],"expect_minutes":30,"out_of_bounds":["…"],   // as handed out
+          "reconstructed":true,"handover":"the prompt at hand-over, not the owner's words",   // a task from before briefs
+          "log":[{"at":"...","kind":"scope","todo_id":"todo_…","by":"<chat id>","change":"…","why":"…","done_when":["…"],"expect_minutes":90,
+                  "added":["…"],"dropped":["…"],"approval":{"text":"…","at":"...","conversation":"…","message_id":"…"}},   // approval: the owner's message that allowed a risky step
+                 {"at":"...","kind":"overdue","todo_id":"todo_…"}],
+          "criteria":["…"],"expect_minutes_now":90,     // done_when and expect_minutes as the scope changes left them
+          "clock_at":"...","due_at":"...","overdue_at":"...",   // the clock: from the hand-out or the latest scope change to max(expect × 3, 24 h); overdue_at once its supervisor was told
+          "result":{"at":"...","todo_id":"todo_…","by":"judge","verdict":"accepted|cancelled",   // by absent: the supervisor's review
+                    "criteria":[{"criterion":"…","state":"met|not_met|unchecked|dropped","evidence":"…","change":"the scope change that dropped it","changed_at":"..."}],
+                    "also_done":["…"]}},
+ // The to-dos that carried the brief's work, oldest first; why: why it stopped (the reason the one that took over gave, else its own end)
+ "lineage":[{"todo_id":"todo_…","title":"…","agent":"claude","machine":"<machine id>","session_id":"…","started":"...","ended":"...","why":"…",
+             "continues":"todo_…","superseded_by":"todo_…","current":true}],
  "spaces":[{"machine_id":"…","space":"group/alpha","linked_at":"..."}],
  "agents":[{"machine_id":"…","session_id":"…","linked_at":"...","released_at":null,
            "title":"…","cwd":"…","agent":"claude","start_error":"","source":"manual|space|spawned|review","via":""}]}   // review: an independent reviewer, released from the start (#2173)
@@ -666,6 +697,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "tool_input":{...}, "summary":"rm -rf build",                   // permission
  "screen":"visible terminal text",                                // screen (TUI dialogs hooks can't cover)
  "always_keys":["tool:Bash"],  // node → hub: what "Always Allow" on an assistant chat's permission card lets through; the hub records it and answers the same card itself (docs/assistant/assistant.md "Always allow in this session"); not used by clients
+ "always_honored":false,       // manager → clients: whether answering Always is kept; see "Always allow" below
+ "tool_title":"iPhone control", // manager → clients: its own tool's name for people, in the user's language; see "Always allow" below
  "agent":"codex", "reason":"…", "always_label":"本会话不再问这个命令"} // a card the node read from the Codex / compatible forks TUI ("Codex questions and approvals"); always_label is emitted in Chinese: "don't ask about this command again this session"
 
 // Resolution (by kind)
@@ -679,6 +712,34 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 {"cancel":true}                                                             // question with can_cancel:true: discard without an answer
 {"answers":{"…":"…"},"answered_by":"assistant"}                               // answered by the assistant (#1602): question only; App replies don't carry answered_by
 ```
+
+### Always allow
+
+A permission card offers **Always allow** only where the answer is kept (#3590). The manager says so in
+`always_honored`, a tri-state:
+
+- `true`: it is kept. The manager sets it on a node's card in an assistant chat whose `always_keys` it remembers
+  (a store, at most 32 keys, no `fields`), and on a card of its own that says in `always_label` what it keeps (the apps
+  a computer may use, LCU's own scopes).
+- `false`: nothing would keep it. The manager sets it on every other card it asks itself: the extensions' tools
+  (`computer_*`, `browser_run`, `iphone_do`, connector writes, `extension.ui`), `persona_settings`, its to-do, agent
+  and health confirmations; and on a node's card in an assistant chat it will not remember (keys but no store, more
+  than 32 keys, `fields`, or a health conversation's card, confirmed each time). Clients show only Allow and Deny, and
+  no scope line. An `always` answered on such a card anyway (an older client) is dropped: the card is allowed once.
+- absent: clients keep their own rule, as before: on iOS a card with a session, on the web and in Lark a card from
+  Claude (no `agent`, or `claude`) or one with an `always_label`. Agents sessions' cards never carry the field: their
+  agent keeps Always itself (Claude Code's session rule).
+
+The field is a tri-state rather than a plain "kept" flag because absence cannot mean "not kept": an Agents session's
+Claude card and a manager card look the same otherwise (a session, no `agent`, no `always_keys`), and an older
+manager sends neither. So a new client hides the choice only on an explicit `false`, and keeps Always on every card
+an older manager sends. An older client ignores the field and keeps offering Always on manager cards; answering it
+allows once, as before, and is no longer recorded as an Always. The value is the manager's: whatever a node sends in
+the field (or in `tool_title`) is dropped.
+
+`tool_title` is the tool's name for people in the user's language (`assistant-tool_titles` in the hub's catalog,
+"iPhone control" for `iphone_do`), set by the manager on its own tools' cards only. Clients title the card with it,
+and otherwise with `tool_name` as before; Agents sessions' cards never carry it.
 
 ### Subagent deliveries as tool results
 
@@ -925,6 +986,9 @@ Once recorded, the origin never changes; Agent sessions (`assistant: false`) don
 - **How clients use it**: absent, empty, `user` and `channel` count as the user's own; everything else counts as an auto chat, including values added later that the client doesn't know (shown as **Other**). Old clients don't know the field and list everything as before.
 - **Titles**: an auto chat's title is set from the start (no waiting for the first turn, no model call), following "MMDD | kind | topic": Inbox `MMDD | 收件箱 | <the item's title>`, scheduled tasks `MMDD | 定时 | <task name>` (the kind words are emitted in Chinese: 收件箱 = Inbox, 定时 = scheduled).
   `收件箱` is not among the kinds the model may pick (only the hub uses it). Other origins still get a title after the first turn (`docs/assistant/assistant.md` "Chat titles").
+  A title an extension gives the chat it opened (`POST /api/v1/sessions/{mid}/{sid}/rename` with its token) is a hint the model reads, not the title (#3758).
+- **Only a scoped token makes an extension the opener**: the hub tells the extension apart by its own token (`permissions.hub`, `docs/extensions/extensions.md` "Hub API: scopes").
+  An extension that calls with the hub's full token (`hub_api`) is the user as far as the hub can tell: its chats are `user` and land in Recent, and its renames are the user's.
 - **Backfilling old chats**: when the hub sees the session list of the assistant's machine, it fills in assistant chats that have no origin yet (`by: "backfill"`): AI twin sessions recorded on Inbox items → `inbox` (filling the title too);
   chats recorded on tasks (`run_session_id`, sessions in run records) and titles started with `定时` (scheduled) → `task`; a first message starting with the Inbox AI twin / chat-forward / scheduled-task prompt → the matching origin;
   the rest → `user`. It can run repeatedly: already recorded ones are untouched. `POST /api/v1/assistant/origins/backfill` (full-permission devices only; with `{"redo":true}` it also re-judges `by: "backfill"` ones)
@@ -1067,6 +1131,10 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET / PUT | `/api/v1/machines/{mid}/clipboard/settings` | The machine's clipboard sharing switch, off by default, kept per machine in settings (works while offline): PUT `{"enabled":bool}` → 200 `MachineClipboard`; GET → the same. Missing `enabled` 400 |
 | GET / PUT | `/api/v1/machines/{mid}/browser` | This Mac's ego lite (plugin `ego`, [plan-ego-browser.md](../plans/plan-ego-browser.md)): GET asks the node's `browser.status` on the spot → `Browser` (`{enabled, installed, version?, set_up, imported, analytics?, ready, note?, screen_sharing, displays?, job?}`); PUT `{"enabled": bool}` is the machine page's switch (the plugin's `machines`). Plugin not enabled or not a Mac → 404 |
 | POST | `/api/v1/machines/{mid}/browser/{install\|open\|cancel}` | The machine page's **Install ego lite**, **Open ego lite**, **Cancel**: the node runs it in the background, progress is in `job`. Plugin not enabled for this machine 404; offline, a job already running, or node too old 409 |
+| GET / PUT | `/api/v1/machines/{mid}/iphone` | The iPhones this Mac reaches for the assistant (extension `iphone`, [iphone.md](../extensions/iphone.md)): GET asks the node's `iphone.status` on the spot → `IPhone` (`{enabled, installed, version?, devices: [{id, name, product_type?, ios?, paired, usb?, state?, transport?, connected, locked, capabilities?, ready, note?, allowed}], note?, job?}`); PUT `{"enabled": bool}` is the machine page's switch (the extension's `machines`). Extension not enabled, or a computer the bridge doesn't run on (Mac and Linux only) → 404 |
+| POST | `/api/v1/machines/{mid}/iphone/{pair\|forget\|cancel}` | `{"device"?}` (forget needs it): the machine page's **Pair**, **Forget**, **Cancel**, the node's `iphone.pair` / `iphone.forget` / `iphone.cancel` → 200 `IPhone`, a pairing's progress in its `job`. Pairing needs the computer on (404), forget and cancel only the extension; pair and forget need a device (400); offline or node too old 409 |
+| GET | `/api/v1/iphone` | Every iPhone the Macs reach, each once, for an iPhone's app to find itself: `{on, devices: [{…device, machines: [{id, name, enabled}], consented}]}` (`on` false and no devices while the extension is off) |
+| PUT | `/api/v1/iphone/consent` | `{"device", "allowed", "app"?: {"bundle_id", "name"}}` (`app`: the Persona app itself, kept in `self_apps` / `self_names` so the core never operates it): an iPhone's own **Allow the Assistant to Operate This iPhone**, kept in the extension's `phones` → that device as in `GET /api/v1/iphone`. Only the user's own signed-in app (403 otherwise); extension off 404; no device 400 |
 | GET | `/api/v1/machines/{mid}/launchers?purpose=` | `{"launchers":[Launcher], "default":{provider, model, effort, runtime?}}`: `default` is the effective value for this purpose in **Model Settings** (`purpose` defaults to `agent.new`; the main chat's picker passes `assistant`), `provider` is the launcher name, and only `assistant` has `runtime`; the client shows "Default: …". For purposes that are not launcher-based, `default` is null. For `agent.new` only, `tiers` `[{name, launcher, model?, effort?, description?}]` and `tiers_profile` `{id, name}`: the Agent presets, the tiers of the model profile in use whose launcher this computer has (its `launchers`), by name; absent with no profile in use or none to offer ([model-profiles.md](../assistant/model-profiles.md) ("Agent presets (tiers)")) |
 | GET | `/api/v1/machines/{mid}/launchers/{name}/models?refresh=1` | The models this launcher's CLI lists in `/model` (choosing a model for a new Agent, `docs/assistant/model-config.md` ("Choosing a model for a new Agent")): `{"agent","models":[{"id","name","description"?,"resolved"?,"default"?,"efforts"?,"default_effort"?,"custom"?}],"locked"?}`. `id` is the value to put in `model` when starting a session; `default` is the one that runs when no model is given (picking it is the same as not picking); `resolved` is what an alias (opus…) maps to under this launcher's settings; `efforts` are the reasoning efforts it supports, weakest to strongest; `locked` is the reason the launcher hard-codes its own `--model`, so picking has no effect. Agents with no list to ask (compatible Codex forks, runtime ones) return `models: []`. The node starts the CLI once to ask (a few seconds) and caches for 10 minutes; `refresh=1` asks again; if it can't list them, 502 `{"error"}`; if this computer's node doesn't have the feature yet, 404 `{"error","code":"node_outdated"}` (same as an old hub; the App hides the model row). After the CLI's own entries come the model IDs the user typed for this launcher on this computer before and that ran (`custom: true`, most recent first, at most 8, without the ones the list already has; no `efforts`: they aren't known; none for a `locked` launcher or an agent other than Claude Code / Codex), see `docs/assistant/model-config.md` ("Typing a model ID", #1644) |
 | DELETE | `/api/v1/machines/{mid}/launchers/{name}/models/custom?model=<id>` | Forget one typed model ID of this launcher on this computer (the list row's "Forget", #1644) → `{"ok":true}`; forgetting one that isn't remembered is also 200; a `model` that isn't a model ID (`proto.ValidModelID`) 400; full-access devices only (403 for a read-only role, extensions can't call it) |
@@ -1126,8 +1194,8 @@ Clients report their errors and crashes only while `features` has `error_reports
 | POST | `/api/v1/sessions/{mid}/{sid}/screen/before` | `{"anchor":["the top few lines on screen"],"lines":200,"format"?:"ansi"}` → `{"text","has_more","at_limit"}`: a stretch of scrollback before the anchor (located by content, the anchor compared as plain text; herdr keeps only about 1000 lines, `at_limit` means it reached the top) |
 | POST | `/api/v1/machines/{mid}/spaces/{wid}/rename` | `{"name"}` → `{ok, name}`: `herdr workspace rename`, and updates "machine/old name" in pins / mutes to the new name: the one the node's `space.rename` answers it shows now (a named herdr session's space has `<session> · ` in front, #2196), else the one given |
 | (node RPC) | `session.start` `plan_then` | For a start with `permission_mode: "plan"`: the mode the session goes on in once its plan is approved, wherever that happens (`docs/integrations/claude-integration.md`, "The mode after the plan"). The manager fills it in; a start that names it keeps its own. Ignored for any other mode, and by nodes older than #3784. |
-| POST | `/api/v1/sessions/{mid}/{sid}/modes` | `{"permission_mode"?, "effort"?, "model"?, "ultracode"?, "ultracode_dismiss_lost"?}`: change a running session's permission mode / reasoning effort (`effort` is `auto` / `low` / `medium` / `high` / `xhigh` / `max`, `auto` being the model's own default, see `docs/apple/ios.md` ("Reasoning effort and permission mode")); `model` (#2434) is only for Claude Code terminal sessions: the node types `/model <id>` into its input box (with the same checks as sending a message: `dialog_open` / `input_draft` reject, Agent working rejects, and the screen is read afterwards to confirm), the id comes from `GET /machines/{mid}/launchers/{name}/models` or is one the user typed (the same rule as a start's `model`, `proto.ValidModelID`; the node refuses anything else), and within one request the model is switched first, then the rest; the session list's `model` shows this choice until a new model appears in the transcript; `permission_mode` and `effort` in the session list are the current values. A Claude Code agent's `bypass_available: true` says it can switch to `bypassPermissions` while it runs (its claude was started with `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`, read off the process by the node, #1379); without it (or from an older node) only a new start or the assistant can pick that mode. Sessions with `efforts` (Codex via app-server) only accept `effort`, with values from `efforts` ("Codex sources and capabilities"). `POST /api/v1/sessions` and `POST /api/v1/assistant/conversations` also accept these two fields, as the starting values. `ultracode` calls the separate `session.ultracode` method after model and effort changes; `ultracode_dismiss_lost:true` only dismisses the resume notice. See "Claude Code ultracode" |
-| POST | `/api/v1/sessions/{mid}/{sid}/rename` | `{"tab_name"?, "title"?}`: the tab uses `herdr tab rename`; the session name sends `/rename <name>` to the running claude (it writes `custom-title`), and if it isn't running, appends the same `custom-title` line to the transcript directly. For assistant chats, `title` is also recorded as the user-given title (the hub's `assistant.titles`, no longer overwritten by automatic titles, `docs/assistant/assistant.md` ("Chat titles")); Codex assistant chats are only recorded on the hub |
+| POST | `/api/v1/sessions/{mid}/{sid}/modes` | `{"permission_mode"?, "effort"?, "model"?, "ultracode"?, "ultracode_dismiss_lost"?}` or a separate `{"service_tier":"<advertised id>"}` request: change a running session's permission mode / reasoning effort (`effort` is `auto` / `low` / `medium` / `high` / `xhigh` / `max`, `auto` being the model's own default, see `docs/apple/ios.md` ("Reasoning effort and permission mode")); `model` (#2434) is only for Claude Code terminal sessions: the node types `/model <id>` into its input box (with the same checks as sending a message: `dialog_open` / `input_draft` reject, Agent working rejects, and the screen is read afterwards to confirm), the id comes from `GET /machines/{mid}/launchers/{name}/models` or is one the user typed (the same rule as a start's `model`, `proto.ValidModelID`; the node refuses anything else), and within one request the model is switched first, then the rest; the session list's `model` shows this choice until a new model appears in the transcript; `permission_mode` and `effort` in the session list are the current values. A Claude Code agent's `bypass_available: true` says it can switch to `bypassPermissions` while it runs (its claude was started with `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`, read off the process by the node, #1379); without it (or from an older node) only a new start or the assistant can pick that mode. Sessions with `efforts` (Codex via app-server) accept `effort` from `efforts` and separate speed requests when `service_tiers` are advertised ("Codex sources and capabilities"). `POST /api/v1/sessions` and `POST /api/v1/assistant/conversations` also accept these two fields, as the starting values. `ultracode` calls the separate `session.ultracode` method after model and effort changes; `ultracode_dismiss_lost:true` only dismisses the resume notice. See "Claude Code ultracode" |
+| POST | `/api/v1/sessions/{mid}/{sid}/rename` | `{"tab_name"?, "title"?}`: the tab uses `herdr tab rename`; the session name sends `/rename <name>` to the running claude (it writes `custom-title`), and if it isn't running, appends the same `custom-title` line to the transcript directly. For assistant chats, `title` is also recorded as the user-given title (the hub's `assistant.titles`, no longer overwritten by automatic titles, `docs/assistant/assistant.md` ("Chat titles")); Codex assistant chats are only recorded on the hub. With an extension's token the title is only a hint: the hub still names a chat it started after its first turn (#3758) |
 | GET / PUT | `/api/v1/mutes` | Mutes, same structure as pins, plus `allowed` (Agents with notifications turned on individually while their space is muted). Rule: the Agent itself in sessions → muted; in allowed → not muted; otherwise go by its space. Muted Agents / spaces get no notifications at all (done, needs you) and are shown dimmed on the phone; cached in hub memory, updated on PUT. GET returns the cached list when available; a failed initial read returns 500 (`code: internal`) without a mute list and is retried on the next read. Clients keep their previous copy on failure; only a successful read may replace it |
 | GET | `/api/v1/hub/update` | The hub's version and update state (`docs/operations/hub-update.md`): `{version, build, channel, can_update, why_not?, latest?{version, build, released, notes, newer, bad, held?}, state, progress?, busy:[{machine_id, machine, session_id?, title}], error?, auto, auto_notice, last_check?, confirmed}`; `state`: `idle` / `checking` / `available` / `downloading` / `waiting_idle` / `restarting` / `confirming` / `updated` / `rolled_back` / `failed`; `busy` lists what a restart would interrupt (chats working or waiting for an answer, machines being redeployed); `auto_notice`: the user hasn't been told "automatic updates are on" yet; `latest.held`: why automatic update won't install this newer version (its code may not include the commit this hub is running, `docs/operations/hub-update.md` ("No going backwards")), though a manual update still can; a Docker hub also has `image{name, tag, pinned}` (the image it runs; `pinned`: the tag is a version number, so `.env` must be changed first), `latest` is the newest release on the registry (`build` is 0, no `released`), and `POST …/check` asks the registry; all `/api/v1/hub/update` endpoints return 503 `internal` with a localized unavailable message when persisted update settings cannot be read. Failed reads are retried, and no settings/history write or automatic update proceeds from unread settings |
 | POST | `/api/v1/hub/update/check` | Check now, returns the same as above |
@@ -2197,7 +2265,7 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   the ids as opaque, as before (`docs/integrations/engines.md` "Named herdr sessions").
 - `herdr_running` / `herdr_running_known` in `node.info`: whether the classic herdr server answers right now, and whether the node can tell (a machine using herdr-core
   has no such socket and sends neither). Old nodes send neither; the hub uses this to tell "not running" from "unknown" (`docs/integrations/engines.md`).
-- `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;
+- `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage", "iphone"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`; iphone, #3450, answers only `plugin.node.call`: `status`, `call`, `pair`, `forget`, `cancel`; `call` takes `IPhoneCall {device?, session?, op: status|look|do, args?, approved?, confirm?, self_apps?, self_names?, timeout_ms?}` and answers `IPhoneResult {output?, text?, image?, needs_approval?, approval_summary?, approval_id?}`, `approval_summary` being the core's approval as an object (`proto.IPhoneApproval`); a failed call is an RPC error with `data: {"sent": "no" | "unknown"}`; see `docs/extensions/iphone-pairing.md` ("The node program `iphone` (#3450)")). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;
   old nodes don't send it, and the hub keeps using `computer.*`, `browser.*` (new nodes still answer those). See `docs/extensions/extensions.md` ("Built-in node programs").
 - `herdr.server.start` (hub → node, no params, returns `{running}`): the user tapped "Start" in the Agents list. Not bound by `herdr_autostart`;
   if it can't start, the reason is returned the same way as `engine_missing`. Old nodes don't have this method, and the hub returns 502 rather than claiming herdr can't start.
@@ -2881,7 +2949,10 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
  "tasks":[{"title":"Fix the login crash","prompt":"The first message to the Agent","machine":"<machine id>","cwd":"/abs/path",
            "launcher":"","model":"","permission":"acceptEdits","readonly":false,"why":"one-line reason",
            "ultracode":true,            // optional (#12): the Claude Code Agent starts with ultracode on; on start, true / false sets it and leaving it out keeps the assistant's choice
-           "done_when":["PR merged into master"],"expect_minutes":30,   // optional (#3124): acceptance criteria, expected minutes; clients only display them and don't send them back on start
+           "done_when":["PR merged into master"],"expect_minutes":30,   // acceptance criteria, expected minutes (#3124); required of task_plan since #3822; clients only display them and don't send them back on start
+           "goal":"one sentence","out_of_bounds":["do not merge"],"started_why":"…",   // optional (#3822): the brief's goal and bounds, and why the assistant starts it on its own
+           "continues":"todo_…","continues_why":"…",   // optional (#3822): the to-do this task takes over from; it keeps that to-do's brief
+           "brief":{…},                 // the hub's (#3822): the brief as it will be kept (the to-do's `brief` above), for the card to show before Start; never sent back
            "reuse_todo":"todo_…",       // optional (#5279): the to-do the task runs on instead of a new one (task_plan's per-task `todo_id`); the apps neither send it back nor change it
            "todo_id":"todo_…",          // only present after start
            "error":"",                   // why the Agent didn't start
@@ -2909,6 +2980,11 @@ in plan order (a task without `todo_id` did not start and has no link); no extra
 //   only when the linked live to-do is pending_review; once done it shows the existing green completion card without the hint.
 //   interrupted (#1516): the Agent's turn was interrupted by a model service error; summary is "The model service errored and was interrupted", error is the original error text; clients draw it in red with "Continue".
 //   A turn with no reply, no tool calls and no error (the model service returned 200 with empty content, #2349) is also interrupted, with error "This turn produced no output: …"
+//   Interrupted receipts after the fact (#3834, docs/assistant/unified-entry.md "Interrupted receipts after the fact"): "cause":"model_error|rate_limited|auth|model_route|no_output",
+//   "resolution":"pending|cancelled|rerouted|resumed|accepted|done" (worked out by the hub on every read; a changed one is sent again as assistant_feed with the same id),
+//   "group":"<feed id>" on a receipt that joined an earlier one's batch (same cause, same chat, within 10 minutes; clients don't draw it on its own),
+//   and on a batch's first receipt "batch":{"cause","machine"?,"total","pending","resolved","tasks":[{"receipt","todo_id","title","resolution","at"}]}.
+//   Clients draw a batch as one card and a handled receipt as a grey line; a receipt without resolution (an older hub) is drawn as before.
 // routed: {"text":"…"} (the note sent to the Agent when the supervisor sends work back is also a routed);
 //         "interrupted":true when the assistant stopped the Agent's turn first and then told it (agent_interrupt with then, #5112); clients that don't know it show an ordinary line to the task
 //         "from":"assistant" when Persona wrote it (agent_send with task, agent_interrupt's then, a rework; #1542): the apps fold it (a line, or the task card's
@@ -3520,3 +3596,11 @@ Each `workspaces.list` / `GET /api/v1/workspaces` workspace may carry `parent_so
 `POST /machines/{mid}/worktree/prepare` advertises `choose_parent: true` when the host can select a sidebar parent independently of the Git source. Only then may the client send `parent_workspace_id` to `worktree/create`; `workspace_id` still names the repository/base checkout. Both IDs belong to that machine and host. Orca validates the selected parent before creating anything and returns `parent_workspace_id` with the result. Omission retains the original source-as-parent behavior; clients must not offer independent parent selection on older nodes that ignore unknown request fields. An explicit `workspace_id` in an Orca session start must still exist and contain `cwd`; a stale choice is refused instead of falling back to another workspace.
 
 `POST /machines/{mid}/worktree/rename` is a full-device node action: `{workspace_id, name, kind?}` changes a listed worktree's display name through its host. It does not rename its branch, directory or Agents. The name is a trimmed single line of at most 80 characters. Orca uses `worktree.set` with only `displayName`; Agent tab names use `terminal.rename` instead. Missing or foreign targets are refused.
+
+### Codex speed settings
+
+Session rows may include `service_tier` (acknowledged native value, omitted while unknown) and
+`service_tiers: [{id, name, description?}]` (native model choices plus `default` for Standard).
+A standalone `service_tier` request to the session modes endpoint calls `session.speed {session_id, service_tier}`.
+Only writable Codex app-server threads with advertised tiers support this request. Native errors are returned, and
+older nodes return `node_outdated`. Speed changes apply to subsequent turns independently of reasoning effort.

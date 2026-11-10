@@ -270,6 +270,18 @@ func (r *Registry) AddBuiltin(m *Manifest, dir string, enabled bool) error {
 	return nil
 }
 
+// AddBuiltinTranslated is AddBuiltin for a manifest written in English, with its text in the other languages (a
+// built-in has no package to read l10n/ from).
+func (r *Registry) AddBuiltinTranslated(m *Manifest, dir string, enabled bool, ts Translations) error {
+	if err := r.AddBuiltin(m, dir, enabled); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.extensions[m.ID].L10n = ts
+	return nil
+}
+
 // KeepOff holds the built-in extension id (registered, before Load) switched off whatever its row says; switching it
 // on answers why. For a built-in that took over a hub.json entry written disabled (docs/extensions/extensions.md "Built-in voice extension"):
 // hub.json has the last word on it, its settings and secrets stay editable, and its row keeps its own switch for when
