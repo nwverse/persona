@@ -67,6 +67,8 @@ fun JSectionHeader(
      *  section's (caption, regular, in every style; as iOS and the web), and a caret for whether it is open (null: none). */
     sub: Boolean = false,
     open: Boolean? = null,
+    /** The [count] in a capsule of this state's tone (the To-dos list's sections, #3712, as iOS `CountBadge`); none: quiet digits. */
+    countTone: Status? = null,
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -99,12 +101,27 @@ fun JSectionHeader(
                 color = if (muted) palette.ink3 else if (sub || style == AppStyle.Glass) palette.ink2 else palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            count?.let { Spacer(Modifier.width(6.dp)); Text("$it", style = PersonaTheme.type.micro, color = palette.ink3) }
+            count?.let {
+                Spacer(Modifier.width(6.dp))
+                if (countTone == null) Text("$it", style = PersonaTheme.type.micro, color = palette.ink3)
+                else {
+                    val tone = palette.status(countTone)
+                    Text("$it", style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold), color = tone.text, maxLines = 1,
+                        modifier = Modifier.clip(CircleShape).background(tone.tint)
+                            .padding(horizontal = SectionHeaderTokens.countPadding, vertical = SectionHeaderTokens.countPaddingVertical))
+                }
+            }
         }
         if (trailing != null || action != null) Spacer(Modifier.width(8.dp))
         trailing?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1) }
         action?.invoke(this)
     }
+}
+
+/** A [JSectionHeader]'s count capsule ([JSectionHeader] `countTone`). */
+object SectionHeaderTokens {
+    val countPadding = 6.dp
+    val countPaddingVertical = 1.dp
 }
 
 /**
