@@ -10295,9 +10295,10 @@ def mock_size(v):
 GIT_PULL_STATE = {"behind": 28, "mode": "success", "pulls": 0}
 # MOCK_PERSONAL_AGENTS=1 (#138): a few personal agent conversations, and Remove from list (POST …/hide, …/unhide,
 # GET /agents/hidden) kept in memory as the extension manager keeps it; GET /mock/personal-agents?reset=1 brings every one
-# back. Off: none, as on a hub without the Lark extension.
+# back. Off: none, as on a hub without the Lark extension. =unconfigured (#2613): no conversations, and the only source
+# reports why, as an extension still waiting for its settings does.
 PERSONAL_AGENTS = os.environ.get("MOCK_PERSONAL_AGENTS")
-PERSONAL_STATE = {"state": "configured" if PERSONAL_AGENTS else "none", "delay": 0.0}
+PERSONAL_STATE = {"state": "unconfigured" if PERSONAL_AGENTS == "unconfigured" else "configured" if PERSONAL_AGENTS else "none", "delay": 0.0}
 PERSONAL_HIDDEN = {}  # session id -> when (ms)
 
 def personal_sources():
@@ -10306,6 +10307,7 @@ def personal_sources():
     source = {"source": "lark-bridge", "enabled": state not in ("missing", "disabled"),
               "accounts": [{"accountId": "example", "provider": "muse"}] if state in ("configured", "empty") else []}
     if state in ("missing", "disabled", "no_accounts"): source["setup"] = state
+    if state == "unconfigured": source["error"] = "Example extension isn't set up yet: fill in its address in the extension's settings."
     return [source]
 
 # #1368: GET /mock/start-fail?n=<count>&code=<code>&delay=<seconds>: the next n starts of an assistant conversation
@@ -12036,9 +12038,9 @@ def mock_usage_windows():
         week = (2 * 24 + 3) * 3600
         scoped = {**win("7d", 10080, 100, week), "model": "Fable"}
         return {"accounts": [
-            {"id": "claude-1", "provider": "claude", "name": "work-claude", "plan": "Max", "sampled_at": iso(now - 12), "local": True, "sources": ["Relay"],
+            {"id": "claude-1", "provider": "claude", "name": "work-claude", "plan": "Max", "sampled_at": iso(now - 12), "local": True, "machines": ["MacBook"], "sources": ["Relay"],
              "windows": [win("5h", 300, 86, 55 * 60), win("7d", 10080, 41, week), scoped]},
-            {"id": "codex-1", "provider": "codex", "name": "Codex Pro", "plan": "pro", "sampled_at": iso(now - 190), "local": True,
+            {"id": "codex-1", "provider": "codex", "name": "Codex Pro", "plan": "pro", "sampled_at": iso(now - 190), "local": True, "machines": ["MacBook", "Studio"],
              "windows": [win("5h", 300, 22, 4 * 3600), win("7d", 10080, 63, (3 * 24 + 5) * 3600)]},
             {"id": "codex-3", "provider": "codex", "name": "team-seat-2", "plan": "ChatGPT Plus", "sampled_at": iso(now - 40 * 60), "sources": ["Relay"],
              "windows": [win("5h", 300, 8, 2 * 3600), win("7d", 10080, 31, 4 * 24 * 3600)]},
