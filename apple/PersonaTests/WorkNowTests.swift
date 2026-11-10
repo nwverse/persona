@@ -145,6 +145,12 @@ struct WorkNowTests {
         #expect(WorkNow(id: "a", text: "x").trailer(took: "") == "")
         #expect(WorkNow(id: "a", text: "x").trailer(took: "5 s") == " · 5 s")
         #expect(WorkNow(id: "a", text: "x", more: 2).trailer(took: "5 s") == " " + String(localized: "+\(2)") + " · 5 s")
+        #expect(WorkNow(id: "a", text: "x", more: 2).trailer(took: "") == " " + String(localized: "+\(2)"))
+        // On a line of its own under the words (the accessibility text sizes): nothing to join it to them.
+        #expect(WorkNow(id: "a", text: "x").trailer(took: "", alone: true) == "")
+        #expect(WorkNow(id: "a", text: "x").trailer(took: "5 s", alone: true) == "5 s")
+        #expect(WorkNow(id: "a", text: "x", more: 2).trailer(took: "5 s", alone: true) == String(localized: "+\(2)") + " · 5 s")
+        #expect(WorkNow(id: "a", text: "x", more: 2).trailer(took: "", alone: true) == String(localized: "+\(2)"))
     }
 
     /// The line follows its step at most about twice a second, and a step coming back after none (subagents done, the

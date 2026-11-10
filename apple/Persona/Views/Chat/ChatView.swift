@@ -5865,6 +5865,7 @@ struct WorkLine: View, Equatable {
     private let doing: WorkNow?
     @State private var shown: WorkNow?
     @State private var shownAt = Date.distantPast
+    @Environment(\.dynamicTypeSize) private var typeSize
     let openTerminal: (() -> Void)?
     let toggle: () -> Void
 
@@ -5981,14 +5982,25 @@ struct WorkLine: View, Equatable {
     }
 
     /// One line: the step's words give way (a path or a command in the middle, a sentence at the end), "+2" and the
-    /// time stay whole.
-    private func stepSummary(_ step: WorkNow, now: Date) -> some View {
-        HStack(spacing: Theme.Space.flush) {
-            Text(step.text).truncationMode(step.tail ? .tail : .middle)
-            Text(step.trailer(took: Self.duration(from: start, to: now))).fixedSize()
+    /// time stay whole. At the accessibility text sizes, where beside those the words kept a letter: up to two lines of
+    /// words, room for both always kept so the line holds still as the steps change, and "+2" and the time on a line under them.
+    @ViewBuilder private func stepSummary(_ step: WorkNow, now: Date) -> some View {
+        let took = Self.duration(from: start, to: now)
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: Theme.Space.flush) {
+                Text(step.text).truncationMode(step.tail ? .tail : .middle).lineLimit(2, reservesSpace: true)
+                // Whole: on a line too narrow it wraps rather than cuts.
+                Text(step.trailer(took: took, alone: true)).lineLimit(nil)
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(spacing: Theme.Space.flush) {
+                Text(step.text).truncationMode(step.tail ? .tail : .middle)
+                Text(step.trailer(took: took)).fixedSize()
+            }
+            .lineLimit(1)
+            .accessibilityElement(children: .combine)
         }
-        .lineLimit(1)
-        .accessibilityElement(children: .combine)
     }
 
     private func counted(now: Date) -> some View {

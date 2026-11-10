@@ -16,11 +16,13 @@ nonisolated struct WorkNow: Equatable, Sendable {
     /// end, a path or a command its middle, as in the step's own row.
     var tail = false
 
-    /// What follows the words and is never cut: "+2 · 1 min 4 s".
-    func trailer(took: String) -> String {
-        var s = more > 0 ? " " + String(localized: "+\(more)") : ""
-        if !took.isEmpty { s += " · " + took }
-        return s
+    /// What follows the words and is never cut: " +2 · 1 min 4 s". `alone`: on a line of its own under them (the
+    /// accessibility text sizes), without what joined it to them: "+2 · 1 min 4 s", "1 min 4 s".
+    func trailer(took: String, alone: Bool = false) -> String {
+        let count = more > 0 ? String(localized: "+\(more)") : ""
+        let lead = alone || count.isEmpty ? count : " " + count
+        guard !took.isEmpty else { return lead }
+        return alone && lead.isEmpty ? took : lead + " · " + took
     }
 
     /// The least time between two steps the running line names (`WorkLine.follow`).
