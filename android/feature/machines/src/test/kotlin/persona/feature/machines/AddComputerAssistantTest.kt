@@ -125,4 +125,47 @@ class AddComputerAssistantTest {
             assertFalse(model.state.value.tooMany)
         }
     }
+
+    @Test fun theDefaultAskedForAndAnOlderHubsReplyIsWhereItWas() = runBlocking {
+        // Several assistants, an older hub, the current one is the hub's own: the computer is there, nothing to say.
+        val own = model(Hub(answer = null)).also { it.add(current(null)) }
+        assertNull(own.state.value.placedUnder())
+        // A reused pending computer (added = false) stays with whoever has it: the machines list says who.
+        val reused = model(Hub(answer = null)).also { it.add(current("m-3fa21c")) }
+        val listed = listOf(Machine("macbook", "MacBook", trust = "pending", manager = "m-8b04d2"))
+        assertEquals("家里", reused.state.value.placedUnder(listed))
+        // Listed under the asked-for assistant: nothing to say.
+        assertNull(reused.state.value.placedUnder(listOf(Machine("macbook", "MacBook", trust = "pending", manager = "m-3fa21c"))))
+        // The roster the page has now, when the one the add left with was none.
+        val cold = model(Hub(answer = "assistant")).also { it.add(current("m-3fa21c", roster = null)) }
+        assertNull(cold.state.value.placedUnder())
+        assertEquals("助手", cold.state.value.placedUnder(current = roster))
+    }
+
+    @Test fun aKeptPickOrDefaultIsSentBeforeTheRosterIsRead() = runBlocking {
+        val hub = Hub()
+        // The default is another assistant than the hub's own (only a roster ever said so): it is named.
+        val other = CurrentAssistant(null, AssistantManagerChoice.Choice("hub", null, "m-3fa21c"))
+        model(hub).add(other)
+        // The hub's own as the default, or nothing known: none, as before.
+        model(hub).add(CurrentAssistant(null, AssistantManagerChoice.Choice("hub", null, "assistant")))
+        assertEquals(listOf("m-3fa21c", null), hub.asked)
+    }
+
+    @Test fun onlyTheSelectedGroupsWaitingComputersAreInTheWay() {
+        val listed = listOf(
+            Machine("a", "server", trust = "pending"),
+            Machine("b~g0000abcd", "NAS", trust = "pending"),
+            Machine("c", "MacBook"),
+        )
+        assertEquals(listOf("a"), inTheWay(listed, null).map { it.id })
+        assertEquals(listOf("b~g0000abcd"), inTheWay(listed, "g0000abcd").map { it.id })
+    }
+
+    @Test fun theHubsWordsShowForTheFourRefusals() {
+        for ((status, code) in listOf(404 to "no_manager", 409 to "installing", 503 to "assistant_offline", 503 to "owners_unknown")) {
+            val refused = persona.core.hub.HubFailure(persona.core.hub.HubError.Server, "hub words $code", status, code)
+            assertEquals(persona.core.designsystem.UiText.Plain("hub words $code"), addErrorText(refused))
+        }
+    }
 }

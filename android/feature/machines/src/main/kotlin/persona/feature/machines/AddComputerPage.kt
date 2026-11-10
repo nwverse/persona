@@ -20,6 +20,7 @@ import persona.core.contracts.Machine
 import persona.core.contracts.api.ComputerCode
 import persona.core.contracts.api.ComputerOs
 import persona.core.contracts.api.ComputerPairing
+import persona.core.contracts.api.ManagerRoster
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import kotlinx.coroutines.flow.StateFlow
@@ -83,7 +84,7 @@ internal fun AddComputerPage(api: ComputerPairing?, machines: StateFlow<List<Mac
             AddStage.Form -> if (offline != null) item("assistant-offline") {
                 JNotice(stringResource(R.string.machines_onb_assistant_offline, offline.shownName), Modifier.padding(top = Tokens.Space.s))
             } else form(state, model::setOs, model::setName)
-            AddStage.Waiting -> state.code?.let { code -> waiting(state, code, shown, relink = confirm != null, onOs = model::setOs) }
+            AddStage.Waiting -> state.code?.let { code -> waiting(state, code, shown, relink = confirm != null, onOs = model::setOs, listed = listed, roster = assistant.roster) }
             AddStage.Expired -> item("expired") { JEmptyState(stringResource(R.string.machines_onb_expired), stringResource(R.string.machines_onb_expired_hint), icon = PhIcons.ClockCountdown) }
             AddStage.Joined -> {
                 item("joined") {
@@ -91,7 +92,7 @@ internal fun AddComputerPage(api: ComputerPairing?, machines: StateFlow<List<Mac
                     JEmptyState(stringResource(R.string.machines_onb_joined, shown),
                         listOf(about, stringResource(R.string.machines_onb_joined_hint)).filter { it.isNotBlank() }.joinToString("\n"), icon = PhIcons.Desktop)
                 }
-                placedUnder(state)
+                placedUnder(state, listed, assistant.roster)
             }
             AddStage.Connected -> item("connected") { JEmptyState(stringResource(R.string.machines_onb_confirmed, shown), stringResource(R.string.machines_onb_confirmed_hint), icon = PhIcons.CheckCircle) }
             AddStage.Gone -> item("gone") {
@@ -106,7 +107,7 @@ internal fun AddComputerPage(api: ComputerPairing?, machines: StateFlow<List<Mac
                     icon = PhIcons.Desktop)
             }
         }
-        val blocking = if (state.tooMany && stage == AddStage.Form) inTheWay(listed) else emptyList()
+        val blocking = if (state.tooMany && stage == AddStage.Form) inTheWay(listed, assistant.group) else emptyList()
         if (blocking.isNotEmpty()) inTheWay(blocking, state.removing) { id -> scope.launch { model.remove(id) } }
         else state.error?.let { error -> item("error") { JInlineStatus(error.text(), Modifier.padding(top = Tokens.Space.m), tone = InlineTone.Failed) } }
     }
@@ -162,7 +163,7 @@ private fun OsSwitch(os: ComputerOs, onOs: (ComputerOs) -> Unit) {
 }
 
 /** How to use the link on that system, then the wait and its countdown. */
-private fun LazyListScope.waiting(state: AddComputerState, code: ComputerCode, shown: String, relink: Boolean, onOs: (ComputerOs) -> Unit) {
+private fun LazyListScope.waiting(state: AddComputerState, code: ComputerCode, shown: String, relink: Boolean, onOs: (ComputerOs) -> Unit, listed: List<Machine>, roster: ManagerRoster?) {
     // The hub does not know which system a computer that never connected runs: the user can switch.
     if (relink) item("relink-os") { Box(Modifier.padding(top = Tokens.Space.s)) { OsSwitch(state.os, onOs) } }
     item("steps") { Instructions(state.os, code) }
@@ -170,12 +171,12 @@ private fun LazyListScope.waiting(state: AddComputerState, code: ComputerCode, s
         JInlineStatus(stringResource(R.string.machines_onb_waiting, shown) + "  " + stringResource(R.string.machines_onb_expires, clockText(state.secondsLeft)),
             Modifier.padding(top = Tokens.Space.l), tone = InlineTone.Busy)
     }
-    placedUnder(state)
+    placedUnder(state, listed, roster)
 }
 
 /** The hub put the computer under another assistant than the current one (or, an older hub, under its own): said plainly. */
-private fun LazyListScope.placedUnder(state: AddComputerState) {
-    state.placedUnder()?.let { name -> item("placed-under") {
+private fun LazyListScope.placedUnder(state: AddComputerState, listed: List<Machine>, roster: ManagerRoster?) {
+    state.placedUnder(listed, roster)?.let { name -> item("placed-under") {
         JNotice(stringResource(R.string.machines_onb_added_under, name), Modifier.padding(top = Tokens.Space.m))
     } }
 }

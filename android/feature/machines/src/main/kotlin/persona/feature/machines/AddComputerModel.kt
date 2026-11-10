@@ -1,6 +1,7 @@
 package persona.feature.machines
 
 import androidx.annotation.StringRes
+import persona.core.contracts.GroupKeys
 import persona.core.contracts.Machine
 import persona.core.contracts.api.ComputerCode
 import persona.core.contracts.api.ComputerOs
@@ -81,13 +82,17 @@ internal data class AddComputerState(
  * pairing codes"): the hub's answer names another, or names none (a hub from before `add.manager` puts a new computer under
  * its own assistant). Null when it is where it was asked for, when none was asked for, and with one assistant.
  */
-internal fun AddComputerState.placedUnder(): String? {
+internal fun AddComputerState.placedUnder(listed: List<Machine> = emptyList(), current: ManagerRoster? = null): String? {
     val code = code ?: return null
     val asked = asked ?: return null
-    val roster = roster?.takeIf { it.isMulti } ?: return null
-    if (code.manager == asked) return null
-    val under = code.manager ?: ManagerRoster.ASSISTANT_MANAGER
-    return roster.manager(under)?.shownName ?: under
+    val roster = (current ?: roster)?.takeIf { it.isMulti } ?: return null
+    // The reply's manager says it; a hub from before add.manager leaves it out and puts a computer it added under its own
+    // assistant, while one it reused stays where it was (the machines list has it under that one).
+    val owner = code.manager?.takeIf { it.isNotBlank() }
+        ?: if (code.added) ManagerRoster.ASSISTANT_MANAGER
+        else listed.firstOrNull { it.id == code.machine }?.manager?.takeIf { it.isNotBlank() } ?: ManagerRoster.ASSISTANT_MANAGER
+    if (owner == asked) return null
+    return roster.manager(owner)?.shownName ?: owner
 }
 
 /** The current assistant when a computer can't be added to it: it is offline (with several; one is never told apart). */
@@ -95,7 +100,8 @@ internal fun CurrentAssistant.offlineForAdding(): HubManager? =
     manager?.takeIf { roster?.isMulti == true && !it.online && !it.isInstalling }
 
 /** The computers keeping a new one from being added: every waiting one, whichever assistant's (the hub's limit is the hub's). */
-internal fun inTheWay(machines: List<Machine>): List<Machine> = machines.filter { it.pending }
+internal fun inTheWay(machines: List<Machine>, group: String? = null): List<Machine> =
+    machines.filter { it.pending && GroupKeys.namespaceOf(it.id) == group }
 
 /** The machine as the WebSocket's list or the polled one has it, whichever has it online first. */
 internal fun AddComputerState.machine(listed: List<Machine>): Machine? {
@@ -211,7 +217,7 @@ internal class AddComputerModel(
         if (s.busy || s.name.isBlank() || assistant?.offlineForAdding() != null) return
         // The roster's id for it (the default's real one too); before the roster is read, a pick of another one this
         // device kept for the hub (only a hub with several assistants has one); none from a hub without a roster.
-        val manager = assistant?.let { a -> if (a.roster != null) a.id else a.choice.manager }
+        val manager = assistant?.let { a -> if (a.roster != null) a.id else a.choice.manager ?: a.choice.defaultId.takeIf { it != ManagerRoster.ASSISTANT_MANAGER } }
         make(asked = manager, roster = assistant?.roster) { api.add(s.name.trim(), s.os, manager) }
     }
 
