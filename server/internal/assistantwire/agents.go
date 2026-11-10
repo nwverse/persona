@@ -7,7 +7,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// ---- the Agents business: the manager's (docs/assistant/agent-work.md "Who owns what") ----
+// ---- the Agents business: the manager's (docs/assistant/agent-work.md "Responsibilities") ----
 //
 // The manager triages an agent's turn once it ends (rules first, then a model), sends "Continue" after a transient model
 // error, wakes an agent when what it waits for should be over, and opens a card for what the user is to decide; it
@@ -83,7 +83,7 @@ type LauncherRepairConfig struct {
 }
 
 // DelegateConfig is manager.json agents.delegate: an agent's question goes to the assistant before the user
-// (docs/assistant/assistant.md "The assistant answers questions first").
+// (docs/assistant/assistant.md "Assistant answers questions first").
 type DelegateConfig struct {
 	// Enabled: off unless true.
 	Enabled *bool `json:"enabled,omitempty"`
@@ -106,15 +106,21 @@ func (c DelegateConfig) Timeout() time.Duration {
 }
 
 // TriageConfig is manager.json agents.triage: the limits, and the switches a hub whose user never saved them starts with
-// (unset: off).
+// (unset: off, but for transient_retry).
 type TriageConfig struct {
 	Enabled      *bool `json:"enabled,omitempty"`
 	AutoContinue *bool `json:"auto_continue,omitempty"`
 	Wake         *bool `json:"wake,omitempty"`
 	Decide       *bool `json:"decide,omitempty"`
 	ToolLoop     *bool `json:"tool_loop,omitempty"`
-	// MaxRetries: "Continue" sent for one run of transient errors before asking the user. Default 3.
+	// TransientRetry: the initial value of the transient_retry switch (unset: on): "Continue" after a transient model
+	// error, as a rule, whether or not the triage itself is on.
+	TransientRetry *bool `json:"transient_retry,omitempty"`
+	// MaxRetries: "Continue" sent for one run of transient errors before leaving it to the user. Default 5.
 	MaxRetries int `json:"max_retries,omitempty"`
+	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
+	// the one before (a rate limit four times as long). Default 15.
+	RetryBaseSeconds int `json:"retry_base_seconds,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
 	MaxWakes int `json:"max_wakes,omitempty"`
 	// SettleSeconds: how long a stopped session stays stopped before its turn is triaged. Default 15.

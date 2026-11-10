@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,8 +16,8 @@ import (
 // retireTodoWork withdraws the manager's pending follow-ups for the agents of a todo that just ended (completed or a
 // failed start): the scheduled wake — one postponed while the machine was offline included — and the open work card
 // are cleared, so neither can wake the finished agent nor let a card answer back into the finished turn. The turn's
-// own work state is kept, as workStarted keeps it: with no wake and no card the tick never acts on the entry, and
-// triage never redoes a turn it already triaged.
+// own work state is kept, as workStartedObserved keeps it: with no wake and no card the tick never acts on the entry,
+// and triage never redoes a turn it already triaged.
 func (s *Service) retireTodoWork(keys ...[2]string) {
 	now := time.Now().UTC()
 	for _, k := range keys {
@@ -67,12 +68,9 @@ func (s *Service) bindRetiredTurn(k [2]string, retiredAt time.Time) {
 	s.saveWork(saved)
 }
 
-// workStarted: a session began working (again). Whatever the manager was going to do for its last turn is off; a card
-// for it is withdrawn. How long the turn waited is recorded.
-func (s *Service) workStarted(ctx context.Context, machine, sid string, now time.Time) {
-	s.workStartedObserved(ctx, machine, sid, now, true)
-}
-
+// workStartedObserved: a session began working (again). Whatever the manager was going to do for its last turn is
+// off; a card for it is withdrawn. How long the turn waited is recorded.
+//
 // A first or reconnected working list observes a running turn; it does not
 // prove that the turn started while this manager was connected.
 func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, now time.Time, newTurn bool) {
@@ -167,12 +165,12 @@ func (s *Service) workSeen(machine, sid string, at time.Time) {
 // workTurnEnded: a session on machine stopped. Once it stays stopped a moment, its turn is triaged; agents waiting
 // for this one are woken.
 func (s *Service) workTurnEnded(ctx context.Context, machine, sid string) {
-	if !s.workOn(ctx) || !s.loadWork(ctx) {
+	if !s.workActive(ctx) || !s.loadWork(ctx) {
 		return
 	}
 	s.wakeWaitersOn(machine, sid)
-	time.Sleep(settleOf(s.triageCfg(ctx)))
-	s.workTurnSettled(ctx, machine, sid)
+	// On a timer: a goroutine asleep through the window would hold a stack per pending turn end (#2472).
+	time.AfterFunc(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
 }
 
 // workTurnSettled checks the turn after the settle window.
@@ -229,6 +227,15 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	w, by, skip := triageRules(c, s.location(ctx), s.lang(ctx))
 	if skip {
 		return // the agent asks itself (or its terminal does): the list shows that
+	}
+	if !s.workOn(ctx) && (w == nil || w.On != proto.WaitTransient) {
+		// The triage is off and only transient errors are continued (transient_retry): no model call, nothing else
+		// decided. A turn that ended otherwise ends the run of transient errors: the next one counts from 1 again.
+		if had && last.Retries > 0 {
+			last.Retries = 0
+			s.putWork(ctx, last)
+		}
+		return
 	}
 	if w == nil {
 		mctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -443,27 +450,56 @@ func turnErrorTransient(c proto.Session) bool {
 }
 
 // transientError: a model API error worth a "Continue" (the service failed for a moment), not one the user must fix
-// (sign-in, key, the model picked).
+// (sign-in, key, the model picked, a request the service refuses as it is, a context too long, an interrupt). What the
+// user must fix wins when the text says both.
 func transientError(text string) bool {
 	t := strings.ToLower(text)
-	for _, w := range []string{"failed to authenticate", "oauth token has expired", "invalid api key", "not logged in", "issue with the selected model",
-		" 401", " 403", "permission_error", "authentication_error", "credit balance", "billing",
-		"ssl certificate", "self-signed certificate", "certificate verif"} {
+	if userErrorStatus.MatchString(t) {
+		return false
+	}
+	for _, w := range userErrorWords {
 		if strings.Contains(t, w) {
 			return false
 		}
 	}
-	for _, w := range []string{"overloaded", " 500", " 502", " 503", " 504", " 529", " 429", "rate limit", "rate_limit",
-		"connection", "timed out", "timeout", "socket hang up", "econnreset", "fetch failed", "no eligible upstream",
-		"internal server error", "service unavailable", "bad gateway", "network", "api_error", "upstream",
-		"can't reach the api server", "temporarily unavailable", "no response from api", "unable to connect to api",
-		"enotfound", "eai_again", "failedtoopensocket"} {
+	if transientStatus.MatchString(t) {
+		return true
+	}
+	for _, w := range transientWords {
 		if strings.Contains(t, w) {
 			return true
 		}
 	}
 	return false
 }
+
+// rateLimitError: a transient error that is a rate limit (429): its "Continue" waits longer (retryBackoff).
+func rateLimitError(text string) bool {
+	t := strings.ToLower(text)
+	return rateLimitStatus.MatchString(t) || strings.Contains(t, "rate limit") || strings.Contains(t, "rate_limit") ||
+		strings.Contains(t, "too many requests")
+}
+
+var (
+	// userErrorStatus: HTTP statuses a "Continue" cannot fix: a bad request (400), sign-in or permission (401, 403),
+	// a request too large (413).
+	userErrorStatus = regexp.MustCompile(`\b(400|401|403|413)\b`)
+	// transientStatus: HTTP statuses of a service failing for a moment: a timeout (408), a rate limit (429), a server
+	// error (500, 502, 503, 504) or overloaded (529).
+	transientStatus = regexp.MustCompile(`\b(408|429|500|502|503|504|529)\b`)
+	rateLimitStatus = regexp.MustCompile(`\b429\b`)
+	userErrorWords  = []string{"failed to authenticate", "oauth token has expired", "invalid api key", "not logged in", "please run /login",
+		"issue with the selected model", "permission_error", "authentication_error", "credit balance", "billing",
+		"ssl certificate", "self-signed certificate", "certificate verif",
+		"invalid_request_error", "invalid request", "prompt is too long", "context length", "context window", "context_length_exceeded",
+		"maximum context", "too many tokens", "request too large", "request_too_large",
+		"interrupted by user", "request was aborted", "aborted by user", "user aborted"}
+	transientWords = []string{"overloaded", "rate limit", "rate_limit", "too many requests",
+		"connection", "timed out", "timeout", "socket hang up", "econnreset", "econnrefused", "fetch failed", "no eligible upstream",
+		"internal server error", "service unavailable", "bad gateway", "gateway timeout", "network", "api_error", "upstream",
+		"can't reach the api server", "temporarily unavailable", "no response from api", "unable to connect to api",
+		"enotfound", "eai_again", "failedtoopensocket"}
+)
 
 // riskyWords mark a next step the manager must not set off itself (docs/assistant/agent-work.md "Safety boundary"): it is only ever a
 // card.

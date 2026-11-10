@@ -10,7 +10,7 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * The words for an agent's background Workflow runs (docs/protocol/agent-states.md "Background workflow, Monitor", #2935): the one line
+ * The words for an agent's background Workflow runs (docs/protocol/agent-states.md "Background workflows and Monitor", #2935): the one line
  * the Agents list and the task cards add under an agent, and the status chip and time of a run's card ([WorkflowTimeline]
  * draws the rest). The same as iOS and the web: "Background workflow 'parity-audit' · Verify 2/2 · 169/185+ · 14 min".
  */

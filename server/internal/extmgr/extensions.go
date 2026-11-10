@@ -76,10 +76,12 @@ type ExtensionView struct {
 	Warnings    []string            `json:"warnings,omitempty"`
 
 	// A plugin from a market (extension_autoupgrade.go): its own auto-upgrade switch, why that switch does not apply
-	// now ("disabled": the extension is switched off; the switch is kept for when it is on), its newer version and what
-	// happened last with an upgrade.
+	// now ("market_removed": its market is no longer registered; "disabled": the extension is switched off; the switch
+	// is kept either way), the market it upgrades from (kept after that market is removed, so removing a market can say
+	// which extensions stop upgrading), its newer version and what happened last with an upgrade.
 	AutoUpgrade       *bool                 `json:"auto_upgrade,omitempty"`
 	AutoUpgradePaused string                `json:"auto_upgrade_paused,omitempty"`
+	Market            string                `json:"market,omitempty"`
 	Upgrade           *ExtensionUpgrade     `json:"upgrade,omitempty"`
 	UpgradeNote       *ExtensionUpgradeNote `json:"upgrade_note,omitempty"`
 	// Nodes: its program on each computer it is switched on for (extension_nodes.go), for a plugin with one.
@@ -174,6 +176,9 @@ type extensions struct {
 	logf, journal func(string, ...any)
 	// stats are how the extensions run (extension_metrics.go).
 	stats *extensionMetrics
+	// switchMu puts the user's Enabled switches one after another (switchExtension, enableChannel): a pack's switch
+	// reads and writes its record of members (#1830). Taken before any registry operation, never inside one.
+	switchMu sync.Mutex
 
 	h    *Manager
 	ctx  context.Context
@@ -214,8 +219,9 @@ type extensions struct {
 	sentLimit sentLimiter
 	// voice is the hub.json entry the built-in voice extension took over (nil without one); voiceID the built-in's id
 	// once registered, "" when there is none (voice_extension.go).
-	voice   *ExtensionConfig
-	voiceID string
+	voice            *ExtensionConfig
+	voiceID          string
+	voiceGatewaySent string
 	// hubRelay is how a relayed manager's extensions reach the hub's API (hub_relay.go).
 	hubRelay hubRelay
 }
@@ -317,8 +323,8 @@ func (ps *extensions) list() []ExtensionView {
 func (ps *extensions) view(ctx context.Context, p *extension.Extension) ExtensionView {
 	m := p.Full
 	l := ps.h.contextLang(ctx)
-	v := ExtensionView{ID: p.Record.ID, Name: m.Name, Kind: m.Kind(), Version: p.Record.Version, Source: p.Record.Source,
-		Enabled: p.Record.Enabled, Description: m.Description, Contributes: m.Contributions(), Warnings: p.WarningTexts(l)}
+	v := ExtensionView{ID: p.Record.ID, Name: p.L10n.Name(l, m.Name), Kind: m.Kind(), Version: p.Record.Version, Source: p.Record.Source,
+		Enabled: p.Record.Enabled, Description: p.L10n.Description(l, m.Description), Contributes: m.Contributions(), Warnings: p.WarningTexts(l)}
 	if c, ok := p.Legacy.(ExtensionConfig); ok {
 		v.Kind, v.Version = c.Kind, ""
 	}
@@ -359,7 +365,11 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 			if link.Said != "" && link.Said != p.Record.Version {
 				v.Attached.Version = link.Said
 				if v.Status == host.StateError {
-					v.Error = i18n.T(l, "extension-status.attached_version", i18n.Args{"current": link.Said, "approved": p.Record.Version, "id": p.Record.ID})
+					key := "extension-status.attached_version"
+					if p.Record.AttachedPackage() { // its package's version is the one approved: no upgrade while attached
+						key = "extension-status.attached_package_version"
+					}
+					v.Error = i18n.T(l, key, i18n.Args{"current": link.Said, "approved": p.Record.Version, "id": p.Record.ID})
 				}
 			}
 		}
@@ -521,6 +531,17 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.nodes.drop(ps.root, c.Old.Record.ID, "")
 	}
 	ps.apply(ctx, c.ID)
+	if ps.voiceID != "" && c.ID != ps.voiceID {
+		next := string(ps.voiceGatewaySpec(ctx))
+		ps.mu.Lock()
+		changedGW := next != ps.voiceGatewaySent
+		ps.mu.Unlock()
+		if changedGW {
+			if vp := ps.reg.Get(ps.voiceID); vp != nil && vp.Record.Enabled {
+				ps.apply(ctx, ps.voiceID)
+			}
+		}
+	}
 	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
 	switch c.Kind {
 	case "removed", "upgraded", "rolled_back": // only the version installed now keeps its packages for computers
@@ -833,6 +854,11 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 	m := p.Manifest
 	id := p.Record.ID
 	s := host.Spec{ID: id, Name: m.Name, Logf: ps.hostLogf()}
+	if ps.h != nil {
+		// A start that does not come up keeps no token, whatever stopped it: initialize or the environment had it already.
+		// Nor does a program elsewhere once its run ends (an idle stop, a lost connection): it goes on running there.
+		s.Release = func() { ps.h.extTokens.revoke(id, tokenStopReason(ps.reg.GetExact(id))) }
+	}
 	if st := ps.stats.of(id); st != nil {
 		s.Observe = st
 	}
@@ -895,6 +921,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		s.RPC, s.HTTP = r.RPCSocket != "", r.HTTPSocket != ""
 		hp.socket = r.HTTPSocket
 		s.Attached = true
+		s.Version = p.Record.Version // the program on the sockets must say it is this one before Init gives it anything
 	} else {
 		if rt.IsDeno() {
 			if err := ps.sourceSpec(ctx, p, &s); err != nil {
@@ -957,9 +984,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if err != nil {
 			return extension.InitializeParams{}, err
 		}
-		info := extension.ExtensionInfo{ID: id, Version: p.Record.Version, Dir: p.Dir}
-		if p.Record.Remote == nil {
-			info.DataDir = ps.reg.DataDir(id)
+		info := extension.ExtensionInfo{ID: id, Version: p.Record.Version}
+		if p.Record.Remote == nil { // paths on the manager's machine, for the program it runs
+			info.Dir, info.DataDir = p.Dir, ps.reg.DataDir(id)
 		}
 		var build int64
 		if ps.h != nil {
@@ -979,7 +1006,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if ps.h != nil && !ps.h.builtin() {
 			params.Hub.Manager = ps.h.opts.ManagerID
 		}
-		if g := p.Record.Granted; !g.FullHub() && len(g.Hub) > 0 && ps.h != nil {
+		// An attached package granted the full token the old way (hub_api) gets one of every scope instead: never the
+		// hub's own, whatever runs on its sockets. One installed from remote: gets none, as before.
+		attachedFull := p.Record.AttachedPackage() && p.Record.Granted.FullHub()
+		if g := p.Record.Granted; (attachedFull || !g.FullHub() && len(g.Hub) > 0) && ps.h != nil {
 			url, err := ps.hubURL()
 			if err != nil {
 				return extension.InitializeParams{}, err
@@ -987,9 +1017,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			// The program the hub started has it already (StartEnv); one elsewhere gets its first here.
 			tok := hubToken.current()
 			if tok == "" || p.Record.Remote != nil {
-				tok = hubToken.renew(ps, p, false)
+				tok = hubToken.renew(ps, p, attachedFull)
 			}
-			params.Hub.URL, params.Hub.Token, params.Hub.Scopes = url, tok, slices.Clone(g.Hub)
+			scopes := slices.Clone(g.Hub)
+			if attachedFull { // the routes' scopes: model calls are granted by name only (extension_model_calls.go)
+				scopes = slices.DeleteFunc(extension.EveryScope(), func(s string) bool { return s == extension.ScopeModels })
+			}
+			params.Hub.URL, params.Hub.Token, params.Hub.Scopes = url, tok, scopes
 		}
 		for _, c := range conns {
 			if ps.h == nil || ps.h.connectors.Enabled(c.ID) {
@@ -999,7 +1033,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		for _, c := range m.Channels() {
 			params.Active["channel"] = append(params.Active["channel"], c.ID)
 		}
-		for point := range m.Contributes { // the rest, without what the user switched off (docs/extensions/extensions.md "Contribution switches")
+		for point := range m.Contributes { // the rest, without what the user switched off (docs/extensions/extensions.md "Turning contributions on and off")
 			if ids := m.Items(point); len(ids) > 0 && point != "connectors" && point != "channel" {
 				params.Active[point] = ids
 			}
@@ -1246,7 +1280,11 @@ func (ps *extensions) remoteManifest(ctx context.Context, r extension.Remote) (*
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", r.HTTPSocket)
 		}
-		client := &http.Client{Transport: &http.Transport{DialContext: dial}, Timeout: 10 * time.Second}
+		// One request per transport: nothing reuses its connection, which would otherwise stay idle (and keep its
+		// goroutines and descriptor) until the plugin closes it.
+		tr := &http.Transport{DialContext: dial, DisableKeepAlives: true}
+		defer tr.CloseIdleConnections()
+		client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://plugin/manifest", nil)
 		res, err := client.Do(req)
 		if err != nil {

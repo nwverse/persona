@@ -127,7 +127,7 @@ server.on('upgrade', (req, socket, head) => { if (req.url === '/api/persona') rt
 - The handshake (constant-time token comparison, subprotocol check) and server-side WebSocket framing (fragmentation, ping, 64 MiB limit, rejecting unmasked frames) are all in `lib/listen.js`, with no other package dependencies.
 - `token` can be a function, called once per connection.
 - `runtime`, `name` and `launcher` in `runtime.hello` must still be filled in; the node replaces them with the config values.
-- The DSH plugin gains a `listen` setting (`docs/integrations/dsh.md` ("Config")): when DSH runs as another user or in a container, it can be connected as a daemon without writing code.
+- The DSH plugin gains a `listen` setting (`docs/integrations/dsh.md` ("Configuration")): when DSH runs as another user or in a container, it can be connected as a daemon without writing code.
 
 Daemons not written in JS implement the "Spec" section above themselves: one WebSocket endpoint, one JSON object per message.
 

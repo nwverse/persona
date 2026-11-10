@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
-import { extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type HubExtensionDetail } from "../../lib/extensions";
+import { extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type ExtensionUpgrade, type HubExtensionDetail } from "../../lib/extensions";
 import { getCatalog, marketOf, type CatalogItem } from "../../lib/extension-market";
 import { toolText } from "../../lib/extension-auth";
 import { t } from "../../i18n";
@@ -28,13 +28,15 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
   const marketManaged = d.source === "installed" && !d.attached && !d.read_only && !!market;
   const uninstallable = d.source === "installed" && !d.attached && !d.read_only && !!marketOf(d.origin);
   const automatic = d.source === "installed" && !d.attached && !d.read_only && d.auto_upgrade !== undefined;
-  const noUpdates = offline ? t("settings-extensions.manager_offline") : marketManaged && !automatic ? t("settings-extensions.action_unknown") : lifecycleReason(d, false);
+  // Its market was removed: there is nothing to check until the market is added again (#1895).
+  const marketRemoved = d.auto_upgrade_paused === "market_removed";
+  const noUpdates = offline ? t("settings-extensions.manager_offline") : marketRemoved ? t("settings-extensions.market_removed_check") : marketManaged && !automatic ? t("settings-extensions.action_unknown") : lifecycleReason(d, false);
   const noUninstall = offline ? t("settings-extensions.manager_offline") : lifecycleReason(d, true);
   const blocked = busy || offline;
   return (
     <div data-extension-settings={d.id}>
       <section data-extension-section="enabled" aria-label={t("settings-extensions.enable")}>
-        <Group footer={offline ? t("settings-extensions.manager_offline") : editable ? t("settings-extensions.enable_footer") : t(d.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
+        <Group footer={offline ? t("settings-extensions.manager_offline") : editable ? enableFooter(d) : t(d.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
           <Row label={t("settings-extensions.enable")}>
             <Switch on={d.enabled ?? true} onChange={onEnabled} disabled={blocked || !editable} label={t("settings-extensions.enable")} />
           </Row>
@@ -49,7 +51,7 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
         {information}
       </section>
       <section data-extension-section="updates" aria-label={t("settings-extensions.upgrade_title")}>
-        <Updates d={d} manager={manager} busy={blocked} market={market} canCheck={marketManaged && !offline} automatic={automatic} reason={noUpdates} onToggle={onAutoUpgrade} onUpgrade={onUpgrade} onChecked={onChecked} />
+        <Updates d={d} manager={manager} busy={blocked} market={market} canCheck={marketManaged && !offline && !marketRemoved} automatic={automatic} reason={noUpdates} onToggle={onAutoUpgrade} onUpgrade={onUpgrade} onChecked={onChecked} />
       </section>
       <section data-extension-section="danger" aria-label={t("settings-extensions.danger_title")}>
         <Group title={t("settings-extensions.danger_title")} footer={uninstallable && !offline ? t("settings-extensions.market_installed_footer") : noUninstall}>
@@ -60,6 +62,16 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
       </section>
     </div>
   );
+}
+
+/** What the Enabled switch does. A pack's takes its members along only on a hub that says so (#1830). */
+export function enableFooter(d: HubExtensionDetail): string {
+  if (!d.extension_pack?.length) return t("settings-extensions.enable_footer");
+  if (!d.pack_members_follow) return t("settings-extensions.enable_footer_pack_alone");
+  if (d.enabled === false && d.pack_off?.length) {
+    return t("settings-extensions.enable_footer_pack_off", { names: d.pack_off.join(t("settings-extensionmarket.list_separator")) });
+  }
+  return t("settings-extensions.enable_footer_pack");
 }
 
 /** Capabilities follow the full-rights market routes, not a manifest's configuration or arbitrary source URL. */
@@ -97,7 +109,8 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
       const catalog = await getCatalog(undefined, market, true, manager);
       const source = catalog.markets.find((m) => m.id === market);
       if (!source || source.error) throw new Error(t("settings-extensions.market_unavailable"));
-      const item = catalog.extensions.find((e) => e.market === market && e.id === d.id);
+      // A renamed extension is in its market under its new ID (#2511).
+      const item = catalog.extensions.find((e) => e.market === market && e.id === d.id) ?? catalog.extensions.find((e) => e.market === market && e.rename_from === d.id);
       if (!item) throw new Error(t("settings-extensions.market_extension_missing"));
       await onChecked();
       setCandidate(item);
@@ -108,7 +121,10 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
       setChecking(false);
     }
   };
-  const u = d.upgrade || (candidate?.upgradable ? { id: d.id, market, from: candidate.installed || d.version || "", to: candidate.version, state: "available" } : null);
+  // A version under a new ID is never installed automatically: it waits for the owner's confirmation.
+  const renamed = !!candidate && candidate.id !== d.id;
+  const u: ExtensionUpgrade | null = d.upgrade || (candidate?.upgradable ? { id: d.id, market, from: candidate.installed || d.version || "", to: candidate.version,
+    state: renamed ? "needs_permission" : "available", rename_to: renamed ? candidate.id : undefined } : null);
   const action = u ? upgradeAction(u) || (u.state === "available" ? t("lib-extensions.action_upgrade") : null) : null;
   const note = d.upgrade_note ? upgradeNote(d.upgrade_note) : null;
   const paused = d.auto_upgrade_paused;
@@ -122,7 +138,7 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
       {checkError && <SettingsHint alert>{checkError}</SettingsHint>}
       {u && (
         <Row label={t("settings-extensions.new_version", { version: u.to })} hint={upgradeDetail(u)} wrapHint>
-          {action && <Button tone="secondary" disabled={busy || checking || !canCheck} onClick={() => onUpgrade(u.market, u.id)}>{action}</Button>}
+          {action && <Button tone="secondary" disabled={busy || checking || !canCheck} onClick={() => onUpgrade(u.market, u.rename_to || u.id)}>{action}</Button>}
         </Row>
       )}
       <Row label={t("settings-extensions.auto_upgrade")}>

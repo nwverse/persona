@@ -7,7 +7,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type Asked = { kind: "draw" | "act"; action?: string; values?: Record<string, string>; answer: (r: unknown) => void };
+type Asked = { kind: "draw" | "act"; action?: string; values?: Record<string, string>; manager?: string; answer: (r: unknown) => void };
 const hub = vi.hoisted(() => ({ asked: [] as Asked[], listeners: new Map<string, Set<(m: Record<string, unknown>) => void>>(), toasts: [] as [string, string][] }));
 
 vi.mock("../../lib/extension-ui", async (original) => {
@@ -15,12 +15,13 @@ vi.mock("../../lib/extension-ui", async (original) => {
   return {
     ...real,
     renderUI: () => new Promise((resolve) => hub.asked.push({ kind: "draw", answer: (v) => resolve(real.readView(v)) })),
-    actUI: (_e: string, _u: string, action: string, opts: { values?: Record<string, string> } = {}) =>
+    actUI: (_e: string, _u: string, action: string, opts: { values?: Record<string, string>; manager?: string } = {}) =>
       new Promise((resolve, reject) =>
         hub.asked.push({
           kind: "act",
           action,
           values: opts.values,
+          manager: opts.manager,
           answer: (r) => {
             if (r instanceof Error) return reject(r);
             const o = (r ?? {}) as { view?: unknown; items?: unknown[] };
@@ -86,8 +87,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-const open = async (view: unknown) => {
-  await act(async () => root.render(<ExtensionUI extension="demo" ui="home" history={false} />));
+const open = async (view: unknown, manager?: string) => {
+  await act(async () => root.render(<ExtensionUI extension="demo" ui="home" history={false} manager={manager} />));
   await answer(hub.asked.find((a) => a.kind === "draw"), view);
 };
 
@@ -102,6 +103,18 @@ describe("UI 6：行内控件", () => {
     // the extension answers with the row as it is now: that is shown
     await answer(acts()[0], { items: [lamp(true)] });
     expect(sw().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("sends the action to the page's manager, as a button's is; the default's names none", async () => {
+    await open(page(false), "m-3");
+    await flip();
+    expect(acts()[0]).toMatchObject({ action: "toggle", manager: "m-3" });
+    act(() => root.unmount());
+    root = createRoot(host);
+    hub.asked.length = 0;
+    await open(page(false));
+    await flip();
+    expect(acts()[0].manager).toBeUndefined();
   });
 
   it("puts back the value the extension drew when the action fails, and says why", async () => {

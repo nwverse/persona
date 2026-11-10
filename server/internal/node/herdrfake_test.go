@@ -334,6 +334,9 @@ func agentOf(kind, session, status, pane, tab, ws, cwd, title string) map[string
 func herdrNode(t *testing.T) (*Node, *fakeHerdr, string) {
 	t.Helper()
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	// herdr's config is the temp home's, not one the environment points at (herdr.WorktreesDir)
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	f := newFakeHerdr(t)
 	n, home := testNode(t)
 	n.hosts, n.dir, n.bin = herdrHosts(&herdr.Client{Socket: f.sock}), filepath.Join(home, ".persona"), "/tmp/persona-test/personad"
@@ -461,6 +464,18 @@ func withSubmitWindow(t *testing.T, window, poll time.Duration) {
 type hubPush struct {
 	Event  string          `json:"event"`
 	Params json.RawMessage `json:"params"`
+}
+
+// pollRepo keeps optional Git decoration stable before a poll test changes its transcript or workflow. Otherwise
+// a cold Git lookup can produce an unrelated sessions.changed on the next tick.
+func pollRepo(t *testing.T) string {
+	t.Helper()
+	cwd := t.TempDir()
+	writeGitFile(t, filepath.Join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n")
+	if got := awaitGitPlace(t, gitPlaces, cwd); got != (gitPlace{cwd, cwd, "main"}) {
+		t.Fatalf("poll repository: %+v", got)
+	}
+	return cwd
 }
 
 // pollNode runs the node's herdr poll loop (no event stream: a snapshot every tick) with a hub connection, and

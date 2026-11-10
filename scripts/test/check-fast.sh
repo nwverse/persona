@@ -14,7 +14,8 @@
 # Path mapping (diff mode):
 #   web/**                     npm ci (only with no node_modules or a changed package.json/package-lock.json),
 #                              typecheck, vitest run
-#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, scripts/mock/inbox_events.json
+#   schema/extension/**, spec/fixtures/injected/**, spec/fixtures/sync/**, spec/fixtures/attention/**,
+#   scripts/mock/inbox_events.json
 #                              also the web check: web/src and its vitest suite read these files. They are the inputs
 #                              outside web/ of the web lane in scripts/ci/paths.py; test_check_fast.py keeps the two in sync
 #   integrations/<pkg>/**      node --test test/*.test.{js,mjs} (packages without tests are skipped)
@@ -48,7 +49,10 @@
 #                              scripts/test/test_privacy_check.py (it runs the hooks); scripts/privacy_check.py also
 #                              scripts/release/test_check_bundle_privacy.py (it imports privacy_check)
 #   docs/**, any *.md          scripts/test/test_doc_paths.py and test_doc_go_paths.py (paths quoted in the docs, the
-#                              CLAUDE.md doc index), test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#                              CLAUDE.md doc index), test_doc_sections.py (section names quoted after a doc path),
+#                              test_doc_wire.py (the wire lists in protocol.md, extensions.md)
+#   server/**, web/src/**, web/e2e/**, scripts/**, sdk/**, apple/**, android/**, integrations/**, spec/**, schema/**
+#                              also test_doc_sections.py: it reads the code comments there too (its SOURCE_DIRS)
 #   server/internal/{proto,hub,extension}/**, schema/extension/manifest.schema.json
 #                              also test_doc_wire.py: the code side of those wire lists
 #   apple/**                   scripts/test/test_apple_l10n.py (String Catalogs, Chinese Swift literals); the iOS/macOS
@@ -599,7 +603,7 @@ else
     # Repository files outside web/ that web/src and its vitest suite read: a change to one also runs the web check,
     # on top of its own mapping below. The same list is the web lane's filter in scripts/ci/paths.py.
     case "$f" in
-      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|scripts/mock/inbox_events.json) WEB=1 ;;
+      schema/extension/*|spec/fixtures/injected/*|spec/fixtures/sync/*|spec/fixtures/attention/*|scripts/mock/inbox_events.json) WEB=1 ;;
     esac
     case "$f" in server/*|sdk/go/*) GO_GUARDS=1 ;; esac  # on top of the mapping below (job_go_guards)
     case "$f" in
@@ -738,10 +742,15 @@ else
     case "$f" in
       docs/*|*.md)
         script_test_add scripts/test/test_doc_paths.py; script_test_add scripts/test/test_doc_go_paths.py
-        script_test_add scripts/test/test_doc_wire.py ;;
+        script_test_add scripts/test/test_doc_sections.py; script_test_add scripts/test/test_doc_wire.py ;;
       # The code side of the wire lists test_doc_wire.py compares with the docs.
       server/internal/proto/*|server/internal/hub/*|server/internal/extension/*|schema/extension/manifest.schema.json)
         script_test_add scripts/test/test_doc_wire.py ;;
+    esac
+    # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
+    case "$f" in
+      server/*|web/src/*|web/e2e/*|scripts/*|sdk/*|apple/*|android/*|integrations/*|spec/*|schema/*)
+        script_test_add scripts/test/test_doc_sections.py ;;
     esac
     case "$f" in apple/*) script_test_add scripts/test/test_apple_l10n.py ;; esac
     # Suites whose names do not match the file they test: test_privacy_check.py copies scripts/hooks into its temp

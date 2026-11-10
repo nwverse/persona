@@ -4,7 +4,7 @@ import SwiftUI
 /// Dynamic Island. A table of its own because the widget extension builds this file but not `Theme`. The island's type has fixed
 /// sizes: the system gives its regions in points, whatever the text size.
 nonisolated enum IslandMetrics {
-    // MARK: What the system gives (measured on the iOS 27 simulators, docs/apple/live-activity.md「和其他 App 共用灵动岛」)
+    // MARK: What the system gives (measured on the iOS 27 simulators, docs/apple/live-activity.md「Sharing the Dynamic Island with other apps」)
 
     /// A compact side limited in width (`isDynamicIslandLimitedInWidth`: another app's activity beside ours on iPhone 18
     /// Pro / Pro Max, landscape, iPhone Duo), and the minimal island in landscape: a 28 pt square, drawn as a circle.
@@ -42,7 +42,7 @@ nonisolated enum IslandMetrics {
     static let smallGap: CGFloat = 1
     /// A compact side's inset from the island's rounded end.
     static let edge: CGFloat = 2
-    /// The persona on the compact island's left side (docs/apple/live-activity.md「形象」), and the gap to its count.
+    /// The persona on the compact island's left side (docs/apple/live-activity.md「Avatar」), and the gap to its count.
     static let face: CGFloat = 22
     static let faceGap: CGFloat = 4
     /// The persona in the expanded island's corner and on the lock screen (a hub package's pictures are made at every
@@ -62,6 +62,19 @@ nonisolated enum IslandMetrics {
     static let packedRowGap: CGFloat = 4
     /// Above the expanded island's rows, below its corners.
     static let rowsTop: CGFloat = 4
+
+    // MARK: The recording activity (docs/apple/live-activity.md「Recording」)
+
+    /// The compact island's time: room for "1:23:45" at `timerNumber` (a two-hour meeting), no more.
+    static let recordingTimerWidth: CGFloat = 54
+    /// The expanded island's time, at `.title3`: "1:23:45" whole.
+    static let recordingExpandedTimerWidth: CGFloat = 92
+    /// The recording's mark on the Lock Screen.
+    static let recordingMark: CGFloat = 40
+    /// Between the Lock Screen's and the expanded island's two buttons.
+    static let buttonGap: CGFloat = 10
+    /// The Lock Screen's inset from the activity's edges.
+    static let lockPadding: CGFloat = 16
 
     // MARK: The settings page's picture of the island
 

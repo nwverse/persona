@@ -9,6 +9,7 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
 ## Checks
 
 - It reuses "Test availability" (`docs/integrations/launchers.md`): the node's `launchers.check` runs `claude -p … --max-turns 1` / `codex exec` once in an empty directory, with a 90-second timeout, spending a few tokens.
+- **The check leaves nothing behind** (#2959): it runs with `--no-session-persistence` (Codex: `--ephemeral`), and removes the empty projects directory Claude Code keeps for its temp directory even so; a CLI without the flag is retried without it. A check a hundred times a day used to leave that many transcripts, filling the 80 newest offline sessions the session list keeps and pushing the user's Agents out of it. The list also skips the check's transcripts on its own — its temp directory is gone, which is what tells them from the user's own work in a directory with a similar name (an older node's name included) — and only sessions it lists count toward the 80: one in a blocked directory or a wordless probe no longer takes a slot.
 - **Interactive-readiness pre-check for Claude** (#2018): before spending that request, the node reads `hasCompletedOnboarding` from Claude Code's global config (`.claude.json`, located by Claude Code's own rule, including a `CLAUDE_CONFIG_DIR` the login shell exports).
   A headless `claude -p` probe answers even while the first-run setup is unfinished, but an interactive start then stops on the first-run screens (style picker, sign-in) and ends with a generic readiness timeout; the check therefore fails at once with an error that names the unfinished setup, without spending a request. A missing config file means Claude Code has never run there and counts as unfinished; an unreadable or malformed config is not a verdict and the real probe runs anyway. An interactive start that still reaches its readiness timeout gets the same explanation appended when the flag says the setup is unfinished.
 - When: it looks every 5 minutes (`healthTick`); on computers that are online (`Reachable`), any launcher last checked longer ago than the interval (default 30 minutes) is rerun.
@@ -17,6 +18,9 @@ Now a hub manager (`server/internal/assistant/launcher_health*.go`) periodically
   Runtime launchers (DSH and others, whose `source` is not `zshrc` / `persona`) are not checked.
 - A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
+  That follow-up reserves the same single-flight probe used by an immediate detour, including its 30-second throttle, so one failure does not run two checks.
+  So are `shell_waiting` and `start_line_rejected` (#2570): the start ended in the new tab's shell before the launcher ran.
+  A coded `agent_start_stalled` error is excluded: the agent opened but its session could not be identified before the deadline. It leaves launcher health unchanged, runs no probe and ends the task without an automatic retry or detour. The node stops the abandoned start before a later retry opens a replacement (see `docs/integrations/codex.md`). An older node that returns only text retains the previous generic-failure handling.
   The App's own starts count as well (#1642, `launcher_health_starts.go`): the hub tells the manager how a start it waited for went (`session.start_ended`: a failure, or a start the node ran before answering that worked),
   and a "New Agent" answered at once (`async`) is followed in the machine's session list, from `starting` to started or to `start_error` (counted once while the node lists it: the starts counted are kept with the records, so one is not counted again after the manager restarts; the failure's `updated_at` is the node's clock and is not compared with the record's).
   A start whose outcome the hub does not know (the computer offline, the call timed out) and a request the node refused before running anything are not recorded.
@@ -69,9 +73,25 @@ Without a reset it follows the usual rules: unavailable for 6 hours, checked at 
 - The launcher list for creating an Agent (`GET /api/v1/machines/{mid}/launchers`) carries `health` on each item (`{state, error, kind, checked_at, resets_at?}`), and the clients gray out the blocked ones ("In the App" below).
 - `agent_start` and explicitly flexible `task_plan` tasks: when the launcher to use is unavailable on this computer, it is rechecked on the spot first (see "On-demand recheck before a reroute"); a passing probe keeps the start on the asked computer, otherwise it switches to another online computer where this launcher is healthy (a directory under the original computer's home becomes the new computer's home),
   and the "reason" in the answer / card says it switched and why (for a usage limit with a reset: `is at its subscription usage limit on <machine> (resets_at=…, in …)`); if no healthy one is found, start as originally planned and warn in the answer that the latest check failed. A task plan switches once when the card is produced and checks again when it actually starts.
+  Flexible task plans verify the mapped directory with `fs.stat` on each candidate before changing the task, including during preview and retry. Only a confirmed directory qualifies; a missing path, file, unreadable response or unreachable node is skipped while other candidates are considered. If none qualifies after a failed start, the task keeps its original machine, directory and error; it does not retry that failure on the same machine. A passing follow-up probe clears health but does not by itself retry a failed start.
   Healthy first: last check passed > never checked; never checked is not treated as broken.
 - `task_plan` defaults to `machine_policy: "fixed"`, also for saved plans without the field. Preview, start and retry retain that machine and its directory. A known unusable launcher fails on that target without starting elsewhere; normal health recovery (a passing check, including Test availability on that computer) permits a later retry there. A terminal-shell `not_in_terminal` refusal can only be cleared by a real terminal start, so an explicit task retry rechecks that shell on the same computer; it still runs the normal native authentication and startup gates. Set `machine_policy: "flexible"` only for portable work that may move. A card edit that changes the machine pins the new target unless it explicitly chooses flexible placement.
 - The tool answers `Queued` while asynchronous dispatch is pending. This is not proof of an Agent start: errors appear on the same task and its failure receipt. A missing or foreign session in a start response is rejected; a `starting` session is not recorded as a successful launcher check.
+
+## A launcher the computer doesn't have (#2640)
+
+Model configuration › Agents (`agent.new`) is the one launcher purpose with no computer, and a model profile's tiers have none either, so their launcher can be a ~/.zshrc function or a wrapper script that only some computers have.
+Health records can't catch that in time: the periodic checks are off by default, so the first sign used to be a failed start (`zsh:1: command not found: <launcher>`), and from then on a fixed task was refused there as unhealthy.
+Every new Agent is now held to what its target computer can start before anything goes out (`launcher_fit.go`, `fitLauncher`): `task_plan`'s card and its dispatch (`startTaskAgent`, on the computer a flexible task lands on), `agent_start`, the App's New Agent (`agents.start_params`) and a message resuming an Agent started outside Persona (`agents.resume_params`).
+
+- **What the computer has**: `machineLaunchers` (its own list without the hidden ones, plus Persona-managed ones), the launchers `hub.json` names for it, plain `claude` and every managed launcher (both run anywhere). The same answer backs `launcherAvailable`, which keeps the main chat off a launcher that is gone.
+- **A default it lacks** (the caller named no launcher; the `agent.new` binding, a profile or a tier gave it): the start runs on `claude` when the computer has Claude Code (its node reported a version, or its list names `claude`), otherwise on the first launcher in its list that takes a prompt (not a runtime's), otherwise on `claude` anyway.
+  The default's model and effort are dropped (the new launcher runs its own default model; an effort the caller gave stays), and so is a tier that no longer applies.
+  The task's `why` says so in the user's language ("<launcher> isn't on <computer>, so this runs on claude with its default model"), and the plan card names the launcher that will run: the plan is changed when the card is made, or, when the computer's list couldn't be read then, at dispatch (the card updates).
+  `agent_start` puts the same line on its confirmation and in its answer (`Note: …`).
+- **A launcher the caller named** that the computer lacks: refused before any tab opens, naming the ones the computer has: `task_plan` fails that task, `agent_start` starts nothing (before the user is asked to confirm), New Agent gets a 400. A plan card moved to such a computer fails that task at dispatch the same way.
+- **A list that can't be read** (computer offline, a 10-second timeout, an older node) counts as having the launcher, as `launcherAvailable` always has: nothing is refused or swapped on a guess.
+- The swap comes before the fixed-policy health check, which then concerns the launcher that will actually run; a flexible task's move to another computer (above) is unchanged and the check runs where it lands.
 
 ## Automatic repair
 
@@ -127,6 +147,21 @@ Decided with the user: gray out with the reason, never hide.
 - **Add Provider** in the help is offered only for a computer in the hub group the provider wizard saves to (the hub-level one); on another group's computer the words still say to add a provider there.
 - The assistant's launcher menus (headless `claude -p` in the login shell) are unchanged: `not_in_terminal` does not apply there, and the main chat's readiness covers its model.
 - A failed start whose session has `start_error_code` (#1642) shows the hub's whole sentence under "Didn't Start" in the chat (iOS `StartingNote`, web chat page) instead of clipping it after three lines; without a code it is shown as before.
+
+## Capacity-aware notes
+
+The health record is per machine; the account-pool gateways know a different, fleet-wide fact: how many subscription accounts of each upstream
+provider are schedulable right now and when the nearest one recovers (`docs/server/usage-windows.md` "Account-pool gateways"). The manager derives a
+read-only `proto.CapacitySnapshot` (`devices.CapacitySnapshot`, from the gateway inventory and the merged usage windows; no gateway or machine is
+asked for it) and uses it only on the detour path (`healthDetour`, the chokepoint `agent_start` and task plans share):
+
+- A provider whose accounts are all unavailable with **fresh** data is *saturated* (`ProviderCapacity.Saturated`); the detour line then adds
+  "no schedulable `<provider>` account in the pool right now" and, when known, "the nearest one recovers …". Stale data or any schedulable account
+  says nothing, and no pool configured means the original wording, unchanged.
+- The launcher's provider is its health record's `agent`, falling back to a Persona-managed launcher's `agent`; an unknown provider gets no note.
+- This first cut never reorders machines or blocks a start: one launcher maps to one provider, so every machine offering it sees the same
+  provider-level capacity, and two different providers are not equivalent (an explicit model configuration is never silently changed,
+  `docs/assistant/model-config.md`). Deferring starts until recovery, per-machine gateway attribution and the App/Lark entries are later work.
 
 ## Not done
 

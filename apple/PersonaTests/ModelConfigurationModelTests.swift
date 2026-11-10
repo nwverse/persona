@@ -193,7 +193,7 @@ struct ModelConfigurationModelTests {
         #expect(page.error?.contains("更新服务器") == true)
     }
 
-    /// A use whose connection the hub holds (docs/assistant/model-config.md「上游限流」): the time as Go writes it, counted down.
+    /// A use whose connection the hub holds (docs/assistant/model-config.md「Upstream rate limits」): the time as Go writes it, counted down.
     @Test func decodesAHeldConnectionAndCountsItDown() async throws {
         let held = #"{"id":"inbox.triage","category_id":"inbox.triage","uses":[{"name":"收件箱分拣"}],"name":"信息筛选","group":"默认模型","kind":"api","override":{},"effective":{"provider":"legacy.ai"},"revision":0,"status":"额度用完，23 分钟后重试","limit":{"reason":"quota","until":"2026-11-02T20:13:00.123456789+08:00"}}"#
         let hub = FakeHub()
@@ -272,13 +272,6 @@ struct ModelConfigurationModelTests {
         #expect(!page.saving)
         await page.load(purposeID: "agent.new")
         #expect(!page.conflict && page.error == nil && !page.dirty)
-    }
-
-    @Test func restoringInheritanceEncodesExplicitNulls() throws {
-        let patch = ModelConfigurationPatch(revision: 9, binding: .init(), fields: ["provider", "model", "effort"])
-        let body = try JSONSerialization.jsonObject(with: JSON.encoder.encode(patch)) as! [String: Any]
-        #expect(body["revision"] as? Int == 9)
-        #expect(body["provider"] is NSNull && body["model"] is NSNull && body["effort"] is NSNull)
     }
 
     @Test func aTaskTimeEditDoesNotOverwriteCentralModelChoices() throws {

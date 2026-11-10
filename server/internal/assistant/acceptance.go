@@ -21,7 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// "Please verify" (#2768, docs/extensions/bots.md "Please verify"): once a task's work is deployed, the hub keeps an ask for the user to try it —
+// "Please verify" (#2768, docs/extensions/bots.md "Task progress and review requests"): once a task's work is deployed, the hub keeps an ask for the user to try it —
 // three lines: what changed, where to look (a link straight to the page), how to check. With the bot on (and its task reports
 // on) the ask goes out as a Feishu card with "Pass" on it; without, it is kept all the same (NoCard) and the briefing, the
 // board and the web app show it. "Pass" (the button, a reply saying so, or the web Accept button) marks the task verified; any other reply to the card is written into the todo's
@@ -60,6 +60,13 @@ type acceptAsk struct {
 	Outcome    string `json:"outcome,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	Recommend  string `json:"recommend,omitempty"`
+	// Deadline: a decision's deadline (#3127, decision_deadline.go); zero: none. Past it unanswered, a Reversible one
+	// takes Recommend by default (ByDefault), one that is not is reminded once and keeps waiting; DueAt is when the
+	// deadline was handled either way.
+	Deadline   time.Time `json:"deadline,omitzero"`
+	Reversible bool      `json:"reversible,omitempty"`
+	DueAt      time.Time `json:"due_at,omitzero"`
+	ByDefault  bool      `json:"by_default,omitempty"`
 }
 
 // acceptPostWindow is how long after an ask its card that did not go out (the bot's status could not be read, the send
@@ -395,6 +402,9 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 	case ask.Conclusion:
 		msg = i18n.T(l, "assistant-reports.verdict_to_agent", i18n.Args{"feedback": text})
 	}
+	if decideAsk(&ask) {
+		s.deadlineAnswered(ctx, id, ask.AskedAt) // the owner answered: no default at its deadline, even if the send fails
+	}
 	if st := s.todoDB(); st != nil {
 		at := decisionNow()
 		if ok, err := s.insertDecision(ctx, st, db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
@@ -443,21 +453,21 @@ func withMediaDropped(l i18n.Lang, note string, media bool) string {
 	return note + "\n" + i18n.T(l, "assistant-reports.accept_media_dropped")
 }
 
-// accepted marks task id verified; false when already handled, never asked, or asked before the latest reopen. A card-less
-// ask (NoCard) can be accepted too, from the web app. card is the message pressed ("" from a reply, which acceptFor already
-// matched, from the web app, or when Feishu does not say): a card that is not this round's (an earlier round's, once the
-// next one has its own) accepts nothing (#4853). A decision (a conclusion that needs the owner) is accepted by taking the
-// option it recommends, which goes to the task's agent (takeRecommendation); one with nothing recommended, or no longer
-// waiting, takes nothing; one whose recommendation could not reach the agent is not taken (acceptTry says why).
-func (s *Service) accepted(ctx context.Context, id, card string) bool {
-	ok, _ := s.acceptTry(ctx, id, card)
-	return ok
+// acceptTry marks task id verified; false when already handled, never asked, or asked before the latest reopen. A
+// card-less ask (NoCard) can be accepted too, from the web app. card is the message pressed ("" from a reply, which
+// acceptFor already matched, from the web app, or when Feishu does not say): a card that is not this round's (an
+// earlier round's, once the next one has its own) accepts nothing (#4853). A decision (a conclusion that needs the
+// owner) is accepted by taking the option it recommends, which goes to the task's agent (takeRecommendation); one with
+// nothing recommended, or no longer waiting, takes nothing. The error is a decision's whose recommendation did not
+// reach the task's agent, or errAcceptStore when the asks cannot be read or the acceptance cannot be saved: either way
+// nothing was taken, the ask still waits, and the owner can try again.
+func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) {
+	return s.acceptTryAs(ctx, id, card, false)
 }
 
-// acceptTry is accepted, with the error of a decision whose recommendation did not reach the task's agent, or
-// errAcceptStore when the asks cannot be read or the acceptance cannot be saved: either way nothing was taken, the ask
-// still waits, and the owner can try again.
-func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) {
+// acceptTryAs is acceptTry; byDefault: nobody answered decision id by its deadline and the hub takes its recommendation
+// (sweepTaskDeadlines), which only a reversible decision past its deadline allows.
+func (s *Service) acceptTryAs(ctx context.Context, id, card string, byDefault bool) (bool, error) {
 	t, todoOK := s.todoNow(id)
 	b := &s.accept
 	b.mu.Lock()
@@ -467,14 +477,18 @@ func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) 
 	}
 	a, ok := b.asks[id]
 	if !ok || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() || (todoOK && acceptAskStale(a, t)) || (card != "" && card != a.MessageID && !slices.Contains(a.Messages, card)) ||
-		decideAsk(a) && (a.Recommend == "" || todoOK && acceptAskEnded(a, t)) {
+		decideAsk(a) && (a.Recommend == "" || todoOK && acceptAskEnded(a, t)) ||
+		byDefault && !(decideAsk(a) && a.Reversible && !a.Deadline.IsZero() && a.DueAt.IsZero() && !time.Now().Before(a.Deadline)) {
 		b.mu.Unlock()
 		return false, nil
 	}
 	a.AcceptedAt = time.Now().UTC()
+	if byDefault {
+		a.ByDefault, a.DueAt = true, a.AcceptedAt
+	}
 	if err := s.saveAcceptErrLocked(ctx); err != nil {
 		// Kept only in memory, it would wait again after a restart: not accepted, and nothing that follows one runs.
-		a.AcceptedAt = time.Time{}
+		a.AcceptedAt, a.ByDefault, a.DueAt = time.Time{}, false, time.Time{}
 		b.mu.Unlock()
 		s.logf("task %s: acceptance: save: %v", id, err)
 		return false, fmt.Errorf("%w: %w", errAcceptStore, err)
@@ -488,7 +502,9 @@ func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) 
 			// Not taken after all: the owner can take it again, and is told why it did not go.
 			b.mu.Lock()
 			if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
-				a.AcceptedAt = time.Time{}
+				// A default that did not go is not tried again (it may have reached the agent after all): its deadline stays
+				// handled (DueAt) and the sweep reminds the owner instead.
+				a.AcceptedAt, a.ByDefault = time.Time{}, false
 				s.saveAcceptLocked(ctx)
 			}
 			b.mu.Unlock()
@@ -513,14 +529,18 @@ func (s *Service) acceptTry(ctx context.Context, id, card string) (bool, error) 
 }
 
 // acceptLoop posts the cards that did not go out when their ask was made (retryAcceptance), and again, each morning, the
-// cards not accepted by then (once a day each).
+// cards not accepted by then (once a day each); every minute it handles the decisions past their deadline.
 func (s *Service) acceptLoop(ctx context.Context) {
 	tick := time.NewTicker(10 * time.Minute)
 	defer tick.Stop()
+	due := time.NewTicker(decisionSweepEvery) // decisions past their deadline (decision_deadline.go)
+	defer due.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-due.C:
+			s.goSweepDecisionDeadlines(time.Now())
 		case <-tick.C:
 			now := time.Now()
 			s.retryAcceptance(now)

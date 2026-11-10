@@ -8,11 +8,20 @@ import { cx } from "../../ui/atoms";
 import { t } from "../../i18n";
 
 function labelOf(tick: NavRailTick): string {
-  return tick.preview || (tick.attachmentsOnly ? t("chat-navrail.attachments", { count: tick.attachmentsOnly }) : "");
+  return tick.preview || (tick.attachmentsOnly ? t("chat-navrail.attachments", { count: tick.attachmentsOnly }) : tick.ordinal ? t("chat-navrail.input", { index: tick.ordinal }) : "");
 }
 
-export function NavRail({ ticks, scroller, onJump, reset }: {
+/** Where the chat's line wrappers (ChatLineView's `[data-line]` boxes) are: the content element's own children, or the
+ *  scroller's when it has no content element. A measure reads those children instead of querying the whole transcript
+ *  subtree, which grows with every message's markup. */
+function lineParent(scroller: HTMLElement): Element {
+  for (const el of scroller.children) if (el instanceof HTMLElement && el.dataset.chatContent !== undefined) return el;
+  return scroller;
+}
+
+export function NavRail({ ticks, total, scroller, onJump, reset }: {
   ticks: NavRailTick[];
+  total?: number;
   scroller: HTMLDivElement | null;
   onJump: (id: string) => void | Promise<void>;
   reset: string;
@@ -64,13 +73,13 @@ export function NavRail({ ticks, scroller, onJump, reset }: {
       setHeight(Math.max(0, scroller.clientHeight - M.padding * 2));
       setRight(Math.max(0, scroller.offsetWidth - scroller.clientWidth));
       const rows = new Map<string, HTMLElement>();
-      for (const el of scroller.querySelectorAll<HTMLElement>("[data-line]")) {
+      for (const el of lineParent(scroller).children) {
         const child = el.firstElementChild;
-        if (child instanceof HTMLElement) rows.set(el.dataset.line ?? "", child);
+        if (el instanceof HTMLElement && el.dataset.line !== undefined && child instanceof HTMLElement) rows.set(el.dataset.line, child);
       }
       const top = scroller.getBoundingClientRect().top;
       offsets.current = list.current.flatMap((tick, index) => {
-        const row = rows.get(tick.id);
+        const row = rows.get(tick.lineId ?? tick.id);
         return row ? [{ index, top: row.getBoundingClientRect().top - top + scroller.scrollTop }] : [];
       });
     }
@@ -193,6 +202,8 @@ export function NavRail({ ticks, scroller, onJump, reset }: {
       aria-description={t("chat-navrail.keys")}
       aria-describedby={previewTick ? previewId : undefined}
       data-nav-rail
+      data-nav-total={total ?? ticks.length}
+      data-nav-source={total === undefined ? "loaded" : "server"}
       data-visible={visible}
       tabIndex={0}
       className={cx("absolute inset-y-0 z-10 flex flex-col justify-center py-6 transition-opacity duration-200 motion-reduce:transition-none", visible ? "opacity-100" : "opacity-0")}

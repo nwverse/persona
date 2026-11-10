@@ -19,7 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The assistant's own settings (settings `assistant`, docs/assistant/assistant.md "Boundary with the hub"): the machine its
+// The assistant's own settings (settings `assistant`, docs/assistant/assistant.md "Boundary with hub"): the machine its
 // conversations run on, its launcher, the user's time zone, "About me", the main conversation and the ones it replaced,
 // and whether tasks from the main conversation are told only there. Only the assistant reads and writes them; hub.json's
 // assistant section is their default (the hub's hello). It reports what the hub's own features need of them in every
@@ -71,6 +71,16 @@ type Settings struct {
 	// off by default it stays open with where it is held, and its agent is told so with its prompt (#3306,
 	// delivery.go). nil is off (the default).
 	DoneNeedsDelivery *bool `json:"done_needs_delivery,omitempty"`
+	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
+	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
+	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
+	// ReviewSamplePercent: the share (0–100) of the finished supervised tasks that passed the judge's own check whose
+	// review still goes to the main conversation (#3128, supervise_sample.go); the rest the judge closes. nil is 100:
+	// every finished task waits for task_review, as before.
+	ReviewSamplePercent *int `json:"review_sample_percent,omitempty"`
+	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
+	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
+	Leaders []string `json:"leaders,omitempty"`
 }
 
 // FormerMain is a main conversation that was replaced, and until when it was the main one.
@@ -329,6 +339,10 @@ type assistantView struct {
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
+	// IdleCloseHours is in effect (0: off).
+	IdleCloseHours int `json:"idle_close_hours"`
+	// ReviewSamplePercent is in effect (100: every finished task waits for task_review).
+	ReviewSamplePercent int `json:"review_sample_percent"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -343,7 +357,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
-		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery}
+		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		ReviewSamplePercent: s.reviewSamplePercent(ctx)}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session

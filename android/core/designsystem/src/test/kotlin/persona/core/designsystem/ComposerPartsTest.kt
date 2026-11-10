@@ -23,6 +23,29 @@ import org.robolectric.annotation.Config
 class ComposerPartsTest {
     @get:Rule val rule = createComposeRule()
 
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Test fun systemFontMetricsDriveGrowthWhenLineHeightIsUnspecified() {
+        var scale by mutableStateOf(1f)
+        var lines = 0
+        rule.setContent {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                androidx.compose.ui.unit.Density(density.density, scale)) {
+                PersonaTheme(style = AppStyle.Glass, reduceMotion = true) {
+                    assertEquals(androidx.compose.ui.unit.TextUnit.Unspecified, PersonaTheme.type.body.lineHeight)
+                    lines = rememberComposerGrowLines()
+                }
+            }
+        }
+        rule.waitForIdle()
+        val normal = lines
+        org.junit.Assert.assertTrue(normal in 3..8)
+        scale = 2f
+        rule.waitForIdle()
+        org.junit.Assert.assertTrue(lines in 3..8)
+        org.junit.Assert.assertTrue("larger system text must leave fewer visible lines", lines < normal)
+    }
+
     @Test fun photoThumbnailsRemoveAndRetryOnlyWhenTheyShould() {
         var style by mutableStateOf(AppStyle.Glass)
         var state by mutableStateOf(AttachmentState.Failed)

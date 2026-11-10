@@ -412,7 +412,7 @@ export interface LookAvatar {
 }
 
 /**
- * An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+ * An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
  */
 export interface LookPalette {
   primary?: string;
@@ -454,8 +454,8 @@ export interface LookDot {
 }
 
 /**
- * A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
- * app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+ * A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+ * package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
  */
 export interface LookItem {
   id: string;
@@ -2335,8 +2335,11 @@ export interface Review {
   discard?: Action;
 }
 
-export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | (string & {});
-export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar"] as const;
+/**
+ * ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days, people).
+ */
+export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | "ring" | (string & {});
+export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar", "ring"] as const;
 
 /**
  * The assistant's ```persona-card block (#886): one JSON object. Joins the components in #1850; this form keeps

@@ -5,9 +5,9 @@ This doc explains how Lark and email data become a knowledge base with **files a
 (Direction decided 2026-10-30: all data ultimately settles in `.persona`; files first, database for indexing; text retained 365 days, attachments 30 days.)
 Since 2026-11-04 the knowledge base belongs to the manager (the assistant process `personad assistant`); since 2026-11-05 sources (connectors) also belong to the manager and feed the knowledge base in the same process (`server/internal/extmgr`, `docs/extensions/extensions.md` ("Who owns what")); see below.
 
-## Who owns what (2026-11-04)
+## Who owns what
 
-As part of moving hub business logic into managers (`docs/assistant/assistant.md` ("Boundary with the hub")), the entire knowledge base moved into the manager (currently there is just one, the assistant):
+As part of moving hub business logic into managers (`docs/assistant/assistant.md` ("Boundary with hub")), the entire knowledge base moved into the manager (currently there is just one, the assistant):
 
 - **The manager runs the knowledge base** (`server/internal/assistant/kb*.go`): the engine (`server/internal/kb`: archiving, model-based compression and organization, indexing, timezone, people / groups / projects, attaching Moments posts to projects),
   its loop (every 2 minutes, or 5 seconds after a source has new data), and its state (files in the data directory, the `kb_entities` index table, `handles.key`; same layout as before, only the manager writes).
@@ -18,7 +18,7 @@ As part of moving hub business logic into managers (`docs/assistant/assistant.md
   **The manager owns the cursor** (`cursors/<connector>.json`, same file as before), which advances only after writing the data. For Moments posts submitted by plugin programs (`posts.*`, `archive.chats`), the hub first checks
   whether "Include in knowledge base" is on, then forwards them unchanged to the manager (`kb.posts_put`, `kb.posts_comments`, `kb.posts_pending`, `kb.archived_chats`).
 - **The hub itself no longer reads the knowledge base.** The extension manager reaches it through its own `kbAsk` (`server/internal/extmgr/kb.go`): deleting a source's data (`kb.forget`) and the extensions' public `kb.*` calls.
-  Triage after an Agent's turn stops moved into the assistant (`docs/assistant/agent-work.md` ("Who owns what")), which reads the project owning a directory directly; `kb.context` and `kb.projects` still answer on the bus, but nothing calls them now.
+  Triage after an Agent's turn stops moved into the assistant (`docs/assistant/agent-work.md` ("Responsibilities")), which reads the project owning a directory directly; `kb.context` and `kb.projects` still answer on the bus, but nothing calls them now.
   Events seen by the hub are one-way: new source data (connector live events, enabling "Include in knowledge base", enabling "Hand to Persona" for "Information", `kb.kick`),
   and an Agent finishing a turn (before deciding notifications, `kb.agent_turn`, the project timeline entry).
 - **Models**: the knowledge base uses the manager's model configuration (`kb.compress`, `kb.project`, `kb.items`, `kb.dedupe`, `kb.moments`, defaulted by `kb.ai` in its `manager.json`),
@@ -27,7 +27,7 @@ As part of moving hub business logic into managers (`docs/assistant/assistant.md
   Storage **follows the manager's `manager.json`**: its `kb` section (`enabled`, `text_days`, `attachment_days`, `extra_dirs`, and `ai` for the models; `docs/operations/config.md` ("manager.json")). Since 2026-11-06 the hub neither reads it nor hands it over in its handshake response (`docs/protocol/protocol.md` ("Handshake")), except raw, once, to a built-in manager it did not start (`legacy_config`, [managers.md](managers.md) ("Configuration"));
   a manager that runs elsewhere reads the `manager.json` on its own machine. With `enabled: false`, the manager does not open the knowledge base and its sources provide nothing
   (`connectors.archives` is empty; other source methods and plugin posts reply "The knowledge base is off for this manager"); source deletion does not ask the knowledge base.
-  When hub.json sets `assistant.external` (manager elsewhere, `docs/assistant/assistant.md` ("Processes")), the knowledge base is in **that machine's** data directory, and its `kb` section is in the `manager.json` there: the original `data/` on the hub machine stops updating.
+  When hub.json sets `assistant.external` (manager elsewhere, `docs/assistant/assistant.md` ("Process")), the knowledge base is in **that machine's** data directory, and its `kb` section is in the `manager.json` there: the original `data/` on the hub machine stops updating.
   To continue using it, copy the entire directory, and the hub machine's `~/.persona/managers/assistant/handles.key` into the same place on that machine (or into its `~/.persona` before the manager first starts there; otherwise future identity-hint hashes will not match); `extra_dirs` refers to paths on that machine; the index table stays in shared Postgres and need not move.
   The app's knowledge API still goes to the hub, which forwards it unchanged; the interface stays the same. CLAUDE.md still calls it "the directory on the hub" (accurate when the manager is on the hub machine).
 - **When it opens**: on the manager's first need (first loop iteration, tool call or request), requiring all three: the hub's `kb` settings have arrived (handshake),
@@ -78,6 +78,7 @@ Transcribed text from phone recordings (and watch recordings relayed through the
   produces a summary, one-line description, title (used if the user has not named it), tags and mentioned projects; projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
 - Retention follows assistant setting `recording_days` (default 14 days, independent of `text_days`): each round deletes directories and index rows whose start time predates retention; tombstones are retained equally long.
 - `kb_list` / `kb_get` / `kb_search` and the app's Knowledge page gain the `recordings` category; `kb_get` includes summary, bookmarks and full transcription (up to 12k characters). Recording content cannot be edited via `kb_update` (the phone is authoritative); only tags can change.
+- A recording that is a meeting (`kind: meeting`, overlapping a calendar item, or minutes asked for) also gets structured minutes besides the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` and `minutes.md` in the same directory, from chunked calls to the same `kb.compress` model, removed and expired with the recording, returned as `detail.minutes`. `kb_get` prints them before the transcript; `kb_search` and the app search find them.
 
 ## Extra notes directories (`kb.extra_dirs`)
 
@@ -119,6 +120,8 @@ and tells it to read their AGENTS.md / CLAUDE.md before reading or writing. Pers
     segments.json           # Timestamped segments (start / end in seconds from the beginning)
     transcript.md           # One line per segment, with clock times in the user's timezone; searched by kb_search
     summary.md              # Model summary after transcription completes
+    minutes.json            # Meeting minutes (meeting-minutes.md): structured, each item at a transcript time
+    minutes.md              # The same minutes as Markdown with clock times; searched
   recordings/.deleted.json  # Deleted recording UUIDs (tombstones); late uploads within retention return 410
   cursors/<connector>.json  # A connector's archive cursor (bookkeeping, not searched)
   select/<chat id>.json     # The selection's mine-rule context of a chat between daily batches (not searched)
@@ -150,7 +153,7 @@ A value the model writes that doesn't fit is dropped on its own, not with the re
 ## Pipeline (manager background, `server/internal/kb`, loop in `assistant/kb.go`)
 
 1. **Archive**: every 2 minutes (5 seconds after a Lark live event), inspect the 100 recently active chats in Lark's Messages list, reading only when the list timestamp is newer than the last archive.
-   Fetch incrementally by cursor (`afterPosition`); a newly seen chat starts with its latest 100 messages. Append to that day's `messages/*.md` (dates and times in the user's timezone, see "Timezone" below).
+   Fetch incrementally by cursor (`afterPosition`); a newly seen chat starts with its latest 100 messages. Append to that day's `messages/*.md` (dates and times in the user's timezone, see "Time zones" below).
    Download images / files / rich-text images to `attachments/<date>/` (up to 20 MB each), leaving `[附件](相对路径)` ("attachment; relative path") in the line; record Lark document links in `docs/`.
    Topic groups read only the newest topic page. Every 6 minutes, read each email account's Inbox messages with UID above the last one (40 per page, at most 5 pages per round; with multiple pages, take the newest first, then fill the middle page by page and continue next time if unfinished),
    reading at most 10 full bodies per round (summaries for the rest), into `mail-<account>-<other address>` chats. Cursors are in `cursors/mail.json` (per-account UIDs, plus `<account>#v` for UIDVALIDITY,
@@ -258,15 +261,17 @@ not report one never matches its rule.
 
 ### Selection (#1523)
 
-`server/internal/kb/selection.go` is the selection document (`kb.Selection`: `messages`, `docs`, `items`, `history`, the JSON of #1523) and its evaluator, pure and
-table-tested (`selection_test.go` covers every example of the issue). `kb.Defaults()` is what a missing document means; `Validate` / `ParseSelection` refuse
+`server/internal/kb/selection.go` is the selection document (`kb.Selection`: `messages`, `docs`, `items`, `history`, the JSON of #1523), with its validation
+(`selection_validate.go`) and its evaluator for messages and documents (`selection_messages.go`, `selection_docs.go`), pure and table-tested (`selection_test.go`
+covers every example of the issue). `kb.Defaults()` is what a missing document means; `Validate` / `ParseSelection` refuse
 unknown fields and rule names, an `order` that does not hold every rule exactly once, `days` / `attachment_days` / `back_days` outside 1…36500 (null is fine),
 `context` outside 0…200, `include_all` or `context` on another rule, and items without a source, a kind (`chat` / `doc`) or an id, twice, or stored without being read.
 The manager hands the document to the engine (`Engine.Selection`); an engine without one keeps everything as before.
 
+- **Web settings** (#2217): Settings → Knowledge selection targets an explicit manager independently of the chat switcher. Item overrides always precede the movable priority levels. Rules can share a level, split into a separate level, or move up/down. Chat candidates carry their source and chat id; document overrides use the original source/id from the selected document metadata, never its KB filename or display name. Failed/unsupported reads enable no save. Manager and credential changes retire pending work, and observable `kb_selection` events block dirty drafts until an explicit reload. Whole-document PUT has no revision precondition: this warning does not prevent an unobserved concurrent write atomically. Turning a rule off stops new writes; blank document days do not introduce default pruning.
+
 - **Storage and API** (`server/internal/assistant/kb_selection.go`): the manager keeps the document in its settings table under `kb.selection` (as the workflow
-  board's switch), so every client and process agrees; today it is edited through `PUT` below and `kb_history_plan`, and an app settings page (the
-  priority as a sortable list, a per-item picker) is left for a follow-up issue. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
+  board's switch), so every client and process agrees; the Web app edits it in Settings → Knowledge selection (#2217), and `kb_history_plan` keeps its existing import controls. The Web editor preserves the whole loaded document, including history and optional rule fields; native settings editors remain follow-up work. `GET /api/v1/kb/selection` is the document (the defaults when none was saved);
   `PUT /api/v1/kb/selection` takes the whole document, validated as above (400 with what is wrong; 403 from a read-only device), stores it, puts it in force at once
   and tells the apps (`kb_selection` event); `GET /api/v1/kb/selection/candidates?source=<connector id>` lists the source's chats (`connectors.history_chats`: id,
   name, kind, flags, estimate, the `source` a per-item setting names, the setting itself, and what the selection reads of it: `whole`, `personal` or `none`). While the
@@ -556,7 +561,7 @@ The flow the tool descriptions ask for: list the plan, show it, apply the owner'
 Replies go through `server/internal/i18n/locales/*/assistant-kb_history.json`; with `kb.history` off the tools say so and ask no connector anything. In the health space only
 `kb_history_status` works: the others change what goes into the knowledge base.
 
-### Timezone (2026-11-01)
+### Time zones
 
 Archive dates and times (daily files, each line's "- 15:04", timeline "- 2006-01-02 15:04", Moments timestamps) are in the user's local time. The user's timezone is the one reported by the phone to assistant settings
 (since 2026-11-04 the manager reads its own settings, falling back to its machine's timezone if never reported; previously `Hub.userLocation`). Before, writes used the hub machine's timezone; with the hub in UTC and the user in UTC+8:
@@ -571,7 +576,7 @@ Files record clock times, not timezones, so each file declares its timezone and 
   - Write first to `messages.rezone/`, then swap with `messages/`, so each chat is entirely new or entirely old.
   - Interrupted work resumes next time: before the swap, original files remain untouched; after it, only `messages.old/` needs deletion. The same data is never converted twice.
 - **Timelines:** `log.md`'s heading includes the timezone (`# 时间线 · Asia/Shanghai`, "Timeline"; bare `# 时间线` means the hub's timezone). Rewrite the whole file once.
-- **When to move:** call `Rezone` when the manager starts (before connecting to the hub, `Service.StartKB`) and before each archive round; do not move if the user timezone cannot be read. Once all data is moved, the same timezone does not trigger another traversal.
+- **When to move:** call `Rezone` when the manager opens the knowledge base (`kbOpenLocked` in `assistant/kb.go`) and before each archive round (`kbRound`); do not move if the user timezone cannot be read. Once all data is moved, the same timezone does not trigger another traversal.
   If the phone changes timezone (travel), the next round moves everything to it.
 - **Reads and writes use the same timezone:**
   - Before reading or writing a chat, ensure it is in the current timezone;

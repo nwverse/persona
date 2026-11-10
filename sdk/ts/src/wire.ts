@@ -412,7 +412,7 @@ export interface LookAvatar {
 }
 
 /**
- * An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+ * An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
  */
 export interface LookPalette {
   primary?: string;
@@ -454,8 +454,8 @@ export interface LookDot {
 }
 
 /**
- * A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
- * app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+ * A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+ * package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
  */
 export interface LookItem {
   id: string;
@@ -2335,8 +2335,11 @@ export interface Review {
   discard?: Action;
 }
 
-export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | (string & {});
-export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar"] as const;
+/**
+ * ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days, people).
+ */
+export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | "ring" | (string & {});
+export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar", "ring"] as const;
 
 /**
  * The assistant's ```persona-card block (#886): one JSON object. Joins the components in #1850; this form keeps
@@ -3163,10 +3166,11 @@ export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "
 /**
  * What a connector declares (ConnectorItem.capabilities): the hub calls only the methods of declared ones. fallback
  * has no method: every inbox thing promises extra.rule_tier. recall is the program's word that it can take back what
- * it sent: the hub then calls connector.recall (only after the user agreed), and the install preview says so. history
- * (needs archive) is history.chats and archive.history, history_anchors (needs history) is history.anchors. catalog
- * lists subscribable read-only sources and calls their short tool names. An extension's connector with one this hub
- * does not know loses only that capability.
+ * it sent: the hub calls recall.can / recall.do after the user agreed, or legacy connector.recall for a program
+ * without those methods, and the install preview says so. history (needs archive) is history.chats and
+ * archive.history, history_anchors (needs history) is history.anchors. catalog lists subscribable read-only sources
+ * and calls their short tool names. An extension's connector with one this hub does not know loses only that
+ * capability.
  */
 export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | (string & {});
 export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"] as const;
@@ -3391,12 +3395,61 @@ export interface ConnectorRecallParams {
 }
 
 /**
- * recall's answer: recalled true is the program's word that the service confirmed the message is no longer there.
- * Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes nothing and lets the
- * user ask again.
+ * Legacy recall's answer: recalled true is the program's word that the service confirmed the message is no longer
+ * there. Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes nothing and
+ * lets the user ask again.
  */
 export interface ConnectorRecallResult {
   recalled: boolean;
+}
+
+/**
+ * recall.can's read-only, memory-only preflight. The hub asks it immediately before recall.do, not for every row of a
+ * ledger page. age_seconds is the sent row's age, clamped at zero for a future timestamp.
+ */
+export interface ConnectorRecallCanParams {
+  contribution: string;
+  action: string;
+  age_seconds: number;
+}
+
+/**
+ * recall.can's answer. can false stops before any write and means not_recallable.
+ */
+export interface ConnectorRecallCanResult {
+  can: boolean;
+}
+
+/**
+ * recall.do takes back one message after the user agreed on their own full device. request_id is stable for this
+ * connector and external message: concurrent duplicates share one operation, and a confirmed success can be replayed
+ * after a lost answer. A failure or unknown outcome may be tried again explicitly. at is retained for connectors
+ * whose own recall window counts from the send. No message text, origin, approval record, account or credential is
+ * included.
+ */
+export interface ConnectorRecallDoParams {
+  contribution: string;
+  request_id: string;
+  action: string;
+  message_ref: string;
+  target?: Record<string, unknown>;
+  at?: string;
+}
+
+/**
+ * recall.do's outcome. Only done and already_recalled say the message is known to be gone. unknown may have taken
+ * effect and is never success.
+ */
+export type ConnectorRecallOutcome = "done" | "already_recalled" | "not_recallable" | "unavailable" | "refused" | "unknown" | (string & {});
+export const CONNECTOR_RECALL_OUTCOMES = ["done", "already_recalled", "not_recallable", "unavailable", "refused", "unknown"] as const;
+
+/**
+ * recall.do's result. error is one human-readable sentence for a non-success status, never a secret or the message's
+ * text. An empty or unrecognized status is treated as unknown by the hub.
+ */
+export interface ConnectorRecallDoResult {
+  status: ConnectorRecallOutcome;
+  error?: string;
 }
 
 /**
@@ -4566,6 +4619,8 @@ export interface KBDetail {
   links?: KBEntry[];
   moments?: KBMomentRef[];
   segments?: KBRecordingSegment[];
+  /** A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them. */
+  minutes?: unknown;
 }
 
 /**
@@ -4607,12 +4662,24 @@ export interface KBDayResult {
   messages: KBDayMessage[];
   prev: string;
   next: string;
+  /**
+   * available means ledger matching ran, not that unmarked messages are human-authored. missing_scope requires
+   * sent.read; unavailable means the service cannot provide provenance. Older hosts omit this field: treat absence as
+   * unavailable.
+   */
+  sent_origin: string;
 }
 
 export interface KBDayMessage {
   /** The message's first line in the day's file, from 1. */
   n: number;
   text: string;
+  /** Present only for a unique match in the sent-as-user ledger, with sent.read. */
+  sent_by?: string;
+  /** The matching ledger row. */
+  sent_ledger_id?: number;
+  /** When this matched send was recalled; the archive may still contain its text. */
+  recalled_at?: string;
 }
 
 /**
@@ -5485,6 +5552,8 @@ export const CALLS: Record<string, Call> = {
   "connector.actions.describe": { from: "hub", params: "ConnectorCallParams", result: "ConnectorDescribeResult" },
   "connector.actions.do": { from: "hub", params: "ConnectorDoParams", result: "ConnectorCallResult" },
   "connector.recall": { from: "hub", params: "ConnectorRecallParams", result: "ConnectorRecallResult" },
+  "connector.recall.can": { from: "hub", params: "ConnectorRecallCanParams", result: "ConnectorRecallCanResult" },
+  "connector.recall.do": { from: "hub", params: "ConnectorRecallDoParams", result: "ConnectorRecallDoResult" },
   "connector.thread.page": { from: "hub", params: "ConnectorThreadParams", result: "ConnectorThreadPage" },
   "connector.thread.media": { from: "hub", params: "ConnectorMediaParams", result: "ConnectorMedia" },
   "connector.inbox.collect": { from: "hub", params: "ConnectorParams", result: "ConnectorCollectResult" },

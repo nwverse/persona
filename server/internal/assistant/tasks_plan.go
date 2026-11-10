@@ -23,7 +23,8 @@ type planTaskIn struct {
 	TodoID string `json:"todo_id"`
 }
 
-func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
+// toolTaskPlanFrom is task_plan from the conversation sessionID running on machine (where its attachments are).
+func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID string, args json.RawMessage) (string, error) {
 	var in struct {
 		Tasks []planTaskIn `json:"tasks"`
 	}
@@ -42,19 +43,17 @@ func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.
 		return "", fmt.Errorf("at most 8 tasks in one plan")
 	}
 	reused := map[string]bool{}
+	modes := map[string]string{} // each computer's Claude Code default mode, read once for this plan
 	for i := range a.Tasks {
 		t := &a.Tasks[i]
 		t.normalizeReadonlyPermission()
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs = "", "", "", nil
+		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a
+		// real health detour and its first-detour guard keeps the true original machine (#2271).
+		t.Reroute = nil
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
 		t.Model = strings.TrimSpace(t.Model)
 		t.Permission = strings.TrimSpace(t.Permission)
-		if t.Permission == "" {
-			t.Permission = s.settings(ctx).DefaultPermissionMode
-			if t.Permission == "" {
-				t.Permission = "default"
-			}
-		}
 		if err := t.normalizeMachinePolicy(); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
@@ -64,6 +63,20 @@ func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.
 		}
 		if t.Model != "" && !proto.ValidModelID(t.Model) { // it goes to the agent as --model (#1644)
 			return "", fmt.Errorf("task %d: model %q is not a model id: %s", i+1, t.Model, proto.ModelIDRule)
+		}
+		atts, err := cleanAttachments(t.Attachments)
+		if err == nil {
+			atts, err = s.checkAttachments(ctx, machine, sessionID, atts)
+		}
+		if err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		t.Attachments, t.Mentioned, t.AttachFrom = atts, s.mentionedAttachments(ctx, machine, sessionID, t.Prompt, atts), ""
+		if t.Project, err = s.todoProject(ctx, t.Project); err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		if len(t.Attachments)+len(t.Mentioned) > 0 {
+			t.AttachFrom = machine
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
@@ -75,6 +88,22 @@ func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.
 		}
 		s.healthyPlace(ctx, &preview) // health follows the resolved launcher
 		t.Machine, t.Cwd, t.Why = preview.Machine, preview.Cwd, preview.Why
+		t.Reroute = preview.Reroute
+		// What it runs on the computer it lands on (#2640): a default that computer lacks is swapped now, so the card
+		// names the launcher that will run and its why says so; a launcher this plan names that it lacks is refused.
+		// A configuration that can't run at all is the dispatch's to say, as before.
+		if m, ok := s.machineByName(ctx, t.Machine); ok {
+			params := map[string]any{"launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "tier": t.Tier}
+			if own, err := s.resolveStart(ctx, params); err == nil {
+				if err := s.fitTaskLauncher(ctx, t, m, own, params); err != nil {
+					return "", fmt.Errorf("task %d: %w", i+1, err)
+				}
+			}
+		}
+		// Unset: settled on the computer it lands on, so the card shows what will run (tasks_permission.go).
+		if t.Permission == "" {
+			t.Permission = s.taskPermission(ctx, t.Machine, modes)
+		}
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return "", fmt.Errorf("todos are unavailable: %v", err)
@@ -144,7 +173,7 @@ func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.
 		}
 	}
 	b.WriteString("This is not confirmation that any agent started. Startup can still fail; the task cards and context snapshot show the outcome.")
-	if s.isMain(ctx, sessionID) {
+	if s.supervises(ctx, sessionID) {
 		b.WriteString(" You supervise them: a supervision message comes when one needs you (review it with task_review).")
 	}
 	b.WriteString(dups)
@@ -162,6 +191,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 	if s := strings.TrimSpace(e.Machine); s != "" {
 		if s != t.Machine {
 			t.MachinePolicy = machineFixed
+			// The user's explicit retarget supersedes a plan-time health detour: drop the stale reroute so the receipt
+			// names the machine the task will actually run on, not the old landing (#2271).
+			t.Reroute = nil
 		}
 		t.Machine = s
 	}

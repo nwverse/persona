@@ -38,6 +38,18 @@ interface InboxAssistantTransport {
      */
     suspend fun bulk(items: List<InboxDoneTarget>, action: InboxBulkAction): JsonObject =
         setDone(items, action != InboxBulkAction.Reopen)
+    /**
+     * One page of [manager]'s done history (`GET /api/v1/inbox/done`, #2200; null: the default manager): newest done
+     * first, from after the entry [before] / [beforeId] (both null: the newest), answering `{items, next?: {before, before_id}}`.
+     * A cursor is one manager's, so each is asked on its own. Old hubs: 404.
+     */
+    suspend fun doneHistory(manager: String?, before: String?, beforeId: String?, limit: Int = 50): JsonObject =
+        throw UnsupportedOperationException("Done history unavailable")
+    /**
+     * [manager]'s done items per day (`GET /api/v1/inbox/done/days?tz=&sources=all`, #2967) in time zone [tz] (an IANA
+     * name), answering `{tz, days: [{day, count}]}`, newest first. Old hubs: 404; a zone the hub doesn't know: 400.
+     */
+    suspend fun doneDays(manager: String?, tz: String): JsonObject = throw UnsupportedOperationException("Done days unavailable")
     suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String): JsonObject
     /** Hands an item to its manager's main chat (`POST /api/v1/inbox/{id}/handoff`), answering `{item, session}`. */
     suspend fun handOff(itemId: String, text: String, clientId: String): JsonObject =
@@ -100,13 +112,25 @@ interface InboxAssistantTransport {
     suspend fun momentsComments(postId: String): JsonObject = throw UnsupportedOperationException("Moments comments unavailable")
     suspend fun urlPreview(messageId: String, url: String): JsonObject = throw UnsupportedOperationException("URL preview unavailable")
 
-    // Mute (docs/assistant/inbox.md "Mute"): an item's repository, chat or sender, in every source.
+    // Mute (docs/assistant/inbox.md "Muting"): an item's repository, chat or sender, in every source.
     /** `GET /api/v1/inbox/mutes`: `{mutes: [{id, source, source_name, tag, value, name, created_at}]}`. */
     suspend fun inboxMutes(): JsonObject = throw UnsupportedOperationException("Inbox mutes unavailable")
     /** `POST /api/v1/inbox/mutes` `{item_id, tag}`: `{mute, settled}`. */
     suspend fun muteInbox(itemId: String, tag: String): JsonObject = throw UnsupportedOperationException("Inbox mutes unavailable")
     /** `DELETE /api/v1/inbox/mutes/{id}`. */
     suspend fun unmuteInbox(id: String): Unit = throw UnsupportedOperationException("Inbox mutes unavailable")
+
+    // Policies (docs/assistant/inbox.md "Policies"): the tier and AI twin of what an item has under one of its mute options.
+    /** `GET /api/v1/inbox/policies`: `{policies: [{id, source, source_name, tag, value, name, tier?, twin?, created_at, updated_at}]}`. */
+    suspend fun inboxPolicies(): JsonObject = throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `POST /api/v1/inbox/policies` `{item_id, tag, tier, twin}`: `{policy, applied}`; setting neither part removes it. */
+    suspend fun setInboxPolicy(itemId: String, tag: String, tier: String, twin: String): JsonObject =
+        throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `PATCH /api/v1/inbox/policies/{id}` `{tier, twin}`: `{policy, applied}`; setting neither part removes it. */
+    suspend fun updateInboxPolicy(id: String, tier: String, twin: String): JsonObject =
+        throw UnsupportedOperationException("Inbox policies unavailable")
+    /** `DELETE /api/v1/inbox/policies/{id}`. */
+    suspend fun removeInboxPolicy(id: String): Unit = throw UnsupportedOperationException("Inbox policies unavailable")
 
     // A Feishu chat's pinned messages (iOS `LarkChatPins`): reading the list marks the pins read upstream.
     /** `GET /api/v1/lark/conversations/{feed}/pins?limit=50&account_id=&cursor=`. */

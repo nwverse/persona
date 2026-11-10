@@ -14,6 +14,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
@@ -51,21 +54,107 @@ import persona.core.designsystem.WorkStep as TimelineStep
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.lines.*
 import androidx.compose.runtime.key
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
 
-internal class ChatMarkdownCache {
-    private val entries = object : LinkedHashMap<String, Pair<String, MarkdownResult>>(80, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<String, MarkdownResult>>) = size > 80
+/** What a reply's text parses as: its formulas as images (MathMarkdown) and its bare links as autolinks (ChatLinks). */
+internal fun chatMarkdown(text: String) = ChatLinks.markdown(MathMarkdown.rewrite(text))
+
+/**
+ * The page's parsed Markdown (docs/android/android.md "Reply Markdown parsing"): one entry per id, the text it
+ * was parsed from and its parse.
+ *
+ * What it keeps: every id the page's prewarm last asked to [keep], and the most recently used [OTHERS] ids besides
+ * (thinking, plans, recaps, replies older than the prewarm's). So it holds at most the prewarm's set (its 80 replies'
+ * text parts) plus [OTHERS]: about 112 entries, which at the ~19 bytes of parse per byte of reply measured on the JVM
+ * (ChatMarkdownBench.retainedHeapPerEntry: 38 KB for a 2 KB reply, 294 KB for 16 KB, 1.15 MB for 64 KB) is about 4 MB
+ * of 2 KB replies and 33 MB of 16 KB ones. A plain LRU as large as the prewarm's set lost all of it to the first other
+ * text: the prewarm, walking its set in order, then evicted each entry just before it came back to it.
+ *
+ * One parse per id and text: a caller that asks while a parse of the same id and text is under way (the page's prewarm
+ * and the row it warms, say) waits for that one. The parse runs in the cache's own [scope], so a caller that leaves (a
+ * row scrolled away, a prewarm restarted) does not cancel it for the others or lose its work.
+ *
+ * A streaming reply parses from its last settled block on ([ChatMarkdownStream]); once it ends, its final text is parsed
+ * whole and kept under the same id.
+ */
+internal class ChatMarkdownCache(
+    /** Parses Markdown whole: mikepenz's parseMarkdown, or one that counts in tests. */
+    private val parseWhole: (String) -> MarkdownResult = { parseMarkdown(it) },
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+) {
+    /** [result] parsed from [text]; [whole]: by [parseWhole], not from a stream's tail. */
+    private class Entry(val text: String, val result: MarkdownResult, val whole: Boolean)
+    private data class Parse(val id: String, val text: String, val whole: Boolean)
+
+    /** Least recently used first. */
+    private val entries = LinkedHashMap<String, Entry>(128, 0.75f, true)
+    private var kept: Set<String> = emptySet()
+    private val running = HashMap<Parse, Deferred<MarkdownResult>>()
+    private val streams = ChatMarkdownStream(parseWhole)
+
+    @Synchronized fun cached(id: String, text: String) = entries[id]?.takeIf { it.text == text }?.result
+
+    /** The ids the page's prewarm parses, kept however many other ids are parsed between its runs. */
+    @Synchronized fun keep(ids: Collection<String>) {
+        kept = ids.toHashSet()
+        trim()
     }
-    @Synchronized fun cached(id: String, text: String) = entries[id]?.takeIf { it.first == text }?.second
-    suspend fun parse(id: String, text: String): MarkdownResult {
-        cached(id, text)?.let { return it }
-        val parsed = withContext(Dispatchers.Default) { parseMarkdown(ChatLinks.markdown(MathMarkdown.rewrite(text))) }
-        synchronized(this) { entries[id] = text to parsed }
-        return parsed
+
+    private fun trim() {
+        var others = entries.keys.count { it !in kept }
+        val ids = entries.keys.iterator()
+        while (others > OTHERS && ids.hasNext()) {
+            if (ids.next() !in kept) {
+                ids.remove()
+                others--
+            }
+        }
+    }
+
+    /**
+     * [text]'s Markdown under [id]. [streaming] is what the row knows of the reply (MessageContent): true while it
+     * streams, false once it is whole; null from a caller that does not know (the page's prewarm, a plan or a recap),
+     * which goes with what the row last said.
+     */
+    suspend fun parse(id: String, text: String, streaming: Boolean? = null): MarkdownResult {
+        val parse = synchronized(this) {
+            when (streaming) {
+                true -> streams.start(id)
+                false -> streams.end(id)
+                null -> {}
+            }
+            val whole = !streams.streaming(id)
+            entries[id]?.takeIf { it.text == text && (it.whole || !whole) }?.let { return it.result }
+            val key = Parse(id, text, whole)
+            running[key] ?: scope.async(start = CoroutineStart.LAZY) { compute(key) }.also { job ->
+                running[key] = job
+                job.invokeOnCompletion { synchronized(this) { running.remove(key, job) } }
+                job.start()
+            }
+        }
+        return parse.await()
+    }
+
+    private fun compute(parse: Parse): MarkdownResult {
+        val markdown = chatMarkdown(parse.text)
+        val (result, whole) = if (parse.whole) parseWhole(markdown) to true else streams.parse(parse.id, markdown)
+        synchronized(this) {
+            entries[parse.id] = Entry(parse.text, result, whole)
+            trim()
+        }
+        return result
+    }
+
+    companion object {
+        const val OTHERS = 32
     }
 }
 
@@ -74,14 +163,15 @@ internal val LocalChatMarkdownCache = staticCompositionLocalOf<ChatMarkdownCache
 /**
  * Markdown in a conversation. A message's words pass [selectable] false: a long press on a message opens its menu (whose
  * "Select" shows the text to select from), and a SelectionContainer would take the press (docs/android/android.md, the old App's
- * lessons). Text without that menu (thinking, a plan, a recap) stays selectable.
+ * lessons). Text without that menu (thinking, a plan, a recap) stays selectable. [streaming]: a reply's row says whether
+ * it is still streaming ([ChatMarkdownCache.parse]).
  */
 @Composable
 internal fun ChatMarkdown(text: String, id: String = text,
     bodyStyle: TextStyle = PersonaTheme.type.body, color: Color = PersonaTheme.palette.ink, selectable: Boolean = true,
-    viewKeys: ((Int) -> String)? = null) {
-    if (selectable) SelectionContainer { ChatMarkdownBody(text, id, bodyStyle, color, viewKeys) }
-    else ChatMarkdownBody(text, id, bodyStyle, color, viewKeys)
+    viewKeys: ((Int) -> String)? = null, streaming: Boolean? = null) {
+    if (selectable) SelectionContainer { ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming) }
+    else ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming)
 }
 
 /**
@@ -92,12 +182,12 @@ internal fun ChatMarkdown(text: String, id: String = text,
  */
 @Composable
 private fun ChatMarkdownCards(text: String, id: String, fences: List<persona.core.domain.views.AssistantFence>,
-    bodyStyle: TextStyle, color: Color, viewKeys: ((Int) -> String)?) {
+    bodyStyle: TextStyle, color: Color, viewKeys: ((Int) -> String)?, streaming: Boolean?) {
     val blocks = LocalViewBlocks.current
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         var at = 0
         fences.forEachIndexed { n, fence ->
-            text.substring(at, fence.start).takeIf { it.isNotBlank() }?.let { ChatMarkdownBody(it, "$id/m$n", bodyStyle, color, null) }
+            text.substring(at, fence.start).takeIf { it.isNotBlank() }?.let { ChatMarkdownBody(it, "$id/m$n", bodyStyle, color, null, streaming) }
             at = fence.end
             when {
                 blocks == null -> CodeText(fence.raw.trimEnd('\n', '\r'), fence.language, syntax = true)
@@ -108,16 +198,17 @@ private fun ChatMarkdownCards(text: String, id: String, fences: List<persona.cor
                 }
             }
         }
-        text.substring(at).takeIf { it.isNotBlank() }?.let { ChatMarkdownBody(it, "$id/m${fences.size}", bodyStyle, color, null) }
+        text.substring(at).takeIf { it.isNotBlank() }?.let { ChatMarkdownBody(it, "$id/m${fences.size}", bodyStyle, color, null, streaming) }
     }
 }
 
 @Composable
-private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, color: Color, viewKeys: ((Int) -> String)? = null) {
+private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, color: Color, viewKeys: ((Int) -> String)? = null,
+    streaming: Boolean? = null) {
     val fences = remember(text) {
         if (persona.core.domain.views.AssistantFences.mentions(text)) persona.core.domain.views.AssistantFences.blocks(text) else emptyList()
     }
-    if (fences.isNotEmpty()) return ChatMarkdownCards(text, id, fences, bodyStyle, color, viewKeys)
+    if (fences.isNotEmpty()) return ChatMarkdownCards(text, id, fences, bodyStyle, color, viewKeys, streaming)
     val cache = LocalChatMarkdownCache.current ?: remember { ChatMarkdownCache() }
     // The paths there on the session's machine become links that open the files pane (PathLinks.kt).
     val actions = LocalChatRowActions.current
@@ -127,7 +218,12 @@ private fun ChatMarkdownBody(text: String, id: String, bodyStyle: TextStyle, col
     if (presence != null && asked.isNotEmpty()) LaunchedEffect(presence, asked) { presence.ask(asked) }
     val linkable = if (presence == null || open == null) emptySet() else asked.filterTo(LinkedHashSet(), presence::linkable)
     val source = remember(text, linkable) { PathLinks.markdown(text, linkable) }
-    val parsed by produceState(cache.cached(id, source), id, source, cache) { value = cache.parse(id, source) }
+    // produceState retains its previous value across key changes. Never draw a predecessor's Markdown in this slot.
+    // [streaming] is a key too: a reply that ends on the text it last streamed still gets its whole parse.
+    val parsedSource by produceState(source to cache.cached(id, source), id, source, cache, streaming) {
+        value = source to cache.parse(id, source, streaming)
+    }
+    val parsed = parsedSource.takeIf { it.first == source }?.second
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
     val outer = LocalUriHandler.current
@@ -238,7 +334,7 @@ internal fun ChatPicture(session: SessionKey, item: Item, loader: ImageLoader, a
 
 /** [userImages] renders neighboring user-image rows in the same bubble; hide those rows with [imagesInUserBubble].
  * [workRunning] comes from the parent work group's live flag; [lastWorkStep] ends its timeline connector; [plan] is the
- * group's plan ([latestPlan]): its TodoWrite is the plan card, the group's other TodoWrites are not drawn (web #1990).
+ * group's plan ([latestPlan]): its TodoWrite is the full plan card, with earlier updates retained as ordinary steps.
  * [waiting]: the turn waits on you ([turnWaitsOnYou]); a running work line then reads "Waiting for you".
  */
 @Composable
@@ -270,7 +366,7 @@ internal fun ChatLineContent(
                         images = userPictures(userImages, session, loader))
                 }
             }
-            "reply" -> line.row.item?.item?.let { MessageContent(it, false, textUpdates[it.id]) }
+            "reply" -> line.row.item?.item?.let { MessageContent(it, false, textUpdates[it.id], boxed = true) }
             "thinking" -> if (!style.hideThoughts) ThoughtContent(line.row.item?.text.orEmpty(), line.id, style.collapseThoughts)
             "image" -> line.row.item?.item?.let { ChatPicture(session, it, loader) }
             "recap" -> line.row.item?.item?.let { RecapLine(listOf(it)) }
@@ -285,47 +381,38 @@ internal fun ChatLineContent(
             line.images.forEach { ChatPicture(session, it.item, loader, alignEnd = true) }
         }
         is ChatLine.Work -> Column(Modifier.fillMaxWidth()) {
-            // While it runs, the plan and the newest steps show under "Working…" and a ticking clock (web #1990); done,
-            // it folds to its summary. Persona's own chat keeps one sentence that counts its time up every second (R1).
-            val trace = line.live && !style.compactToolSummary
-            // Waiting on you, the turn stays open (folding and the plan card as while it runs), but its line says it waits:
-            // no "Working…", no clock, no spinner, as the header says "Waiting for you".
-            val waits = waiting && line.live
-            val now by rememberNow(1_000, enabled = line.live && !trace && !waits)
-            // The Workflow calls whose runs the session lists keep their cards out of the fold (#3435): under the line
-            // while it is folded, in their own place among its steps once open. Only a line with such a call reads the
-            // runs, so a run's progress redraws no other line.
-            val launches = remember(line.steps) { line.steps.any { (it as? WorkItem.Tool)?.call?.name == "Workflow" } }
-            val workflows = if (launches) LocalChatWorkflows.current else null
-            val cards = remember(line.steps, workflows?.runs) { workflows?.let { workflowCalls(line.steps, it.runs) }.orEmpty() }
-            val peek = remember(line.steps, trace, cards) {
-                if (trace) workPeek(line.steps, cards = cards.mapNotNullTo(mutableSetOf()) { it.toolUseId }) else null
-            }
-            WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, peek = trace, waiting = waits), line.open,
-                { onToggle(line.id) }, running = line.live && !waits,
-                trailing = if (trace && !waits) ({ WorkClock(line) }) else null,
-                peek = peek?.takeIf { it.plan != null || it.steps.isNotEmpty() }?.let { shown -> {
-                    shown.plan?.let { PlanStep(it, running = true, nested = true) }
-                    shown.steps.forEachIndexed { i, step ->
-                        key(step.id) {
-                            val last = i == shown.steps.lastIndex
-                            // A thought is one line here (web ThinkingLine): a long one streaming in would make the peek jump.
-                            if (step is WorkItem.Thought) TimelineStep(PhIcons.Lightbulb,
-                                thoughtLine(textUpdates[step.item.id]?.text ?: step.item.text.orEmpty(), stringResource(R.string.chat_work_thought)),
-                                verb = stringResource(R.string.chat_work_thought), last = last, singleLine = true)
-                            else WorkStep(step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates,
-                                running = true, last = last)
-                        }
-                    }
-                } }) {}
-            if (!line.open && workflows != null) cards.forEach { run ->
-                key(run.runId ?: run.taskId) { JWorkflowCallCard(run, folds = workflows.folds, onOpenAgent = workflows.open) }
+            // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary.
+            if (style.compactToolSummary) AssistantWorkSummary(line, onToggle)
+            else {
+                // Waiting on you, the turn stays the live one (it folds and opens as while it runs), but its line says it
+                // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
+                val waits = waiting && line.live
+                val now by rememberNow(1_000, enabled = line.live && !waits)
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
+                    { onToggle(line.id) }, running = line.live && !waits) {}
             }
         }
         is ChatLine.Step -> WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
+    }
+}
+
+@Composable
+private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
+    val state = stringResource(if (line.open) R.string.chat_tasks_expanded else R.string.chat_tasks_collapsed)
+    val label = pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools)
+    val spoken = stringResource(persona.core.designsystem.R.string.designsystem_with_state, label, state)
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { onToggle(line.id) }
+        .then(Modifier.semantics { stateDescription = state; contentDescription = spoken })
+        .padding(vertical = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        JIcon(if (line.open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true,
+            size = Tokens.Space.m, tint = PersonaTheme.palette.ink3)
+        Text(label,
+            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -363,8 +450,8 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     open = true
                 }
             }
-            if (todos != null && !style.compactToolSummary) {
-                if (plan?.id == call.id) PlanStep(plan, running)
+            if (todos != null && !style.compactToolSummary && plan?.id == call.id) {
+                PlanStep(plan, running)
                 return
             }
             val presentation = toolPresentation(LocalResources.current, call.use.item)
@@ -427,13 +514,6 @@ private fun PlanStep(plan: LinePlan, running: Boolean, nested: Boolean = false) 
         } }
     }
     PlanCard(items, progress.current, progress.step, live = running, nested = nested, note = if (plan.failed) stringResource(R.string.chat_content_plan_failed) else null)
-}
-
-/** A running line's clock, every second: a leaf of its own, so the ticking redraws nothing else. */
-@Composable
-private fun WorkClock(line: ChatLine.Work) {
-    val now by rememberNow(1_000)
-    Text(line.durationText(now)?.text().orEmpty())
 }
 
 /** The pictures shown inside a user bubble, or null when there are none (a message of only contexts has no bubble). */

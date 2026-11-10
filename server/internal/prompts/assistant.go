@@ -1,6 +1,9 @@
 package prompts
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // AssistantMachine is one computer in the assistant's CLAUDE.md, as seen from where the assistant runs.
 type AssistantMachine struct {
@@ -212,7 +215,7 @@ type Snapshot struct {
 	Machines      []SnapshotMachine
 	Needs, Unread []SnapshotAgent
 	// Waiting: stopped on something the hub waits out for them (a retry, a deploy, another agent); Done: finished
-	// within a day, with the conclusion (docs/assistant/agent-work.md "Persona knows").
+	// within a day, with the conclusion (docs/assistant/agent-work.md "What Persona knows").
 	Waiting, Done []SnapshotAgent
 	// Awaiting: stopped on a question to the user, who looked at it and has not answered (docs/protocol/agent-states.md
 	// "Awaiting your reply", #5096).
@@ -297,6 +300,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 // saying so first (assistant/context). Node puts what changed of it at the start of each message (TurnContext).
 type AssistantContext struct {
 	Main     bool
+	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
 	Owner    string
 	Snapshot string
 }
@@ -404,6 +408,10 @@ type AskTodoAnswer struct {
 	Thread    bool
 	Dropped   bool
 	Several   bool // more than one question was asked
+	// Defaulted: nobody decided by the question's deadline (Deadline, MM-DD HH:MM) and it could be undone, so its
+	// recommended options were taken by default (#3127).
+	Defaulted bool
+	Deadline  string
 }
 
 // AskTodoChoice is one call of the user's: the question as they wrote it ("" for a reply in the topic), the choice, why.
@@ -420,14 +428,19 @@ func RenderAskTodoAnswer(a AskTodoAnswer) string { return render("assistant/ask_
 type Supervise struct {
 	Level   string
 	Entries []SuperviseEntry
+	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
+	// needs_user, told the main conversation.
+	Leader, Escalated bool
 }
 
-// SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed).
+// SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
+// started, escalated).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
 	Minutes         int                // how long it has waited (needs_you) or not moved (stalled)
 	Ask             string             // needs_you: what it asks
+	Recommend       string             // escalated: the option the leader recommends
 	DoneWhen        []string           // what done means
 	Round           int                // reworks so far
 	Machine         string             // where its agent runs (a name)
@@ -442,6 +455,10 @@ type SuperviseEntry struct {
 	Said        string
 	Evidence    []string
 	Step, Steps int
+	// failed with its tab kept (#2570): until when (local "15:04"), the question its shell waits on, the tab's last
+	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
+	KeptUntil, Question, Screen string
+	RetriesLeft                 int
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }
@@ -545,12 +562,15 @@ type TurnContext struct {
 func RenderTurnContext(c TurnContext) string { return render("assistant/turn_context", c) }
 
 // TaskDone is the system prompt deciding whether a task opened from an assistant conversation is finished, so the
-// hub can mark its todo done (assistant/task_done, docs/assistant/todos.md "Auto-complete").
+// hub can mark its todo done (assistant/task_done, docs/assistant/todos.md "Automatic completion").
 type TaskDone struct {
 	Owner string
 	// Delivery: also say how far the work was delivered (assistant.done_needs_delivery, docs/assistant/todos.md "Delivery"): only
 	// live or nothing to ship closes the task.
 	Delivery bool
+	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
+	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
+	Checks bool
 }
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
@@ -558,6 +578,19 @@ func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d)
 // RenderTaskDelivery is the delivery standard a task's agent is handed after its prompt (assistant/task_delivery,
 // docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got.
 func RenderTaskDelivery() string { return render("assistant/task_delivery", nil) }
+
+// TaskAttachments ends a message to an agent with the files and pictures the user gave the assistant for it (#2437):
+// where they are on the agent's computer (Copied: copied there from the assistant's), and those that could not come.
+// Pictures go last, in the <attached_images> block a picture sent straight to an agent ends with (node/send.go), so
+// the apps draw them as they do those.
+type TaskAttachments struct {
+	Files, Missing, Pictures []string
+	Copied                   bool
+}
+
+func RenderTaskAttachments(a TaskAttachments) string {
+	return strings.TrimRight(render("assistant/task_attachments", a), "\n")
+}
 
 // SideConversation preserves the provenance of a non-owner's message to a tasked Agent.
 type SideConversation struct {
@@ -583,6 +616,9 @@ type TaskDoneReply struct {
 	Machine, Ask, Text string
 	From               string `json:"from,omitempty"`
 	Source             string `json:"source,omitempty"`
+	// Earlier is the agent's reply in the turn before the user's own follow-up in this session (its report of the
+	// work, when the follow-up only asks whether it is done); never set for a side-conversation turn (#3111).
+	Earlier string `json:"earlier,omitempty"`
 }
 
 func RenderTaskDoneInput(in TaskDoneInput) string { return render("assistant/task_done_input", in) }
@@ -607,7 +643,7 @@ type HandoffTurn struct {
 func RenderMainHandoff(h MainHandoff) string { return render("assistant/main_handoff", h) }
 
 // Acceptance is a deployed task, for the three lines of its "Please accept" card (assistant/acceptance_input; the system
-// prompt is assistant/acceptance; docs/extensions/bots.md "Please accept").
+// prompt is assistant/acceptance; docs/extensions/bots.md "Task progress and review requests").
 type Acceptance struct {
 	Title, Prompt, Reply string
 	Links                []string // the only links it may pick
@@ -639,3 +675,6 @@ type WorkspaceSession struct {
 func RenderWorkspaceMention(w WorkspaceMention) string {
 	return render("assistant/workspace_mention", w)
 }
+
+// RenderWorkoutReport describes one consented workout, never a medical diagnosis.
+func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }

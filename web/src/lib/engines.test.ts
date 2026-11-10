@@ -11,7 +11,6 @@ import {
   engineSaveError,
   KNOWN_ENGINES,
   alsoOpenText,
-  canStartIn,
   currentHosts,
   ENGINE_HOSTS,
   hostOptions,
@@ -54,7 +53,7 @@ describe("engine choice (iOS EngineSelectionModel)", () => {
 
   it("lists every known engine when the node reports none (offline, older hubs)", () => {
     const m = machine({ engine: "future" });
-    expect(engineOptions(m).map((e) => e.id)).toEqual(["herdr", "herdr-core", "herdr-both", "orca", "paseo"]);
+    expect(engineOptions(m).map((e) => e.id)).toEqual(["herdr", "herdr-core", "herdr-both", "orca", "paseo", "cindy"]);
     expect(engineOptions(m).every((e) => !e.available)).toBe(true);
     expect(engineOptions({ engines: [] }).length).toBe(KNOWN_ENGINES.length);
     // known ones stay selectable offline; an unknown one only while reported available
@@ -68,6 +67,8 @@ describe("engine choice (iOS EngineSelectionModel)", () => {
     expect(engineDetail("herdr-both")).toBe("终端和桌面 App 的会话都显示");
     expect(engineName("paseo")).toBe("Paseo");
     expect(engineDetail("paseo")).toBe("Paseo 里的 Agent");
+    expect(engineName("cindy")).toBe("Cindy");
+    expect(engineDetail("cindy")).toBe("Cindy 里的 Agent");
     expect(engineDetail("future")).toBeUndefined();
   });
 
@@ -140,10 +141,9 @@ describe("engine host sets (#2576)", () => {
     expect(hostOptions(machine()).map((e) => e.id)).toEqual(ENGINE_HOSTS);
   });
 
-  it("offers a host to start in only among those that can start sessions", () => {
-    expect(startHosts(machine({ engine_hosts: ["herdr", "herdr-core", "orca"], engine_default: "herdr" }))).toEqual(["herdr", "orca"]);
-    expect(startHosts(machine({ engine: "herdr-both" }))).toEqual(["herdr"]);
-    expect(canStartIn("herdr-core")).toBe(false);
+  it("offers every enabled host to start in", () => {
+    expect(startHosts(machine({ engine_hosts: ["herdr", "herdr-core", "orca"], engine_default: "herdr" }))).toEqual(["herdr", "herdr-core", "orca"]);
+    expect(startHosts(machine({ engine: "herdr-both" }))).toEqual(["herdr", "herdr-core"]);
   });
 
   it("names the other hosts a session is open in", () => {

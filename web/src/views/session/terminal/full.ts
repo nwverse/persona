@@ -1,4 +1,4 @@
-// The full herdr surface's feed (docs/integrations/terminal.md "The full herdr UI"): herdr's own client, run in a PTY on the computer,
+// The full herdr surface's feed (docs/integrations/terminal.md "Full herdr UI"): herdr's own client, run in a PTY on the computer,
 // drawn by a plain xterm. Not TerminalFeed's job — that one mirrors a pane's grid frame by frame — so this is a feed of
 // its own with the same face for what the page shares (the key bar, the find bar, the right-click menu): the hub relays
 // bytes both ways over the app WebSocket (herdr_open / herdr_data / herdr_input / herdr_resize / herdr_ack / herdr_close,
@@ -11,7 +11,7 @@ import { t as tr } from "../../../i18n";
 import { openLink } from "../../../lib/links";
 import { followRoute, focusAddress, focusGuard, decideFocus, parseFocus, type HerdrFocus } from "../../../lib/herdr-focus";
 import { navigate } from "../../../lib/router";
-import { getState, isOpen, onHubEvent, send } from "../../../lib/store";
+import { getSession, getState, isOpen, onHubEvent, send } from "../../../lib/store";
 import { currentPlatform, passesToApp } from "../../../lib/shortcuts";
 import { herdrOwnsKey, isCtrlV, linkOpens, rightClickRoute, type RightClick } from "../../../lib/terminal-conflicts";
 import {
@@ -761,7 +761,7 @@ export class FullFeed {
   private openWebLink(e: MouseEvent, uri: string) {
     if (!linkOpens(e, this.mouseTracked, this.pointer)) return; // the click is herdr's (lib/terminal-conflicts.ts)
     const url = webLink(uri);
-    if (url) openLink(url);
+    if (url) openLink(url, undefined, getSession(this.mid, this.target)?.manager);
   }
 
   // ── the clipboard ─────────────────────────────────────

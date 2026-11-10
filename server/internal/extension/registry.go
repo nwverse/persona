@@ -55,15 +55,27 @@ type Record struct {
 	Remote            *Remote         `json:"remote,omitempty"`
 	// DisabledContributions are the contributions the user switched off ("<point>/<id>", docs/extensions/extensions.md "Contribution switches"):
 	// they do not take effect while the rest of the extension runs. A connector's switch is the connector's own.
-	DisabledContributions []string  `json:"disabled_contributions,omitempty"`
-	InstalledAt           time.Time `json:"installed_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	DisabledContributions []string `json:"disabled_contributions,omitempty"`
+	// PackOff, on an extension pack, are the members switching the pack off switched off (docs/extensions/extensions.md
+	// "Dependencies, exports and packs", #1830): switching the pack back on turns these on again and no others.
+	PackOff     []string  `json:"pack_off,omitempty"`
+	InstalledAt time.Time `json:"installed_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Remote is a plugin that runs elsewhere and is reached on these sockets.
 type Remote struct {
 	RPCSocket  string `json:"rpc_socket,omitempty"`
 	HTTPSocket string `json:"http_socket,omitempty"`
+	// Package: it is the installed package's program, attached (Attach); the package stays. Without it, the extension
+	// was installed from remote: and has no package.
+	Package bool `json:"package,omitempty"`
+}
+
+// AttachedPackage: an installed package whose program runs on its own and is reached on Remote's sockets (Attach). Its
+// package stays installed and still takes effect (skills, instructions, gates); Detach runs it from there again.
+func (r Record) AttachedPackage() bool {
+	return r.Source == SourceInstalled && r.Remote != nil && r.Remote.Package
 }
 
 // Store keeps the registry (the hub's Postgres: tables plugins, plugin_secrets, plugin_audit).
@@ -94,8 +106,10 @@ type Extension struct {
 	Manifest *Manifest
 	Full     *Manifest
 	Schema   *Schema
-	// Dir is the package's directory ("" for a remote or hub.json plugin).
+	// Dir is the package's directory ("" for one installed from remote: or a hub.json plugin).
 	Dir string
+	// L10n are the package's translations of its manifest's text (l10n.go), read with it; never changed after.
+	L10n Translations
 	// Problem is why it cannot run on this hub (engines, a missing package); it is then not started.
 	Problem  string
 	Warnings []string
@@ -119,7 +133,7 @@ func (p *Extension) ProblemText(l i18n.Lang) string {
 // Change is what the registry tells the hub after it changed a plugin.
 type Change struct {
 	ID   string
-	Kind string // installed | upgraded | rolled_back | removed | enabled | disabled | config | secret
+	Kind string // installed | upgraded | rolled_back | removed | enabled | disabled | config | secret | attached | detached
 	// Old is the plugin before the change (removed, upgraded, rolled back).
 	Old *Extension
 }
@@ -330,11 +344,15 @@ func (r *Registry) fromRow(row Record) *Extension {
 	}
 	p.Full, p.Manifest = m, m.Without(row.DisabledContributions)
 	p.Schema, _ = ParseSchema(m.Configuration)
-	if row.Remote == nil {
+	if row.Remote == nil || row.AttachedPackage() {
 		p.Dir = r.installedDir(row.StorageKey(), row.Version)
 		if !hasManifest(p.Dir) {
 			p.problemErr = i18n.Err("extension-status.package_missing", i18n.Args{"path": p.Dir})
 			p.Problem = p.problemErr.Error()
+		} else {
+			var warnings []string
+			p.L10n, warnings = ReadTranslations(p.Dir)
+			p.Warnings = append(p.Warnings, warnings...)
 		}
 	}
 	if w, err := CheckEngines(m, r.build); err != nil {
@@ -404,6 +422,7 @@ func snapshotExtension(p *Extension) *Extension {
 		out.Record.Granted.Storage = &storage
 	}
 	out.Record.DisabledContributions = slices.Clone(p.Record.DisabledContributions)
+	out.Record.PackOff = slices.Clone(p.Record.PackOff)
 	if p.Record.Remote != nil {
 		remote := *p.Record.Remote
 		out.Record.Remote = &remote
@@ -413,13 +432,14 @@ func snapshotExtension(p *Extension) *Extension {
 }
 
 // HubScopeAllowed checks the live permission record while holding the registry lock. Callers must not read the
-// pointer returned by Get to authorize a request: SetEnabled can change its record concurrently.
+// pointer returned by Get to authorize a request: SetEnabled can change its record concurrently. The legacy full-hub
+// grant covers every scope but the ones only granted by name (InEveryScope).
 func (r *Registry) HubScopeAllowed(id, scope string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p := r.extensions[id]
 	return p != nil && p.Record.Enabled && p.Problem == "" &&
-		(p.Record.Granted.FullHub() || slices.Contains(p.Record.Granted.Hub, scope))
+		((p.Record.Granted.FullHub() && InEveryScope(scope)) || slices.Contains(p.Record.Granted.Hub, scope))
 }
 
 // HubScopeGranted is HubScopeAllowed without the legacy full-hub grant: the user granted scope itself. For what
@@ -447,7 +467,8 @@ func (r *Registry) SendsAsUser(id, contribution string) bool {
 }
 
 // EventSubscribers snapshots the enabled, compatible extensions subscribed to topic. A nonempty scope additionally
-// requires that actual grant (or the legacy full-hub grant); an empty scope preserves the other event topics' rules.
+// requires that actual grant (or the legacy full-hub grant, where InEveryScope); an empty scope preserves the other
+// event topics' rules.
 func (r *Registry) EventSubscribers(topic, scope string) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -456,7 +477,7 @@ func (r *Registry) EventSubscribers(topic, scope string) []string {
 		if !p.Record.Enabled || p.Problem != "" || p.Manifest == nil {
 			continue
 		}
-		if scope != "" && !p.Record.Granted.FullHub() && !slices.Contains(p.Record.Granted.Hub, scope) {
+		if scope != "" && !(p.Record.Granted.FullHub() && InEveryScope(scope)) && !slices.Contains(p.Record.Granted.Hub, scope) {
 			continue
 		}
 		if slices.Contains(p.Manifest.Topics(), topic) {

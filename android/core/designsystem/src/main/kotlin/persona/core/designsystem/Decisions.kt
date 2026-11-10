@@ -34,6 +34,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
@@ -316,6 +318,8 @@ fun MarkerText(text: String, style: TextStyle, modifier: Modifier = Modifier) {
  * One answer to choose. The [recommended] one stands out by its label, icon and outline,
  * not a second solid action or a colored backing. A [multiSelect] option is read as a checkbox (ticked or not), otherwise as a
  * radio button; [position] ("current" of "total") is read after the label so a screen reader hears how many there are.
+ * The label keeps to 2 lines and the [detail] to 3, unless [fullText] (a full-page view, where an option must be readable
+ * in full before it is picked).
  */
 @Composable
 fun DecisionOption(
@@ -328,6 +332,7 @@ fun DecisionOption(
     enabled: Boolean = true,
     multiSelect: Boolean = false,
     position: Pair<Int, Int>? = null,
+    fullText: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -355,8 +360,8 @@ fun DecisionOption(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(label, style = type.label, color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 3, overflow = TextOverflow.Ellipsis) }
+            Text(label, style = type.label, color = ink, maxLines = if (fullText) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
+            detail?.let { Text(it, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = if (fullText) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis) }
         }
         if (selected) { Spacer(Modifier.width(8.dp)); JIcon(PhIcons.CheckCircle, null, size = 20.dp, tint = palette.accent, selected = true) }
         else if (recommended) {
@@ -364,6 +369,33 @@ fun DecisionOption(
             JIcon(PhIcons.Sparkle, null, size = 14.dp, tint = if (style == AppStyle.Board) palette.accent else ink, selected = true)
             Spacer(Modifier.width(3.dp))
             Text(stringResource(R.string.designsystem_decision_recommended), style = type.micro.copy(fontWeight = FontWeight.Bold), color = if (style == AppStyle.Board) palette.accent else ink, maxLines = 1)
+        }
+    }
+}
+
+/** A single action line. Alternatives move into a menu before their labels would be truncated. */
+@Composable
+fun DecisionActions(primary: JAction?, alternatives: List<JAction>, overflowLabel: String, modifier: Modifier = Modifier, busy: Boolean = false) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val type = PersonaTheme.type.labelSmall
+    val size = JButtonSize.Small
+    var menu by remember { mutableStateOf(false) }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val actions = alternatives + listOfNotNull(primary)
+        val labels = actions.sumOf { measurer.measure(it.label, style = type, maxLines = 1, softWrap = false).size.width }
+        val required = with(density) { (size.padding * (actions.size * 2) + Tokens.Space.s * (actions.size - 1).coerceAtLeast(0)).toPx() } + labels
+        val overflow = required > with(density) { maxWidth.toPx() }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+            if (overflow && alternatives.isNotEmpty()) Box {
+                JIconButton(PhIcons.DotsThree, overflowLabel, { menu = true }, enabled = !busy)
+                JMenu(menu && !busy, { menu = false }, alternatives.map { it.copy(enabled = it.enabled && !busy) })
+            } else alternatives.forEach { action ->
+                JButton(action.label, action.onClick, kind = JButtonKind.Secondary, size = size, enabled = action.enabled && !busy)
+            }
+            primary?.let { action ->
+                JButton(action.label, action.onClick, Modifier.weight(1f, fill = false), size = size, enabled = action.enabled && !busy)
+            }
         }
     }
 }

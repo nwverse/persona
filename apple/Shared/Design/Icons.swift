@@ -30,6 +30,8 @@ extension Theme {
         static let byState = "circle.grid.2x1"
         static let muted = "bell.slash.fill"
         static let notifications = "bell.badge"
+        /// The hours this device's notifications keep quiet (Settings › Notifications).
+        static let quietHours = "moon.zzz.fill"
         /// An Agent at work (the fleet's working count).
         static let working = "gearshape.fill"
         /// Calls moved to the background.
@@ -39,6 +41,8 @@ extension Theme {
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
         static let unchecked = "circle"
+        /// Some of a group picked (the inbox's Select, #2059).
+        static let partlyChecked = "minus.circle.fill"
         static let uncheckedBox = "square"
         static let todo = "checklist"
         /// Recent, or waiting to come back (reconnecting, last used).
@@ -126,7 +130,8 @@ extension Theme {
         static let gitBranch = "arrow.triangle.branch"
         /// The spaces a host nests under another (Orca's child worktrees,「N 个子项」, #3075).
         static let childSpaces = "square.3.layers.3d.down.right"
-        static let workspaceUnread = "bell.fill"
+        /// A notification that needs attention, in a workspace or from a background task.
+        static let notification = "bell.fill"
         /// Where a workspace comes from (its source host): the same plug as a hub plugin.
         static let workspaceHost = plugins
         /// Branch to New Chat: a new conversation from a reply (#2137).
@@ -135,7 +140,7 @@ extension Theme {
         static let rewindChat = undo
         static let gitUpstream = "cloud"
         static let gitNoUpstream = "icloud.slash"
-        /// Git Pull / Push / Fetch in the node menu (docs/integrations/terminal.md「节点菜单」).
+        /// Git Pull / Push / Fetch in the node menu (docs/integrations/terminal.md「Node menus」).
         static let gitPull = "arrow.down.to.line.compact"
         static let gitPush = "arrow.up.to.line.compact"
         static let gitFetch = "icloud.and.arrow.down"
@@ -144,7 +149,7 @@ extension Theme {
         static let splitDown = "rectangle.split.1x2"
         /// Close a whole terminal tab, every pane in it.
         static let closeTab = "xmark.rectangle"
-        /// New Worktree…: another checkout of a workspace's repository (docs/integrations/terminal.md「新建 worktree…」).
+        /// New Worktree…: another checkout of a workspace's repository (docs/integrations/terminal.md「New worktree…」).
         static let newWorktree = "plus.rectangle.on.folder"
         static let retry = "arrow.clockwise"
         /// Put a computer's own Persona files right (Machine Details › What This Computer Can Do › Repair).
@@ -171,6 +176,11 @@ extension Theme {
         static let translate = "translate"
         /// Settings › Appearance › Avatar.
         static let avatar = "person.crop.artframe"
+        /// Settings › Appearance › Avatar › New from Photo: make an avatar from an image of your own (#2405).
+        static let newAvatar = "photo.badge.plus"
+        /// Zoom in and out of a picture with a slider beside it (the avatar crop on the Mac).
+        static let zoomIn = "plus.magnifyingglass"
+        static let zoomOut = "minus.magnifyingglass"
         /// Settings › Appearance › Interface Style.
         static let style = "paintpalette"
         /// Settings › Appearance › Theme Color.
@@ -216,6 +226,8 @@ extension Theme {
         static let filterActive = "line.3.horizontal.decrease.circle.fill"
         /// A plain list layout.
         static let listView = "list.bullet"
+        /// A calendar layout (the to-dos' Calendar, beside `listView`, #2029).
+        static let calendarView = "calendar"
         /// A card layout (the Agents list's Display › Cards, beside `listView`).
         static let cardView = "rectangle.grid.1x2"
         /// A list's view menu: how rows are grouped (Group By), a custom group added or removed (New Group /
@@ -237,6 +249,8 @@ extension Theme {
         static let unarchive = "tray.and.arrow.up"
         static let mute = "bell.slash"
         static let unmute = "bell"
+        /// An Inbox rule: where a chat's, sender's or repository's items go and what the AI twin does with them.
+        static let inboxRule = "signpost.right"
         static let collapseAll = "rectangle.compress.vertical"
         static let expandAll = "rectangle.expand.vertical"
         static let newConversation = "plus.bubble"
@@ -271,6 +285,11 @@ extension Theme {
         static let forward = "chevron.forward"
         static let expand = "chevron.down"
         static let collapse = "chevron.up"
+        /// Holding the mic: slide this way to drop what was heard, or up to keep dictating hands-free (`DictationHold`).
+        static let slideToCancel = back
+        static let slideToLock = collapse
+        /// Clears an agent's context (/clear), in the 「+」 menu and panel.
+        static let clearContext = "eraser"
 
         // MARK: Things
 
@@ -284,6 +303,8 @@ extension Theme {
         static let persona = "sparkle"
         /// AI does it: summaries, drafts, AI edits, hand to Persona.
         static let ai = "sparkles"
+        /// The composer's glow while a reply is generating (Settings › Appearance › Glow While Replying).
+        static let composerGlow = "wand.and.rays"
         /// The Agents tab and what stands for it.
         static let agents = "chevron.left.forwardslash.chevron.right"
         /// An agent run from its command line, not its desktop app: the badge on its mark (`AgentMark`, #6390).
@@ -341,7 +362,7 @@ extension Theme {
         /// A computer whose kind is not known.
         static let machine = "desktopcomputer"
         static let laptop = "laptopcomputer"
-        /// A Mac's live screen (VNC, docs/extensions/computer-use.md「实时画面」).
+        /// A Mac's live screen (VNC, docs/extensions/computer-use.md「Live view」).
         static let screen = "display"
         /// Which of a Mac's displays its VNC shows, when it has more than one (#80).
         static let displays = "display.2"
@@ -378,9 +399,9 @@ extension Theme {
         static let makeDefault = "star.circle"
         /// What Persona sent in the user's name through the connectors (Settings › Sent as You, docs/extensions/connectors.md "Sent as the user").
         static let sentAsYou = "paperplane.circle"
-        /// A hub reached through an SSH tunnel (Settings › hub › SSH Tunnel, docs/operations/network.md「经 SSH 隧道连 hub」).
+        /// A hub reached through an SSH tunnel (Settings › hub › SSH Tunnel, docs/operations/network.md「Connecting to hub through SSH」).
         static let sshTunnel = "network.badge.shield.half.filled"
-        /// A hub reached through the app's own in-app tunnel (docs/operations/network.md「经 App 内隧道连 hub」).
+        /// A hub reached through the app's own in-app tunnel (docs/operations/network.md「Connecting to hub through an in-app tunnel」).
         static let inAppTunnel = "lock.iphone"
         /// A hub reached through a SOCKS5 proxy another app on this device serves (Settings › hub › Local Proxy,
         /// docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
@@ -402,14 +423,14 @@ extension Theme {
         static let upgrade = "arrow.up.square"
         /// A page a plugin draws (its declarative UI).
         static let pluginPage = "chart.bar.doc.horizontal"
-        /// A plugin's main-navigation entry by the `icon` it asks for (docs/extensions/extensions.md「UI 插槽」): one meaning each,
+        /// A plugin's main-navigation entry by the `icon` it asks for (docs/extensions/extensions.md「UI slots」): one meaning each,
         /// anything else is `plugins`.
         static let pluginChart = "chart.bar"
         static let pluginGauge = "gauge.with.needle"
         static let pluginList = listView
         static let pluginBell = unmute
         static let pluginDoc = document
-        static let pluginCalendar = "calendar"
+        static let pluginCalendar = calendarView
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
         static let phone = "iphone"
@@ -447,7 +468,7 @@ extension Theme {
         static let channels = "ellipsis.bubble"
         /// A voice channel (talking to Persona out loud), and a chat's way into a voice conversation (Voice Chat).
         static let voiceChannel = "waveform.and.mic"
-        /// The voice conversation's bar (docs/assistant/voice.md「界面」). Mute: turns the call's microphone off; muted, the button
+        /// The voice conversation's bar (docs/assistant/voice.md「UI」). Mute: turns the call's microphone off; muted, the button
         /// shows `voiceUnmute` (Unmute), the same mic filled like a toggle that is on, as the iOS Phone app's Mute. The muted
         /// orb wears `voiceMute`.
         static let voiceMute = "mic.slash"
@@ -533,6 +554,8 @@ extension Theme {
         static let questionFilled = "questionmark.bubble.fill"
         static let plan = "list.bullet.clipboard"
         static let planFilled = "list.bullet.clipboard.fill"
+        /// An MCP server's form to fill in (an `elicitation` card; its link card draws `link`).
+        static let mcpForm = "rectangle.and.pencil.and.ellipsis"
         /// A file edited in place (the Edit tools; Auto-Edit mode).
         static let editFile = "pencil.line"
         static let newFile = "doc.badge.plus"
@@ -545,8 +568,16 @@ extension Theme {
         static let subagentWorking = "person.2.badge.gearshape"
         /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
         static let agentChat = "bubble.left.and.text.bubble.right"
-        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one).
+        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
         static let meeting = "person.2.wave.2"
+        /// The calendar event a meeting recording is named after (docs/apple/recording.md).
+        static let calendarEvent = "calendar.day.timeline.left"
+        /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).
+        static let keyPoint = "text.bubble.fill"
+        static let decision = "signature"
+        static let openQuestion = "questionmark.circle.dashed"
+        /// A meeting's minutes as a whole (the watch's Meeting Minutes).
+        static let minutes = "note.text"
         /// People in the knowledge base.
         static let people = "person.3"
         /// A tap on the screen, in tips and features.

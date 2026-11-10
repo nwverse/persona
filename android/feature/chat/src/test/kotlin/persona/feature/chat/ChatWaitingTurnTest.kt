@@ -31,7 +31,7 @@ import java.time.Instant
 /**
  * #2483: the real chat page for an Agent whose status stays working while the hub's state says it needs you (a hook holds
  * Claude Code's question, docs/protocol/agent-states.md). Its current turn's line says "Waiting for you", as the header
- * does, with no clock; the same session at work still says "Working…" with its time.
+ * does, with no clock; the same session at work still says what it is doing with its time.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp")
@@ -89,8 +89,8 @@ class ChatWaitingTurnTest {
         rule.mainClock.autoAdvance = false
         rule.setContent { ChatScreen(key, chats, sender, interactions, sessions, onBack = {}) }
 
-        // At work: the line says "Working…" and counts its time.
-        val atWork = waitFor("the working line") { shown -> "Working…" in shown && shown.any(clock::matches) }
+        // At work: the line says what it is doing and counts its time.
+        val atWork = waitFor("the working line") { shown -> shown.any(clock::containsMatchIn) }
         assertFalse(atWork.toString(), atWork.any { it.startsWith("Waiting for you, ") })
 
         // The hub says it needs you, herdr's status still working: the line says what the header says, and stops counting.
@@ -98,8 +98,7 @@ class ChatWaitingTurnTest {
         val waiting = waitFor("the waiting line") { shown -> shown.any { it.startsWith("Waiting for you, ") } }
         rule.mainClock.advanceTimeBy(5_000)
         for (shown in listOf(waiting, texts())) {
-            assertFalse(shown.toString(), "Working…" in shown)
-            assertFalse(shown.toString(), shown.any(clock::matches))
+            assertFalse(shown.toString(), shown.any(clock::containsMatchIn))
             assertTrue(shown.toString(), "Waiting for you" in shown)
         }
     }

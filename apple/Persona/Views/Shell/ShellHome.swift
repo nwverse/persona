@@ -10,6 +10,7 @@ struct ShellHome: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
     @Environment(\.shellRailEdge) private var railEdge
+    @Environment(\.managerSwitcherRoom) private var switcherRoom
     var pending: PendingStart?
     var error: String?
     @Binding var launcher: String?
@@ -21,6 +22,8 @@ struct ShellHome: View {
     var send: (String, [ImagePayload]) -> Void
     @State private var room = NeedsRoom()
     @State private var route: ReadinessRoute?
+    /// The composer's @ list is open (#2319): Needs You steps aside for it.
+    @State private var mentionOpen = false
 
     /// How far the welcome fades out over Needs You and the composer, rather than being cut off at their edge.
     fileprivate static let fade = Theme.Space.xl
@@ -52,7 +55,7 @@ struct ShellHome: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .dismissesKeyboardOnTap()
-        .contentMargins(.top, AssistantTopBar.room(railEdge), for: .scrollContent)
+        .contentMargins(.top, AssistantTopBar.room(railEdge) + switcherRoom, for: .scrollContent)
         // Room to scroll the last things to ask clear of the fade.
         .contentMargins(.bottom, pending == nil ? Self.fade : ChatView.newestGap, for: .scrollContent)
         .onPreferenceChange(WelcomeFold.self) { room.fold = $0 }
@@ -78,12 +81,14 @@ struct ShellHome: View {
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
                         .onDisappear { room.card = 0 }
                 }
-                if pending == nil {
-                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge)), openInbox: openInbox).shellScaled()
+                if pending == nil, !mentionOpen {
+                    ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge) + switcherRoom), openInbox: openInbox).shellScaled()
                 }
-                StarterComposer(disabled: pending != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
+                if let m = model.assistantManagerOffline { ManagerOfflineNote(manager: m) }
+                StarterComposer(disabled: pending != nil || model.assistantManagerOffline != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
                                 gate: model.readinessGate(route: $route), send: send)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.composerAtRest($0, typeSize: typeSize) }
+                    .onPreferenceChange(MentionMenuOpen.self) { open in withAnimation(Theme.Motion.standard) { mentionOpen = open } }
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.bottom, Theme.Space.s)
@@ -206,7 +211,7 @@ struct ShellNeedsYou: View {
         var id: String {
             switch self {
             case .agent(let ix): "ix-" + ix.id
-            case .inbox(let it): "in-" + it.id
+            case .inbox(let it): "in-" + it.key
             }
         }
     }
@@ -279,7 +284,7 @@ struct ShellNeedsYou: View {
             Button { model.open(ix.sessionKey) } label: {
                 BUIListRow(agentName(ix), detail: oneLine(ix.summary ?? ix.questions?.first?.question ?? ix.title),
                            accessory: .disclosure, detailLines: 1) {
-                    IconTile(ix.kind.symbol, tint: Theme.needsYou)
+                    IconTile(ix.symbol, tint: Theme.needsYou)
                 }
             }
             .buttonStyle(.plain)
@@ -336,7 +341,7 @@ struct ShellNeedsYou: View {
         case .agent(let ix):
             Button { model.open(ix.sessionKey) } label: {
                 HStack(spacing: Theme.Space.m) {
-                    ThemedIcon(ix.kind.symbol)
+                    ThemedIcon(ix.symbol)
                         .font(Theme.Font.heading)
                         .foregroundStyle(Theme.needsYou)
                         .scaledFrame(width: Theme.Size.icon)
@@ -410,7 +415,7 @@ struct ShellNeedsYou: View {
     }
 }
 
-/// The pages the shell pushes onto the Assistant page by value (docs/apple/ios.md「新外壳」), and what those push in turn: the
+/// The pages the shell pushes onto the Assistant page by value (docs/apple/ios.md「New shell」), and what those push in turn: the
 /// inbox (its items and Feishu pages), the machines (a machine, its agents). One stack, values only: a value pushed on
 /// top of a view-based push lands under it (docs/lessons/ios.md).
 struct ShellDestinations: ViewModifier {
@@ -441,6 +446,6 @@ struct ShellDestinations: ViewModifier {
 }
 
 extension EnvironmentValues {
-    /// The Persona conversation is in the shell (docs/apple/ios.md「新外壳」): neutral bubbles, the shell's composer, modes in it.
+    /// The Persona conversation is in the shell (docs/apple/ios.md「New shell」): neutral bubbles, the shell's composer, modes in it.
     @Entry var shellChat = false
 }

@@ -13,6 +13,10 @@ struct InboxHandOffModelTests {
         var asked: [String] = []
         var started: [String] = []
         var agents: [(key: SessionKey, text: String)] = []
+        var agentAccepted = true
+        var agentFiled = false
+        var agentError: String?
+        var agentDelay: Duration?
         /// What `open()` went to.
         var went: [(target: InboxHandOffModel.Target, key: SessionKey)] = []
         var done = 0
@@ -61,7 +65,11 @@ struct InboxHandOffModelTests {
                 calls.started.append($0)
                 return Self.fresh
             },
-            sendToAgent: { calls.agents.append(($0, $1)) },
+            sendToAgent: { key, text, _ in
+                calls.agents.append((key, text))
+                if let delay = calls.agentDelay { try? await Task.sleep(for: delay) }
+                return calls.agentAccepted ? InboxHandOffModel.AgentSendResult(delivered: true, error: nil, filed: calls.agentFiled) : .failed(calls.agentError)
+            },
             open: { calls.went.append(($0, $1)) },
             markDone: { calls.done += 1 }))
     }
@@ -111,6 +119,56 @@ struct InboxHandOffModelTests {
         let sent = await m.send(ask: "b")
         let a = try #require(calls.agents.first)
         #expect(sent && a.key == agent && ContextRef.parse(a.text).rest == "b" && calls.done == 2 && calls.handOffs.isEmpty)
+    }
+
+    @Test func handOffListsOnlyAgentsThatCanTakeAMessage() throws {
+        let good = try session("good")
+        let viewOnly = try session("view-only", viewOnly: true)
+        let offline = try session("offline", state: .offline)
+        let offlineMachine = try session("machine-offline", machine: "offline")
+        let assistant = try session("assistant", assistant: true)
+        let got = InboxHandOffModel.agents([good, viewOnly, offline, offlineMachine, assistant], limit: 8) { $0.id == "m" }
+        #expect(Set(got.map(\.sessionID)) == ["good"])
+        // A source's remembered Agent (#2121) passes the same test, so one that can't take it now counts as gone.
+        let takes = [good, viewOnly, offline, offlineMachine, assistant].map { s in InboxHandOffModel.takes(s) { $0.id == "m" } }
+        #expect(takes == [true, false, false, false, false])
+    }
+
+    @Test func aRefusedAgentSendKeepsTheItemAndSheet() async {
+        let calls = Calls(), m = model(calls)
+        calls.agentAccepted = false
+        calls.agentError = "Finish the draft on the computer first"
+        m.target = .agent(SessionKey(machineID: "m", sessionID: "a"))
+        let sent = await m.send(ask: "a")
+        #expect(!sent)
+        #expect(calls.agents.count == 1 && calls.done == 0)
+        #expect(m.sent == nil && m.error == "Finish the draft on the computer first")
+    }
+
+    @Test func anAgentSendFilesOnlyAfterItsDelayedDelivery() async throws {
+        let calls = Calls(), m = model(calls)
+        calls.agentDelay = .milliseconds(100)
+        m.target = .agent(SessionKey(machineID: "m", sessionID: "a"))
+        let sending = Task { await m.send(ask: "a") }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(m.sending && calls.done == 0)
+        #expect(await sending.value)
+        #expect(calls.done == 1 && m.sent?.key == SessionKey(machineID: "m", sessionID: "a"))
+    }
+
+    @Test func anAgentSendAlreadyFiledByTheOutboxDoesNotFileAgain() async {
+        let calls = Calls(), m = model(calls)
+        calls.agentFiled = true
+        m.target = .agent(SessionKey(machineID: "m", sessionID: "a"))
+        #expect(await m.send(ask: "a"))
+        #expect(calls.done == 0)
+    }
+
+    private func session(_ id: String, assistant: Bool = false, state: AgentState = .working, viewOnly: Bool = false, machine: String = "m") throws -> Session {
+        let source = viewOnly ? #","source_kind":"runtime","capabilities":{"read":true,"send":false}"# : ""
+        return try JSON.decoder.decode(Session.self, from: Data("""
+        {"machine_id":"\(machine)","session_id":"\(id)","title":"\(id)","cwd":"/tmp","status":"idle","state":"\(state.rawValue)","assistant":\(assistant)\(source)}
+        """.utf8))
     }
 
     @Test func aRetryKeepsTheClientIDOnlyWhileTheHandOffMayHaveGone() async {
@@ -181,7 +239,7 @@ struct InboxHandOffModelTests {
         let calls = Calls(), m = model(calls)
         calls.failures = [APIError(status: 503, message: "node offline", fields: ["code": "node_unreachable", "delivered": "none"])]
         _ = await m.send(ask: "a")
-        #expect(m.error == "node offline")
+        #expect(m.error == String(localized: "This computer is offline: Persona Link isn't running, or the computer is asleep."))
         _ = await m.send(ask: "a")
         let ids = calls.handOffs.map(\.clientID)
         #expect(ids.count == 2 && ids[0] != ids[1])
@@ -213,7 +271,7 @@ struct InboxHandOffModelTests {
         let c = Calls(), fresh = model(c)
         c.failures = [APIError(status: 502, message: "context canceled", fields: ["code": "internal"])]
         _ = await fresh.send(ask: "a")
-        #expect(fresh.error == "context canceled")
+        #expect(fresh.error?.contains("HTTP 502") == true && fresh.error?.contains("context canceled") == false)
         _ = await fresh.send(ask: "a")
         #expect(c.handOffs.count == 2 && c.handOffs[0].clientID != c.handOffs[1].clientID)
     }
@@ -252,7 +310,8 @@ struct InboxHandOffModelTests {
         }
         let went = await m.send(ask: "a")
         #expect(went && errors == [String(localized: "It may have reached the computer already. Check the chat before sending it again."),
-                                   String(localized: "Can't reach the hub"), nil, "offline", Self.lookAgain])
+                                   String(localized: "Can't reach the hub"), nil,
+                                   String(localized: "The manager is offline or restarting. Try again shortly."), Self.lookAgain])
         #expect(calls.handOffs.count == 6 && Set(calls.handOffs.map(\.clientID)).count == 1 && calls.opened.count == 1)
     }
 
@@ -338,18 +397,21 @@ struct InboxHandOffModelTests {
         #expect(calls.handOffs.count == 6 && Set(calls.handOffs.map(\.clientID)).count == 1)
     }
 
-    /// Loading the item sent nothing: a timeout or a proxy's 5xx says the hub is out of reach, not to look in the chat.
-    @Test func aFailedLoadSaysTheHubIsOutOfReach() async {
+    /// Loading sent nothing. A gateway response is not evidence of a network outage or an uncertain send.
+    @Test func aFailedLoadPreservesTheFailureKind() async {
         let calls = Calls(), m = model(calls)
-        let hub = String(localized: "Can't reach the hub")
         calls.loadFailures = [URLError(.timedOut), APIError(status: 502, message: "Bad Gateway"),
-                              APIError(status: 404, message: "no such item", fields: ["code": "not_found"])]
+                              APIError(status: 404, message: "no such item", fields: ["code": "not_found"]),
+                              APIError(status: 503, message: "Request failed", fields: ["code": "assistant_offline"]),
+                              URLError(.notConnectedToInternet)]
         var errors: [String?] = []
-        for _ in 0..<3 {
+        for _ in 0..<5 {
             _ = await m.send(ask: "a")
             errors.append(m.error)
         }
-        #expect(errors == [hub, hub, "no such item"] && calls.handOffs.isEmpty)
+        #expect(errors == [String(localized: "The request timed out. Try again later."), "Bad Gateway", "no such item",
+                           String(localized: "The manager is offline or restarting. Try again shortly."),
+                           String(localized: "Can't reach the hub")] && calls.handOffs.isEmpty)
         let went = await m.send(ask: "a")
         #expect(went && calls.handOffs.count == 1)
     }
@@ -366,7 +428,7 @@ struct InboxHandOffModelTests {
         c.failures = [APIError(status: 405, message: "Method Not Allowed")]
         c.askFailures = [APIError(status: 503, message: "Persona is offline", fields: ["code": "assistant_offline"])]
         let wentAnyway = await checked.send(ask: "a")
-        #expect(!wentAnyway && c.done == 0 && checked.error == "Persona is offline")
+        #expect(!wentAnyway && c.done == 0 && checked.error == String(localized: "The manager is offline or restarting. Try again shortly."))
         c.failures = [APIError(status: 405, message: "Method Not Allowed")]
         _ = await checked.send(ask: "a")
         #expect(c.done == 1 && c.asked.count == 2 && c.handOffs[0].clientID != c.handOffs[1].clientID)
@@ -493,5 +555,105 @@ struct InboxHandOffModelTests {
         #expect(InboxAsk.allCases.count == 3)
         #expect(Set(InboxAsk.allCases.map(\.ask)).count == 3)
         #expect(Set(InboxAsk.allCases.map(\.title)).count == 3)
+    }
+}
+
+/// The live Agent path through AppModel and the real outbox: a wait is not a final failure, and a later refusal keeps
+/// the hub's reason. FakeHub records every request and its operation id.
+@MainActor
+@Suite(.serialized)
+struct InboxHandOffDeliveryTests {
+    private let key = SessionKey(machineID: "m", sessionID: "handoff-delivery")
+
+    private func model(_ hub: FakeHub, folder: URL? = nil) -> AppModel {
+        let model = AppModel(stateFolder: folder ?? FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        model.forgetRestoredForTests()
+        model.apiForTests = hub.client
+        model.linksUpForTests = true
+        let json = #"{"machine_id":"m","session_id":"handoff-delivery","title":"t","cwd":"/tmp/p","status":"idle","state":"working"}"#
+        let session = try! JSON.decoder.decode(Session.self, from: Data(json.utf8))
+        model.applySessions([MachineRef(group: "", id: "m"): [session]])
+        return model
+    }
+
+    @Test func waitingThenDeliveredUsesOnePendingMessageAndOneID() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/sessions/m/\(key.sessionID)/messages"
+        var calls = 0
+        hub.on("POST", path) { _ in
+            calls += 1
+            if calls == 1 { throw URLError(.timedOut) }
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        let model = model(hub)
+        defer { model.outboxRetry.values.forEach { $0.cancel() } }
+        var result: InboxHandOffModel.AgentSendResult?
+        let sending = Task { @MainActor in result = await model.sendForHandOff(key, text: "context") }
+        for _ in 0..<300 where model.chat(key).pending.first?.state != .waiting { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(model.chat(key).pending.first?.state == .waiting)
+        #expect(result == nil && calls == 1, "waiting completed the hand-off before delivery")
+
+        model.flushOutbox()
+        for _ in 0..<300 where result == nil { try await Task.sleep(for: .milliseconds(10)) }
+        sending.cancel()
+        let delivered = try #require(result, "the outbox's delivery did not finish the hand-off")
+        #expect(delivered.delivered)
+        let requests = hub.sent("POST", path)
+        #expect(requests.count == 2)
+        #expect(Set(requests.map { $0.headers[OpRetry.header] ?? "" }).count == 1)
+        let pendingID = try #require(model.chat(key).pending.first).id.uuidString
+        #expect(requests.first?.headers[OpRetry.header]?.caseInsensitiveCompare(pendingID) == .orderedSame)
+        #expect(model.chat(key).pending.first?.state == .sent)
+    }
+
+    @Test func aRestoredWaitingHandOffFilesWhenItsRetryIsDelivered() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/sessions/m/\(key.sessionID)/messages"
+        var calls = 0
+        hub.on("POST", path) { _ in
+            calls += 1
+            if calls == 1 { throw URLError(.timedOut) }
+            return Data(#"{"ok":true}"#.utf8)
+        }
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let first = model(hub, folder: folder)
+        var firstFilings: [PendingMessage.InboxHandOff] = []
+        first.inboxHandOffDoneForTests = { firstFilings.append($0) }
+        let item = try JSON.decoder.decode(InboxItem.self, from: Data(#"{"id":"mail:a:1","source":"mail","kind":"mail","account":"a","account_name":"A","title":"t","preview":"p","count":1,"manager":"mgr"}"#.utf8))
+        let sending = Task { @MainActor in _ = await first.sendForHandOff(key, text: "context", item: item, file: true) }
+        for _ in 0..<300 where first.chat(key).pending.first?.state != .waiting { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(first.chat(key).pending.first?.state == .waiting)
+        sending.cancel()
+        first.saveOutbox()
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(firstFilings.isEmpty)
+        first.outboxRetry.values.forEach { $0.cancel() }
+
+        let restored = model(hub, folder: folder)
+        var filings: [PendingMessage.InboxHandOff] = []
+        restored.inboxHandOffDoneForTests = { filings.append($0) }
+        restored.restoreOutbox()
+        #expect(restored.chat(key).pending.first?.inboxHandOff?.itemID == "mail:a:1")
+        restored.flushOutbox()
+        for _ in 0..<300 where filings.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        restored.outboxRetry.values.forEach { $0.cancel() }
+        #expect(filings.count == 1)
+        #expect(filings.first?.itemID == "mail:a:1" && filings.first?.manager == "mgr" && filings.first?.filed == true)
+        #expect(restored.chat(key).pending.first?.state == .sent)
+        let requests = hub.sent("POST", path)
+        #expect(requests.count == 2)
+        #expect(Set(requests.map { ($0.headers[OpRetry.header] ?? "").lowercased() }).count == 1)
+    }
+
+    @Test func aRefusalReturnsTheComputersReason() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/sessions/m/\(key.sessionID)/messages"
+        hub.on("POST", path) { _ in
+            throw APIError(status: 409, message: "Finish the draft on the computer first",
+                           fields: ["code": "input_draft", "delivered": "none"])
+        }
+        let result = await model(hub).sendForHandOff(key, text: "context")
+        #expect(!result.delivered)
+        #expect(result.error?.contains("Finish the draft on the computer first") == true)
     }
 }

@@ -1,4 +1,4 @@
-// Searching the web terminal's text (docs/integrations/terminal.md "Search"). What can be searched depends on who holds the text:
+// Searching the web terminal's text (docs/integrations/terminal.md "What search covers"). What can be searched depends on who holds the text:
 // xterm holds only the screen (scrollback 0: herdr redraws the grid in place), and while watching, the page holds the
 // pages of herdr's history it loaded above it — and the whole screen too once "Wrap long lines" draws it. So there are two lists of
 // matches: "rows" (the lines the page holds, found here) and "screen" (xterm's grid, found by its search addon, which also

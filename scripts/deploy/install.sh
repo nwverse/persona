@@ -9,7 +9,7 @@
 # persona-manager beside it too (docs/server/server.md "Programs"). PERSONA_DL=<url> installs from somewhere else.
 #
 # One hub is enough for a home (docs/archive/operations/plan-hub-center.md section 0); every other computer gets the node service: the
-# resident node and the connector persona-link, paired with the hub (docs/operations/link.md "Installing the node service"):
+# resident node and the connector persona-link, paired with the hub (docs/operations/link.md "Install the node service"):
 #
 #   curl -fsSL <site>/install.sh | sh -s -- --node --pair '<link from personad hub pair --machine <id>>'   # this one connects to the hub
 #   curl -fsSL <site>/install.sh | sh -s -- --node --listen [:18663] [--addr <address the hub reaches this one at>]  # the hub connects here
@@ -316,8 +316,9 @@ $(unit_forms "${DEST#"$HOME"}/$1" | sed 's/^/%h/')" ;; esac
 		/usr/lib/systemd/system/*.service.d/*.conf \
 		"$HOME"/Library/LaunchAgents/*.plist /Library/LaunchAgents/*.plist /Library/LaunchDaemons/*.plist; do
 		[ -f "$f" ] || continue
-		# The paths go in through the environment: awk -v would read backslashes in them as escapes.
-		if SERVICE_FORMS="$forms" awk '
+		# The paths go in through the environment: awk -v would read backslashes in them as escapes. In bytes (LC_ALL=C):
+		# macOS awk stops on a binary property list in a UTF-8 locale and prints its bytes; a byte match is the same here.
+		if SERVICE_FORMS="$forms" LC_ALL=C awk '
 			function names(s, p,  i, c) {
 				i = index(s, p)
 				if (p == "" || !i) return 0

@@ -13,11 +13,18 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// inboxStore is the database's inbox (table inbox_items); a store without it keeps the inbox in memory.
+// inboxStore is the database's inbox (table inbox_items); a store without it keeps the inbox in memory. It keeps the
+// done items for inboxKeepHistory (GET /api/v1/inbox/done pages them); the manager holds the open ones and those done
+// within inboxForget.
 type inboxStore interface {
 	PutInboxItem(ctx context.Context, id string, data []byte, updatedAt time.Time, doneAt *time.Time) error
-	InboxItems(ctx context.Context, doneSince time.Time) ([][]byte, error)
-	DeleteInboxItems(ctx context.Context, ids []string) error
+	// InboxItems hands each open item, and each one done since doneSince, to each (raw is valid only during the call).
+	InboxItems(ctx context.Context, doneSince time.Time, each func(raw []byte) error) error
+	DoneInboxItems(ctx context.Context, q db.InboxDoneQuery) ([]db.InboxRow, error)
+	DoneInboxDays(ctx context.Context, zone string, connectors bool) ([]db.InboxDay, error)
+	DoneInboxItemsByID(ctx context.Context, ids []string) ([][]byte, error)
+	PurgeInboxItems(ctx context.Context, doneBefore time.Time) (int64, error)
+	DeleteInboxSource(ctx context.Context, source string, ids []string) ([]string, error)
 }
 
 // inboxBatchStore is an inboxStore that writes many items in one round trip (the database's PutInboxItems).
@@ -66,14 +73,25 @@ func (s *Service) inboxUp(w http.ResponseWriter, r *http.Request) bool {
 // loadInbox reads the items still remembered and the mutes; false when the database could not be read.
 func (s *Service) loadInbox(ctx context.Context) bool {
 	b := &s.inbox
-	if !s.loadInboxMutes(ctx) || !s.loadInboxPolicies(ctx) {
+	if !s.loadInboxMutes(ctx) || !s.loadInboxPolicies(ctx) || !s.loadInboxFolders(ctx) {
 		return false
 	}
 	st := s.inboxDB()
 	if st == nil {
 		return true
 	}
-	rows, err := st.InboxItems(ctx, time.Now().Add(-inboxForget))
+	now := time.Now()
+	s.purgeInboxHistory(ctx, st, now)
+	// Each row is decoded straight from the driver's buffer (json.Unmarshal copies every string and json.RawMessage it
+	// keeps), so the rows' bytes are never all held besides the items; nothing is taken in until the read has ended.
+	var loaded []*InboxItem
+	err := st.InboxItems(ctx, now.Add(-inboxForget), func(raw []byte) error {
+		var it InboxItem
+		if json.Unmarshal(raw, &it) == nil && it.ID != "" {
+			loaded = append(loaded, &it)
+		}
+		return nil
+	})
 	if err != nil {
 		s.logf("inbox: load: %v", err)
 		return false
@@ -83,24 +101,45 @@ func (s *Service) loadInbox(ctx context.Context) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.larkAccount = cfg.LarkAccount
-	for _, raw := range rows {
-		var it InboxItem
-		if json.Unmarshal(raw, &it) == nil && it.ID != "" {
-			if _, have := b.items[it.ID]; have {
-				continue // newer in memory than in the database
-			}
-			b.larkRequestAccount(&it)
-			if it.ArrivedOf == "" { // stored before arrivals were stamped
-				it.ArrivedOf, it.ArrivedAt = it.Last, it.UpdatedAt
-			}
-			if len(it.Chain) == 0 { // stored before chains: received and triaged, from its fields
-				it.Chain = synthesizedChain(b.userLang(), &it)
-				it.ChainSeq = len(it.Chain)
-			}
-			b.items[it.ID] = &it
+	for _, it := range loaded {
+		if _, have := b.items[it.ID]; have {
+			continue // newer in memory than in the database
 		}
+		b.stored(it)
+		b.items[it.ID] = it
 	}
 	return true
+}
+
+// stored brings an item read from the database up to what the inbox holds now, under b.mu: the Lark account the apps
+// pass for it, and what rows from before arrivals and chains lack.
+func (b *inboxBook) stored(it *InboxItem) {
+	b.larkRequestAccount(it)
+	if it.ArrivedOf == "" { // stored before arrivals were stamped
+		it.ArrivedOf, it.ArrivedAt = it.Last, it.UpdatedAt
+	}
+	if len(it.Chain) == 0 { // stored before chains: received and triaged, from its fields
+		it.Chain = synthesizedChain(b.userLang(), it)
+		it.ChainSeq = len(it.Chain)
+	}
+}
+
+// purgeInboxHistory deletes the items done more than inboxKeepHistory ago: at load, then from the rounds at most every
+// inboxPurgeEvery. One that fails is only logged; the next one deletes them.
+func (s *Service) purgeInboxHistory(ctx context.Context, st inboxStore, now time.Time) {
+	b := &s.inbox
+	b.mu.Lock()
+	due := now.Sub(b.purgedAt) >= inboxPurgeEvery
+	if due {
+		b.purgedAt = now
+	}
+	b.mu.Unlock()
+	if !due {
+		return
+	}
+	if _, err := st.PurgeInboxItems(ctx, now.Add(-inboxKeepHistory)); err != nil {
+		s.logf("inbox: purge the done items past %s: %v", inboxKeepHistory, err)
+	}
 }
 
 // saveInbox persists changed items and tells the hub (it tells the extensions and the apps). It returns the ids
@@ -117,12 +156,18 @@ func (s *Service) saveInboxUndo(ctx context.Context, changed []*InboxItem, undo 
 }
 
 // saveInboxPrepared can stage a detached row and publish its committed effects under mu before saving is released.
-// prepare runs under mu; finish runs there after the store answers, including when every row succeeded.
+// prepare runs under mu; finish runs there after the store answers, including when every row succeeded. Every change
+// of an item reaches the database here, so this is also where GET /api/v1/inbox forgets the changed items' kept bytes
+// (inbox_list_memo.go): first, before waiting for another save, so a GET meanwhile lists what memory holds; as the rows
+// are taken; and after finish, which may undo a change.
 func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, prepare func(*InboxItem) *InboxItem, finish func(map[string]bool)) map[string]bool {
 	b := &s.inbox
 	if len(changed) == 0 {
 		return nil
 	}
+	b.mu.Lock()
+	b.forgetListed(changed)
+	b.mu.Unlock()
 	if !b.loaded.Load() { // not read yet: what is stored stays as it is (inboxReady)
 		s.logf("inbox: %d changed items not saved: what is stored was not read", len(changed))
 		return nil
@@ -130,6 +175,7 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 	var told []assistantwire.InboxChangedItem
 	b.saving.Lock()
 	b.mu.Lock()
+	b.forgetListed(changed)
 	rows := make([]db.InboxRow, 0, len(changed))
 	now := time.Now()
 	for i, it := range changed {
@@ -161,6 +207,7 @@ func (s *Service) saveInboxPrepared(ctx context.Context, changed []*InboxItem, p
 	if finish != nil {
 		b.mu.Lock()
 		finish(failed)
+		b.forgetListed(changed)
 		b.mu.Unlock()
 	}
 	b.saving.Unlock()

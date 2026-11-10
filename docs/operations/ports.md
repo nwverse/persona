@@ -44,6 +44,11 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 - "This machine" is the machine the session runs on (for assistant chats, the hub machine).
 - These show up in: Agent replies (a row of badges under the message), Bash tool output (under the output once expanded), the top of the session (`Session.ports`),
   and when tapping such a link itself in a message or the terminal (`ChatActions.openLink` checks for port links first). These links are no longer preloaded (preloading would open the phone's own localhost).
+- A link to one of the hub's own pages (`/s/…`, `/todos`, `/persona/…`; a hub on the agent's machine) is no dev server: it gets no badge and opens as that page (#2696).
+- The web (#504) recognizes the same links (`web/src/lib/port-links.ts`) and draws the badges under an agent's finished answer (`views/chat/PortChips.tsx`): `:5173` with the page's
+  title, "Stopped" and dimmed once nothing listens there. A port some agent on that machine lists (`Session.ports`) is live; any other is asked about with `GET …/ports/{port}`
+  (`lib/port-presence.ts`: a live answer is kept a minute, a gone one 30 s, no answer 20 s). A badge, or the link itself, opens the page in the **Preview** panel ([preview.md](../web/preview.md)),
+  only on a hub with `preview` and for an agent's session with a working folder; assistant conversations get none.
 ## Forwarding
 
 ### Why "listen locally on the phone"
@@ -72,7 +77,7 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
   it is reloaded when taken out (unless it is still loading), otherwise you'd see the page as it was when last closed (2026-11-05, #1934). The refresh button in the top bar (`link-reload`) uses `reloadFromOrigin`
   to fetch again; native Lark pages don't have it.
 - The Mac App uses the same code; the sandbox needs `com.apple.security.network.server` (listening on loopback only).
-- Android (#2144): `core/hub/PortForwarder.kt` likewise listens on 127.0.0.1 and ::1 with one WebSocket per connection; see `docs/android/android.md` ("Port forwarding").
+- Android (#2144): `core/hub/PortForwarder.kt` likewise listens on 127.0.0.1 and ::1 with one WebSocket per connection; see `docs/android/android.md` ("Terminal and links").
 
 ### hub (`server/internal/hub/ports.go`) and streams (`server/internal/streams`)
 

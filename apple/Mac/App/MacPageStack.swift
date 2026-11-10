@@ -4,7 +4,7 @@ import SwiftUI
 /// The sections' pages, each built the first time its section is shown and kept in the window after that: a switch
 /// hides one page and shows another (#390). Built anew on every switch (a `switch` in the shell), Agents took about
 /// 240 ms on the main thread and Inbox about 190 (its list, its split, its rows' heights, its toolbar items all over
-/// again); kept, a page comes back in about one frame (docs/apple/mac.md「切换分区」).
+/// again); kept, a page comes back in about one frame (docs/apple/mac.md「Section switching: persistent pages」).
 ///
 /// Each page is in a hosting view of its own (`MacPageHostingView`), not in a SwiftUI `ZStack`: a hidden view in the
 /// same hierarchy is still laid out with it. What a kept page must do behind another one is up to the page, told by

@@ -71,9 +71,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				t.Error = err.Error()
 				continue
 			}
+			if t.Project != "" && todo.Project != t.Project {
+				if moved, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Project: &t.Project}); err != nil {
+					s.logf("task %s: project: %v", todo.ID, err)
+				} else {
+					todo = moved
+				}
+			}
 		} else {
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
-			todo, err = s.createTodo(ctx, title, t.Prompt, p.Conversation, p.ID)
+			todo, err = s.createTaskTodo(ctx, title, t.Prompt, p.Conversation, p.ID, t.Project)
 			if err != nil {
 				t.Error = err.Error()
 				continue
@@ -83,7 +90,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		}
 		t.TodoID = todo.ID
-		if s.isMain(ctx, p.Conversation) { // the main conversation follows up what it hands out (supervise.go)
+		if s.supervises(ctx, p.Conversation) { // the main conversation or a leader follows up what it hands out (supervise.go)
 			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
 		}
 		if t.ReuseTodo != "" {
@@ -189,14 +196,14 @@ const taskFailTimeout = 30 * time.Second
 func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, retry bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
-	placed := t.Machine
+	placed, placedWhy := t.Machine, t.Why
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
-	if err != nil && ctx.Err() == nil {
+	if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
-		// failure counts against the launcher there. Only flexible tasks may retry on another healthy machine.
+		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		shouldRetry := transientStartErr(err)
 		if !shouldRetry && t.MachinePolicy == machineFlexible {
-			_, _, shouldRetry = s.healthDetour(ctx, Device{ID: t.Machine}, s.startLauncher(ctx, t.Launcher))
+			shouldRetry = s.healthyPlace(ctx, &t)
 		}
 		if shouldRetry {
 			s.logf("task %s: start: %v; retrying", t.TodoID, err)
@@ -207,7 +214,7 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 			}
 		}
 	}
-	if t.Machine != placed { // the card shows where it runs
+	if t.Machine != placed || t.Why != placedWhy { // the card shows where it runs, and on what (launcher_fit.go)
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
@@ -222,6 +229,7 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 		}
 	}
 	if err == nil {
+		s.remedyStarted(context.WithoutCancel(ctx), planID, conversation, i, t) // after an assistant's retry (start_remedy.go)
 		return
 	}
 	s.logf("task %s: start: %v", t.TodoID, err)
@@ -234,19 +242,34 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 		limit = proto.CodedStartErrorMax // the hub's sentence, whose remedy comes last (#1642): kept whole
 	}
 	reason := clip(oneLine(s.startFailureText(ctx, t.Machine, err)), limit)
+	// The new tab's shell waits on a question, or the agent's screen stopped, and the computer keeps the tab: a
+	// supervised task's start is remedied first, not failed yet (start_remedy.go, #2570).
+	code, args := codedStartRefusal(err)
+	if s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
+		return
+	}
+	// A retry the assistant asked for that failed so its tab is gone: the start fails for good, and the supervisor and
+	// the user hear of it as of a first failure.
+	remedied := t.Start != nil && t.Start.State == remedying
 	if ferr := s.failTodo(ctx, t.TodoID, reason); ferr != nil {
 		s.logf("task %s: fail: %v", t.TodoID, ferr)
 	}
-	if p, lerr := s.loadPlan(ctx, planID); lerr == nil && i < len(p.Tasks) {
-		p.Tasks[i].Error = err.Error()
-		p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = codedStartRefusal(err)
-		_, _ = s.movePlan(ctx, p, planStarted)
-		s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	if perr := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
+		pt.Error = err.Error()
+		pt.ErrorCode, pt.ErrorArgs = code, args
+		if remedied && pt.Start != nil {
+			pt.Start.State, pt.Start.Pane, pt.Start.At = remedyFailed, "", time.Now().UTC()
+		}
+	}); perr != nil {
+		s.logf("plan %s: task %d's start error: %v", planID, i, perr)
 	}
 	s.tasks.mu.Lock()
 	s.tasks.receipted[t.TodoID] = time.Now()
 	s.tasks.mu.Unlock()
-	if retry {
+	if remedied {
+		s.remedyStep(ctx, conversation, t.TodoID, startRemedyBody{Action: "gave_up", By: "hub", Attempt: t.Start.Attempt, Reason: reason})
+	}
+	if retry && !remedied {
 		return
 	}
 	_, _ = s.appendFeed(ctx, conversation, feedReceipt, t.TodoID, receiptBody{Title: t.Title, State: "failed",
@@ -346,11 +369,14 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if !ok { // another assistant sharing the store reopened it first
 		return view, nil
 	}
-	p.Tasks[i].Error, p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = "", "", nil
-	if _, err := s.movePlan(ctx, p, planStarted); err != nil {
+	// Task i is kept as this retry starts it (t), its error cleared. The plan is read again under its lock, so what its
+	// other tasks recorded since p was read stays.
+	if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
+		*pt = t
+		pt.Error, pt.ErrorCode, pt.ErrorArgs = "", "", nil
+	}); err != nil {
 		s.logf("plan %s: %v", p.ID, err)
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 	s.logf("task %s: retrying its start on %s", todoID, m.ID)
 	started = true
 	go func() {

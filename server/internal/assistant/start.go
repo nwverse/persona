@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Starting the assistant's conversations (docs/assistant/assistant.md "Processes", "New main chat"): its directory on the machine is
+// Starting the assistant's conversations (docs/assistant/assistant.md "Process", "New main chat"): its directory on the machine is
 // prepared first (the CLAUDE.md written from what the hub tells it, the connectors' and plugins' skills), the model
 // configuration applied, then the node's assistant.send. The main conversation is one of them; putting it away for a
 // new one keeps what it left for the next one's first message.
@@ -218,8 +218,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 			s.logf("assistant: note guest conversation %s: %v", short(sess.SessionID), err)
 		}
 	}
-	sess.Origin, sess.OriginRef = firstNonEmpty(p.Origin, OriginUser), p.OriginRef
-	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef)
+	sess.Origin, sess.OriginRef, sess.OpenedBy = firstNonEmpty(p.Origin, OriginUser), p.OriginRef, p.OpenedBy
+	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef, sess.OpenedBy)
 	return sess, nil
 }
 
@@ -303,7 +303,7 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		p.Text = s.renderHandoff(ctx, handoff, p.Text)
 	}
 	p.MachineID, p.Purpose, p.Main = "", "", false
-	p.Origin, p.OriginRef = OriginUser, "" // the main conversation is the user's, whatever channel opened it
+	p.Origin, p.OriginRef, p.OpenedBy = OriginUser, "", "" // the main conversation is the user's, whatever channel opened it
 	sess, err := s.startConversationOn(ctx, p, true)
 	if err != nil {
 		return proto.Session{}, err
@@ -448,6 +448,15 @@ func requestOrigin(r *http.Request, purpose string) (origin, ref string) {
 	return OriginExtension, ext
 }
 
+// requestOpener is the extension whose token asks POST /api/v1/assistant/conversations to open one (the hub's
+// headers: a client's own are dropped on the way), "" for anyone else.
+func requestOpener(r *http.Request) string {
+	if r.Header.Get(RoleHeader) != roleExtension {
+		return ""
+	}
+	return r.Header.Get(ExtensionHeader)
+}
+
 func (s *Service) startRoutes() {
 	s.handle("POST /api/v1/assistant/conversations", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -458,7 +467,7 @@ func (s *Service) startRoutes() {
 			Effort         string        `json:"effort"`
 			Main           bool          `json:"main"` // becomes the main conversation
 			// Purpose is the model purpose it runs under ("assistant" when empty; a plugin's /agent asks for its own);
-			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "Assistant").
+			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "REST (App → hub)").
 			Purpose   string `json:"purpose"`
 			MachineID string `json:"machine_id"`
 			Space     string `json:"space"` // "health": a conversation of the health space (docs/assistant/health.md)
@@ -513,7 +522,7 @@ func (s *Service) startRoutes() {
 		// The main conversation is the assistant's, on its machine.
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
-			GuestTools: guestTools})
+			OpenedBy: requestOpener(r), GuestTools: guestTools})
 		if err != nil {
 			apierr.Call(w, err)
 			return

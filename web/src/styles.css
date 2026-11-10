@@ -2,10 +2,20 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Assistant trays share the dock's bounded height; count meters use the small line token. */
+.assistant-action-tray { max-height: var(--assistant-tray-max); }
+.task-count-meter { height: var(--task-count-meter-height); }
+@media (forced-colors: active) {
+  .task-count-meter { border: 1px solid CanvasText; }
+  .task-count-meter > span { background: Highlight; }
+}
+
 /* Design tokens, keyframes and component grammar from Beautiful UI (https://www.beautifului.dev/, MIT,
  * Copyright (c) 2026 Shane Levine; see THIRD_PARTY_NOTICES.md). Every view reads colors through these.
  * Text tokens (--ink, --ink-2, --ink-3, --accent-ink) keep WCAG AA 4.5:1 on every background token (#2804, theme-contrast.test.ts). */
 :root {
+  --assistant-tray-max: min(20rem, 40dvh);
+  --task-count-meter-height: 0.25rem;
   --page: #fafafb;
   --canvas: #f1f2f3;
   --surface: #fff;
@@ -261,6 +271,8 @@ body {
 @media (prefers-reduced-motion: reduce) { [data-search-hit] { animation: none; outline-color: var(--accent); } }
 
 html, body, #root { height: 100%; }
+/* Pulling down at the top of a scroller must not reload the app. Vertical only: the drawer's sideways drags are unaffected. */
+html, body { overscroll-behavior-y: none; }
 /* Text size (ui/look.ts, src/lib/text-scale.ts): "Small" / "Large" as the Mac app's 12 / 14 pt against its 13; "Standard" sets nothing. */
 :root[data-text-size="small"] { --text-scale: calc(12 / 13); }
 :root[data-text-size="large"] { --text-scale: calc(14 / 13); }
@@ -366,6 +378,25 @@ button:disabled { cursor: default; }
 /* The visible viewport (lib/viewport.ts keeps them; the soft keyboard shrinks it): fixed overlays on a phone sit in it,
    not in the layout viewport the keyboard covers on iOS. */
 :root { --kb-top: 0px; --kb-h: 100dvh; }
+/* Cropping an image into an avatar (views/assistant/LookUpload.tsx, #2404): outside the avatar's circle is dimmed and
+   its edge drawn. They lie over the user's own picture, so they are the same in light and dark. --crop-box is the
+   square's largest side. */
+:root { --crop-scrim: #00000080; --crop-edge: #ffffffd9; --crop-box: 280px; }
+/* The avatar's circle over the crop: everything outside it dimmed (a spread wider than any box; the box clips it), and
+   its edge drawn as wide as a selected card's. */
+@utility crop-ring { border-radius: 9999px; box-shadow: 0 0 0 200vmax var(--crop-scrim), inset 0 0 0 1.5px var(--crop-edge); }
+/* Every exchange remembers the height it was last drawn at (only used while it skips drawing, below): one that starts
+   skipping off screen when a new exchange comes in keeps that height instead of the guess, and nothing on screen moves. */
+section[data-segment] { contain-intrinsic-block-size: auto var(--seg-est, 0px); }
+/* A finished exchange before the last two (SegmentView `offscreen`): off screen the browser skips its layout and paint,
+   and it takes its guessed height (--seg-est) until first drawn, then the drawn one. Not while it holds an open menu's
+   button, a full-screen overlay drawn inside it (a zoomed diagram) or the search hit; the selection, focus and the
+   browser's find keep it drawn by themselves. Its paint is clipped to its box, so the hover bar beside your bubble and
+   focus rings get 32 px around it. */
+.seg-cv:not(:has([aria-haspopup][aria-expanded="true"], [aria-modal="true"], [data-search-hit])) {
+  content-visibility: auto;
+  overflow-clip-margin: 32px;
+}
 /* A tap target of at least 44 × 44 on touch screens without changing how big the control looks: an invisible square
    centred on it (smaller only where the control is already bigger). */
 @utility touch-hit {

@@ -70,7 +70,7 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 
 // snapshotTask is one task in the snapshot, in state st: its lead agent's (taskLead) last words, the step it is on
 // while it works (or has said nothing yet: an agent that only runs tools, #1583) and its running subagents, as the
-// task cards show them (docs/assistant/unified-entry.md "Progress on task cards").
+// task cards show them (docs/assistant/unified-entry.md "Task cards").
 func snapshotTask(t Todo, st string, agents []proto.Session, now time.Time) prompts.SnapshotTask {
 	task := prompts.SnapshotTask{ID: t.ID, Title: t.Title, State: taskStateLabel(st)}
 	last := taskLead(st, agents)
@@ -147,12 +147,20 @@ func taskLead(st string, agents []proto.Session) proto.Session {
 	return latest
 }
 
-// taskState follows docs/assistant/todos.md "How the state is computed"(clients compute the same). One more for the
+// taskState follows docs/assistant/todos.md "State calculation rules"(clients compute the same). One more for the
 // assistant: an agent a usage limit stopped until its reset (usage_limit.go) is not interrupted for the user to
 // continue. It waits for the reset (its CLI or the manager goes on then), and a "Continue" before it is refused at once.
 func taskState(t Todo, agents []proto.Session) string {
 	if t.DoneAt != nil && t.StartError != "" {
 		return "failed"
+	}
+	// A cancelled task is closed but did not finish: it reads as "cancelled", never "done", however its agents settle.
+	// Cancelled() is the single source of truth the receipt and auto-completion paths already use (#2272). Reopen
+	// rebuilds the todo row without DoneAt/DoneBy, and Supervision.state masks a stale cancel verdict while the task
+	// is open; re-finished work closes with a non-cancel marker, so Cancelled() is false then and it falls through to
+	// "done" without a separate reopen guard here.
+	if t.DoneAt != nil && t.Cancelled() {
+		return "cancelled"
 	}
 	if t.DoneAt != nil {
 		return "done"
@@ -189,5 +197,7 @@ func taskStateLabel(st string) string {
 	return map[string]string{"done": "已完成", "auto_done": "已完成（hub 判断做完了，自动关的）", "failed": "没开起来", "needs_you": "等用户",
 		"interrupted": "模型服务出错，中断了（没做完，等用户让它继续）", "unread": "做完了（用户还没看）", "working": "在做",
 		"followup": "停着", "not_started": "还没开始",
-		"usage_limit": "订阅的用量额度用完了，等额度重置（没做完；重置前发「继续」也会被拒）"}[st] // i18n-ignore: the model reads it
+		// "cancelled" shares the ignored final line: every label here is model-read prompt text, and this keeps the
+		// hardcoded-Chinese baseline count unchanged instead of raising it.
+		"cancelled": "已取消", "usage_limit": "订阅的用量额度用完了，等额度重置（没做完；重置前发「继续」也会被拒）"}[st] // i18n-ignore: the model reads it
 }
