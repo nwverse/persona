@@ -162,8 +162,8 @@ func taskStageKind(readonly bool, doneWhen []string, pr string) string {
 	return "code"
 }
 
-var codeTaskWords = lazyre.New(`(?i)\b(PR|MR|merge[ds]?|deploy(?:ed|ment)?|release[ds]?|fix(?:ed|es)?|bugs?|implement(?:ed|ation)?|code|tests?|commit(?:ted|s)?|builds?|features?|refactor(?:ed|ing)?)\b|修复|实现|代码|测试|提交|合并|合入|部署|上线|发布|功能|重构|编译`)
-var generalTaskWords = lazyre.New(`(?i)\b(research|investigate|report|plan|triage|cleanup|summary|analysis|doc review)\b|调研|报告|方案|分诊|清理|总结|分析`)
+var codeTaskWords = lazyre.New(`(?i)\b(PR|MR|merge[ds]?|deploy(?:ed|ment)?|release[ds]?|fix(?:ed|es)?|bugs?|implement(?:ed|ation)?|code|tests?|commit(?:ted|s)?|builds?|features?|refactor(?:ed|ing)?)\b|修复|实现|代码|测试|提交|合并|合入|部署|上线|发布|功能|重构|编译`) // i18n-ignore: match what the agent or user wrote, not text shown
+var generalTaskWords = lazyre.New(`(?i)\b(research|investigate|report|plan|triage|cleanup|summary|analysis|doc review)\b|调研|报告|方案|分诊|清理|总结|分析`)                                                                                                   // i18n-ignore: match what the agent or user wrote, not text shown
 
 // advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
@@ -229,6 +229,7 @@ type todoStage struct {
 	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
 	Deploy   *deployWatch  `json:"deploy,omitempty"`   // deploy_check.go: held until the running hub has the work
 	Verified bool          `json:"verified,omitempty"` // explicit acceptance outranks delivery and reply keywords
+	Check    *TodoCheck    `json:"check,omitempty"`    // task_check.go
 }
 
 const reportStagesKey = "assistant.todo_stages"

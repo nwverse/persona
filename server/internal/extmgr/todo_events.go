@@ -59,3 +59,28 @@ func fieldsOf(v any) map[string]any {
 	_ = json.Unmarshal(raw, &fields)
 	return fields
 }
+
+// leader.changed and leader.report: the assistant tells of its leader conversations and what they report
+// (assistant/directions.go, leader_reports.go); the subscribers granted leaders.read are told, on the to-dos' queue
+// (both come from the task ledger, and are few).
+func init() {
+	onAssistantEvent(assistantwire.EventLeaderChanged, func(h *Manager, raw json.RawMessage) {
+		var p assistantwire.LeaderChangedEvent
+		if json.Unmarshal(raw, &p) != nil || p.ID == "" {
+			return
+		}
+		if h.extensions.todoWanted(assistantwire.EventLeaderChanged) {
+			h.extensions.queueOn(&h.extensions.todoEvents, extensionNotice{topic: assistantwire.EventLeaderChanged, payload: fieldsOf(p)})
+		}
+	})
+	onAssistantEvent(assistantwire.EventLeaderReport, func(h *Manager, raw json.RawMessage) {
+		var p assistantwire.LeaderReportEvent
+		if json.Unmarshal(raw, &p) != nil || p.ID == "" || p.Leader == "" || p.Todo == "" ||
+			!slices.Contains([]string{assistantwire.LeaderReached, assistantwire.LeaderDecision, assistantwire.LeaderStuck}, p.Kind) {
+			return
+		}
+		if h.extensions.todoWanted(assistantwire.EventLeaderReport) {
+			h.extensions.queueOn(&h.extensions.todoEvents, extensionNotice{topic: assistantwire.EventLeaderReport, payload: fieldsOf(p)})
+		}
+	})
+}

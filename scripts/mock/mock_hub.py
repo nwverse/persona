@@ -1084,8 +1084,12 @@ CODEX_HISTORY = "c0de9a1f-2222-4000-8000-000000000002"
 DSH_SESSION = "session-3f2a9c4e-0000-4000-8000-000000000003"
 CLAUDE_DESKTOP = "c1a0de00-1111-4000-8000-000000000004"
 CLAUDE_TERMINAL = "c1a0de00-2222-4000-8000-000000000005"
+AGY_SESSION = "a6700000-1111-4000-8000-000000000006"
 NO_SPACE = dict(space_kind=None, space_id=None, space_name=None, space_index=None, slot_id=None, slot_name=None,
                 slot_index=None, pane_id=None, tab_id=None, workspace_id=None, launcher=None)
+_desktop_caps = {"read": True, "send": True}
+if os.environ.get("MOCK_MODE_CAPS"):
+    _desktop_caps["modes"] = False
 if os.environ.get("MOCK_SOURCES"):
     SESSIONS += [
         sess("server", CODEX_LIVE, "整理部署脚本", "/home/me/code/deploy", "working", "working", "", 0, "", 0, 1,
@@ -1108,12 +1112,20 @@ if os.environ.get("MOCK_SOURCES"):
         # messages through its peer inbox, one in another terminal whose inbox the node cannot use.
         sess("server", CLAUDE_DESKTOP, "整理发布说明", "/home/me/code/release", "working", "working", "", 0, "", 0, 1,
              "把这周合并的 PR 按模块分好了，正在写摘要。", agent="claude", source_kind="claude_desktop",
-             capabilities={"read": True, "send": True}, **NO_SPACE),
+             capabilities=_desktop_caps, **NO_SPACE),
         sess("server", CLAUDE_TERMINAL, "排查构建缓存", "/home/me/code/build", "idle", "idle", "", 0, "", 0, 12,
              "缓存键里少了 Go 版本，已经补上。", agent="claude", source_kind="claude_cli",
              read_only_reason="这个 Claude 没有开放会话之间的消息通道（版本较旧或功能关着）：手机上只能看，回复请在电脑上",
              capabilities={"read": True}, **NO_SPACE),
     ]
+if os.environ.get("MOCK_MODE_CAPS"):
+    # A runtime that explicitly takes Claude-style modes, and a desktop Claude that explicitly cannot (#1843).
+    SESSIONS.append(
+        sess("server", AGY_SESSION, "检查运行时的模式切换", "/home/me/code/modes", "working", "working", "", 0, "", 0, 1,
+             "运行时支持切换权限模式和思考强度。", agent="agy", agent_label="Antigravity", agent_name="agy-runtime",
+             source_kind="runtime", source_instance_id="agy", permission_mode="plan", effort="high",
+             capabilities={"read": True, "send": True, "interrupt": True, "approve": True,
+                           "terminal": False, "attach": False, "modes": True}, **NO_SPACE))
 
 # MOCK_OVERVIEW_DENSE=1: the overview on a wide screen with many finished rows: agents run through a runtime (a source
 # tag), tabs named after the agent's first words (the title must not be said twice), long titles and one with none.
@@ -1412,6 +1424,16 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+MOCK_LEADERS = []
+if os.environ.get("MOCK_LEADERS") == "1":
+    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+        c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
+        c["origin"] = "user"
+        ASSISTANT.append(c)
+        MOCK_LEADERS.append(c["session_id"])
+
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
 def health_sess(sid, title, minutes, last):
@@ -1709,6 +1731,8 @@ def assistant_state(space="", archived=False):
         out["main"] = cfg["main"]
     if MEETING_ATTENDANCE["on"]:
         out["meeting_attendance_default"] = cfg.get("meeting_attendance_default", "off")
+    if MOCK_LEADERS and not space:
+        out["leaders"] = MOCK_LEADERS
     return out
 
 
@@ -2423,6 +2447,11 @@ def stamp_managers(path, obj):
     dflt = MANAGERS["default"]
     if path in ("/api/v1/inbox", "/api/v1/inbox/done") and isinstance(obj.get("items"), list):
         obj = dict(obj, items=[dict(x, manager=inbox_owner(x.get("id"))) if isinstance(x, dict) else x for x in obj["items"]])
+    if path == "/api/v1/inbox" and isinstance(obj.get("items"), list):
+        # the merged list leaves out a manager that doesn't answer (ownership_lists.go mergeList): an offline one's items
+        # aren't in it, so the apps say it is offline rather than empty
+        offline = {m["id"] for m in MANAGERS["list"] if not m.get("online")}
+        obj = dict(obj, items=[x for x in obj["items"] if not (isinstance(x, dict) and x.get("manager") in offline)])
     for key in ("extensions", "plugins", "connectors"):
         if path == "/api/v1/" + key and isinstance(obj.get(key), list):
             obj = dict(obj, **{key: merged_by_manager(obj[key])})
@@ -3295,6 +3324,13 @@ if MOCK_TASKS:
             _task_todo("todo_task_long2", "Workflow 支持：hub / 网页 / 安卓 / Apple 端都能看到后台状态", "", "macbook", WIDGET,
                        "/Users/me/code/weather", 18, "plan_mock_2"),
         ]
+    # MOCK_TASK_CHECK=1 (#3180, docs/assistant/todos.md "Automatic completion"): the blog move's agent stopped and the
+    # hub's completion check found it waiting, so its Progress row says why it is not done.
+    if os.environ.get("MOCK_TASK_CHECK") == "1":
+        for _t in TODOS_INIT:
+            if _t["id"] == "todo_task_blog":
+                _t["check"] = {"verdict": "waiting", "reason": "等 Vercel 部署跑完", "at": ago(minutes=11),  # i18n-ignore
+                               "work_since": ago(minutes=40)}
     TODOS = copy.deepcopy(TODOS_INIT)
     # MOCK_TASK_DECISION=1: a stopped task whose owner can finish without another Agent turn.
     if os.environ.get("MOCK_TASK_DECISION") == "1":
@@ -3422,11 +3458,23 @@ if MOCK_TASKS:
     # on its card, the tests task's question and Persona cutting in on it in the feed; reviews (#3124): the widget fix
     # sent back once, the release notes accepted and closed by the review.
     if os.environ.get("MOCK_TASKS_REPORTS") == "1":
+        # The widget agent reports in English, in Markdown; the hub's paraphrase in the user's language is the row's line, the
+        # whole report the details' (#3181). text is the report in one line of at most 200 characters, as the hub keeps it.
+        _WIDGET_REPORT = ("Reproduced the **landscape crash** on the simulator.\n\n"
+                          "- Cause: the widget timeline reads a `nil` size after rotation\n"
+                          "- Fix: fall back to the widget family's default size\n\n"
+                          "Next: add a snapshot test for landscape, then open the PR.")
+
+        def _report_text(report):
+            one = " ".join(report.split())
+            return one if len(one) <= 200 else one[:199] + "…"
+
         for _t in TODOS_INIT + TODOS:  # TODOS is the copy made above (reset copies TODOS_INIT again)
             if _t["id"] == "todo_task_widget":
                 _t["supervision"] = {"supervisor": ASK1, "done_when": ["PR 合并到 master", "横屏截图贴进 PR"], "state": "", "round": 0,
                                      "reviews": [], "updated_at": ago(minutes=40),
-                                     "progress": {"kind": "progress", "step": 3, "steps": 5, "text": "在横屏模拟器上复现崩溃", "at": ago(minutes=2)}}
+                                     "progress": {"kind": "progress", "step": 3, "steps": 5, "text": _report_text(_WIDGET_REPORT),
+                                                  "line": "已在模拟器复现横屏崩溃，正在修", "detail": _WIDGET_REPORT, "at": ago(minutes=2)}}
             if _t["id"] == "todo_task_tests":
                 _t["supervision"] = {"supervisor": ASK1, "done_when": ["覆盖率到 80%"], "state": "", "round": 0, "reviews": [],
                                      "updated_at": ago(minutes=40),
@@ -4735,7 +4783,8 @@ def cell_width(ch):
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
-# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell.
+# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
+# shell is a new session.
 NODE_ACTIONS = []
 CLOSED_PANES, CLOSED_TABS, TAB_NAMES, SPLIT_PANES = set(), set(), {}, {}
 # #2431 "New worktree…": worktree/create adds a workspace (with one shell pane) next to the persona one; a branch or a path
@@ -4861,6 +4910,23 @@ def node_action(h, p, body):
         return h.send_json({"op": body.get("op"), "outcome": outcome, "message": message})
     elif area == "panes" and verb == "agent":
         time.sleep(0.6)
+        # As the node answers (docs/protocol/protocol.md): the session it started, bound to that pane, idle with no first
+        # message, listed from now on; the apps open its chat (#3287). A started session's id: /mock/reset takes it away.
+        hosts = mock_panes(mid)["hosts"]
+        pane = str(body.get("pane", ""))
+        shell = next((x for x in (hosts[0]["panes"] if hosts else []) if x["pane"] == pane), None)
+        if shell:  # a pane the computer does not list starts nothing: answered as before
+            tab = next((t for t in hosts[0]["tabs"] if t["id"] == shell["tab_id"]), {})
+            ws = shell["workspace_id"]
+            mate = next((x for x in SESSIONS if x["machine_id"] == mid and x.get("workspace_id") == ws), {})  # the space it joins
+            START_IDS[0] += 1
+            s = sess(mid, "d4e6f8a0-0000-4000-8000-%012d" % START_IDS[0], "新会话", shell.get("cwd") or mate.get("cwd", ""), "idle", "idle",
+                     mate.get("space_name", ""), mate.get("space_index", 0), tab.get("label", ""), tab.get("number", 0), 0, "",
+                     pane_id=pane, tab_id=shell["tab_id"], slot_id=shell["tab_id"], workspace_id=ws, space_id=mate.get("space_id", ws))
+            s["launcher"] = body.get("launcher") or "claude"
+            SESSIONS.append(s)
+            push_machine(mid)  # as the hub pushes the machine's list once the node has the session: the app's chat gets its name
+            return h.send_json({"session_id": s["session_id"]})
     return h.send_json({})
 
 
@@ -5183,6 +5249,7 @@ PREFS = {"input": True, "done": "long", "live_activity": True, "lock_details": F
          "island": {"preset": "a", "left": "", "right": "", "machine": ""},
          # quiet hours (#5806): never set until a client sets them; MOCK_QUIET_HOURS=1 starts with 23:00–07:00 on
          "quiet": {"enabled": True, "start": "23:00", "end": "07:00"} if os.environ.get("MOCK_QUIET_HOURS") else {"enabled": False, "start": "", "end": ""}}  # one device is enough
+PREFS_FAIL = [os.environ.get("MOCK_PREFS_FAIL") == "1"]  # Settings › Notifications can't read the prefs (503, #1860); GET /mock/prefs_fail?on=0|1
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
 DEVICES = []  # POST /api/v1/devices, newest last (GET /mock/devices): each one's id, kind and push `features` (#2433)
 # The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
@@ -5204,6 +5271,9 @@ elif os.environ.get("MOCK_BOT") == "off":
 # hub does when Claude calls it; GET /mock/phone shows the registrations and results.
 PHONES = {}  # socket -> {"send", "registration"}
 TOOL_RESULTS = []
+# MOCK_CF_ACCESS=<client id>:<client secret>: the hub behind Cloudflare Access (docs/operations/network.md "Behind
+# Cloudflare Access"): /api/ without those CF-Access-Client-Id / CF-Access-Client-Secret headers gets Access's answers.
+MOCK_CF_ACCESS = tuple(os.environ.get("MOCK_CF_ACCESS", "").split(":", 1)) if ":" in os.environ.get("MOCK_CF_ACCESS", "") else None
 MOCK_PAIR_TOKEN = os.environ.get("MOCK_PAIR_TOKEN", "")
 MOCK_PAIR_GRACE = float(os.environ.get("MOCK_PAIR_GRACE", "10"))
 # MOCK_PAIR_TRADE_DELAY=<s>: the trade answers that late; MOCK_PAIR_DROP=<s>: the first socket on the pairing token is
@@ -14243,6 +14313,7 @@ VOICE_VOICES = {
 }
 # What --help lists after the options.
 MOCK_HELP = [
+    "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
@@ -14608,6 +14679,24 @@ class H(BaseHTTPRequestHandler):
         it opens everything until traded once on POST /api/v1/auth/tokens, then for MOCK_PAIR_GRACE seconds (default 10,
         the hub's 2 minutes made short); the device tokens it was traded for keep working (#2766)."""
         u = urlparse(self.path)
+        if MOCK_CF_ACCESS and u.path.startswith("/api/"):
+            got = (self.headers.get("CF-Access-Client-Id", ""), self.headers.get("CF-Access-Client-Secret", ""))
+            if got != MOCK_CF_ACCESS:
+                print("mock: Cloudflare Access refused %s %s (%s)" % (self.command, u.path, "wrong token" if any(got) else "no token"), flush=True)
+                self.close_connection = True
+                if any(got):  # a token Access refuses: its own HTML page
+                    page = b'<html><body>Forbidden. <a href="/cdn-cgi/access/logout">Sign out</a></body></html>'
+                    self.send_response(403)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(page)))
+                    self.end_headers()
+                    self.wfile.write(page)
+                else:  # none: a redirect to its login
+                    self.send_response(302)
+                    self.send_header("Location", "https://example-team.cloudflareaccess.com/cdn-cgi/access/login/hub.invalid?redirect_url=" + u.path)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                return True
         if MOCK_PAIR_TOKEN and u.path.startswith("/api/") and u.path != "/api/v1/health":
             got = self.headers.get("Authorization", "").removeprefix("Bearer ").strip() or (parse_qs(u.query).get("token") or [""])[0]
             ok = got in PAIR_DEVICE_TOKENS or (got == MOCK_PAIR_TOKEN and (PAIR_TRADED[0] is None or time.time() < PAIR_TRADED[0] + MOCK_PAIR_GRACE))
@@ -14991,7 +15080,12 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/kb_updates": return self.send_json({"updates": KB_UPDATES})
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
-        if p.startswith("/api/v1/devices/") and p.endswith("/prefs"): return self.send_json(PREFS)
+        if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
+            PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
+            return self.send_json({"fail": PREFS_FAIL[0]})
+        if p.startswith("/api/v1/devices/") and p.endswith("/prefs"):
+            if PREFS_FAIL[0]: return self.send_json({"error": "mock: prefs unavailable"}, 503)  # #1860
+            return self.send_json(PREFS)
         if p == "/api/v1/pins": return self.send_json(PINS)
         if p == "/api/v1/mutes": return self.send_json({"spaces": [], "sessions": TREE_MUTED, "allowed": []})
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
@@ -18334,6 +18428,11 @@ MOCK_HELP.append("MOCK_RELAY_ACCOUNTS=<fixture.json>  （配合 MOCK_EXTENSIONS=
 # confirm it / remove it. MOCK_ADD_COMPUTER=seed also lists one pending computer that never connected and makes Mac Studio
 # a link computer that is offline (error_code link_offline). MOCK_ADD_COMPUTER_ERROR=<code> refuses every add with it
 # (tls_required, mesh_member, too_many_pending); MOCK_ADD_COMPUTER_NO_SITE=1: the reply has no install line (a local build).
+# {"add": {…, "manager": id}} adds it to that manager (404 no_manager, 409 installing) and the reply says `manager`;
+# one added to an offline manager is not listed in /machines (the hub lists what a manager reports) and never connects
+# (its Persona Link gets 503 assistant_offline). The same name again for a manager that is online lists it there.
+# MOCK_ADD_COMPUTER_NO_MANAGER=1 is a hub from before add.manager (the field ignored, no `manager` in the reply).
+# Not mocked: 503 assistant_offline (a reused computer in an offline manager's own list) and 503 owners_unknown.
 # MOCK_READINESS (below) turns it on too: a scenario with no computer or a pending one is added / confirmed here.
 ADD_COMPUTER = os.environ.get("MOCK_ADD_COMPUTER", "") or ("1" if os.environ.get("MOCK_READINESS") else "")
 ADD_COMPUTER_PENDING_TEXT = "等你在新版 App 或网页里确认这是你的电脑"
@@ -18354,6 +18453,18 @@ def _add_computer_listed(m):
     MACHINES.append(m)
     if MACHINES_KEEP is not None:
         MACHINES_KEEP.add(m["id"])
+
+
+# Computers added to an offline manager, by id: the hub has them, /machines does not list them yet.
+ADD_COMPUTER_UNLISTED = {}
+
+
+def _add_computer_all():
+    return MACHINES + list(ADD_COMPUTER_UNLISTED.values())
+
+
+def _manager_online(mid):
+    return next((x for x in MANAGERS["list"] if x["id"] == mid), {}).get("online", False)
 
 
 if ADD_COMPUTER:
@@ -18396,13 +18507,25 @@ if ADD_COMPUTER:
                 handler.send_json(reply, status)
                 return True
             added = False
+            # add.manager (docs/protocol/protocol.md "Computer pairing codes"): the computer is that manager's; a hub from
+            # before it (MOCK_ADD_COMPUTER_NO_MANAGER=1, or one with no roster) ignores it and says no manager in the reply.
+            owner = ""
+            if add and _stamps() and os.environ.get("MOCK_ADD_COMPUTER_NO_MANAGER") != "1":
+                owner = str(add.get("manager") or "").strip()
+                target = next((x for x in MANAGERS["list"] if x["id"] == owner), None)
+                if owner and target is None:
+                    handler.send_json({"error": "没有这个助手", "code": "no_manager"}, 404)
+                    return True
+                if target is not None and target.get("installing"):
+                    handler.send_json({"error": "这个助手还没装好，装好后再添加电脑", "code": "installing"}, 409)
+                    return True
             if add:
                 name = str(add.get("name") or "").strip()
                 if not name or len(name) > 40:
                     handler.send_json({"error": "名字不能为空，最多 40 个字", "code": "invalid_name"}, 400)
                     return True
-                m = next((x for x in MACHINES if x.get("name") == name and x.get("trust") == "pending" and not x.get("online")), None)
-                if m is None and sum(1 for x in MACHINES if x.get("trust") == "pending") >= 3:
+                m = next((x for x in _add_computer_all() if x.get("name") == name and x.get("trust") == "pending" and not x.get("online")), None)
+                if m is None and sum(1 for x in _add_computer_all() if x.get("trust") == "pending") >= 3:
                     # the hub's own limit (maxPendingComputers, server/internal/hub/machines_add.go)
                     handler.send_json({"error": "已经加了 3 台电脑还没处理完（有的可能还没连上来过）。删掉用不上的，再添加新的",
                                        "code": "too_many_pending"}, 429)
@@ -18410,15 +18533,24 @@ if ADD_COMPUTER:
                 if m is None:
                     base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or add.get("os") or "computer"
                     mid, n = base, 2
-                    while any(x["id"] == mid for x in MACHINES):
+                    while any(x["id"] == mid for x in _add_computer_all()):
                         mid, n = "%s-%d" % (base, n), n + 1
                     m = {"id": mid, "name": name, "kind": "link", "icon": add.get("icon") or "laptop", "online": False,
                          "trust": "pending", "error_code": "never_connected", "error": ADD_COMPUTER_PENDING_TEXT}
-                    _add_computer_listed(m)
                     added = True
+                if owner == "assistant":
+                    MANAGED_MACHINES.pop(m["id"], None)
+                elif owner:  # added to it, or the one used again moved to it
+                    MANAGED_MACHINES[m["id"]] = owner
+                if not any(x is m for x in MACHINES):  # listed once its manager is one that reports it (online)
+                    if _manager_online(machine_manager(m["id"])):
+                        ADD_COMPUTER_UNLISTED.pop(m["id"], None)
+                        _add_computer_listed(m)
+                    else:
+                        ADD_COMPUTER_UNLISTED[m["id"]] = m
                 os_name = add.get("os") or "mac"
             else:
-                m = next((x for x in MACHINES if x["id"] == again), None)
+                m = next((x for x in _add_computer_all() if x["id"] == again), None)
                 if m is None:
                     handler.send_json({"error": "没有这台电脑", "code": "not_found"}, 404)
                     return True
@@ -18434,17 +18566,19 @@ if ADD_COMPUTER:
                      "command": "persona-link pair '%s'" % pair}
             if added:
                 reply["added"] = True
+            if _stamps() and os.environ.get("MOCK_ADD_COMPUTER_NO_MANAGER") != "1":
+                reply["manager"] = machine_manager(m["id"])
             if not os.environ.get("MOCK_ADD_COMPUTER_NO_SITE"):
                 reply["install"] = {"linux": "curl -fsSL https://example.com/install.sh | sh -s -- --node --pair '%s'" % pair}
             _add_computer_push()
             join = float(os.environ.get("MOCK_ADD_COMPUTER_JOIN") or 8)
-            if join > 0:
+            if join > 0 and _manager_online(machine_manager(m["id"])):  # an offline manager's: 503 assistant_offline
                 threading.Timer(join, _add_computer_join, (m["id"], os_name)).start()
             handler.send_json(reply)
             return True
         parts = p.split("/")
         if len(parts) == 6 and p.startswith("/api/v1/machines/") and parts[5] in ("confirm", "reject"):
-            m = next((x for x in MACHINES if x["id"] == parts[4]), None)
+            m = next((x for x in _add_computer_all() if x["id"] == parts[4]), None)
             if m is None:
                 handler.send_json({"error": "没有这台电脑", "code": "not_found"}, 404)
                 return True
@@ -18455,7 +18589,7 @@ if ADD_COMPUTER:
             elif m.get("trust") != "pending":
                 handler.send_json({"error": "这台电脑已经确认过了", "code": "not_pending"}, 409)
                 return True
-            else:
+            elif ADD_COMPUTER_UNLISTED.pop(m["id"], None) is None:
                 MACHINES.remove(m)
             _add_computer_push()
             handler.send_json({"ok": True})
@@ -18471,7 +18605,8 @@ if ADD_COMPUTER:
 
 MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：features 有 machines_add / machine_trust，pair-codes 的 add 加一台待确认的电脑，"
                  "MOCK_ADD_COMPUTER_JOIN 秒后（默认 8，0 = 不来）它连上来等确认；seed 另列一台没连过的待确认电脑、Mac Studio 离线（link_offline）；"
-                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令")
+                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
+                 "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
