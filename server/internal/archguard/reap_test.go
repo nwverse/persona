@@ -116,7 +116,9 @@ func TestReapInheritedRunsBeforeAnyChildStarts(t *testing.T) {
 	}
 }
 
-// A new production call site has to be listed above, so that its place is pinned too.
+// A new production call site has to be listed above, so that its place is pinned too. Every reference counts, under
+// whatever name the file imports osproc (an alias or a dot import), in a package-level func literal, or taken as a
+// value; only a plain osproc.ReapInherited() call in a listed function passes, the shape the test above checks.
 func TestEveryReapInheritedCallSiteIsPinned(t *testing.T) {
 	pinned := map[string]bool{}
 	for _, s := range reapSites {
@@ -137,32 +139,85 @@ func TestEveryReapInheritedCallSiteIsPinned(t *testing.T) {
 			return nil
 		}
 		src, err := os.ReadFile(path)
-		if err != nil || !bytes.Contains(src, []byte("ReapInherited(")) {
+		if err != nil || !bytes.Contains(src, []byte("ReapInherited")) {
 			return err
 		}
 		f, err := parser.ParseFile(fset, path, src, 0)
 		if err != nil {
 			return err
 		}
+		names := osprocNames(f)
+		if len(names) == 0 {
+			return nil
+		}
 		rel := serverPath(path)
 		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
+			owner := "" // package level: never a listed site
+			if fd, ok := decl.(*ast.FuncDecl); ok {
+				owner = fd.Name.Name
 			}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				if c, ok := n.(*ast.CallExpr); ok && callName(c) == reapCall && !pinned[rel+" "+fd.Name.Name] {
-					t.Errorf("%s: %s in %s is not in reapSites (reap_test.go): list it so its place is checked",
-						pos(fset, c), reapCall, fd.Name.Name)
+			called := map[ast.Expr]bool{}
+			ast.Inspect(decl, func(n ast.Node) bool {
+				if c, ok := n.(*ast.CallExpr); ok {
+					called[c.Fun] = true
 				}
 				return true
 			})
+			for _, ref := range reapRefs(decl, names) {
+				switch {
+				case owner == "" || !pinned[rel+" "+owner]:
+					t.Errorf("%s: %s outside a function in reapSites (reap_test.go): list the function so its place is checked",
+						pos(fset, ref), reapCall)
+				case exprName(ref) != reapCall || !called[ref]:
+					t.Errorf("%s: write %s in %s as a plain %s() call, the only shape reapSites checks",
+						pos(fset, ref), reapCall, owner, reapCall)
+				}
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// osprocNames are the names f refers to the osproc package by: "osproc", an alias, "." for a dot import.
+func osprocNames(f *ast.File) map[string]bool {
+	names := map[string]bool{}
+	for _, imp := range f.Imports {
+		if imp.Path.Value != `"github.com/nwverse/persona/server/internal/osproc"` {
+			continue
+		}
+		if imp.Name == nil {
+			names["osproc"] = true
+		} else if imp.Name.Name != "_" {
+			names[imp.Name.Name] = true
+		}
+	}
+	return names
+}
+
+// reapRefs returns every expression in n that names osproc.ReapInherited, with osproc imported under names.
+func reapRefs(n ast.Node, names map[string]bool) []ast.Expr {
+	var refs []ast.Expr
+	var visit func(ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch e := n.(type) {
+		case *ast.SelectorExpr:
+			if x, ok := e.X.(*ast.Ident); ok && names[x.Name] && e.Sel.Name == "ReapInherited" {
+				refs = append(refs, e)
+			}
+			ast.Inspect(e.X, visit) // the selected name is a field or method, not the dot-imported function
+			return false
+		case *ast.Ident:
+			if names["."] && e.Name == "ReapInherited" {
+				refs = append(refs, e)
+			}
+		}
+		return true
+	}
+	ast.Inspect(n, visit)
+	return refs
 }
 
 // parseFunc parses file (under server/) and returns its one function or method named name.

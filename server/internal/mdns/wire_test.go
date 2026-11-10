@@ -511,7 +511,7 @@ func reverseName(a netip.Addr) name {
 
 // TestNameBudgetAdmitsRealResponses pins that the name budget (one per label read and pointer followed, len(msg) per
 // message) lets real responses through even though their names expand to more bytes than the message has: a
-// budget charged per name byte, or a smaller one, would drop them.
+// budget charged per name byte would drop them. It does not pin how close they come to len(msg).
 func TestNameBudgetAdmitsRealResponses(t *testing.T) {
 	host := name{"living-room-hub", "local"}
 	inst := name{"Living Room Hub v1.2 (Den)", "_persona-hub", "_tcp", "local"}
@@ -606,6 +606,45 @@ func TestNameBudgetAdmitsRealResponses(t *testing.T) {
 			t.Errorf("%s: names expand to %d bytes, not more than the %d-byte message", c.desc, expanded, len(c.msg))
 		}
 		t.Logf("%s: %d bytes, names expand to %d", c.desc, len(c.msg), expanded)
+	}
+}
+
+// labelByLabel is a response with a PTR to the host at every level of the ip6.arpa name of a, the last levels of it:
+// each owner is one label and a pointer to the owner before it, the name compressed label by label.
+func labelByLabel(a netip.Addr, levels int) []byte {
+	msg := []byte{0, 0, 0x84, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	host := len(msg)
+	msg = append(msg, 3, 'h', 'u', 'b', 5, 'l', 'o', 'c', 'a', 'l', 0, 0, 1, 0x80, 1, 0, 0, 0, 120, 0, 4, 192, 0, 2, 10)
+	full, prev := reverseName(a), 0
+	for i := len(full) - 1; i >= len(full)-levels; i-- {
+		start := len(msg)
+		msg = append(msg, byte(len(full[i])))
+		msg = append(msg, full[i]...)
+		if prev == 0 {
+			msg = append(msg, 0)
+		} else {
+			msg = append(msg, byte(0xC0|prev>>8), byte(prev))
+		}
+		prev = start
+		msg = append(msg, 0, 12, 0x80, 1, 0, 0, 0, 120, 0, 2, byte(0xC0|host>>8), byte(host))
+	}
+	msg[7] = byte(1 + levels)
+	return msg
+}
+
+// Each owner of labelByLabel reads every level under it again, so the message costs about levels squared against a
+// budget that grows by about 16 a level: a shallow chain reads, a record at each of the 34 levels of an ip6.arpa name
+// runs out. That is the cost the budget exists to refuse; responders compress by whole suffix instead, which reads
+// each name once (TestNameBudgetAdmitsRealResponses).
+func TestNameBudgetLabelByLabel(t *testing.T) {
+	a := netip.MustParseAddr("2001:db8:1:2:a1b2:c3ff:fed4:e5f6")
+	full := reverseName(a)
+	m, err := unpackMessage(labelByLabel(a, 8))
+	if err != nil || len(m.answers) != 9 || !m.answers[8].name.equal(full[len(full)-8:]) {
+		t.Fatalf("8 levels: %+v, %v; want 9 answers, the last for %v", m, err, full[len(full)-8:])
+	}
+	if _, err := unpackMessage(labelByLabel(a, len(full))); !errors.Is(err, errNameBudget) {
+		t.Errorf("%d levels: err = %v, want errNameBudget", len(full), err)
 	}
 }
 
