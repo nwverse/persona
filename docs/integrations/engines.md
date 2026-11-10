@@ -1,4 +1,4 @@
-# Engines: herdr, Herdr App, Orca, Paseo
+# Engines: herdr, Herdr App, Orca, Paseo, Cindy
 
 **One engine per computer**: Persona sees and drives Claude Code / Codex through an engine. Each computer selects one; Agents shows live sessions only from it.
 Sessions elsewhere (other engines, ordinary terminals) appear only as "Not running" history. Default herdr preserves existing machines without an explicit choice.
@@ -8,15 +8,16 @@ plus Herdr App on another computer opening terminals through remote). Sessions m
 
 On computers with **botmux**, its sessions appear alongside the selected engine ("botmux" below). It is not an engine option and needs no selection.
 
-**Paseo** is terminal-free: it runs Agents through provider SDKs, with node connected through a bridge; see `docs/integrations/paseo.md`.
+**Paseo** and **Cindy** are terminal-free: they run Agents through provider SDKs and runtimes, with node connected through a bridge; see `docs/integrations/paseo.md` and `server/internal/node/cindybridge.go`.
 
 ## Host sets (#2576)
 
-A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca and Paseo, or none at all, plus a **default engine**:
+A computer can **enable several engines at once**, any combination of herdr, Herdr App, Orca, Paseo and Cindy, or none at all, plus a **default engine**:
 where sessions started from the phone, and sessions continued from there, go. Each single choice above is a special case of a set: herdr is `{herdr}`, and
 "herdr + Herdr App" is `{herdr, herdr-core}` with herdr the default. API and storage: `docs/protocol/protocol.md` "Engines" ("Host sets").
 The web is wired: the machine page's Engine section is a checklist with "Make default", New Agent has "Open in", and a session live in
-two hosts shows "Also open in …" above the composer. iOS and Android still pick one engine, and the single engine picked keeps working.
+two hosts shows "Also open in …" above the composer. iOS and Android still pick one engine, and the single engine picked keeps working;
+iOS also offers "No Terminal Engine", the empty set, last in Choose Engine when the hub reports `engine_hosts` (#3302).
 
 - **Only enabled hosts are registered.** An engine that is not checked gets no client, no polling and no event subscription; it is only probed once in
   `node.info` (for "Detected"). An engine that is not installed or not running does not slow the others down.
@@ -28,7 +29,9 @@ two hosts shows "Also open in …" above the composer. iOS and Android still pic
   the set itself works like switching engines did (live terminal views end, the session list is rebuilt). With Orca the default, a Claude session that is not
   running is continued in Orca, any other agent's is refused (`orca_resume`); with Paseo the default, new and continued sessions go to Paseo.
 - **The empty set**: no terminal host. Agents shows transcripts, runtimes (DSH, pi, opencode) and botmux sessions only; starting or continuing a
-  session from the phone is refused with "这台电脑没启用终端引擎" (`engine_missing`) and nothing is sent.
+  session from the phone is refused with "这台电脑没启用终端引擎" (`engine_missing`) and nothing is sent. This is the choice for a computer
+  whose sessions are only the desktop apps' (Claude's and Codex's, `docs/integrations/claude-integration.md`, `docs/integrations/codex.md`):
+  they stay listed, and the node probes no engine.
 - **One session live in two hosts** (say herdr `--resume`d a session that is still open in Orca): it is listed once and owned by one host
   (`node/ownership.go`). The owner is, in order: (1) the pane whose claude process runs it (`~/.claude/sessions/<pid>.json`); (2) the pane whose last
   SessionStart hook named it; (3) the default engine's pane; (4) otherwise herdr, Herdr App, Orca in that order. Messages, keys and interrupts go to
@@ -68,6 +71,7 @@ two hosts shows "Also open in …" above the composer. iOS and Android still pic
 | `herdr-both` | herdr + Herdr App | Both above | Both runtimes detected |
 | `orca` | Orca | Terminals and native Claude chats (structured sessions) in Orca desktop app, or its remote runtime launched here over SSH by Orca on another computer | Orca desktop / remote runtime running, with a Persona-compatible version |
 | `paseo` | Paseo | Paseo Agents (desktop app, `paseo` command; Claude Code, Codex, ACP all count) | Paseo daemon running; address in its home's `paseo.pid` responds |
+| `cindy` | Cindy | Cindy Agents (desktop app and `cindy-host`; Claude Code, Codex, Pi) | Cindy installed, running, or its loopback host endpoint / profile database present |
 
 herdr and Herdr App are from the same developer but separate: neither sees the other's sessions. If using only one, select it;
 if both are used and should appear on the phone, choose "herdr + Herdr App (side by side)."
@@ -136,6 +140,19 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
   it works normally while the other list is empty).
 - Orca next to herdr goes through "Host sets" above; there are no more combination options.
 
+## tmux (approvals only)
+
+A Claude Code the user starts by hand in a tmux pane (`tmux new -s work`, then `claude`) is not an engine. It is listed as a session in an ordinary
+terminal and stays read-only, with one exception: its approval can be answered from the app.
+
+Claude Code writes the pane it runs in into its own `sessions/<pid>.json` (`"tmux": "work:@11.%11"`), so no process environment is scanned. When a
+dialog holds that pane (a permission prompt, a question, a picker), the session lists as Needs you and gets a screen card on web, Android and iOS.
+An answer presses the keys in the pane through the tmux command (`server/internal/node/hosttmux.go`, `server/internal/tmux`); a dialog that changed
+since the card was made is refused without a keypress (`prompt_changed`).
+
+Nothing else comes from this host: no spaces, slots, terminal tab, live stream or starting sessions. A message still goes through the session's peer
+inbox when it has one. tmux is added next to whichever engine the machine selected and needs no choice.
+
 ## botmux
 
 [botmux](https://github.com/deepcoldy/botmux) maps each Lark topic to a Claude Code / Codex / compatible CLI session in its own tmux. It is not an engine:
@@ -172,7 +189,7 @@ Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
   like botmux Claude Code, those actions stay in Lark / on computer. Codex suspended beyond 7 days and absent from botmux appears as read-only Codex history; reply in Lark.
 - **Same session on both sides**: if also running in an engine pane (previously resumed from phone), the live pane wins and botmux's suspended record yields.
 - **Detection**: find `botmux` when node connects and learns whether to list it (next item), and on engine switches: PATH first, then installer path `~/.botmux/bin/botmux` (launchd node has only system PATH). Installing later requires restarting that computer's personad.
-- **Disable**: "Also show botmux sessions" (#2575; the web has it in the machine page header as **botmux · On / Off** beside the engine pill, one click flips it, #2842; iOS below Engine in machine details; Android next to Engine in Engine and connection, saved on tap, #2899), default on. Changes immediately send `node.configure {"botmux": …}`, stored in hub settings.
+- **Disable**: "Also show botmux sessions" (#2575; the web has it in the machine page header as **botmux · On / Off** beside the engine pill, one click flips it, #2842; iOS below Engine in machine details; Android next to Engine in Engine and connection, saved on tap, #2899), default on. Changes immediately send `node.configure {"botmux": …}` (the hub adds `claude_dirs` so the node keeps its Claude config directories), stored in hub settings.
   `"botmux": false` in the machine's `machines[]` hub.json entry is only its unset-setting default (`docs/operations/config.md`; old nodes ignore). Stops `botmux observe` / `botmux dashboard current` (in-flight results discarded); Agents has no `botmux:` panes.
   Hub specifies the setting in `node.configure` on connection; node does not attach botmux or push lists before that (preventing sessions briefly disappearing / returning). Old hubs omit it; attach as before when asked for sessions.
   After disabling, tmux botmux sessions still appear as Not running history. Replying on phone launches engine `claude --resume`, potentially colliding with botmux's instance; reply to these in Lark.
@@ -242,7 +259,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   An explicit `HERDR_SOCKET_PATH` or `HERDR_SESSION` in the node's environment wins (a node started inside a herdr pane has them, so it uses that pane's server; it logs when that is not the data directory's own session); under systemd the server of a session is a unit of its own (`persona-herdr-server-<session>`); Windows keeps the default server. A default server already running with another data directory's `PERSONA_HOME` (started by a node before this) is not detected: restart herdr.
 - **Switch**: per machine, "Automatically start herdr when needed" below **Settings › Machines › Engine**. hub.json
   `machines[].herdr_autostart` is only the machine's unset-choice default (omitted means enabled). User choices live in hub settings
-  (`herdr_autostart/<machine-id>`), sent through `node.configure` on connect / changes. Once disabled, manual `herdr server stop` stays stopped,
+  (`herdr_autostart/<machine-id>`), sent through `node.configure` on connect / changes (a change also carries `claude_dirs`, so the node keeps its directories). Once disabled, manual `herdr server stop` stays stopped,
   and node does not restart it. `GET /api/v1/machines/{mid}/herdr` (`{autostart, running, known}`),
   `PUT` (`{"autostart": bool}`); row exists only for herdr / herdr-both. Client UI pending (#1915).
 - **Manual start**: `node.info` includes `herdr_running` / `herdr_running_known` (old nodes omit both, distinguishing stopped from
@@ -257,7 +274,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   One read failure does not remove existing notices; endpoint 404 stops polling that machine. Start shows "Starting…"; failures show localized known reasons inline (immediate exit / killed, missing, no response, old node, offline, timeout, `HerdrFailure.says`; unknown reasons remain raw). Keep button; raw hub text, status, request ID under long-press / context-menu Copy details, not body.
   After success, use POST result for that machine during this run until hub also reports running (GET may still use connection-time value). Web same (`web/src/lib/herdr-notice.ts`, `views/agents/HerdrNotices.tsx`), below filters in sidebar / mobile Agents section, polling every 10 seconds while visible,
   same rules / localized failures, with raw hub text, status, request ID (`X-Request-Id`) in Copy details button / context menu.
-- **While it is not running**: the node keeps asking herdr for its sessions about twice a second. With no socket it falls back to the herdr CLI, which can reach a server the socket cannot (another session, an older herdr). Once the CLI says no server runs (`server_not_running`), calls without a socket return that same answer without running herdr for 1 s, then 2 s, 4 s, … up to 30 s; the socket answering, or the CLI finding a server, ends the wait at once (`herdr.Client.call`). A computer with herdr installed and its server stopped used to run herdr twice a second (about 140 runs a minute, 240 ms of CPU a minute between the node and those runs; about 20 ms now). A started server is found on the next poll through its socket, so starting it from the phone or a terminal shows its sessions as fast as before.
+- **While it is not running**: the node keeps asking herdr for its sessions about twice a second. With no socket it falls back to the herdr CLI, which can reach a server the socket cannot (another session, an older herdr). Once the CLI says no server runs (`server_not_running`), calls without a socket return that same answer without running herdr for 1 s, then 2 s, 4 s, … up to 30 s; the socket answering, or the CLI finding a server, ends the wait at once (`herdr.Client.call`). A computer with herdr installed and its server stopped used to run herdr twice a second (about 140 runs a minute, 240 ms of CPU a minute between the node and those runs; about 20 ms now). A started server is found on the next poll through its socket, so starting it from the phone or a terminal shows its sessions as fast as before. `herdr session list` (the named sessions, every 5 s) needs no server and succeeds, so it has no such answer; instead a list that found nothing running is kept while herdr itself, the entries of `<herdr config dir>/sessions/` and the absence of every listed socket stay the same, and given again without running herdr (`herdr/sessionlist.go`). A server starting creates its socket or its session's directory, so the next list runs herdr again; a list with any session running is never kept.
 - **Failure**: still `engine_missing`. Missing herdr copy unchanged; installed-but-failed says "Automatic start also failed." Details include exit code / final output lines,
   output in `persona/herdr/persona-herdr-server.log` under the user's cache folder (`~/.cache` on Linux, `~/Library/Caches` on macOS; a folder of the node's own in the temp folder when there is none), also node logs. No autostart on Windows; behavior unchanged.
 

@@ -759,7 +759,8 @@ data class ExtensionErrorReportsItem(
 
 /**
  * A tunnel the apps can reach this hub through when its own addresses do not answer (docs "In-app tunnels"): an
- * in-app tunnel core built into the app, going to the configuration's target_host and target_port.
+ * in-app tunnel core built into the app, going to the configuration's target_host and target_port; an optional
+ * integer ssh_port is the hub machine's SSH port, for an SSH tunnel the app dials through this tunnel.
  */
 @Serializable
 data class ExtensionTunnelItem(
@@ -3282,14 +3283,15 @@ data class ExtensionReview(
 )
 
 /**
- * Values of PersonaCardKind.
+ * ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days, people).
  */
 object ExtensionPersonaCardKind {
     const val STAT = "stat"
     const val STACKED_BAR = "stacked_bar"
     const val LINE = "line"
     const val BAR = "bar"
-    val ALL = listOf("stat", "stacked_bar", "line", "bar")
+    const val RING = "ring"
+    val ALL = listOf("stat", "stacked_bar", "line", "bar", "ring")
 }
 
 /**

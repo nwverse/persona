@@ -504,7 +504,8 @@ export interface ErrorReportsItem {
 
 /**
  * A tunnel the apps can reach this hub through when its own addresses do not answer (docs "In-app tunnels"): an
- * in-app tunnel core built into the app, going to the configuration's target_host and target_port.
+ * in-app tunnel core built into the app, going to the configuration's target_host and target_port; an optional
+ * integer ssh_port is the hub machine's SSH port, for an SSH tunnel the app dials through this tunnel.
  */
 export interface TunnelItem {
   id: string;
@@ -2335,8 +2336,11 @@ export interface Review {
   discard?: Action;
 }
 
-export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | (string & {});
-export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar"] as const;
+/**
+ * ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days, people).
+ */
+export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | "ring" | (string & {});
+export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar", "ring"] as const;
 
 /**
  * The assistant's ```persona-card block (#886): one JSON object. Joins the components in #1850; this form keeps

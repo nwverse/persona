@@ -147,14 +147,16 @@ func TestCarriedScanRevalidated(t *testing.T) {
 	})
 }
 
-// A resident node's next connection goes on with the last one's background-task scans: the meta its first list reads
-// has the transcript's background task, and the scan is the one the last connection made. A read from the start of
-// this transcript (8 KiB, bgSyncLimit 1 KiB here) runs off the list's path, so a list made while one runs has no
-// background state for it yet: the first list of each connection tells whether that connection read the transcript
-// from the start.
+// A resident node's next connection goes on with the last one's background-task scans: its first use of the
+// transcript's meta has the background task, and the scan is the one the last connection made. A read from the start
+// of this transcript (8 KiB, bgSyncLimit 1 KiB here) runs off the list's path and initially returns pending.
 func TestAttachCarriesBackgroundScans(t *testing.T) {
 	home := shortHome(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CODEX_CONFIG_DIR", "")
+	t.Setenv("HERDR_CONFIG_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("PATH", os.Getenv("PATH")) // New puts ~/.local/bin and the like in front
 	defer func(v int64) { bgSyncLimit = v }(bgSyncLimit)
 	bgSyncLimit = 1 << 10
@@ -178,12 +180,22 @@ func TestAttachCarriesBackgroundScans(t *testing.T) {
 		done <- Attach(ctx, func() (*Node, error) {
 			n, err := New("test")
 			if err == nil {
+				// Only the fixture's transcripts participate, regardless of agents running on this machine.
+				n.cdirs.scan = func() map[int]procEnv { return nil }
+				n.codices.scan = func() []codexProcess { return nil }
+				n.codices.checked = func() ([]codexProcess, bool) { return nil, true }
 				mu.Lock()
 				nodes = append(nodes, n)
 				mu.Unlock()
 			}
 			return n, err
 		}, extra, nil)
+	}()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Attach: %v", err)
+		}
 	}()
 	// connect is the hub on a new connection: state.load answers with no sessions, everything else with {}.
 	connect := func() (*rpc.Peer, net.Conn) {
@@ -199,13 +211,20 @@ func TestAttachCarriesBackgroundScans(t *testing.T) {
 		}
 		return hub, a
 	}
-	// listed answers a list on hub and says whether the transcript's meta it was made from (node i's) had the background
-	// task, rather than waiting for a read of the transcript.
+	// listed checks discovery through the hub, then the background state on this connection. The shared offline list
+	// can already hold the previous node's row without having read this node's meta at all.
 	listed := func(hub *rpc.Peer, i int) bool {
 		t.Helper()
 		offlineCache.Lock() // the transcript's row is read again for every list, not taken from the last 20 s
 		offlineCache.at = time.Time{}
 		offlineCache.Unlock()
+		if i == 1 {
+			// An in-flight poll from the old connection can refill the shared cache before the new list arrives.
+			mu.Lock()
+			previous := nodes[0]
+			mu.Unlock()
+			previous.appendOffline(nil, nil)
+		}
 		var reply struct {
 			Sessions []proto.Session `json:"sessions"`
 		}
@@ -221,6 +240,13 @@ func TestAttachCarriesBackgroundScans(t *testing.T) {
 		n.mu.Lock()
 		m := n.metas[path]
 		n.mu.Unlock()
+		if i == 1 {
+			st, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m = n.meta(path, st) // first use must return the carried task without scheduling another scan
+		}
 		return !m.bgWait && len(m.bg) == 1 && strings.Contains(m.bg[0].Command, "sleep 600")
 	}
 	scanOf := func(i int) *bgScan {
@@ -243,13 +269,9 @@ func TestAttachCarriesBackgroundScans(t *testing.T) {
 	hub, conn = connect()
 	defer conn.Close()
 	if !listed(hub, 1) {
-		t.Fatal("second connection: the first list lacks the task, so the transcript was read again from the start")
+		t.Fatal("second connection: first use of the transcript's meta lacks the carried background task")
 	}
 	if sc := scanOf(1); sc != first {
 		t.Fatal("second connection: not the first connection's scan")
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("Attach: %v", err)
 	}
 }

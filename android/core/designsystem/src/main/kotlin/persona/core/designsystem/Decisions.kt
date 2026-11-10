@@ -34,6 +34,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
@@ -56,6 +58,8 @@ enum class DecisionKind(@StringRes val labelRes: Int, val icon: PhIcon) {
  * brief an ink-on-neutral card; the board a neutral strip with a thin amber edge that expands in
  * place — collapsed it shows [summary] and [quickActions], tapping it opens the [body] and [actions].
  * [onOpen] opens the conversation (glass and brief: tapping the card; board: the "Open" action).
+ * [note] says why the quick actions cannot be used (the hub is out of reach, the computer must approve): the board shows it
+ * above them while collapsed, where the [body] that says it otherwise is not drawn (#2483).
  */
 @Composable
 fun DecisionCard(
@@ -67,6 +71,7 @@ fun DecisionCard(
     expires: String? = null,
     summary: String? = null,
     advice: String? = null,
+    note: String? = null,
     expandedByDefault: Boolean = true,
     onOpen: (() -> Unit)? = null,
     quickActions: (@Composable RowScope.() -> Unit)? = null,
@@ -136,6 +141,7 @@ fun DecisionCard(
                         onOpen?.let { Spacer(Modifier.height(4.dp)); JTextButton(stringResource(R.string.designsystem_decision_open_chat), it, icon = PhIcons.ArrowSquareOut) }
                     } else {
                         summary?.let { Spacer(Modifier.height(8.dp)); Text(it, style = type.code, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        note?.let { Spacer(Modifier.height(Tokens.Space.s)); Text(it, style = type.caption, color = palette.cautionText) }
                         quickActions?.let { Spacer(Modifier.height(10.dp)); Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = it) }
                     }
                 }
@@ -363,6 +369,33 @@ fun DecisionOption(
             JIcon(PhIcons.Sparkle, null, size = 14.dp, tint = if (style == AppStyle.Board) palette.accent else ink, selected = true)
             Spacer(Modifier.width(3.dp))
             Text(stringResource(R.string.designsystem_decision_recommended), style = type.micro.copy(fontWeight = FontWeight.Bold), color = if (style == AppStyle.Board) palette.accent else ink, maxLines = 1)
+        }
+    }
+}
+
+/** A single action line. Alternatives move into a menu before their labels would be truncated. */
+@Composable
+fun DecisionActions(primary: JAction?, alternatives: List<JAction>, overflowLabel: String, modifier: Modifier = Modifier, busy: Boolean = false) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val type = PersonaTheme.type.labelSmall
+    val size = JButtonSize.Small
+    var menu by remember { mutableStateOf(false) }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val actions = alternatives + listOfNotNull(primary)
+        val labels = actions.sumOf { measurer.measure(it.label, style = type, maxLines = 1, softWrap = false).size.width }
+        val required = with(density) { (size.padding * (actions.size * 2) + Tokens.Space.s * (actions.size - 1).coerceAtLeast(0)).toPx() } + labels
+        val overflow = required > with(density) { maxWidth.toPx() }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+            if (overflow && alternatives.isNotEmpty()) Box {
+                JIconButton(PhIcons.DotsThree, overflowLabel, { menu = true }, enabled = !busy)
+                JMenu(menu && !busy, { menu = false }, alternatives.map { it.copy(enabled = it.enabled && !busy) })
+            } else alternatives.forEach { action ->
+                JButton(action.label, action.onClick, kind = JButtonKind.Secondary, size = size, enabled = action.enabled && !busy)
+            }
+            primary?.let { action ->
+                JButton(action.label, action.onClick, Modifier.weight(1f, fill = false), size = size, enabled = action.enabled && !busy)
+            }
         }
     }
 }

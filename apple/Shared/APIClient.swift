@@ -3,6 +3,9 @@ import Foundation
 nonisolated struct ServerConfig: Codable, Hashable, Sendable {
     var url: URL
     var token: String
+    /// The hub's Cloudflare Access service token, when it sits behind Access (docs/operations/network.md "Behind
+    /// Cloudflare Access"); nil: none.
+    var access: HubAccess?
 
     /// Parses `persona://pair?url=…&token=…`. Not a computer's `…://link?…`
     /// (`isComputerLink`, for Persona Link on that computer): its one-time code would pair this device in its place.
@@ -30,9 +33,17 @@ nonisolated struct ServerConfig: Codable, Hashable, Sendable {
         HubNaming.accepts(scheme: url.scheme) && url.host()?.lowercased() == "link"
     }
 
-    init(url: URL, token: String) {
+    init(url: URL, token: String, access: HubAccess? = nil) {
         self.url = url
         self.token = token
+        self.access = access
+    }
+
+    /// What every request to the hub carries: this device's credential and, to the hub's own address only, its
+    /// Cloudflare Access service token.
+    func authorize(_ request: inout URLRequest) {
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        CloudflareAccess.apply(access, to: &request, hub: url)
     }
 
     /// Demo Mode: the made-up hub inside the app (Persona/App/DemoHub.swift). Its host can never resolve, so nothing
@@ -49,6 +60,8 @@ nonisolated struct LocalRequest: Sendable {
     var body: Data?
     /// Operation semantics and anonymous caller diagnostics, matching the real request's headers.
     var headers: [String: String] = [:]
+    /// The caller's bound on the real URL request, exposed to transport-level tests.
+    var timeout: TimeInterval = 30
 }
 
 nonisolated struct APIError: LocalizedError, Sendable {
@@ -61,11 +74,38 @@ nonisolated struct APIError: LocalizedError, Sendable {
     var requestID: String?
     /// Structured error details the user has to confirm (e.g. the extensions that depend on it); not logged.
     var details: JSONValue?
+    /// Route context for the one pre-code knowledge refusal; never match diagnostics from unrelated endpoints.
+    var requestPath: String?
     var errorDescription: String? {
-        guard status >= 500, let requestID else { return message }
-        return String(localized: "\(message) (request \(requestID))")
+        let text = businessMessage ?? (code == "internal" && status >= 500
+            ? String(localized: "The service couldn't complete this request. Try again later. (HTTP \(status))") : message)
+        guard status >= 500, let requestID else { return text }
+        return String(localized: "\(text) (request \(requestID))")
     }
-    var code: String? { fields["code"] }
+    var code: String? {
+        let code = fields["code"]
+        let path = requestPath?.split(separator: "?", maxSplits: 1).first.map(String.init)
+        let knowledge = path == "/api/v1/kb" || path?.hasPrefix("/api/v1/kb/") == true || path == "/api/v1/kb-search"
+            || path == "/api/v1/recordings" || path?.hasPrefix("/api/v1/recordings/") == true
+        if knowledge, status == 503, code == "internal", fields["detail"] == "the knowledge base is off" { return "kb_disabled" }
+        return code
+    }
+
+    /// Business codes precede status and free-form server wording. Raw fields remain available for diagnostics.
+    var businessMessage: String? {
+        switch code {
+        case "kb_disabled": String(localized: "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.")
+        case "kb_unavailable": String(localized: "The knowledge base isn't ready yet. Try again shortly.")
+        case "kb_read_only": String(localized: "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings.")
+        case "assistant_offline": String(localized: "The manager is offline or restarting. Try again shortly.")
+        case "node_unreachable":
+            fields["delivered"] == "none"
+                ? String(localized: "This computer is offline: Persona Link isn't running, or the computer is asleep.")
+                : String(localized: "The connection to this computer dropped. Reconnect it and check whether your last action went through before retrying.")
+        case "timeout": String(localized: "The request timed out. Try again later.")
+        default: nil
+        }
+    }
 
     /// The hub's words for a call that ran out of time (Go's context deadline, a node call's timeout).
     static func isTimeoutText(_ message: String) -> Bool {
@@ -146,7 +186,7 @@ nonisolated struct APIClient: Sendable {
         let c = URLSessionConfiguration.default
         c.urlCache = nil
         c.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: c)
+        return URLSession(configuration: c, delegate: HubRedirects.shared, delegateQueue: nil)
     }()
 
     /// Where a request goes: under the hub's address, through its SSH tunnel when the app routes it there
@@ -236,15 +276,21 @@ nonisolated struct APIClient: Sendable {
         let headers = clientMetadata.headers.merging(opID.map(HubNaming.operationHeaders) ?? [:]) { _, operation in operation }
             .merging(routing(path, query)) { _, manager in manager }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
-            let data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
-                                                     body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers))
+            let data: Data
+            do {
+                data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
+                                                     body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers, timeout: timeout))
+            } catch var error as APIError {
+                error.requestPath = path
+                throw error
+            }
             if opID != nil { try Self.checkReceipt(data, status: nil) }
             return data
         }
         if config.isDemo { throw APIError(status: 503, message: String(localized: "Demo mode isn't available")) }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
         req.httpMethod = method
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
@@ -254,8 +300,8 @@ nonisolated struct APIClient: Sendable {
             req.httpBody = try JSON.encoder.encode(AnyEncodable(body))
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        let (data, resp) = try await session.data(for: req)
-        let ok = try checked(data, resp, requestID: requestID)
+        let (data, resp) = try await session.data(for: req, delegate: HubRedirects.shared)
+        let ok = try checked(data, resp, requestID: requestID, path: path)
         if opID != nil { try Self.checkReceipt(ok, status: (resp as? HTTPURLResponse)?.statusCode ?? 0) }
         return ok
     }
@@ -274,13 +320,14 @@ nonisolated struct APIClient: Sendable {
         }
     }
 
-    private func checked(_ data: Data, _ resp: URLResponse, requestID: String) throws -> Data {
+    private func checked(_ data: Data, _ resp: URLResponse, requestID: String, path: String? = nil) throws -> Data {
+        try CloudflareAccessError.check(resp, body: data, access: config.access)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
             throw APIError(status: status, message: APIError.message(in: data) ?? HTTPURLResponse.localizedString(forStatusCode: status),
                            fields: APIError.fields(in: data),
                            requestID: (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "X-Request-Id") ?? requestID,
-                           details: try? JSON.decoder.decode(JSONValue.self, from: data))
+                           details: try? JSON.decoder.decode(JSONValue.self, from: data), requestPath: path)
         }
         return data
     }
@@ -295,7 +342,7 @@ nonisolated struct APIClient: Sendable {
             do { return (try await request("GET", path, query: q), nil) } catch let e as APIError where e.status == 304 { return (nil, etag) }
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: 30)
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
@@ -305,7 +352,7 @@ nonisolated struct APIClient: Sendable {
         let (data, resp) = try await Self.uncachedSession.data(for: req) // our own cache: URLSession's would hide the 304
         let http = resp as? HTTPURLResponse
         if http?.statusCode == 304 { return (nil, etag) }
-        return (try checked(data, resp, requestID: requestID), http?.value(forHTTPHeaderField: "ETag"))
+        return (try checked(data, resp, requestID: requestID, path: path), http?.value(forHTTPHeaderField: "ETag"))
     }
 
     /// A bounded, staged attachment sent from disk. The fake transport reads it only in tests.
@@ -318,15 +365,15 @@ nonisolated struct APIClient: Sendable {
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: timeout)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
         req.setValue(requestID, forHTTPHeaderField: "X-Client-Request-Id")
         for (name, value) in routing(path, query) { req.setValue(value, forHTTPHeaderField: name) }
-        let (data, response) = try await session.upload(for: req, fromFile: file)
-        return try checked(data, response, requestID: requestID)
+        let (data, response) = try await session.upload(for: req, fromFile: file, delegate: HubRedirects.shared)
+        return try checked(data, response, requestID: requestID, path: path)
     }
 
     nonisolated struct UploadedFile: Codable, Sendable {
@@ -352,7 +399,7 @@ nonisolated struct APIClient: Sendable {
         }
         var req = URLRequest(url: url("/api/v1/machines/\(machine)/files", query: query), timeoutInterval: 120)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
@@ -373,7 +420,7 @@ nonisolated struct APIClient: Sendable {
             return
         }
         var req = URLRequest(url: url(path, query: query), timeoutInterval: 120)
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
         let requestID = String(UUID().uuidString.prefix(8)).lowercased()
@@ -385,7 +432,7 @@ nonisolated struct APIClient: Sendable {
         if !(200..<300).contains(status) {
             let handle = try FileHandle(forReadingFrom: temp)
             defer { try? handle.close() }
-            _ = try checked(handle.read(upToCount: 64 << 10) ?? Data(), response, requestID: requestID)
+            _ = try checked(handle.read(upToCount: 64 << 10) ?? Data(), response, requestID: requestID, path: path)
         }
         try Task.checkCancellation()
         let size = (try FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? NSNumber)?.int64Value ?? 0
@@ -458,7 +505,10 @@ nonisolated struct APIClient: Sendable {
     }
     func setEngine(machine: String, engine: MachineEngine) async throws -> Machine {
         struct Body: Encodable { var engine: String }
-        var m = try JSON.decoder.decode(Machine.self, from: await request("PUT", "/api/v1/machines/\(machine)/engine", body: Body(engine: engine.rawValue)))
+        // No terminal engine is the empty host set, which a single engine cannot say (docs/integrations/engines.md "Host sets").
+        struct Hosts: Encodable { var hosts: [String] }
+        let body: any Encodable = engine == .noEngine ? Hosts(hosts: []) : Body(engine: engine.rawValue)
+        var m = try JSON.decoder.decode(Machine.self, from: await request("PUT", "/api/v1/machines/\(machine)/engine", body: body))
         m.group = group
         return m
     }
@@ -706,7 +756,7 @@ nonisolated struct APIClient: Sendable {
         guard parts.count == 3 else { throw APIError(status: 0, message: "bad image ref") }
         if config.isDemo { return try await request("GET", "/api/v1/sessions/\(parts[0])/\(parts[1])/items/\(parts[2])/image") }
         var req = URLRequest(url: itemURL(machine: parts[0], session: parts[1], item: parts[2], "image"), timeoutInterval: 60)
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
         let (data, resp) = try await Self.uncachedSession.data(for: req) // ChatImageLoader keeps it on disk
@@ -721,7 +771,7 @@ nonisolated struct APIClient: Sendable {
     func fullItem(_ k: SessionKey, id: String) async throws -> Item {
         if config.isDemo { return try JSON.decoder.decode(Item.self, from: try await request("GET", sp(k) + "/items/\(id)/full")) }
         var req = URLRequest(url: itemURL(machine: k.machineID, session: k.sessionID, item: id, "full"), timeoutInterval: 60)
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         clientMetadata.apply(to: &req)
         let (data, resp) = try await Self.uncachedSession.data(for: req)
@@ -1075,10 +1125,11 @@ nonisolated struct APIClient: Sendable {
     }
 
     /// What the main conversation still needs (docs/protocol/protocol.md「Main chat readiness」). `probe`: also try one word on it
-    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」).
+    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」). The hub may spend 100 s on the check
+    /// and another 12 s on the node's self-check, so a probe waits 130 s rather than the ordinary 30 s read budget.
     func assistantReadiness(probe: Bool = false) async throws -> AssistantReadiness {
         try JSON.decoder.decode(AssistantReadiness.self, from: try await request("GET", "/api/v1/assistant/readiness",
-                                                                                 query: probe ? ["probe": "1"] : [:]))
+                                                                                 query: probe ? ["probe": "1"] : [:], timeout: probe ? 130 : 30))
     }
 
     /// Later: the checklist stops coming up by itself (the card still shows when the readiness gets worse).
@@ -1594,6 +1645,8 @@ extension Error {
         let ns = self as NSError
         if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut { return true }
         guard let api = self as? APIError else { return false }
+        if api.code == "timeout" { return true }
+        if api.businessMessage != nil { return false }
         return api.status == 504 || APIError.isTimeoutText(api.message)
     }
 
@@ -1696,7 +1749,7 @@ extension Date {
     nonisolated var realDate: Date? { timeIntervalSince1970 > 946_684_800 ? self : nil }
 }
 
-private nonisolated final class DownloadProgress: NSObject, URLSessionDownloadDelegate, Sendable {
+private nonisolated final class DownloadProgress: HubRedirects, URLSessionDownloadDelegate, @unchecked Sendable {
     let report: @Sendable (Int64, Int64) -> Void
     init(_ report: @escaping @Sendable (Int64, Int64) -> Void) { self.report = report }
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
@@ -1706,7 +1759,7 @@ private nonisolated final class DownloadProgress: NSObject, URLSessionDownloadDe
     }
 }
 
-private nonisolated final class UploadProgress: NSObject, URLSessionTaskDelegate, Sendable {
+private nonisolated final class UploadProgress: HubRedirects, @unchecked Sendable {
     let report: @Sendable (Int64) -> Void
     init(_ report: @escaping @Sendable (Int64) -> Void) { self.report = report }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,

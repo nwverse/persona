@@ -1,5 +1,5 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
-import { useManagerOffline } from "../ManagerParts";
+import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
 import { LinkManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -19,7 +19,7 @@ import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotic
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, type TaskIndex } from "../../lib/tasks";
+import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentParent, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -29,7 +29,7 @@ import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistan
 import { unlinkAgentFromTodo } from "../../lib/todos";
 import { LinkTodoDialog } from "../LinkTodoDialog";
 import { t as tr } from "../../i18n";
-import { rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
+import { lastEditablePrompt, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import type { Item, Session, Subagent } from "../../lib/types";
@@ -64,7 +64,7 @@ import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-con
 import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
-import { navRailTicks, type NavRailSource } from "../../lib/nav-rail";
+import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
 import { containsInput, indexedNavTicks, userInputRevision } from "../../lib/user-input-index";
 import { useUserInputs } from "./useUserInputs";
 import { NavRail } from "./NavRail";
@@ -88,7 +88,7 @@ import { AssistantFace, AssistantLauncherChip, CompactionStrip, useAssistantMenu
 import { Segmented } from "../assistant/parts";
 import { PageBoundary } from "../PageBoundary";
 import { ViewLayer } from "../session/ViewLayer";
-import { MAIN_TITLE, conversationTitle } from "../assistant/conversations";
+import { conversationTitle } from "../assistant/conversations";
 import { usePersona } from "../assistant/Persona";
 import { voiceCalls, useVoiceCall, useVoiceState } from "../../lib/voice/calls";
 import { agentLabel } from "../../lib/mentions";
@@ -113,6 +113,8 @@ const NO_FEED: FeedItem[] = [];
 const NO_PANES: Session[] = [];
 // the assistant has no subagents: one array, so the chat context does not change with every render
 const NO_SUBAGENTS: Subagent[] = [];
+// no fine pointer: the rail draws nothing, so its ticks are not read
+const NO_RAIL_TICKS: NavRailTick[] = [];
 /** Going to a search hit: how long the rows that hold it get to open before the line it is on stands in, when to give
  *  up, and how long it stays lit (Android: 3 s). */
 const FIND_MS = 400;
@@ -209,6 +211,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const archivedHere = useArchived(mid, sid);
   // its manager offline (several managers): nothing can be sent, wherever it was opened from; the page's own word first
   const ownerOffline = useManagerOffline(session?.manager);
+  // the main conversation is titled with the current assistant's name once there are several
+  const mainTitle = useAssistantTitle();
   const offlineLine = offline ?? ownerOffline;
   // Virtual subagent transcript views read their execution metadata from the complete parent snapshot.
   const parentSid = subagentParent(sid);
@@ -225,9 +229,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const interactions = useStore((s) => s.interactions.filter((i) => i.machine_id === mid && i.session_id === sid));
   const answered = useStore((s) => Object.values(s.answered).filter((a) => a.ix.machine_id === mid && a.ix.session_id === sid));
   const delegated = useStore((s) => Object.values(s.delegated).filter((d) => d.ix.machine_id === mid && d.ix.session_id === sid));
-  // the list as pushed: its updated_at is what tells the page it fell behind (useTranscript)
+  // the list as pushed: its updated_at and rev are what tell the page it fell behind (useTranscript); a subagent has no rev
   const viewed = readOnly ? (listed?.find((a) => a.session_id === sid) ?? null) : null;
-  const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, cache: mainCache, assistant });
+  const tr = useTranscript(mid, sid, { starting: Boolean(launching) && !readOnly, updatedAt: (readOnly ? viewed : session)?.updated_at, rev: readOnly ? undefined : session?.rev, cache: mainCache, assistant });
   const trNow = useRef(tr);
   trNow.current = tr;
   const railChat = useRef(`${mid}/${sid}`);
@@ -346,7 +350,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const noRowBlock = useMemo(() => (refusedNoRow ? { label: t(gone ? "chat-chatview.session_gone" : "chat-chatview.connecting") } : undefined), [refusedNoRow, gone]);
   // A Persona conversation without a title yet is "New chat", as All chats and the sidebar call it, not its folder's name (#1697)
   const named = session ?? archivedHere;
-  const title = isMain ? MAIN_TITLE : named ? (assistant ? conversationTitle(named) : sessionTitle(named)) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
+  const title = isMain ? mainTitle : named ? (assistant ? conversationTitle(named) : sessionTitle(named)) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
   const canFork = Boolean(session?.can_fork) && !readOnly;
   // "Rewind to here" (#2436): offered on your messages of a session in a terminal; off with a reason while it cannot. Live
   // (chat-actions.ts): it changes with every turn, and in `actions` it would render every message's actions again.
@@ -354,6 +358,25 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const [rewindLive] = useState(() => liveValue(rewindOff));
   useLayoutEffect(() => rewindLive.set(rewindOff), [rewindLive, rewindOff]);
   const canRewind = canCompose && !readOnly && !assistant;
+  const [editingLast, setEditingLast] = useState(false);
+  const editLastBusy = useRef(false);
+  const editLastMessage = useCallback(async () => {
+    if (editLastBusy.current || !canRewind || rewindLive.get() || noRow || tr.loading || tr.error) return;
+    const last = lastEditablePrompt(items.current);
+    if (!last) return;
+    editLastBusy.current = true;
+    setEditingLast(true);
+    try {
+      await rewindTo(mid, sid, draftKey, items.current, last.id, last.raw, "conversation");
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      editLastBusy.current = false;
+      setEditingLast(false);
+    }
+  }, [canRewind, rewindLive, noRow, tr.loading, tr.error, mid, sid, draftKey]);
+  const editableLast = useMemo(() => lastEditablePrompt(tr.items), [tr.items]);
+  const onEditLastMessage = canRewind && !rewindOff && !noRow && !tr.loading && !tr.error && !editingLast && editableLast ? editLastMessage : undefined;
   const actions = useMemo<ChatActions>(
     () => ({
       draftKey,
@@ -892,7 +915,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
   lastTasks.current = tasks;
   // Only lightweight positions are fetched for navigation; older transcript bodies wait for a selection.
-  const loadedRailTicks = useMemo(() => navRailTicks(lines), [lines]);
+  const loadedRailTicks = useMemo(() => (fine ? navRailTicks(lines) : NO_RAIL_TICKS), [fine, lines]);
   const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
   const inputIndex = useUserInputs(mid, sid, tr.history, inputRevision, fine && !tr.loading, tr.reload);
   const railTicks = useMemo(() => inputIndex ? indexedNavTicks(inputIndex, lines, tr.items) : loadedRailTicks, [inputIndex, lines, tr.items, loadedRailTicks]);
@@ -957,7 +980,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   );
   const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: railJump }), [railTicks, inputIndex?.total, railJump]);
   // the subagents the agent is waiting on (#5602): running, launched in the foreground, their calls not answered yet
-  const callsAnswered = useMemo(() => new Set(tr.items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => i.tool_use_id!)), [tr.items]);
+  const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
   const waitingOn = useMemo(() => (assistant ? null : agentsWorking(subagents, callsAnswered)), [assistant, subagents, callsAnswered]);
   // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, the running bar shows no time (#3534)
   const [clocks, setClocks] = useState(0);
@@ -1228,7 +1251,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       answered={answered}
       delegated={delegated}
       offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
-      narrow={compactDock}
+      // in the assistant's Pending tray (AssistantActionBar) the tray is the box that scrolls: a second scroll box of
+      // their own left the card's sticky answer row at its bottom, out of sight below the tray's fold
+      narrow={compactDock && (!assistant || voiceState === "live")}
       short={short}
       keyboard={keyboard}
       onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
@@ -1322,6 +1347,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
                         onRetry={canRetry && d.line.id === lines.at(-1)?.id ? retry : undefined}
+                        onEditLastMessage={d.line.id === lines.at(-1)?.id ? onEditLastMessage : undefined}
                         fix={d.line.id === lines.at(-1)?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
@@ -1341,6 +1367,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   streaming={(line.kind === "segment" || line.kind === "supervision") && line.live ? tr.streaming || undefined : undefined}
                   expandFold={tr.expandFold}
                   onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
+                  onEditLastMessage={i === lines.length - 1 ? onEditLastMessage : undefined}
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
                   offscreen={offscreen(line)}
@@ -1388,7 +1415,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         {/* everything over the composer: it shrinks and scrolls before the composer does (the composer grew, and its
             cards, task questions and notes stood taller than the dock, drawn up over the chat or pushing it to nothing);
             the box clips what is in it, so its children keep a little room for their shadows (p-1; -m-1 gives it back) */}
-        <div data-chat-dock-above className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
+        <div data-chat-dock-above data-scroll-box className="-m-1 flex min-h-0 shrink flex-col gap-2 overflow-y-auto overscroll-contain p-1 empty:hidden">
         {short ? (
           // a phone on its side: the plan's pill, the run's status and the queue share one line
           (pills || running || queue) && (
@@ -1450,6 +1477,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           needsYou={state === "needs_you"}
           onSend={send}
           disabled={Boolean(offlineLine) || (!noRow && !sessionCan(session, "send"))}
+          onEditLastMessage={onEditLastMessage}
+          loadingDraft={editingLast}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
           onStop={sessionCan(session, "interrupt") ? interrupt : undefined}
           stopping={stopping}

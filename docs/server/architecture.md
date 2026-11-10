@@ -111,6 +111,8 @@ Where the business type needs fields of its own, it stays a separate type with t
 - **Pure contracts**: every package in `testdata/contracts.txt` depends only on the standard library and other listed packages (the SDK's `sdk/go/wire` is listed by its full import path), and every package named `*wire` must be listed.
 - **Part boundaries**: the hub (`hub`, `hubedge`) depends on no manager (`assistant`, `devices`, `extmgr`, `manager`) or node package, a manager on no hub package, and the node (`node`) on neither.
   Known violations would go into `testdata/boundary_allowed.txt` (shrink-only, each line naming the step that removes it); it is empty, and a line that no longer applies fails too.
+- **Reap first**: every production `osproc.ReapInherited` call (the hub's `claimInherited`, the manager's `runManager`, `managercli.Assistant`, the node's `runNode`) comes before anything that could start a child, and the hub's `Run`, `Serve` and `RunSlot` call `claimInherited` first (`reap_test.go`).
+  Only the calls its list names, each with why it starts no process, may run ahead; a new call site has to be listed.
 
 ## Key flows
 
@@ -123,8 +125,8 @@ Where the business type needs fields of its own, it stays a separate type with t
 4. The node starts tailing the transcript, and events are pushed through the hub to subscribed apps.
 
 ### Answering questions / approving plans
-1. claude calls AskUserQuestion → PreToolUse hook → `personad hook` connects to node.sock and sends an `interaction` → the node hands it to the manager (`interaction.create`), which records it and has the hub push it to the app / watch (including a local notification).
-2. The user picks on the phone → hub → manager → node → the hook process outputs `updatedInput.answers` → claude continues.
+1. claude calls AskUserQuestion → PreToolUse lets Claude draw its terminal dialog → the following PermissionRequest connects `personad hook` to node.sock and sends an `interaction` → the node hands it to the manager (`interaction.create`), which records it and has the hub push it to the app / watch (including a local notification).
+2. The user picks on the phone → hub → manager → node → PermissionRequest outputs `updatedInput.answers` → claude continues. If the person answers in the terminal first, PostToolUse withdraws the waiting phone card instead.
 3. The card waits whether or not an app is online. The hook leaves the question to the terminal (the TUI shows it as usual, and it can be answered at the computer too) on timeout (30 minutes by default),
    when the node has no connection to its manager, or when a resident node's manager has been away longer than the 10-minute hold (`docs/protocol/protocol.md` "When the manager is away (resident nodes)").
 

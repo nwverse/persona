@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -132,7 +133,7 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	if c.Assistant {
 		return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
 	}
-	todo, made, err := s.adoptAgent(ctx, self, am, c, a.Title, i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
+	todo, made, err := s.adoptAgent(ctx, self, am, c, a.Title, "", i18n.T(s.lang(ctx), "assistant-tasks.adopt_notes",
 		i18n.Args{"agent": agentLabel(c), "machine": am.Name, "cwd": c.Cwd}), a.DoneWhen, a.ExpectMinutes, true)
 	if err != nil {
 		return "", err
@@ -150,11 +151,11 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 // adoptAgent puts agent c of machine am under conversation self's supervision (agent_supervise, agent_send with a
 // task): a task of self already gets the new done_when / expect_minutes (none: kept; update false: left as it is, for
 // the caller to write later), an agent of no task becomes one
-// (a todo titled title, else after the session, with notes, the agent linked: made true; the caller puts its card in
-// the feed, taskCard); another
+// (a todo with notes and the agent linked, named by adoptedTitle from title and prompt: made true; the caller puts its
+// card in the feed, taskCard); another
 // conversation's task, or the user's own todo, stays theirs (an error). If the agent cannot be linked to the todo just
 // made, that todo is closed (no empty task stays).
-func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c proto.Session, title, notes string, doneWhen []string,
+func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c proto.Session, title, prompt, notes string, doneWhen []string,
 	expect int, update bool) (Todo, bool, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
@@ -184,15 +185,16 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 			return Todo{}, false, err
 		}
 		t.Supervision = &v
+		s.setTaskStageKind(ctx, t.ID, "", "", taskStageKind(false, v.DoneWhen, t.PRURL), false)
 		return t, false, nil
 	}
-	title = clip(oneLine(title), 40)
-	if title == "" {
-		title = clip(oneLine(cmp.Or(strings.TrimSpace(c.Title), agentLabel(c))), 40)
-	}
+	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
 	todo, err := s.createTodo(ctx, title, notes, self, "")
 	if err != nil {
 		return Todo{}, false, err
+	}
+	if retitle {
+		s.nameTodoLater(ctx, todo.ID, title, cmp.Or(strings.TrimSpace(prompt), title))
 	}
 	v, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
 		v.Supervisor, v.DoneWhen, v.ExpectMinutes = self, doneWhen, expect
@@ -202,6 +204,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("supervise it: %w", err)
 	}
+	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
 	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
@@ -231,6 +234,29 @@ type sendTask struct {
 	Title         string   `json:"title"`
 	DoneWhen      []string `json:"done_when"`
 	ExpectMinutes int      `json:"expect_minutes"`
+}
+
+// givenTask is agent_send's task as sent, nil for a reply (#3386): left out, null, or an object of only title,
+// done_when and expect_minutes that says nothing (sendTask.none), which runtimes that fill in every field of a tool's
+// schema send for a reply. Anything else stays a task, as before: another type, a field of the wrong type or a key the
+// task has not (a misspelled title) must not turn a hand-off into an untracked reply.
+func givenTask(raw json.RawMessage) *sendTask {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var t sendTask
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&t); err == nil && t.none() {
+		return nil
+	}
+	return &t
+}
+
+// none: task has only blank fields (no title, no non-blank done_when, no expect_minutes above 0); any real value in one
+// of them makes it a hand-off.
+func (t sendTask) none() bool {
+	return strings.TrimSpace(t.Title) == "" && len(cleanDoneWhen(t.DoneWhen)) == 0 && t.ExpectMinutes <= 0
 }
 
 // handedTask is the task agent_send with a task put the agent on: made now, or self's own that it worked for already
@@ -277,11 +303,23 @@ func otherWork(c proto.Session, t Todo, task sendTask) error {
 	return nil
 }
 
+// adoptedTitle names the todo of an agent adopted as a task (#3020), as task_plan names its tasks (taskTitle): the
+// assistant's title when it is a real one, else it or the instruction (prompt) cleaned now, and retitle for the model to
+// name it later. The session's title or label only when neither leaves anything.
+func (s *Service) adoptedTitle(ctx context.Context, c proto.Session, given, prompt string) (title string, retitle bool) {
+	if strings.TrimSpace(given) != "" || strings.TrimSpace(prompt) != "" {
+		if title, retitle = s.taskTitle(ctx, given, prompt); title != "" {
+			return title, retitle
+		}
+	}
+	return cutRunes(oneLine(cmp.Or(strings.TrimSpace(c.Title), agentLabel(c))), todoTitleMax(s.hello(ctx).Locale)), false
+}
+
 // handTask puts the agent under self's supervision for task before text is sent to it (adoptAgent): text is the new
 // todo's notes, and its title when task has none. An agent on a task of self's stays on it, unchanged until the send.
 func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
 	// Decided under adoptMu (adoptAgent): another hand-off may have put the agent on a task since sendTaskAllowed.
-	todo, made, err := s.adoptAgent(ctx, self, am, c, cmp.Or(strings.TrimSpace(task.Title), text), text, task.DoneWhen, task.ExpectMinutes, false)
+	todo, made, err := s.adoptAgent(ctx, self, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, false)
 	if err != nil {
 		return nil, fmt.Errorf("%w; nothing was sent", err)
 	}
@@ -594,7 +632,14 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
-	s.noteProgress(ctx, t.ID, TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()})
+	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
+	if text != progress.Text {
+		progress.Detail = text
+	}
+	if s.noteProgress(ctx, t.ID, progress) {
+		s.goReportLine(t, progress.At, kind, text) // off the tool call: it answers right away
+	}
+	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
 	// the handoff; progress reports only update the card (the stream stays quiet).
 	if kind != upReportProgress {

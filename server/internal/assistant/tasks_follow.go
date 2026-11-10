@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -148,7 +149,9 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
+	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
 	s.setTaskStage(ctx, t.ID, "develop", "")
+	s.taskPlanApproval()
 	if t.Supervision != nil {
 		s.supervisedWorking(ctx, t)
 	}
@@ -198,7 +201,7 @@ const interruptedSummary = assistantwire.InterruptedSummary
 // Not kept in a package variable: that would read the catalogs whenever personad starts, a hook too (#1308).
 func silentTurnErrorIn(l i18n.Lang) string { return i18n.T(l, "assistant-tasks.silent_turn") }
 
-var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+var prLink = lazyre.New(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://[^/\s<>"()]+/(?:[^/\s<>"()]+/)+merge_requests/\d+\b`)
 
 // taskTurnEnded: one of the task's agents (sid on machine) ended a turn. Once none of them works or waits for the
 // user any more, the conversation gets a receipt (once per stretch of work), and the todo is closed if the judge
@@ -357,10 +360,8 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		s.logf("task %s: receipt: %v", t.ID, err)
 	}
 	s.taskNotice(cctx, t, name, "done", "", clipMarkdown(text, 1500))
-	stage, pr := stageOf(text)
-	s.setTaskStage(cctx, t.ID, stage, pr)
-	if stageIndex(stage) >= stageIndex("deploy") {
-		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // the user tries it (acceptance.go)
+	if s.advanceTaskReply(cctx, t, last.MachineID, last.SessionID, text) {
+		go s.askAcceptance(t, last.MachineID, last.SessionID, text) // verified, by the supervising assistant or the user (acceptance.go)
 	}
 	s.taskReport(t, reportDone, name, [2]string{last.MachineID, last.SessionID}, text, nil)
 	s.autoFinishTask(t, since, worked) // the work may be finished: then the todo is done (done.go)
@@ -395,6 +396,12 @@ func (s *Service) taskTurnEndedAfter(ctx context.Context, machine, sid string, a
 // routeToTask sends text straight to the agent of task todoID that most needs it, and keeps it in the conversation as
 // the user's (no from: a task card's Message, or a decision the owner made in Lark).
 func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text string) (FeedItem, error) {
+	return s.routeToTaskChecked(ctx, conversation, todoID, text, nil)
+}
+
+// routeToTaskChecked lets automatic decisions recheck their task after slow session/device lookups.
+// Direct user messages retain routeToTask's ability to reuse a completed task's agent.
+func (s *Service) routeToTaskChecked(ctx context.Context, conversation, todoID, text string, guard func(Todo) bool) (FeedItem, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return FeedItem{}, err
 	}
@@ -421,6 +428,15 @@ func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text st
 	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wait)
 	defer cancel()
+	if guard != nil {
+		cur, ok := s.todoNow(todoID)
+		if !ok {
+			return FeedItem{}, db.ErrTodoNotFound
+		}
+		if !guard(cur) {
+			return FeedItem{}, db.ErrTodoCompleted
+		}
+	}
 	if err := s.call(sctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 		return FeedItem{}, err
 	}

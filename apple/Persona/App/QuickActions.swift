@@ -2,9 +2,11 @@
 import UIKit
 
 /// The home screen icon's long-press menu (#3199): the last two conversations opened here (#2191, `RecentChatsStore`),
-/// then New Chat and Inbox; the system shows four at most, so Agents is not among them (the tab bar has it). They only open
-/// a page; with no hub paired the app stays on its welcome page.
+/// then Record a Meeting, New Chat and Inbox; the system shows four at most, so Agents is not among them (the tab bar has
+/// it). They only open a page; with no hub paired the app stays on its welcome page. Record a Meeting starts recording too
+/// (docs/apple/recording.md「Meeting recordings」), with or without a hub: the text syncs once there is one.
 enum QuickAction: String, CaseIterable {
+    case meetingRecording = "persona.meeting-recording"
     case newConversation = "persona.new-conversation"
     case inbox = "persona.inbox"
     /// A recently opened conversation: its `SessionKey.path` in the item's user info.
@@ -12,6 +14,7 @@ enum QuickAction: String, CaseIterable {
 
     var item: UIApplicationShortcutItem {
         let (title, symbol): (String, String) = switch self {
+        case .meetingRecording: (String(localized: "Record a Meeting"), Theme.Icon.recording)
         case .newConversation: (String(localized: "New Chat [Quick Actions ea4b29]"), Theme.Icon.compose)
         case .inbox: (String(localized: "Inbox"), Theme.Icon.inbox)
         }
@@ -49,6 +52,8 @@ enum QuickAction: String, CaseIterable {
         guard let action = QuickAction(rawValue: item.type) else { return false }
         model.shellSettings = false
         switch action {
+        case .meetingRecording:
+            Task { await MeetingRecorder.shared.startMeeting(inForeground: true) }
         case .newConversation:
             model.selectedTab = .assistant
             // As the drawer's New Chat: the shell takes Assistant back to its root (a pushed inbox included), the old tabs only

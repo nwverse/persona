@@ -74,6 +74,17 @@ type Settings struct {
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
+	// ReviewSamplePercent: the share (0–100) of the finished supervised tasks that passed the judge's own check whose
+	// review still goes to the main conversation (#3128, supervise_sample.go); the rest the judge closes. nil is 100:
+	// every finished task waits for task_review, as before.
+	ReviewSamplePercent *int `json:"review_sample_percent,omitempty"`
+	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
+	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
+	Leaders []string `json:"leaders,omitempty"`
+	// InterjectBackground: a message the user sends while a Claude conversation is still answering moves what runs in
+	// the foreground (Bash commands, subagents) to the background, so the message is taken up at once instead of after
+	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default).
+	InterjectBackground *bool `json:"interject_background,omitempty"`
 }
 
 // FormerMain is a main conversation that was replaced, and until when it was the main one.
@@ -191,6 +202,13 @@ func quietOn(v *bool) bool { return v == nil || *v }
 // mainTasksQuiet: a task opened from the main conversation now is quiet (main_tasks_quiet, on by default).
 func (s *Service) mainTasksQuiet(ctx context.Context) bool {
 	return quietOn(s.settings(ctx).MainTasksQuiet)
+}
+
+// interjectBackground: a message sent while a conversation answers moves its foreground work to the background
+// (interject_background, off by default).
+func (s *Service) interjectBackground(ctx context.Context) bool {
+	v := s.settings(ctx).InterjectBackground
+	return v != nil && *v
 }
 
 // startRequestedTasks: task_plan starts the tasks the user asked for without waiting for "Start" (start_requested_tasks,
@@ -334,6 +352,10 @@ type assistantView struct {
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
 	// IdleCloseHours is in effect (0: off).
 	IdleCloseHours int `json:"idle_close_hours"`
+	// ReviewSamplePercent is in effect (100: every finished task waits for task_review).
+	ReviewSamplePercent int `json:"review_sample_percent"`
+	// InterjectBackground is in effect, like DoneNeedsDelivery.
+	InterjectBackground bool `json:"interject_background"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -348,7 +370,9 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
-		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour)}
+		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		ReviewSamplePercent: s.reviewSamplePercent(ctx),
+		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session

@@ -1,21 +1,22 @@
 // The inbox list (docs/assistant/inbox.md"App"): filters by source and kind, search, then Needs you (agents waiting on you first),
 // FYI, Collapsed and Done, each a section that opens / closes from its title.
-import { Fragment, memo, useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   agentDraft, agentWorking, conversationRoute, fromLine, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
   itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
   BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
-  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone,
+  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup,
 } from "../../lib/inbox";
-import { doneGroups, groupBySource, groupByTime, openAtFirst, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
+import { dayGroupCounts, doneGroups, groupBySource, groupByTime, openAtFirst, sortTimeKeys, timeRange, timeTitle, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
 import { useMailAccounts } from "../../lib/mail";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick } from "../../lib/router";
+import { openedItemState } from "../../lib/inbox-nav";
 import { useInboxSources } from "../../lib/inbox-sources";
-import { managerOrder, multiManager, ownerIn, useRoster, type Manager } from "../../lib/managers";
+import { type Manager } from "../../lib/managers";
+import { scoped, useScope, useScoped } from "../../lib/current-assistant";
 import { useStore } from "../../lib/store";
-import { ManagerHeading } from "../ManagerParts";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
 import { requestRoute } from "../../lib/card-focus";
@@ -26,6 +27,7 @@ import type { MenuAt } from "../../ui/menu-model";
 import { Icon } from "../../ui/icons";
 import { openPolicyDialog, RulesDialog } from "./PolicyDialog";
 import { isNoHover } from "../../ui/media-query";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
@@ -34,6 +36,7 @@ import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFolde
 import { folderCrumbs, UNFILED } from "../../lib/inbox-folders";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
 import { CheckMark } from "../settings/ProviderFields";
+import { OfflineState, useShownOffline } from "../ManagerParts";
 
 function useStored(key: string): [string, (v: string) => void] {
   const [v, setV] = useState(() => localStorage.getItem(key) ?? "");
@@ -69,7 +72,9 @@ type Picked = Set<string> | null;
 
 /** `selected`: the item opened (its id and manager). `picked` / `onPicked`: selecting, from the page's "Select". */
 export function InboxList({ selected, picked = null, onPicked }: { selected?: { id: string; manager?: string }; picked?: Picked; onPicked?: Dispatch<SetStateAction<Picked>> }) {
-  const items = useInbox((s) => s.items);
+  // with several assistants the list is the current one's (docs/assistant/managers.md "Clients"); one: every item
+  const mine = useScope();
+  const items = useScoped(useInbox((s) => s.items));
   const loaded = useInbox((s) => s.loaded);
   const loading = useInbox((s) => s.loading);
   const error = useInbox((s) => s.error);
@@ -88,6 +93,9 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const historyMore = useInbox((st) => st.historyMore);
   const historyLoading = useInbox((st) => st.historyLoading);
   const historyError = useInbox((st) => st.historyError);
+  const doneDays = useInbox((st) => st.doneDays);
+  const groupLoading = useInbox((st) => st.groupLoading);
+  const groupComplete = useInbox((st) => st.groupComplete);
   const [storedFolder, setFolder] = useStored("inbox.folder");
   const [query, setQuery] = useState("");
   const foldersShown = useFoldersShown(items);
@@ -96,7 +104,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   // The agents waiting, picked in the store: the list holds the store's own interaction objects, so a sessions or
   // machines push that leaves them as they were keeps the same array (useStore compares it item by item) and the list,
   // with every row in it, does not render again.
-  const agents = useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query, folder }));
+  const agents = useScoped(useStore((st) => waitingAgents(st.interactions, st.sessions, st.mutes, { source, kind, query, folder })));
   // the sections opened or closed by hand, by "<manager group>:<section>" (each manager's group keeps its own; one
   // manager: the group ""), the others as they are at first
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
@@ -122,25 +130,21 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const s = useMemo(() => sections(items, { source, kind, query, folder }), [items, source, kind, query, folder]);
   // what the folder bar counts: the items the other filters leave
   const inFilters = useMemo(() => (foldersShown ? items.filter((it) => matches(it, { source, kind, query })) : []), [foldersShown, items, source, kind, query]);
-  // with several managers, each one's items and waiting agents under its name, sectioned as before (docs/assistant/managers.md
-  // "Clients"); one: the list as it was
-  const roster = useRoster();
-  const byManager = useMemo(() => {
-    if (!multiManager(roster)) return null;
-    return managerOrder(roster)
-      .map((m) => ({
-        manager: m,
-        sec: sections(items.filter((it) => ownerIn(roster, it.manager) === m.id), { source, kind, query, folder }),
-        ags: agents.filter((ix) => ownerIn(roster, ix.manager) === m.id),
-      }))
-      .filter((g) => g.ags.length || g.sec.done.length || TIERS.some((tier) => g.sec.tiers[tier.key].length));
-  }, [roster, items, agents, source, kind, query, folder]);
-  const chips = mailAccounts(accounts, items);
+  // several assistants: the list's one group is the current assistant's (its Done history and day counts are asked of
+  // it by name); one: the group "" as before
+  const byManager = useMemo(() => (mine.manager ? [{ manager: mine.manager, sec: s, ags: agents }] : null), [mine.manager, s, agents]);
+  // the hub's list of mail accounts is the default assistant's: with several, the chips are the accounts the current
+  // one's items name
+  const chips = mailAccounts(mine.several ? [] : accounts, items);
   const connectors = useMemo(() => connectorSources(items), [items]);
   const failed = Boolean(error) && !items.length;
   const empty = !s.tiers.action.length && !s.tiers.working.length && !s.tiers.fyi.length && !s.tiers.noise.length && !agents.length;
+  // the current assistant offline (several assistants): the hub's merged list leaves it out, so nothing here means it
+  // couldn't answer, not that it has nothing; it says so instead of "All caught up" or the first-run page
+  const offline = useShownOffline();
+  const away = ready && empty && !failed && Boolean(offline);
   // nothing ever came in, nothing filtered: is anything connected at all? (still unknown: the plain "All caught up")
-  const sources = useInboxSources(ready && empty && !failed && !items.length && !query && !source && !kind && !folder);
+  const sources = useInboxSources(ready && empty && !failed && !away && !items.length && !query && !source && !kind && !folder);
   const unconnected = sources && !sources.connected ? sources : null;
   // Clean up all: the open items the list shows (its filters and search); the agents waiting are not items.
   const openInView = kind === "agent" ? [] : [...s.tiers.action, ...s.tiers.working, ...s.tiers.fyi, ...s.tiers.noise];
@@ -159,6 +163,30 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const order = ["lark", ...chips.map((a) => `mail:${a.id}`), ...connectors.map((c) => `c:${c.id}`)];
   const mailName = (account: string) => chips.find((a) => a.id === account)?.email ?? account;
   const groupOpen = (group: string, section: string, key: string) => folds[`${group}|${section}|${key}`] ?? openAtFirst(section, key);
+  const filtered = Boolean(source || kind || query || folder);
+  // Done's groups (#2969). With the hub's day counts (#2967) every group they name is listed with its count, loaded or not,
+  // and loads its own items when it opens; filtered or searched, the counts are of what is loaded ("n+" until the group
+  // is complete). Without them, as before: what the history has loaded, "n+" on the last group while there is more.
+  const doneGroupsOf = (group: string, done: InboxItem[]): { groups: DoneGroup[]; next?: DoneGroup } => {
+    const loaded = doneGroups(done, now);
+    const days = doneDays[group];
+    if (!days) return { groups: loaded.map((g, i) => ({ ...g, count: g.items.length, plus: i === loaded.length - 1 && historyMore.includes(group), more: false, range: timeRange(g.key, now) })) };
+    const counts = dayGroupCounts(days, now, filtered ? 0 : loaded.find((g) => g.key === "just")?.items.length ?? 0);
+    const byKey = new Map(loaded.map((g) => [g.key, g.items]));
+    // complete: a page of its own reached its start, or the list holds it (the done items of its last days, the hub's
+    // inboxKeepDone), or (unfiltered) as many are loaded as the hub counts
+    const complete = (key: string, loadedCount: number) => groupComplete.includes(`${group}|${key}`) || timeRange(key, now).start >= now - LIST_DONE_MS
+      || (!filtered && loadedCount >= (counts.get(key) ?? 0));
+    const groupOf = (key: string): DoneGroup => {
+      const items = byKey.get(key) ?? [];
+      const done = complete(key, items.length);
+      return { key, title: timeTitle(key), items, count: filtered ? items.length : Math.max(items.length, counts.get(key) ?? 0), plus: filtered && !done, more: !done, range: timeRange(key, now) };
+    };
+    // filtered, only the groups with items that match show; "Show older" under Done loads the newest one the hub counts
+    // that hasn't all come
+    const pending = filtered ? sortTimeKeys(counts.keys(), now).find((key) => !complete(key, 0)) : undefined;
+    return { groups: sortTimeKeys(filtered ? byKey.keys() : [...byKey.keys(), ...counts.keys()], now).map(groupOf), next: pending ? groupOf(pending) : undefined };
+  };
   const layout = (byManager ?? [{ manager: null, sec: s, ags: agents }]).map(({ manager, sec, ags }) => {
     const tiers = TIERS.map((tier) => {
       const list = sec.tiers[tier.key];
@@ -166,8 +194,10 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
       const groups: InboxGroup[] = tier.key === "working" ? [] : grouping === "time" ? groupByTime(list, now, (it) => it.updated_at) : groupBySource(list, order, mailName);
       return { tier, list, waiting, groups, titled: tier.key !== "working" && (groups.length > 1 || (waiting.length > 0 && list.length > 0)) };
     });
-    const done = doneWithHistory(sec.done, manager && roster ? history.filter((it) => ownerIn(roster, it.manager) === manager.id) : history, { source, kind, query, folder });
-    return { manager, group: manager?.id ?? "", tiers, done, doneGroups: doneGroups(done, now) };
+    const done = doneWithHistory(sec.done, scoped(history, mine), { source, kind, query, folder });
+    const group = manager?.id ?? "";
+    const { groups: dg, next } = doneGroupsOf(group, done);
+    return { manager, group, tiers, done, doneGroups: dg, doneNext: next };
   });
   // the open items in sight: in sections and groups shown open (In progress is always open)
   const shownOpen = kind === "agent" ? [] : layout.flatMap(({ group, tiers }) => tiers.filter(({ tier }) => tier.key === "working" || isOpen(group, tier.key))
@@ -187,16 +217,34 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     return n;
   });
   const historyManagers = byManager ? byManager.map((g) => g.manager.id) : [undefined];
-  // Done's history from the hub (the list holds only the last few days): a first page once the list is in, so Done's
-  // groups and counts are there before it opens; more on "Show older"
+  // Done's history from the hub (the list holds only the last few days): each manager's day counts once the list is in
+  // (#2967), so Done lists every day's group and count before it opens; a manager without them gets a first page of its
+  // history instead, and more on "Show older", as before
   useEffect(() => {
-    if (ready && !history.length && historyMore.length) void loadOlderDone(historyManagers);
+    if (!ready) return;
+    void loadDoneDays(historyManagers).then((without) => {
+      if (without.length && !history.length) void loadOlderDone(without);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+  }, [ready, mine.manager?.id]);
+  // A Done group shown open whose items haven't all come loads its first page by itself, once while the list is up;
+  // the next pages come on its "Show older", so opening 1+ month doesn't stream in every item of it
+  const autoLoaded = useRef(new Set<string>());
+  useEffect(() => {
+    for (const { manager, group, doneGroups: dg } of layout) {
+      if (!doneDays[group] || !isOpen(group, "done")) continue;
+      for (const g of dg) {
+        const id = `${group}|${g.key}`;
+        if (!g.more || !groupOpen(group, "done", g.key) || autoLoaded.current.has(id)) continue;
+        autoLoaded.current.add(id);
+        void loadDoneGroup(manager?.id, g.key, g.range);
+      }
+    }
+  });
   const jumpTo = (group: string, key: string) => {
     if (!isOpen(group, "done")) toggle(group, "done");
     putFold(`${group}|done|${key}`, true);
-    requestAnimationFrame(() => document.querySelector(`[data-group="${CSS.escape(`${group}|done|${key}`)}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    requestAnimationFrame(() => scrollListTo(document.querySelector(`[data-group="${CSS.escape(`${group}|done|${key}`)}"]`)));
   };
   const allChosen = shownOpen.length > 0 && shownOpen.every((it) => picked?.has(itemKey(it)));
   const pick = useCallback((it: InboxItem) => onPicked?.((p) => {
@@ -238,7 +286,10 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-    <div className="min-h-0 flex-1 overflow-y-auto" data-picking={picking || undefined}>
+    {/* `overflow-y-auto` alone makes this a scroll container on both axes, so a row or a long chip (a connector's name)
+        wider than the 380px column let the whole list scroll sideways and cut off every card (#3262); `overflow-x-clip`
+        clips that overflow instead, and is not a scroll container, so `scrollIntoView` above cannot shift it either. */}
+    <div className="min-h-0 flex-1 overflow-y-auto overflow-x-clip" data-picking={picking || undefined}>
       <div className="mx-auto max-w-[760px] px-3 pt-3 pb-16 sm:px-4">
         <label className="flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
@@ -317,7 +368,8 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
             </Button>
           </div>
         )}
-        {ready && empty && !failed && unconnected && (
+        {away && offline && <OfflineState offline={offline} className="mt-10" />}
+        {ready && empty && !failed && !away && unconnected && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center" data-inbox-no-sources>
             <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
               <Icon name="inbox" size={17} />
@@ -333,7 +385,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
             </div>
           </div>
         )}
-        {ready && empty && !failed && !unconnected && (
+        {ready && empty && !failed && !away && !unconnected && (
           <div className="mt-10 flex flex-col items-center gap-2 text-center">
             <span className="flex size-10 items-center justify-center rounded-full bg-green-tint text-green">
               <Icon name="check" size={17} stroke={2.6} />
@@ -343,8 +395,10 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           </div>
         )}
 
-        {layout.map(({ manager, group, tiers, done, doneGroups: dg }) => {
-          const more = historyMore.includes(group);
+        {layout.map(({ manager, group, tiers, done, doneGroups: dg, doneNext: nextGroup }) => {
+          const exact = Boolean(doneDays[group]);
+          const more = exact ? Boolean(nextGroup) || dg.some((g) => g.plus) : historyMore.includes(group);
+          const doneCount = exact ? dg.reduce((n, g) => n + g.count, 0) : done.length;
           const moreError = historyError[group] ?? "";
           const isSelected = (it: InboxItem) => !!selected && sameItem(it, selected);
           const row = (it: InboxItem, off = false) => (
@@ -362,7 +416,6 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           };
           return (
             <Fragment key={group}>
-              {manager && <ManagerHeading manager={manager} className="mt-5 px-1" />}
               {ready && tiers.map(({ tier, list, waiting, groups, titled }) => {
                 if (!list.length && !waiting.length) return null;
                 const clear = tier.key === "fyi" ? t("inbox-inboxlist.clear_fyi") : tier.key === "noise" ? t("inbox-inboxlist.clear_noise") : undefined;
@@ -384,20 +437,24 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                   </Section>
                 );
               })}
-              {ready && done.length > 0 && (
-                <Section k="done" title={t("inbox-inboxlist.done")} count={more ? { text: `${done.length}+`, label: `${done.length}+` } : sectionCount(done.length, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}
+              {ready && doneCount > 0 && (
+                <Section k="done" title={t("inbox-inboxlist.done")} count={more ? { text: `${doneCount}+`, label: `${doneCount}+` } : sectionCount(doneCount, 0)} open={isOpen(group, "done")} onToggle={() => toggle(group, "done")}
                   menu={dg.length > 1 ? [
-                    ...dg.map((g, i) => ({ key: `jump:${g.key}`, label: g.title, hint: i === dg.length - 1 && more ? `${g.items.length}+` : String(g.items.length), onSelect: () => jumpTo(group, g.key) })),
+                    ...dg.map((g) => ({ key: `jump:${g.key}`, label: g.title, hint: g.plus ? `${g.count}+` : String(g.count), onSelect: () => jumpTo(group, g.key) })),
                     { key: "fold-all", label: t("inbox-inboxlist.fold_all"), divider: true, onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, false)) },
                     { key: "unfold-all", label: t("inbox-inboxlist.unfold_all"), onSelect: () => dg.forEach((g) => putFold(`${group}|done|${g.key}`, true)) },
                   ] : undefined}>
-                  {dg.length > 1 ? dg.map((g, i) => groupOf("done", g, g.items.map((it) => row(it, true)), { more: i === dg.length - 1 && more })) : done.map((it) => row(it, true))}
-                  {more && history.length > 0 && (
-                    <div className="flex items-center gap-2 px-1 pt-1">
-                      <Button tone="quiet" busy={historyLoading} onClick={() => void loadOlderDone(historyManagers)}>{historyLoading ? t("inbox-inboxlist.loading_older") : t("inbox-inboxlist.load_older")}</Button>
-                      {moreError && <span className="min-w-0 truncate text-[11.5px] text-red" title={moreError}>{t("inbox-inboxlist.older_failed", { error: moreError })}</span>}
-                    </div>
-                  )}
+                  {dg.length > 1 ? dg.map((g) => {
+                    const id = `${group}|${g.key}`;
+                    return groupOf("done", g, (
+                      <>
+                        {g.items.map((it) => row(it, true))}
+                        {exact && g.more && !filtered && <OlderButton busy={groupLoading.includes(id)} error={moreError} run={() => void loadDoneGroup(manager?.id, g.key, g.range)} />}
+                      </>
+                    ), { more: g.plus, count: g.count });
+                  }) : done.map((it) => row(it, true))}
+                  {!exact && more && history.length > 0 && <OlderButton busy={historyLoading} error={moreError} run={() => void loadOlderDone(historyManagers)} />}
+                  {nextGroup && <OlderButton busy={groupLoading.includes(`${group}|${nextGroup.key}`)} error={moreError} run={() => void loadDoneGroup(manager?.id, nextGroup.key, nextGroup.range)} />}
                 </Section>
               )}
             </Fragment>
@@ -475,6 +532,35 @@ function Section({ k, title, count, open, onToggle, action, menu, children }: { 
   );
 }
 
+/**
+ * Scrolls the list's own scroller (the nearest box that scrolls) so `el` is at its top. Not scrollIntoView: that scrolls
+ * every box above it too, the app shell included, which hides its overflow but still scrolls from code; Jump To then
+ * lifted the whole app and left a blank band under it (#2969).
+ */
+function scrollListTo(el: Element | null) {
+  let box = el?.parentElement;
+  while (box && !/auto|scroll/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+  if (!el || !box) return;
+  box.scrollTo?.({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: scrollBehavior() });
+}
+
+/** How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page. */
+const LIST_DONE_MS = 3 * 86_400_000;
+
+/** A group of Done (#2969): its items loaded so far, its count (the hub's when it has day counts), whether the count
+ *  reads "n+" (plus), whether more of its items can load (more) and its time range (where its pages start). */
+type DoneGroup = InboxGroup & { count: number; plus: boolean; more: boolean; range: { start: number; end: number } };
+
+/** "Show older" under Done or in one of its groups: one more page, with why the last one failed. */
+function OlderButton({ busy, error, run }: { busy: boolean; error: string; run: () => void }) {
+  return (
+    <div className="flex items-center gap-2 px-1 pt-1">
+      <Button tone="quiet" busy={busy} onClick={run}>{busy ? t("inbox-inboxlist.loading_older") : t("inbox-inboxlist.load_older")}</Button>
+      {error && <span className="min-w-0 truncate text-[11.5px] text-red" title={error}>{t("inbox-inboxlist.older_failed", { error })}</span>}
+    </div>
+  );
+}
+
 /** A group's tick while selecting: none, some ("–") or all of it picked. */
 function GroupTick({ state }: { state: "none" | "some" | "all" }) {
   return (
@@ -498,12 +584,13 @@ function Group({ id, title, count, more, open, onToggle, pick, children }: { id:
             <GroupTick state={pick.state} />
           </button>
         )}
-        <button type="button" onClick={() => onToggle(!open)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11.5px] text-ink-2">
+        {/* under the section's title (12px, medium), not as big (#2969) */}
+        <button type="button" onClick={() => onToggle(!open)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] text-ink-2">
           <Icon name="chevronRight" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />
-          <span className="truncate font-medium">{title}</span>
+          <span className="truncate">{title}</span>
           <span className="shrink-0 text-ink-3 tabular-nums">{more ? `${count}+` : count}</span>
         </button>
-        {pick && pick.picked > 0 && <span className="shrink-0 text-[11.5px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
+        {pick && pick.picked > 0 && <span className="shrink-0 text-[11px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
       </div>
       {/* the same 2px of room as the section's (#2703), so a selected card's ring isn't cut inside a group; the header's
           bottom padding gives up those 2px to keep its 4px */}
@@ -561,11 +648,11 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
             <span className="min-w-0 flex-1">
               {it.summary ? (
                 <>
-                  <span className={cx("line-clamp-2 text-[12.5px] leading-[1.5]", done ? "text-ink-2" : "text-ink")}><Spark />{it.summary}</span>
+                  <span className={cx("line-clamp-2 text-[12.5px] leading-[1.5] break-words", done ? "text-ink-2" : "text-ink")}><Spark />{it.summary}</span>
                   <span className="mt-0.5 block truncate text-[11.5px] text-ink-2">{from}</span>
                 </>
               ) : (
-                <span className="line-clamp-2 text-[12.5px] leading-[1.5] text-ink-2">{from}</span>
+                <span className="line-clamp-2 text-[12.5px] leading-[1.5] break-words text-ink-2">{from}</span>
               )}
               {showAccount && !isLark(it) && !it.connector && <span className="mt-0.5 block truncate text-[11px] text-ink-3">{it.account_name}</span>}
               {folder !== undefined && <FolderLine it={it} folder={folder} />}
@@ -585,7 +672,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
       ) : off ? (
         <div inert className="flex gap-3 rounded-[14px] p-3">{head}</div>
       ) : (
-        <a href={href(to)} onClick={(e) => onLinkClick(e, to)} aria-current={selected ? "page" : undefined} className="flex gap-3 rounded-[14px] p-3 outline-offset-[-2px]">{head}</a>
+        <a href={href(to)} onClick={(e) => onLinkClick(e, to, openedItemState())} aria-current={selected ? "page" : undefined} className="flex gap-3 rounded-[14px] p-3 outline-offset-[-2px]">{head}</a>
       )}
       {(first || draft || working || mark) && (
         <div inert={picking} className={cx("-mt-1 flex flex-col gap-2 pr-3 pb-3", pick ? "pl-[92px]" : "pl-[64px]")}>
@@ -647,10 +734,11 @@ async function mutesByManager(managers: Manager[]): Promise<MuteGroup[]> {
 }
 
 /** "Muted" (the ⋯ menu; iOS InboxMutesView): every source's muted repositories, chats and senders, newest first, each
- *  with "Unmute". Only what comes in later comes back. With several managers, each one's under its name. */
+ *  with "Unmute". Only what comes in later comes back. With several assistants, the current one's. */
 function MutesDialog({ onClose }: { onClose: () => void }) {
-  const roster = useRoster();
-  const managers = multiManager(roster) ? managerOrder(roster) : null;
+  // several assistants: the current one's mutes, asked of it by name
+  const mine = useScope().manager;
+  const managers = useMemo(() => (mine ? [mine] : null), [mine]);
   const [list, setList] = useState<InboxMute[] | null>(null);
   const [groups, setGroups] = useState<MuteGroup[] | null>(null);
   const [failed, setFailed] = useState("");
@@ -691,7 +779,7 @@ function MutesDialog({ onClose }: { onClose: () => void }) {
       </li>
     );
   };
-  // several managers: the groups with something to say (mutes, or why they could not be read)
+  // several assistants: the current one's group when it has something to say (mutes, or why they could not be read)
   const shownGroups = groups?.filter((g) => g.error || g.mutes?.length) ?? null;
   const empty = managers ? shownGroups?.length === 0 : list?.length === 0;
   return (
@@ -716,7 +804,6 @@ function MutesDialog({ onClose }: { onClose: () => void }) {
           {shownGroups ? (
             shownGroups.map((g) => (
               <section key={g.manager.id} data-mutes-manager={g.manager.id} className="mb-2">
-                <ManagerHeading manager={g.manager} className="px-1 pt-1 pb-0.5" />
                 {g.error ? (
                   <p className="px-1 py-1.5 text-[12px] break-words text-ink-3">{g.manager.online ? t("inbox-inboxlist.mutes_load_failed", { error: g.error }) : t("inbox-inboxlist.mutes_offline")}</p>
                 ) : (

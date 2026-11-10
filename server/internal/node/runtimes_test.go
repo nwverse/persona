@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -259,6 +260,23 @@ func listed(t *testing.T, n *Node) map[string]proto.Session {
 	return out
 }
 
+func TestRuntimeCloseCapabilityIsIndependentOfTerminal(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+			n, _ := runtimeNode(t)
+			hello := dshHello()
+			hello["caps"].(map[string]any)["close"] = allowed
+			host := dialRuntime(t, n, hello)
+			_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "close-capability", "status": "working"}}})
+			waitFor(t, "runtime session listed", func() bool { _, ok := listed(t, n)["close-capability"]; return ok })
+			caps := listed(t, n)["close-capability"].Capabilities
+			if caps == nil || caps.Close == nil || *caps.Close != allowed || caps.Terminal {
+				t.Fatalf("close %v listed as %+v", allowed, caps)
+			}
+		})
+	}
+}
+
 func TestRuntimeSessionsAreListedAndPushed(t *testing.T) {
 	n, hub := runtimeNode(t)
 	host := dialRuntime(t, n, dshHello())
@@ -428,6 +446,36 @@ func TestRuntimeSendRefusedWithoutTheCap(t *testing.T) {
 	}
 	if s := listed(t, n)["session-3"]; s.Capabilities == nil || s.Capabilities.Send || s.ReadOnlyReason == "" {
 		t.Fatalf("a runtime without send is listed read-only with a reason: %+v %q", s.Capabilities, s.ReadOnlyReason)
+	}
+}
+
+// A row's modes capability (#1843): what the runtime declared, for a row whose agent takes Claude Code's modes or is the
+// runtime's own, never a subagent's. Rows of a runtime that did not declare it say false, not nothing.
+func TestRuntimeModesCapability(t *testing.T) {
+	for _, c := range []struct {
+		declared bool
+		rt, id   string
+		agent    string
+		want     bool
+	}{
+		{true, "orca", "session-1", "claude", true},
+		{true, "agy", "session-1", "agy", true},
+		{true, "paseo", "session-1", "codex", false},
+		{true, "paseo", "session-1", "claude", true},
+		{true, "paseo", "session-1", "paseo", false}, // Paseo's catch-all (opencode, grok, ...): its modes refuses them
+		{true, "orca", "session-1" + subagentSep + "a1", "claude", false},
+		{false, "dsh", "session-1", "dsh", false},
+	} {
+		if got := runtimeModes(c.declared, c.rt, proto.Session{SessionID: c.id, Agent: c.agent}); got != c.want {
+			t.Errorf("%+v: modes %v", c, got)
+		}
+	}
+	n, _ := runtimeNode(t)
+	host := dialRuntime(t, n, map[string]any{"runtime": "dsh"})
+	_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{{"session_id": "session-4"}}})
+	waitFor(t, "listed", func() bool { _, ok := listed(t, n)["session-4"]; return ok })
+	if s := listed(t, n)["session-4"]; s.Capabilities == nil || s.Capabilities.Modes == nil || *s.Capabilities.Modes {
+		t.Fatalf("a runtime without modes lists modes false: %+v", s.Capabilities)
 	}
 }
 

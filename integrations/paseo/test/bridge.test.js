@@ -60,7 +60,7 @@ test("Paseo's agents are the engine's sessions: Claude Code's by its session and
   assert.equal(node.hello.runtime, 'paseo')
   assert.equal(node.hello.name, 'Paseo')
   assert.equal(node.hello.version, '0.14.0', "Paseo's version")
-  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, resume: true })
+  assert.deepEqual(node.hello.caps, { start: true, send: true, interrupt: true, rename: true, close: true, assistant: false, modes: true, resume: true, readonly: true })
   assert.deepEqual(node.hello.launchers.map((l) => [l.name, l.agent]), [['my-claude', 'claude'], ['my-codex', 'codex'], ['grok', 'paseo']])
   assert.deepEqual(node.hello.launchers[0].models, [{ id: 'fable[1m]', name: 'Fable', default: true, efforts: ['low', 'high', 'max'], default_effort: 'max' }])
   const byId = Object.fromEntries(rows().map((r) => [r.session_id, r]))
@@ -274,7 +274,10 @@ test('interrupt, rename, permission mode and effort go to the agent', async (t) 
   assert.deepEqual([fake.requestsOf('set_agent_mode_request')[0].modeId, fake.requestsOf('set_agent_thinking_request')[0].thinkingOptionId], ['plan', 'high'])
   await assert.rejects(call(node, 'session.modes', { session_id: SID, effort: 'xhigh' }), /没有「xhigh」/)
   await assert.rejects(call(node, 'session.modes', { session_id: SID, permission_mode: 'auto' }), /没有「auto」模式/)
-  await assert.rejects(call(node, 'session.modes', { session_id: `paseo-${a.codex.id}`, permission_mode: 'plan' }), /没有 Claude Code 的权限模式/)
+  await assert.rejects(call(node, 'session.modes', { session_id: `paseo-${a.codex.id}`, permission_mode: 'plan' }), /没有这个权限模式/)
+  // Codex: Persona's bypassPermissions is Paseo's full-access; the other modes are Paseo's own (left alone).
+  await call(node, 'session.modes', { session_id: `paseo-${a.codex.id}`, permission_mode: 'bypassPermissions' })
+  assert.equal(fake.requestsOf('set_agent_mode_request').at(-1).modeId, 'full-access')
 })
 
 test('a new session: an agent of the launcher\'s provider, with the form\'s choices, under an id kept on it', async (t) => {
@@ -294,6 +297,40 @@ test('a new session: an agent of the launcher\'s provider, with the form\'s choi
   await assert.rejects(call(node, 'session.start', { cwd: '/nonexistent/dir', prompt: 'x' }), /没有这个目录/)
   fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: 'Provider unavailable' } })
   await assert.rejects(call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /Paseo 没能新建：Provider unavailable/)
+})
+
+test("a new Codex session: bypassPermissions starts it with Paseo's full-access mode; the other modes are left alone", async (t) => {
+  const { fake, node } = await setup(t)
+  const start = (permission_mode) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-codex', permission_mode })
+    .then(() => fake.requestsOf('agent.create.request').at(-1).config)
+  assert.equal((await start('bypassPermissions')).modeId, 'full-access')
+  assert.equal((await start('auto')).modeId, undefined)
+  assert.equal((await start('default')).modeId, undefined)
+})
+
+test('a read-only (plan) start: Paseo\'s plan mode on a Claude provider, never a writable fallback (#3238)', async (t) => {
+  const { fake, node } = await setup(t)
+  const plan = (params) => call(node, 'session.start', { cwd: '/tmp', prompt: 'x', permission_mode: 'plan', ...params })
+  await plan({ launcher: 'my-claude' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).config.modeId, 'plan')
+  // A launcher Paseo does not have, or none: a Claude provider in plan mode, not just the default one.
+  await plan({ launcher: 'cc_gateway', shell_launcher: true })
+  assert.deepEqual([fake.requestsOf('agent.create.request').at(-1).config.provider, fake.requestsOf('agent.create.request').at(-1).config.modeId], ['my-claude', 'plan'])
+  const before = fake.requestsOf('agent.create.request').length
+  for (const launcher of ['my-codex', 'grok']) {
+    const err = await plan({ launcher }).catch((e) => e)
+    assert.equal(err.code, 'readonly_unsupported', launcher)
+  }
+  assert.equal(fake.requestsOf('agent.create.request').length, before, 'refused before anything was created')
+  // Paseo starting it in another mode after all: archived, and refused.
+  fake.handlers['agent.create.request'] = (msg) => ({ payload: { agent: agentSnapshot({ id: msg.agentId, provider: 'my-claude', cwd: '/tmp', currentModeId: 'bypassPermissions' }) } })
+  const err = await plan({ launcher: 'my-claude' }).catch((e) => e)
+  assert.equal(err.code, 'readonly_unsupported')
+  assert.equal(fake.requestsOf('archive_agent_request').at(-1).agentId, fake.requestsOf('agent.create.request').at(-1).agentId)
+  // A takeover cannot set the mode: refused unless Paseo's own agent is in plan already.
+  const take = await call(node, 'session.start', { cwd: '/tmp', resume: 'cccccccc-0000-4000-8000-000000000009', permission_mode: 'plan' }).catch((e) => e)
+  assert.equal(take.code, 'readonly_unsupported')
+  assert.equal(fake.requestsOf('import_agent_request').length, 0)
 })
 
 test("完成未看 follows Paseo: seen there, seen here; a new turn to look at, unread again", async (t) => {

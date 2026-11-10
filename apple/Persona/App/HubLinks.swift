@@ -153,7 +153,7 @@ extension AppModel {
             link.live.disconnect()
         }
         // iOS cuts them in the background anyway; back in front each socket picks its way again (docs/operations/network.md).
-        closeAllTunnels()
+        closeTunnelsForBackground()
     }
 
     /// A silent push in the background: the group that sent it connects for its call (nil: every group).
@@ -370,6 +370,18 @@ extension AppModel {
         change(&r.hubs[i])
         registry = r
         saveRegistry(r)
+    }
+
+    /// Settings › hub › Cloudflare Access saved (nil: cleared): the hub's requests carry it from now on, the group's
+    /// socket reconnects with it, and the watch and the widgets get it.
+    func setHubAccess(_ access: HubAccess?, hub id: String) {
+        guard let hub = registry.hubs.first(where: { $0.id == id }), hub.config.access != access else { return }
+        updateHub(id) { $0.config.access = access }
+        buildLinks() // the links' fallback config, and the widgets' credentials
+        pushWatchConfigs()
+        guard let link = link(hub.group), !link.isDemo else { return }
+        link.live.disconnect()
+        link.live.connect(link.fallback) // its route picks the group's hub again, from the registry
     }
 
     // MARK: Live Activity

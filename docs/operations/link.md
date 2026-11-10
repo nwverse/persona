@@ -154,6 +154,8 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 - **node is unchanged**: all features live in `personad node`. This computer needs a resident node (installed together under "Install the node service" above; separately, use `persona-link node install`
   or `scripts/deploy/node-launchd.sh install`); persona-link forwards streams only to its socket `~/.persona/node-attach.sock`. This is the same path that SSH-started `node --stdio` forwarded to
   (`internal/node/attach.go`). Writing a systemd / launchd service for the resident node is packaging, not functionality: the service contents match those written by `scripts/deploy/node-launchd.sh`.
+  Because the resident node runs in the user's login session, features that need that session live there too, such as
+  sharing the computer's clipboard with the phone ([clipboard.md](clipboard.md)).
 - **hub and manager** (since 2026-11-04 computers belong to the manager, [machines.md](../server/machines.md), "Who connects to computers"):
   - This computer is kind `link` in hub.json; nobody SSHs into it;
   - Persona Link still connects to the hub address; after authenticating, the hub forwards the connection unchanged to the manager (`devices.accept` + `GET /api/v1/bus/relay`, preserving individual messages and close codes);
@@ -249,10 +251,13 @@ Both sides ignore a message type they don't know.
   | Case | Wait |
   | --- | --- |
   | Replaced by a new link from the same computer (4001) | 30 seconds |
-  | Credentials rejected (401 / 403) or revoked (4002) | 5 minutes, or retry immediately when link.json changes (re-pairing) |
+  | Credentials rejected (401 / 403) or revoked (4002) | 5 minutes, or retry within 2 seconds when link.json changes (re-pairing) |
   | Hub restarts (1001) | Normal backoff |
   | Manual **Reconnect now** | No wait |
+  | Paired again while connected (new token, pin, trust or machine in link.json) | No wait: the link ends as with **Reconnect now** and comes back with the new pairing within about 2 seconds |
 
+- Any wait ends within 2 seconds when link.json changes (re-paired, an address added). The change counts from when the attempt read link.json, so a new credential written while the hub was refusing the old one is tried at the next check, not after 5 minutes; while a link is up, only a new credential counts (the link writes the hub's addresses and names into link.json itself).
+- While connected, persona-link looks at link.json every 2 seconds when its modification time changed and compares the pairing itself (token, pin, trust, machine), not just the time: the hub's endpoints and renames rewrite link.json with the same pairing and leave the link alone.
 - Only one persona-link can run per computer (`~/.persona/link.json.run` file lock), or they replace each other repeatedly.
 
 **Network changes**
@@ -754,7 +759,7 @@ Passive mode: `./persona-link install --listen [:18663] [--addr <address the hub
 
 The unit contains neither mode nor listen address: both live in link.json. Changing mode or port requires no service reinstall; the running persona-link switches within a second or two.
 
-Running `install` before pairing starts the service as unpaired; later `persona-link pair` makes it adopt new credentials within seconds, without restart (checks link.json changes every 2 seconds).
+Running `install` before pairing starts the service as unpaired; later `persona-link pair` makes it adopt new credentials within seconds, without restart (checks link.json changes every 2 seconds, also while connected, **Reconnect** above).
 
 Generated unit:
 

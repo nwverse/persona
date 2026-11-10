@@ -47,11 +47,12 @@ import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
 import { hubHasExt } from "../lib/extension-api";
 import { hostOf, type ProviderView } from "../lib/providers";
+import { harnessGroups, harnessLabel, scopeSummary } from "../lib/provider-scope";
 import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
-import { categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, searchSettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
+import { AGENT_KINDS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, searchSettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { formatList, t } from "../i18n";
 
@@ -233,7 +234,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   }, [scrollAnchor, tab]);
   const goGroup = (g: SearchGroup) => {
     setQuery("");
-    pick(g.tab, null);
+    const agent = g.tab === "agents" ? AGENT_KINDS.find((id) => g.anchor === `settings-${id}`) : undefined;
+    pick(g.tab, null, agent);
     setScrollAnchor(g.anchor);
   };
   return (
@@ -275,12 +277,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <ModelConfiguration open={sub} onOpen={(id) => pick("models", id, "model-config")} onProviders={() => pick("models", null, "providers")} />
                 </section>
               </>}
-              {tab === "agents" && (["claude", "codex", "agy", "omp"] as const).map((agent) => (
-                <section key={agent} id={`settings-${agent}`} className="scroll-mt-4">
-                  <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent === "agy" ? "Antigravity" : "omp"}</h2>
-                  <AgentSettings agent={agent} />
-                </section>
-              ))}
+              {tab === "agents" && <AgentSections section={at.section} />}
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
@@ -322,6 +319,59 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+
+const AGENT_LABEL: Record<AgentTab, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", omp: "omp" };
+
+function isAgentSection(section: SettingsSection | null): section is AgentTab {
+  return section != null && (AGENT_KINDS as readonly string[]).includes(section);
+}
+
+/** The original stacked launcher sections. Each heading folds its own settings; all start open. */
+function AgentSections({ section }: { section: SettingsSection | null }) {
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (!isAgentSection(section)) return;
+    setClosed((cur) => {
+      if (!cur.has(section)) return cur;
+      const next = new Set(cur);
+      next.delete(section);
+      return next;
+    });
+  }, [section]);
+  const toggle = (id: AgentTab) => {
+    setClosed((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  return (
+    <>
+      {AGENT_KINDS.map((id) => {
+        const shown = !closed.has(id);
+        return (
+          <section key={id} id={`settings-${id}`} className="scroll-mt-4">
+            <button
+              type="button"
+              aria-expanded={shown}
+              aria-controls={`settings-${id}-body`}
+              aria-label={t(shown ? "settings-agentsettings.hide_agent" : "settings-agentsettings.show_agent", { agent: AGENT_LABEL[id] })}
+              onClick={() => toggle(id)}
+              className="mb-2 flex w-full items-center gap-1 px-1 py-0.5 text-left"
+            >
+              <h2 className="text-[15px] font-semibold text-ink">{AGENT_LABEL[id]}</h2>
+              <Icon name="chevronRight" size={14} className={cx("shrink-0 text-ink-3 transition-transform", shown && "rotate-90")} />
+            </button>
+            <div id={`settings-${id}-body`} hidden={!shown}>
+              <AgentSettings agent={id} />
+            </div>
+          </section>
+        );
+      })}
+    </>
   );
 }
 
@@ -674,7 +724,7 @@ function Models() {
       {list && query && shown.length === 0 && <p className="py-10 text-center text-[13px] text-ink-3">{t("settings.no_matching_providers", { query })}</p>}
       {list && (!query || managed.length > 0) && (
         <Group title={t("settings.managed_title", { count: managed.length })} footer={managed.length ? t("settings.managed_footer") : undefined}>
-          {managed.length ? managed.map(row) : <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.managed_empty")}</p>}
+          {managed.length ? <ManagedRows list={managed} row={row} /> : <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.managed_empty")}</p>}
         </Group>
       )}
       {builtin.length > 0 && (
@@ -923,6 +973,8 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model && <KVRow k={t("settings.custom_model")} v={l.custom_model} mono />}
               {l.kind !== "api" && (!l.agent || l.agent === "claude") && l.custom_model_name && <KVRow k={t("settings.custom_model_name")} v={l.custom_model_name} />}
               <KVRow k="API Key" v={l.has_key ? t("settings.key_set_hidden") : t("settings.not_set")} />
+              {l.share && <KVRow k={t("settings.devices")} v={scopeSummary(l, mname)} />}
+              {l.share && l.key_machines?.length ? <KVRow k={t("settings.machine_keys")} v={formatList(l.key_machines.map(mname), { type: "conjunction", style: "narrow" })} /> : null}
               {l.api !== "responses" && l.api !== "chat" && (!l.agent || l.agent === "claude") && <KVRow k={t("settings.auth")} v={l.auth === "bearer" ? "Bearer" : "x-api-key"} />}
               {l.kind !== "api" && l.args?.length ? <KVRow k={t("settings.extra_args")} v={l.args.join(" ")} mono /> : null}
               {l.models?.length ? <KVRow k={t("settings.model_list")} v={formatList(l.models.map((m) => m.id), { type: "conjunction", style: "narrow" })} mono sub={t("settings.model_count", { count: l.models.length })} /> : null}
@@ -965,6 +1017,23 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit }: { nam
         </div>
       )}
     </Dialog>
+  );
+}
+
+/** Persona's providers by harness (Claude Code, Codex, …, direct API), each under a small header; one harness alone
+ *  needs none, so the list stays as it was. */
+function ManagedRows({ list, row }: { list: LauncherView[]; row: (l: LauncherView) => React.ReactNode }) {
+  const groups = harnessGroups(list);
+  if (groups.length < 2) return <>{list.map(row)}</>;
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.harness} role="group" aria-label={harnessLabel(g.harness)} className="divide-y divide-line">
+          <div className="bg-inset px-4 py-1.5 text-[11px] font-medium text-ink-3">{harnessLabel(g.harness)}</div>
+          {g.items.map(row)}
+        </div>
+      ))}
+    </>
   );
 }
 

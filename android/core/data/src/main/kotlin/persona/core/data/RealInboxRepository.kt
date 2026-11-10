@@ -21,6 +21,9 @@ import java.io.IOException
 
 enum class LarkWindowSyncState { Cached, Syncing, Complete, Incomplete, Failed }
 
+/** How many of the done history's records [RealInboxRepository] keeps for changes to them (#2974). */
+private const val PAGED_BACK_KEPT = 2_000
+
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class RealInboxRepository(
     private val connection: InboxAssistantConnection,
@@ -274,7 +277,7 @@ class RealInboxRepository(
         completions.withItems(listOf("${transport.scope}:$shown")) {
             if (!owns(transport)) throw CancellationException("Pairing changed")
             val change = completions.begin(setOf(shown), done)
-            val old = change.before.firstOrNull()
+            val old = change.before.firstOrNull() ?: pagedBackRecord(shown)
             try {
                 val result = completions.request { asItem(old) { transport.setDone(old?.hubItemId ?: itemId, done) } }
                 if (owns(transport)) {
@@ -427,7 +430,27 @@ class RealInboxRepository(
             if (manager.isNullOrBlank() || item["manager"] != null) item else JsonObject(item + ("manager" to JsonPrimitive(manager)))
         }
         val next = body.obj("next")?.let { n -> n.string("before").takeIf { it.isNotBlank() }?.let { persona.feature.inbox.InboxDoneCursor(it, n.string("before_id").ifBlank { null }) } }
-        return persona.feature.inbox.InboxDonePage(listed(data, transport), next)
+        return persona.feature.inbox.InboxDonePage(listed(data, transport).also { notePagedBack(transport, it) }, next)
+    }
+
+    override suspend fun doneDays(manager: String?, zone: java.time.ZoneId): List<persona.feature.inbox.InboxDoneDay>? {
+        val transport = requireTransport()
+        val body = try {
+            transport.doneDays(manager?.takeIf { it.isNotBlank() }, zone.id)
+        } catch (e: UnsupportedOperationException) {
+            return null
+        } catch (e: Exception) {
+            // An old hub (404 / 405), or a zone it doesn't know (400): Done pages back from the newest as before.
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status in setOf(400, 404, 405)) return null
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        return body.array("days").mapNotNull { day ->
+            val d = day as? JsonObject ?: return@mapNotNull null
+            val date = runCatching { java.time.LocalDate.parse(d.string("day")) }.getOrNull() ?: return@mapNotNull null
+            val count = (d["count"] as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+            persona.feature.inbox.InboxDoneDay(date, count)
+        }
     }
 
     /** What the managers answered to a bulk action, in the app's ids, and the items it changed as the hub has them now. */
@@ -443,8 +466,10 @@ class RealInboxRepository(
         transport: InboxAssistantTransport, items: List<InboxDoneTarget>, action: InboxBulkAction, old: List<InboxRecord>,
     ): BulkOutcome {
         val byId = old.associateBy { it.item.id }
+        // an item paged back into Done is in no list: its own record from the history page (#2974)
+        fun known(id: String) = byId[id] ?: pagedBackRecord(id)
         val default = AssistantManagerChoice.current.value.defaultId
-        val groups = items.groupBy { byId[it.id]?.manager?.takeIf { m -> m.isNotBlank() && m != default } }
+        val groups = items.groupBy { known(it.id)?.manager?.takeIf { m -> m.isNotBlank() && m != default } }
         val answers = mutableListOf<InboxBulkResult>()
         val changed = mutableListOf<Pair<InboxRecord, JsonObject>>()
         val failed = mutableListOf<String>()
@@ -461,7 +486,7 @@ class RealInboxRepository(
                 answers += InboxBulkResult(r.changed.map(key), r.unchanged.map(key), r.changedSince.map(key), r.missing.map(key), r.failed.map(key))
                 data.array("changed").forEach { e ->
                     (e as? JsonObject)?.let { obj ->
-                        val next = record(obj, transport, byId[key(obj.string("id"))])
+                        val next = record(obj, transport, known(key(obj.string("id"))))
                         val raw = next.manager?.let { JsonObject(obj + ("manager" to JsonPrimitive(it))) } ?: obj
                         changed += next to raw
                     }
@@ -1135,8 +1160,29 @@ class RealInboxRepository(
         return records
     }
 
-    /** The record shown with [itemId] (the app's id, InboxItemKey; or the hub's, from outside the lists). */
-    private fun recordOf(itemId: String): InboxRecord? = current.value.records.inboxRecord(itemId)
+    /**
+     * The record shown with [itemId] (the app's id, InboxItemKey; or the hub's, from outside the lists), or one the done
+     * history paged back into Done ([pagedBackRecord]).
+     */
+    private fun recordOf(itemId: String): InboxRecord? = current.value.records.inboxRecord(itemId) ?: pagedBackRecord(itemId)
+
+    /**
+     * The records the done history handed out ([doneHistory], #2576), by pairing and the app's id: none of them is in the
+     * list, so a change to one (Move back, Mark done) takes its manager and hub id from here rather than going to the
+     * default manager by the app's id (#2974). The newest [PAGED_BACK_KEPT] are kept.
+     */
+    private val pagedBack = object : LinkedHashMap<String, InboxRecord>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, InboxRecord>?) = size > PAGED_BACK_KEPT
+    }
+
+    private fun notePagedBack(transport: InboxAssistantTransport, records: List<InboxRecord>) = synchronized(pagedBack) {
+        records.forEach { pagedBack["${transport.scope}:${it.item.id}"] = it }
+    }
+
+    private fun pagedBackRecord(itemId: String): InboxRecord? {
+        val scope = connection.current.value?.scope ?: return null
+        return synchronized(pagedBack) { pagedBack["$scope:$itemId"] }
+    }
 
     /**
      * Runs requests for [record]'s item, naming its manager on each of them where they are made (RequestManager): the

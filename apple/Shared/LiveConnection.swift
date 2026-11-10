@@ -68,6 +68,9 @@ nonisolated enum ServerEvent: Sendable {
     case todos
     /// The personas the hub offers changed, e.g. a tiered look moved to another tier (docs/apple/persona.md): list them again.
     case personas
+    /// The avatar chosen on the hub changed (another device chose one, or the hub went back to the default when its
+    /// package or extension went; docs/apple/persona.md): `effective` is the one to show, `id` the one chosen.
+    case look(id: String?, effective: String?)
     /// The hub's roster of managers changed (docs/assistant/managers.md): Settings › Managers reads it again. Sent only to a
     /// socket that asked for feature `managers` (`queryItems`).
     case managers
@@ -154,6 +157,8 @@ nonisolated enum ServerEvent: Sendable {
         var key: String?
         var conversation: String?
         var plan: TaskPlan?
+        /// look's: the avatar to show (`id` is the one chosen).
+        var effective: String?
         var plugin: String?
         /// extension_ui's (plugin_ui says `plugin`).
         var extensionID: String?
@@ -176,6 +181,7 @@ nonisolated enum ServerEvent: Sendable {
             case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
             case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
+            case effective
             case answeredBy = "answered_by"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
@@ -259,6 +265,9 @@ nonisolated enum ServerEvent: Sendable {
         case "inbox": return .inbox
         case "todos": return .todos
         case "personas": return .personas
+        case "look":
+            guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
+            return .look(id: e.id, effective: e.effective)
         case "managers": return .managers
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
@@ -321,7 +330,7 @@ nonisolated extension ServerEvent {
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .personas, .look, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth: return self
         }
     }
@@ -414,6 +423,9 @@ final class LiveConnection {
     /// tries again only slowly (`rejectedRetry`). Cleared once a socket opens, and by `connect` (paired again).
     private(set) var rejected = false { didSet { if rejected != oldValue { onChange?() } } }
     static let rejectedRetry: TimeInterval = 60
+    /// Cloudflare Access in front of the hub turned the last handshake away (docs/operations/network.md "Behind
+    /// Cloudflare Access"); kept through the retries, cleared once a socket opens or by `connect`.
+    private(set) var accessBlocked: CloudflareAccessError?
     /// When the next attempt starts while the hub is out of reach.
     private(set) var nextTry: Date?
     /// The socket went while connected and is not back yet (docs/operations/hub-restart.md): nil once it is, or after
@@ -491,6 +503,7 @@ final class LiveConnection {
         self.config = config
         backoff = 1
         rejected = false
+        accessBlocked = nil
         open()
     }
 
@@ -594,12 +607,13 @@ final class LiveConnection {
         comps.scheme = config.url.scheme == "https" ? "wss" : "ws"
         comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream)
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
-        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
         RequestClientMetadata.current.apply(to: &req)
         req.timeoutInterval = 15
         resumed = false // until this socket's hello says so
         let t = session.webSocketTask(with: req)
+        t.delegate = HubRedirects.shared
         t.maximumMessageSize = 64 << 20
         task = t
         state = .connecting
@@ -683,6 +697,7 @@ final class LiveConnection {
                         self.sayHello()
                         self.backoff = 1
                         self.rejected = false
+                        self.accessBlocked = nil
                         self.onConnected?()
                     }
                     self.extensionStreamFrame(data, event: event)
@@ -695,7 +710,11 @@ final class LiveConnection {
                     // The handshake's answer: 401 is the hub refusing this credential, not the hub being away.
                     let refused = (t.response as? HTTPURLResponse)?.statusCode == 401
                     if refused != self.rejected { self.rejected = refused }
-                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)") : err.localizedDescription)
+                    // Cloudflare Access in front of the hub turned the handshake away: say so, not a generic failure.
+                    let access = CloudflareAccess.blocked(t.response) ? CloudflareAccessError(tokenSent: self.config?.access != nil) : nil
+                    if access != self.accessBlocked { self.accessBlocked = access }
+                    self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)")
+                                         : access?.localizedDescription ?? err.localizedDescription)
                     self.stalled = false
                     self.scheduleReconnect(gen)
                 }
@@ -832,10 +851,17 @@ final class LiveConnection {
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
     /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
+    /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
+    /// card_compat.go), which every build before the ring draws.
     nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
-        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : [])
+        let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : []) + (chatApps.contains(client.platform) ? [cardRingFeature] : [])
     }
+
+    /// The client_hello feature that says this app draws ```persona-card rings (#3068).
+    nonisolated static let cardRingFeature = "persona_card_ring"
 
     func send(_ object: [String: Any]) {
         if let local {

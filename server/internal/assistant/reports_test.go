@@ -15,8 +15,15 @@ import (
 // testReportDelay is the tests' reportDelay: short, set on each service (never the shared constant).
 const testReportDelay = 50 * time.Millisecond
 
-// reportService is a task service whose Feishu bot is paired, with reports on (or off), recording the posts.
+// reportService is a task service whose Feishu bot is paired, with reports on (or off) and the execution steps on (the
+// card as it was before #3218), recording the posts.
 func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) {
+	t.Helper()
+	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true})
+}
+
+// reportServiceWith is reportService with the bot's switches as given.
+func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, func() []string) {
 	t.Helper()
 	s, f := newTaskService(t)
 	s.reports.mu.Lock()
@@ -26,7 +33,7 @@ func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) 
 	var posts []string
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: on}}, nil
+			Features: feats}, nil
 	})
 	f.answerApp(AppFeishu, FeishuPost, func(p json.RawMessage) (any, error) {
 		var m struct {
@@ -275,7 +282,7 @@ func TestTaskReportDroppedWhenBotNotReady(t *testing.T) {
 	}
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: true}}, nil
+			Features: FeishuFeatures{Main: true, Cards: true, Reports: true, ReportSteps: true}}, nil
 	})
 	time.Sleep(6 * testReportDelay)
 	if got := posts(); len(got) != 0 {

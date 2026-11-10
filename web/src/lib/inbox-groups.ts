@@ -108,3 +108,52 @@ export function doneGroups(items: InboxItem[], now: number): InboxGroup[] {
 export function openAtFirst(section: string, key: string): boolean {
   return section !== "done" || key === "just" || key === "today";
 }
+
+/** Local midnight `n` days after the day `t` falls on (negative: before), by the calendar, so across daylight saving. */
+function shiftDays(t: number, n: number): number {
+  const d = new Date(t);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n).getTime();
+}
+
+/**
+ * Where a Done group starts and ends (end not included), so it can load its own items (#2969): Just now and Today run
+ * on past now, 1+ month has no start. The bounds are local midnights, as timeKey's days are.
+ */
+export function timeRange(key: string, now: number): { start: number; end: number } {
+  const today = dayStart(now);
+  switch (key) {
+    case "just": return { start: now - 3_600_000, end: Infinity };
+    case "today": return { start: today, end: Infinity };
+    case "yesterday": return { start: shiftDays(today, -1), end: today };
+    case "week": return { start: shiftDays(today, -29), end: shiftDays(today, -6) };
+    case "month": return { start: -Infinity, end: shiftDays(today, -29) };
+  }
+  const start = keyDay(key);
+  return { start, end: shiftDays(start, 1) };
+}
+
+/**
+ * Done's group counts from the hub's per-day counts (GET /api/v1/inbox/done/days, #2967; days as "YYYY-MM-DD" in this
+ * device's zone): each day's count goes to the group its day falls in. Just now is part of Today and all in the list:
+ * `just` (how many it holds) comes off Today.
+ */
+export function dayGroupCounts(days: Record<string, number>, now: number, just = 0): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [day, n] of Object.entries(days)) {
+    // the day's noon: its key whatever the day's length (a daylight-saving day has 23 or 25 hours)
+    const k = timeKey(new Date(keyDay(`d:${day}`) + 12 * 3_600_000).toISOString(), now);
+    out.set(k, (out.get(k) ?? 0) + n);
+  }
+  if (just > 0) {
+    out.set("just", just);
+    const today = (out.get("today") ?? 0) - just;
+    if (today > 0) out.set("today", today);
+    else out.delete("today");
+  }
+  return out;
+}
+
+/** The time groups' keys in Done's order (newest first), for groups that come from counts as well as from items. */
+export function sortTimeKeys(keys: Iterable<string>, now: number): string[] {
+  return [...new Set(keys)].sort((a, b) => timeRank(a, now) - timeRank(b, now));
+}

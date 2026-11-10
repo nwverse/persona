@@ -90,8 +90,18 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 	}
+	// What may change the manager's inbox: a merged list fetched while it is under way is not kept, and one kept from
+	// before it answered is not given again (inbox_answers.go).
+	changes := r.Method != http.MethodGet && r.Method != http.MethodHead
+	if changes {
+		h.inboxAnswers.changed(id)
+	}
 	var res assistantwire.HTTPResponse
-	if err := h.callBus(ctx, id, assistantwire.MethodHTTP, req, &res); err != nil {
+	err = h.callBus(ctx, id, assistantwire.MethodHTTP, req, &res)
+	if changes {
+		h.inboxAnswers.changed(id)
+	}
+	if err != nil {
 		var coded *rpc.Error
 		switch {
 		case send && (errors.Is(err, errBusDropped) || errors.Is(err, context.DeadlineExceeded)):
@@ -186,4 +196,16 @@ func localizedOnce(forms map[i18n.Lang][]byte, l i18n.Lang, b []byte, localize f
 	form := localize(l, b)
 	forms[l] = form
 	return form
+}
+
+// toFullWanting is toWanting for the full devices only: a computer to computer transfer's progress (file_transfer,
+// docs/protocol/file-transfer.md) names files, which an answer-only device (the watch) has no business with.
+func (h *Hub) toFullWanting(feature string, b []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.role == roleFull && c.wants(feature) {
+			c.queue(b)
+		}
+	}
 }

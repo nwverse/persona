@@ -18,6 +18,7 @@ import {
 } from "../../lib/extension-ui";
 import { presenceStyle, usePresence, type Present } from "../../ui/motion";
 import { Rolling } from "../../ui/Rolling";
+import { scrollBehavior } from "../../ui/stream/motion";
 import { t } from "../../i18n";
 import { Button, cx, EASE, Loading, Spinner } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
@@ -103,7 +104,7 @@ export function ViewSections({ view, embedded, compact, ...handlers }: ViewHandl
 /** Scrolls the page to a file's diff (a file tree without an action, on a page of diffs). */
 function revealDiff(path: string) {
   const el = [...document.querySelectorAll<HTMLElement>("[data-diff-path]")].find((e) => e.dataset.diffPath === path);
-  el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  el?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 /** The side pane's title on a narrow screen: its first section's, with how many files its tree has. */
@@ -685,7 +686,7 @@ function Row({ item: it, busy, onPress, pressable, chosen, h }: { item: UIItem; 
       disabled={!!busy || !pressable(it.action)}
       aria-pressed={chosen ? chosen === it.action.id : undefined}
       onClick={() => onPress(it.action!)}
-      className={cx("flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left whitespace-nowrap transition-colors enabled:hover:bg-hover", chosen === it.action.id && "bg-accent-tint", c && !slider ? "pr-2" : menu.button ? "pr-1" : "pr-4")}
+      className={cx("flex min-w-0 flex-1 w-full items-center gap-3 py-2.5 pl-4 text-left whitespace-nowrap transition-colors enabled:hover:bg-hover", chosen === it.action.id && "bg-accent-tint", c && !slider ? "pr-2" : menu.button ? "pr-1" : "pr-4")}
     >
       {body}
     </button>

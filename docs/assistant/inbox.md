@@ -3,6 +3,8 @@
 The Inbox tab is Persona's information entry point: Lark messages and mail from all email accounts share **one list**, grouped into items. AI triages first; people see only the conclusions.
 (Requested direction 2026-10-27: no group-by-group browsing, no second Lark client; see `docs/extensions/feishu.md`.)
 
+Navigation badges count unread open inbox entries across pending sections; read-but-pending items remain in their sections and keep their completion state. Android counts each native conversation once using its reconciled source receipts, plus unread non-conversation items. Web and Apple count inbox items. Zero keeps the existing hidden-badge behavior. The roster's `inbox_needs_you` and the home page's pending count retain their separate meaning: open items requiring action, including ones already read. A receipt can precede the next item-list update, so Android's badge reads `InboxConversations` rather than only the cached item flags.
+
 ## Ownership: the manager owns the Inbox (2026-11-04)
 
 The Inbox belongs to the **manager** (assistant process `personad assistant`; `docs/assistant/assistant.md`, "Boundary with hub"): items and their state (pre-admission triage,
@@ -318,7 +320,8 @@ Each item can be filed under a **folder path**: a `/`-separated string such as `
 - **Data**: `folder` and `folder_by` (`model` | `user`) on the item (listed), `folder_of` as bookkeeping (not listed). Items are JSON rows in `inbox_items`, so there is no migration. The settings `{enabled, rules}` are kept under the settings key `inbox_folders`. **Off by default**: it spends model calls and adds the folder bar, so the user turns it on.
 - **APIs**: `GET /api/v1/inbox/folders[?sources=all]` → `{enabled, rules, folders: [{path, count, open}]}` (the folders the listed items are filed in, exactly, most used first). `PUT /api/v1/inbox/folders {enabled?, rules?}` → the same (turning it on starts a pass). `PUT /api/v1/inbox/{id}/folder {folder}`: a path files it by hand, `""` takes it out of every folder (the model leaves it alone too), and `null` hands it back to the model. A path that normalizes to nothing is 400, and a failed write is rolled back (500). It answers with the listed item.
 - **Web**: with folders on (or any item filed), a folder bar sits under the filter chips: crumbs from **All folders** down to the folder picked, and the folders right under it as chips with their open counts (plus **Unfiled** at the top). Picking a folder filters the list, its sections and **Clean up all** to that folder and everything under it. Agents waiting are left out, and the choice is remembered like the other filters. Rows show their folder when the list is not already in it. **Move to folder…** is in a row's menu and the item's header, with the folders in use as suggestions, **Let AI decide** and **No folder**. **Folders…** in the ⋯ menu turns automatic filing on and edits the folder rules.
-- **Not yet**: iOS, Mac and Android browse and move by folder (they ignore the new fields until then). There's no assistant tool to move items, and policies can't target a folder.
+- **Assistant tools** (#3099, `assistant/inbox_folders.go`, descriptions in `prompts/mcp/inbox/`): `inbox_folders` lists the folders in use across every source (path, items, open) and whether automatic filing is on; with `folder` it also lists the items filed there and below, with `unfiled: true` the items in no folder, open first and then newest first, at most 50, each with the id `inbox_move` takes. `inbox_move {items, folder}` makes the same move as `PUT /api/v1/inbox/{id}/folder` (`setInboxFolder`): a path files the items by hand, `""` takes them out of every folder, and the model leaves them alone afterwards. It has no "back to the model" form. Every id is checked first: an unknown id, or a path that normalizes to nothing, moves nothing. A failed write leaves that item as it was and names it in the error.
+- **Not yet**: iOS, Mac and Android browse and move by folder (they ignore the new fields until then), and policies can't target a folder.
 
 ## Events and handling chain (phase 1, 2026-11-05)
 
@@ -348,7 +351,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 
 | kind | Recorded when | Tap destination |
 | --- | --- | --- |
-| `received` | New messages enter this item, **one entry per batch**: "Received 3 messages · A contact" (mail: "Received 2 emails · …"), with `count`, `sender`; `messages` is this batch (up to 10, 200 characters each; Lark from plugin context lines, omitted if unreadable, preview for one message; mail uses summaries). Replies from others also go here. Messages outside this item are not recorded | First batch message's source position: Lark first batch `start_position`, later batches by chat sequence (count backward by new-message count, never earlier than previous batch's last message); mail first uid; others source page |
+| `received` | New messages enter this item, **one entry per batch**: "Received 3 messages · A contact" (mail: "Received 2 emails · …"), with `count`, `sender`; `messages` is this batch (up to 10, 200 characters each; Lark from plugin context lines without their trailing notes for the AI (`(id=…, …)`), omitted if unreadable, preview for one message; mail uses summaries). Replies from others also go here. Messages outside this item are not recorded | First batch message's source position: Lark first batch `start_position`, later batches by chat sequence (count backward by new-message count, never earlier than previous batch's last message); mail first uid; others source page |
 | `triaged` | Triage: "Triaged: Needs you" / "Triaged: Needs you (urgent)," `detail` = tier · reason. Same-tier retriage with unchanged urgency is not recorded | Expand inline |
 | `handling` | A handling chat takes over this item (once per chat) | That chat |
 | `sent` | Persona sends on your behalf (`/reply`, confirmed reply suggestion): "Sent a Lark message" / "Sent an email" / "Posted a comment" | Lark chat tail (where reply lands); replied mail; others source page |
@@ -547,15 +550,23 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
 - **Source groups** follow the filter chips' order: Lark, each mail account, each connector (by its account), then sources the chips don't name in the order they first show up.
 - **Folding**: every group folds to its title and count; folds are kept on this device per manager, section and group (web `inbox.folds`, Apple `@StoredValue("inbox.folds")`).
   Open at first: every group of Needs you, FYI and Collapsed; in Done only Just now and Today. Group titles stick to the top while their rows scroll by.
-  Done's title has Jump To (its groups with counts; picking one unfolds it and scrolls to its first row, since an iOS `List` can't scroll to a header) and Fold all / Unfold all.
-- **Done's history**: past the list's 3 days, the apps page each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page): the first page when the list is shown,
-  the next from Show Older at the end of Done. Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them.
-  The last group's count reads "n+" while older pages remain. Old hubs (404 / 405) quietly have no history. Done from history reopens through the item's own manager.
+  Done's title has Jump To (its groups with counts; picking one unfolds it, loads it if it isn't, and scrolls to its first row, since an iOS `List` can't scroll to a header)
+  and Fold all / Unfold all.
+- **Done's history**: past the list's 3 days, Done reads each manager's `GET /api/v1/inbox/done` ("History" under "Lifecycle"; 100 a page; on iOS the default manager's).
+  Items the hub didn't stamp with a manager get the default one when there are several, so the per-manager filter keeps them. Done from history reopens through the item's own manager.
+  - **With day counts** (#2969; "Days" under "Lifecycle", #2967): when the list is shown the apps ask for the counts in this device's zone, and Done lists every group they name
+    with its exact count, loaded or not (Today less what Just now holds). Groups older than today start folded, so nothing more loads until one opens: opening a group, or
+    picking it in Jump To, loads its first page from its end (`before=<the group's end>`, no `before_id`), and Show Older inside it loads the next, until a page reaches
+    the group's start. The groups the list holds (its 3 days) are complete without a page. Filtered or searched, the hub's counts don't apply: Done shows the groups with
+    matching items, counted as loaded and "n+" until complete, and Show Older under Done loads the newest group the hub counts that hasn't all come.
+  - **Without them** (a hub from before #2967: 404 / 405): the first page from the newest when the list is shown, the next from Show Older at the end of Done; the last
+    group's count reads "n+" while older pages remain. Old hubs without the history (404 / 405) quietly have none.
 - **Selection** (web, iOS / iPad): Select in the header (iPhone hides the tab bar meanwhile; Esc ends it on the web); rows get a tick. Select All picks only rows in sight;
   a folded group is picked through its title's tick (none / some / all of it), which picks or unpicks the whole group, folded or not, and its title says how many are picked.
   The web's bar also says how many picked rows are folded away. The one action is Mark as Done: `POST /api/v1/inbox/bulk` `action: done` per manager, with Undo ("Clean up all").
   There is no Mark as Read: Done stays Persona-only.
-- DEBUG (iOS): `-showInboxPicked <n>`, `-showInboxPickedDone YES`, `-showInboxDone YES` (Done and its newest group open), `-showInboxPickGroups YES`.
+- DEBUG (iOS): `-showInboxPicked <n>`, `-showInboxPickedDone YES`, `-showInboxDone YES` (Done and its newest group open), `-showInboxPickGroups YES`,
+  `-showInboxJump <group>` (Done jumped to that group, `week` or `month`, its first page loaded). Mock hub: `MOCK_INBOX_HISTORY=busy` (36 done a day for two months), `MOCK_INBOX_DAYS=none`.
 - Tests: web `lib/inbox-groups.test.ts`, `views/inbox/Inbox.groups.test.tsx`, `views/inbox/Inbox.select.test.tsx`; Apple `InboxGroupsTests`, `InboxBulkTests`.
 
 ## App
@@ -590,7 +601,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   - Edit (`InboxSuggestionEditor`): changing text then Send / Start / Confirm = `confirm` with `text` (omit if unchanged); Say something + Tell AI below = `instruct`.
     One `client_id` per attempt, with the card's displayed `version`. `409 suggestion_stale` shows Suggestion updated and redraws from the returned item, closing the editor. Failure stays in the editor for retry (`InboxSuggestionModel`).
   - Chain initially shows only the latest entry; Expand all (N) reveals all, oldest first. Each row: time · kind icon · text. Taps follow `link` (`InboxChainTarget`):
-    source → source page; `session` → chat (manager handling chat in assistant, sub-chat as Agent); `item` → that item; no link → inline `detail` / `messages`.
+    source → source page; `session` → chat (manager handling chat in assistant, sub-chat as Agent; on the iPhone shell both, and AI Draft Reply's See How the AI Twin Handled It, push over the item (`InboxChatRoute`), so Back returns to it, #3114); `item` → that item; no link → inline `detail` / `messages`.
     Entries with both navigation and messages (Received messages) have a separate expand arrow on the right.
   - Manager-archived items (`done_by: "manager"`) show "Handled by the manager" in detail state. Chain `done` (user marked done / manager found no action needed) uses ✓ and is not tappable.
     FYI conclusions remain under FYI with their card; OK archives them.

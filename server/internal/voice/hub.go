@@ -257,11 +257,22 @@ func (h *hubClient) channels(ctx context.Context) ([]channel.View, error) {
 }
 
 // triageSwitches are the hub's session triage switches (GET /api/v1/agents/triage, docs/assistant/agent-work.md "Switches"): whether
-// it triages an agent's stopped turn at all, and whether it goes on ("Continue") after a transient model error.
+// it triages an agent's stopped turn at all, and whether it goes on ("Continue") after a transient model error
+// (transient_retry, unset: on, also with the triage off) or once a usage limit resets (auto_continue).
 type triageSwitches struct {
-	Enabled      bool `json:"enabled"`
-	AutoContinue bool `json:"auto_continue"`
+	Enabled        bool  `json:"enabled"`
+	AutoContinue   bool  `json:"auto_continue"`
+	TransientRetry *bool `json:"transient_retry,omitempty"`
 }
+
+// triageOff: nothing triages, nothing is continued (the switches unknown).
+func triageOff() triageSwitches {
+	off := false
+	return triageSwitches{TransientRetry: &off}
+}
+
+// transientOn: the hub continues a transient model error by itself.
+func (sw triageSwitches) transientOn() bool { return sw.TransientRetry == nil || *sw.TransientRetry }
 
 func (h *hubClient) triage(ctx context.Context) (triageSwitches, error) {
 	var out triageSwitches

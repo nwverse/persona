@@ -29,7 +29,11 @@ import kotlinx.coroutines.launch
 /** [onOpenCard]: the app opens a request card outside any session on Agents (#5610); without it, Agents opens. */
 @Composable
 fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: ((persona.core.navigation.RequestRef) -> Unit)? = null) {
-    val snapshot by repository.snapshot.collectAsStateWithLifecycle()
+    // The page lists the current assistant's inbox (docs/assistant/managers.md "Clients"): the hub's list is every
+    // manager's, each item with its own, so another assistant's item still opens from a notification or a link.
+    val listed by repository.snapshot.collectAsStateWithLifecycle()
+    val assistant = currentAssistant()
+    val snapshot = remember(listed, assistant) { listed.ofAssistant(assistant) }
     val connection by repository.connectionState.collectAsStateWithLifecycle(ConnectionState.Connecting)
     val onlineSince = rememberOnlineSince(connection)
     val shownConnection = rememberSettledConnection(connection)
@@ -76,9 +80,15 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         { it.toList() }, { it.toSet() })) { mutableStateOf(emptySet<String>()) }
     fun endSelection() { selecting = false; picked = emptySet() }
     androidx.activity.compose.BackHandler(selecting) { endSelection() }
-    val roster = LocalManagerRoster.current
+    // Picked rows are the assistant's whose inbox showed them: another assistant ends the selection, so nothing it no
+    // longer shows is acted on.
+    var selectionOf by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(assistant.id) }
+    LaunchedEffect(assistant.id) { if (selectionOf != assistant.id) { selectionOf = assistant.id; endSelection() } }
+    // Named on the history's requests and in the keys of what it read; "" (one manager, or a hub without a roster)
+    // names none, as before.
+    val historyManager = assistant.id.takeIf { assistant.roster?.isMulti == true }.orEmpty()
     // Done's history past the list's few days (#2576): merged in under Done; the list's own copy of an item wins.
-    val history = remember(repository) { InboxDoneHistory(repository, scope) }
+    val history = remember(repository, historyManager) { InboxDoneHistory(repository, scope) }
     val listedIds = remember(snapshot.records) { snapshot.records.mapTo(HashSet()) { it.item.id } }
     val allRecords = if (history.records.isEmpty()) snapshot.records else snapshot.records + history.records.filter { it.item.id !in listedIds }
     val records = allRecords.associateBy { it.item.id }
@@ -120,7 +130,6 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     val groups = displayGroups.filter { section.isEmpty() || it.id == section }
     val needsCount = needsYouCount(result, ::working)
-    val doneCount = result.groups.firstOrNull { it.id == "done" }?.count ?: 0
     val allCount = result.groups.sumOf { it.count }
     val sources = listOf("" to res.getString(R.string.inbox_all_sources)) + snapshot.records.map { record ->
         record.item.account to record.sourceLabel.ifBlank { if (record.feedId != null) res.getString(R.string.inbox_source_lark) else record.item.account.ifBlank { res.getString(R.string.inbox_source_mail) } }
@@ -218,10 +227,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val zone = java.time.ZoneId.systemDefault()
     val locale = currentLocale
     val now = java.time.Instant.now()
-    fun subsOf(group: InboxGroup): List<InboxShownGroup> = if (group.folded) emptyList() else
-        inboxSectionGroups(group.id, group.rows, grouping, now, zone, res, locale, ::rowRecords) { row ->
-            interactions[row.id]?.createdAt?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() }
-        }
+    // Done's counts from the hub (#3016), per manager ("" the default): only with no filter or search on, since they count
+    // everything; then each group shows "n" of what is loaded and Show older pages back from the newest.
+    val filtering = query.isNotBlank() || source.isNotEmpty() || kind.isNotEmpty()
+    fun subsOf(group: InboxGroup, manager: String = ""): List<InboxShownGroup> = if (group.folded) emptyList() else
+        inboxSectionGroups(group.id, group.rows, grouping, now, zone, res, locale, ::rowRecords,
+            cardAt = { row -> interactions[row.id]?.createdAt?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() } },
+            doneDays = if (group.id == "done" && !filtering) history.days[manager] else null)
     // What "Select all" picks: the rows shown now (a folded group is picked with its own tick).
     fun shownRows(group: InboxGroup): List<InboxRow> = subsOf(group).takeIf { it.isNotEmpty() }
         ?.filter { InboxGroups.isOpen(group.id, it.key, folds) }?.flatMap { it.rows } ?: group.visibleRows
@@ -237,9 +249,21 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val listIndex = remember { InboxListIndex() }
     fun setFolds(value: List<String>) = filter(currentFilters.copy(folds = value))
     // Done's history: the first page when Done opens, then "Show older".
-    val historyManagers = roster?.installed?.map { it.id }?.takeIf { it.size > 1 } ?: listOf(null)
+    val historyManagers = listOf(historyManager.ifEmpty { null })
     val doneOpen = groups.any { it.id == "done" && !it.folded }
-    LaunchedEffect(doneOpen) { if (doneOpen && !history.started) history.load(historyManagers) }
+    // Another assistant is another history (a new [history]): read it too when Done is already open.
+    LaunchedEffect(doneOpen, history) { if (doneOpen && !history.started) history.start(historyManagers, zone) }
+    // Done's total with the hub's counts (#3016): what its groups add up to, folded or not, for the Done chip and Done's
+    // title alike; with a filter or search on, or no counts, what is loaded.
+    fun doneTotal(done: InboxGroup, manager: String): Int {
+        val days = history.days[manager]?.takeIf { !filtering } ?: return done.count
+        return inboxSectionGroups("done", done.rows, grouping, now, zone, res, locale, ::rowRecords, cardAt = { null }, doneDays = days)
+            .takeIf { it.isNotEmpty() }?.sumOf { it.count } ?: done.count
+    }
+    val doneCount = result.groups.firstOrNull { it.id == "done" }?.let { done -> doneTotal(done, historyManager) } ?: 0
+    // Show older at the end of Done: for the managers whose hub doesn't count, and for all of them while filtering.
+    val olderManagers = if (filtering) historyManagers else historyManagers.filter { it.orEmpty() !in history.days }
+    val showOlder = doneOpen && !history.counting && olderManagers.isNotEmpty() && (history.more || history.failed || history.loading)
     val scopeText = bulkScope(res, section, sources.firstOrNull { it.first == source && source.isNotEmpty() }?.second,
         if (kind == "agent") "Agent" else kindLabel(res, kind), query)
     var showMore by remember { mutableStateOf(false) }
@@ -269,7 +293,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     jumpMenu?.let { menu ->
         JActionSheet(title = stringResource(R.string.inbox_jump_to), onDismiss = { jumpMenu = null }, actions = menu.groups.map { group ->
-            JAction("${group.title} · ${group.rows.size}") {
+            JAction("${group.title} · ${group.count}") {
                 if (!InboxGroups.isOpen(menu.section, group.key, folds)) setFolds(InboxGroups.toggle(menu.section, group.key, folds))
                 jumpTo = "group:${menu.prefix}${menu.section}/${group.key}"
             }
@@ -409,10 +433,6 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     else -> JEmptyState(stringResource(R.string.inbox_empty_filtered_title), stringResource(R.string.inbox_empty_filtered_text), icon = PhIcons.CheckCircle)
                 }
             }
-            // Several managers (docs/assistant/managers.md step 4): each one's inbox under its name, its sections inside.
-            val byManager = inboxByManager(roster, groups) { row ->
-                if (row.type == InboxRowType.Interaction) interactions[row.id]?.manager else records[row.id]?.manager
-            }
             // Rows of a group (#2576: in a selection a tap picks, a long-press starts one).
             fun rows(prefix: String, shown: List<InboxRow>) = itemsIndexed(shown, key = { _, row -> "$prefix${row.type}:${row.id}" }, contentType = { _, row -> row.type }) { index, row ->
                 val position = GroupPosition.of(index, shown.size)
@@ -448,13 +468,15 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 }
             }
             val sections: (String, List<InboxGroup>) -> Unit = { prefix, shownGroups -> shownGroups.forEach { group ->
-                val subs = subsOf(group)
+                val manager = prefix.removeSuffix(":")
+                val subs = subsOf(group, manager)
                 val sectionPickable = if (selecting && subs.isEmpty()) group.rows.filter(::selectable).map { it.id } else emptyList()
                 item("section:$prefix${group.id}", contentType = "section") {
                     val title = if (group.id == "working") group.title.text() else inboxGroupTitle(group)
                     JSectionHeader(
                         title = title,
-                        count = group.count,
+                        // Done with the hub's counts (#3016): all of it, as its groups add up, not just what is loaded.
+                        count = if (group.id == "done") doneTotal(group, manager) else group.count,
                         status = when (group.id) { "action" -> Status.NeedsYou; "working" -> Status.Working; else -> null },
                         trailing = if (group.id == "working") null else if (group.folded) stringResource(R.string.inbox_expand) else stringResource(R.string.inbox_collapse),
                         onClick = if (group.id == "working") null else ({
@@ -487,22 +509,25 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         // Opaque only while pinned over the rows: at rest it shows the page (Glass's light) as the other headers do.
                         val pinned by remember(index) { derivedStateOf { scroll.firstVisibleItemIndex >= index } }
                         JSectionHeader(sub.title, if (pinned) Modifier.background(PersonaTheme.palette.background) else Modifier,
-                            count = sub.rows.size, sub = true, open = open,
+                            count = sub.count, sub = true, open = open,
                             onClick = { setFolds(InboxGroups.toggle(group.id, sub.key, folds)) },
                             leading = if (selecting && pickable.isNotEmpty()) ({ InboxGroupTick(pickable, picked, sub.title) { picked = it } }) else null,
                             trailing = if (selecting && n > 0) androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_group_picked, n, n) else null)
                     }
                     if (open) rows("$prefix${group.id}/${sub.key}:", sub.rows)
+                    // A counted group not all in (#3016): its own first page as it opens, then Show older inside it.
+                    val pageId = "$manager/${sub.key}"
+                    if (open && !sub.whole && pageId !in history.endedGroups) item("older:$prefix${group.id}/${sub.key}", contentType = "older") {
+                        val end = InboxGroups.span(sub.key, now, zone).second
+                        LaunchedEffect(pageId) { if (!history.fetched(pageId)) history.loadGroup(manager, sub.key, end) }
+                        InboxOlderRow(pageId in history.loadingGroups, pageId in history.failedGroups) { history.loadGroup(manager, sub.key, end) }
+                    }
                 }
             } }
-            if (byManager == null) sections("", groups)
-            else byManager.forEach { (manager, shownGroups) ->
-                item("manager:${manager.id}", contentType = "manager") { JManagerHeader(manager, count = manager.items.size) }
-                sections("${manager.id}:", shownGroups)
-            }
+            sections(if (historyManager.isEmpty()) "" else "$historyManager:", groups)
             // Older done items, after the list's few days (#2576).
-            if (doneOpen && (history.more || history.failed || history.loading)) item("done-older") {
-                InboxOlderRow(history) { history.load(historyManagers) }
+            if (showOlder) item("done-older") {
+                InboxOlderRow(history.loading, history.failed) { history.load(olderManagers) }
             }
           }
           listIndex.counted = keyed.counted
@@ -523,19 +548,17 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
 }
 
 /**
- * The inbox's sections split by the manager each row belongs to ([managerOf]; no stamp is the default's), the default
- * manager first, then the roster's order; a manager with no rows is left out. Null with one manager.
+ * The current assistant's share of the hub's inbox: its items, and the cards of its agents (a card is its own
+ * manager's; one that names none is the default's, as an item is).
  */
-internal fun inboxByManager(
-    roster: persona.core.contracts.api.ManagerRoster?, groups: List<InboxGroup>, managerOf: (InboxRow) -> String?,
-): List<Pair<persona.core.contracts.api.ManagerGroup<InboxRow>, List<InboxGroup>>>? {
-    val byManager = roster?.groups(groups.flatMap { it.rows }.distinct(), managerOf) ?: return null
-    return byManager.map { manager ->
-        val mine = manager.items.toSet()
-        manager to groups.mapNotNull { group ->
-            group.rows.filter { it in mine }.takeIf { it.isNotEmpty() }?.let { rows -> group.copy(rows = rows, visibleRows = group.visibleRows.filter { it in mine }) }
-        }
-    }
+internal fun InboxSnapshot.ofAssistant(assistant: persona.core.contracts.api.CurrentAssistant): InboxSnapshot {
+    val mine = records.filter { assistant.owns(it.manager) }
+    val cards = interactions.filter { assistant.ownsOn(it.machineId, it.manager) }
+    // The merged list's triage is the default manager's: said only on its own inbox.
+    val default = assistant.roster?.defaultManagerId ?: assistant.choice.defaultId
+    val sorting = triage.takeIf { assistant.id == default }
+    return if (mine.size == records.size && cards.size == interactions.size && sorting == triage) this
+    else copy(records = mine, interactions = cards, triage = sorting)
 }
 
 /** A section's title by its id; :core:domain's titles are Chinese, and a group this app does not know keeps its own. */

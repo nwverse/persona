@@ -43,6 +43,10 @@ type fakeHub struct {
 	agentModels   map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
 	modelsLocked  map[string]string                  // launchers.models's locked, by launcher
 	managed       map[string][]proto.ManagedLauncher // what each node was given (launchers.managed)
+	// catalogNodes: the nodes take launchers.catalog (a node from before it answers unknown method); catalog is what each got.
+	catalogNodes  bool
+	catalog       map[string][]proto.ManagedLauncher
+	ownServices   map[string]proto.OwnServiceState // launchers.own_service by machine/agent (none: unknown method)
 	presets       []assistantwire.LauncherPreset
 	voice         []assistantwire.VoicePlugin
 	modelExts     []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
@@ -80,12 +84,15 @@ type fakeHub struct {
 	agents       int
 	offline      map[string]bool
 	failStart    error
-	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
-	failWorktree error            // worktree.create's answer when set
-	slowStart    bool             // session.start blocks until the call's context ends, then answers with its error (a node that builds the session before answering late)
-	judged       int              // the done judge's calls to the model
-	judge        string           // what they answer ("": an error)
-	outcome      string           // what the outcome model answers (todo_outcome.go; "": an error)
+	worktrees    []map[string]any          // worktree.prepare / worktree.create params, {"method": …} added
+	failWorktree error                     // worktree.create's answer when set
+	slowStart    bool                      // session.start blocks until the call's context ends, then answers with its error (a node that builds the session before answering late)
+	judged       int                       // the done judge's calls to the model
+	judge        string                    // what they answer ("": an error)
+	judgeFails   int                       // the done judge's next calls that fail before f.judge answers
+	judgeAsked   []string                  // what the done judge was given (its input)
+	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
+	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
 	outcomeAsked []modelCall
 	retired      []string // session.retire's session ids
 	retireErr    error
@@ -100,6 +107,9 @@ type fakeHub struct {
 	// were asked; the sessions whose pushes are off, by machine.
 	triage      string
 	triageAsked []modelCall
+	// The Progress row's paraphrase of a report (report_line.go): its answer (none: an error), and what was asked.
+	reportLine      string
+	reportLineAsked []modelCall
 	// The delegate's model (delegate.go): its answer ("": it fails), and what it was asked.
 	delegate      string
 	delegateAsked []modelCall
@@ -315,6 +325,26 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			models = []proto.AgentModel{}
 		}
 		return json.Marshal(proto.LauncherModels{Agent: launcherAgent(name), Models: models, Locked: f.modelsLocked[name]})
+	case DeviceLaunchersCatalog:
+		if !f.catalogNodes {
+			return nil, fmt.Errorf("unknown method %s", p.Method)
+		}
+		var m struct {
+			Launchers []proto.ManagedLauncher `json:"launchers"`
+		}
+		_ = json.Unmarshal(p.Params, &m)
+		if f.catalog == nil {
+			f.catalog = map[string][]proto.ManagedLauncher{}
+		}
+		f.catalog[p.Device] = m.Launchers
+		return json.RawMessage(`{"ok":true}`), nil
+	case DeviceLaunchersOwnService:
+		agent, _ := a["agent"].(string)
+		st, ok := f.ownServices[p.Device+"/"+agent]
+		if !ok {
+			return nil, fmt.Errorf("unknown method %s", p.Method)
+		}
+		return json.Marshal(st)
 	case assistantwire.DeviceLaunchersManaged:
 		var m struct {
 			Launchers []proto.ManagedLauncher `json:"launchers"`
@@ -661,6 +691,9 @@ func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 }
 func (noPlans) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
+}
+func (noPlans) TaskPlans(context.Context, string) ([]db.TaskPlanRow, error) {
+	return nil, nil
 }
 func (noPlans) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
@@ -1042,6 +1075,9 @@ func (f *fakeHub) fakeModel(t *testing.T) {
 		case strings.Contains(in.System, "盯着用户电脑上的编程 Agent"): // the Agents triage (agents_triage.go)
 			f.triageAsked = append(f.triageAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
 			reply, fail = f.triage, f.triage == ""
+		case strings.Contains(in.System, "向 Persona 的一次汇报转述成一句话"): // the Progress row's line (report_line.go)
+			f.reportLineAsked = append(f.reportLineAsked, modelCall{in.System, user})
+			reply, fail = f.reportLine, f.reportLine == ""
 		case strings.Contains(in.System, "先替用户判断 Agent 的提问"): // the delegate (delegate.go)
 			f.delegateAsked = append(f.delegateAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
 			reply, fail = f.delegate, f.delegate == ""
@@ -1050,7 +1086,16 @@ func (f *fakeHub) fakeModel(t *testing.T) {
 			reply, fail = f.outcome, f.outcome == ""
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
+			f.judgeAsked = append(f.judgeAsked, user)
 			reply, fail = f.judge, f.judge == ""
+			if f.judgeBy != nil {
+				reply = f.judgeBy(user)
+				fail = reply == ""
+			}
+			if f.judgeFails > 0 {
+				f.judgeFails--
+				fail = true
+			}
 		case f.noModel:
 			fail = true
 		default:

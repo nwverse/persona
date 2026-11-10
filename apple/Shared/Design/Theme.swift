@@ -56,6 +56,21 @@ nonisolated enum Theme {
     }
     #endif
 
+    /// The handle on the line between a split's list and its page (#2624, `SplitDividerHandle`).
+    enum Split {
+        static let handle = Color.secondary.opacity(0.45)
+        static let handleHeld = Color.secondary.opacity(0.8)
+        /// Its touch area: narrow (what it takes from the list's and the page's edges), tall.
+        static let handleWidth: CGFloat = 28
+        static let handleHeight: CGFloat = 88
+        /// How far it moves before it is a drag; past the least width, how far until letting go closes the list; from
+        /// the page's edge, how far to the right brings the list back; a step of VoiceOver's adjust.
+        static let slop: CGFloat = 6
+        static let closesPast: CGFloat = 80
+        static let opensPast: CGFloat = 40
+        static let step: CGFloat = 40
+    }
+
     /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
     enum WorkspaceSidebar {
         static let background = Color(light: 0xF5F5F5, dark: 0x2A2A2A)
@@ -128,6 +143,8 @@ nonisolated enum Theme {
     #else
     private static let aiTintStrength = 0.14
     #endif
+    /// A line picked out for a moment in the accent's soft ground (the transcript line a minutes item's time jumped to).
+    static var accentTint: Color { accent.opacity(aiTintStrength) }
     /// The AI color at half strength: a mark of the AI's that is at work but not the lit one (a workflow phase with
     /// agents running that the run has moved past), apart from a ring (not started) and the full dot (lit).
     static var aiMuted: Color { ai.opacity(0.5) }
@@ -172,6 +189,10 @@ nonisolated enum Theme {
         static let del = Color(light: 0xC62B33, dark: 0xFF6369)
         static let addFill = Color(light: 0x30A46C, dark: 0x4CC38A).opacity(0.14)
         static let delFill = Color(light: 0xE5484D, dark: 0xFF6369).opacity(0.12)
+        /// The words that changed inside a changed line (the chat's `DiffView`), over that line's fill: the code on
+        /// them stays ≥ 4.5:1 in both appearances (about 7:1 dark, 11:1 light).
+        static let addEmphasis = Color(light: 0x30A46C, dark: 0x4CC38A).opacity(0.32)
+        static let delEmphasis = Color(light: 0xE5484D, dark: 0xFF6369).opacity(0.30)
         /// A modified file ("M"), the way editors mark it, kept apart from the working amber.
         static let changed = Color(light: 0x8A6A00, dark: 0xE3B341)
     }
@@ -551,6 +572,10 @@ nonisolated enum Theme {
         static let headerTitle: CGFloat = 480
         /// The list column of a split on iPad: wide enough for the agents' cards and the inbox rows.
         static let sidebarMin: CGFloat = 340
+        /// The least an iPhone Duo's list column is dragged to (#2624): its open display is narrower than an iPad.
+        static let sidebarMinPhone: CGFloat = 200
+        /// What a split's page keeps beside its list column when the list is dragged wider (#2624).
+        static let splitDetailMin: CGFloat = 300
         static let sidebar: CGFloat = 400
         static let sidebarMax: CGFloat = 480
         /// The narrowest column of a card grid (Machines' cards): two side by side in an iPad's detail column.
@@ -606,9 +631,10 @@ nonisolated enum Theme {
         static let lineStrong = Color.primary.opacity(0.18)
     }
 
-    /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner and
-    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md) and the dot of a held mic (`DictationHold`), and those stop with Reduce Motion (the spinner
-    /// is the system's).
+    /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner,
+    /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), the dot of a held mic (`DictationHold`) and,
+    /// when it is turned on, the composer's glow while a reply is generating (`ComposerGlow`); those stop with Reduce Motion
+    /// (the spinner is the system's).
     enum Motion {
         static let state = Animation.snappy(duration: 0.25)
         static let layout = Animation.smooth(duration: 0.3)
@@ -850,6 +876,9 @@ nonisolated enum Theme {
         static let drawer = Color(light: 0xF9F9F9, dark: 0x171717)
         /// The composer: its field's corner when it is one line (a capsule) and when it has grown into a card.
         static let composerRadius: CGFloat = 32
+        /// The colors that travel around the composer while a reply is generating (Glow While Replying, `ComposerGlow`):
+        /// blue through violet to pink, each in its light and dark shade.
+        static let composerGlow: [Color] = [Hue.blue, Hue.indigo, Hue.purple, Hue.pink]
         /// Reserve most of the keyboard-visible viewport for the conversation, not the draft.
         static let composerHeightFraction: CGFloat = 0.22
         static let composerMinimumLines = 3

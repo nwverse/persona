@@ -35,7 +35,7 @@ final class AppModel {
     /// The hub-level group's hub (what Persona, Inbox and the hub's settings talk to); nil when not paired.
     var config: ServerConfig? { hub?.config }
     /// Persona's looks (docs/apple/persona.md): the chosen one, what the hub offers, the packages on the phone.
-    let personas = PersonaStore()
+    let personas: PersonaStore
     /// Which paths conversations mention are there on their machines (only those are linked).
     let filePresence = FilePresence()
     /// Which machine ports links point at are listening (docs/operations/ports.md).
@@ -318,8 +318,10 @@ final class AppModel {
     var isDemo: Bool { links.first?.isDemo == true }
     static let demoKey = "demo.on"
 
-    init(stateFolder: URL? = nil) {
+    /// `personas`: a store of its own (tests: a folder and defaults of their own); the app's otherwise.
+    init(stateFolder: URL? = nil, personas store: PersonaStore? = nil) {
         self.stateFolder = stateFolder
+        personas = store ?? PersonaStore()
         RetiredPreferences.clear(from: .standard)
         TextSize.current.applyToMacFonts() // what `textSize` starts at
         Task.detached(priority: .utility) { LarkAttachment.staging.sweep() }
@@ -444,7 +446,7 @@ final class AppModel {
     nonisolated static func prepare(_ event: ServerEvent) {
         switch event {
         // The block being written (the finished ones are memoized as they finish).
-        case .delta(_, let text): _ = MarkdownMemo.content(StreamChunks.split(text).tail + " ▍")
+        case .delta(_, let text): _ = StreamTail.content(StreamChunks.split(AssistantCardText.replacingCards(text)).tail)
         case .interaction(let interaction):
             if let plan = interaction.plan { _ = MarkdownMemo.content(plan) }
         default: break
@@ -498,7 +500,7 @@ final class AppModel {
     func adopt(_ configs: [ServerConfig]) {
         var r = HubRegistry()
         for cfg in configs {
-            if let had = registry.hubs.first(where: { $0.config == cfg }) {
+            if let had = registry.hubs.first(where: { $0.config.url == cfg.url && $0.config.token == cfg.token }) {
                 r.hubs.append(had)
             } else {
                 var hub = PairedHub(config: cfg)
@@ -514,6 +516,12 @@ final class AppModel {
         // `-seedLocalProxy <base64 of the LocalProxyRoute JSON>`: the first hub's local proxy, the same way.
         if let s = UserDefaults.standard.string(forKey: "seedLocalProxy"), !r.hubs.isEmpty, let json = Data(base64Encoded: s),
            let route = try? JSONDecoder().decode(LocalProxyRoute.self, from: json) { r.hubs[0].localProxy = route }
+        // `-seedCloudflareAccess <client id>:<client secret>`: the first hub's Cloudflare Access token (MOCK_CF_ACCESS,
+        // docs/operations/testing.md); "-" clears it.
+        if let s = UserDefaults.standard.string(forKey: "seedCloudflareAccess"), !r.hubs.isEmpty {
+            let parts = s.split(separator: ":", maxSplits: 1).map(String.init)
+            r.hubs[0].config.access = parts.count == 2 ? HubAccess(clientID: parts[0], clientSecret: parts[1]) : nil
+        }
         registry = HubGrouping.regroup(r)
         saveRegistry(registry)
         buildLinks()
@@ -548,6 +556,9 @@ final class AppModel {
         let tunnels = SSHTunnels.shared
         // Paired again: the tunnel it has, unless the pairing page set one.
         let ssh = ssh ?? registry.hubs.first { $0.config.url == new.url }?.ssh
+        // And its Cloudflare Access token, unless the pairing page set one (a link opened from the camera has none).
+        var new = new
+        if new.access == nil { new.access = registry.hubs.first { $0.config.url == new.url }?.config.access }
         if let ssh, ssh.isUsable {
             let direct = ssh.always ? false : await HubRoute.healthProbe(new)
             if !direct { try await tunnels.open(SSHTunnels.pairingID, route: ssh, hub: new.url) }
@@ -578,6 +589,7 @@ final class AppModel {
             // The same pairing link again (scanned twice, opened from the camera as well): it was traded for this
             // device's own token already. Writing it back would leave the app on a token the hub drops in minutes.
             if let ssh { r.hubs[i].ssh = ssh }
+            r.hubs[i].config.access = new.access
             group = r.hubs[i].group
             tunnels.adopt(SSHTunnels.pairingID, as: r.hubs[i].id)
         } else if let i = same {
@@ -692,7 +704,7 @@ final class AppModel {
         starterDrafts = [:] // the demo's group is the empty one, as a hub's may be
         if let k = assistantCurrent, demo.contains(k) { assistantCurrent = nil }
         if let k = openChat, demo.contains(k) { openChat = nil }
-        for key in demo { ChatCache.remove(key) }
+        for key in demo { ChatCache.remove(key, in: stateFolder) }
     }
 
     /// Sign Out of everything: every group, every hub (Settings › Disconnect with one group, a revoked credential of this device).
@@ -1069,6 +1081,9 @@ final class AppModel {
             openAssistantConversation(key)
         } else {
             shellSettings = false // the shell's Settings sheet would cover the chat (#3818)
+            #if os(iOS)
+            if let shell = tabRouter as? ShellState, shell.drawer.isOpen { shell.drawer.close() } // and so would the drawer
+            #endif
             selectedTab = .chats
             openChat = key
         }
@@ -1082,7 +1097,7 @@ final class AppModel {
         chatTick += 1
         chatUse[key] = chatTick
         if let c = chats[key] { return c }
-        let c = ChatStore(key: key)
+        let c = ChatStore(key: key, cacheFolder: stateFolder)
         c.onArrived = { [weak self] in self?.saveOutbox() }
         chats[key] = c
         evictChats()
@@ -1761,6 +1776,16 @@ final class AppModel {
             // The new tier's package is downloaded whole before the face changes (PersonaStore.load). The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
             if isHub { Task { await personas.reload(api) } }
+        case .look(let id, let effective):
+            // Another device chose an avatar, or the hub went back to the default. Like every hub-level setting, the
+            // avatar is the current hub's: another group's choice is its own (docs/protocol/multi-hub.md). The hub it
+            // came from goes with it: when another group's became current before it is handled, it changes nothing.
+            if isHub, let from = api {
+                Task {
+                    guard api?.config.url == from.config.url else { return }
+                    await personas.follow(id, effective: effective, api: from)
+                }
+            }
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
@@ -1891,6 +1916,7 @@ final class AppModel {
         case .inbox: "inbox"
         case .todos: "todos"
         case .personas: "personas"
+        case .look: "look"
         case .managers: "managers"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
@@ -2810,7 +2836,7 @@ final class AppModel {
         if let k = assistantCurrent, gone.contains(k.group) { assistantCurrent = nil }
         for g in gone {
             StateCache.remove(Self.snapshotName(g), in: stateFolder)
-            ChatCache.removeGroup(g)
+            ChatCache.removeGroup(g, in: stateFolder)
             PinsStore.forget(suffix: g)
             InboxHandOffMemory.forget(group: g)
             if !keepingPushKeys { PushCrypto.removeKey(group: g) }
@@ -2832,6 +2858,8 @@ final class AppModel {
         InboxStore.shared.reload()
         TodoStore.shared.forget()
         TodoStore.shared.reload()
+        // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
+        personas.switchHub(api)
         Task {
             await refreshAssistant()
             await personas.refresh(api)
@@ -2998,10 +3026,14 @@ final class AppModel {
     /// Kept across launches with the text (#4578): a quote is the larger part of a reply.
     var composerContexts: [SessionKey: [ContextRef]] = AppModel.savedContexts() { didSet { saveContexts(); markDrafts() } }
     @ObservationIgnored let contextWriter = Debouncer()
+    /// Comments waiting to lead a chat's next message as `> ` blocks (code, a page's element, picked words;
+    /// `MessageComments`, #151), kept across launches as the quotes are.
+    var composerComments: [SessionKey: [MessageComment]] = AppModel.savedComments() { didSet { saveComments(); markDrafts() } }
+    @ObservationIgnored let commentWriter = Debouncer()
     /// The chats with something unsent (text or quotes): the Agents rows' Draft (#4578). Apart from `drafts`, which
     /// changes on every key: this changes only when a chat gains or loses a draft, so the rows do not draw again as
     /// one is typed.
-    var draftMarks: Set<SessionKey> = AppModel.marks(AppModel.savedDrafts(), AppModel.savedContexts())
+    var draftMarks: Set<SessionKey> = AppModel.marks(AppModel.savedDrafts(), AppModel.savedContexts(), AppModel.savedComments())
     /// A chat asked for its composer's keyboard (a message just quoted, #1058); the composer takes it and clears it.
     var composerFocus: SessionKey?
 

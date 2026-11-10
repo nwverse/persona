@@ -406,11 +406,12 @@ func heldRecently(m quickMeta, path string, pass *codexListPass) bool {
 	return time.Since(at) < codexHeldIdle
 }
 
-// codexListPass holds what one codexSessions pass looks up once instead of once per thread. The list is rebuilt every
-// second, and with a few hundred rollouts each thread resolved its directory's symlinks (a stat per part of the path,
-// a readlink per link), stat'ed its rollout up to three times, looked for the Codex App's socket and rebuilt the
-// assistant's project name with a regexp: about 19 stat calls per rollout per pass. It lives for one pass of one caller,
-// so nothing in it is shared or needs invalidating. A nil pass looks everything up each time.
+// codexListPass holds what one session-list rebuild (sessionList, codexSessions) looks up once instead of once per row.
+// The list is rebuilt every second, and with a few hundred rollouts each thread resolved its directory's symlinks (a
+// stat per part of the path, a readlink per link), stat'ed its rollout up to three times, looked for the Codex App's
+// socket and rebuilt the assistant's project name with a regexp: about 19 stat calls per rollout per pass. Every Claude
+// row's decoration (ultracodeRow) also resolved the data directory and rebuilt that name. It lives for one pass of one
+// caller, so nothing in it is shared or needs invalidating. A nil pass looks everything up each time.
 type codexListPass struct {
 	real    map[string]string    // directory → realPath
 	stats   map[string]codexStat // rollout path → os.Stat
@@ -486,6 +487,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	cfg := n.codexInventory()
 	for _, home := range cfg.Homes {
 		n.registerRollouts(home)
+		n.registerCodexAppThreads(home, pass) // the App's chats whose rollout is old or gone (codex_appdb.go)
 	}
 	n.codices.mu.Lock()
 	sources := make(map[string]codexSource, len(n.codices.threads))
@@ -529,6 +531,12 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Title = threadTitle(src.home, src.thread)
 				untitled(&s, m)
 			}
+		} else if t, ok := codexAppThreadOf(src); ok {
+			// A Codex App chat whose rollout is gone: its row in the App's database (codex_appdb.go).
+			if !n.sessionScopeAllows(t.Cwd) || identity.IsAssistantDir(t.Cwd) {
+				continue
+			}
+			s.Cwd, s.Title, s.UpdatedAt, s.Rev = t.Cwd, t.Title, t.updated(), t.UpdatedAtMs
 		}
 		s.AgentName = filepath.Base(src.home)
 		if holder := liveRollouts[id]; holder != "" && heldRecently(m, src.path, pass) {
@@ -569,6 +577,12 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			n.codexEffortRow(id, &s.Efforts, &s.Effort, m) // codex_effort.go
 		} else if err != errCodexNoOwner {
 			s.ReadOnlyReason = err.Error()
+		} else if src.path == "" && codexDesktopChatIn(src, pass) {
+			// The App's chat whose rollout is gone: sent to through the App, as one with a rollout.
+			s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
+			s.Capabilities.Send = true
+			s.ReadOnlyReason = ""
+			n.placeCodexDesktop(&s, src, src.thread, false)
 		} else if o := readCodexOrigin(src.path); o.desktop {
 			switch {
 			case o.parent != "":

@@ -33,6 +33,7 @@ extension TaskState {
         case .needsYou: StateName.needsYou.text
         case .working: StateName.working.text
         case .unread: StateName.unread.text
+        case .waiting: StateName.taskWaiting.text
         case .followup: StateName.followUp.text
         case .notStarted: String(localized: "Starting [Task Views d14c3a]")
         case .done: StateName.done.text
@@ -175,7 +176,7 @@ struct PlanCard: View {
                     let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: ultraChoice), blocked: { blocked.contains($0) })
                     Task { await store.start(plan, edits: edits, remember: remember) }
                 } label: {
-                    Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Started")).lineLimit(1)
+                    Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Start")).lineLimit(1)
                         .frame(maxWidth: .infinity)
                 }
                 .themedButton(prominent: true)
@@ -267,10 +268,15 @@ struct PlanTaskRow: View {
         }
     }
 
+    /// The modes a planned task can start with (web PLAN_PERMISSIONS, Android PlanPermissions); Auto too, which the hub
+    /// may settle an unset one to from Claude Code's default mode (#3026).
+    static let permissions = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"]
+
     static func permissionLabel(_ mode: String) -> String {
         switch mode {
         case "acceptEdits": String(localized: "Can edit files")
         case "plan": String(localized: "Plan first")
+        case "auto": String(localized: "Auto [Plan Card Permission]", comment: "A planned task's permission mode: the agent judges the risk itself")
         case "bypassPermissions": String(localized: "Allow Everything")
         default: String(localized: "Ask every step")
         }
@@ -308,7 +314,7 @@ struct PlanEditSheet: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Picker("Permissions", selection: Binding(get: { tasks[i].permission ?? "default" }, set: { tasks[i].permission = $0 })) {
-                            ForEach(["default", "acceptEdits", "plan", "bypassPermissions"], id: \.self) { Text(PlanTaskRow.permissionLabel($0)).tag($0) }
+                            ForEach(PlanTaskRow.permissions, id: \.self) { Text(PlanTaskRow.permissionLabel($0)).tag($0) }
                         }
                         if Ultracode.planOffered {
                             PlanUltracodeRow(on: Binding(get: { tasks[i].ultracode == true }, set: { tasks[i].ultracode = $0 }),
@@ -324,7 +330,7 @@ struct PlanEditSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: !tasks.isEmpty && tasks != opened) { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Started") { start(tasks) }.bold() }
+                ToolbarItem(placement: .confirmationAction) { Button("Start") { start(tasks) }.bold() }
             }
         }
         #if os(macOS)
@@ -354,81 +360,86 @@ struct TaskCard: View {
             let state = store.state(todo)
             let lead = store.leadSession(todo)
             let ultracode = store.ultracode(todo)
-            Button {
-                store.detailTask = todo.id
-            } label: {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    HStack(spacing: Theme.Space.s) {
-                        TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
-                        Text(todo.title).font(Theme.Font.bodyStrong).lineLimit(1)
-                        if ultracode { UltracodeMark(font: Theme.Font.labelStrong).transition(.opacity) }
-                        Spacer(minLength: Theme.Space.s)
-                        if let t = TaskClock.since(todo.createdAt), state != .done, state != .failed {
-                            Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
-                        }
-                    }
-                    .animation(UltracodeMark.motion, value: ultracode)
-                    Text(TaskPlace.line(todo, lead: lead))
-                        .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                    TaskNowLine(todo: todo, state: state, lead: lead)
-                    // What Persona sent its agent (#1542): the hand-off sent with this card is drawn only here.
-                    TaskSentList(todoID: todo.id, conversation: conversation)
-                    if state == .done, todo.supervision != nil {
-                        ReviewChip(todo: todo)
-                    }
-                    // The PR its work is in (`pr_url`, #2768), as the Feishu bot's task report links it (#5033).
-                    if let pr = todo.prLink {
-                        Button {
-                            openURL(pr)
-                        } label: {
-                            Label(todo.prLabel ?? String(localized: "View PR"), systemImage: Theme.Icon.pullRequest).lineLimit(1)
-                        }
-                        .font(Theme.Font.captionStrong)
-                        .foregroundStyle(Theme.accent)
-                        .buttonStyle(.plain)
-                    }
-                    if state != .done {
+            if let ask = todo.openAsk {
+                BriefAcceptRow(row: ask.row(for: todo), group: AppModel.shared.hub?.group ?? "")
+                    .card(padding: Theme.Space.l)
+            } else {
+                Button {
+                    store.detailTask = todo.id
+                } label: {
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
                         HStack(spacing: Theme.Space.s) {
-                            Text(state.label).font(Theme.Font.captionMedium).foregroundStyle(state.labelColor).lineLimit(1).fixedSize()
+                            TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
+                            Text(todo.title).font(Theme.Font.bodyStrong).lineLimit(1)
+                            if ultracode { UltracodeMark(font: Theme.Font.labelStrong).transition(.opacity) }
+                            Spacer(minLength: Theme.Space.s)
+                            if let t = TaskClock.since(todo.createdAt), state != .done, state != .failed {
+                                Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
+                            }
+                        }
+                        .animation(UltracodeMark.motion, value: ultracode)
+                        Text(TaskPlace.line(todo, lead: lead))
+                            .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                        TaskNowLine(todo: todo, state: state, lead: lead)
+                        // What Persona sent its agent (#1542): the hand-off sent with this card is drawn only here.
+                        TaskSentList(todoID: todo.id, conversation: conversation)
+                        if state == .done, todo.supervision != nil {
                             ReviewChip(todo: todo)
-                            Spacer(minLength: Theme.Space.l)
-                            if state == .failed {
-                                // Nothing to say a word to: the way out is on the card.
-                                Button {
-                                    store.askRemove(todo, pending: $removing)
-                                } label: {
-                                    Label("Remove [Task Sheets 6135d4]", systemImage: Theme.Icon.delete).lineLimit(1)
+                        }
+                        // The PR its work is in (`pr_url`, #2768), as the Feishu bot's task report links it (#5033).
+                        if let pr = todo.prLink {
+                            Button {
+                                openURL(pr)
+                            } label: {
+                                Label(todo.prLabel ?? String(localized: "View PR"), systemImage: Theme.Icon.pullRequest).lineLimit(1)
+                            }
+                            .font(Theme.Font.captionStrong)
+                            .foregroundStyle(Theme.accent)
+                            .buttonStyle(.plain)
+                        }
+                        if state != .done {
+                            HStack(spacing: Theme.Space.s) {
+                                Text(state.label).font(Theme.Font.captionMedium).foregroundStyle(state.labelColor).lineLimit(1).fixedSize()
+                                ReviewChip(todo: todo)
+                                Spacer(minLength: Theme.Space.l)
+                                if state == .failed {
+                                    // Nothing to say a word to: the way out is on the card.
+                                    Button {
+                                        store.askRemove(todo, pending: $removing)
+                                    } label: {
+                                        Label("Remove [Task Sheets 6135d4]", systemImage: Theme.Icon.delete).lineLimit(1)
+                                    }
+                                    .font(Theme.Font.captionStrong)
+                                    .foregroundStyle(Theme.danger)
+                                    .buttonStyle(.plain)
+                                } else {
+                                    Button {
+                                        store.routes[conversation] = todo.id
+                                    } label: {
+                                        Label("Message [Task Views 7e7db6]", systemImage: Theme.Icon.routeToTask).lineLimit(1)
+                                    }
+                                    .font(Theme.Font.captionStrong)
+                                    .foregroundStyle(Theme.accent)
+                                    .buttonStyle(.plain)
                                 }
-                                .font(Theme.Font.captionStrong)
-                                .foregroundStyle(Theme.danger)
-                                .buttonStyle(.plain)
-                            } else {
-                                Button {
-                                    store.routes[conversation] = todo.id
-                                } label: {
-                                    Label("Message [Task Views 7e7db6]", systemImage: Theme.Icon.routeToTask).lineLimit(1)
-                                }
-                                .font(Theme.Font.captionStrong)
-                                .foregroundStyle(Theme.accent)
-                                .buttonStyle(.plain)
                             }
                         }
                     }
+                    .contentShape(.rect)
                 }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .card(padding: Theme.Space.l)
-            .overlay {
-                if state == .needsYou {
-                    RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                        .stroke(state.agentState.color, lineWidth: Theme.Size.lineMedium)
+                .buttonStyle(.plain)
+                .card(padding: Theme.Space.l)
+                .overlay {
+                    if state == .needsYou {
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .stroke(state.agentState.color, lineWidth: Theme.Size.lineMedium)
+                    }
                 }
+                .menuPreviewShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                .contextMenu { TaskRemoveMenuItem(todo: todo, state: state, pending: $removing) }
+                .confirmTaskRemoval($removing)
+                .animation(Theme.Motion.state, value: state)
             }
-            .menuPreviewShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
-            .contextMenu { TaskRemoveMenuItem(todo: todo, state: state, pending: $removing) }
-            .confirmTaskRemoval($removing)
-            .animation(Theme.Motion.state, value: state)
         }
     }
 }
@@ -862,10 +873,18 @@ struct ReceiptCard: View {
         return .done
     }
 
+    /// The task's name on its receipt (#3036): its to-do's title now, so a rename (the user's, or the model's a moment
+    /// after the task was handed out) shows on every receipt, as on the card and lines beside it; the receipt's own title
+    /// (the name when it was written) once the to-do is gone from the list.
+    nonisolated static func title(_ item: FeedItem, todo: TodoItem?) -> String {
+        if let now = todo?.title.trimmingCharacters(in: .whitespacesAndNewlines), !now.isEmpty { return now }
+        return item.title ?? String(localized: "Tasks")
+    }
+
     var body: some View {
         let todo = item.ref.flatMap { store.todos[$0] }
         let outcome = Self.outcome(item, todo: todo)
-        let title = item.title ?? String(localized: "Tasks")
+        let title = Self.title(item, todo: todo)
         let tint: Color = switch outcome {
         case .failed, .interrupted: Theme.danger
         case .stopped: .secondary
@@ -971,112 +990,8 @@ struct TaskQuestions: View {
     }
 }
 
-/// The dock: All for the board, held at the leading edge so it never scrolls out of reach, then a pill for each task
-/// going on (waiting for the user first), scrolling sideways beside it. In the main conversation the agents going on
-/// that no task stands for (opened on the Agents page, #1113) follow the tasks, marked as agents.
-struct TaskDock: View {
-    var conversation: String
-    /// The conversation's model operating a Mac (#1343): a pill of its own, first.
-    var computer: ComputerActivity? = nil
-    @State private var removing: TodoItem?
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let dock = store.dock(conversation)
-        let all = store.tasks(of: conversation)
-        let agents = store.agents(of: conversation)
-        let operating = ComputerActivityPill.shows(computer)
-        if !all.isEmpty || !agents.isEmpty || operating {
-            HStack(spacing: Theme.Space.s) {
-                if !all.isEmpty || !agents.isEmpty { board(all.count + agents.count) }
-                if !dock.isEmpty || !agents.isEmpty || operating {
-                    ScrollView(.horizontal) {
-                        HStack(spacing: Theme.Space.s) {
-                            if operating { ComputerActivityPill(activity: computer) }
-                            ForEach(dock) { todo in pill(todo) }
-                            ForEach(agents) { agent in pill(agent) }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
-                    #if os(macOS)
-                    // The pills fade out at the trailing edge instead of being cut off by it (#1224 B6): a window
-                    // narrower than the dock showed half a pill with its words cut.
-                    .mask {
-                        Color.black
-                            .padding(.trailing, Theme.Size.macRowFade)
-                            .overlay(alignment: .trailing) {
-                                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: Theme.Size.macRowFade)
-                            }
-                    }
-                    #else
-                    // A pill cut by the screen's edge mid-word reads as broken: the pills fade out at an end with more.
-                    .edgeFade()
-                    #endif
-                    .animation(Theme.Motion.layout, value: dock.map(\.id) + agents.map(\.key.path))
-                }
-            }
-            .padding(.horizontal, Theme.Space.xs)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            #if !os(macOS)
-            .padding(.top, Theme.Space.s)
-            .dockChatFade()
-            // Drawn under the question and the @ list over it in the footer, so the fade reaches only the chat.
-            .zIndex(-1)
-            #endif
-            .confirmTaskRemoval($removing)
-        }
-    }
-
-    private func board(_ count: Int) -> some View {
-        Button {
-            store.showBoard = true
-        } label: {
-            Text("All \(count) [Task Views b479ca]")
-                .dockCapsule()
-                .fixedSize() // the pills give way, All does not
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("task-dock.board")
-    }
-
-    private func pill(_ todo: TodoItem) -> some View {
-        let state = store.state(todo)
-        return Button {
-            store.detailTask = todo.id
-        } label: {
-            DockPillLabel(title: todo.title, state: state.agentState, waiting: state == .needsYou) {
-                TaskMark(state: state, size: Theme.Size.dot)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("task-dock.pill")
-        .menuPreviewShape(.capsule)
-        .contextMenu { TaskRemoveMenuItem(todo: todo, state: state, pending: $removing) }
-        .transition(.scale.combined(with: .opacity))
-    }
-
-    /// An agent no task stands for: its state's dot and the Agents mark, opening its page in the task's sheet.
-    private func pill(_ agent: DockAgent) -> some View {
-        Button {
-            store.detailAgent = agent.key
-        } label: {
-            DockPillLabel(title: agent.title, state: agent.state, waiting: agent.isWaiting) {
-                StatusDot(state: agent.state, size: Theme.Size.dot)
-                ThemedIcon(Theme.Icon.agents).font(Theme.Font.label)
-                    .foregroundStyle(agent.isWaiting ? AnyShapeStyle(agent.state.tone.text) : AnyShapeStyle(.secondary))
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Agent \(agent.title), \(agent.isWaiting ? StateName.needsYou.text : StateName.working.text)")
-        .accessibilityIdentifier("task-dock.agent")
-        .transition(.scale.combined(with: .opacity))
-    }
-}
-
-/// The capsule the row above the assistant's composer draws an entry in: the dock's All (#1094) and, on the phone, the
-/// action bar's Pending / Progress / Agents (#2879). One look for both, so the bar is exactly as low as the dock was:
+/// The capsule the row above the assistant's composer draws an entry in: the action bar's Needs You / In Progress (#3393)
+/// and its trays' All, the look the dock's All had (#1094), so the bar is exactly as low as the dock was:
 /// caption medium (13 pt at the default text size; it follows Dynamic Type), 12 pt sideways and 6 pt up and down
 /// (`Theme.Space.m` / `.sm`), a capsule, `Theme.Fill.chip` behind secondary words: 28 pt tall at the default text size.
 /// `.selected` (its tray is open) is the filter chip's on look in the same size (`FilterChip`: the accent behind white,

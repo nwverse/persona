@@ -68,6 +68,7 @@
     <string name="agents_range_running">运行中</string>
     <string name="agents_range_all">全部</string>
     <string name="agents_range_history">历史</string>
+    <string name="agents_grouping_current">分组：%1$s</string>
     <string name="agents_grouping_repo">按仓库</string>
     <string name="agents_grouping_state">按状态</string>
     <string name="agents_grouping_todo">按待办</string>
@@ -495,4 +496,19 @@
     <string name="agents_page_loaded">已加载 %1$d / %2$d 个会话</string>
     <string name="agents_page_more">加载更多</string>
     <string name="agents_page_previous">加载之前的会话</string>
+    <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
+    <string name="agents_todos_section_waiting">需要你</string>
+    <string name="agents_todos_section_working">工作中</string>
+    <string name="agents_todos_section_just_done">刚做完</string>
+    <string name="agents_todos_section_pr">PR 待合并</string>
+    <string name="agents_todos_section_other">其他未完成</string>
+    <string name="agents_todos_section_shelved">已搁置</string>
+    <string name="agents_todos_summary">%1$d 个未完成 · %2$d 个搁置 · %3$d 个已完成</string>
+    <string name="agents_todo_restore">恢复</string>
+    <string name="agents_todo_pr_moved">%1$s · %2$s有动静</string>
+    <string name="agents_todo_pr">PR</string>
+    <string name="agents_todo_state_accepted">已验收</string>
+    <plurals name="agents_todos_related">
+        <item quantity="other">%1$d 个相关</item>
+    </plurals>
 </resources>

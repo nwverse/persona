@@ -45,7 +45,7 @@ object PairingModule {
         // Explicit: the runtime cannot be a ConnectionEndpoints itself (its HubConnection.state has another type).
         disconnect = { pairing.unpair() }, endpoints = runtime.endpoints, machines = machines, models = models, extensions = extensions, providers = providers,
         channels = channels, feishuBot = feishuBot, hubUpdates = hubUpdates, managers = managers, sent = sent,
-        hubs = runtime.hubGroups, addHub = platform.adding, connectors = connectors,
+        hubs = runtime.hubGroups, tunnels = runtime.hubTunnels, addHub = platform.adding, connectors = connectors,
         translation = translation, triage = triage, capsule = capsule, pairingAttempts = attempts, readiness = readiness,
         appUpdateStore = persona.feature.settings.AppUpdateStore(application, updates, devices.binding),
         desktops = (application as PersonaApp).desktops, clearCacheFiles = { files -> persona.core.data.CacheClearing.delete(files) })
@@ -67,24 +67,25 @@ class WiredPairingService @Inject constructor(application: Application, private 
     override suspend fun pair(request: PairingRequest) = pair(request) {}
 
     // Storage discards the old pairings, including when pairing with the same hub again.
-    override suspend fun pair(request: PairingRequest, progress: (PairingProgress) -> Unit) = pair(request, progress) { runtime.pair(it) }
+    override suspend fun pair(request: PairingRequest, progress: (PairingProgress) -> Unit) = pair(request, progress) { it, access -> runtime.pair(it, access) }
 
     /** Pairs one more hub next to the existing ones (settings › hub › "Add hub"); the same checks as [pair]. */
-    suspend fun addHub(request: PairingRequest, progress: (PairingProgress) -> Unit) = pair(request, progress) { runtime.addHub(it) }
+    suspend fun addHub(request: PairingRequest, progress: (PairingProgress) -> Unit) = pair(request, progress) { it, access -> runtime.addHub(it, access) }
 
-    private suspend fun pair(request: PairingRequest, progress: (PairingProgress) -> Unit, save: suspend (HubCredentials) -> Unit) = lock.withLock {
+    private suspend fun pair(request: PairingRequest, progress: (PairingProgress) -> Unit, save: suspend (HubCredentials, HubAccess?) -> Unit) = lock.withLock {
         var networking: HubPairingClient? = null
         try {
             progress(PairingProgress(PairingStage.Parse))
-            val parsed = request.parsedPairingLink()
+            // The Access token is typed on the pairing screen, never part of a link: kept whichever way the link parses.
+            val parsed = request.parsedPairingLink()?.copy(access = request.access)
                 ?: request.copy(url = request.url.trim(), token = request.token.trim())
             val addresses = HubPairingClient.addresses(parsed)
-            networking = HubPairingClient(parsed.hub, parsed.fp, addresses, app.clientVersion())
+            networking = HubPairingClient(parsed.hub, parsed.fp, addresses, app.clientVersion(), parsed.access)
             val result = networking.pair(parsed.token, app.deviceName, progress)
             val saved = HubCredentials(result.address, result.hubId, result.fingerprint,
                 result.candidates, result.token, result.deviceId)
             withContext(NonCancellable) {
-                save(saved)
+                save(saved, parsed.access)
                 progress(PairingProgress(PairingStage.Complete))
             }
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -137,6 +138,8 @@ class WiredPairingService @Inject constructor(application: Application, private 
             HubError.Incompatible -> PairingFailure.Incompatible
             HubError.TlsRequired -> PairingFailure.TlsRequired
             HubError.LocalNetworkPermission -> PairingFailure.LocalPermission
+            HubError.AccessRequired -> PairingFailure.AccessRequired
+            HubError.AccessRejected -> PairingFailure.AccessRejected
             else -> PairingFailure.Unknown
         }
         return PairingException(reason).also { it.initCause(this) }
