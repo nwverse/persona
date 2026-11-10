@@ -458,6 +458,7 @@ Drawn as Telegram draws them (#2984), with one look on every platform: the web a
 | Swipe on a message (Agents) | quote, threshold 66 pt, with a VoiceOver "Quote" action |
 | Long press on a message | lifted menu with an action bar |
 | Hold the mic | cancel by sliding left, lock by sliding up |
+| Touch and hold the composer's + (iPhone) | system menu of the attach panel's More list; a tap still opens the panel, whose More tab is the plain alternative (#3225) |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
