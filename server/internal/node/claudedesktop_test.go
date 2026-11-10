@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // writeEntrypointTranscript writes a Claude transcript of the desktop app (or of the command line for "cli").
@@ -225,20 +227,71 @@ func TestDesktopSessionsAreListedWhateverTheirAge(t *testing.T) {
 	for i := 0; i < 85; i++ { // the newest 80 others stay the newest 80
 		writeEntrypointTranscript(t, dir, fmt.Sprintf("cccccccc-0000-4000-8000-%012d", i), "cli", time.Duration(i+1)*time.Minute)
 	}
-	got := map[string]bool{}
+	got := map[string]proto.Session{}
 	others := 0
 	for _, s := range n.scanOffline() {
-		got[s.SessionID] = true
+		got[s.SessionID] = s
 		if strings.HasPrefix(s.SessionID, "cccccccc") {
 			others++
 		}
 	}
 	for id, want := range map[string]bool{oldOpen: true, oldSilent: true, oldArchived: false, oldUnnamed: false} {
-		if got[id] != want {
-			t.Errorf("%s listed=%v, want %v", id, got[id], want)
+		if _, listed := got[id]; listed != want {
+			t.Errorf("%s listed=%v, want %v", id, listed, want)
 		}
 	}
 	if others != 80 {
 		t.Fatalf("other sessions = %d, want the newest 80", others)
+	}
+	// A session whose transcript says nothing yet has the title and the directory its entry gives (a message to it
+	// resumes it there).
+	if s := got[oldSilent]; s.Title != "t" || s.Cwd != "/src/app" {
+		t.Fatalf("silent session title %q cwd %q, want the entry's", s.Title, s.Cwd)
+	}
+}
+
+// The desktop app's sessions are counted on their own, recent ones too: the newest maxDesktopOffline of them are listed,
+// and they take none of the others' 80. Another platform's run (agentfilters.go) is left out even when the index names
+// it.
+func TestDesktopSessionsHaveACountOfTheirOwn(t *testing.T) {
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, third := useDesktopDirs(t)
+	for i := 0; i < maxDesktopOffline+5; i++ {
+		id := fmt.Sprintf("dddddddd-0000-4000-8000-%012d", i)
+		writeEntrypointTranscript(t, dir, id, "claude-desktop-3p", time.Duration(i+1)*time.Minute)
+		writeDesktopEntry(t, third, fmt.Sprintf("d%d", i), id, false, nil, "")
+	}
+	for i := 0; i < 85; i++ {
+		writeEntrypointTranscript(t, dir, fmt.Sprintf("cccccccc-0000-4000-8000-%012d", i), "cli", time.Duration(i+1)*time.Minute)
+	}
+	const platform = "eeeeeeee-0000-4000-8000-000000000001"
+	run := filepath.Join(dir, platform+".jsonl")
+	os.WriteFile(run, []byte(`{"type":"user","uuid":"u1","timestamp":"2026-11-05T07:31:12Z","cwd":"/src/app","entrypoint":"claude-desktop-3p","message":{"role":"user","content":"[bot run] summarize"}}`+"\n"+strings.Repeat(" ", 4096)+"\n"), 0o600)
+	writeDesktopEntry(t, third, "platform", platform, false, nil, "")
+	n.setAgentFilters([]proto.AgentFilter{{Extension: "bot", ID: "bot", Agents: []string{"claude"}, FirstMessagePrefixes: []string{"[bot run]"}}})
+	desktop, others := 0, 0
+	listed := map[string]bool{}
+	for _, s := range n.scanOffline() {
+		listed[s.SessionID] = true
+		switch {
+		case strings.HasPrefix(s.SessionID, "dddddddd"):
+			desktop++
+		case strings.HasPrefix(s.SessionID, "cccccccc"):
+			others++
+		}
+	}
+	if desktop != maxDesktopOffline || others != 80 {
+		t.Fatalf("desktop sessions %d, others %d; want %d and 80", desktop, others, maxDesktopOffline)
+	}
+	if !listed[fmt.Sprintf("dddddddd-0000-4000-8000-%012d", 0)] || listed[fmt.Sprintf("dddddddd-0000-4000-8000-%012d", maxDesktopOffline)] {
+		t.Fatal("not the newest of the desktop sessions")
+	}
+	if listed[platform] {
+		t.Fatal("another platform's run is listed because the index names it")
 	}
 }

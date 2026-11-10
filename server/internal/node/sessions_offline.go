@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"maps"
 	"os"
 	"path/filepath"
@@ -102,11 +103,9 @@ func (n *Node) scanOffline() []proto.Session {
 			cands = append(cands, cand{p, st, keptOnes})
 			continue
 		}
-		if desktop.listed(id) { // in the desktop app's sidebar: listed however long it has been quiet, counted on its own
-			cands = append(cands, cand{p, st, desktopOnes})
-			continue
-		}
-		if time.Since(st.ModTime()) > offlineWindow || (st.Size() < 2048 && !forked[id]) {
+		// In the desktop app's sidebar: listed however long it has been quiet, and however little it says yet.
+		inDesktop := desktop.listed(id)
+		if !inDesktop && (time.Since(st.ModTime()) > offlineWindow || (st.Size() < 2048 && !forked[id])) {
 			continue
 		}
 		if isAssistantProject(filepath.Base(filepath.Dir(p)), own) {
@@ -116,6 +115,10 @@ func (n *Node) scanOffline() []proto.Session {
 		// Another platform's runs (agentfilters.go) go before the newest are counted: hundreds a day would crowd out
 		// the user's own.
 		if !forked[id] && n.agentFiltered("claude", p) {
+			continue
+		}
+		if inDesktop { // counted on their own: they neither take the others' 80 nor are pushed out by them
+			cands = append(cands, cand{p, st, desktopOnes})
 			continue
 		}
 		cands = append(cands, cand{p, st, others})
@@ -143,8 +146,14 @@ func (n *Node) scanOffline() []proto.Session {
 		if isLauncherCheckRun(c.path, m) {
 			continue // a launcher health check's run, a hundred a day on each computer: no session of the user's (#2959)
 		}
-		// Where the session is: an assistant conversation's start directory, before the filters look at it.
-		cwd := n.assistantHome(id, m.cwd)
+		// Where the session is: an assistant conversation's start directory, before the filters look at it. A desktop
+		// app's session whose transcript says nothing yet (it just began, or went on in a new transcript) has the
+		// directory and the title its entry gives.
+		title, cwd := m.title, m.cwd
+		if about, ok := desktop.about[id]; ok {
+			title, cwd = cmp.Or(title, about.title), cmp.Or(cwd, about.cwd)
+		}
+		cwd = n.assistantHome(id, cwd)
 		if !n.sessionScopeAllows(cwd) {
 			continue
 		}
@@ -160,7 +169,7 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		n.setPath(id, c.path)
 		s := proto.Session{
-			SessionID: id, Title: m.title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
+			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
 			Agent: "claude", AgentSurface: m.surface,
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}
