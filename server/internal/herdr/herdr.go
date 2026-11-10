@@ -39,6 +39,8 @@ type Client struct {
 	trips episode
 	// noServer backs off the CLI while it, too, finds no server (call).
 	noServer cliBackoff
+	// lists keeps a `herdr session list` that found nothing running while that cannot have changed (sessionlist.go).
+	lists listMemo
 	// snapshotCut is separate from transport failures: successful smaller calls do not end a truncation streak.
 	snapshotCut atomic.Bool
 	now         func() time.Time // the clock note reads; nil: time.Now (tests set it)
