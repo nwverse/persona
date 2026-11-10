@@ -331,10 +331,11 @@ func explain(body map[string]any, code, message string, l i18n.Lang) {
 	}
 }
 
-// Sentence is the plain words in l of code, one of the refusals the hub words itself ("" for any other): a start refused on
-// its request with nothing to name (readonly_unsupported, directory_untypable) as it is, and codeActions' by its data: machine_name (else "this computer"), launcher, and of a start the new tab's shell could not run
-// (where "terminal", node/shellmiss.go) what it could not run (missing, kind), that shell (pane_shell) and the shell
-// and rc file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
+// Sentence is the plain words in l of code, one of the refusals the hub words itself ("" for any other): a start refused
+// on its request with nothing to name (readonly_unsupported, directory_untypable) as it is, and codeActions' by their
+// data: machine_name (else "this computer"), launcher, and of a start the new tab's shell could not run (where
+// "terminal", node/shellmiss.go) what it could not run (missing, kind), that shell (pane_shell) and the shell and rc
+// file the launchers are listed in (launcher_shell, rc_file). What a 409 says, and a session's start_error.
 func Sentence(l i18n.Lang, code string, data map[string]any) string {
 	switch code {
 	case "readonly_unsupported", proto.CodeDirectoryUntypable: // the request refused, with nothing to name

@@ -81,7 +81,7 @@ func TestOtherAgentStartFileInFish(t *testing.T) {
 	}
 	home := t.TempDir()
 	for _, prompt := range shellQuoteTexts[:6] {
-		file, err := writeStartScript(filepath.Join(home, "node"), otherAgentCommand("wrapper", "", prompt))
+		file, err := writeStartScript(filepath.Join(home, "node"), otherAgentCommand("wrapper", "", prompt, bin))
 		if err != nil {
 			t.Fatal(err)
 		}
