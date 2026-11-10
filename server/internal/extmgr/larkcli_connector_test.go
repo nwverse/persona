@@ -170,6 +170,12 @@ func TestBotViewExposesLarkCLIBinding(t *testing.T) {
 	if view.LarkCLI == nil || view.LarkCLI.Profile != managedLarkCLIProfile || view.LarkCLI.AppID != "cli_example" || !view.LarkCLI.SameApp || view.LarkCLI.Mode != "bot" || view.LarkCLI.Choice != "" || len(view.LarkCLI.Profiles) != 2 {
 		t.Fatalf("larkcli view = %+v", view.LarkCLI)
 	}
+	// The managed profile is "follow the bot's app" itself: it is never listed as a separate choice, nor accepted as one.
+	for _, p := range view.LarkCLI.Profiles {
+		if p.Name == managedLarkCLIProfile {
+			t.Fatalf("managed profile listed: %+v", view.LarkCLI.Profiles)
+		}
+	}
 }
 
 func TestLarkCLIAppProfileChoicePrecedenceAndValidation(t *testing.T) {
