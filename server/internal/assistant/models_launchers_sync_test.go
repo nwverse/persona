@@ -225,7 +225,18 @@ func TestLauncherListAnswersLastSeenWhileRefreshRuns(t *testing.T) {
 
 	release()
 	waitFor(t, "the refreshed launcher snapshot", func() bool {
-		code, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
-		return code == http.StatusOK && strings.Contains(raw, "after")
+		snapshot, _ := s.zshrcLaunchersLastSeen(t.Context())
+		for _, machine := range snapshot {
+			for _, launcher := range machine.Launchers {
+				if launcher.Name == "after" {
+					return true
+				}
+			}
+		}
+		return false
 	})
+	code, raw := launcherCall(t, s, "GET", "/api/v1/launchers", "")
+	if code != http.StatusOK || !strings.Contains(raw, "after") {
+		t.Fatalf("the refreshed snapshot did not reach the route: %d %s", code, raw)
+	}
 }

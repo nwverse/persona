@@ -307,7 +307,12 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.launcherGate != nil {
 			gate := f.launcherGate
 			f.mu.Unlock()
-			<-gate
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				f.mu.Lock()
+				return nil, ctx.Err()
+			}
 			f.mu.Lock()
 		}
 		if f.slowLaunchers[p.Device] {
