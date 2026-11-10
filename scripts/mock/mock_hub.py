@@ -1210,10 +1210,10 @@ if os.environ.get("MOCK_AGENT_MARKS"):
         SESSIONS.append(sess("server", sid, title, "/home/me/code/marks", status, state, MARKS_SPACE, 12, f"agent-{i}", i, mins,
                              "好的，我先看一下。", agent=agent, **extra))
 
-# MOCK_DESKTOP_APPS=1 (#3756): someone who works in the desktop apps, for the Agents list's By App. Claude's desktop app and
-# the Codex App each have running and offline sessions (the Codex App's chats in its projects), and two run from a terminal.
+# MOCK_DESKTOP_APPS=1 (#3756): someone who works in the desktop apps on the MacBook, for the Agents list's By App. Claude's
+# desktop app and the Codex App each have running and offline sessions (the Codex App's chats in its projects), and two run
+# from a terminal. Fields as the node sends them (claudebg.go, codex_registry.go).
 if os.environ.get("MOCK_DESKTOP_APPS"):
-    _off = dict(pane_id=None, tab_id=None, workspace_id=None, slot_id=None, slot_name=None, slot_index=None)
     DESKTOP_APPS = [  # (session id, agent, surface, title, status, state, project, minutes ago)
         ("d3a0e7a0-0000-4000-8000-000000000001", "claude", "desktop", "重构登录流程", "working", "working", "web-app", 2),
         ("d3a0e7a0-0000-4000-8000-000000000002", "claude", "desktop", "升级前检查网关配置", "idle", "unread", "gateway", 25),
@@ -1225,17 +1225,15 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
         ("d3a0e7a0-0000-4000-8000-000000000008", "claude", "cli", "跑一遍集成测试", "working", "working", "web-app", 8),
         ("d3a0e7a0-0000-4000-8000-000000000009", "codex", "cli", "清理旧的迁移文件", "offline", "offline", "billing", 900),
     ]
-    for i, (sid, agent, surface, title, status, state, project, mins) in enumerate(DESKTOP_APPS, 1):
-        kw = dict(agent_surface=surface, started_by_persona=False)
+    for sid, agent, surface, title, status, state, project, mins in DESKTOP_APPS:
+        kw = dict(NO_SPACE, agent_surface=surface, started_by_persona=False)
         if surface == "desktop" and agent == "codex":
             kw.update(space_kind="codex_app", space_id=f"codex-project:/Users/me/code/{project}", space_name=project,
-                      agent_name="Codex App", **_off)
-        elif surface == "desktop":
-            kw.update(space_kind=None, space_id=None, space_name=None, **_off)
-        elif status == "offline":
-            kw.update(_off)
-        SESSIONS.append(sess("server", sid, title, f"/Users/me/code/{project}", status, state, project, 30 + i, f"desktop-{i}", i,
-                             mins, "好的，我先看一下。", agent=agent, **kw))
+                      agent_name="Codex App", source_kind="codex_history", capabilities={"read": True, "send": True})
+        elif surface == "desktop" and status != "offline":
+            kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
+        SESSIONS.append(sess("macbook", sid, title, f"/Users/me/code/{project}", status, state, "", 0, "", 0, mins,
+                             "好的，我先看一下。", agent=agent, **kw))
 
 # MOCK_SPLIT_TABS=1: herdr's layout for the sidebar's "By machine" tree and the chat's pane tabs (#1963): two machines (the
 # NAS offline, its agent only under "Recent"), workspaces whose tabs hold one pane or two (claude and codex in one slot),

@@ -2206,9 +2206,7 @@ private struct AgentsList: View {
     ]
 
     /// The fold ids of the sections By Status / By Machine shows now (Collapse All).
-    private func sectionIDs(_ sessions: [Session]) -> [String] {
-        grouping == .app ? AppGroups.build(sessions).map(\.id) : order.sectionIDs(sessions, byMachine: grouping == .machine)
-    }
+    private func sectionIDs(_ sessions: [Session]) -> [String] { order.sectionIDs(sessions, byMachine: grouping == .machine) }
 
     private func stateSectionCount(_ key: String, loaded: Int) -> Int {
         let filters: [String: AgentFilter] = ["needs": .needsYou, "unread": .unread, "working": .working]
@@ -2295,7 +2293,13 @@ private struct AgentsList: View {
         }
     }
 
-    /// One section per machine, its agents by state; idle ones fold like in a space.
+    /// An app section's spoken counts: the state counts, then the offline agents, which they leave out.
+    static func appDetail(_ group: SpaceGroup) -> String {
+        let offline = group.sessions.filter { $0.state == .offline }.count
+        return ([StateCounts.spoken(group)].filter { !$0.isEmpty } + (offline > 0 ? [String(localized: "\(offline) \(AgentState.offline.label)")] : []))
+            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
+    }
+
     /// By App (#3756): a section per app (`AppGroups`) with its running and offline agents, the latest first; each folds
     /// as a machine's section does, its state counts on its title.
     @ViewBuilder private func appSections(_ sessions: [Session]) -> some View {
@@ -2306,7 +2310,7 @@ private struct AgentsList: View {
                     cappedRows(app.sessions, key: app.id) { s in slotRow(s, context: true) }
                 }
             } header: {
-                FoldButton(title: app.title, folded: isFolded(app.id), detail: StateCounts.spoken(group)) { toggleFold(app.id) } label: {
+                FoldButton(title: app.title, folded: isFolded(app.id), detail: Self.appDetail(group)) { toggleFold(app.id) } label: {
                     AppSectionHeader(app: app, counts: group)
                 }
             }
@@ -2314,6 +2318,7 @@ private struct AgentsList: View {
         }
     }
 
+    /// One section per machine, its agents by state; idle ones fold like in a space.
     @ViewBuilder private func machineSections(_ live: [Session]) -> some View {
         ForEach(machineOrder(live), id: \.ref) { m in
             let rows = ordered(live.filter { $0.machineRef == m.ref })
