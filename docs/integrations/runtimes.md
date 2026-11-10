@@ -4,7 +4,7 @@ Agents in Persona come from two kinds of places, integrated differently:
 
 | | Host | Runtime |
 | --- | --- | --- |
-| What it is | Where the terminal lives: herdr, Herdr App, Orca (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
+| What it is | Where the terminal lives: herdr, Herdr App, Orca, Tern (`docs/integrations/engines.md`) | An Agent runtime that manages its own sessions and has no terminal: DSH (`docs/integrations/dsh.md`), later the pi extension, platforms built on DSH… |
 | Where sessions come from | node reads panes, recognizes sessions by process, reads Claude / Codex transcripts | The runtime reports its sessions and provides their content |
 | Interactions (questions / plans / permissions) | Claude Code hooks | The runtime asks itself (`interaction.create`) |
 | Where the code lives | One host implementation in Persona (`internal/host`, `node/host*.go`) | **No code added to Persona**: the runtime implements the same protocol with the SDK |

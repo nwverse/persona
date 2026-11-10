@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-// Configuring the app through the open platform's server API (docs/extensions/bots.md "On the open platform"),
+// Configuring the app through the open platform's server API (docs/extensions/bots.md "What to do on the Open Platform"),
 // so that after the credentials verify, everything the console asked by hand — scopes, events, the long
 // connection, the publish — happens by itself. Best-effort: nothing here blocks binding; a private domain
 // (an unknown console) skips it, and every failure degrades to one sentence and a link to the console.
@@ -45,7 +45,7 @@ func AppConsoleURL(domain, appID string) string {
 	return base + "/" + appID
 }
 
-// The scopes and events the bot needs (docs/extensions/bots.md "On the open platform"). Group messaging is
+// The scopes and events the bot needs (docs/extensions/bots.md "What to do on the Open Platform"). Group messaging is
 // deliberately not opened here: im:message.group_msg is sensitive and usually needs the enterprise admin's
 // review, and the group gate works without it.
 var configureScopes = []string{"im:message:send_as_bot", "contact:user.base:readonly"}

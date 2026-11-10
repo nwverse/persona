@@ -69,6 +69,8 @@ type fakeHub struct {
 	noGuest       bool             // the node is older than guest conversations: assistant.guest_prepare is unknown
 	larkCLI       bool
 	slowSnapshots time.Duration // the connectors' live states come this late (nothing: there are none)
+	liveStates    []any         // the connectors' live states (connectors.snapshots), when they come at once
+	snapshotAsks  int           // connectors.snapshots calls
 	replies       []string      // the model's answers, in turn (the last one again when they run out)
 	answers       []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown     bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
@@ -465,10 +467,14 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	}
 	if p.AppID == AppConnectors && p.Method == ConnectorsSnapshots {
 		f.mu.Lock()
-		slow := f.slowSnapshots
+		f.snapshotAsks++
+		slow, live := f.slowSnapshots, f.liveStates
 		f.mu.Unlock()
 		if slow == 0 {
-			return json.Marshal(map[string]any{"snapshots": []any{}})
+			if live == nil {
+				live = []any{}
+			}
+			return json.Marshal(map[string]any{"snapshots": live})
 		}
 		select {
 		case <-time.After(slow):
