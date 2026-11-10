@@ -5046,6 +5046,29 @@
       },
       "extractionState" : "manual"
     },
+    "%lld more waiting on you, not in %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld more waiting on you, not in %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ほかに %1$lld 件が対応待ち（「%2$@」の対象外）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "另有 %1$lld 项需要你，不在「%2$@」里"
+          }
+        }
+      }
+    },
     "%lld Picked" : {
       "localizations" : {
         "en" : {
@@ -23286,6 +23309,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Clear the %@ filter" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear the %@ filter"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」の絞り込みを解除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除「%@」筛选"
+          }
+        }
+      }
     },
     "CPU, memory and network update every 10 seconds. Charts show the last hour." : {
       "localizations" : {
@@ -48874,6 +48920,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Every to-do has a due date" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Every to-do has a due date"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "すべてのToDoに期限があります"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有待办都有截止日期"
+          }
+        }
+      }
     },
     "Every use in this category uses this setting. Leave fields empty to keep the current default. Changing the provider clears the previous model and reasoning effort. Custom model IDs must be supported by the provider." : {
       "localizations" : {
@@ -74709,6 +74778,29 @@
         }
       }
     },
+    "No Due Date" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Due Date"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "期限なし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无截止日期"
+          }
+        }
+      }
+    },
     "No Extension Markets Yet" : {
       "localizations" : {
         "en" : {
@@ -81406,6 +81498,75 @@
         }
       }
     },
+    "Nothing due this month" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing due this month"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今月が期限のToDoはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本月没有到期的待办"
+          }
+        }
+      }
+    },
+    "Nothing due this week" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing due this week"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今週が期限のToDoはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本周没有到期的待办"
+          }
+        }
+      }
+    },
+    "Nothing due today" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nothing due today"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今日が期限のToDoはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今天没有到期的待办"
+          }
+        }
+      }
+    },
     "Nothing Here" : {
       "localizations" : {
         "en" : {
@@ -84946,6 +85107,29 @@
         }
       }
     },
+    "Recent Activity" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recent Activity"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近の動き"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近动过"
+          }
+        }
+      }
+    },
     "Remove Key" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -85060,6 +85244,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Show" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Show"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "表示"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示"
+          }
+        }
+      }
     },
     "Shows the desktop apps' sessions." : {
       "localizations" : {
@@ -127167,6 +127374,29 @@
       },
       "extractionState" : "manual"
     },
+    "This Month" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Month"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今月"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本月"
+          }
+        }
+      }
+    },
     "This Reply" : {
       "localizations" : {
         "en" : {
@@ -127189,6 +127419,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "This Week" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This Week"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今週"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本周"
+          }
+        }
+      }
     },
     "This Week's Health" : {
       "localizations" : {
@@ -133609,6 +133862,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Try another filter." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try another filter."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の絞り込みを試してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "换个筛选看看。"
+          }
+        }
+      }
     },
     "Try Anyway" : {
       "extractionState" : "manual",
