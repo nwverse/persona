@@ -113,7 +113,7 @@ func TestSwitchBindsPressedCard(t *testing.T) {
 // The agents card's "Start new agent" button posts the same form /start builds (startAgentCard), quoting the
 // pressed list card, and starts nothing itself (#5438).
 func TestStartFormCallbackPostsStartCard(t *testing.T) {
-	s, f, _, _ := startCardHub(t)
+	s, f, posts, _ := startCardHub(t)
 	ctx := context.Background()
 	var a feishubot.CardAction
 	a.Action.Value = map[string]any{"a": "start_form"}
@@ -122,18 +122,12 @@ func TestStartFormCallbackPostsStartCard(t *testing.T) {
 	if r.Toast == nil || r.Toast.Content != i18n.T("", "assistant-feishu_cards.start_form_opening") {
 		t.Fatalf("toast %+v", r.Toast)
 	}
-	var post map[string]any
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if ps := f.appParams(AppFeishu, FeishuPost); len(ps) > 0 {
-			post = ps[0]
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
+	waitForForm(t, posts, "the start form was not posted")
+	ps := f.appParams(AppFeishu, FeishuPost)
+	if len(ps) != 1 {
+		t.Fatalf("posted %d start forms, want one", len(ps))
 	}
-	if post == nil {
-		t.Fatal("the start form was not posted")
-	}
+	post := ps[0]
 	if replyTo, _ := post["reply_to"].(string); replyTo != "om_agents" {
 		t.Fatalf("the form replies to %q, want the pressed list card", replyTo)
 	}
@@ -199,11 +193,11 @@ func (f *fakeHub) agentCount() int { // successful session.start calls only (the
 	return f.agents
 }
 
-// startSlotHeld reports whether mid's dedup slot is still taken (test only).
-func (s *Service) startSlotHeld(mid string) bool {
+// pressSlotHeld reports whether message mid's button kind slot is still taken (test only).
+func (s *Service) pressSlotHeld(mid, kind string) bool {
 	s.fbot.mu.Lock()
 	defer s.fbot.mu.Unlock()
-	_, ok := s.fbot.startAt[mid+"start"]
+	_, ok := s.fbot.pressAt[mid+kind]
 	return ok
 }
 
@@ -295,10 +289,10 @@ func TestStartCardFailedStartLetsNextPressThrough(t *testing.T) {
 		t.Fatal("the failure note was not sent")
 	}
 	deadline := time.Now().Add(2 * time.Second) // the note lands before the slot is released
-	for s.startSlotHeld("om_card1") && time.Now().Before(deadline) {
+	for s.pressSlotHeld("om_card1", "start") && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
-	if s.startSlotHeld("om_card1") {
+	if s.pressSlotHeld("om_card1", "start") {
 		t.Fatal("the failed start kept its dedup slot")
 	}
 	if got := f.agentCount(); got != 0 {
@@ -351,7 +345,7 @@ func TestStartCardLateFailureKeepsNewerSlot(t *testing.T) {
 	}
 	// The first start's failure arrives late; it owns the old timestamp and must not delete the newer slot.
 	s.forgetStartCard(mid, first)
-	if !s.startSlotHeld(mid) {
+	if !s.pressSlotHeld(mid, "start") {
 		t.Fatal("the late failure released the second press's slot")
 	}
 	// Inside the restored window a third press is therefore still swallowed.
@@ -359,6 +353,83 @@ func TestStartCardLateFailureKeepsNewerSlot(t *testing.T) {
 	if blocked, _ := s.startCardPressed(mid); !blocked {
 		t.Fatal("third press was not deduped: the late failure had dropped the newer slot")
 	}
+}
+
+// pressStartForm presses the agents card's "Start new agent" button on message mid, as Lark delivers a press, and
+// checks the toast the owner gets for it.
+func pressStartForm(t *testing.T, s *Service, mid string) {
+	t.Helper()
+	var a feishubot.CardAction
+	a.Action.Value = map[string]any{"a": "start_form"}
+	a.Context.MessageID = mid
+	want := i18n.T("", "assistant-feishu_cards.start_form_opening")
+	if r := s.botCardAction(context.Background(), &a, ""); r.Toast == nil || r.Toast.Content != want {
+		t.Fatalf("press of %s: toast %+v, want %q", mid, r.Toast, want)
+	}
+}
+
+// waitForForm is a start form posted (posts is startCardHub's).
+func waitForForm(t *testing.T, posts chan struct{}, why string) {
+	t.Helper()
+	select {
+	case <-posts:
+	case <-time.After(2 * time.Second):
+		t.Fatal(why)
+	}
+}
+
+// A press of the agents card's "Start new agent" delivered twice (a double tap, or the hub resending a call it gave
+// up on) opens one form: the second press gets the same toast and posts nothing, as the /start button does. A press
+// of another list card is another press and opens its own form (#3789).
+func TestStartFormPressOpensOneForm(t *testing.T) {
+	s, _, posts, _ := startCardHub(t)
+
+	pressStartForm(t, s, "om_agents")
+	pressStartForm(t, s, "om_agents") // the same press again: a second tap, or the hub's resend
+	waitForForm(t, posts, "the start form was not posted")
+	// The swallowed press posts from no goroutine of its own, so nothing of it can land later either.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-posts:
+		t.Fatal("the duplicate press posted a second start form")
+	default:
+	}
+
+	pressStartForm(t, s, "om_agents2")
+	waitForForm(t, posts, "a press of another list card posted no start form")
+}
+
+// After the form window, pressing the same card again opens another form: the guard covers a press delivered twice,
+// not the owner asking for a new form a moment later.
+func TestStartFormPressAgainAfterWindow(t *testing.T) {
+	s, _, posts, _ := startCardHub(t)
+
+	pressStartForm(t, s, "om_agents")
+	waitForForm(t, posts, "the first start form was not posted")
+	botFormWindow = 0
+	t.Cleanup(func() { botFormWindow = 10 * time.Second })
+	pressStartForm(t, s, "om_agents")
+	waitForForm(t, posts, "a press after the window posted no start form")
+}
+
+// A start form that could not be posted says so and frees its press slot: the owner can press the same button again
+// instead of getting "Opening the start form" and nothing after it (#3789).
+func TestStartFormFailedPostFreesThePress(t *testing.T) {
+	s, f, posts, says := startCardHub(t)
+	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return nil, errors.New("the app is down") })
+
+	pressStartForm(t, s, "om_agents")
+	select {
+	case <-says:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the owner was not told that the start form could not be opened")
+	}
+	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) {
+		posts <- struct{}{}
+		return map[string]any{"message_id": "om_form"}, nil
+	})
+	pressStartForm(t, s, "om_agents") // a retry press of the same card, right away
+	waitForForm(t, posts, "the retry press posted no start form: the failed one kept its slot")
 }
 
 // cardButtons is every button of a card's button rows (top level), by its text: what pressing it answers.
