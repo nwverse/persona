@@ -114,13 +114,17 @@ func (c Client) Capture(ctx context.Context, pane, source string, lines int, ans
 }
 
 // lastRows cuts a capture to its last n rows (all of them with n <= 0), past the blank rows that end it, and ends each
-// row in \r\n for ansi or \n otherwise.
+// row in \r\n for ansi or \n otherwise. A row is blank by what it shows: tmux -e keeps a colored row of spaces that
+// the plain read drops, and the two reads of one pane must end at the same row so that row i of one is row i of the
+// other (session.screen.before pages the plain read and takes the colors from the same rows of the ANSI one).
 func lastRows(out string, n int, ansi bool) string {
-	out = strings.TrimRight(out, "\n")
-	if out == "" {
+	rows := strings.Split(out, "\n")
+	for len(rows) > 0 && blankRow(rows[len(rows)-1]) {
+		rows = rows[:len(rows)-1]
+	}
+	if len(rows) == 0 {
 		return ""
 	}
-	rows := strings.Split(out, "\n")
 	if n > 0 && len(rows) > n {
 		rows = rows[len(rows)-n:]
 	}
@@ -129,6 +133,32 @@ func lastRows(out string, n int, ansi bool) string {
 		end = "\r\n"
 	}
 	return strings.Join(rows, end) + end
+}
+
+// blankRow reports whether a captured row shows nothing: only spaces once the CSI (colors) and OSC (hyperlinks)
+// sequences tmux -e emits are skipped.
+func blankRow(row string) bool {
+	for i := 0; i < len(row); i++ {
+		switch {
+		case row[i] == ' ' || row[i] == '\r':
+		case row[i] == 0x1b && i+1 < len(row) && row[i+1] == '[':
+			i += 2
+			for i < len(row) && (row[i] < 0x40 || row[i] > 0x7e) {
+				i++
+			}
+		case row[i] == 0x1b && i+1 < len(row) && row[i+1] == ']':
+			i += 2
+			for i < len(row) && row[i] != 0x07 && !(row[i] == 0x1b && i+1 < len(row) && row[i+1] == '\\') {
+				i++
+			}
+			if i < len(row) && row[i] == 0x1b {
+				i++ // the ST's backslash
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Persona's key names (host.Host.SendKeys: "enter", "shift+tab", "ctrl+u", "alt+left", "f5"...) become tmux's key
@@ -283,18 +313,20 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// dropBufferTimeout bounds the cleanup of a buffer whose paste failed.
+// dropBufferTimeout bounds the cleanup of a buffer whose load or paste failed.
 const dropBufferTimeout = 2 * time.Second
 
 // SendText types text into the pane without submitting it, through a tmux buffer so that a line break is text and not
 // Enter (bracketed paste when the program takes it). Empty text types nothing. The buffer never outlives the call: the
-// paste deletes it, and a paste that fails (the pane closed, ctx ended) is followed by an explicit delete.
+// paste deletes it, and a load or paste that fails (the pane closed, ctx ended) is followed by an explicit delete. A
+// failed load needs it too: the server may have taken the text before the client gave up.
 func (c Client) SendText(ctx context.Context, pane, text string) error {
 	if text == "" {
 		return nil
 	}
 	buf := fmt.Sprintf("%s-%d", bufferPrefix, bufferSeq.Add(1))
 	if _, err := c.run(ctx, text, "load-buffer", "-b", buf, "-"); err != nil {
+		c.dropBuffer(ctx, buf)
 		return err
 	}
 	if _, err := c.run(ctx, "", "paste-buffer", "-p", "-d", "-b", buf, "-t", pane); err != nil {
@@ -309,7 +341,7 @@ func (c Client) SendText(ctx context.Context, pane, text string) error {
 func (c Client) dropBuffer(ctx context.Context, buf string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dropBufferTimeout)
 	defer cancel()
-	_, _ = c.run(ctx, "", "delete-buffer", "-b", buf) // the paste error is the one that matters
+	_, _ = c.run(ctx, "", "delete-buffer", "-b", buf) // the load or paste error is the one that matters
 }
 
 // Prompt types text and presses Enter.

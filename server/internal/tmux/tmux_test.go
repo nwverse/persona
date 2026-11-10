@@ -92,6 +92,29 @@ esac
 	}
 }
 
+// A load the client gives up on (ctx ended, or a tmux wrapper that hangs after the server took the text) may still have
+// left the buffer on the server: it is deleted too, and nothing is pasted.
+func TestTmuxSendTextDeletesTheBufferWhenTheLoadFails(t *testing.T) {
+	for _, c := range []struct{ name, load string }{
+		{"load outlives its context", "cat > /dev/null; exec sleep 30"},
+		{"load fails", "cat > /dev/null; echo 'server exited unexpectedly' >&2; exit 1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin, calls := fakeTmux(t, "case \"$1\" in\nload-buffer) "+c.load+" ;;\nesac\n")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := (Client{Bin: bin}).SendText(ctx, "%1", "my secret answer"); err == nil {
+				t.Fatal("SendText with a failed load = nil error")
+			}
+			log := readCalls(t, calls)
+			if len(log) != 2 || !strings.HasPrefix(log[0], "load-buffer") || !strings.HasPrefix(log[1], "delete-buffer") ||
+				bufferOf(log[0]) == "" || bufferOf(log[1]) != bufferOf(log[0]) {
+				t.Fatalf("calls = %q, want load-buffer then delete-buffer of the same buffer", log)
+			}
+		})
+	}
+}
+
 // Two Persona processes on one tmux server must not share buffer names: one's load would overwrite the other's text.
 func TestTmuxSendTextBufferNamesAreUniqueAndCarryThePid(t *testing.T) {
 	bin, calls := fakeTmux(t, `[ "$1" = load-buffer ] && cat > /dev/null
@@ -335,6 +358,15 @@ func TestLastRows(t *testing.T) {
 		{"a\nb\n\n\n", 1, false, "b\n"},
 		{"a\nb\n\n\n", 5, true, "a\r\nb\r\n"},
 		{"\n\n", 3, false, ""},
+		// tmux -e keeps a colored blank row that the plain read drops: both end at the same row, so row i of one is
+		// row i of the other.
+		{"a\n\x1b[41m   \x1b[49m\n", 0, true, "a\r\n"},
+		{"a\n\x1b[41m   \x1b[49m\n\x1b[0m\n", 1, true, "a\r\n"},
+		{"\x1b]8;;https://example.com\x1b\\ \x1b]8;;\x1b\\\n", 0, true, ""},
+		{"a\n   \n", 0, false, "a\n"},
+		// A colored row with text, or a blank row above the content, stays.
+		{"\x1b[41m x \x1b[49m\n", 0, true, "\x1b[41m x \x1b[49m\r\n"},
+		{"\x1b[41m   \x1b[49m\na\n", 0, true, "\x1b[41m   \x1b[49m\r\na\r\n"},
 		{"", 0, true, ""},
 	} {
 		if got := lastRows(c.out, c.n, c.ansi); got != c.want {
