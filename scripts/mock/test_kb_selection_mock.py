@@ -45,17 +45,20 @@ class KBSelectionMockTests(unittest.TestCase):
             cls.process.wait(timeout=5)
         cls.log.close()
 
-    def request(self, path, body=None):
+    def request(self, path, body=None, role=None):
+        headers = {"Content-Type": "application/json"}
+        if role:
+            headers["X-Mock-Role"] = role
         request = Request(self.base + path,
                           data=None if body is None else json.dumps(body).encode(),
                           method="GET" if body is None else "PUT",
-                          headers={"Content-Type": "application/json"})
+                          headers=headers)
         with urlopen(request, timeout=3) as response:
             return json.load(response)
 
-    def refused(self, body):
+    def refused(self, body, role=None):
         with self.assertRaises(HTTPError) as error:
-            self.request("/api/v1/kb/selection", body)
+            self.request("/api/v1/kb/selection", body, role)
         return error.exception.code
 
     def test_defaults_then_the_saved_document(self):
@@ -80,6 +83,14 @@ class KBSelectionMockTests(unittest.TestCase):
         self.assertEqual(self.refused(changed(lambda d: d["messages"]["order"].pop())), 400)
         self.assertEqual(self.refused(changed(lambda d: d.update(items=[{"source": "lark", "kind": "chat", "id": "a", "read": False, "store": True}]))), 400)
         self.assertEqual(self.refused(changed(lambda d: d.update(extra=True))), 400)
+        self.assertEqual(self.refused(changed(lambda d: d["messages"]["rules"]["mine"].update(context=True))), 400)
+
+    def test_a_read_only_device_cannot_save(self):
+        doc = self.request("/api/v1/kb/selection")
+        doc["messages"]["rules"]["group"] = {"on": True}
+        self.assertEqual(self.refused(doc, "readonly"), 403)
+        unchanged = self.request("/api/v1/kb/selection")
+        self.assertFalse(unchanged["messages"]["rules"]["group"]["on"])
 
     def test_a_chat_and_a_document_say_where_they_came_from(self):
         chat = self.request("/api/v1/kb/chats/oc_team")["detail"]["meta"]
@@ -91,6 +102,7 @@ class KBSelectionMockTests(unittest.TestCase):
 class OldHubTests(KBSelectionMockTests):
     mode = "missing"
     test_defaults_then_the_saved_document = test_refuses_what_the_hub_would = test_a_chat_and_a_document_say_where_they_came_from = None
+    test_a_read_only_device_cannot_save = None
 
     def test_a_hub_from_before_the_selection_answers_404(self):
         with self.assertRaises(HTTPError) as error:
@@ -101,6 +113,7 @@ class OldHubTests(KBSelectionMockTests):
 class FutureDocumentTests(KBSelectionMockTests):
     mode = "future"
     test_defaults_then_the_saved_document = test_refuses_what_the_hub_would = test_a_chat_and_a_document_say_where_they_came_from = None
+    test_a_read_only_device_cannot_save = None
 
     def test_a_newer_hub_adds_a_field(self):
         self.assertIn("later", self.request("/api/v1/kb/selection"))

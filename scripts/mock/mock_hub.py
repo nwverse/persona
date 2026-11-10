@@ -5859,7 +5859,9 @@ def kb_selection_problem(doc):
                 return "%s.%s days" % (part, name)
             if rule.get("include_all") is not None and name != "mentions":
                 return "%s.%s include_all" % (part, name)
-            if rule.get("context") is not None and (name != "mine" or not 0 <= rule["context"] <= 200):
+            context = rule.get("context")
+            if context is not None and (name != "mine" or isinstance(context, bool) or
+                                        not isinstance(context, int) or not 0 <= context <= 200):
                 return "%s.%s context" % (part, name)
     seen = set()
     for item in doc.get("items") or []:
@@ -5884,6 +5886,8 @@ def kb_selection_route(h, method, p, raw):
     if mode == "missing":
         return h.send_json({"code": "not_found", "error": "unknown kind"}, 404) or True
     if method == "PUT":
+        if is_read_only(h):
+            return h.send_json({"error": "read-only device"}, 403) or True
         if mode == "fail":
             return h.send_json({"error": "知识库暂时写不进去"}, 503) or True
         doc = json.loads(raw or b"{}")
