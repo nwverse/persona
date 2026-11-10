@@ -16,7 +16,8 @@ keeps the token equal to the icon and `--ink-3`.
 
 An Assistant task's only card is its **Progress** tray row. Plan, execution, blocked progress, PR and acceptance update
 that stable row; tapping opens existing task details. The conversation, including historical task events, shows only a
-small **Dispatched N · View in Progress** entry instead of plan/task/receipt/review/report cards. The hint opens Progress.
+small dispatched line instead of plan/task/receipt/review/report cards: **Dispatched: <title> · Open**, or every title when
+there are several, each opening that task in the side panel (its Agent's chat, or the task card before it starts) (#3700).
 
 The dock groups actions as **Pending / Progress / Agents**, with one bounded, scrollable tray open at a time. Pending
 retains planning, permission/question and owner-acceptance flows; `Todo.ask` uses the existing Accept action and the captured
@@ -59,6 +60,8 @@ This change aligns task-row placement; existing web tool folding and turn-source
 `python3 web/e2e/assistant-task-trays.py <preview URL> --shots <output directory>` runs the production-built client against
 synthetic HTTP/WebSocket data in wide and phone widths, light/dark, including the entries' measured capsule height and
 selected state, keyboard toggling, live same-row completion, owner decisions and proof that no draft was sent by approval. Its captures are browser screenshots, not a deployed-hub check.
+`python3 web/e2e/dispatched-line.py <preview URL> --shots <output directory>` checks the dispatched line the same way (#3700): one
+task and a plan of three, light/dark, each opening its own task in the side panel while In progress stays closed.
 
 ## Color hierarchy and quiet surfaces
 
@@ -309,12 +312,14 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   Any session or workspace pin, or any explicitly saved grouping (including To-do), selects the complete legacy list until the paged API can express those views (#6108).
   An absent or unrecognized grouping preference keeps paging; an explicit To-do choice is preserved even though To-do is the legacy default.
   The grouping shortcut also switches a mounted paged list immediately. Pin updates are reactive; removing the last pin returns to paging if no grouping was saved.
-  The fallback requests query-free `GET /sessions`, so pinned and grouped rows beyond the first page are included. It refreshes on session invalidation/reconnect events,
+  The fallback keeps a complete copy of the collection, so pinned and grouped rows beyond the first page are included (`lib/complete-sessions.ts`, #3759): its first read takes complete pages (`GET /sessions?summary=0&limit=200`, following `next_cursor`), and each later read only `since` its revision (changed and removed rows). Complete pages are read again only after `409 revision_expired` (a hub restart), when the copy was released, or from a hub that answers the paging query with its whole legacy list. Before #3759 every hint read the whole list again (about 17 times a minute, hundreds of KB each). It refreshes on session invalidation/reconnect events, except a `sessions_list` hint whose `revision` the copy already holds,
   keeps the last complete result while loading and retries failed reads after five seconds. Consumers share a credential-scoped snapshot, request and cooldown; a one-second grace after the last unmount permits sidebar/Agents-page handoff, then releases everything. Reset or credential changes invalidate immediately. Other views keep their bounded transport.
-  Normal invalidations coalesce into one trailing read no sooner than three seconds after the previous request finishes; new hints do not postpone that deadline. Initial reads and reconnects bypass the throttle, and quiet failure retries retain their five-second delay.
+  Normal invalidations coalesce into one trailing read no sooner than three seconds after the previous request finishes; new hints do not postpone that deadline. Initial reads and reconnects bypass the throttle, and quiet failure retries retain their five-second delay. A delta that changes nothing leaves the published snapshot as it is.
   Local row edits remain visible during refresh; marking fallback-only rows as seen sends each requested identity even when the detail cache has never loaded it.
   Paged state chips keep the last successful counts during refresh, scope changes and transient failures; a successful zero count still takes effect.
+  The paged list's controls use the same components as the complete list, with no native `<select>` / `<datalist>`: "Recently updated / Computer / Project / Space / Repo" is a segmented control ("Repo" switches to the full By repo tree, as before; personal agents: "Recently updated / Account"), the state chips match the quick filters (state mark + count), and picking a value is a pill that opens the design system's menu (radio rows, the busiest groups first, a count at the row's end; a project shows its folder name with the full path under it). Space adds a "computer" pill before it. Personal agents' provider filter is a `SearchField`.
   Screenshot fixture: `MOCK_SESSIONS_LIST=1` enables paging in `scripts/mock/mock_hub.py`; seed pins through its existing `/api/v1/pins` endpoint.
+  Session list reads: `node web/e2e/session-list-reads.mjs <web URL> --hub <mock URL>` counts the page's `GET /sessions` by kind during a quiet minute and a minute of hints (`docs/operations/testing.md`, "Session list reads").
   The grouping controls described below belong to the complete-list view.
   Below the Agents title and above the quick filters is a row of segments "To-do / Machine / Repo / Project / Status" (the full name, "By to-do"…, is each segment's accessible name and hover hint, #2812; it used to be the "By machine ⌄" dropdown right of the title); one click switches, and ⌘E / Ctrl+E cycles in the same order. Browsers that never picked one default to by to-do (#2812, by machine before, #1963); by to-do shows "Loading…" until the first to-do list arrives, instead of drawing every Agent under "Not on a to-do" first and moving them afterwards. Once picked (#1836) it is remembered for next time; a hub without to-dos shows no "To-do" segment, and a by-to-do choice shows by machine for now. The choice and each group's fold state are saved in the current browser.
   The segments choose the grouping; the **⋯** on the right of the title row (**Agent list options**; before #2812 it shared the "By machine ⌄" dropdown with the groupings) holds sorting and Collapse all / Expand all. Sorting (matching iOS / Mac `AgentSort`, `src/lib/agent-sort.ts`, stored in `persona.agentSort`): **State first** (default) keeps each group's own order; with **Recently updated**, Agents within each group are sorted by time only (working ones by `state_since`), and machines, spaces, tabs and repos are ordered by their newest Agent too (by repo, machines keep their original order, like iOS, so a whole section does not jump when another computer updates). By project, **Other agents** is sorted by time only; pinned spaces stay first and a repo's main worktree stays first; by to-do, only the Agents under each to-do are sorted by time. With **Recently updated** the **⋯** becomes a highlighted clock icon. By status hides sorting (the sections are the states).
@@ -615,6 +620,8 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   **Minutes** (a recording that is a meeting, `docs/assistant/meeting-minutes.md`) sits under the recording's facts: the title, time, place and attendees, then key points, decisions, action items and open questions. Each item's clock time scrolls the transcript to its line and highlights it.
   Each action item has **Add to to-dos**, and the remaining ones have **Add all**. Both go through `POST /api/v1/recordings/{id}/minutes/todos`; an item already added shows **Added**. **Copy** copies the minutes' Markdown. **Regenerate** (or **Make minutes** on a complete recording that has none) asks the hub to write them again.
   While they are being written the section says so and the page re-reads the detail every few seconds. Screenshots and browser checks with fixtures: `web/e2e/recording-minutes.mjs`.
+  A meeting Persona attends (#2981, `docs/assistant/meeting-minutes.md` "Attending a meeting") adds two rows to the facts: **Persona** with its role (Listener or Participant) and **Attending session**, which opens that session's chat (a Persona conversation, an Agent, or the main chat when none was named; plain text when the page does not know the main chat).
+  **Questions in the meeting** (`knowledge/RecordingAsks.tsx`) lists what was asked on the phone, oldest first: the question (typed, or heard in the room), its time, the answer or why there is none, whether it was meant to be read aloud, and the earlier meetings and projects it drew on, each opening its entry. A line above says how the attending session follows: live, catching up (`fed` below `next`), or the hub's `problem` (an unknown one as "Persona can't follow this meeting right now"). It reads `GET /api/v1/recordings/{id}/live` with the detail's credentials and manager, every 5 seconds while the recording is still being made and the page is shown, once afterwards; only for a recording with a role, or a meeting on a hub that lists `meeting_attendance` (asks outlive a role turned off), and only shown with a role or with questions. A `404` or `410` hides it without a word. It is read-only: asking stays on the phone. Screenshots and browser checks with fixtures: `web/e2e/recording-attendance.mjs`.
   Before removal, the confirmation explains that the entire affected relationship list on each entry becomes protected against automatic changes, including additions or removals of other relationships in those lists. Only the applicable removal delta is sent.
   Both authoritative details must confirm that the relationship is absent and both lists are protected under your ownership before success is shown. A rejected write can have partially changed the records: refresh both ends and keep the original correction available for idempotent retry even if its row disappears. Closing the dialog keeps an unfinished correction visible with a **Review correction** action, including after its related row disappears. If reading either end fails, retry verification first. An accepted request with failed or unchanged readback offers read-only verification, including when an older hub silently ignores the delta. Navigation, manager replacement and credential replacement retire the operation's controls and delayed results.
   When there is no cached list for the selected type and tag, show **Loading** below the search box until the list arrives, then display the type pills, selected type's count, tag filters and content together. This prevents the arriving count from wrapping the pills and shifting content down on mobile (#4047).
@@ -643,6 +650,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   General contains appearance (Match system / Light / Dark, theme color, text size; see "Theme color and text size" below), avatar, where the Persona assistant runs (models are on the Model configuration tab, #1291), and this browser (hub address, hub name, linked hubs, disconnect).
   Assistant (`settings/AssistantSettings.tsx`): On its own (opens scheduled tasks), About me (`PUT /assistant {notes}`, saved on Save or leaving),
   Memory (`/assistant/memory`: titles first use the Chinese titles from the MEMORY.md index; view / edit the whole file / delete, with a read-only index), Skills (`GET /skills`, skills on the computer running the assistant, read-only, `settings/Skills.tsx`), and Runs on (read-only; no model entry, models are under Model configuration › Main chat).
+  Meetings (#2981) picks `meeting_attendance_default` (Off / Listener / Participant), the role a meeting recording on the phone starts with; its footer says answers use meeting material only. It is there only when `GET /assistant` has the field (a hub or manager that attends meetings), is saved with `PUT /assistant` and, like the default permissions, counts only once the answer names this manager and echoes the role; otherwise the toast says the assistant did not confirm it.
   Claude Code and Codex (`settings/AgentSettings.tsx`): pick an online computer; allowlisted settings (toggle / dropdown / text) are immediately `PUT` when changed. "Apply to all online machines" is on by default.
   Each row's ⋯ restores the default (clearing a text field is also null) or pushes to all online machines; failures roll back.
   Claude Code also has **Live replies** for the shown computer (`settings/LiveReplies.tsx`, #1309): one switch, on by default, `GET` / `PUT /machines/{mid}/claude-live-replies {"on"}`, sent to every online computer too while "Change all online machines" is on; a refused change on the shown one goes back, an older hub (404) shows no group. Its footer says what it gains and costs: the web and the iPhone and Mac apps show replies sooner (the Apple apps draw an Agent's live text since #1309's Apple part, `docs/apple/ios.md` "An agent's live reply"), the computer's terminal shows them a few lines at a time, the hub keeps the switch (not `~/.claude/settings.json`, which the "Machines" group's footer is about), and the change reaches sessions started after it (`docs/integrations/claude-integration.md` "Live replies (MessageDisplay)"). The row is the shared `Row` with `wrapHint` (its hint wraps), and a failed read is `RowFailed` (`settings/SettingsParts.tsx`).
@@ -1301,6 +1309,28 @@ The web app can be installed on a phone's home screen / a computer's desktop and
 - **Settings › General › This browser › Install as app** (`lib/pwa.ts`): when the browser offers an install prompt (Chrome, Edge) it is an "Install" button;
   on iPhone / iPad it points to "Add to Home Screen" in Safari's share menu, Safari on Mac to **File › Add to Dock**, other browsers on http explain that https is needed, and the rest point to the browser menu. Already in a standalone window, it shows "Installed".
 
+## Sharing an Agent session (#3605)
+
+The Agent chat's **⋯** menu has **Share…** (`src/sharing/`), a dialog over the server sharing contract (#3604):
+the complete message catalog (paged, all history) with **All messages / From a message / Choose messages**, then
+**Include future messages** and **Include work details** (both off by default) and a lifetime of 1, 3, 7 or 30 days
+(default 3). Creating needs a sanitized preview and an explicit sensitivity confirmation; on an HTTP sharing origin the
+server's transport warning is shown and needs a second confirmation. The link appears once with **Copy**; the dialog
+lists existing links without tokens, narrows them (work details off, future off, shorter lifetime) without a new
+preview, and revokes after a destructive confirmation. Create is never retried automatically, every request names its
+manager with `X-Persona-Manager`, and responses that arrive after the session or manager changed are dropped.
+Sessions on a computer reached through another hub of the group are not shareable from the web yet.
+
+The public viewer is a separate document and build: `public-share/` with `vite.public.config.ts`, emitted to
+`dist/public-share/index.html` and `dist/public-share/share-assets/` and served by the hub only on the configured
+sharing origin. A build plugin fails when the emitted graph reaches anything outside `public-share/`, its own
+catalogs and the shared palette, so it has no sign-in, store, API client, service worker, manifest or telemetry.
+It renders escaped plain text (no HTML, links, images or cards), keeps work details collapsed, fetches with
+`credentials:"omit"`, `cache:"no-store"` and rejected redirects, keeps one request in flight, polls every 15 seconds
+(live) or 30 seconds (static), pauses in hidden tabs and hides old content until it revalidates, and clears on a
+404 or at local expiry. It stores neither the link nor the content. The main app's service worker passes `/share`,
+`/share-assets` and `/public-share` through untouched, so an installed app never answers a share link with its shell.
+
 ## Subscription usage (bottom of the sidebar, #2432)
 
 At the very bottom of the sidebar (below the Agents list): one thin bar for each of the two fullest subscription accounts, turning the warning color at ≥ 80%. Clicking opens a popover with one row per window per account (length, % used, bar, reset countdown, pace hint),
@@ -1482,7 +1512,7 @@ Conventions (languages, fallback, glossary) are in [i18n.md](../protocol/i18n.md
   Sources and terms are in the file header comments and `THIRD_PARTY_NOTICES.md`; agents whose terms are unclear get the first character rather than a drawn mark. Check: `scripts/test/web_agent_marks_e2e.py` (mock hub with `MOCK_AGENT_MARKS=1`).
 - Button text is always one line (`whitespace-nowrap`); when it doesn't fit, use an icon + `title`.
 - Source marks: where a sidebar agent was opened is an icon at its row's end, not a word (`SourceTag` in `Sidebar.tsx`, `sessionSource` in `lib/agent-groups.ts`).
-  A pane of a terminal engine (herdr, the Herdr App's and Orca's terminals) is a bare prompt (`run`: chevron and underscore, no frame) in `--source-terminal`; a desktop app's own chat
+  A pane of a terminal engine (herdr, the Herdr App's, Orca's and Tern's terminals) is a bare prompt (`run`: chevron and underscore, no frame) in `--source-terminal`; a desktop app's own chat
   (a Codex App thread, `space_kind: codex_app`; a Paseo agent, `host: paseo`; an Orca native chat, the `orca` runtime) is a framed window (`appWindow`) in
   `--source-desktop`; a Lark group (botmux) is Lark's own mark (`BrandMark`), a link to its topic when the row has one. Other runtimes and history no
   host lists get none. Each mark is `role=img` with its name as `aria-label` and `title` (`lib-agent-groups.source_*`), and the row's own tooltip names

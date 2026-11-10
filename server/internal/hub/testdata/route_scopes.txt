@@ -239,6 +239,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/phone/write-queue
 -                    GET /api/v1/pins
 -                    GET /api/v1/recordings
+-                    GET /api/v1/recordings/{id}/live
 agents.read          GET /api/v1/sessions
 agents.read          GET /api/v1/sessions/archived
 agents.read          GET /api/v1/sessions/{mid}/{sid}/info
@@ -435,6 +436,8 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 notify               POST /api/v1/notify
 -                    POST /api/v1/phone/runtime-cli
 -                    POST /api/v1/phone/write-queue/{id}/cancel
+-                    POST /api/v1/recordings/{id}/ask
+-                    POST /api/v1/recordings/{id}/live
 -                    POST /api/v1/recordings/{id}/minutes
 -                    POST /api/v1/recordings/{id}/minutes/todos
 agents.control       POST /api/v1/sessions
@@ -456,6 +459,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/subscriptions
 -                    POST /api/v1/subscriptions/-/dry-run
 -                    POST /api/v1/subscriptions/-/ui
+-                    POST /api/v1/subscriptions/{id}/generate
 -                    POST /api/v1/subscriptions/{id}/run
 -                    POST /api/v1/tabs/autoname
 -                    POST /api/v1/task-plans/{id}/dismiss

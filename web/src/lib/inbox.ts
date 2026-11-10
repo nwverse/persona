@@ -510,9 +510,9 @@ export function sections(items: InboxItem[], f: InboxFilter): InboxSections {
   return out;
 }
 
-/** The sidebar badge: unread open items, independent of their pending section. */
+/** The sidebar badge: unread open items in Needs you; reading never completes them. */
 export function badgeCount(items: InboxItem[]): number {
-  return items.filter((it) => !isDone(it) && !it.read).length;
+  return items.filter((it) => !isDone(it) && !it.read && statusOf(it) === "action").length;
 }
 
 /** The connectors with items in the list (GitHub…), one filter chip each, in the order they first come. */

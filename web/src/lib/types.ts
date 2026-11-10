@@ -110,6 +110,8 @@ export interface SessionCapabilities {
   approve?: boolean;
   terminal?: boolean;
   attach?: boolean;
+  /** Whether the runtime explicitly supports session model changes. */
+  model?: boolean;
   /** Closing the agent independently of terminal access. Older nodes retain terminal-only closing. */
   close?: boolean;
   /** The permission mode and effort chips can change it (session.modes, #1843): the node's word, absent from older nodes. */
@@ -282,6 +284,10 @@ export interface Session {
   background_count?: number;
   running_subagents?: number;
   running_workflows?: number;
+  /** Independent shell/Monitor count; unlike background_count, excludes workflows and subagents. */
+  background_tasks_count?: number;
+  /** Newest running workflow, compact metadata only (no agents, phases or tools). */
+  workflow_progress?: Workflow;
   parent_session_id?: string;
   root_session_id?: string;
   is_subagent?: boolean;

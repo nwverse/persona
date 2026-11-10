@@ -2148,6 +2148,10 @@ struct ChatView: View {
     /// The agent's pending cards, and in DEBUG the sample ones the screenshot switches add (`-showSampleQuestion YES`…).
     private var pendingCards: [PendingCards.Card] {
         var cards = model.interactions(for: key).map { PendingCards.Card(interaction: $0, enabled: model.canAnswer($0)) }
+        // A card answered in a terminal dialog of several questions stays, greyed, until the next one comes (#2970).
+        if let move = model.screenMoves[key], !cards.contains(where: { $0.interaction.kind == .screen }) {
+            cards.append(PendingCards.Card(interaction: move.card, enabled: false))
+        }
         #if DEBUG
         let samples: [(String, (SessionKey) -> Interaction?)] = [
             ("showSampleQuestion", Interaction.sampleQuestion), ("showSampleScreen", Interaction.sampleScreen),
@@ -2665,7 +2669,8 @@ struct ChatView: View {
         withAnimation(.smooth(duration: 0.35)) { chrome.collapse = 0 }
     }
 
-    /// The chrome folded away: back, and where you are ("app › leader · Chat") — tap it for everything again.
+    /// The chrome folded away: back, and the session's name as the open header says it — tap it for everything again,
+    /// where it runs included.
     private var compactChrome: some View {
         HStack(spacing: 0) {
             Button { back() } label: {
@@ -2686,7 +2691,7 @@ struct ChatView: View {
                             if !s.assistant { AgentMark(s, side: Theme.Size.markXS) } // its agent before its state (#6390)
                             StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
                         }
-                        Text(compactPlace).lineLimit(1).truncationMode(.middle)
+                        Text(compactTitle).lineLimit(1).truncationMode(.tail)
                     }
                 }
                 .animation(Theme.Motion.standard, value: model.connection.shown)
@@ -2698,7 +2703,7 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(model.connection.shown != .online ? String(localized: "\(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)), show title and tags")
-                                : String(localized: "\(compactPlace), show title and tags"))
+                                : String(localized: "\(compactTitle), show title and tags"))
             .accessibilityIdentifier("chat.compactTitle")
             .titleSaysLink() // the slim bar says Connecting… too: the shell's floating pill does not say it again
             Spacer(minLength: 0)
@@ -3303,9 +3308,10 @@ struct ChatView: View {
         withAnimation(Theme.Motion.standard) { pane = order[j] }
     }
 
-    private var compactPlace: String {
-        let place = [session?.spaceName, session?.slotLabel].compactMap { $0 }.joined(separator: " › ")
-        return (place.isEmpty ? title : place) + " · " + pane.title
+    /// The slim bar's words: what the session is, as the open header, the web and Android name it (#3631). Where it runs
+    /// is a tap away, on the open header's second line and in Session Info; the pane's name only off the chat.
+    private var compactTitle: String {
+        pane == .chat ? title : title + " · " + pane.title
     }
 
     /// A hub link asked for one of this chat's messages (AppModel.messageJump): the entry target from now; taken once.
