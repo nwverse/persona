@@ -74,6 +74,9 @@ type Settings struct {
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
+	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
+	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
+	Leaders []string `json:"leaders,omitempty"`
 }
 
 // FormerMain is a main conversation that was replaced, and until when it was the main one.

@@ -300,6 +300,7 @@ func RenderSnapshotWorkflow(w SnapshotWorkflow) string {
 // saying so first (assistant/context). Node puts what changed of it at the start of each message (TurnContext).
 type AssistantContext struct {
 	Main     bool
+	Leader   bool // a leader conversation (#3133): it supervises the tasks it hands out
 	Owner    string
 	Snapshot string
 }
@@ -423,15 +424,19 @@ func RenderAskTodoAnswer(a AskTodoAnswer) string { return render("assistant/ask_
 type Supervise struct {
 	Level   string
 	Entries []SuperviseEntry
+	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
+	// needs_user, told the main conversation.
+	Leader, Escalated bool
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
-// started).
+// started, escalated).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
 	Minutes         int                // how long it has waited (needs_you) or not moved (stalled)
 	Ask             string             // needs_you: what it asks
+	Recommend       string             // escalated: the option the leader recommends
 	DoneWhen        []string           // what done means
 	Round           int                // reworks so far
 	Machine         string             // where its agent runs (a name)
