@@ -329,8 +329,9 @@ test("an Agent for a provider that takes no MCP servers is created again without
   assert.ok(first.config.mcpServers.persona.env.PERSONA_SESSION_ID)
   assert.deepEqual(second.config, { provider: 'grok', cwd: '/tmp' }, 'the old configuration, no mcpServers')
   assert.notEqual(second.agentId, first.agentId, 'a new agent id: the failed one has a record in Paseo')
-  assert.equal(second.labels['persona.session'], `paseo-${second.agentId}`)
-  assert.equal(res.session.session_id, `paseo-${second.agentId}`)
+  assert.equal(first.labels['persona.session'], `paseo-${first.agentId}`)
+  assert.equal(second.labels['persona.session'], first.labels['persona.session'], 'the Persona session stays; only the Paseo agent is new')
+  assert.equal(res.session.session_id, first.labels['persona.session'])
   assert.ok(logs.some((l) => /provider grok takes no MCP servers; creating the agent again without the Persona tools/.test(l)), logs.join('\n'))
   await until('listed', () => rows().some((r) => r.session_id === res.session.session_id))
   assert.equal(fake.agents.has(first.agentId), false, 'the failed attempt left no agent')
@@ -348,6 +349,31 @@ test("an Agent for a provider that takes no MCP servers is created again without
   none.fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: "Provider 'grok' does not support MCP servers" } })
   await assert.rejects(call(none.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /does not support MCP servers/)
   assert.equal(none.fake.requestsOf('agent.create.request').length, 1)
+})
+
+test("a refusal that comes after the start was answered keeps the session id the row, the label and the tools named", async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const mcpConfig = join(dir, 'mcp.json')
+  writeFileSync(mcpConfig, JSON.stringify(MCP_JSON))
+  const { fake, node, rows } = await setup(t, { mcpConfig, noMcpProviders: ['grok'] })
+  const known = new Set(rows().map((r) => r.session_id))
+  fake.refuseDelay = 2000 // past the bridge's wait for the answer (callWait 1500 in setup)
+  const res = await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' })
+  const placeholder = res.session.session_id
+  const [first] = fake.requestsOf('agent.create.request')
+  assert.equal(fake.requestsOf('agent.create.request').length, 1, 'the row came while the first request was unanswered')
+  assert.equal(placeholder, `paseo-${first.agentId}`)
+  assert.equal(first.config.mcpServers.persona.env.PERSONA_SESSION_ID, placeholder)
+  await until('the second request', () => fake.requestsOf('agent.create.request').length === 2)
+  const second = fake.requestsOf('agent.create.request')[1]
+  assert.notEqual(second.agentId, first.agentId, 'a new Paseo agent')
+  assert.equal(second.config.mcpServers, undefined)
+  assert.equal(second.labels['persona.session'], placeholder, 'the same Persona session')
+  await until('listed under the row\'s id', () => rows().some((r) => r.session_id === placeholder))
+  assert.deepEqual([...fake.agents.values()].filter((e) => e.agent.provider === 'grok' && e.agent.labels['persona.session']).map((e) => [e.agent.id, e.agent.labels['persona.session']]),
+    [[second.agentId, placeholder]])
+  assert.equal(rows().filter((r) => !known.has(r.session_id) && r.session_id !== placeholder).length, 0, 'no second session id')
 })
 
 test('a new session without a usable MCP config is created as before, and the log says why', async (t) => {

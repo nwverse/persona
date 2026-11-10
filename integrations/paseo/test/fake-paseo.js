@@ -60,6 +60,7 @@ export async function startFakePaseo(t, o = {}) {
     subs: new Map(), // subscriptionId → { conn, kind, events?, agentIds? }
     handlers: {}, // a test's own answers: type → (msg) => payload | undefined
     refuse: undefined, // close code for the next hellos
+    refuseDelay: 0, // ms before an MCP refusal is answered (a creation slow to fail)
     noMcp: new Set(o.noMcpProviders ?? []), // providers that take no MCP servers (Paseo's requireExternalMcpSupport)
   }
   let n = 0
@@ -169,7 +170,10 @@ export async function startFakePaseo(t, o = {}) {
         const bad = mcpServersError(msg.config.mcpServers)
         if (bad) return reply(c, 'agent.create.response', { requestId: id, agent: null, error: `Invalid agent config: ${bad}` })
         if (Object.keys(msg.config.mcpServers ?? {}).length && f.noMcp.has(msg.config.provider)) {
-          return reply(c, 'agent.create.response', { requestId: id, agent: null, error: `Provider '${msg.config.provider}' does not support MCP servers` })
+          const refuse = () => reply(c, 'agent.create.response', { requestId: id, agent: null, error: `Provider '${msg.config.provider}' does not support MCP servers` })
+          if (f.refuseDelay) setTimeout(refuse, f.refuseDelay).unref()
+          else refuse()
+          return
         }
         const agent = agentSnapshot({ id: msg.agentId ?? randomUUID(), provider: msg.config.provider, cwd: msg.config.cwd, labels: msg.labels ?? {},
           model: msg.config.model ?? null, currentModeId: msg.config.modeId ?? null, thinkingOptionId: msg.config.thinkingOptionId ?? null,

@@ -654,12 +654,13 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     const prompt = typeof params.prompt === 'string' ? params.prompt : ''
     const workspaceId = workspaceFor(params.workspace_id, cwd)
-    let agentId, sessionId
-    // One creation request. An agent id is used for one only: Paseo keeps a record of a failed creation under its
+    // The Persona session is fixed for this start: the row handed to the node while Paseo is still creating, the label,
+    // the tools' PERSONA_SESSION_ID and the listed session are all it, whichever Paseo agent ends up holding it.
+    let agentId = randomUUID()
+    const sessionId = `${RUNTIME}-${agentId}`
+    // One creation request. A Paseo agent id is used for one only: Paseo keeps a record of a failed creation under its
     // agent id, and another request for the same id would meet it.
     const attempt = (withTools) => {
-      agentId = randomUUID()
-      sessionId = `${RUNTIME}-${agentId}`
       const mcpServers = withTools ? personaMcpServers(options.mcpConfig, sessionId, log) : undefined
       const req = { agentId, config: mcpServers ? { ...config, mcpServers } : config, labels: { [SESSION_LABEL]: sessionId } }
       if (prompt.trim()) req.initialPrompt = prompt
@@ -671,6 +672,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     const created = attempt(true).then(({ res, withTools }) => {
       if (!withTools || res?.agent || !MCP_UNSUPPORTED.test(res?.error ?? '')) return res
       log(`paseo: provider ${provider} takes no MCP servers; creating the agent again without the Persona tools`)
+      agentId = randomUUID()
       return attempt(false).then((again) => again.res)
     })
     created.then((res) => res?.agent && upsert(res.agent), () => {})

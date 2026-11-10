@@ -1,4 +1,4 @@
-// Persona's agent MCP tools for the agents the bridge creates (docs/integrations/paseo.md "Agent tools"). Paseo takes
+// Persona's agent MCP tools for the agents the bridge creates (docs/integrations/paseo.md "Create"). Paseo takes
 // stdio MCP servers in an agent's config.mcpServers and keeps them across reloads, so this reads the node's mcp.json
 // and gives each agent its own copy, naming the Persona session the agent belongs to.
 
