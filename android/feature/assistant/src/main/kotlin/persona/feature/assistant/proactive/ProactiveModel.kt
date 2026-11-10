@@ -292,6 +292,8 @@ internal class ProactiveStore(
     /** Says failures in the page's language. */
     private val say: ProactiveText,
     private val clock: () -> Instant = Instant::now,
+    /** Where a message goes when no page is listening to [messages] (a write that failed after the page was left). */
+    private val unheard: (String) -> Unit = {},
 ) {
     private val mutable = MutableStateFlow(ProactiveState())
     val state: StateFlow<ProactiveState> = mutable.asStateFlow()
@@ -415,14 +417,19 @@ internal class ProactiveStore(
         val result = try { attempt { api.freshTask(id) } } finally { mutable.update { it.copy(busy = it.busy - "fresh:$id") } }
         result.onSuccess { task ->
             put(task)
-            notices.tryEmit(say.string(R.string.assistant_proactive_fresh_done))
+            tell(say.string(R.string.assistant_proactive_fresh_done))
         }.onFailure { report(R.string.assistant_proactive_not_saved, it) }
         return result
     }
 
     /** [what] is a sentence with the reason as `%1$s` ("Couldn't save: %1$s"). */
     private fun report(@StringRes what: Int, error: Throwable) {
-        notices.tryEmit(say.string(what, failureReason(say, error)))
+        tell(say.string(what, failureReason(say, error)))
+    }
+
+    /** To the page when it is listening; otherwise (it was left while a write went on) to [unheard], not dropped. */
+    private fun tell(message: String) {
+        if (notices.subscriptionCount.value == 0 || !notices.tryEmit(message)) unheard(message)
     }
 }
 

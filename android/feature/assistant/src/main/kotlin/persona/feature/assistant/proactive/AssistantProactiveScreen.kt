@@ -66,7 +66,11 @@ fun AssistantProactiveScreen(
     val hostScope = LocalAssistantHost.current?.coroutineScope
     val pageScope = rememberCoroutineScope()
     val say = rememberProactiveText()
-    val store = remember(management, hostScope, say) { ProactiveStore(management.proactive(), hostScope ?: pageScope, say) }
+    // The shell's notice outlives the page: a write that fails after the page is left is still said.
+    val feedback = LocalAppFeedback.current
+    val store = remember(management, hostScope, say, feedback) {
+        ProactiveStore(management.proactive(), hostScope ?: pageScope, say, unheard = { feedback?.notice(it) })
+    }
     ProactiveScreen(store, onBack, onOpenConversation, modifier, machines, initialPage, onModelConfiguration)
 }
 
