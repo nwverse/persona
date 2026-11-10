@@ -119,6 +119,35 @@ const Today = createContext("");
 
 type LarkThreadProps = { chat: LarkChatRef; pinsOpen?: boolean; onPinsOpen?: (open: boolean) => void };
 
+/** Connector codes that say the chat itself can never be opened again: it was disbanded, or the signed-in account is
+ * no longer a member. Upstream outages keep their own codes and stay retryable. */
+const TERMINAL_CONVERSATION_CODES = new Set(["CONVERSATION_NOT_FOUND", "CONVERSATION_NOT_MEMBER"]);
+
+/** Whether the first page's failure means the conversation is permanently unavailable (a disbanded group, an app
+ * whose access was removed), as opposed to a transient gateway failure the reader can retry. The extension answers
+ * 404/403 with a terminal code; a bare 404/410 without a business code is treated as a gone resource too, while a
+ * hub-level `not_found` (an old route) keeps the ordinary error text. */
+export function conversationUnavailable(e: unknown): boolean {
+  if (!(e instanceof ApiError)) return false;
+  const code = (e.code ?? "").toUpperCase();
+  if (TERMINAL_CONVERSATION_CODES.has(code)) return true;
+  return (e.status === 404 || e.status === 410) && !code;
+}
+
+/** The empty state for a chat that can no longer be opened: an explicit explanation instead of a blank pane or a
+ * raw gateway error that only says "unavailable". */
+function ThreadUnavailable() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+      <span className="flex size-10 items-center justify-center rounded-full bg-field text-ink-3">
+        <Icon name="chat" size={18} />
+      </span>
+      <p className="text-[13.5px] font-medium text-ink">{t("inbox-larkthread.unavailable_title")}</p>
+      <p className="max-w-[320px] text-[12.5px] text-ink-3">{t("inbox-larkthread.unavailable_detail")}</p>
+    </div>
+  );
+}
+
 export function LarkThread(props: LarkThreadProps) {
   // whose Lark the chat is (an inbox item's manager; a chat opened from it is the same one's): every request below names it
   const outer = useItemManager();
@@ -139,6 +168,8 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   const focus = chat.focus;
   const [page, setPage] = useState<LarkPage | null>(null);
   const [error, setError] = useState("");
+  // The connector says the chat itself is gone (disbanded, access removed): ThreadUnavailable replaces the thread.
+  const [unavailable, setUnavailable] = useState(false);
   const [newerBusy, setNewerBusy] = useState(false);
   // The draft's quote comes back with the chat (lib/lark-chat.ts drafts); set while drawing, so the box never keeps
   // another chat's quote for a frame.
@@ -188,6 +219,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
     tracker.current = null;
     setPage(null);
     setError("");
+    setUnavailable(false);
     setFlash(null);
     setPinThread(null);
     setOpenTopic(null);
@@ -204,7 +236,11 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
         tracker.current = new LarkReadTracker(initialCursor(focus, messages, topic || Boolean(r.topic)));
         setPage({ ...r, messages });
       })
-      .catch((e) => live && setError(errorText(e)));
+      .catch((e) => {
+        if (!live) return;
+        if (conversationUnavailable(e)) setUnavailable(true);
+        else setError(errorText(e));
+      });
     return () => {
       live = false;
     };
@@ -534,6 +570,7 @@ function LarkThreadBody({ chat, pinsOpen = false, onPinsOpen }: LarkThreadProps)
   }), [feed, chat.group, refreshAround]);
 
   if (!page) {
+    if (unavailable) return <ThreadUnavailable />;
     return <div className="p-5">{error ? <p className="text-[12.5px] text-red">{error}</p> : <Loading label={t("inbox-larkthread.loading")} />}</div>;
   }
   const firstNew = focus ? page.messages.find((m) => comparePosition(m.position, focus) >= 0)?.id : undefined;
