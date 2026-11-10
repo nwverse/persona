@@ -125,7 +125,7 @@ func archiveSnapshot(s proto.Session) proto.Session {
 	}
 	return proto.Session{
 		MachineID: s.MachineID, SessionID: s.SessionID, Title: s.Title,
-		Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot,
+		Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
 		Agent: s.Agent, AgentLabel: s.AgentLabel, AgentName: s.AgentName,
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
@@ -218,22 +218,6 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 		list = append(list, s)
 	}
 	return list
-}
-
-// A later archive/restore supersedes an older delete tombstone. A subsequent
-// explicit delete still works, without a non-atomic write to two settings keys.
-func (svc *Service) agentArchiveChanges(machine string) map[string]time.Time {
-	out := map[string]time.Time{}
-	records := svc.agentArchives.snapshot.Load()
-	if records == nil {
-		return out
-	}
-	for _, rec := range *records {
-		if rec.Session.MachineID == machine {
-			out[rec.Session.SessionID] = rec.ChangedAt
-		}
-	}
-	return out
 }
 
 func (svc *Service) archiveStore() Store {

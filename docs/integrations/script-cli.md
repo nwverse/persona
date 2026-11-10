@@ -8,6 +8,11 @@ Let scripts, CI, long-running jobs, and programs that don't run in herdr reach t
 Inspired by the commands of the same name in moshi-hook. Like `personad hook`, both commands only talk to the local node (`~/.persona/node.sock`, 0600, same system user).
 They never touch the hub token and need no network configuration: if node is connected to the hub they work; if not, they follow the exit codes below.
 
+A resident node (Persona Link, the Mac's launchd node, a service node) still answers while its manager is away, in standby:
+`notify` is kept in `~/.persona/node-spool.jsonl` and sent when the manager is back (the command exits 0 at once; see `--strict` below).
+`ask` is told to retry during the hold (10 minutes after the manager was last connected) and gets its card if the manager is back within `nodeclient.ResumeWait` (2 minutes);
+past either, the phone counts as unreachable (exit code 4). Details: `../protocol/protocol.md` ("When the manager is away (resident nodes)").
+
 ## Commands and exit codes
 
 ```
@@ -21,7 +26,7 @@ personad notify "title" [body] [--silent] [--error] [--strict]
 | Exit code | `ask` | `notify` |
 | --- | --- | --- |
 | 0 | Approved (no options), or an option was picked (printed to stdout, one line) | Always 0 (best effort); with `--strict`, it means at least one push device or WebSocket connection was selected |
-| 1 | Denied; or "Hand back to computer" was tapped on the phone and there's no one to ask in the terminal | Only with `--strict`: the hub did not accept it (no node, hub not connected, hub too old), or no recipient was selected: `muted` (session muted), `no_device` (no reachable push device or capable WebSocket connection), `filtered` (all reachable recipients declined by notification preferences or desktop suppression) |
+| 1 | Denied; or "Hand back to computer" was tapped on the phone and there's no one to ask in the terminal | Only with `--strict`: the hub did not accept it (no node, hub not connected, hub too old), it was queued for later (the manager is away; it still goes out when the manager is back), or no recipient was selected: `muted` (session muted), `no_device` (no reachable push device or capable WebSocket connection), `filtered` (all reachable recipients declined by notification preferences or desktop suppression) |
 | 2 | Usage error (no question, too many options, invalid `--timeout`…) | Usage error (no title, more than two arguments…). This is a mistake in the script, so it is not covered by "best effort" |
 | 3 | Timed out, nobody answered | - |
 | 4 | The phone can't be reached: no node, node not connected to the hub, hub didn't accept it | - |
@@ -30,7 +35,8 @@ personad notify "title" [body] [--silent] [--error] [--strict]
 - On exit code 4 or "Hand back to computer", if stdin is a real terminal (not `/dev/null` or a pipe) and `--require-remote` is not set, it falls back to asking in the terminal: a numbered list of options (type the number or the option text),
   or `[y/N]` without options. EOF counts as deny. A timeout or a denial is an answer, so neither falls back to the terminal.
 - Without `--strict`, a failure only writes one line to stderr, `Not sent: <reason>` (localized), and the exit code stays 0, so a `set -e` script is never broken by a notification.
-- The "confirmation" of `--strict` means it was handed to push or a capable WebSocket connection (`{"sent":true}`), not that the phone displayed it: notification delivery has no receipt anyway (see `../protocol/protocol.md` ("Persistent connection notifications")).
+  A queued notification (`{"queued":true}`, a resident node in standby) writes nothing and exits 0; with `--strict` it writes `Not sent: <reason>` and exits 1, because nothing was sent yet.
+- The "confirmation" of `--strict` means it was handed to push or a capable WebSocket connection (`{"sent":true}`), not that the phone displayed it: notification delivery has no receipt anyway (see `../protocol/protocol.md` ("Notifications over the persistent connection (ws_notify)")).
 
 ## Path
 
@@ -38,21 +44,21 @@ personad notify "title" [body] [--silent] [--error] [--strict]
 personad ask / notify
   └─ node.sock  {"kind":"ask"|"notify","input":{…},"pane":"…","attempt":"…"}   one request / one reply per connection, one JSON line each
        └─ node (node/scriptcli.go)
-            ├─ ask    → hub request interaction.create (same path as hook) → blocks until answered / expired
-            └─ notify → hub request notify (deliverNotify in hub/notify_api.go, shared with POST /api/v1/notify)
+            ├─ ask    → manager request interaction.create (assistant/fleet_events.go, same path as hook) → blocks until answered / expired
+            └─ notify → passed on by the manager to the hub's notify (deliverNotify in hub/notify_api.go, shared with POST /api/v1/notify)
 ```
 
 node's replies:
 
 - `ask`: `{"status":"answered|denied|dismissed|timeout|unavailable|invalid","answer":"…","error":"…","retry":true}`.
-  `retry` means node is exiting (hub or node restart); the command reconnects to the next node with the same `attempt`, for at most `nodeclient.ResumeWait` (2 minutes), exactly like hook.
-- `notify`: `{"sent":true|false,"reason":"muted|no_device|filtered","error":"…"}` (the reason describes hub-side suppression).
+  `retry` means node is exiting (hub or node restart) or is in standby within the hold; the command reconnects to the next node with the same `attempt`, for at most `nodeclient.ResumeWait` (2 minutes), exactly like hook.
+- `notify`: `{"sent":true|false,"reason":"muted|no_device|filtered","queued":true,"error":"…"}` (the reason describes hub-side suppression; `queued` means a resident node in standby kept it and sends it when its manager is back).
 
 An old node doesn't know `ask` / `notify` (replies `{"error":"unknown kind"}`), and the command treats that as unreachable. With a new node and an old hub, the `notify` request fails with unknown method and is likewise treated as not sent.
 
-### What `ask` looks like on the phone
+### What `ask` looks like on clients
 
-It reuses existing card shapes, so **Android / web need no changes** (for answering cards without a session on iOS / Mac / watch, see "Attribution" below, #4059):
+It reuses existing question and permission card shapes. Cards without a session open directly on supported clients, including the web (#1882); see "Attribution" below.
 
 | Command | `interaction.kind` | Card |
 | --- | --- | --- |
@@ -71,7 +77,7 @@ node uses the "pane → session" table learned from hooks (`bindPane`) to find t
 
 - Found: the card / notification is attached to that session (`session_id`), the card's subtitle is the session title, tapping the notification opens that session, and `notify` sends nothing when that session is muted.
 - Not found (Claude Code never ran in the pane, no hook has fired yet, or it isn't in herdr): `session_id` is empty, the card subtitle is the name of the calling directory, and the notification subtitle is the machine name.
-  iOS / Mac / watch can still answer (#4059): cards without sessions do not check session-source approval permissions (`Interaction.canAnswer`), and Agents' "Needs You" lists them too ("Script" and directory name, same criteria as the badge).
+  iOS / Mac / watch (#4059), Android and web (#1882) can still answer: explicitly sessionless cards do not check session-source approval permissions. On the web, Overview and Inbox open `/requests/<id>` with the existing question or permission card; ordinary session cards still require that session's approval capability. New requests notify individually, using the device's existing notification preferences, and opening one uses the same request route.
   Tapping there or in the Inbox opens the card directly (no chat exists to open).
 - `ask` also carries the calling directory (`cwd`). `notify` carries no path.
 
@@ -81,7 +87,7 @@ node uses the "pane → session" table learned from hooks (`bindPane`) to find t
 Delivery goes through APNs (direct or via the push relay) and the persistent connection event of `ws_notify` (`kind: "alert"`). If neither channel selects a recipient, the hub returns `sent: false`: `no_device` when no device has a usable push route and no capable connection is online; `filtered` when reachable recipients exist but all are excluded by "Needs You", manager notification switches, "Phone Muted", or the open-desktop rule. A selection on either channel is enough for `sent: true`; asynchronous APNs or relay failures do not change that reply.
 
 - `--error`: `interruption-level: time-sensitive`, and the title gets a "⚠️ " prefix; the default is `active`.
-- `--silent`: no `sound` in `aps`. `notifyRequest` gained an optional `silent` field for this, which the HTTP API also accepts.
+- `--silent`: no `sound` in `aps`. `notifyRequest` gained an optional `silent` field for this, which the HTTP API also accepts. Through the push relay the phone takes the sound from the sealed `aps`, so it is quiet there too; only the "New message" fallback of a push that can't be opened rings (`../operations/push-relay.md`).
 - The title is at most 120 characters, the body at most 1000; anything longer is truncated in node, without an error.
   The push itself is bounded in bytes (3500 encoded), so the hub then cuts the body further, by characters with a trailing "…", until it fits (`fitBody`): 1000 emoji or escaped `<` `>` `&` are still delivered. Only a title too large on its own is refused (`notification is too large`). Extensions' `POST /api/v1/notify` is not cut: it still gets a 400 over the limit.
 

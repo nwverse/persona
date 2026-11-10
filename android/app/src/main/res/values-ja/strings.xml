@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_tab_inbox">受信トレイ</string>
+    <string name="app_tab_assistant">アシスタント</string>
+    <string name="app_tab_agents">Agents</string>
+    <string name="app_machines">コンピュータ</string>
+    <string name="app_sidebar">サイドバー</string>
     <string name="app_tab_settings">設定</string>
     <string name="app_demo_badge">体験</string>
     <string name="app_try_demo">ハブがない場合は体験モードへ</string>

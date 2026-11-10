@@ -137,9 +137,6 @@ func (h *Hub) awaitManager(ctx context.Context, limit time.Duration) bool {
 	return h.waitDevices(ctx) == nil
 }
 
-// applyDeviceStates is applyDeviceStatesFrom the manager that carries hub.json's machines.
-func (h *Hub) applyDeviceStates(st devicewire.States) { h.applyDeviceStatesFrom(devicesOwner, st) }
-
 // applyDeviceStatesFrom takes devices.state from manager owner: every machine it carries, in the apps' order. The
 // other managers' machines stay as they were, and only the machines owner carries are taken (ownership.go
 // machineOwner: another manager's, and a mesh member's from any manager but the carrier, are dropped). The apps get

@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/nwverse/persona/server/internal/host"
@@ -29,8 +30,8 @@ func (n *Node) startKind(ctx context.Context) string {
 	return n.defaultKind()
 }
 
-// checkStartHost refuses a start naming a host the machine does not enable, or one that cannot start sessions
-// (herdr-core); nothing is started. "" is the default host, always fine here (the empty set is refused later).
+// checkStartHost refuses a start naming a host the machine does not enable, or one that cannot start sessions; nothing
+// is started. "" is the default host, always fine here (the empty set is refused later).
 func (n *Node) checkStartHost(kind string) error {
 	if kind == "" {
 		return nil
@@ -46,9 +47,24 @@ func (n *Node) checkStartHost(kind string) error {
 		return nil // its runtime starts sessions (runtimecontrol.go)
 	}
 	if _, ok := n.hosts.Get(kind).(host.Launcher); !ok {
-		return refusal(engineMissing, fmt.Sprintf("%s 不支持从手机新开会话，这次没有发送。", name), nil)
+		return cannotStartRefusal(kind)
 	}
 	return nil
+}
+
+// launcherFor is the host of kind as a Launcher. One that cannot start sessions gets checkStartHost's refusal, so a
+// start on the machine's default host does not show "unsupported: <kind> cannot do this".
+func (n *Node) launcherFor(kind string) (host.Launcher, error) {
+	launch, err := hostCapFor[host.Launcher](n, kind)
+	if errors.Is(err, host.ErrUnsupported) {
+		return nil, cannotStartRefusal(kind)
+	}
+	return launch, err
+}
+
+// cannotStartRefusal refuses a start in host kind, which cannot start sessions; nothing is sent.
+func cannotStartRefusal(kind string) error {
+	return refusal(engineMissing, fmt.Sprintf("%s 不支持从手机新开会话，这次没有发送。", proto.EngineNames[kind]), nil)
 }
 
 // hostCapFor is the host of kind as capability C (hostCap for a start that named its host).

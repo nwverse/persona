@@ -22,7 +22,7 @@ import (
 // scan, sums it per minute and model for the last usageWindow, and reports changed minutes to the hub as "usage".
 // A node starts with the hub connection, so a fresh meter re-reads the window from the files and sends it whole
 // ("full"): nothing is stored, and restarting either side recounts the same numbers; the manager keeps the week
-// (docs/server/machines.md「Token 用量」).
+// (docs/server/machines.md "Token usage").
 //
 // Each bucket also says which launcher ran it (the session's, as Persona started it; "" for one typed in a terminal),
 // and a reply is counted once in the window even when it is in more than one file: a fork (Claude Code's
@@ -87,7 +87,18 @@ func (n *Node) usageFiles(cutoff time.Time) []string {
 }
 
 // meterUsage scans every usageEvery and reports what changed.
-func (n *Node) meterUsage(ctx context.Context) {
+func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
+	// A first full scan cannot be reattributed after offsets and reply IDs are consumed. Do not replace the hub's
+	// window until launcher state has loaded successfully (stateReady); a failed first try leaves this waiting until a
+	// later try on this connection loads it (reloadState), or the connection ends.
+	select {
+	case <-ctx.Done():
+		return
+	case <-stateLoaded:
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	m := newUsageMeter()
 	m.launcherOf = func(session string) string {
 		st, _ := n.state.get(session)
