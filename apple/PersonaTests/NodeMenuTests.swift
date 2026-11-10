@@ -112,6 +112,18 @@ import Testing
         #expect(!NodeMenu.launchableHere(Launcher(name: "codex", agent: "codex")))
     }
 
+    /// Run Agent Here opens the agent it started (#3287): the session `panes/agent` names, on the space's computer and
+    /// hub group; an answer that names none leaves the list in front.
+    @Test func runHereOpensTheSessionTheAnswerNames() {
+        let started = NodeMenu.startedChat(Data(#"{"session_id":"s9"}"#.utf8), on: MachineRef(group: "", id: "m"))
+        #expect(started == SessionKey(machineID: "m", sessionID: "s9"))
+        let elsewhere = NodeMenu.startedChat(Data(#"{"session_id":" s9 "}"#.utf8), on: MachineRef(group: "work", id: "m"))
+        #expect(elsewhere == SessionKey(group: "work", machineID: "m", sessionID: "s9"), "another group's computer keeps its group")
+        #expect(NodeMenu.startedChat(Data("{}".utf8), on: MachineRef(group: "", id: "m")) == nil)
+        #expect(NodeMenu.startedChat(Data(#"{"session_id":""}"#.utf8), on: MachineRef(group: "", id: "m")) == nil)
+        #expect(NodeMenu.startedChat(Data(), on: MachineRef(group: "", id: "m")) == nil, "an empty answer")
+    }
+
     @Test func rowMenuIsNotEqualWhenItsPaneItemsChange() {
         let actions = AgentRowMenu.Actions()
         let key = session("a").key

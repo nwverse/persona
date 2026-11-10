@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -24,6 +25,7 @@ const (
 	sigReport      = "report"      // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
+	sigAsk         = "ask"         // its agent's card came to the supervisor before the user (ask_route.go)
 )
 
 var (
@@ -57,6 +59,11 @@ type superviseSignal struct {
 	Step, Steps int
 	// Orphan: why nobody works on it (sigOrphaned): orphanError, orphanClosed or orphanOffline.
 	Orphan string
+	// To is the conversation it goes to when that is not digestTo's to say: a card's rung (sigAsk), the main
+	// conversation for a leader's escalated cards.
+	To string
+	// Cards: an escalated signal's cards the user was given (ask_escalate).
+	Cards []prompts.SuperviseAsk
 }
 
 const (
@@ -78,13 +85,19 @@ func (g superviseSignal) id() string {
 	if g.Kind == sigReport {
 		return g.Todo + "|" + g.Kind + ":" + g.Report
 	}
+	if g.Kind == sigAsk { // its cards with each rung are an entry of their own
+		return g.Todo + "|" + g.Kind + "@" + g.To
+	}
+	if g.Kind == sigEscalated && len(g.Cards) > 0 { // a leader's escalated cards, apart from its needs_user
+		return g.Todo + "|" + g.Kind + ":cards"
+	}
 	return g.Todo + "|" + g.Kind
 }
 
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigOrphaned: // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned: // started: the user waits to hear it
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -307,12 +320,17 @@ func (s *Service) superviseLoop(ctx context.Context) {
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
+	s.askTick(now) // cards held past their time go up a rung (ask_route.go)
+	routed := s.routedSessions()
 	for _, t := range s.todosOf(ctx, "*") {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
 		s.remedyWatch(ctx, t, now) // a failed start's kept tab expired (start_remedy.go)
 		for _, g := range watchSignals(t, s.taskAgents(ctx, t), now) {
+			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
+				continue // its card is with the supervisor as an ask already
+			}
 			s.signal(g)
 		}
 		if g, ok := s.orphanSignal(t); ok { // nobody works on it, as the minute pass found (tasks_orphan.go)
