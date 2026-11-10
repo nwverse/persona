@@ -5104,6 +5104,7 @@ PREFS = {"input": True, "done": "long", "live_activity": True, "lock_details": F
          "island": {"preset": "a", "left": "", "right": "", "machine": ""},
          # quiet hours (#5806): never set until a client sets them; MOCK_QUIET_HOURS=1 starts with 23:00–07:00 on
          "quiet": {"enabled": True, "start": "23:00", "end": "07:00"} if os.environ.get("MOCK_QUIET_HOURS") else {"enabled": False, "start": "", "end": ""}}  # one device is enough
+PREFS_FAIL = [os.environ.get("MOCK_PREFS_FAIL") == "1"]  # Settings › Notifications can't read the prefs (503, #1860); GET /mock/prefs_fail?on=0|1
 RESOLVED = []  # resolve calls, newest last (GET /mock/resolved)
 DEVICES = []  # POST /api/v1/devices, newest last (GET /mock/devices): each one's id, kind and push `features` (#2433)
 # The last client_hello's features, platform and version, and the X-Persona-Client of the last GET /api/v1/interactions
@@ -14912,7 +14913,12 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/kb_updates": return self.send_json({"updates": KB_UPDATES})
         if p == "/mock/inbox_drafts": return self.send_json({"drafts": INBOX_DRAFTS})
         if p == "/mock/inbox_bulk": return self.send_json({"requests": INBOX_BULK})
-        if p.startswith("/api/v1/devices/") and p.endswith("/prefs"): return self.send_json(PREFS)
+        if p == "/mock/prefs_fail":  # MOCK_PREFS_FAIL at run time: ?on=1 fails Settings › Notifications' read, ?on=0 lets Retry through
+            PREFS_FAIL[0] = q.get("on", ["1"])[0] == "1"
+            return self.send_json({"fail": PREFS_FAIL[0]})
+        if p.startswith("/api/v1/devices/") and p.endswith("/prefs"):
+            if PREFS_FAIL[0]: return self.send_json({"error": "mock: prefs unavailable"}, 503)  # #1860
+            return self.send_json(PREFS)
         if p == "/api/v1/pins": return self.send_json(PINS)
         if p == "/api/v1/mutes": return self.send_json({"spaces": [], "sessions": TREE_MUTED, "allowed": []})
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
