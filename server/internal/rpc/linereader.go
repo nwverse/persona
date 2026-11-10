@@ -55,6 +55,9 @@ func (s *lineReader) setErr(err error) {
 
 // Scan finds the next line, step for step as bufio.Scanner.Scan with ScanLines does.
 func (s *lineReader) Scan() bool {
+	// The last line goes now, as a Scanner's does when the next split finds none: kept while Scan waits for input, it
+	// would keep the buffer a long line grew (Bytes is valid only until the next Scan).
+	s.token = nil
 	for {
 		if s.end > s.start || s.err != nil {
 			data := s.buf[s.start:s.end]
