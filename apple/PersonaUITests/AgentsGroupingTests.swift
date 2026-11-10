@@ -140,6 +140,29 @@ final class AgentsGroupingTests: XCTestCase {
         }
     }
 
+    /// One agent row in every grouping (#3753): the weather widget's agent is drawn in the Display style (Avatar, the
+    /// default) whichever grouping is picked, By Repository included: an avatar row with its latest words, not a line of
+    /// the grouping's own.
+    func testOneAgentRowInEveryGrouping() {
+        launch(fresh: true)
+        XCTAssertTrue(says("repo"), "a fresh list is By Repository: \(menu.label)")
+        var heights: [String: CGFloat] = [:]
+        for g in ["repo", "space", "state", "machine", "recent"] {
+            if g != "repo" { choose(g) }
+            closeSearchIfNeeded()
+            let row = app.buttons.matching(NSPredicate(format: "identifier == 'agents.row' AND label CONTAINS %@", "给天气 App 加主屏幕小组件")).firstMatch
+            for _ in 0..<24 where !comfortablyVisible(row) { scrollContent() }
+            XCTAssertTrue(row.exists, "\(g): no row for the widget agent")
+            XCTAssertTrue(row.label.contains("小组件的时间线"), "\(g): the row does not say the agent's latest words: \(row.label)")
+            heights[g] = row.frame.height
+            shot("grouping-\(g)-row")
+            for _ in 0..<30 where !menu.isHittable { scrollContent(down: false) }
+            XCTAssertTrue(menu.isHittable, "back to the grouping menu")
+        }
+        // Avatar rows: two lines of words under the title (the tree's line was about 30 pt).
+        for (g, h) in heights { XCTAssertGreaterThan(h, 60, "\(g): the widget agent's row is \(h) pt tall") }
+    }
+
     /// Passive search stays unfocused while menus open, but an explicit search tap still opens and accepts text.
     func testSearchOpensOnlyWhenExplicitlyTapped() {
         launch(fresh: true)
