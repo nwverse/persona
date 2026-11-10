@@ -415,12 +415,58 @@
         }
       }
     },
+    "In Progress [Action Bar]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Progress"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "進行中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "进行中"
+          }
+        }
+      }
+    },
     "Just Finished": {
       "extractionState": "manual",
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Just finished" } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "刚做完待看" } },
         "ja": { "stringUnit": { "state": "translated", "value": "完了したばかり" } }
+      }
+    },
+    "Needs You [Action Bar]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs You"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要対応"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要你处理"
+          }
+        }
       }
     },
     "No computer shares its clipboard yet. Turn on clipboard sharing on a computer's page in Persona.": {
@@ -488,6 +534,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "用不了：%1$@"
+          }
+        }
+      }
+    },
+    "Nothing in progress right now": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing in progress right now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "進行中のものはありません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在没有进行中的事"
           }
         }
       }

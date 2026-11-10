@@ -2116,7 +2116,7 @@ struct ChatView: View {
     }
 
     /// Above the assistant's composer (docs/assistant/unified-entry.md): what the conversation's tasks ask, the @ list while
-    /// a mention is typed, the dock (the action bar on the phone, #2879), and the route chip.
+    /// a mention is typed, the action bar (#3393), and the route chip.
     @ViewBuilder private var taskFooter: some View {
         let conversation = key.sessionID
         let tasks = TasksStore.shared
@@ -2133,12 +2133,8 @@ struct ChatView: View {
         }
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
         VoiceCallHides(key: key) {
-            #if os(macOS)
-            TaskDock(conversation: conversation, computer: computerActivity)
-            #else
-            // The phone: Pending / Progress / Agents in the dock's capsules, each opening its tray (#2879).
-            AssistantActionBar(conversation: conversation, computer: computerActivity)
-            #endif
+            // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
+            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity)
             RouteChip(conversation: conversation)
         }
     }

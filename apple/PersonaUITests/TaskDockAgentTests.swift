@@ -1,8 +1,8 @@
 import XCTest
 
-/// The main conversation's agents opened by hand (#1113), on the phone in the action bar's trays (#2879): Progress lists
-/// the tasks and its All the board, Agents the agents with the waiting one first, and a tap opens the agent's page in
-/// the task's sheet. Against
+/// The main conversation's agents opened by hand (#1113), in the action bar's trays (#3393): In Progress lists the
+/// working tasks and the agent of its own at work, its All the board, Needs You the agent of its own that waits, and a
+/// tap opens the agent's page in the task's sheet. Against
 /// scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 and MOCK_TASKS_DOCK unset (four tasks, two agents) or
 /// =pair (one task, one agent) (PERSONA_MOCK_HUB; PERSONA_DOCK_MODE names which). With PERSONA_SHOTS set it writes the
 /// dock, the board and the agent's sheet there (PERSONA_DOCK_APPEARANCE names the simulator's appearance in the file).
@@ -26,23 +26,22 @@ final class TaskDockAgentTests: XCTestCase {
     }
 
     @MainActor func testAgentsFollowTheTasks() throws {
-        let pair = ProcessInfo.processInfo.environment["PERSONA_DOCK_MODE"] == "pair"
         let app = XCUIApplication()
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", url]
         app.launchPinned()
 
-        // Progress lists the conversation's tasks; Agents its agents, the ones of its own among them.
-        let progress = app.openActionTray("progress")
+        // In Progress lists the tasks going on (the widget fix among them).
+        let progress = app.openActionTray("running")
         let tasks = app.trayTasks
         let agents = app.trayAgents
-        let want = pair ? (tasks: 1, agents: 1) : (tasks: 4, agents: 2)
+        let want = (tasks: 1, agents: 1)
         app.waitForRows(tasks, atLeast: want.tasks)
         XCTAssertGreaterThanOrEqual(tasks.count, want.tasks, app.debugDescription)
         sleep(2) // the conversation above settles
         try shot(app, "dock")
 
-        // Progress' All: the board lists them under Needs You / Working.
+        // In Progress' All: the board lists them under Needs You / Working.
         let board = app.buttons["action-tray.board"]
         XCTAssertTrue(board.waitForExistence(timeout: 5), app.debugDescription)
         board.tap()
@@ -54,8 +53,8 @@ final class TaskDockAgentTests: XCTestCase {
         XCTAssertTrue(progress.waitForExistence(timeout: 5))
         sleep(1)
 
-        // Agents: the one waiting for the user (the photo sync) says so, first.
-        app.openActionTray("agents")
+        // Needs You: the agent of its own waiting for the user (the photo sync) says so.
+        app.openActionTray("needs-you")
         app.waitForRows(agents, atLeast: want.agents)
         XCTAssertGreaterThanOrEqual(agents.count, want.agents, app.debugDescription)
         XCTAssertTrue(agents.element(boundBy: 0).label.contains("需要你"), agents.element(boundBy: 0).label)

@@ -44,11 +44,11 @@ final class IPadTaskDetailTests: XCTestCase {
         app.launchArguments = ["-pairURL", url]
         app.launchPinned()
 
-        // The action bar's trays list them (#2879): Progress the tasks, Agents the agents.
-        let progress = app.openActionTray("progress")
+        // The action bar's trays list them (#3393): In Progress the working tasks, Needs You the agent of its own that asks.
+        let progress = app.openActionTray("running")
         let tasks = app.trayTasks
         let agents = app.trayAgents
-        XCTAssertTrue(tasks.firstMatch.waitForExistence(timeout: 20), "no task in Progress:\n\(app.debugDescription)")
+        XCTAssertTrue(tasks.firstMatch.waitForExistence(timeout: 20), "no task in In Progress:\n\(app.debugDescription)")
         sleep(2) // the conversation settles
         try shot(app, "conversation")
 
@@ -67,7 +67,7 @@ final class IPadTaskDetailTests: XCTestCase {
         sleep(1)
 
         // An agent of its own: the same page, under its own title (its chat's header, #3255).
-        app.openActionTray("agents")
+        app.openActionTray("needs-you")
         app.waitForRows(agents, atLeast: 1)
         let agent = agents.firstMatch
         XCTAssertTrue(agent.waitForExistence(timeout: 5), app.debugDescription)
