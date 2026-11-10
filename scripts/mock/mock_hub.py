@@ -31,7 +31,7 @@ def features():
     return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push",
-            "machine_rename"] + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
+            "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
                 ["terminal_control", "terminal_scroll", "terminal_click", "terminal_mouse"] if TERMINAL_CONTROL else []) + (
                 ["terminal_panes"] if os.environ.get("MOCK_TERMINAL_PANES") else []) + (["herdr_client"] + ([] if os.environ.get("MOCK_TERMINAL_FULL_NOFOCUS") else ["herdr_focus"]) if TERMINAL_FULL else []) + (
                 ["assistant_compact", "assistant_main_new"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
@@ -9105,7 +9105,16 @@ def paged_sessions(query):
     Changed fixtures expire cursors/revisions instead of retaining a delta journal.
     """
     rows = out_by_machine(all_sessions())
-    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not query:
+    # ?manager=<id> (feature sessions_manager): that manager's computers' sessions only, in the whole list, the pages
+    # and the counts; one the roster lacks is 404 no_manager. A hub from before the roster (MOCK_MANAGERS=0) ignores it.
+    if "manager" in query and os.environ.get("MOCK_MANAGERS") != "0":
+        named = query["manager"][0].strip()
+        if len(query["manager"]) != 1:  # (an empty value never gets here: parse_qs drops it; the hub answers 400)
+            return {"error": "manager must have exactly one nonempty value", "code": "invalid_query"}, 400
+        if not any(m["id"] == named and not m.get("installing") for m in MANAGERS["list"]):
+            return {"error": "no such manager: %r" % named, "code": "no_manager"}, 404
+        rows = [s for s in rows if s.get("manager") == named]
+    if os.environ.get("MOCK_SESSIONS_LIST") != "1" or not (set(query) - {"manager"}):
         return {"sessions": rows}, 200
     revision = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:16]
     fields = {"machine_id": "machine_id", "session_id": "session_id", "state": "state",
