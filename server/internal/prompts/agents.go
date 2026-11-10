@@ -190,6 +190,19 @@ type DispatchTask struct {
 
 func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }
 
+// RenderTaskLeader is what follows the prompt of a task whose agent is a task leader (agents/task_leader, #3656): that it
+// can hand direct workers to task_plan and how their reports reach it.
+func RenderTaskLeader() string { return render("agents/task_leader", struct{}{}) }
+
+// RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
+func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
+
+// RenderWorkerSupervise is the supervision message a task leader's agent gets about its workers (agents/worker_supervise,
+// assistant/task_leader.go): what each task of its own needs, from the same entries a conversation's message lists.
+func RenderWorkerSupervise(entries []SuperviseEntry) string {
+	return render("agents/worker_supervise", struct{ Entries []SuperviseEntry }{entries})
+}
+
 // AgentCloseoutRequired is what an agent is told when its stop is held for a missing closeout (#3612).
 type AgentCloseoutRequired struct {
 	Form     string // the closeout's form (closeout.Example)

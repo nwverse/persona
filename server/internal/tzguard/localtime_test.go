@@ -116,8 +116,26 @@ func machineZoneLines(path string) ([]zoneHit, error) {
 	if err != nil {
 		return nil, err
 	}
+	var siblings [][]byte
+	if bytes.Contains(source, []byte(".Local()")) {
+		entries, err := os.ReadDir(filepath.Dir(path))
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			other := filepath.Join(filepath.Dir(path), e.Name())
+			if other == path || e.IsDir() || !isSource(other) {
+				continue
+			}
+			text, err := os.ReadFile(other)
+			if err != nil {
+				return nil, err
+			}
+			siblings = append(siblings, text)
+		}
+	}
 	var hits []zoneHit
-	sc := bufio.NewScanner(bytes.NewReader(maskBooleanLocalCalls(source)))
+	sc := bufio.NewScanner(bytes.NewReader(maskBooleanLocalCalls(source, siblings...)))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for n := 1; sc.Scan(); n++ {
 		code, _, _ := strings.Cut(sc.Text(), "//") // comments may name it

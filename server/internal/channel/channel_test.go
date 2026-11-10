@@ -118,8 +118,10 @@ func TestRunCheck(t *testing.T) {
 	if s := r.Check(Look{Now: t0.Add(5 * time.Hour), Exists: true}); s.Do != Finish || !strings.Contains(s.Note, "先不等了") {
 		t.Fatalf("too long: %+v", s)
 	}
+	// A held run ends with a word as well: its progress card went back with its message, so an ending without a note
+	// would be a quiet one and nothing would be said anywhere.
 	held := &Run{Started: t0, Held: true}
-	if s := held.Check(Look{Now: t0.Add(3 * time.Hour), Exists: true}); s.Do != Finish || s.Note != "" || s.End != EndGaveUp {
+	if s := held.Check(Look{Now: t0.Add(3 * time.Hour), Exists: true}); s.Do != Finish || !strings.Contains(s.Note, "先不等了") || s.End != EndGaveUp {
 		t.Fatalf("held too long: %+v", s)
 	}
 }

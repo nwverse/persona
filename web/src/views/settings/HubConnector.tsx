@@ -51,15 +51,19 @@ function Mark({ id, size }: { id: string; size: number }) {
 
 // ── the rows on Settings › Connectors ────────────────────
 
-export function ConnectorList({ onOpen }: { onOpen: (id: string) => void }) {
+export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void }) {
   const [all, setAll] = useState<HubConnector[] | null>(null);
   const [error, setError] = useState("");
   const lark = useLarkOn();
   useEffect(() => {
     listConnectors()
-      .then((l) => (setAll(l), setError("")))
+      .then((l) => {
+        setAll(l);
+        onLarkCli?.(l.find((c) => c.id === "larkcli") ?? null);
+        setError("");
+      })
       .catch((e) => setError(errorText(e)));
-  }, []);
+  }, [onLarkCli]);
   const list = useMemo(() => all && otherConnectors(all, lark), [all, lark]);
   // with several managers, each one's connectors under its name (each has its own built-ins, docs/assistant/managers.md
   // "Clients"), and a row opens that manager's copy; one: as before
@@ -518,7 +522,16 @@ function SignInSections({ c, reload }: { c: HubConnector; reload: () => Promise<
   );
 }
 
-function SignInSteps({ c, reload, footer }: { c: HubConnector; reload: () => Promise<void>; footer: string }) {
+export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent", bare }: {
+  c: HubConnector;
+  reload: () => Promise<void>;
+  footer?: string;
+  startLabel?: string;
+  /** The start button's tone: the default accent, or quiet where signing in is a secondary action. */
+  startTone?: "accent" | "quiet";
+  /** Draw only the step content so a caller can place it inside its own section. */
+  bare?: boolean;
+}) {
   const [prompt, setPrompt] = useState<ConnectorPrompt | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -560,29 +573,28 @@ function SignInSteps({ c, reload, footer }: { c: HubConnector; reload: () => Pro
   // until the user has entered / scanned it.
   useStepPolling(isPolledStep(prompt) ? prompt : null, (step) => send(step, {}, true), prompt?.kind === "qr" ? 3 : 5);
 
-  if (!prompt) {
-    return (
-      <Group title={t("settings-hubconnector.sign_in")} footer={footer}>
-        <div className="px-4 py-3">
-          <Button tone="accent" busy={busy} onClick={() => void send("", {})}>{t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
-        </div>
-      </Group>
-    );
-  }
   const cancel = () => (setPrompt(null), setValues({}));
+  const body = !prompt ? (
+    <div className="px-4 py-3">
+      <Button tone={startTone} busy={busy} onClick={() => void send("", {})}>{startLabel ?? t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
+    </div>
+  ) : (
+    <SignInStep
+      name={c.name}
+      prompt={prompt}
+      values={values}
+      busy={busy}
+      isChannel={isChannel}
+      onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
+      onSubmit={() => void send(prompt.step ?? "", values)}
+      onRestart={() => (cancel(), void send("", {}))}
+      onCancel={cancel}
+    />
+  );
+  if (bare) return body;
   return (
     <Group title={t("settings-hubconnector.sign_in")} footer={footer}>
-      <SignInStep
-        name={c.name}
-        prompt={prompt}
-        values={values}
-        busy={busy}
-        isChannel={isChannel}
-        onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
-        onSubmit={() => void send(prompt.step ?? "", values)}
-        onRestart={() => (cancel(), void send("", {}))}
-        onCancel={cancel}
-      />
+      {body}
     </Group>
   );
 }

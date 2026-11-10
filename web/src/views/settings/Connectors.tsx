@@ -10,6 +10,7 @@ import { parseOwnedSub } from "../../lib/manager-choice";
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, mailSummary, signsInOnPhone, type MailAccount, type MailForm, type MicrosoftConfig } from "../../lib/agent-settings";
 import { t } from "../../i18n";
 import { api, enc, errorText } from "../../lib/api";
+import type { HubConnector } from "../../lib/connectors";
 import { ago } from "../../lib/format";
 import { accountTitle, type LarkAccount, type LarkAccountList } from "../../lib/lark-accounts";
 import { useLarkOn, useStore } from "../../lib/store";
@@ -37,6 +38,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   // Lark (the Lark gateway through /api/v1/lark/…) only on a hub that has it (feature `lark`); "Lark bot" is the hub's own.
   const lark = useLarkOn();
+  const [larkcli, setLarkcli] = useState<HubConnector | null | undefined>();
   // "feishu-bot" is not a hub connector: FeishuBot reads it and opens its own dialog.
   // `<id>@<manager>`: another manager's connector, opened from its extension's page (docs/assistant/managers.md "Clients")
   if (open === SENT_SUB) return (
@@ -57,8 +59,8 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
       </p>
       <Mail />
       {lark && <Feishu />}
-      <FeishuBot onChannel={onChannel} />
-      {hasConnectors && <ConnectorList onOpen={onOpen} />}
+      <FeishuBot onChannel={onChannel} larkcli={larkcli} onOpen={onOpen} />
+      {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} />}
       <Group anchor="sent">
         <Row icon="send" label={t("settings-sent.entry_label")} hint={t("settings-sent.hint")} onClick={() => onOpen(SENT_SUB)} />
       </Group>

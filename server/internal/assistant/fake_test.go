@@ -862,6 +862,9 @@ func newServiceOn(t *testing.T, f *fakeHub, st Store) *Service {
 func withSettings(t *testing.T, f *fakeHub, s *Service) *Service {
 	t.Helper()
 	f.fakeModel(t)
+	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
+	// which turns this off.
+	s.briefsOptional = true
 	if f.settings != nil {
 		setSettings(t, s, func(v *Settings) { *v = *f.settings })
 	}

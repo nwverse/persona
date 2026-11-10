@@ -382,7 +382,8 @@ func listTools(ctx context.Context) ([]map[string]any, error) {
 }
 
 func listToolsOnce(ctx context.Context) ([]map[string]any, error) {
-	line, err := dialNode(ctx, map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest()})
+	line, err := dialNode(ctx, map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
+		"pane": nodeclient.HookPane(os.Getenv)}) // the pane names the agent whose tools these are (a task leader's task_plan)
 	if err != nil {
 		return nil, fmt.Errorf("Persona node is not reachable: %w", err)
 	}

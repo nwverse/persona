@@ -716,6 +716,18 @@ var Points = map[string]Point{
 		}
 		return s.ID, checkShortcut(s)
 	}},
+	// iphone: operating the iPhones paired with the user's Macs over RemotePairing (only the built-in iphone,
+	// docs/extensions/iphone.md); the same contribution as computer's: an id and a name.
+	"iphone": {Name: "iphone", Namespace: "iphone", Version: 1, Item: func(raw json.RawMessage) (string, error) {
+		var c ComputerItem
+		if err := strict(raw, &c); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(c.ID) {
+			return c.ID, fmt.Errorf("iphone id %q: a-z0-9_-", c.ID)
+		}
+		return c.ID, nil
+	}},
 	"computer": {Name: "computer", Namespace: "computer", Version: 1, Item: func(raw json.RawMessage) (string, error) {
 		var c ComputerItem
 		if err := strict(raw, &c); err != nil {
