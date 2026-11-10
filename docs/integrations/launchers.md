@@ -195,6 +195,7 @@ A key bought for one computer (an isolated container the assistant runs on) shou
 - **Rolling upgrade**: a node without `launchers.catalog` (it answers `unknown method`) gets `launchers.managed` as before, but only with the providers in its scope, keys included, so on-demand and the own-service rule apply only once it is updated. An old manager keeps pushing `launchers.managed` to new nodes, which still take it (every entry there is full).
 - Per-computer keys live in their own setting `launchers.machine_keys` (`[{launcher, machine, key_sealed}]`, sealed and re-sealed with the providers' keys); deleting a provider deletes them.
 - Web: Settings › Model providers › a provider › “Devices” (`web/src/views/settings/ProviderScope.tsx`), grouped by harness in the list.
+- iOS / Mac: Settings › Model Providers › a provider › Computers (`apple/Persona/Views/Settings/ProviderComputersPage.swift`, the form and what a save sends in `apple/Persona/Views/Settings/ProviderScopeForm.swift`), a row next to Proxy in the wizard's Advanced, on the preset key step and in the older form; the detail page says the scope and how many computers have a key of their own, and the list groups by harness when there is more than one. Demo Mode takes scopes too. `-openProviderComputers all|selected|none|legacy|keys|api` opens a made-up provider's page on the hub's computers (`new` with `-openProviderWizard models`).
 
 ## Parameters on the launcher page (`node/launcherprobe.go`)
 
