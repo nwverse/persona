@@ -18,15 +18,14 @@ import (
 
 // userOnlyWords mark a step only the user may let an agent take, whatever its task says: it is seen by other people,
 // deletes, costs money or changes production.
-var userOnlyWords = []string{"发消息", "回复", "评论", "comment", "send", "发送", "删除", "delete", "购买", "付费", "续费", "充值",
-	"生产", "production"}
+var userOnlyWords = []string{"发消息", "回复", "评论", "comment", "send", "发送", "删除", "delete", "购买", "付费", "续费", "充值", "生产", "production"} // i18n-ignore: matched
 
 // ownWriteWords mark a reversible write of the agent's own (pushing its branch): a dispatched task may do it without
 // naming it.
-var ownWriteWords = []string{"push", "推送", "推到"}
+var ownWriteWords = []string{"push", "推送", "推到"} // i18n-ignore: matched
 
 // negations before a word in the task text say not to do it ("不要发布").
-var negations = []string{"不要", "不用", "不得", "禁止", "别", "勿", "不", "don't", "do not", "never", "not "}
+var negations = []string{"不要", "不用", "不得", "禁止", "别", "勿", "不", "don't", "do not", "never", "not "} // i18n-ignore: matched
 
 // taskAuthorizes: todo text (its title and notes, as the user or the main conversation wrote it) authorizes step:
 // none of step's risky words is the user's alone, and each one that is not the agent's own reversible write is in the
@@ -69,7 +68,7 @@ func mentionedToDo(text, word string) bool {
 		before := text[:at]
 		for n := 0; n < 8 && before != ""; n++ { // at most 8 runes back, within its clause
 			r, size := utf8.DecodeLastRuneInString(before)
-			if strings.ContainsRune("，。；：！？,.;:!?\n", r) {
+			if strings.ContainsRune("，。；：！？,.;:!?\n", r) { // i18n-ignore: clause punctuation
 				break
 			}
 			before = before[:len(before)-size]
