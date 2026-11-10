@@ -10793,6 +10793,9 @@ PERSONAL_HIDDEN = {}  # session id -> when (ms)
 PERSONAL_PREFS = {"pins": [], "view": {}, "sections": [], "assign": {}}
 PERSONAL_PREF_FAIL = {"status": 0}
 
+def personal_prefs():
+    return dict(PERSONAL_PREFS, hidden=dict(PERSONAL_HIDDEN))
+
 def personal_sources():
     state = PERSONAL_STATE["state"]
     if state == "none": return []
@@ -15096,10 +15099,10 @@ class H(BaseHTTPRequestHandler):
             for client in list(CLIENTS.values()):
                 try: client["send"]({"type": "agents", "session_ids": []})
                 except Exception: pass
-            return self.send_json(dict(PERSONAL_STATE, hidden=sorted(PERSONAL_HIDDEN), prefs=PERSONAL_PREFS, prefs_fail=PERSONAL_PREF_FAIL["status"]))
+            return self.send_json(dict(PERSONAL_STATE, hidden=sorted(PERSONAL_HIDDEN), prefs=personal_prefs(), prefs_fail=PERSONAL_PREF_FAIL["status"]))
         if p == "/api/v1/agents/prefs":
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
-            return self.send_json(PERSONAL_PREFS)
+            return self.send_json(personal_prefs())
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
@@ -15566,9 +15569,15 @@ class H(BaseHTTPRequestHandler):
             if os.environ.get("MOCK_PERSONAL_UPGRADE"): return self.send_json({"error": "use retained local preferences"}, 404)
             if PERSONAL_PREF_FAIL["status"]:
                 return self.send_json({"error": "mock preference save failed"}, PERSONAL_PREF_FAIL["status"])
+            body = json.loads(self.last_body or b"{}")
+            body.pop("hidden", None)  # only hide / unhide may change this, as on the hub
+            body.pop("updatedAt", None)
             PERSONAL_PREFS.clear()
-            PERSONAL_PREFS.update(json.loads(self.last_body or b"{}"))
-            return self.send_json(PERSONAL_PREFS)
+            PERSONAL_PREFS.update(body)
+            for c in list(CLIENTS.values()):
+                try: c["send"]({"type": "agents.prefs"})
+                except Exception: pass
+            return self.send_json(personal_prefs())
         if p.startswith("/api/v1/assistant/conversations/" + ASK1 + "/always/") and self.command == "DELETE":
             key = p.rsplit("/", 1)[-1]
             ALWAYS_GRANTS[:] = [g for g in ALWAYS_GRANTS if g["key_hash"] != key]
