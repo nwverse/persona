@@ -2941,6 +2941,9 @@ if os.environ.get("MOCK_REWIND"):
         it("user", "text", 60, text="继续"), it("assistant", "text", 55, text="把 `fetchAll` 改成了 `loadAll`。"),
         it("user", "text", 40, text="把 tmp 也改了"), it("assistant", "text", 35, text="`tmp` 已经改成 `cached`。"),
         it("user", "text", 20, text="继续"), it("assistant", "text", 15, text="CI 绿了，可以合。")]
+    if os.environ.get("MOCK_REWIND") == "safeguards":
+        ITEMS[REVIEW][-2]["text"] = "> Example quote\n\nRevise this paragraph"
+        ITEMS[REVIEW][-1]["text"] = "API Error: Opus 5.5's safeguards flagged this message. Details: [frontier_llm]"
 # MOCK_WORKFLOW=1 (#3436): the Workflow calls that launched the review agent's runs, each drawn as its run's card (the
 # parity-audit one in a turn the hub folds: the app fetches that fold for the card), and each agent's own conversation.
 if os.environ.get("MOCK_WORKFLOW") == "1":
@@ -11006,10 +11009,26 @@ def mock_denied(p, q):
 
 
 _mock_files_tree = mock_files
+# MOCK_GIT_READ_FAIL=1 (#1889): the first Git status read answers, every later status read and every page of older
+# commits fails as the hub answers for a computer that went offline (503, its own sentence), to see the Git tab say so;
+# GET /mock/git-read?reset=1 lets the next status read answer again.
+GIT_READ_FAIL = {"reads": 0}
+
+
+def mock_git_read_fail(p):
+    if not os.environ.get("MOCK_GIT_READ_FAIL") or not p.startswith("/api/v1/machines/"): return None
+    what = "/".join(p.split("/")[5:])
+    if what == "git/status":
+        GIT_READ_FAIL["reads"] += 1
+        if GIT_READ_FAIL["reads"] == 1: return None
+    elif what != "git/log":
+        return None
+    return {"error": "This computer is offline. Make sure it’s on and connected to the internet and that Persona Link is running, then try again.",
+            "code": "node_unreachable", "delivered": "none"}, 503
 
 
 def mock_files(p, q):
-    answer = mock_denied(p, q) or mock_above_home(p, q) or _mock_files_tree(p, q)
+    answer = mock_git_read_fail(p) or mock_denied(p, q) or mock_above_home(p, q) or _mock_files_tree(p, q)
     if answer and TIME_OFFSET and answer[1] == 200: answer = (mock_offset_times(answer[0]), 200)
     return answer
 
@@ -14097,6 +14116,9 @@ class H(BaseHTTPRequestHandler):
             if "pr_fail" in q: GIT_W["pr_fail"] = q["pr_fail"][0] or None
             if q.get("gone"): GIT_W.update(upstream="origin/" + GIT_W["branch"], ahead=0, gone=True)
             return self.send_json({"branch": GIT_W["branch"], "ahead": GIT_W["ahead"], "files": len(GIT_W["files"])})
+        if p == "/mock/git-read" and os.environ.get("MOCK_GIT_READ_FAIL"):
+            if q.get("reset"): GIT_READ_FAIL["reads"] = 0
+            return self.send_json(GIT_READ_FAIL)
         if p == "/mock/git-pull" and os.environ.get("MOCK_GIT_PULL"):
             if "mode" in q:
                 GIT_PULL_STATE.update(behind=28, mode=q["mode"][0], pulls=0)
@@ -16892,7 +16914,7 @@ MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装
 MOCK_HELP.append("MOCK_MANAGER_COMMANDS=1  设置 › 管理者：新建 / 换个地方装的回答带安装命令（commands.service / docker）；MOCK_MANAGERS=0 是还没有名册的旧 hub（/api/v1/managers 404）")
 MOCK_HELP.append("MOCK_SENT=1|empty|nodb|forbidden|old  Settings > Sent as you (#5278, scripts/mock/sent_ledger_mock.py): 1 is about 70 made-up rows (four ways through the gate, one text of 4000 characters), empty has none, nodb is 503 no_database, forbidden 403, old a hub from before the ledger (404 with no code)")
 MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a Feishu app and a WeChat account (#5826)")
-MOCK_HELP.append("MOCK_REWIND=1  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
+MOCK_HELP.append("MOCK_REWIND=1|safeguards  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")

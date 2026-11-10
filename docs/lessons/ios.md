@@ -1580,3 +1580,11 @@ A worktree's display name and its Agents' conversation names are different comma
   sides start and end with aside first (a typical edit leaves a few lines to compare), maps lines to integers, and above
   1,000 lines in between draws them as removed then added instead. `TextCompare` (document versions) caps each side at
   20,000 lines only, far more than a phone has memory for when two big versions share little; not changed yet.
+
+## A read the user asked for must say when it fails (2026-11-10, #1889)
+
+- The Git tab's load paths kept a failure quiet once a status was shown (`if status == nil && !live`), and Load Earlier
+  Commits used `try?`: a pull to refresh or ⌘R over a stale status, or a failed page of history, looked exactly like
+  "nothing new" or "no earlier commits". Keep the quiet path only for the automatic live refresh; a read the user started
+  says it failed over what stays shown (a notice with Retry, or the button itself turning into Try Again). Decide it in a
+  small pure type (`GitReadFailure`) so a test pins which case is quiet.
