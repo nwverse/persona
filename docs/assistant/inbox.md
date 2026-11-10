@@ -474,12 +474,15 @@ To-dos do not store a separate tree. Code: `assistant/inbox_parent.go`.
   A history item memory no longer holds still opens (`GET /api/v1/inbox/{id}` reads its row, read-only) and can be reopened (`/{id}/done` with `done:false`, `/bulk` `reopen`,
   `/done` with `done:false` load its row into memory first); filing it again finds no item (404 / `missing`), as before. Without a database there is nothing to fall back to.
   Deleting a source's data (`inbox.forget`) deletes its history rows too.
+- **Days** (#2967): `GET /api/v1/inbox/done/days?tz=` counts the history per calendar day in the zone the app names (Postgres's `AT TIME ZONE` on `done_at`, so a day follows the zone's offset on its date; a manager without a database counts what it holds). With `sources=all` it reads only `done_at` from `inbox_items_open`. The apps' Done lists every day's count from it and jumps to a day with `GET /api/v1/inbox/done?before=<the day's end>` and no `before_id`, which lists the items done before that moment.
 - **Storage** (#2779, manager migration `0471`): `inbox_items.data` is `json` compressed with lz4, the bytes the manager wrote; every reader unmarshals them in Go,
   so the start read no longer turns jsonb back into text. `source` is a generated column of `data->>'source'` with its own index, which `DeleteInboxSource` reads
   instead of every document. `inbox_items_open` is `(done_at, id)`, so an upsert of an open item changes no indexed column and can be a HOT update.
   Writes still need valid JSON without `\u0000` in a string, as with jsonb: computing `source` refuses them (`docs/lessons/server.md`, "Inbox rows as json").
   A server built without lz4, or a Postgres before 14, gets the same rewrite with the default compression. The migration also adds `jsonb_typeof(json)`, so the
   done page of a build from before it still runs if a hub goes back to that build (`docs/operations/hub-restart.md`); it can be dropped once no such build can run.
+  The start read (`InboxItems`) has no `ORDER BY` (the manager keys the items by id) and hands each row to the manager straight from the driver's buffer,
+  where it is decoded; the rows are never collected as bytes first. A read that fails midway takes nothing in, as before.
 - Read elsewhere (Lark / another mail client): mark `read`; non-Needs you items become done (`done_by=read`). Needs you remains open, but unread count becomes zero and me / everyone mention flags clear (no longer unread mentions). Rule-tiered items are retiered using current rules after reading; no longer Needs you means done.
   Already-read open items with remaining unread count or stale rule tiers (read before a rule change) are reconciled next round (#798).
 - A reply by me in Lark (latest chat message is mine, newer than the item) handles it (`done_by=replied`).
@@ -650,6 +653,12 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   Undo takes it back (a typed ask goes back into the field), View sends it at once and opens the conversation; left alone it goes and the toast says where, with View. Sending
   never leaves the page. The last target is remembered (`inbox.handOffTarget`); an Agent no longer listed falls back to Main Chat. "Also mark as done" keeps the targets' defaults.
   The Mac and the iPhone's source pages (whose own reply composer sits at the bottom) keep the sheet, which opens the conversation after sending.
+  **Per source** (#2121, `InboxHandOffMemory`, shared cases in `spec/fixtures/inbox/handoff_memory.json`), the bar and the sheet remember where an item went:
+  - **Key:** the item's source plus its most specific mute option (`repo`, else `chat`, else `sender`), in the hub group.
+  - **Next item from that source:** starts on that target, marked **Last time**. Nothing is sent until the user sends. An item without one of those options starts as before (the bar's last target, the sheet's Main Chat).
+  - **The remembered Agent can't take it now** (it has ended, can't take messages or its computer is offline: the same test as the Agents offered): Main Chat stands in, with a line saying so.
+  - **Visible Mark as Done:** a preselected Agent turns Mark as Done on, so the bar's toast says "· marking done" / "· marked done" and the sheet shows its toggle.
+  - **Storage:** local to the device, ids only, the 200 most recent sources, not synced, and forgotten with the group (`forgetGroups`, `unpair`).
   iOS and Mac (`InboxHandOffModel`) send it with one `client_id` per hand-off. Whenever the answer leaves open whether the text went (no answer or a timeout, the connection lost
   midway, a 5xx without a `code` from something in front of the hub or from the hub unable to keep its receipt, `assistant_in_doubt`, `delivered: unknown` or `yes`, the node lost
   without `delivered: none`, a pending (`202 {"state":"pending"}`) or unknown receipt), the sheet says to check the chat before sending it again, and the same ask sent again is the
