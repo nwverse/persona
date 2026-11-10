@@ -225,3 +225,123 @@ func TestMinutesDaysEffective(t *testing.T) {
 		t.Fatalf("MinutesDaysFor(0, 0) = %d", got)
 	}
 }
+
+// A live log read before a trim is not written back after it, and none is written to a trimmed recording at all: the
+// trim keeps no live log (putLive).
+func TestRecordingTrimKeepsNoLiveLog(t *testing.T) {
+	e := goldenEngine(t, nil)
+	e.RecordingDaysFunc = func() int { return 14 }
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, goldenZone)
+	start := now.AddDate(0, 0, -20)
+	u := meetingUpload(1, start, "a transcript line")
+	u.Attendance = AttendanceListener
+	putRecording(t, e, recID, u, start)
+	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Start: 1, End: 2, Text: "secret live line"}}); err != nil {
+		t.Fatal(err)
+	}
+	putMeetingMinutes(t, e, recID, Minutes{Version: 1, Revision: 1, Title: "Design review", Markdown: "# Design review"})
+	ask := func(l *Live) {
+		l.Asks = append(l.Asks, LiveAsk{ID: "q1", Question: "What was decided?", State: "pending"})
+	}
+	kept := func(when string) {
+		t.Helper()
+		if names := recordingFileNames(t, e, recID); !slices.Equal(names, trimKept) {
+			t.Fatalf("%s: a trimmed recording keeps %v", when, names)
+		}
+		l, r, err := e.LiveRead(recID)
+		if err != nil || !r.Trimmed() || r.Attendance != "" || len(l.Segments) != 0 || len(l.Asks) != 0 {
+			t.Fatalf("%s: live %+v, recording %+v, %v", when, l, r, err)
+		}
+	}
+
+	// The trim lands between the live log's read and its write.
+	_, err := e.LiveUpdate(recID, func(l *Live, r Recording) error {
+		if r.Attendance == "" || len(l.Segments) != 1 {
+			t.Errorf("read before the trim: %+v %+v", l, r)
+		}
+		if n := e.PruneRecordings(now); n != 0 {
+			t.Errorf("pruned %d, want it trimmed", n)
+		}
+		ask(l)
+		return nil
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an update across the trim: %v", err)
+	}
+	kept("across the trim")
+
+	// After it: an update stores nothing, an append is refused as not attending.
+	if _, err := e.LiveUpdate(recID, func(l *Live, _ Recording) error { ask(l); return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an update after the trim: %v", err)
+	}
+	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Start: 3, End: 4, Text: "another line"}}); !errors.Is(err, ErrNotAttending) {
+		t.Fatalf("an append after the trim: %v", err)
+	}
+	if err := e.Store.goneError(recID); !errors.Is(err, ErrNotAttending) {
+		t.Fatalf("why a trimmed recording takes no live log: %v", err)
+	}
+	kept("after the trim")
+}
+
+// A trim cut short (meta.json written, the transcript's files still there: a crash, a failed removal) is finished on the
+// next pass, also once recording_days made longer lets the recording back in the window; a whole recording there is
+// left alone.
+func TestRecordingTrimFinishedWithinWindow(t *testing.T) {
+	e := goldenEngine(t, nil)
+	days := 14
+	e.RecordingDaysFunc = func() int { return days }
+	var indexed []string
+	e.Index = func(kind, id, _ string, _ Tagging, _ string, _ time.Time) { indexed = append(indexed, id) }
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, goldenZone)
+	start := now.AddDate(0, 0, -20)
+	const whole = "66666666-6666-4666-8666-666666666666"
+	putRecording(t, e, recID, meetingUpload(1, start, "orchardword transcript line"), start)
+	if err := e.Store.PutSummary(KindRecording, recID, "summary from the transcript"); err != nil {
+		t.Fatal(err)
+	}
+	putMeetingMinutes(t, e, recID, Minutes{Version: 1, Revision: 1, Title: "Design review", Markdown: "# Design review\n\n- quasarminutes decision"})
+	putRecording(t, e, whole, meetingUpload(1, start, "wholeword transcript line"), start)
+	putMeetingMinutes(t, e, whole, Minutes{Version: 1, Revision: 1, Title: "Planning", Markdown: "# Planning"})
+	wholeFiles := recordingFileNames(t, e, whole)
+
+	// The crash: the trim wrote meta.json and nothing more.
+	r := recordingNow(t, e, recID)
+	e.Store.recFilesMu.Lock()
+	err := e.Store.putTrimmedMeta(r, now)
+	e.Store.recFilesMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := recordingFileNames(t, e, recID); !slices.Contains(names, "transcript.md") {
+		t.Fatalf("set up: %v", names)
+	}
+	days, indexed = 60, nil
+	if n := e.PruneRecordings(now); n != 0 {
+		t.Fatalf("pruned %d", n)
+	}
+	if names := recordingFileNames(t, e, recID); !slices.Equal(names, trimKept) {
+		t.Fatalf("a trim cut short keeps %v", names)
+	}
+	d, err := e.Get(KindRecording, recID, 12000)
+	if err != nil || len(d.Segments) != 0 || d.Summary != "" {
+		t.Fatalf("detail %+v %v", d, err)
+	}
+	if res := e.Find("orchardword", 10); len(res) != 0 {
+		t.Fatalf("the transcript is still found: %+v", res)
+	}
+	if res := e.Find("quasarminutes", 10); len(res) != 1 || res[0].Entry.ID != recID {
+		t.Fatalf("find the minutes: %+v", res)
+	}
+	if !slices.Equal(indexed, []string{recID}) {
+		t.Errorf("indexed %v, want the trimmed one again", indexed)
+	}
+	if names := recordingFileNames(t, e, whole); !slices.Equal(names, wholeFiles) || recordingNow(t, e, whole).Trimmed() {
+		t.Fatalf("a whole recording within the window changed: %v", names)
+	}
+
+	// Finished: later passes change nothing.
+	indexed = nil
+	if n := e.PruneRecordings(now.Add(time.Hour)); n != 0 || len(indexed) != 0 {
+		t.Fatalf("again: pruned %d, indexed %v", n, indexed)
+	}
+}

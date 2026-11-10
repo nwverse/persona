@@ -31,7 +31,8 @@ func (s *Store) hasMinutes(id string) bool {
 
 // trimRecording trims recording r (as read under recMu, which the caller holds) at now; false when there was nothing
 // left to do (trimmed before). meta.json is written first and durably, so a crash before the files go leaves a
-// recording already trimmed, whose files the next pass removes.
+// recording already trimmed, whose files the next pass removes (PruneRecordings finishes any trimmed one, also back
+// within recording_days).
 func (s *Store) trimRecording(r *Recording, now time.Time) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -354,24 +355,29 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 		}}, nil
 }
 
-// setMinutesDays changes minutes_days. The card and the answer say the days in effect, never fewer than
-// recording_days: a smaller value is saved as given (it counts again should recording_days shrink) but changes nothing
-// now.
+// setMinutesDays changes minutes_days to the value asked for, decided on the saved setting: the knowledge base raises
+// it to recording_days (kb.MinutesDaysFor), so a value below recording_days changes nothing in effect now, but it is
+// saved all the same and counts once recording_days is shorter. Only the value already saved (365 when unset) changes
+// nothing. The card says the days in effect, before and after, or that they stay and what is saved for later.
 func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var days int
 	if err := json.Unmarshal(v, &days); err != nil || days < minMinutesDays || days > maxMinutesDays {
 		return nil, errors.New("value must be a whole number of days, 1–3650")
 	}
-	before, recording := s.minutesDays(ctx), s.recordingDays(ctx)
-	after := kb.MinutesDaysFor(days, recording)
-	if after == before {
-		return &ownChange{summary: fmt.Sprintf("assistant.minutes_days is unchanged: minutes are kept %d days (never fewer than "+
-			"assistant.recording_days, %d)", before, recording)}, nil
+	cur := s.settings(ctx)
+	saved, recording := cmp.Or(minutesDaysSetting(cur), kb.DefaultMinutesDays), recordingDaysOf(cur)
+	before, after := kb.MinutesDaysFor(saved, recording), kb.MinutesDaysFor(days, recording)
+	if days == saved {
+		return &ownChange{summary: fmt.Sprintf("assistant.minutes_days is unchanged: %d is saved, minutes are kept %d days (never "+
+			"fewer than assistant.recording_days, %d)", saved, before, recording)}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
 	return &ownChange{cardText: func(l i18n.Lang) string {
+		if after == before {
+			return i18n.T(l, "assistant-settings_tool.change_minutes_days_saved", i18n.Args{"before": saved, "after": days, "effective": after})
+		}
 		return i18n.T(l, "assistant-settings_tool.change_minutes_days", i18n.Args{"before": before, "after": after})
 	},
 		apply: func(ctx context.Context) (string, error) {
@@ -380,6 +386,10 @@ func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownCh
 			}
 			s.settingsChanged(ctx)
 			s.kbWake() // a shorter retention prunes now
+			if after != days {
+				return fmt.Sprintf("assistant.minutes_days is saved as %d: minutes are kept %d days for now, as long as "+
+					"assistant.recording_days, and %d once that is shorter.", days, after, days), nil
+			}
 			return fmt.Sprintf("assistant.minutes_days is %d: a meeting's minutes stay that long after it, its transcript "+
 				"only assistant.recording_days.", after), nil
 		}}, nil

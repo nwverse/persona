@@ -30,5 +30,6 @@
   "meeting_role_listener": "旁听",
   "meeting_role_participant": "参与",
   "title_minutes_days": "会议纪要保留",
-  "change_minutes_days": "会议纪要保留：{before} → {after} 天"
+  "change_minutes_days": "会议纪要保留：{before} → {after} 天",
+  "change_minutes_days_saved": "会议纪要保留：{before} → {after} 天，目前仍为 {effective} 天（不少于录音的保留天数）"
 }

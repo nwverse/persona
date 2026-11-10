@@ -245,7 +245,10 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       )}
 
       {typeof info?.recording_days === "number" && (
-        <Group anchor="recordings" title={t("settings-assistantsettings.recordings_title")} footer={t("settings-assistantsettings.recordings_footer")}>
+        // A manager from before minutes_days (#3780) deletes a recording's minutes with it: only one that says the minutes'
+        // days promises they stay longer.
+        <Group anchor="recordings" title={t("settings-assistantsettings.recordings_title")}
+          footer={t(typeof info.minutes_days === "number" ? "settings-assistantsettings.recordings_footer" : "settings-assistantsettings.recordings_footer_with_minutes")}>
           <DaysRow field="recording_days" label={t("settings-assistantsettings.recording_days")} value={info.recording_days} tries={retentionTries}
             disabled={info.manager !== manager || retentionBusy} onSave={(days) => void setRetention("recording_days", days)} />
           {typeof info.minutes_days === "number" && <DaysRow field="minutes_days" label={t("settings-assistantsettings.minutes_days")} value={info.minutes_days} tries={retentionTries}

@@ -28,7 +28,9 @@ let writes: Record<string, unknown>[];
 let answer: ((body: Record<string, unknown>) => Response) | undefined;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
-const effective = () => saved && { recording_days: saved.recording_days, minutes_days: Math.max(saved.minutes_days ?? 365, saved.recording_days ?? 14) };
+/** False: a manager from before minutes_days (#3780), which says only recording_days. */
+let withMinutes: boolean;
+const effective = () => saved && { recording_days: saved.recording_days, ...(withMinutes ? { minutes_days: Math.max(saved.minutes_days ?? 365, saved.recording_days ?? 14) } : {}) };
 const state = () => ({ manager: "assistant", notes: "", ...(effective() ?? {}) });
 const input = (label: string) => host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
 const recordings = () => input(t("settings-assistantsettings.recording_days"));
@@ -45,7 +47,7 @@ beforeEach(async () => {
   resetManagerChoice(); setRosterDefault("assistant");
   vi.mocked(toast).mockClear();
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
-  saved = { recording_days: 14 }; writes = []; answer = undefined;
+  saved = { recording_days: 14 }; writes = []; answer = undefined; withMinutes = true;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input).split("?")[0];
     if (path.endsWith("/assistant")) {
@@ -68,6 +70,7 @@ it("shows both retentions in effect and saves a change the hub confirms", async 
   await render();
   expect(host.textContent).toContain("Recordings");
   expect(host.textContent).toContain(t("settings-assistantsettings.recordings_footer"));
+  expect(host.textContent).not.toContain(t("settings-assistantsettings.recordings_footer_with_minutes"));
   expect([recordings()!.value, minutes()!.value]).toEqual(["14", "365"]);
   await enter(minutes()!, "730");
   expect(writes).toEqual([{ minutes_days: 730 }]);
@@ -84,6 +87,19 @@ it("has no group on a hub that does not say its retention", async () => {
   expect(recordings()).toBeNull();
   expect(minutes()).toBeNull();
   expect(host.textContent).not.toContain(t("settings-assistantsettings.recordings_footer"));
+});
+
+it("promises nothing about the minutes on a manager that deletes them with the recording", async () => {
+  withMinutes = false;
+  await render();
+  expect(recordings()!.value).toBe("14");
+  expect(minutes()).toBeNull();
+  expect(host.textContent).toContain(t("settings-assistantsettings.recordings_footer_with_minutes"));
+  expect(host.textContent).not.toContain(t("settings-assistantsettings.recordings_footer"));
+  await enter(recordings()!, "30");
+  expect(writes).toEqual([{ recording_days: 30 }]);
+  expect(recordings()!.value).toBe("30");
+  expect(toast).not.toHaveBeenCalled();
 });
 
 it("sends nothing out of bounds or not a whole number, and says the bounds", async () => {

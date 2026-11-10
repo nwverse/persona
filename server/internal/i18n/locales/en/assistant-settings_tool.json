@@ -30,5 +30,6 @@
   "meeting_role_listener": "Listener",
   "meeting_role_participant": "Participant",
   "title_minutes_days": "Keep meeting minutes",
-  "change_minutes_days": "Keep meeting minutes: {before} → {after} days"
+  "change_minutes_days": "Keep meeting minutes: {before} → {after} days",
+  "change_minutes_days_saved": "Keep meeting minutes: {before} → {after} days, {effective} for now (never fewer than recordings are kept)"
 }

@@ -537,8 +537,9 @@ func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 }
 
 // PruneRecordings applies the retention (files and index): a recording that started before recording_days goes, unless
-// it has minutes and started within minutes_days, which trims it to them (recording_trim.go); tombstones older than
-// recording_days go too. How many recordings went (the trimmed ones are not counted).
+// it has minutes and started within minutes_days, which trims it to them (recording_trim.go), and a trim cut short is
+// finished whatever the window; tombstones older than recording_days go too. How many recordings went (the trimmed
+// ones are not counted).
 func (e *Engine) PruneRecordings(now time.Time) int {
 	if e.Store.ReadOnly() {
 		return 0
@@ -551,17 +552,15 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 	var gone []string
 	for _, r := range st.Recordings() {
 		if !r.StartedAt.Before(cut) {
+			// Within recording_days only a trimmed one has anything to do: the files an interrupted trim left (a crash
+			// after its meta.json, a failed removal) go even once recording_days made longer lets it back in the window.
+			if r.Trimmed() {
+				e.trimPruned(r, now)
+			}
 			continue
 		}
 		if !r.StartedAt.Before(minutesCut) && st.hasMinutes(r.ID) {
-			if trimmed, err := st.trimRecording(r, now); err != nil {
-				e.logf("recording %s: trim: %v", r.ID, err)
-			} else if trimmed {
-				st.notify(KindRecording, r.ID, "metadata")
-				st.notify(KindRecording, r.ID, "messages")
-				st.notify(KindRecording, r.ID, "summary")
-				e.index(KindRecording, r.ID, r.Name, r.Tagging, r.OneLine, r.StartedAt)
-			}
+			e.trimPruned(r, now)
 			continue
 		}
 		st.recFilesMu.Lock()
@@ -591,6 +590,20 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 		_ = writeJSON(st.tombstonesPath(), t)
 	}
 	return len(gone)
+}
+
+// trimPruned trims recording r for PruneRecordings (which holds recMu), or finishes its trim: idempotent, it says
+// what changed and indexes the recording again only when something did.
+func (e *Engine) trimPruned(r *Recording, now time.Time) {
+	st := e.Store
+	if trimmed, err := st.trimRecording(r, now); err != nil {
+		e.logf("recording %s: trim: %v", r.ID, err)
+	} else if trimmed {
+		st.notify(KindRecording, r.ID, "metadata")
+		st.notify(KindRecording, r.ID, "messages")
+		st.notify(KindRecording, r.ID, "summary")
+		e.index(KindRecording, r.ID, r.Name, r.Tagging, r.OneLine, r.StartedAt)
+	}
 }
 
 // RecordingDays is the retention in days (Engine.RecordingDaysFunc, the assistant's setting), the default without one.

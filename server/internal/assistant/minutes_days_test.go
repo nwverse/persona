@@ -50,8 +50,9 @@ func TestMinutesDaysSetting(t *testing.T) {
 	}
 }
 
-// persona_settings reads and changes assistant.minutes_days: the days in effect, an approval card from before to after,
-// a value that changes nothing in effect (below recording_days) asks nothing.
+// persona_settings reads and changes assistant.minutes_days: the days in effect, an approval card from before to after;
+// a value below recording_days changes nothing in effect but is saved as asked for (its card says so), and only the
+// value saved already asks nothing.
 func TestMinutesDaysSettingsTool(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(t, newFakeHub().withMachine())
@@ -75,19 +76,21 @@ func TestMinutesDaysSettingsTool(t *testing.T) {
 			t.Fatalf("%s: %s", bad, out)
 		}
 	}
-	card := i18n.T(i18n.Default, "assistant-settings_tool.change_minutes_days", i18n.Args{"before": 365, "after": 30})
-	go func() {
-		q, ok := awaitCard(s)
-		if !ok || q.Summary != card {
-			t.Errorf("card %+v, want %q", q, card)
-			return
-		}
-		allow := true
-		raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
-		if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
-			t.Error(err)
-		}
-	}()
+	approve := func(card string) {
+		go func() {
+			q, ok := awaitCard(s)
+			if !ok || q.Summary != card {
+				t.Errorf("card %+v, want %q", q, card)
+				return
+			}
+			allow := true
+			raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+			if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	approve(i18n.T(i18n.Default, "assistant-settings_tool.change_minutes_days", i18n.Args{"before": 365, "after": 30}))
 	if out, _ := set(`30`); !strings.HasPrefix(out, key+" is 30") || get() != "30" {
 		t.Fatalf("approved: %s", out)
 	}
@@ -95,8 +98,17 @@ func TestMinutesDaysSettingsTool(t *testing.T) {
 	if out := get(); out != "60" {
 		t.Fatalf("below recording_days: %s", out)
 	}
+	// 45 is below recording_days too: nothing changes now, yet it is what counts once recording_days is shorter.
+	approve(i18n.T(i18n.Default, "assistant-settings_tool.change_minutes_days_saved", i18n.Args{"before": 30, "after": 45, "effective": 60}))
+	if out, isErr := set(`45`); isErr || !strings.HasPrefix(out, key+" is saved as 45") || get() != "60" || s.minutesDaysNow() != 45 {
+		t.Fatalf("a value below recording_days: %s (saved %d)", out, s.minutesDaysNow())
+	}
 	if out, isErr := set(`45`); isErr || !strings.Contains(out, "unchanged") || len(s.pendingQuestions()) != 0 {
-		t.Fatalf("a value below recording_days: %s", out)
+		t.Fatalf("set to what is saved: %s", out)
+	}
+	setSettings(t, s, func(v *Settings) { d := 14; v.RecordingDays = &d })
+	if out := get(); out != "45" {
+		t.Fatalf("recording_days shorter: %s, want the 45 asked for", out)
 	}
 }
 

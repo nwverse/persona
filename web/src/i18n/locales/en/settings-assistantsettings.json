@@ -75,5 +75,6 @@
   "days_unit": "days",
   "days_range": "A whole number from {min} to {max}",
   "recordings_footer": "Recordings older than this leave the knowledge base, and the phone deletes its own copies, audio included. A meeting’s minutes stay longer: its transcript goes with the recording, the minutes stay searchable until their own number of days after the meeting, never fewer than the recording’s.",
+  "recordings_footer_with_minutes": "Recordings older than this leave the knowledge base together with their meeting minutes, and the phone deletes its own copies, audio included.",
   "retention_unconfirmed": "The assistant did not confirm this retention. Reload before trying again."
 }
