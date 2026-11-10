@@ -329,6 +329,13 @@ struct AssistantActionBar: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: conversation) { open = nil }
+        #if DEBUG
+        .onAppear {
+            if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
+                open = tray
+            }
+        }
+        #endif
         .confirmTaskRemoval($removing)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("action-bar")
