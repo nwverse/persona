@@ -48,6 +48,11 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
 			return nil, planInvalid{err}
 		}
+		// A plan saved before the rule, or edited on the card, is held to it too (task_plan checks it as it makes a plan).
+		p.Tasks[i].Permission = strings.TrimSpace(p.Tasks[i].Permission)
+		if err := p.Tasks[i].checkWritablePermission(); err != nil {
+			return nil, planInvalid{fmt.Errorf("task %d: %w. Nothing was started", i+1, err)}
+		}
 		if !s.placeTask(ctx, &p.Tasks[i]) {
 			return nil, i18n.Err("assistant-tasks.task_no_machine", i18n.Args{"task": p.Tasks[i].Title, "machine": strconv.Quote(p.Tasks[i].Machine)})
 		}
@@ -94,7 +99,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if s.supervises(ctx, p.Conversation) { // the main conversation or a leader follows up what it hands out (supervise.go)
 			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
 		}
-		if t.ReuseTodo != "" {
+		if t.ReuseTodo != "" || t.Parent != "" { // a worker's has no conversation to show a card in (task_leader.go)
 			continue
 		}
 		if _, err := s.appendFeed(ctx, p.Conversation, feedTask, todo.ID, nil); err != nil {
@@ -218,6 +223,10 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
 	placed, placedWhy := t.Machine, t.Why
+	if t.Role == roleLeader { // its tools are listed once it is linked: a list asked for meanwhile waits (task_leader.go)
+		s.leaderStarts.Add(1)
+		defer s.leaderStarts.Add(-1)
+	}
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
 	if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
@@ -239,11 +248,11 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
-		err = s.linkTodoAgent(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, "")
+		err = s.linkPlanAgent(ctx, t, mid, sid, false)
 		if errors.Is(err, db.ErrTodoCompleted) {
 			// The user tapped "Done" while the agent was starting (a busy machine takes minutes, #1396). The task stays
 			// done and its agent stays in it: nothing reads failed, and the close loop still finds the agent to retire.
-			err = s.linkTodoAgentOfDoneTask(ctx, t.TodoID, mid, sid, t.Title, t.Cwd, "")
+			err = s.linkPlanAgent(ctx, t, mid, sid, true)
 			if err != nil {
 				s.logf("task %s: link to the finished task: %v", t.TodoID, err)
 			}
@@ -291,6 +300,10 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.remedyStep(ctx, conversation, t.TodoID, startRemedyBody{Action: "gave_up", By: "hub", Attempt: t.Start.Attempt, Reason: reason})
 	}
 	if retry && !remedied {
+		return
+	}
+	if t.Parent != "" { // a worker's leader hears of it; no conversation has a card for it (task_leader.go)
+		s.tellLeaderOfFailedStart(ctx, t, reason)
 		return
 	}
 	_, _ = s.appendFeed(ctx, conversation, feedReceipt, t.TodoID, receiptBody{Title: t.Title, State: "failed",

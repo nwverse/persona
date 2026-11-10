@@ -189,3 +189,23 @@ type DispatchTask struct {
 }
 
 func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }
+
+// RenderTaskLeader is what follows the prompt of a task whose agent is a task leader (agents/task_leader, #3656): that it
+// can hand direct workers to task_plan and how their reports reach it.
+func RenderTaskLeader() string { return render("agents/task_leader", struct{}{}) }
+
+// RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
+func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
+
+// WorkerReport is a worker's report as its task leader's agent reads it (agents/worker_report, assistant/task_leader.go).
+type WorkerReport struct {
+	Worker   string // the worker's tab or title, "" when it is not known
+	Title    string // the worker's task
+	Kind     string // progress, question, blocked, done or failed
+	Text     string
+	Evidence []string
+	Step     int
+	Steps    int
+}
+
+func RenderWorkerReport(r WorkerReport) string { return render("agents/worker_report", r) }

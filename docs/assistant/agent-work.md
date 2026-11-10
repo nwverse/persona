@@ -217,12 +217,13 @@ A subscription's 5-hour or weekly usage limit (#1710) is no failure to report an
 
 ## Safety boundary
 
-Persona **sends to Agents on its own** only four kinds of message, none introducing new intent:
+Persona **sends to Agents on its own** only five kinds of message, none introducing new intent:
 
 1. Continuation after a transient error: like "Retry" on the App's error card, it resumes the interrupted task; likewise the continuation once a subscription's usage limit reset (`prompts/agents/limit_continue.md`: go on with what you were doing, without redoing what is done);
 2. A wakeup after a registered wait: asks only whether the awaited event is ready, and explicitly says `接下来要推代码、部署、给别人发消息、合并或改别人的 MR 时先停下来问用户，不要自己做` ("Before pushing code, deploying, messaging others, or merging / modifying someone else's MR, stop and ask the user; do not do it yourself");
 3. The answer the user selected on a card;
 4. After the auth relay completed the authorization link it stopped at ([auth-relay.md](../operations/auth-relay.md)): go on with what it was doing.
+5. A worker's report to its task leader's agent, and the notice that a worker did not start (`prompts/agents/worker_report.md`, [unified-entry.md](unified-entry.md), "Task leaders"): information the worker chose to report, with nothing to do unless the leader decides; it queues behind a running turn like any message.
 
 Any next step involving **pushing code, deploying / releasing, messaging others, or touching someone else's MR / PR** must not receive an unapproved automatic wake:
 

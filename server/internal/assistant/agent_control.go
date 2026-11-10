@@ -570,7 +570,15 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 		return "", err
 	}
 	t, ok := s.taskOf(ctx, machine, session)
-	if !ok || t.Supervision == nil || t.Supervision.Supervisor == "" {
+	// A task leader's worker reports to its leader's session, not to a conversation (task_leader.go).
+	lead, isWorker, hasLeader := TodoAgent{}, false, false
+	if ok {
+		lead, isWorker, hasLeader = s.workerLeader(t, machine, session)
+	}
+	if isWorker && !hasLeader {
+		return "Nobody receives this: the task you work for is closed. Ask the user what you need the usual way.", errNoSupervisor
+	}
+	if !isWorker && (!ok || t.Supervision == nil || t.Supervision.Supervisor == "") {
 		return "Nobody receives this: your work is not a task Persona supervises. Ask the user what you need the usual way.", errNoSupervisor
 	}
 	if !s.upReports.allow(machine, session, now) {
@@ -586,6 +594,9 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	step := max(0, min(a.Step, 1000))
 	if steps > 0 {
 		step = min(step, steps)
+	}
+	if isWorker {
+		return s.reportToLeader(ctx, t, lead, machine, session, a.Kind, text, evidence, step, steps)
 	}
 	notUrgent := a.Urgent != nil && !*a.Urgent
 	if notUrgent && a.Kind == upReportQuestion {

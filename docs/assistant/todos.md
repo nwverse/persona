@@ -111,9 +111,13 @@ Records associations between to-dos and Agent sessions:
   - `manual`: manually linked or handed to an existing Agent;
   - `space`: linked with the entire workspace project;
   - `spawned`: spawned by a parent Agent linked to the to-do.
+  - `leader`: the Agent of a task handed out with `task_plan` role `leader` (#3656, [unified-entry.md](unified-entry.md), "Task leaders");
+  - `worker`: an Agent a task leader handed out with its own `task_plan`; `via` is the leader's to-do id (not a session): the worker's supervisor is that task's leader Agent;
+  - `review`: an independent reviewer's session (kept released, hidden from the lists).
 - `via` (text, NOT NULL, DEFAULT ''): association path:
   - For source `space`, project key `<machine_id>/<space>`;
-  - For source `spawned`, parent Agent identifier `<machine_id>/<session_id>`.
+  - For source `spawned`, parent Agent identifier `<machine_id>/<session_id>`;
+  - For source `worker`, the leader's to-do id.
 - `dismissed_at` (timestamptz): manual removal timestamp. Removal sets both `released_at` and `dismissed_at`. APIs exclude removed records, and subsequent session updates do not automatically relink them.
 - Constraints:
   - Primary key: `(todo_id, machine_id, session_id)`.

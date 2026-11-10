@@ -263,7 +263,7 @@ func TestLauncherHealthMovesPlannedTasks(t *testing.T) {
 	f.checks["server/work"] = proto.LauncherCheck{Error: "90 秒内没有回答"}
 	ctx := context.Background()
 	s.healthRound(ctx, true)
-	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"修 CI","prompt":"修 CI","machine":"l4","cwd":"~/code/app","launcher":"work",
+	res, err := s.toolTaskPlan(ctx, "conv9", json.RawMessage(`{"tasks":[{"title":"修 CI","permission":"bypassPermissions","prompt":"修 CI","machine":"l4","cwd":"~/code/app","launcher":"work",
 		"readonly":false,"user_requested":false,"machine_policy":"flexible","why":"代码在那"}]}`))
 	if err != nil {
 		t.Fatal(err)

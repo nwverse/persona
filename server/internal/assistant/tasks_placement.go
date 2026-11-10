@@ -153,6 +153,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
+	switch {
+	case t.Role == roleLeader: // what it may hand out, and how its workers reach it (task_leader.go)
+		prompt += "\n\n" + prompts.RenderTaskLeader()
+	case t.Parent != "":
+		prompt += "\n\n" + prompts.RenderTaskWorker()
+	}
 	if !t.Readonly && s.doneNeedsDelivery(ctx) { // what done means: live and checked (delivery.go)
 		prompt += "\n\n" + prompts.RenderTaskDelivery()
 	}
