@@ -468,6 +468,16 @@ function LarkReadSection({ connector, status, reload, onOpen }: { connector: Hub
     }
   };
   const profile = status?.larkcli;
+  const [editingProfile, setEditingProfile] = useState(false);
+  // Which lark-cli profile reads Lark right now, in words: following the bot's app, the one picked here, or the one
+  // manager.json fixes (then it cannot be changed from the app).
+  const profileInUse = !profile
+    ? ""
+    : profile.mode === "bot" || (profile.mode === "default" && !profile.choice)
+      ? t(profile.mode === "bot" ? "settings-feishubot.larkcli_profile_auto_short" : "settings-feishubot.larkcli_profile_default")
+      : profile.mode === "config"
+        ? t("settings-feishubot.larkcli_profile_fixed", { name: profile.profile })
+        : profile.profile || profile.choice;
   const saveProfile = async (choice: string) => {
     setSwitching(true);
     try {
@@ -495,6 +505,16 @@ function LarkReadSection({ connector, status, reload, onOpen }: { connector: Hub
             <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", connectorDotClass[tone])} />
             <span className="truncate">{connectorState(connector)}{connector.status === "ok" && connector.account ? ` · ${connectorSummary(connector)}` : ""}</span>
           </div>
+          {profile && (
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
+              <span className="truncate">{t("settings-feishubot.larkcli_profile_using", { name: profileInUse })}</span>
+              {profile.mode !== "config" && (
+                <button type="button" className="shrink-0 whitespace-nowrap text-accent hover:underline" onClick={() => setEditingProfile((v) => !v)}>
+                  {t(editingProfile ? "settings-feishubot.larkcli_profile_done" : "settings-feishubot.larkcli_profile_change")}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
       {lacksPermission && (
@@ -517,12 +537,12 @@ function LarkReadSection({ connector, status, reload, onOpen }: { connector: Hub
         // Signed in: signing in again is a quiet secondary action; otherwise it is what this section is for.
         <SignInSteps c={connector} reload={reload} startLabel={t(connector.status === "ok" ? "settings-feishubot.read_reauthorize" : "settings-feishubot.read_authorize")} startTone={connector.status === "ok" ? "quiet" : "accent"} bare />
       )}
-      {profile && (
-        <Row label={t("settings-feishubot.larkcli_profile_title")} hint={profile.mode === "config" ? t("settings-feishubot.larkcli_profile_configured") : undefined}>
+      {profile && editingProfile && profile.mode !== "config" && (
+        <Row label={t("settings-feishubot.larkcli_profile_title")}>
           <select
             aria-label={t("settings-feishubot.larkcli_profile_title")}
             value={profile.choice}
-            disabled={profile.mode === "config" || switching}
+            disabled={switching}
             onChange={(e) => void saveProfile(e.target.value)}
             className={cx(controlClass, "max-w-[300px]")}
           >
