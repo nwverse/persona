@@ -452,10 +452,14 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
+	// they wait here before going up a rung.
+	Asked      bool
+	AskMinutes int
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
-// started, escalated).
+// started, escalated, ask).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
@@ -468,6 +472,7 @@ type SuperviseEntry struct {
 	Session         string             // its agent's session id (short)
 	AgentID         string             // full id for durable deduplication; not rendered
 	Last            string             // what its agent said last
+	Closeout        *SuperviseCloseout // the closeout its agent ended the turn with (#3612), nil when it wrote none
 	Link            string             // the task's page ("" when the hub has no public_url)
 	Quiet           bool               // the user was not pushed about it
 	Review          *SuperviseReviewed // review: what the independent reviewer found (#2173), nil when none ran
@@ -480,6 +485,17 @@ type SuperviseEntry struct {
 	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
+	// ask: the cards waiting, and the task's decisions in effect (prompts/todo/decisions.md, rendered); escalated: the
+	// cards a leader gave the user.
+	Asks      []SuperviseAsk
+	Decisions string
+}
+
+// SuperviseAsk is one card of a task's agent on its way to the user: its interaction id, kind (question, permission,
+// plan), the agent's machine (a name) and short session id, what it asks, and whether the rung below did not handle it in time.
+type SuperviseAsk struct {
+	ID, Kind, Machine, Session, Text string
+	Raised                           bool
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }
@@ -592,6 +608,8 @@ type TaskDone struct {
 	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
 	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
 	Checks bool
+	// Language: the user's language for the reason, which the apps show on the task ("" for Chinese, the prompt's own).
+	Language string
 }
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
@@ -699,3 +717,42 @@ func RenderWorkspaceMention(w WorkspaceMention) string {
 
 // RenderWorkoutReport describes one consented workout, never a medical diagnosis.
 func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
+
+// SuperviseCloseout is an agent's own closeout as a supervision message shows it: its claim, to be checked.
+type SuperviseCloseout struct {
+	Status, Waiting   string
+	Merged, Deployed  string // "yes", "no" or ""
+	Did               []string
+	Verified, Missing string
+	Artifacts         []string
+	// CheckedMerged, CheckedDeployed: what the hub found itself, "yes", "no" or "" when it could not tell.
+	CheckedMerged, CheckedDeployed string
+}
+
+// Route is the system prompt of assistant.route (assistant/route): is a New chat's first message a direction or a quick
+// chat. Language is the direction name's language by its own name ("" Chinese); Crowded: there are Leaders leaders
+// already, so the model names the closest one too.
+type Route struct {
+	Language string
+	TitleMax int
+	Crowded  bool
+	Leaders  int
+}
+
+func RenderRoute(r Route) string { return render("assistant/route", r) }
+
+// RouteLeader is a current leader as the route model is shown it.
+type RouteLeader struct{ ID, Title, Project string }
+
+// RouteInput is what the route model reads: the sentence, the leaders and the knowledge base's project names.
+type RouteInput struct {
+	Sentence string
+	Leaders  []RouteLeader
+	Projects []string
+}
+
+func RenderRouteInput(in RouteInput) string { return render("assistant/route_input", in) }
+
+// RenderRouteAgent is the system prompt of assistant.route for a new agent (assistant/route_agent): which leader's
+// direction its work belongs to; it reads RouteInput (the agent's first message as the sentence, no projects).
+func RenderRouteAgent() string { return render("assistant/route_agent", nil) }

@@ -151,7 +151,9 @@ nonisolated enum AssistantEntries {
                                  messageWaits: (FeedItem) -> Bool = AssistantEntries.messageWaits) -> Result {
         let lookup = TodosLogic.makeSessionLookup(sessions)
         let isMain = !(main ?? "").isEmpty && main == conversation
-        let pair = { (m: String, s: String) in m + "/" + s }
+        // A function, not a closure value: Swift 6.2.4 (Xcode 26.3) rejects capturing a closure value in the `listed`
+        // closure below ("sending 'pair' risks causing data races").
+        func pair(_ m: String, _ s: String) -> String { m + "/" + s }
         var asksOf: [String: [Interaction]] = [:]
         for ix in interactions.sorted(by: { ($0.createdAt ?? .distantPast, $0.id) < ($1.createdAt ?? .distantPast, $1.id) }) {
             asksOf[pair(ix.machineID, ix.sessionID), default: []].append(ix)
@@ -320,12 +322,16 @@ struct AssistantActionBar: View {
             .padding(.horizontal, Theme.Space.xs)
             #if !os(macOS)
             .padding(.top, Theme.Space.s)
-            .dockChatFade()
-            // Drawn under the question and the @ list over it in the footer, so the fade reaches only the chat.
-            .zIndex(-1)
             #endif
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        #if !os(macOS)
+        // On the whole bar, after its full-width frame (#3643): as wide as the chat, and over whatever is topmost, the
+        // capsules or the open tray. On the capsule row it was as wide as the capsules and under the tray.
+        .dockChatFade()
+        // Drawn under the question and the @ list over it in the footer, so the fade reaches only the chat.
+        .zIndex(-1)
+        #endif
         .onChange(of: conversation) { open = nil }
         .confirmTaskRemoval($removing)
         .accessibilityElement(children: .contain)

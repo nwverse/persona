@@ -25,6 +25,7 @@
   "filter_empty": "「{filter}」のエージェントはありません",
   "show_all": "すべて表示",
   "pinned_section": "ピン留め",
+  "leader": "リーダー",
   "launching": "起動中",
   "launch_untitled": "新しいエージェント",
   "launch_failed": "起動に失敗",

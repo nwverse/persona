@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -124,6 +125,19 @@ func TestTriageRelatedKeysFollowTheSharedCases(t *testing.T) {
 	}
 }
 
+func TestTriageDueByUsesUTCWithoutAUserZone(t *testing.T) {
+	td := Todo{ID: "due", DueDate: "2026-11-10"}
+	got, ok := triageDueBy(td, nil)
+	if !ok || got.Location() != time.UTC || got.Format(time.RFC3339) != "2026-11-10T23:59:59Z" {
+		t.Fatalf("nil zone: got %v (%v), ok=%v", got, got.Location(), ok)
+	}
+	zone := time.FixedZone("user", 8*60*60)
+	got, ok = triageDueBy(td, zone)
+	if !ok || got.Location() != zone || got.Format(time.RFC3339) != "2026-11-10T23:59:59+08:00" {
+		t.Fatalf("user zone: got %v (%v), ok=%v", got, got.Location(), ok)
+	}
+}
+
 // Dismissed agents are not the apps' (formatTodo leaves them out): one still asking does not make the to-do wait.
 func TestTriageLeavesDismissedAgentsOut(t *testing.T) {
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
@@ -133,5 +147,54 @@ func TestTriageLeavesDismissedAgentsOut(t *testing.T) {
 	look := lookupOf([]proto.Session{{MachineID: "m", SessionID: "ask", State: proto.StateNeedsYou, UpdatedAt: now}})
 	if got := triageTodo(td, look, now, time.Time{}, time.UTC); got.Rule != ruleRest {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// An open concern is never shelved (#3582): quiet for days it stays in Other open; while an agent of it runs it is in
+// Working; a task the same age is shelved. Closed by its report, it is done like any other. Go only until the clients
+// get the rule and the shared fixtures with it.
+func TestTriageNeverShelvesAConcern(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-5 * 24 * time.Hour)
+	concern := Todo{ID: "c", Kind: db.KindConcern, Origin: "main", CreatedAt: old, UpdatedAt: old}
+	task := concern
+	task.ID, task.Kind = "t", ""
+	none := lookupOf(nil)
+	if got := triageTodo(listedTodo{Todo: task}, none, now, time.Time{}, time.UTC); got.Section != triageShelved {
+		t.Fatalf("a quiet task: %+v", got)
+	}
+	if got := triageTodo(listedTodo{Todo: concern}, none, now, time.Time{}, time.UTC); got.Section != triageOther || got.Rule != ruleRest {
+		t.Fatalf("a quiet concern: %+v", got)
+	}
+	running := concern
+	running.Agents = []TodoAgent{{MachineID: "m", SessionID: "s"}}
+	look := lookupOf([]proto.Session{{MachineID: "m", SessionID: "s", State: proto.StateWorking, Status: proto.StatusWorking, UpdatedAt: now}})
+	if got := triageTodo(listedTodo{Todo: running}, look, now, time.Time{}, time.UTC); got.Section != triageWorking {
+		t.Fatalf("a concern with an agent working: %+v", got)
+	}
+	res := triageTodos([]listedTodo{{Todo: concern}, {Todo: task}}, none, now, time.UTC, false)
+	if res.Shelved != 1 || res.Open != 1 {
+		t.Fatalf("counts: open %d shelved %d", res.Open, res.Shelved)
+	}
+	// A failed start long ago, an accepted review or a live delivery file a task with the finished ones, never a concern.
+	failed := concern
+	failed.StartError = "no launcher"
+	if got := triageTodo(listedTodo{Todo: failed}, none, now, time.Time{}, time.UTC); got.Section != triageOther {
+		t.Fatalf("a concern whose agent failed to start days ago: %+v", got)
+	}
+	accepted := concern
+	accepted.Supervision = &Supervision{State: reviewAccepted, Reviews: []TaskReview{{Verdict: reviewAccepted, At: old}}}
+	live := concern
+	live.Delivery = &TodoDelivery{State: deliveryLive, At: old}
+	for name, c := range map[string]Todo{"accepted": accepted, "deployed": live} {
+		if got := triageTodo(listedTodo{Todo: c}, none, now, time.Time{}, time.UTC); got.Section != triageOther {
+			t.Fatalf("a %s concern: %+v", name, got)
+		}
+	}
+	reported := concern
+	at := now.Add(-time.Minute)
+	reported.DoneAt = &at
+	if got := triageTodo(listedTodo{Todo: reported}, none, now, time.Time{}, time.UTC); got.Section != triageJustDone {
+		t.Fatalf("a reported concern: %+v", got)
 	}
 }
