@@ -1,64 +1,30 @@
 // What the pages show of the managers once there is more than one (docs/assistant/managers.md "Clients"): the assistant page's
-// switcher, the headings the machines, extensions and inbox lists group under, and what an offline manager's assistant
-// page says. With one manager none of it renders, so those pages stay as they were.
+// title, a manager's heading where a list still names whose a thing is, and what an offline manager's assistant page
+// says. With one manager none of it renders, so those pages stay as they were. The switcher itself is the sidebar's
+// head (views/AssistantSwitcher.tsx).
 import { useRef, useState } from "react";
 import { t } from "../i18n";
 import { lastSyncedText, managerOrder, multiManager, useRoster, type Manager } from "../lib/managers";
-import { chooseManager, useShownManager } from "../lib/manager-choice";
+import { pickedName, useChosenManager, useShownManager } from "../lib/manager-choice";
 import { ago } from "../lib/format";
-import { refreshReadiness } from "../lib/readiness";
-import { navigate } from "../lib/router";
 import { api, enc, errorText } from "../lib/api";
 import { Button, cx, Menu, toast, useMenu } from "../ui/atoms";
-import { SegmentedTrack } from "../ui/Segmented";
+import { MAIN_TITLE } from "./assistant/conversations";
 
 /** The status dot of a manager: green online, grey offline. */
 function Dot({ online }: { online: boolean }) {
   return <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", online ? "bg-green" : "bg-line-strong")} />;
 }
 
-/** The assistant page's switcher: one segment per installed manager, the default first; offline ones greyed with when
- *  they last synced. Nothing with one manager. */
-export function ManagerSwitcher({ className }: { className?: string }) {
+/** The assistant page's title: the current assistant's name once there are several (the sidebar's switcher picks it,
+ *  views/AssistantSwitcher.tsx), else Persona as before. */
+export function useAssistantTitle(): string {
   const roster = useRoster();
   const shown = useShownManager();
-  if (!multiManager(roster)) return null;
-  const pick = (m: Manager) => {
-    if (m.id === shown) return;
-    chooseManager(m.id);
-    // the conversation open now is the other manager's: back to the main one of this, and its readiness
-    navigate({ name: "persona" });
-    void refreshReadiness({ force: true });
-  };
-  return (
-    <div className={cx("flex shrink-0 overflow-x-auto px-3 py-2 sm:px-4", className)}>
-      <SegmentedTrack role="radiogroup" label={t("settings-managers.switcher")} className="flex gap-0.5 rounded-control p-0.5" thumbClassName="rounded-[7px]">
-        {managerOrder(roster).map((m) => {
-          const on = m.id === shown;
-          const synced = lastSyncedText(m);
-          return (
-            <button
-              key={m.id}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              data-selected={on}
-              title={synced || undefined}
-              onClick={() => pick(m)}
-              className={cx(
-                "relative z-[1] flex h-7 items-center gap-1.5 whitespace-nowrap rounded-[7px] px-3 text-[12.5px] transition-colors duration-150",
-                on && "font-medium",
-                m.online ? (on ? "text-ink" : "text-ink-2 hover:text-ink") : "text-ink-3 hover:text-ink-2",
-              )}
-            >
-              <Dot online={m.online} />
-              <span className="max-w-[10em] truncate">{m.name}</span>
-            </button>
-          );
-        })}
-      </SegmentedTrack>
-    </div>
-  );
+  const picked = useChosenManager();
+  // before the roster is read (a reload): a kept pick's name as the roster last gave it
+  if (!roster && picked) return pickedName() || MAIN_TITLE;
+  return (multiManager(roster) && roster.managers.find((m) => m.id === shown)?.name) || MAIN_TITLE;
 }
 
 /** The heading of one manager's group in a list: its name, and when an offline one last synced. */
