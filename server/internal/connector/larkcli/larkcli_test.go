@@ -544,3 +544,20 @@ func TestDisplayNameFollowsLanguage(t *testing.T) {
 		t.Fatalf("stable name changed: %q", c.Name())
 	}
 }
+
+func TestMessageTimeReadsLarkCLIWallClockMinutes(t *testing.T) {
+	// lark-cli prints "2006-01-02 15:04" in the local time zone; RFC 3339 and Unix times still work.
+	want := time.Date(2030, 1, 1, 15, 14, 0, 0, time.Local).UTC()
+	if got := messageTime(adapter.Message{CreateTime: "2030-01-01 15:14"}); !got.Equal(want) {
+		t.Fatalf("wall-clock minute = %v, want %v", got, want)
+	}
+	if got := messageTime(adapter.Message{CreateTime: "2030-01-01 15:14:30"}); !got.Equal(want.Add(30 * time.Second)) {
+		t.Fatalf("wall-clock second = %v", got)
+	}
+	if got := messageTime(adapter.Message{CreateTime: "2030-01-01T12:00:00Z"}); !got.Equal(time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("RFC 3339 = %v", got)
+	}
+	if got := messageTime(adapter.Message{CreateTime: "not a time"}); !got.IsZero() {
+		t.Fatalf("garbage = %v", got)
+	}
+}
