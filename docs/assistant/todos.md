@@ -133,7 +133,7 @@ Decisions the user has made for this task ("Decision records"):
 ### 5. todo_supervision table
 Ledger for tasks supervised by the main chat (#3124, `docs/assistant/unified-entry.md`, "Supervision"), one row each; unsupervised to-dos have no row:
 - `todo_id` (text, PK, FK → `todos(id)` ON DELETE CASCADE).
-- `supervisor` (text, NOT NULL): supervisor, the chat that created it.
+- `supervisor` (text, NOT NULL): supervisor, the chat that created it. With Agent tasks on (#3617, `docs/assistant/unified-entry.md` "Agent tasks") a to-do another chat or the user opened can have one too: the main chat or a leader, with `done_when` empty unless given.
 - `done_when` (jsonb, NOT NULL, DEFAULT '[]'): acceptance criteria (string array); `expect_minutes` (integer, NOT NULL, DEFAULT 0): expected minutes.
 - `state` (text, NOT NULL, DEFAULT ''): `''` in progress, `pending_review`, `rework`, `needs_user`, `accepted`, `cancelled`; `round` (integer): rework round.
 - `reviews` (jsonb, NOT NULL, DEFAULT '[]'): each review (`verdict`, per-item `checks`, `note`), at most 20 kept; `updated_at` (timestamptz).
@@ -290,6 +290,8 @@ curl -X POST '<hub address>/api/v1/todos/retitle' -H 'Authorization: Bearer <tok
 
 Tasks dispatched from assistant chats (to-dos created by `task_plan`, nonempty `origin`) are automatically marked done by assistant, without individual user taps (except tasks supervised by main chat: completion judgment moves to "Pending review", and supervisor must accept with `task_review`, `done_by = review`, see `docs/assistant/unified-entry.md`, "Supervision"). Manually created to-dos (empty `origin`) never auto-complete; only user marking done counts.
 
+With Agent tasks on (#3617, off by default; `docs/assistant/unified-entry.md` "Agent tasks"), an Agent started from an app's New Agent or by `agent_start` from any chat is on a quiet, supervised to-do with a nonempty `origin`, so it is judged here like the main chat's own tasks: an app's Agent gets its to-do at the first turn end that did work, and that stop is the first one judged. A manually created to-do an Agent is linked to gets a supervisor then, but still never auto-completes.
+
 **When judged**: all task Agents stop (none working, waiting for user or carrying pending cards), at the same point assistant sends the done receipt to chat (`taskTurnEnded` in `assistant/tasks_follow.go`; one receipt and one judgment per stretch of work). The receipt's `done` is the end of that stretch, not of the task: the apps draw it "<task> stopped, not done yet" while the to-do is open and as done once it is, and the "Today" card lists as finished only to-dos that are done (#6153).
 
 Normal receipts are written before judgment for both supervised and unsupervised tasks. At receipt time, the latest open to-do with a supervision ledger adds `review: {"state":"awaiting","criteria":N}` (the number of `done_when` entries, including zero), unless its effective supervision state is `needs_user`. This names Persona's next follow-up: `superviseJudged` signals review for finished work or idle for unfinished work; `needs_user` means the task is already waiting on the user. An accepted task that was reopened, or a cancelled task the user explicitly reopened, has an ongoing effective state and qualifies again. The receipt does not wait for the model or change the order of supervision signals. Failed / interrupted receipts carry no review. The web keeps the neutral stopped title for an open task and adds "Waiting for Persona's review", with a positive criterion count; completing the to-do hides this historical hint. Older receipts and clients remain compatible (#4893).
@@ -374,7 +376,7 @@ links do not count, and an Agent linked to an open to-do can still receive follo
 unaffected. Direct chat messages and `agent_send` still work; a user-completed to-do stays done until explicitly reopened,
 while a hub-completed task reopens on new work as described below.
 
-After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent no longer occupies a herdr tab:
+After a task dispatched from assistant chat (nonempty `origin`) completes—manually or automatically—its Agent no longer occupies a herdr tab (with Agent tasks on, `docs/assistant/unified-entry.md` "Agent tasks", that includes the Agents started from an app or another chat, whose to-dos have an `origin` too):
 assistant checks every minute (`assistant/tasks_close.go`, reading hub's App-facing session list through `sessions.list`); once task completion and Agent inactivity both reach 3 minutes (`taskCloseIdle`, measured from the later of completion time and last activity), ask node to close it (`session.retire`, `node/retire.go`):
 close its pane (whole tab if it is the only pane, same as **Close** on phone), exiting the Agent process with it.
 

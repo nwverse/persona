@@ -106,6 +106,17 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
 			set: s.setInterjectBackground},
+		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
+			About: "off (the default): only tasks the main conversation or a leader hands out are supervised; an agent started from an " +
+				"app or by agent_start from another conversation is on no task. on: every agent Persona starts gets a quiet to-do (no " +
+				"pushes or badges for it) supervised by the conversation that started it when that is the main conversation or a leader, " +
+				"else by the main conversation: an app's agent once a turn of it did work (edits, commands), a to-do the user made when " +
+				"an agent is linked to it, and report_to_supervisor from an agent on any open to-do reaches its supervisor. Agents " +
+				"started by hand in a terminal are left alone. Costs model calls (the done judge, supervision turns). Applies from the " +
+				"next start, turn end and report",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
+			set: s.setAgentTasks},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -225,7 +236,7 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"assistant.interject_background": "title_interject_background", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "model_profiles.tiers": "title_model_tiers",
 	"assistant.meeting_attendance_default": "title_meeting_attendance_default"}
 
 // clipped is a value as the card shows it, in l.
@@ -391,6 +402,13 @@ func (s *Service) setInterjectBackground(ctx context.Context, v json.RawMessage)
 		return i18n.T(l, "assistant-settings_tool.change_interject_background", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InterjectBackground },
 		"assistant.interject_background is %v from the next message on.")
+}
+
+func (s *Service) setAgentTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.agentTasks, "assistant.agent_tasks is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_agent_tasks", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AgentTasks },
+		"assistant.agent_tasks is %v from the next start, turn end and report on (to-dos made before keep what they have).")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.

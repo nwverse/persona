@@ -218,7 +218,10 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 	}
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
-		return
+		// An agent Persona started that is on no todo becomes a task once a turn of it did work (#3617, agent_tasks.go).
+		if t, ok = s.agentTaskAtTurnEnd(ctx, machine, sid); !ok {
+			return
+		}
 	}
 	if current, ok := s.todoNow(t.ID); ok && (current.Cancelled() || current.AgentAborted(machine, sid)) {
 		s.logf("task %s: cancelled or agent %s/%s aborted: skipping turn end", t.ID, machine, sid)
