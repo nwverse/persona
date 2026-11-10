@@ -39,7 +39,9 @@ pub async fn usb_list() -> Result<Value, BridgeError> {
 }
 
 /// Pairs with the phone `udid` over trusted USB and writes the record to `out`:
-/// `{"udid", "name", "model", "product_version"}`.
+/// `{"udid", "name", "model", "product_version", "developer_mode"}`. Pairing works with Developer Mode off, but the
+/// phone then neither advertises nor takes connections over the network, so `developer_mode` says so up front
+/// (`null` when the phone didn't say).
 pub async fn pair(udid: &str, out: &Path) -> Result<Value, BridgeError> {
     let device = usb_devices()
         .await?
@@ -82,6 +84,7 @@ pub async fn pair(udid: &str, out: &Path) -> Result<Value, BridgeError> {
         "name": peer.map(|p| p.name.clone()).or(facts.name),
         "model": peer.map(|p| p.model.clone()).or(facts.product_type),
         "product_version": facts.product_version,
+        "developer_mode": facts.developer_mode,
     }))
 }
 
@@ -135,6 +138,7 @@ struct Facts {
     name: Option<String>,
     product_type: Option<String>,
     product_version: Option<String>,
+    developer_mode: Option<bool>,
 }
 
 impl Facts {
@@ -146,11 +150,17 @@ impl Facts {
             product_type: value(&mut lockdown, "ProductType").await,
             product_version: value(&mut lockdown, "ProductVersion").await,
             name: None,
+            developer_mode: None,
         };
         if let Ok(trust) = provider.get_pairing_file().await
             && lockdown.start_session(&trust).await.is_ok()
         {
             facts.name = value(&mut lockdown, "DeviceName").await;
+            facts.developer_mode = lockdown
+                .get_value(Some("DeveloperModeStatus"), Some("com.apple.security.mac.amfi"))
+                .await
+                .ok()
+                .and_then(|v| v.as_boolean());
         }
         facts
     }

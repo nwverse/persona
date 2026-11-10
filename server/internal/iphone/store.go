@@ -25,6 +25,9 @@ type Record struct {
 	// Transport is how sessions reach it: "" or TransportNetwork for a phone (RemotePairing over the network),
 	// TransportSimulator for a Simulator device the bridge drives on this computer (no address to find).
 	Transport string `json:"transport,omitempty"`
+	// DeveloperMode is what the phone said at pairing; nil when it didn't. Off, it pairs but neither advertises
+	// nor takes connections over the network.
+	DeveloperMode *bool `json:"developer_mode,omitempty"`
 	// Address is a manual "host" or "host:port" (a Tailscale address or name, where Bonjour doesn't reach); tried
 	// before Bonjour when set.
 	Address string `json:"address,omitempty"`

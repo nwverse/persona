@@ -32,6 +32,10 @@ pair)
     echo '{"udid":"'"$udid"'","name":"Test Simulator","model":"iPhone99,1","product_version":"26.1","transport":"simulator"}'
     exit 0
   fi
+  if [ -n "$FAKE_DEVMODE_OFF" ]; then
+    echo '{"udid":"'"$udid"'","name":"Test Phone","model":"iPhone99,1","product_version":"27.0","developer_mode":false}'
+    exit 0
+  fi
   echo '{"udid":"'"$udid"'","name":"Test Phone","model":"iPhone99,1","product_version":"26.1"}'
   ;;
 match)

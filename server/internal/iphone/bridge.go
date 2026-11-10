@@ -74,6 +74,7 @@ type PairInfo struct {
 	ProductType    string `json:"product_type,omitempty"`
 	ProductVersion string `json:"product_version,omitempty"`
 	Transport      string `json:"transport,omitempty"` // "simulator" for a Simulator device
+	DeveloperMode  *bool  `json:"developer_mode,omitempty"`
 }
 
 // maxOutput bounds what a one-shot command's stdout and stderr are kept to.

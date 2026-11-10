@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func runCLI(t *testing.T, m *Manager, args ...string) (int, string, string) {
@@ -131,5 +132,25 @@ func TestMountArgs(t *testing.T) {
 		if udid != c.udid || dir != c.dir || force != c.force || ok != c.ok {
 			t.Errorf("%v: got %q %q %v %v", c.in, udid, dir, force, ok)
 		}
+	}
+}
+
+func TestCommandDeveloperModeOff(t *testing.T) {
+	m, _ := bridgeManager(t)
+	t.Setenv("FAKE_DEVMODE_OFF", "1")
+	code, out, _ := runCLI(t, m, "pair", testUDID)
+	if code != 0 || !strings.Contains(out, "Developer Mode is off") {
+		t.Fatalf("pair: %d %q", code, out)
+	}
+	rec, err := m.store.Load(testUDID)
+	if err != nil || rec.DeveloperMode == nil || *rec.DeveloperMode {
+		t.Fatalf("record: %+v %v", rec, err)
+	}
+	// Nothing on the network answers: the failure says why.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err = m.Call(ctx, testUDID, "screenshot", nil)
+	if Code(err) != "developer_mode_off" || !strings.Contains(err.Error(), "Developer Mode") {
+		t.Fatalf("call: %v", err)
 	}
 }

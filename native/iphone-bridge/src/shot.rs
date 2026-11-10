@@ -60,19 +60,17 @@ pub fn prepare(raw: Vec<u8>, opts: &ShotOptions, o: Orientation) -> Result<Prepa
         });
     }
     let mut img = reader(&raw)?.decode().map_err(unreadable)?;
+    // Smaller first, then turned: both cost by the pixel. `thumbnail` averages pixels in one pass, much faster
+    // than a filtered resize and plenty for a screen.
+    if too_big {
+        img = img.thumbnail(opts.max_dimension, opts.max_dimension);
+    }
     img = match turns {
         1 => img.rotate90(),
         2 => img.rotate180(),
         3 => img.rotate270(),
         _ => img,
     };
-    if too_big {
-        img = img.resize(
-            opts.max_dimension,
-            opts.max_dimension,
-            image::imageops::FilterType::Triangle,
-        );
-    }
     let (width, height) = (img.width(), img.height());
     let mut bytes = Vec::new();
     let encoded = match want {

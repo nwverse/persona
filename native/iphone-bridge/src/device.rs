@@ -6,7 +6,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use idevice::core_device::{
     AppServiceClient, ButtonState, CallInfoBlob, DisplayServiceClient, ImageFormat as DeviceImageFormat,
@@ -42,6 +42,10 @@ use crate::shot;
 const GATE_IDLE: Duration = Duration::from_secs(10);
 /// After the gate opens, the phone needs a moment before input counts as real (the library's description).
 const GATE_SETTLE: Duration = Duration::from_millis(300);
+/// The display stream stays at least this long after the last input before it stops, so the phone acts on it.
+const INPUT_LINGER: Duration = Duration::from_secs(1);
+/// After input, before answering: one-way key and button events get this to be read on the phone.
+const KEY_SETTLE: Duration = Duration::from_millis(100);
 /// How long a finger rests for a tap, and between the taps of a double tap.
 const TAP_HOLD: Duration = Duration::from_millis(50);
 const TAP_GAP: Duration = Duration::from_millis(80);
@@ -83,7 +87,8 @@ pub struct Device {
 struct Gate {
     client: DisplayServiceClient<Box<dyn ReadWrite>>,
     drains: Vec<JoinHandle<()>>,
-    last_used: Instant,
+    /// When the last input went out (tokio's clock, so tests can move it).
+    last_used: tokio::time::Instant,
 }
 
 /// Resolves `host` (an IP literal, an IPv6 literal with `%zone`, or a name) and `port`.
@@ -409,8 +414,11 @@ impl Device {
         let orientation = self.orientation().await;
         let screen = self.screen().await?;
         // Always PNG from the phone: iOS 18 refuses "jpeg"; the bridge converts.
+        let started = tokio::time::Instant::now();
         let raw = self.capture(DeviceImageFormat::Png).await?;
+        let captured = started.elapsed();
         let image = shot::prepare(raw, &opts, orientation)?;
+        let converted = started.elapsed() - captured;
         let (pw, ph) = screen.frame(orientation);
         let mut out = json!({
             "mime": image.mime,
@@ -419,6 +427,12 @@ impl Device {
             "point_width": pw,
             "point_height": ph,
             "orientation": orientation.as_str(),
+            // Where the time went, to find out why a capture is sometimes slow (#3792).
+            "timing_ms": {
+                "capture": captured.as_millis() as u64,
+                "convert": converted.as_millis() as u64,
+                "stream_open": self.gate.is_some(),
+            },
         });
         match &opts.out_file {
             Some(path) => crate::files::write_private(Path::new(path), &image.bytes)?,
@@ -518,20 +532,39 @@ impl Device {
         Ok(Gate {
             client,
             drains,
-            last_used: Instant::now(),
+            last_used: tokio::time::Instant::now(),
         })
     }
 
-    /// Stops the display stream; with `link_lost`, only lets go of it, since nothing can reach the phone.
+    /// Stops the display stream; with `link_lost`, only lets go of it, since nothing can reach the phone. The
+    /// phone takes input only while the stream runs, so it stops no sooner than `INPUT_LINGER` after the last
+    /// input: stopping right away (a one-shot call, or `serve` ending) dropped a tap the phone hadn't acted on.
     async fn close_gate(&mut self, link_lost: bool) {
         if let Some(mut gate) = self.gate.take() {
             if !link_lost {
-                let _ = tokio::time::timeout(STOP_TIMEOUT, gate.client.stop_media_stream()).await;
+                let client = &mut gate.client;
+                stop_after_linger(gate.last_used, async {
+                    let _ = tokio::time::timeout(STOP_TIMEOUT, client.stop_media_stream()).await;
+                })
+                .await;
             }
             for d in gate.drains {
                 d.abort();
             }
         }
+    }
+
+    /// Waits until the phone has read the input sent so far before the answer goes back. The touch service
+    /// answers requests in order on the connection that carried the touches, so one round trip there means the
+    /// phone has them; keys and buttons go one way on their own connection, so they get `KEY_SETTLE`.
+    async fn confirm_input(&mut self) -> Result<(), BridgeError> {
+        if let Some(hid) = self.hid.as_mut() {
+            hid.list_connected_services()
+                .await
+                .map_err(|e| from_idevice(e, Phase::Operation, "confirm input"))?;
+        }
+        tokio::time::sleep(KEY_SETTLE).await;
+        Ok(())
     }
 
     async fn touch(&mut self, x: u16, y: u16, down: bool) -> Result<(), BridgeError> {
@@ -963,6 +996,12 @@ fn major_version(v: &str) -> Option<u32> {
     v.split('.').next()?.trim().parse().ok()
 }
 
+/// Runs `stop` no sooner than `INPUT_LINGER` after `last_input`.
+async fn stop_after_linger(last_input: tokio::time::Instant, stop: impl std::future::Future<Output = ()>) {
+    tokio::time::sleep_until(last_input + INPUT_LINGER).await;
+    stop.await;
+}
+
 /// How long the app operations wait for the phone before saying it didn't answer, instead of running into the
 /// request's deadline and ending the session.
 const APP_ANSWER: Duration = Duration::from_secs(20);
@@ -1208,17 +1247,23 @@ impl Phone for Device {
                 self.hid = None;
                 self.indigo = None;
                 self.close_gate(e.link_lost()).await;
-            } else if let Some(g) = self.gate.as_mut() {
-                g.last_used = Instant::now();
+            } else {
+                if let Some(g) = self.gate.as_mut() {
+                    g.last_used = tokio::time::Instant::now();
+                }
+                if let Err(e) = self.confirm_input().await {
+                    self.hid = None;
+                    self.indigo = None;
+                    self.close_gate(e.link_lost()).await;
+                    return Err(e);
+                }
             }
         }
         result
     }
 
     fn idle_at(&self) -> Option<tokio::time::Instant> {
-        self.gate
-            .as_ref()
-            .map(|g| tokio::time::Instant::from_std(g.last_used + GATE_IDLE))
+        self.gate.as_ref().map(|g| g.last_used + GATE_IDLE)
     }
 
     async fn idle(&mut self) {
@@ -1361,6 +1406,30 @@ mod tests {
             SETTINGS
         ));
         assert!(!main_executable_of("/Applications/Preferences.app/Preferences", ""));
+    }
+
+    /// The stream (what lets the phone take input) stops only after the phone had time for the last input, even
+    /// when the process is about to end right after answering.
+    #[tokio::test(start_paused = true)]
+    async fn the_stream_outlives_the_last_input() {
+        let log = std::cell::RefCell::new(Vec::new());
+        let start = tokio::time::Instant::now();
+        let input_at = start + Duration::from_millis(200);
+        tokio::time::sleep_until(input_at).await;
+        log.borrow_mut().push(("input", start.elapsed()));
+        stop_after_linger(input_at, async {
+            log.borrow_mut().push(("stream stopped", start.elapsed()))
+        })
+        .await;
+        let log = log.into_inner();
+        assert_eq!(log[0].0, "input");
+        assert_eq!(log[1].0, "stream stopped");
+        assert!(log[1].1 - log[0].1 >= INPUT_LINGER, "{log:?}");
+
+        // Input long ago: no wait.
+        let before = tokio::time::Instant::now();
+        stop_after_linger(before - Duration::from_secs(5), async {}).await;
+        assert_eq!(tokio::time::Instant::now(), before);
     }
 
     #[test]
