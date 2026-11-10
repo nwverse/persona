@@ -125,7 +125,7 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []prompts.TaskDo
 			s.tasks.mu.Lock()
 			since := s.tasks.working[t.ID]
 			s.tasks.mu.Unlock()
-			if report, evidence, valid := freshTaskDoneReport(current, items, since); ok && valid {
+			if report, evidence, valid := freshTaskDoneReport(current, items, since); ok && valid && source != "meeting" {
 				text = strings.Join(append([]string{text, report}, evidence...), "\n")
 			} else {
 				sideTurnBlocked = true
