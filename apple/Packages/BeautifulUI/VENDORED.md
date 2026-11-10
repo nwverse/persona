@@ -20,3 +20,5 @@ git -C <BeautifulUI 仓库> archive --format=tar <提交> BeautifulUI | tar -x -
 
 - `TaskRow.titleLeading { … }`（#3004）：标题第一行、标题文字前面的视图（Agents 行的「终端」/「飞书群」来源标签）。
   leading 槽固定 24pt 宽，只放状态徽标；之前把标签也塞进去，居中后两边溢出，徽标被挤出卡片、标签压住标题。
+- `ToolChipLabel`'s label (#2986): `.layoutPriority(1)` in place of `.fixedSize()`. Whole when it fits, as before; an MCP
+  tool's long "Server · Tool" label ends in "…" instead of pushing the row past the screen's edge.

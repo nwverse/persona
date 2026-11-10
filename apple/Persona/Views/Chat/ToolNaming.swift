@@ -142,6 +142,9 @@ nonisolated enum ToolNaming {
 
     static func isQuiet(_ name: String) -> Bool { quiet.contains(tableName(name)) }
 
+    /// Whether a call counts in a run's summary: any but bookkeeping, and bookkeeping that failed (its chip turns red).
+    static func speaks(_ call: ToolCall) -> Bool { !isQuiet(call.name) || call.isError }
+
     /// A shell tool's command as its detail shows it ("$ go test ./..."); a Monitor that listens on a WebSocket shows
     /// its address. nil for any other tool.
     static func commandLine(_ name: String, _ input: JSONValue) -> String? {

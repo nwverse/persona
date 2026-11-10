@@ -7,10 +7,12 @@ import Testing
 /// by the fields that say the most, and arguments as a key/value list.
 @MainActor
 struct ToolNamingTests {
-    private func call(_ name: String, _ input: [String: JSONValue] = [:]) -> ToolCall {
+    private func call(_ name: String, _ input: [String: JSONValue] = [:], failed: Bool = false) -> ToolCall {
         let use = Item(id: "1#0", seq: 1, ts: Date(timeIntervalSince1970: 1), role: "assistant", kind: .toolUse, text: nil,
                        toolUseID: "t1", toolName: name, toolInput: .object(input), isError: nil, image: nil)
-        return ToolCall(use: use, result: nil)
+        let error = Item(id: "2#0", seq: 2, ts: Date(timeIntervalSince1970: 2), role: "user", kind: .toolResult, text: "No matching tools",
+                         toolUseID: "t1", toolName: nil, toolInput: nil, isError: true, image: nil)
+        return ToolCall(use: use, result: failed ? error : nil)
     }
 
     // MARK: Names in words
@@ -206,6 +208,17 @@ struct ToolNamingTests {
         #expect(ToolNaming.arguments(.string("x")).isEmpty)
     }
 
+    /// Any number a tool sends lists without trapping: past Int's range it prints as a Double (`JSONValue.string`).
+    @Test func hugeNumbersListWithoutTrapping() {
+        #expect(JSONValue.number(3).string == "3")
+        #expect(JSONValue.number(2.5).string == "2.5")
+        #expect(JSONValue.number(1e20).string == "1e+20")
+        #expect(JSONValue.number(1e20).int == nil && JSONValue.string("inf").int == nil && JSONValue.string("nan").int == nil)
+        #expect(JSONValue.number(-3.7).int == -3 && JSONValue.string("42").int == 42)
+        let args = ToolNaming.arguments(.object(["limit": .number(1e20), "ids": .array([.number(Double(UInt64.max)), .number(7)])]))
+        #expect(args.map(\.value) == ["1.8446744073709552e+19, 7", "1e+20"])
+    }
+
     // MARK: Runs of steps
 
     @Test func bookkeepingStaysQuietInARun() {
@@ -221,6 +234,11 @@ struct ToolNamingTests {
         let done = call("TaskUpdate", ["taskId": .string("3"), "status": .string("completed")])
         #expect(ToolRunSummary.chips([done, call("Bash", ["command": .string("ls")])]).first?.label == "完成待办")
         #expect(ToolRunSummary.chips([done, done]).first?.label == "更新待办")
+        // Bookkeeping that failed still shows, red: a closed run never hides a failed step.
+        let failed = ToolRunSummary.chips([call("ToolSearch", ["query": .string("select:Nope")], failed: true), call("Bash", ["command": .string("ls")])])
+        #expect(failed.map(\.label) == ["加载工具", "运行"])
+        #expect(failed.map(\.isError) == [true, false])
+        #expect(ToolNaming.speaks(call("TaskList", failed: true)) && !ToolNaming.speaks(call("TaskList")))
     }
 
     @Test func aNotebookEditCountsItsNewLines() {

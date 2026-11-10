@@ -102,6 +102,12 @@ describe("ActionRow", () => {
     expect(inlineInput(use("n", "Monitor", { command: "tail -f x", description: "d" }))).toBe("tail -f x");
   });
 
+  it("a tool named like one of Object's methods reads as any other unknown tool", () => {
+    expect(presentAction(use("n", "constructor", {}))).toEqual({ verb: "调用", param: { text: "constructor", title: undefined } });
+    expect(presentAction(use("n", "hasOwnProperty", { title: "T" })).param!.text).toBe("hasOwnProperty · T");
+    expect(presentAction(use("n", "mcp__foundry__constructor_args", {})).param!.text).toBe("Foundry · Constructor args");
+  });
+
   it("any other call opens to its arguments as key: value lines, not JSON", () => {
     expect(argumentLines({ repo: "persona", title: "Crash", labels: ["bug", "ios"], meta: { a: 1 }, blank: " ", none: [] })).toBe(
       "title: Crash\nlabels: bug, ios\nmeta: {\"a\":1}\nrepo: persona",

@@ -10,7 +10,7 @@ import { fileName, toolFile } from "../../lib/files";
 import { openPanel } from "../../lib/panel";
 import { getSession } from "../../lib/store";
 import { taskBadge } from "../../lib/tasks";
-import { personaToolVerb, SUBJECT_KEYS, toolChip, toolDisplayName, toolLabel } from "../../lib/turns";
+import { ownEntry, personaToolVerb, SUBJECT_KEYS, toolChip, toolDisplayName, toolLabel } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import type { ToolStep } from "../../lib/work-groups";
 import { cx, Dialog, EASE, IconButton, Spinner } from "../../ui/atoms";
@@ -137,8 +137,9 @@ export function presentAction(use: Item): ActionPresentation {
     return { verb: t("chat-actionrow.verb_call"), param: { text: truncateParam(what), title: name } };
   }
   const chip = toolChip(use);
-  if (DONE[name]) return { verb: DONE[name], ...(chip ? { param: { text: truncateParam(chip), title: chip } } : {}) };
-  return { verb: VERB[name] ?? t("chat-actionrow.verb_call"), param: { text: truncateParam(chip ? `${toolLabel(name)} · ${chip}` : toolLabel(name)), title: chip || undefined } };
+  const done = ownEntry(DONE, name);
+  if (done) return { verb: done, ...(chip ? { param: { text: truncateParam(chip), title: chip } } : {}) };
+  return { verb: ownEntry(VERB, name) ?? t("chat-actionrow.verb_call"), param: { text: truncateParam(chip ? `${toolLabel(name)} · ${chip}` : toolLabel(name)), title: chip || undefined } };
 }
 
 // ── diffs ──
@@ -195,7 +196,7 @@ export function inlineInput(use: Item): string {
 /** Any other call's input as `key: value` lines, not a JSON dump (iOS ToolArgumentsDetail, #2986): the telling fields
  *  first, then the rest by name; text as written, lists of words joined, anything nested as one line of JSON. */
 export function argumentLines(inp: Record<string, unknown>): string {
-  const keys = [...SUBJECT_KEYS.filter((k) => k in inp), ...Object.keys(inp).filter((k) => !SUBJECT_KEYS.includes(k)).sort()];
+  const keys = [...SUBJECT_KEYS.filter((k) => Object.hasOwn(inp, k)), ...Object.keys(inp).filter((k) => !SUBJECT_KEYS.includes(k)).sort()];
   const shown = (v: unknown): string => {
     if (typeof v === "string") return v.trim();
     if (v === null) return "null";

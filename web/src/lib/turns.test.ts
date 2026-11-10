@@ -370,6 +370,18 @@ it("toolChip says what Claude Code's newer tools were about", () => {
   expect(toolChip(call("mcp__github__create_issue", { owner: "o", title: "Crash on launch" }))).toBe("Crash on launch");
 });
 
+it("names that match Object's own methods stay words (no table lookup reaches the prototype)", () => {
+  const call = (name: string, input: Record<string, unknown>): Item => ({ id: "c#0", seq: 1, role: "assistant", kind: "tool_use", tool_name: name, tool_input: input });
+  expect(["constructor_args", "encode_constructor", "toString", "__proto__"].map(humanizeTool)).toEqual(["Constructor args", "Encode constructor", "To string", "Proto"]);
+  expect(mcpServerName("constructor")).toBe("Constructor");
+  expect(toolDisplayName("mcp__constructor__x")).toBe("Constructor · X");
+  expect(toolDisplayName("mcp__foundry__constructor_args")).toBe("Foundry · Constructor args");
+  expect(toolLabel("constructor")).toBe("constructor");
+  expect(toolChip(call("constructor", { title: "T" }))).toBe("T");
+  expect(toolChip(call("valueOf", {}))).toBe("");
+  expect(personaToolVerb("mcp__persona__constructor")).toBeNull();
+});
+
 describe("persona-file tags", () => {
   it("become files on the message, not text", () => {
     const p = parseUserText('上次的录屏，你看下按钮那里\n\n<persona-file kind="video" path="/tmp/录屏 1.mov" name="录屏.mov" size="25270000" duration="6.0"/>\n<persona-file kind="file" path="/tmp/a&amp;b.pdf"/>');

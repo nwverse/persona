@@ -339,7 +339,7 @@ struct ToolGroupView: View {
     private func summary(_ calls: [ToolCall]) -> String {
         var counts: [String: Int] = [:]
         var order: [String] = []
-        let work = calls.filter { !ToolNaming.isQuiet($0.name) }
+        let work = calls.filter(ToolNaming.speaks)
         for c in work.isEmpty ? calls : work {
             let v = ToolPresentation.verb(c.name)
             if counts[v] == nil { order.append(v) }
@@ -400,9 +400,9 @@ enum ToolRunSummary {
     static func chips(_ calls: [ToolCall]) -> [ToolChipGroup.Chip] {
         var order: [Kind] = []
         var groups: [Kind: [ToolCall]] = [:]
-        // Bookkeeping (loading tools, reading the to-do list) says nothing about the work: a chip only when it is all
-        // the run did. Opened, the run still lists every call.
-        let work = calls.filter { !ToolNaming.isQuiet($0.name) }
+        // Bookkeeping (loading tools, reading the to-do list) says nothing about the work: a chip only when it failed or
+        // is all the run did. Opened, the run still lists every call.
+        let work = calls.filter(ToolNaming.speaks)
         for c in work.isEmpty ? calls : work {
             let k = kind(c.name)
             if groups[k] == nil { order.append(k) }
@@ -576,7 +576,10 @@ struct ToolCallRow: View {
                             .foregroundStyle(tint)
                     }
                 }
+                // One line: the verb first ("GitHub · Create issue" is long), the subject gives way.
                 Text(ToolPresentation.verb(call)).font(onTimeline ? Theme.Font.secondaryMedium : Theme.Font.secondaryStrong)
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Text(ToolPresentation.subject(call))
                     .font(Theme.Font.secondary)
                     .foregroundStyle(.secondary)

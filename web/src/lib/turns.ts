@@ -357,6 +357,7 @@ export function toolChip(use: Item): string {
   };
   const name = use.tool_name ?? "";
   const tool = name.startsWith("mcp__") && !isPersonaTool(name) ? "" : name;
+  const newer = ownEntry(CLAUDE_TOOL_CHIP, tool);
   let v = "";
   if (tool === "Bash" || tool === "exec_command" || tool === "shell" || tool === "PowerShell") v = pick("description", "command", "cmd");
   else if (/^(Read|Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) v = shortFile(pick("file_path", "notebook_path"));
@@ -365,7 +366,7 @@ export function toolChip(use: Item): string {
   else if (tool === "WebSearch") v = pick("query");
   else if (tool === "Task" || tool === "Agent") v = pick("description", "prompt");
   else if (tool === "TodoWrite") v = t("lib-turns.update_todos");
-  else if (CLAUDE_TOOL_CHIP[tool]) v = CLAUDE_TOOL_CHIP[tool](inp, pick);
+  else if (newer) v = newer(inp, pick);
   else v = pickSubject(inp);
   if (!v && Array.isArray(inp.command)) v = (inp.command as unknown[]).join(" ");
   return v.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
@@ -429,6 +430,12 @@ const CLAUDE_TOOL_CHIP: Record<string, (inp: Record<string, unknown>, pick: Pick
   Skill: (_, pick) => pick("skill", "command"),
 };
 
+/** A table's entry for a key that comes from data (a tool's name, a word of it): its own entries only, so a tool or a
+ *  word called "constructor" or "toString" is not mistaken for one of Object's methods. */
+export function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 /** Words spelled their own way wherever they show up in a name (iOS ToolNaming.spelled). */
 // i18n-ignore-start: product names and acronyms, the same in every language
 const SPELLED: Record<string, string> = {
@@ -450,7 +457,7 @@ export function nameWords(id: string): string[] {
 
 /** An identifier in words, the first capitalized: "create_issue" is "Create issue", "getPRComments" "Get PR comments" (iOS ToolNaming.humanize). */
 export function humanizeTool(id: string): string {
-  const words = nameWords(id).map((w) => SPELLED[w.toLowerCase()] ?? (w.length > 1 && /^[A-Z0-9]+$/.test(w) ? w : w.toLowerCase()));
+  const words = nameWords(id).map((w) => ownEntry(SPELLED, w.toLowerCase()) ?? (w.length > 1 && /^[A-Z0-9]+$/.test(w) ? w : w.toLowerCase()));
   if (!words.length) return "";
   const [first, ...rest] = words;
   return [SPELLED_VALUES.has(first) ? first : first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(" ");
@@ -464,7 +471,7 @@ export function mcpServerName(server: string): string {
   let words = nameWords(s);
   const half = words.length / 2;
   if (half >= 1 && Number.isInteger(half) && words.slice(0, half).join(" ").toLowerCase() === words.slice(half).join(" ").toLowerCase()) words = words.slice(0, half);
-  return words.map((w) => SPELLED[w.toLowerCase()] ?? w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  return words.map((w) => ownEntry(SPELLED, w.toLowerCase()) ?? w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
 export function shortFile(p: string) {
@@ -496,7 +503,8 @@ export const TOOL_LABEL: Record<string, string> = {
 
 export function toolLabel(name?: string): string {
   if (!name) return t("lib-turns.tool");
-  if (TOOL_LABEL[name]) return TOOL_LABEL[name];
+  const label = ownEntry(TOOL_LABEL, name);
+  if (label) return label;
   // mcp__<server>__<tool>, and the server may have underscores itself (mcp__plugin_x_y__tool), like the apps
   if (name.startsWith("mcp__")) return name.slice(name.lastIndexOf("__") + 2).replace(/_/g, " ");
   return name;
@@ -591,7 +599,7 @@ const PERSONA_VERB_KEY: Record<string, string> = {
 export function personaToolVerb(name?: string): { verb: string; what?: string } | null {
   if (!isPersonaTool(name)) return null;
   const base = name!.slice(name!.lastIndexOf("__") + 2);
-  const key = PERSONA_VERB_KEY[canonicalTool(base)];
+  const key = ownEntry(PERSONA_VERB_KEY, canonicalTool(base));
   if (key) return { verb: t(`lib-turns.${key}`) };
   const family = /^(phone|mail)_(.+)$/.exec(base);
   if (family) return { verb: t(family[1] === "phone" ? "lib-turns.persona_phone" : "lib-turns.persona_mail"), what: family[2].replace(/_/g, " ") };
