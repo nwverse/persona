@@ -71,7 +71,7 @@ func TestSubagentMessagesAreAssociatedToolResults(t *testing.T) {
 				}
 			}
 			got := ParseLine(4, []byte(subagentPeerLine("interim", "agent-review", "Interim analysis; continue working.", queued, false)), &meta)
-			if len(got) != 1 || got[0].Kind != proto.KindToolResult || got[0].From != "" || got[0].ToolUseID != "toolu_review" || got[0].Task.Status != "running" || got[0].Wake || got[0].Queued {
+			if len(got) != 1 || got[0].Kind != proto.KindToolResult || got[0].From != "" || got[0].ToolUseID != "toolu_review" || got[0].Task.Status != "running" || got[0].Wake == queued || got[0].Queued {
 				t.Fatalf("interim report: %+v", got)
 			}
 			if len(meta.Background) != 1 || meta.Turns != 1 || meta.FirstUser != "Run a synthetic review." {
@@ -107,6 +107,23 @@ func TestSubagentAssociationDoesNotUsePeerDisplayName(t *testing.T) {
 		if len(got) != 1 || got[0].Kind != proto.KindText || got[0].From != "general-purpose" || got[0].Text != "A genuine message from another session." {
 			t.Fatalf("unrelated peer changed: %+v", got)
 		}
+	}
+}
+
+func TestIdleSubagentReportRetainsWakeBoundary(t *testing.T) {
+	var meta Meta
+	for i, line := range subagentLaunch() {
+		ParseLine(i+1, []byte(line), &meta)
+	}
+	ParseLine(4, []byte(`{"type":"assistant","uuid":"answer","message":{"role":"assistant","content":[{"type":"text","text":"The preliminary response is complete."}]}}`), &meta)
+	ParseLine(5, []byte(`{"type":"system","subtype":"turn_duration","uuid":"end","parentUuid":"answer","durationMs":1000}`), &meta)
+	if !meta.TurnClosed {
+		t.Fatal("the parent turn did not end")
+	}
+	promptAt := meta.LastPromptAt
+	got := ParseLine(6, []byte(subagentPeerLine("idle-report", "agent-review", "The subagent is still checking.", false, false)), &meta)
+	if len(got) != 1 || !got[0].Wake || got[0].Kind != proto.KindToolResult || !meta.TurnOpen || meta.TurnClosed || meta.Turns != 1 || meta.LastPromptAt != promptAt {
+		t.Fatalf("idle peer delivery lost its wake or became user input: %+v", got)
 	}
 }
 

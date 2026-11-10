@@ -136,6 +136,16 @@ describe("associated subagent reports", () => {
     expect(terminalCalls([...initial, current]).has("launch")).toBe(status !== "waiting");
   });
 
+  it.each([false, true])("preserves a foreground report with an agentId warning tail (metadata=%s)", async (metadata) => {
+    const foreground = item(3, "tool_result", { tool_use_id: "launch", text: "## Foreground findings\nThe complete report is still readable.\nagentId: example-agent (This is an internal ID for your use)", ...(metadata ? { task: note("completed") } : {}) });
+    await draw([...initial.slice(0, 2), foreground], false);
+    await click("[data-work-group] > button");
+    expect(host.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card")).toBe("completed");
+    await click("[data-subagent-card] button");
+    await click("[data-report-line]");
+    expect(host.textContent).toContain("The complete report is still readable.");
+  });
+
   it("fetches full text by the report item's parent-session identity, not the task's 4KB preview", async () => {
     const cut = { ...done, full_size: 16000, task: { ...done.task!, detail: "Compatibility preview only" } };
     vi.mocked(fullItem).mockResolvedValue({ ...cut, text: "## Full findings\nThe entire fictional report is visible." });

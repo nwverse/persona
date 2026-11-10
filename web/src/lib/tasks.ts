@@ -4,6 +4,8 @@
 import { formatDate, t } from "../i18n";
 import type { BackgroundTask, Item, LoopInfo, Subagent, TaskNote } from "./types";
 import type { AgentStatus } from "./work-groups";
+import { launchedTaskID } from "./task-association";
+export { attachedAgentNotices } from "./task-association";
 
 /** Background tasks and the calls that started them. A notice names its call by tool_use_id, or only by the task id
  *  the call's result announced ("running in background with ID: …", "Monitor started (task …"). */
@@ -20,9 +22,6 @@ export interface TaskIndex {
   descriptions: Map<string, string>;
   startedAt: Map<string, string>;
 }
-
-// agentId takes its colon: Claude Code 2.1.319's receipt says "including the agentId below" before the id line.
-const LAUNCHED = /(?:running in background with ID:?|agentId:|Monitor started \(task:?|moved to the background \(ID:?)\s*([A-Za-z0-9_-]+)/;
 
 export function emptyTaskIndex(): TaskIndex {
   return { notes: new Map(), reports: new Map(), calls: new Map(), started: new Set(), descriptions: new Map(), startedAt: new Map() };
@@ -42,9 +41,9 @@ export function buildTaskIndex(items: Item[]): TaskIndex {
   for (const it of items) {
     if (it.kind === "tool_use" && it.tool_use_id) uses.set(it.tool_use_id, it);
     if (it.kind === "tool_result" && it.tool_use_id) {
-      const m = LAUNCHED.exec(it.text ?? "");
-      if (m) {
-        byTask.set(m[1], it.tool_use_id);
+      const id = launchedTaskID(it.text ?? "");
+      if (id) {
+        byTask.set(id, it.tool_use_id);
         x.started.add(it.tool_use_id);
       }
     }
@@ -67,13 +66,6 @@ export function buildTaskIndex(items: Item[]): TaskIndex {
     }
   }
   return x;
-}
-
-/** Legacy agent notices already owned by a loaded Agent/Task call belong under that card, not in the feed.
- *  Unassociated peers and notices whose call is on an unloaded page keep their existing presentation. */
-export function attachedAgentNotices(items: Item[], index = buildTaskIndex(items)): Set<string> {
-  const calls = new Set(items.filter((i) => i.kind === "tool_use" && i.tool_use_id && (i.tool_name === "Agent" || i.tool_name === "Task")).map((i) => i.tool_use_id!));
-  return new Set(items.filter((i) => i.kind === "notice" && i.task?.kind === "agent" && Boolean(index.calls.get(i.id)) && calls.has(index.calls.get(i.id)!)).map((i) => i.id));
 }
 
 export function taskFailed(n: TaskNote): boolean {
@@ -244,7 +236,7 @@ export function subagentTitle(a: Subagent): string {
 // ── a subagent call in the chat (its card, cindy's AgentTaskCard) ──
 
 /** What an Agent / Task call returned when it only started the subagent in the background. */
-const LAUNCH_RECEIPT = /Async agent launched|This is an internal ID for your use/;
+const LAUNCH_RECEIPT = /^\s*(?:Async agent launched|This is an internal ID for your use)/;
 /** The "agentId: …" line Claude Code appends to a subagent's report. */
 const AGENT_ID_LINE = /^\s*agentId:.*$/gm;
 
@@ -259,6 +251,7 @@ export function subagentParent(sid: string): string {
 }
 
 export function isLaunchReceipt(result?: Item): boolean {
+  if (result?.task?.kind === "agent" && (result.task.detail || agentNoteStatus(result.task) !== "running")) return false;
   return LAUNCH_RECEIPT.test(result?.text ?? "");
 }
 
@@ -300,7 +293,8 @@ export function terminalCalls(items: Item[], index = buildTaskIndex(items)): Set
     const call = it.tool_use_id || index.calls.get(it.id);
     if (!call) continue;
     const status = agentNoteStatus(it.task);
-    if (status ? status !== "running" : it.kind === "tool_result" && !isLaunchReceipt(it)) answered.add(call);
+    if (status === "running") answered.delete(call);
+    else if (status || it.kind === "tool_result" && !isLaunchReceipt(it)) answered.add(call);
   }
   return answered;
 }

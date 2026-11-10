@@ -615,6 +615,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			return nil
 		}
 		if it, ok := meta.agentPeer(mk, e.Origin, e.Message.Content); ok {
+			it.Wake = true
 			return []proto.Item{it}
 		}
 		if agent, report, ok := handbackOf(e.Origin); ok {

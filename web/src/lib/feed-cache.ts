@@ -2,7 +2,7 @@
 import { BASE } from "./base";
 import type { Item } from "./types";
 import { injectedOf } from "./injected";
-import { buildTaskIndex } from "./tasks";
+import { taskCalls } from "./task-association";
 
 const PREFIX = "persona.feedCache.v1:";
 export const FEED_CACHE_MAX_BYTES = 256 * 1024;
@@ -158,24 +158,19 @@ function newestTurns(value: FeedCache): FeedCache {
   }
   // A retained report must not lose the earlier launch it belongs under. Extend the contiguous prefix, including
   // that call's user turn, rather than caching a detached call that would break paging coverage.
-  const index = buildTaskIndex(value.items);
-  const launches = new Map<string, number>();
-  value.items.forEach((i, at) => {
-    if (i.kind === "tool_use" && i.tool_use_id && (i.tool_name === "Agent" || i.tool_name === "Task")) launches.set(i.tool_use_id, at);
-  });
-  let previous = start;
-  do {
-    previous = start;
-    for (const i of value.items.slice(start)) {
-      if (i.task?.kind !== "agent") continue;
-      const call = i.tool_use_id || index.calls.get(i.id);
-      const launch = call ? launches.get(call) : undefined;
-      if (launch !== undefined && launch < start) {
-        start = launch;
-        while (start > 0 && !userQuestion(value.items[start])) start--;
-      }
+  const calls = taskCalls(value.items);
+  const needed = new Set<string>();
+  for (let at = value.items.length - 1; at >= 0 && (at >= start || needed.size); at--) {
+    const item = value.items[at];
+    if (item.task?.kind === "agent") {
+      const call = item.tool_use_id || calls.get(item.id);
+      if (call) needed.add(call);
     }
-  } while (start < previous);
+    if (item.kind === "tool_use" && (item.tool_name === "Agent" || item.tool_name === "Task") && needed.delete(item.tool_use_id ?? "") && at < start) {
+      start = at;
+      while (start > 0 && !userQuestion(value.items[start])) start--;
+    }
+  }
   while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
   return {
     machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,

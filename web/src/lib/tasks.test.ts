@@ -132,6 +132,12 @@ describe("a subagent call's card", () => {
     expect(agentStatus(res("42 passed"), undefined, true)).toBe("completed");
   });
 
+  it("uses the latest nonterminal evidence instead of a past completion for working bars", () => {
+    const finished: Item = { ...res("Done"), task: { kind: "agent", status: "completed", tool_use_id: "c" } };
+    const resumed: Item = { ...res("Working again"), id: "resumed#0", seq: 3, task: { kind: "agent", status: "running", tool_use_id: "c" } };
+    expect(terminalCalls([finished, resumed]).has("c")).toBe(false);
+  });
+
   it("does not infer completion from an unknown subagent status", () => {
     const result: Item = { ...res("Interim detail"), task: { kind: "agent", status: "future-status", tool_use_id: "c" } };
     expect(agentStatus(result, meta(false), false)).toBe("running");

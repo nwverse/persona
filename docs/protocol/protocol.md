@@ -668,10 +668,10 @@ not invented.
   compatibility preview. Use `text` first and the existing item full-text endpoint for manual full inspection.
   Launch receipts are not reports. A status-only notification, including the pointer after an already delivered
   handback, has no `text` or `task.detail`; its status still participates in the call's lifecycle.
-- `wake` still marks a task notification delivered while the parent was idle, including a normalized agent
-  `tool_result`. It starts a new parent turn without becoming a user-authored message. Cold windows reconstruct
-  earlier launch associations and delivery status before parsing their tail; incremental reads append results,
-  never rewrite the old launch receipt.
+- `wake` marks a task notification or associated peer report delivered as a user line while the parent was idle,
+  including hidden `isMeta` peer lines. Queued-command attachments absorbed mid-turn do not carry it. It starts a
+  new parent turn without becoming a user-authored message. Cold windows reconstruct earlier launch associations
+  and delivery status before parsing their tail; incremental reads append results, never rewrite the old receipt.
 
 Apple integration (#3377): decode `task` on `tool_result` as well as on legacy notices, accept `running`, retain all
 results per call and use only terminal evidence to stop the work bar. Handle `wake` independently of item kind.

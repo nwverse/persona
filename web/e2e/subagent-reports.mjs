@@ -1,12 +1,12 @@
 // Real app, synthetic HTTP/WS only. A shared CDP run leaves Chrome and evidence tabs open.
-// node web/e2e/subagent-reports.mjs <loopback web URL> <screenshot directory> [CDP URL | Chrome executable]
+// node web/e2e/subagent-reports.mjs <loopback web URL> <screenshot directory> [CDP URL | Chrome executable] [standard | large]
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
-const [base, shots, cdp = "http://127.0.0.1:9222"] = process.argv.slice(2);
+const [base, shots, cdp = "http://127.0.0.1:9222", textSize = "standard"] = process.argv.slice(2);
 const shared = /^https?:/.test(cdp);
-if (!base || !shots || !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(base)) {
+if (!base || !shots || !["standard", "large"].includes(textSize) || !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(base)) {
   console.error("usage: node web/e2e/subagent-reports.mjs <loopback web URL> <screenshot directory> [CDP URL]");
   process.exit(2);
 }
@@ -36,7 +36,8 @@ async function verify(theme, width) {
   const page = await context.newPage();
   await page.setViewportSize({ width, height: 1000 });
   await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
-  await page.addInitScript(({ theme, at }) => {
+  await page.addInitScript(({ theme, at, textSize }) => {
+    localStorage.setItem("persona.text-size", textSize);
     localStorage.setItem("persona.token", "synthetic-example-token");
     localStorage.setItem("persona.language", "en");
     localStorage.setItem("persona.theme", theme);
@@ -45,7 +46,7 @@ async function verify(theme, width) {
       constructor(...args) { super(...(args.length ? args : [at])); }
       static now() { return at; }
     };
-  }, { theme, at: Date.parse(AT) + 10000 });
+  }, { theme, at: Date.parse(AT) + 10000, textSize });
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace(/^\/api\/v1/, "");
@@ -83,6 +84,7 @@ async function verify(theme, width) {
     await page.screenshot({ path: join(shots, `web-${width}-${theme}-${state}.png`) });
   };
   await summary.waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.textSize ?? "standard"), textSize, "configured text size is applied");
   assert.equal(await summary.getAttribute("aria-expanded"), "false");
   assert.equal(await card.count(), 0);
   items = [...initial, progress];
@@ -92,6 +94,7 @@ async function verify(theme, width) {
   await card.waitFor();
   assert.equal(await card.getAttribute("data-subagent-card"), "running");
   assert.equal(await card.locator("button").first().getAttribute("aria-expanded"), "false");
+  await shot("running-tool-collapsed");
   await card.locator("button").first().click();
   await card.locator("[data-report-line]").waitFor();
   assert.equal(await card.locator("[data-report]").getAttribute("data-report"), "folded");
@@ -105,6 +108,10 @@ async function verify(theme, width) {
   await page.waitForFunction(() => document.querySelector("[data-subagent-card]")?.getAttribute("data-subagent-card") === "completed");
   assert.equal(await card.locator("[data-report]").count(), 2, "pointer notification adds no duplicate report");
   assert.equal(await card.locator('[data-items="report-example-4#0"] [data-report]').getAttribute("data-report"), "open");
+  await card.locator("button").first().click();
+  assert.equal(await card.locator("button").first().getAttribute("aria-expanded"), "false");
+  await shot("completed-tool-collapsed");
+  await card.locator("button").first().click();
   await card.locator('[data-items="report-example-6#0"] [data-report-line]').click();
   await card.getByText("Every fictional check passed.", { exact: true }).waitFor();
   assert.equal(await chat.locator("[data-subagent-card]").count(), 1);
@@ -130,7 +137,7 @@ function atNow() { return new Date(Date.parse(AT) + 10000).toISOString(); }
 try {
   browser = shared ? await chromium.connectOverCDP(cdp) : await chromium.launch({ executablePath: cdp, args: ["--no-sandbox"] });
   for (const width of [1280, 390]) for (const theme of ["light", "dark"]) await verify(theme, width);
-  console.log(`PASS subagent report browser verification: 4 real-app scenarios, 16 screenshots, synthetic data only${shared ? "; tabs retained" : ""}`);
+  console.log(`PASS subagent report browser verification: 4 real-app scenarios, 24 screenshots, synthetic data only${shared ? "; tabs retained" : ""}`);
 } catch (error) {
   console.error("FAIL subagent report browser verification", error);
   process.exitCode = 1;

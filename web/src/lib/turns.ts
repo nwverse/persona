@@ -8,7 +8,7 @@ import { errorSignature, isRetryText, parseAPIError, type APIErrorInfo } from ".
 import { foldCompactions, isCompaction } from "./compaction";
 import { injectedOf } from "./injected";
 import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
-import { attachedAgentNotices } from "./tasks";
+import { attachedAgentNotices } from "./task-association";
 import type { Injected, Item, MessageSource } from "./types";
 
 export type Step =
