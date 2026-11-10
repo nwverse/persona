@@ -141,7 +141,7 @@ class ModelManagerScopeShotsTest {
             rule.waitForIdle()
             assertEquals("save" to "work", calls.last { it.first == "save" })
         }
-        assertTrue(calls.contains("catalog" to "assistant"))
+        assertTrue(calls.contains("catalog" to null)) // the default's names none
         assertTrue(calls.contains("catalog" to "work"))
         assertTrue(calls.filter { it.first == "purpose" || it.first == "save" }.all { it.second == "work" })
     }

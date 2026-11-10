@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -193,7 +194,8 @@ class ChannelsShotsTest {
         // With a navigation host, the removed introduction row used to be present.
         rule.onAllNodesWithText("助手").assertCountEquals(0)
         // The brand card is Persona too; only a separate legacy navigation entry is forbidden.
-        rule.onAllNodes(hasText("Persona") and !hasTestTag("settings-hub-card")).assertCountEquals(0)
+        // (Without a roster the first group's heading says Persona: a heading, not an entry.)
+        rule.onAllNodes(hasText("Persona") and !hasTestTag("settings-hub-card") and !hasAnyAncestor(hasTestTag("settings-assistant-head"))).assertCountEquals(0)
         rule.onAllNodesWithText("认识 Persona").assertCountEquals(0)
         // One row, in the current assistant's group (docs/assistant/managers.md "Clients"): after Connectors (and
         // Extensions), before the computers' Claude Code settings; no section of its own.

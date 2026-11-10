@@ -104,7 +104,8 @@ class ConnectorOwnershipShotsTest {
         }
         rule.waitUntil { api.calls.isNotEmpty() }
         rule.waitUntil { rule.onAllNodesWithText("GitHub").fetchSemanticsNodes().isNotEmpty() }
-        assertEquals(listOf("list" to "assistant"), api.calls.filter { it.first == "list" }.distinct())
+        // The default assistant's list names no manager (the request the hub always got).
+        assertEquals(listOf<Pair<String, String?>>("list" to null), api.calls.filter { it.first == "list" }.distinct())
         assertEquals(0, rule.onAllNodesWithText("work-example", substring = true).fetchSemanticsNodes().size)
         assertEquals(0, rule.onAllNodesWithText("GitHub · ", substring = true).fetchSemanticsNodes().size)
         rule.onNodeWithText("GitHub").performClick()

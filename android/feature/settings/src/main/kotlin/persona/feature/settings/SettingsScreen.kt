@@ -430,7 +430,7 @@ private fun SettingsContent(
                     onManage = { open(SettingsPage.Managers) },
                     // No roster (an older hub, demo mode): no assistants to name or switch, so a plain heading and no footer.
                     fallback = { JAssistantSettingsHeader(stringResource(persona.core.designsystem.R.string.designsystem_brand_persona), null, false,
-                        switchLabel, onSwitch = null) },
+                        switchLabel, onSwitch = null, modifier = Modifier.testTag("settings-assistant-head")) },
                     head = { current, isDefault, _, toggle ->
                         JAssistantSettingsHeader(stringResource(R.string.settings_group_assistant, current.shownName), current, isDefault,
                             switchLabel, onSwitch = toggle)
