@@ -736,8 +736,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if c.HubFeatures != nil || c.MachineID != "" {
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 		}
-		if c.ClaudeDirs != nil || c.Keep == nil && (c.HubFeatures == nil || c.MachineID != "") {
-			// Keep-only and capability-only updates leave the known directories intact.
+		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
 		}
 		if c.ClaudeDirsBlocked != nil {

@@ -59,10 +59,12 @@ assistant process. A new Claude assistant, Agent SDK assistant or guest conversa
 handler only as `persona` when the hub announces
 `persona_contracts_v1`. Its automatic tool permissions use the same namespace selection, so each built-in tool is
 offered once and only one built-in MCP process is needed. An old hub, an absent feature list or a connection that has
-not received its hub capabilities keeps both `persona` and `jarvis`. On a hub reconnect, the manager clears retained
-nodes' capabilities before finishing its handshake, then forwards the new announcement. An unacknowledged reset closes
-that node connection so it must reconnect with the safe default. Reconnecting replaces the remembered capabilities;
-a decision for one process is not changed halfway through its startup. An unused warm process whose namespace policy
+not received its hub capabilities keeps both `persona` and `jarvis`. On a hub reconnect, `rehook` forwards the new
+announcement through `configureNode`; a successful reply without `hub_features` sends an empty list. Until that
+`hubConnected` call returns successfully, or if it fails, a retained node connection keeps the previous hub's
+capabilities. A new conversation in this window can therefore still register only `persona` after a hub downgrade.
+The manager handshake does not wait for capability resets or disconnect nodes over them. A decision for one process
+is not changed halfway through its startup. An unused warm process whose namespace policy
 no longer matches is replaced before reuse. No user configuration is required.
 
 Resumed assistant sessions retain both namespaces, even with a capable hub. This conservative fallback also applies

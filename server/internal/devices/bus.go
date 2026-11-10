@@ -6,8 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"slices"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -116,63 +114,12 @@ func (d *Devices) Event(name string, params json.RawMessage) bool {
 func (d *Devices) Hello(res json.RawMessage) {
 	// Before the connection counts as up: the hub asks nothing through it yet (hubopen.go).
 	d.endHubOpened()
-	d.resetNodeHubFeatures()
 	var h struct {
 		Devices *devicewire.Config `json:"devices"`
 	}
 	if json.Unmarshal(res, &h) == nil && h.Devices != nil {
 		d.Configure(*h.Devices)
 	}
-}
-
-// resetNodeHubFeatures clears capabilities before a new bus handshake can start
-// conversations on retained node connections. Rehook supplies the new hub's list
-// afterward. A node that cannot acknowledge the reset must reconnect first.
-func (d *Devices) resetNodeHubFeatures() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	limit := make(chan struct{}, 8)
-	var wg sync.WaitGroup
-	for _, m := range d.machinesNow() {
-		m.mu.Lock()
-		peer := m.peer
-		m.mu.Unlock()
-		if peer == nil {
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case limit <- struct{}{}:
-				defer func() { <-limit }()
-			case <-ctx.Done():
-				peer.Close(ctx.Err())
-				return
-			}
-			// Bound even a transport write that cannot itself be interrupted.
-			result := make(chan error, 1)
-			go func() {
-				// Older nodes clear their known directories on a capability-only update.
-				params := m.withClaudeDirs(ctx, map[string]any{"hub_features": []string{}})
-				result <- peer.Call(ctx, "node.configure", params, nil)
-			}()
-			var err error
-			select {
-			case err = <-result:
-			case <-ctx.Done():
-				err = ctx.Err()
-			}
-			var remote *rpc.Error
-			if errors.As(err, &remote) && (remote.Code == "unknown_method" || strings.HasPrefix(remote.Message, "unknown method")) {
-				return // Older nodes cannot hold this capability and need no reset.
-			}
-			if err != nil {
-				peer.Close(err)
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 // hubConnected hands the node, through the hub, what is the hub's (Codex settings, the sends it

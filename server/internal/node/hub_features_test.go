@@ -1,7 +1,6 @@
 package node
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -32,22 +31,5 @@ func TestHubFeaturesConfiguration(t *testing.T) {
 				t.Fatalf("hubSupportsPersonaContracts = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestHubFeaturesOnlyUpdatePreservesClaudeDirectories(t *testing.T) {
-	n, _ := testNode(t)
-	known := []string{t.TempDir()}
-	n.cdirs = &claudeDirs{known: slices.Clone(known), scan: func() map[int]procEnv { return nil }}
-	for _, features := range [][]string{{nodeproto.PersonaContracts}, {}} {
-		if _, err := nodeCall(t, n, "node.configure", map[string]any{"hub_features": features}); err != nil {
-			t.Fatal(err)
-		}
-		n.cdirs.mu.Lock()
-		got := slices.Clone(n.cdirs.known)
-		n.cdirs.mu.Unlock()
-		if !slices.Equal(got, known) {
-			t.Fatalf("capability-only update forgot Claude directories: %v", got)
-		}
 	}
 }
