@@ -126,8 +126,9 @@ services:
         done
         exec docker-entrypoint.sh "$$@"
       - postgres-entrypoint
-    # PostgreSQL's own defaults unless .env says otherwise, except wal_compression: auto, which the entrypoint above
-    # resolves (docs/operations/docker.md "Disk writes"). Settings given here win over ALTER SYSTEM and postgresql.conf.
+    # PostgreSQL's own defaults unless .env says otherwise, except wal_compression (auto, which the entrypoint above
+    # resolves) and checkpoint_timeout (15min; docs/operations/docker.md "Disk writes"). Settings given here win over
+    # ALTER SYSTEM and postgresql.conf.
     command:
       - postgres
       - -c
@@ -135,7 +136,7 @@ services:
       - -c
       - wal_compression=${PERSONA_POSTGRES_WAL_COMPRESSION:-auto}
       - -c
-      - checkpoint_timeout=${PERSONA_POSTGRES_CHECKPOINT_TIMEOUT:-5min}
+      - checkpoint_timeout=${PERSONA_POSTGRES_CHECKPOINT_TIMEOUT:-15min}
       - -c
       - wal_writer_delay=${PERSONA_POSTGRES_WAL_WRITER_DELAY:-200ms}
     logging: *logging

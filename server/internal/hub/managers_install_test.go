@@ -281,7 +281,7 @@ func runDockerScript(t *testing.T, n, id, hub, code, script string) {
 		t.Fatalf("first run: %v\n%s", err, out)
 	}
 	// Its Postgres runs with pgdocker.ServerArgs, as every container pgdocker makes.
-	if !strings.Contains(out, "ARGV run -d --name "+n+"-pg --network "+n+" --restart unless-stopped -v "+n+"-data:/var/lib/postgresql -e POSTGRES_USER=persona -e POSTGRES_DB=persona -e POSTGRES_PASSWORD postgres:18-alpine postgres -c wal_compression=lz4\n") {
+	if !strings.Contains(out, "ARGV run -d --name "+n+"-pg --network "+n+" --restart unless-stopped -v "+n+"-data:/var/lib/postgresql -e POSTGRES_USER=persona -e POSTGRES_DB=persona -e POSTGRES_PASSWORD postgres:18-alpine postgres -c wal_compression=lz4 -c checkpoint_timeout=15min\n") {
 		t.Fatalf("first run, the database container:\n%s", out)
 	}
 	for _, line := range strings.Split(out, "\n") {

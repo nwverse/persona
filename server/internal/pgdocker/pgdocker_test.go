@@ -137,15 +137,15 @@ func TestProvisionManagerDBIsIdempotent(t *testing.T) {
 	}
 }
 
-// A container is made running postgres with ServerArgs after the image (lz4 for the WAL's full page images), and
-// scripts/deploy/db.sh makes the hub's with the same.
+// A container is made running postgres with ServerArgs after the image (lz4 for the WAL's full page images, fewer
+// checkpoints), and scripts/deploy/db.sh makes the hub's with the same.
 func TestCreateRunsPostgresWithServerArgs(t *testing.T) {
 	f := &fake{}
 	c := &Container{Name: "persona-postgres", Volume: "persona-pgdata", Port: 18661, Run: f.run}
 	if err := c.Create(context.Background(), "pw"); err != nil {
 		t.Fatal(err)
 	}
-	want := " " + Image + " postgres -c wal_compression=lz4"
+	want := " " + Image + " postgres -c wal_compression=lz4 -c checkpoint_timeout=15min"
 	if f.count("docker run") != 1 || !strings.HasSuffix(f.calls[len(f.calls)-1], want) {
 		t.Fatalf("docker run does not end with %q:\n%s", want, strings.Join(f.calls, "\n"))
 	}

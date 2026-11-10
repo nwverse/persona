@@ -382,14 +382,14 @@ class ComposeTests(unittest.TestCase):
         "PERSONA_LOG_MAX_FILE": "3",
         "PERSONA_POSTGRES_SYNCHRONOUS_COMMIT": "on",
         "PERSONA_POSTGRES_WAL_COMPRESSION": "auto",
-        "PERSONA_POSTGRES_CHECKPOINT_TIMEOUT": "5min",
+        "PERSONA_POSTGRES_CHECKPOINT_TIMEOUT": "15min",
         "PERSONA_POSTGRES_WAL_WRITER_DELAY": "200ms",
         "PERSONA_POSTGRES_HEALTHCHECK_INTERVAL": "5s",
         "PERSONA_POSTGRES_HEALTHCHECK_TIMEOUT": "5s",
         "PERSONA_POSTGRES_HEALTHCHECK_RETRIES": "30",
     }
 
-    def test_compose_disk_write_settings_default_to_the_old_timings_and_postgres_defaults(self):
+    def test_compose_disk_write_defaults_match_the_env_example_and_docs(self):
         text = COMPOSE.read_text()
         names = "|".join(self.DISK_WRITE_DEFAULTS)
         self.assertEqual(dict(re.findall(r"\$\{(" + names + r"):-([^}]*)\}", text)), self.DISK_WRITE_DEFAULTS)

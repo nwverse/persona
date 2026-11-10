@@ -89,10 +89,10 @@ else
   PW=$(python3 -c 'import secrets;print(secrets.token_hex(24))')
   docker volume create "$VOLUME" >/dev/null
   # postgres 18 keeps PGDATA under /var/lib/postgresql/<major>/docker, so mount the parent. The command after the image
-  # is pgdocker.ServerArgs (server/internal/pgdocker): lz4 for the full page images in the WAL.
+  # is pgdocker.ServerArgs (server/internal/pgdocker): fewer and lz4-compressed full page images in the WAL.
   docker run -d --name "$NAME" --restart unless-stopped -p 127.0.0.1:$PORT:5432 \
     -v "$VOLUME":/var/lib/postgresql -e POSTGRES_USER=persona -e POSTGRES_PASSWORD="$PW" -e POSTGRES_DB=persona \
-    postgres:18-alpine postgres -c wal_compression=lz4 >/dev/null
+    postgres:18-alpine postgres -c wal_compression=lz4 -c checkpoint_timeout=15min >/dev/null
   [ -f "$CFG" ] || echo '{}' > "$CFG"
   umask 077
   python3 - "$CFG" "postgres://persona:$PW@127.0.0.1:$PORT/persona?sslmode=disable" <<'PY'
