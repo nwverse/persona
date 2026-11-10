@@ -4,8 +4,8 @@
 package ai
 
 import (
-	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,7 +26,7 @@ type Config = aiwire.Config
 
 // errNotConfigured is shown in the app as is (e.g. under "AI Draft Reply"), so it says where to fix it there.
 var errNotConfigured = errors.New("还没有能直接调用的模型：在 设置 › 模型供应商 添加带 Key 的接入，再到 设置 › 模型配置 为这项选择它" +
-	`（或在管理者的 manager.json 写 "ai"）`)
+	`（或在助手的 manager.json 写 "ai"）`)
 
 // IsNotConfigured tells a request that had no model to go to (nothing set up for it) from one that failed.
 func IsNotConfigured(err error) bool { return errors.Is(err, errNotConfigured) }
@@ -232,7 +232,9 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 
 // respond calls the Responses API. It always streams: some compatible endpoints (Codex-backed relays) reject
 // stream=false, and the text is just the concatenated output_text deltas. The system prompt goes in as a developer
-// message rather than `instructions`, which those relays replace with their own.
+// message rather than `instructions`, which those relays replace with their own. Events are framed as SSE
+// (SSEEvents), and a stream that ends before its terminal event (completed, incomplete or failed) was cut: an error
+// wrapping io.ErrUnexpectedEOF, not a short reply.
 func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Request) (reply Reply, answered bool, err error) {
 	input := []any{map[string]any{"role": "developer", "content": r.System}}
 	for _, m := range r.Messages {
@@ -261,17 +263,18 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	}
 	var b strings.Builder
 	refused := false // a refusal content part came: the model declined, whatever else the stream says
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 64<<10), 4<<20)
-	for sc.Scan() {
-		data, ok := strings.CutPrefix(sc.Text(), "data:")
-		if !ok {
-			continue
-		}
+	// event acts on one event's data, and done says it ended the stream, with the reply and error to return. ended
+	// returns them: a limit the stream reported is no answer, so it holds the gate like the HTTP 429 it stands for.
+	ended := func(got Reply, err error) (Reply, bool, error) {
+		var limit *streamLimit
+		return got, !errors.As(err, &limit), err
+	}
+	event := func(data string) (reply Reply, done bool, err error) {
 		var ev struct {
 			Type    string `json:"type"`
 			Delta   string `json:"delta"`
 			Message string `json:"message"`
+			Code    string `json:"code"` // an error event's
 			// Part is the content part of response.content_part.added/done: type output_text or refusal.
 			Part struct {
 				Type string `json:"type"`
@@ -279,6 +282,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 			Response struct {
 				Model string `json:"model"`
 				Error *struct {
+					Code    string `json:"code"`
 					Message string `json:"message"`
 				} `json:"error"`
 				IncompleteDetails *struct {
@@ -293,8 +297,8 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				} `json:"usage"`
 			} `json:"response"`
 		}
-		if json.Unmarshal([]byte(strings.TrimSpace(data)), &ev) != nil {
-			continue
+		if json.Unmarshal([]byte(data), &ev) != nil {
+			return reply, false, nil
 		}
 		finished := func() Reply {
 			r := Reply{Text: b.String(), Model: ev.Response.Model}
@@ -337,20 +341,36 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 			}
 			return reply, true, fmt.Errorf("ai: %s: %s", ev.Type, msg)
 		case "response.failed", "error":
-			msg := ev.Message
-			if ev.Response.Error != nil {
-				msg = ev.Response.Error.Message
+			msg, code := ev.Message, ev.Code
+			if e := ev.Response.Error; e != nil {
+				msg, code = e.Message, cmp.Or(e.Code, code)
+			}
+			if limit := streamLimitFor(ev.Type, code, msg); limit != nil { // a limit told after the 200 holds the gate too
+				return reply, true, limit
 			}
 			return reply, true, fmt.Errorf("ai: %s: %s", ev.Type, msg)
 		}
+		return reply, false, nil
 	}
-	if err := sc.Err(); err != nil {
+	var (
+		got     Reply
+		gotErr  error
+		stopped bool
+	)
+	if err := SSEEvents(resp.Body, func(data string) bool {
+		got, stopped, gotErr = event(data)
+		return stopped
+	}); err != nil {
 		return reply, true, fmt.Errorf("ai: read stream: %w", err)
 	}
-	if b.Len() == 0 {
-		return reply, true, errors.New("ai: stream ended without a reply")
+	if stopped {
+		return ended(got, gotErr)
 	}
-	return Reply{Text: b.String()}, true, nil
+	// No terminal event: the connection was cut, and whatever text came is only part of the answer.
+	if b.Len() == 0 {
+		return reply, true, fmt.Errorf("ai: stream ended without a reply: %w", io.ErrUnexpectedEOF)
+	}
+	return reply, true, fmt.Errorf("ai: stream ended before the response completed: %w", io.ErrUnexpectedEOF)
 }
 
 // JSON asks for a JSON object and decodes the first one in the reply into out.
@@ -381,6 +401,12 @@ func (c *Client) JSONMax(ctx context.Context, system, user string, maxTokens int
 	}
 }
 
+// ErrNoObject: the reply holds no JSON object at all.
+var ErrNoObject = errors.New("ai: no JSON object in reply")
+
+// ErrUnterminated: the reply's JSON object never closes (and the reply was not cut off at max_tokens).
+var ErrUnterminated = errors.New("ai: unterminated JSON object in reply")
+
 // ErrTruncated: the reply stopped at max_tokens before the answer was complete, even with the room doubled.
 var ErrTruncated = errors.New("ai: reply cut off at max_tokens")
 
@@ -403,7 +429,7 @@ func (e *RefusalError) Unwrap() error { return ErrRefused }
 func FirstObject(s string) (string, error) {
 	start := strings.IndexByte(s, '{')
 	if start < 0 {
-		return "", errors.New("ai: no JSON object in reply")
+		return "", ErrNoObject
 	}
 	depth, inStr, esc := 0, false, false
 	for i := start; i < len(s); i++ {
@@ -425,7 +451,7 @@ func FirstObject(s string) (string, error) {
 			}
 		}
 	}
-	return "", errors.New("ai: unterminated JSON object in reply")
+	return "", ErrUnterminated
 }
 
 // unmarshalReply is json.Unmarshal for a model's object, whose strings may hold what JSON does not allow there: an

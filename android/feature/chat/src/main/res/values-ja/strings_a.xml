@@ -251,6 +251,11 @@
     <string name="chat_tasks_since_hours_minutes">%1$d時間%2$d分</string>
     <string name="chat_tasks_default_title">タスク</string>
     <string name="chat_tasks_routed_to">「%1$s」へ</string>
+    <string name="chat_tasks_sent_to">「%1$s」に送信</string>
+    <string name="chat_tasks_sent_interrupting">「%1$s」を止めて送信</string>
+    <plurals name="chat_tasks_sent_count">
+        <item quantity="other">指示を%1$d件送信</item>
+    </plurals>
     <string name="chat_tasks_collapse">折りたたむ</string>
     <string name="chat_tasks_expand">展開</string>
     <string name="chat_tasks_expanded">展開済み</string>
@@ -259,6 +264,7 @@
     <string name="chat_tasks_answered_default">回答済み</string>
     <string name="chat_tasks_permission_accept_edits">ファイル編集可</string>
     <string name="chat_tasks_permission_plan">先にプラン</string>
+    <string name="chat_tasks_permission_auto">自動判断</string>
     <string name="chat_tasks_permission_bypass">すべて許可</string>
     <string name="chat_tasks_permission_default">毎回確認</string>
     <plurals name="chat_tasks_plan_started">
@@ -453,6 +459,7 @@
     <string name="chat_review_title">完了条件</string>
     <string name="chat_review_none">完了条件は未指定</string>
     <string name="chat_review_open">未検収</string>
+    <string name="chat_review_unchecked">未確認</string>
     <string name="chat_review_met">達成</string>
     <string name="chat_review_missing">不足</string>
     <string name="chat_review_note">監督メモ：%1$s</string>

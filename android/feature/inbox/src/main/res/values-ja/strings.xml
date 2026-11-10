@@ -12,6 +12,35 @@
     <string name="inbox_close">閉じる</string>
     <string name="inbox_expand">展開</string>
     <string name="inbox_collapse">折りたたむ</string>
+    <string name="inbox_mark_done">対応済みにする</string>
+    <string name="inbox_group_agents">あなたを待っている Agent</string>
+    <string name="inbox_group_mail">メール · %1$s</string>
+    <string name="inbox_group_just">たった今</string>
+    <string name="inbox_group_today">今日</string>
+    <string name="inbox_group_yesterday">昨日</string>
+    <string name="inbox_group_week">7日以上前</string>
+    <string name="inbox_group_month">1か月以上前</string>
+    <string name="inbox_grouping_source">ソース別</string>
+    <string name="inbox_grouping_time">時間別</string>
+    <string name="inbox_jump_to">移動</string>
+    <string name="inbox_fold_all">すべて折りたたむ</string>
+    <string name="inbox_unfold_all">すべて展開</string>
+    <string name="inbox_select_all">すべて選択</string>
+    <string name="inbox_deselect_all">選択を解除</string>
+    <string name="inbox_end_selection">選択を終了</string>
+    <string name="inbox_pick_group">「%1$s」をすべて選択</string>
+    <string name="inbox_load_older">さらに読み込む</string>
+    <string name="inbox_loading_older">読み込み中…</string>
+    <string name="inbox_older_failed">以前の項目を読み込めませんでした</string>
+    <plurals name="inbox_selected_count">
+        <item quantity="other">%1$d件を選択</item>
+    </plurals>
+    <plurals name="inbox_group_picked">
+        <item quantity="other">%1$d件選択</item>
+    </plurals>
+    <plurals name="inbox_picked_folded">
+        <item quantity="other">%1$d件を選択（折りたたみ中 %2$d件）</item>
+    </plurals>
     <string name="inbox_source_lark">Lark</string>
     <string name="inbox_source_mail">メール</string>
     <string name="inbox_moments">Moments</string>
@@ -131,6 +160,8 @@
     <string name="inbox_handoff_who">依頼先</string>
     <string name="inbox_handoff_main_chat">メインチャット</string>
     <string name="inbox_handoff_no_agents">オンラインのエージェントがいません。まずPersonaに任せることができます。</string>
+    <string name="inbox_handoff_last_time">前回</string>
+    <string name="inbox_handoff_last_gone">前回渡したエージェントは終了しているため、今回は Persona に渡します。</string>
     <string name="inbox_handoff_mark_done">同時に対応済みにする</string>
     <string name="inbox_handoff_sending">引き継ぎ中…</string>
     <string name="inbox_hand_to_persona">Personaに任せる</string>
@@ -147,6 +178,7 @@
     <string name="inbox_triage_timeout">振り分けモデルの応答が遅すぎます</string>
     <string name="inbox_triage_behind">新しいメッセージが多いため順番待ち</string>
     <string name="inbox_triage_configure">設定する</string>
+    <string name="inbox_read_failed">今回は読み取れませんでした。一覧が不完全な可能性があります</string>
     <string name="inbox_translating">%1$sに翻訳中…</string>
     <string name="inbox_translation_original">原文</string>
     <string name="inbox_translated_into">%1$sに翻訳済み</string>
@@ -167,11 +199,42 @@
     <string name="inbox_mute_tag_sender">送信者</string>
     <string name="inbox_mutes_title">ミュート中</string>
     <string name="inbox_mutes_failed">ミュート一覧を読み取れません</string>
+    <string name="inbox_mutes_offline">オフラインです。戻るとここにミュートが表示されます。</string>
     <string name="inbox_mutes_empty_title">ミュートはありません</string>
     <string name="inbox_mutes_empty_text">受信トレイで項目を長押しすると、そのリポジトリ・会話・送信者をミュートできます。</string>
     <string name="inbox_unmute">ミュート解除</string>
     <string name="inbox_unmute_failed">ミュートを解除できませんでした。元に戻しました</string>
     <string name="inbox_muted_notice">「%1$s」をミュートしました。今後は受信トレイに入りません</string>
+
+    <!-- Rules: where an item's chat, sender or repository goes, and the AI twin (InboxPolicies.kt). -->
+    <string name="inbox_policy_repo">このリポジトリのルール</string>
+    <string name="inbox_policy_chat">この会話のルール</string>
+    <string name="inbox_policy_sender">この送信者のルール</string>
+    <string name="inbox_policy_title">%1$s のルール</string>
+    <string name="inbox_policy_intro">%1$s。ハブは AI の仕分けのあと、ここから届くものにこのルールを適用します。ミュートが優先されます。</string>
+    <string name="inbox_policy_tier">振り分け先</string>
+    <string name="inbox_policy_tier_none">仕分けに任せる</string>
+    <string name="inbox_policy_tier_action">常に要対応</string>
+    <string name="inbox_policy_tier_fyi">参考</string>
+    <string name="inbox_policy_tier_noise">折りたたみ</string>
+    <string name="inbox_policy_twin">AI 分身</string>
+    <string name="inbox_policy_twin_none">設定どおり</string>
+    <string name="inbox_policy_twin_first">分身を優先</string>
+    <string name="inbox_policy_twin_never">分身は触れない</string>
+    <string name="inbox_policy_twin_note">分身を優先：要対応でなくても AI 分身に渡し、ほかより先に始めます。分身は触れない：常にあなたが対応します。AI 分身をオンにしておく必要があります。</string>
+    <string name="inbox_policy_save">保存</string>
+    <string name="inbox_policy_cancel">キャンセル</string>
+    <string name="inbox_policy_remove">削除</string>
+    <string name="inbox_policy_edit">編集</string>
+    <string name="inbox_policy_saved">「%1$s」のルールを保存しました</string>
+    <string name="inbox_policy_removed">「%1$s」のルールを削除しました</string>
+    <string name="inbox_policy_failed">ルールを保存できませんでした：%1$s</string>
+    <string name="inbox_rules_title">ルール</string>
+    <string name="inbox_rules_failed">ルールを読み込めませんでした：%1$s</string>
+    <string name="inbox_rules_offline">オフラインです。戻るとここにルールが表示されます。</string>
+    <string name="inbox_rules_empty_title">ルールはありません</string>
+    <string name="inbox_rules_empty_text">受信トレイで項目を長押しして、その会話・送信者・リポジトリのルールを設定します。</string>
+    <string name="inbox_rules_remove_failed">ルールを削除できませんでした：%1$s</string>
 
     <!-- Inbox phase 1: events, suggestions, the Handling chain (InboxEvents.kt). -->
     <string name="inbox_section_working">進行中</string>
@@ -202,6 +265,6 @@
     <string name="inbox_event_chain">処理の流れ</string>
     <string name="inbox_event_chain_all">すべて表示（%1$d）</string>
     <string name="inbox_event_view_source">原文を見る</string>
-    <string name="inbox_done_by_manager">マネージャーが処理済み</string>
+    <string name="inbox_done_by_manager">アシスタントが処理済み</string>
     <string name="inbox_event_related">関連</string>
 </resources>

@@ -4,16 +4,52 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
+import persona.core.contracts.api.ManagerPins
 import persona.core.domain.inbox.InboxItem
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class InboxConversationsTest {
+    @Test fun badgeUpdatesAfterReadAndSurvivesRefreshAndRecreation() = runTest {
+        val unread = item("a", "room", "action")
+        val pending = item("b", null, "action").copy(read = true)
+        val completed = item("c", null, "action").let { it.copy(read = true,
+            item = it.item.copy(doneAt = "2026-11-10T00:00:00Z")) }
+        val repository = ConversationRepository(listOf(unread, pending, completed))
+        repository.window("room").value = window(message(1))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        runCurrent()
+        fun count() = inboxUnreadCount(repository.snapshot.value.records, controller.state.value)
+        assertEquals(1, count())
+        assertTrue(controller.readConversation(controller.state.value.rows.single().key))
+        runCurrent()
+        assertEquals(0, count())
+        assertEquals(InboxConversationSection.ReadPending, controller.state.value.rows.single().section)
+        assertTrue(repository.done.isEmpty())
+        // The hub item list may lag behind the successful source receipt.
+        repository.snapshot.value = repository.snapshot.value.copy(refreshes = 1)
+        runCurrent()
+        assertEquals(0, count())
+        assertFalse(repository.snapshot.value.records.first().item.isDone)
+        // A new process reconciles from the source's persisted read window.
+        val restarted = ConversationRepository(repository.snapshot.value.records)
+        restarted.window("room").value = window(message(1).copy(isRead = true))
+        val fresh = InboxConversations(restarted, "paired", backgroundScope, ReplyComposers(restarted, backgroundScope))
+        runCurrent()
+        assertEquals(0, inboxUnreadCount(restarted.snapshot.value.records, fresh.state.value))
+        assertEquals(InboxConversationSection.ReadPending, fresh.state.value.rows.single().section)
+        assertTrue(restarted.done.isEmpty())
+    }
+
     @Test fun readFyiLeavesTheUnreadGroupsWithoutBecomingPendingOrCompleted() {
         val fyi = item("f", "room", "fyi")
         val read = setOf(InboxReadVersion("f", "v1"))
@@ -69,6 +105,33 @@ class InboxConversationsTest {
         val empty = controller.readAll(setOf(InboxConversationSection.Action), emptySet())
         assertTrue(empty.succeeded.isEmpty())
         assertEquals(1, repository.reads.size)
+    }
+
+    @Test fun anotherManagersRowIsReadAndAcknowledgedAsThatManager() = runTest {
+        val repository = ConversationRepository(listOf(item("a", "room", "action"), item("b", "other-room", "action").copy(manager = "m-3")))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        runCurrent()
+        val chat = listOf("lark", "conversations", "other-room")
+        assertEquals(setOf("m-3"), repository.opened.filter { it.first == "other-room" }.map { it.second?.manager(chat) }.toSet())
+        assertEquals(listOf(null), repository.opened.filter { it.first == "room" }.map { it.second }.distinct())
+        val rows = controller.state.value.rows
+        assertTrue(controller.readConversation(rows.single { it.key.manager == "m-3" }.key))
+        assertTrue(controller.readConversation(rows.single { it.key.manager == null }.key))
+        assertEquals(listOf("other-room", "room"), repository.latest.map { it.first })
+        assertEquals("m-3", repository.latest[0].second?.manager(chat))
+        assertNull(repository.latest[1].second)
+        // The capsule sends a row's reply with its binding's context: the row's manager's pins.
+        assertEquals("m-3", controller.bind(rows.single { it.key.manager == "m-3" }.key)!!.context[ManagerPins]?.manager(chat))
+        assertNull(controller.bind(rows.single { it.key.manager == null }.key)!!.context[ManagerPins])
+    }
+
+    @Test fun anotherManagersShownMessagesAreReadAsThatManager() = runTest {
+        val repository = ConversationRepository(listOf(item("b", "other-room", "fyi").copy(manager = "m-3")))
+        repository.window("other-room").value = window(message(1))
+        val controller = InboxConversations(repository, "paired", backgroundScope, ReplyComposers(repository, backgroundScope))
+        runCurrent()
+        assertTrue(controller.read(controller.captureFyi().single()))
+        assertEquals("m-3", repository.visibleUnder.single()?.manager(listOf("lark", "conversations", "other-room")))
     }
 
     @Test fun groupsBySourceAccountAndThreadKeepingEveryOriginalItem() {
@@ -226,13 +289,27 @@ private class ConversationRepository(records: List<InboxRecord>) : InboxReposito
     override val snapshot = MutableStateFlow(InboxSnapshot(records = records))
     private val windows = mutableMapOf<String, MutableStateFlow<LarkConversation>>()
     fun window(feed: String) = windows.getOrPut(feed) { MutableStateFlow(LarkConversation(loading = true)) }
-    override fun conversation(feedId: String, startPosition: Long?) = window(feedId)
+    /** Each chat opened, with the pins it is read under. */
+    val opened = mutableListOf<Pair<String, ManagerPins?>>()
+    override fun conversation(feedId: String, startPosition: Long?): Flow<LarkConversation> = flow {
+        opened += feedId to currentCoroutineContext()[ManagerPins]
+        emitAll(window(feedId))
+    }
+    /** Each chat acknowledged without its messages shown (markLatestRead), with the pins it went under. */
+    val latest = mutableListOf<Pair<String, ManagerPins?>>()
+    override suspend fun markLatestRead(feedId: String): Boolean {
+        latest += feedId to currentCoroutineContext()[ManagerPins]
+        return true
+    }
     val reads = mutableListOf<Pair<String, List<String>>>()
     val done = mutableListOf<String>()
     var accepted = true
     var gate: CompletableDeferred<Unit>? = null
+    /** The pins each shown-messages read went under. */
+    val visibleUnder = mutableListOf<ManagerPins?>()
     override suspend fun markVisible(feedId: String, messages: List<LarkMessage>): Boolean {
         reads += feedId to messages.map { it.id }
+        visibleUnder += currentCoroutineContext()[ManagerPins]
         gate?.await()
         return accepted
     }

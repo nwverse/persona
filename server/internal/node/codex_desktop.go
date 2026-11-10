@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -196,6 +197,7 @@ type codexAppState struct {
 	projectless map[string]bool
 	assigned    map[string]string // thread → project id
 	projects    map[string]codexAppProject
+	sidebar     []string // the threads of both lists that are valid ids, sorted: what codexAppThreads looks up
 }
 
 type codexAppProject struct {
@@ -257,6 +259,19 @@ func loadCodexAppState(home string) *codexAppState {
 	for id, a := range raw.Assignments {
 		s.assigned[id] = a.ProjectID
 	}
+	add := func(id string) {
+		if validID(id) && len(s.sidebar) < codexAppSidebarMax {
+			s.sidebar = append(s.sidebar, id)
+		}
+	}
+	for id := range s.projectless {
+		add(id)
+	}
+	for id := range s.assigned {
+		add(id)
+	}
+	slices.Sort(s.sidebar)
+	s.sidebar = slices.Compact(s.sidebar)
 	codexAppStates.Store(home, codexAppStateCache{mtime: st.ModTime(), size: st.Size(), state: s})
 	return s
 }
@@ -451,9 +466,16 @@ func readCodexOrigin(path string) codexOrigin {
 }
 
 // codexDesktopChat: a chat of the Codex App running on this machine (not a CLI thread, not a subagent of one).
-func codexDesktopChat(src codexSource) bool {
-	if src.path == "" || !codexDesktopAvailable(src.home) {
+func codexDesktopChat(src codexSource) bool { return codexDesktopChatIn(src, nil) }
+
+// codexDesktopChatIn is codexDesktopChat with the App's presence looked up once per home in a list pass (codexListPass).
+func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
+	if !pass.desktopAvailable(src.home) {
 		return false
+	}
+	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go)
+		_, ok := codexAppThreadOf(src)
+		return ok
 	}
 	o := readCodexOrigin(src.path)
 	return o.desktop && o.parent == "" && loadCodexAppState(src.home).listed(src.thread)

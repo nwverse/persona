@@ -52,7 +52,7 @@ type ContextParams struct {
 }
 
 // ContextResult is assistant.context's answer: the <persona-context> text, and the <persona-view-errors> block of the
-// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Feedback next turn").
+// conversation's rich views that failed their check and were not reported yet (docs/assistant/assistant-views.md "Next-turn feedback").
 // Reading it consumes nothing: the node acks Receipts once the message is delivered.
 type ContextResult struct {
 	Text       string             `json:"text"`

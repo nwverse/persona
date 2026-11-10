@@ -136,6 +136,22 @@ describe("main conversation feed cache", () => {
     expect(read.hasMore).toBe(true);
   });
 
+  it.each(["tool_result", "notice"] as const)("retains an older launch and contiguous history referenced by a cached %s report", (kind) => {
+    const launch = item(2, "assistant", { kind: "tool_use", tool_name: "Agent", tool_use_id: "example-launch" });
+    const receipt = item(3, "user", { kind: "tool_result", tool_use_id: "example-launch", text: "Async agent launched successfully.\nagentId: example-agent" });
+    const task = { kind: "agent", status: "completed", task_id: "example-agent", detail: "Synthetic report" };
+    const report = item(22, kind === "notice" ? "system" : "user", { kind, wake: true, text: kind === "tool_result" ? "Synthetic report" : "Agent completed", task, ...(kind === "tool_result" ? { tool_use_id: "example-launch" } : {}) });
+    const items = [item(1, "user"), launch, receipt, item(4), item(10, "user"), item(11), item(20, "user"), item(21), report];
+    const scope = cache.feedCacheScope();
+    cache.writeFeedCache(scope, page({ items }));
+    expect(cache.readFeedCache()?.items.map((i) => i.id)).toEqual(items.map((i) => i.id));
+    cache.writeMemoryPage(scope, page({ items }));
+    expect(cache.readMemoryPage(scope, "machine-demo", "main-demo")?.items.map((i) => i.id)).toEqual(items.map((i) => i.id));
+    const ordinary = items.slice(0, -1);
+    cache.writeFeedCache(scope, page({ items: ordinary }));
+    expect(cache.readFeedCache()?.items.map((i) => i.id)).toEqual(ordinary.slice(4).map((i) => i.id));
+  });
+
   it("replaces the one cached main page instead of accumulating conversations", () => {
     const scope = cache.feedCacheScope();
     cache.writeFeedCache(scope, page());
@@ -214,5 +230,40 @@ describe("main conversation feed cache", () => {
     expect(cache.feedCacheScope()).toBeNull();
     expect(cache.readFeedCache()).toBeNull();
     expect(() => cache.clearFeedCache()).not.toThrow();
+  });
+});
+
+describe("memory pages of other chats", () => {
+  const scope = () => cache.feedCacheScope()!;
+  const write = (sid: string) => cache.writeMemoryPage(scope(), page({ sessionID: sid }));
+  const has = (sid: string) => cache.readMemoryPage(scope(), "machine-demo", sid) !== null;
+
+  it("keeps the most recently used chats and never touches storage", () => {
+    for (let n = 0; n < cache.MEMORY_PAGES; n++) write(`s${n}`);
+    expect(has("s0")).toBe(true); // reading it makes s1 the oldest
+    write("newest");
+    expect([has("s0"), has("s1"), has("newest")]).toEqual([true, false, true]);
+    expect(entries()).toEqual([]);
+  });
+
+  it("never answers for another hub, another login, or after sign-out", () => {
+    write("agent");
+    expect(cache.readMemoryPage(scope(), "another-machine", "agent")).toBeNull();
+    const old = scope();
+    stored.set("persona.token", "jd_another_browser_credential");
+    expect(cache.readMemoryPage(scope(), "machine-demo", "agent")).toBeNull();
+    expect(cache.readMemoryPage(old, "machine-demo", "agent")).toBeNull();
+    write("agent");
+    cache.clearFeedCache();
+    expect(has("agent")).toBe(false);
+  });
+
+  it("keeps only the newest turns, and no page at all for an empty chat", () => {
+    cache.writeMemoryPage(scope(), page({ sessionID: "long", items: [item(1, "user"), item(2, "user"), item(3, "user")] }));
+    const kept = cache.readMemoryPage(scope(), "machine-demo", "long")!;
+    expect(kept.items.map((row) => row.seq)).toEqual([2, 3]);
+    expect(kept.hasMore).toBe(true);
+    cache.writeMemoryPage(scope(), page({ sessionID: "long", items: [] }));
+    expect(has("long")).toBe(false);
   });
 });

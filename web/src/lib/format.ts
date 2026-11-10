@@ -7,6 +7,7 @@ import { workLine } from "./work";
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
   if (!s) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
+  if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
   return !s.source_kind || s.capabilities?.[operation] === true;
 }
 
@@ -49,7 +50,8 @@ export function sessionMenuActions(s: Session): string[] {
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
     ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
-    ...(sessionCan(s, "terminal") ? ["resume", ...(!s.assistant && stateOf(s) !== "offline" ? ["close"] : [])] : []),
+    ...(sessionCan(s, "terminal") ? ["resume"] : []),
+    ...(!s.assistant && stateOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
 }
 
@@ -104,10 +106,6 @@ export function byAttention(a: Session, b: Session): number {
   const ta = stateOf(a) === "working" ? a.state_since || a.updated_at : a.updated_at;
   const tb = stateOf(b) === "working" ? b.state_since || b.updated_at : b.updated_at;
   return (tb ?? "").localeCompare(ta ?? "") || a.session_id.localeCompare(b.session_id) || a.machine_id.localeCompare(b.machine_id);
-}
-
-export function isLive(s: Session) {
-  return stateOf(s) !== "offline";
 }
 
 /** Why it waits for you, in its host's words (a botmux attention), while it needs you; a reason left over from before

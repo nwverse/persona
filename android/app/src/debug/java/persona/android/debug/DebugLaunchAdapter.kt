@@ -11,7 +11,6 @@ import persona.android.navigation.terminalLink
 import persona.core.navigation.MachinesRoute
 import persona.core.navigation.RouteInput
 import persona.feature.knowledge.KnowledgeRoute
-import persona.platform.phonetools.PhoneToolsRoute
 import persona.core.contracts.api.PairingRequest
 import persona.core.navigation.AppTab
 import persona.core.navigation.ResolvedRoute
@@ -22,18 +21,22 @@ import java.net.URI
 private val pages = mapOf(
     "machines" to ResolvedRoute(AppTab.Agents, MachinesRoute),
     "knowledge" to ResolvedRoute(AppTab.Persona, KnowledgeRoute),
-    "phone" to ResolvedRoute(AppTab.Settings, PhoneToolsRoute),
-    "mail" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Mail)),
-    "feishu" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Feishu)),
-    "catalog" to ResolvedRoute(AppTab.Settings, ComponentCatalogRoute),
+    "inbox" to ResolvedRoute(AppTab.Persona, persona.core.navigation.InboxRoute),
+    "settings" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsRoute),
+    "phone" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.PhoneData)),
+    "mail" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Mail)),
+    "feishu" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Feishu)),
+    "catalog" to ResolvedRoute(AppTab.Persona, ComponentCatalogRoute),
     "voice" to ResolvedRoute(AppTab.Persona, persona.core.navigation.VoiceRoute("voice", "语音")),  // i18n-ignore: debug launch arguments, developer-only
-    "channels" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Channels)),
-    "feishu-bot" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.FeishuBot)),
-    "managers" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Managers)),
-    "sent" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Sent)),
-    "hub-update" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.HubUpdate)),
-    "translate" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Translation)),
-    "triage" to ResolvedRoute(AppTab.Settings, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Triage)),
+    "channels" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Channels)),
+    "feishu-bot" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.FeishuBot)),
+    "managers" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Managers)),
+    "connectors" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Connectors)),
+    "connectors/sent" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Sent)),
+    "sent" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Sent)),
+    "hub-update" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.HubUpdate)),
+    "translate" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Translation)),
+    "triage" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Triage)),
 )
 
 class DebugLaunchAdapter : LaunchAdapter {
@@ -52,7 +55,8 @@ class DebugLaunchAdapter : LaunchAdapter {
         require(state == null || arguments["debug.mockAddress"] == null) { "状态预览使用本地演示数据，请勿同时传入假 hub 地址" }  // i18n-ignore: debug launch arguments, developer-only
         tools.state = state
         if (state != null && arguments.keys.none { it.startsWith("debug.open") }) {
-            arguments["debug.openTab"] = if (state in setOf("load-failed", "loading")) "Inbox" else "Agents"
+            if (state in setOf("load-failed", "loading")) arguments["debug.openPage"] = "inbox"
+            else arguments["debug.openTab"] = "Agents"
         }
         val address = arguments["debug.mockAddress"]
         val pairing = address?.let {
@@ -80,7 +84,7 @@ class DebugLaunchAdapter : LaunchAdapter {
         return LaunchInput(
             resolve = { router ->
                 when {
-                    catalog -> ResolvedRoute(AppTab.Settings, ComponentCatalogRoute)
+                    catalog -> ResolvedRoute(AppTab.Persona, ComponentCatalogRoute)
                     page != null -> page
                     // The same order as MainActivity: terminal fallback, notification tab, then general deep links.
                     link != null -> terminalLink(link) ?: notificationRoute(Uri.parse(link))?.let { router.open(it) }

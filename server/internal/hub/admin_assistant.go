@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The assistant's cards (docs/assistant/assistant-views.md "Prompts and switches", #2023): hub.json's assistant.persona_view, switched from
+// The assistant's cards (docs/assistant/assistant-views.md "Prompts and toggles", #2023): hub.json's assistant.persona_view, switched from
 // the admin UI without a restart. What reads it per request (Hello: the view tools and actions, inline registration,
 // the channel relay) follows at once. The assistant's own instructions do not: its CLAUDE.md is written when its
 // directory is next prepared (a new conversation, or a warm spare process), and a process reads it and its tool list
@@ -41,18 +41,18 @@ func (h *Hub) assistantPersonaViewLocked() bool {
 // file) kept as it was; off removes the key (its default) and an "assistant" left empty with it.
 func setAssistantPersonaView(dir string, on bool) error {
 	return editHubJSON(dir, func(o *jsonObject) error {
-		a, err := o.object("assistant") // not an object: an error, the file stays as it is
+		a, err := o.Object("assistant") // not an object: an error, the file stays as it is
 		if err != nil {
 			return err
 		}
 		if on {
-			if err := a.set("persona_view", true); err != nil {
+			if err := a.Set("persona_view", true); err != nil {
 				return err
 			}
 		} else {
-			a.del("persona_view")
+			a.Del("persona_view")
 		}
-		o.setObject("assistant", a)
+		o.SetObject("assistant", a)
 		return nil
 	})
 }

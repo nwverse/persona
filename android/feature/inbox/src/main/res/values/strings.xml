@@ -13,6 +13,38 @@
     <string name="inbox_close">Close</string>
     <string name="inbox_expand">Expand</string>
     <string name="inbox_collapse">Collapse</string>
+    <string name="inbox_mark_done">Mark as done</string>
+    <string name="inbox_group_agents">Agents waiting on you</string>
+    <string name="inbox_group_mail">Mail · %1$s</string>
+    <string name="inbox_group_just">Just now</string>
+    <string name="inbox_group_today">Today</string>
+    <string name="inbox_group_yesterday">Yesterday</string>
+    <string name="inbox_group_week">7+ days ago</string>
+    <string name="inbox_group_month">1+ month ago</string>
+    <string name="inbox_grouping_source">By source</string>
+    <string name="inbox_grouping_time">By time</string>
+    <string name="inbox_jump_to">Jump to</string>
+    <string name="inbox_fold_all">Collapse all</string>
+    <string name="inbox_unfold_all">Expand all</string>
+    <string name="inbox_select_all">Select all</string>
+    <string name="inbox_deselect_all">Deselect all</string>
+    <string name="inbox_end_selection">End selection</string>
+    <string name="inbox_pick_group">Select all in %1$s</string>
+    <string name="inbox_load_older">Show older</string>
+    <string name="inbox_loading_older">Loading…</string>
+    <string name="inbox_older_failed">Couldn’t load older items</string>
+    <plurals name="inbox_selected_count">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <plurals name="inbox_group_picked">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <plurals name="inbox_picked_folded">
+        <item quantity="one">%1$d selected, %2$d in collapsed groups</item>
+        <item quantity="other">%1$d selected, %2$d in collapsed groups</item>
+    </plurals>
     <string name="inbox_source_lark">Lark</string>
     <string name="inbox_source_mail">Mail</string>
     <string name="inbox_moments">Moments</string>
@@ -142,6 +174,8 @@
     <string name="inbox_handoff_who">Who does it</string>
     <string name="inbox_handoff_main_chat">Main chat</string>
     <string name="inbox_handoff_no_agents">No agents are online. You can hand it to Persona for now.</string>
+    <string name="inbox_handoff_last_time">Last time</string>
+    <string name="inbox_handoff_last_gone">The agent this went to last time has ended, so it goes to Persona.</string>
     <string name="inbox_handoff_mark_done">Also mark as done</string>
     <string name="inbox_handoff_sending">Handing off…</string>
     <string name="inbox_hand_to_persona">Hand to Persona</string>
@@ -160,6 +194,7 @@
     <string name="inbox_triage_timeout">The triage model is too slow</string>
     <string name="inbox_triage_behind">Too many new messages, queued</string>
     <string name="inbox_triage_configure">Set up</string>
+    <string name="inbox_read_failed">Not read this round; the list may be incomplete</string>
     <string name="inbox_translating">Translating into %1$s…</string>
     <string name="inbox_translation_original">Original</string>
     <string name="inbox_translated_into">Translated into %1$s</string>
@@ -180,11 +215,42 @@
     <string name="inbox_mute_tag_sender">Sender</string>
     <string name="inbox_mutes_title">Muted</string>
     <string name="inbox_mutes_failed">Couldn\'t read what is muted</string>
+    <string name="inbox_mutes_offline">Offline: its mutes show here once it is back.</string>
     <string name="inbox_mutes_empty_title">Nothing muted</string>
     <string name="inbox_mutes_empty_text">Long-press an item in the Inbox to mute its repository, conversation or sender.</string>
     <string name="inbox_unmute">Unmute</string>
     <string name="inbox_unmute_failed">Couldn\'t unmute; restored</string>
     <string name="inbox_muted_notice">Muted “%1$s”; it won\'t come into the Inbox again</string>
+
+    <!-- Rules: where an item's chat, sender or repository goes, and the AI twin (InboxPolicies.kt). -->
+    <string name="inbox_policy_repo">Rule for this repository</string>
+    <string name="inbox_policy_chat">Rule for this conversation</string>
+    <string name="inbox_policy_sender">Rule for this sender</string>
+    <string name="inbox_policy_title">Rule for %1$s</string>
+    <string name="inbox_policy_intro">%1$s. The hub applies it in code to what comes in from here, after the AI sorts it; a mute still wins.</string>
+    <string name="inbox_policy_tier">Where it goes</string>
+    <string name="inbox_policy_tier_none">Leave to triage</string>
+    <string name="inbox_policy_tier_action">Always Needs you</string>
+    <string name="inbox_policy_tier_fyi">FYI</string>
+    <string name="inbox_policy_tier_noise">Collapsed</string>
+    <string name="inbox_policy_twin">AI twin</string>
+    <string name="inbox_policy_twin_none">As set</string>
+    <string name="inbox_policy_twin_first">AI twin first</string>
+    <string name="inbox_policy_twin_never">Never AI twin</string>
+    <string name="inbox_policy_twin_note">AI twin first hands these to the AI twin even when they are not Needs you, before the others. Never keeps them yours. The AI twin must be on.</string>
+    <string name="inbox_policy_save">Save</string>
+    <string name="inbox_policy_cancel">Cancel</string>
+    <string name="inbox_policy_remove">Remove</string>
+    <string name="inbox_policy_edit">Edit</string>
+    <string name="inbox_policy_saved">Rule saved for “%1$s”</string>
+    <string name="inbox_policy_removed">Rule removed for “%1$s”</string>
+    <string name="inbox_policy_failed">Couldn\'t save the rule: %1$s</string>
+    <string name="inbox_rules_title">Rules</string>
+    <string name="inbox_rules_failed">Couldn\'t load the rules: %1$s</string>
+    <string name="inbox_rules_offline">Offline: its rules show here once it is back.</string>
+    <string name="inbox_rules_empty_title">No rules</string>
+    <string name="inbox_rules_empty_text">Long-press an item in the Inbox and pick a rule for its conversation, sender or repository.</string>
+    <string name="inbox_rules_remove_failed">Couldn\'t remove the rule: %1$s</string>
 
     <!-- Inbox phase 1: events, suggestions, the Handling chain (InboxEvents.kt). -->
     <string name="inbox_section_working">In progress</string>
@@ -215,6 +281,6 @@
     <string name="inbox_event_chain">What happened</string>
     <string name="inbox_event_chain_all">Show all (%1$d)</string>
     <string name="inbox_event_view_source">View original</string>
-    <string name="inbox_done_by_manager">Handled by the manager</string>
+    <string name="inbox_done_by_manager">Handled by the assistant</string>
     <string name="inbox_event_related">Related</string>
 </resources>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -288,19 +290,18 @@ func TestSettingsTool(t *testing.T) {
 		t.Fatalf("a hub setting: %s", out)
 	}
 	answer := func(allow bool) {
-		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-			if qs := s.pendingQuestions(); len(qs) == 1 {
-				raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
-				if qs[0].Kind != proto.IxPermission || qs[0].ToolName != "persona_settings" || qs[0].SessionID != "c1" {
-					t.Errorf("card: %+v", qs[0])
-				}
-				if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: qs[0].ID, Answer: raw}); err != nil {
-					t.Error(err)
-				}
-				return
-			}
+		q, ok := awaitCard(s)
+		if !ok {
+			t.Error("no card on the phone")
+			return
 		}
-		t.Error("no card on the phone")
+		raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+		if q.Kind != proto.IxPermission || q.ToolName != "persona_settings" || q.SessionID != "c1" {
+			t.Errorf("card: %+v", q)
+		}
+		if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
+			t.Error(err)
+		}
 	}
 	go answer(false)
 	if out := tool(`{"action":"set","key":"assistant.notes","value":"示例备注"}`); !strings.Contains(out, "declined") || s.notes(ctx) != "" {
@@ -323,6 +324,61 @@ func TestSettingsTool(t *testing.T) {
 	}
 	if out := tool(`{"action":"get","key":"assistant.main_tasks_quiet"}`); out != "true" {
 		t.Fatalf("quiet: %s", out)
+	}
+}
+
+// persona_settings' three on/off settings (setBoolSetting): the same value changes nothing and asks nothing; another
+// asks on the phone with the setting's own card, and only an approval saves it; a value that is not a bool is refused.
+func TestBoolSettingsSet(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t, newFakeHub().withMachine())
+	tool := func(args string) (string, bool) {
+		r := s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(args), MachineID: "server", SessionID: "c1"})
+		return r.Content[0].Text, r.IsError
+	}
+	word := map[bool]string{true: i18n.T(i18n.Default, "assistant-settings_tool.on"), false: i18n.T(i18n.Default, "assistant-settings_tool.off")}
+	// answer approves (or not) the one card, which must say card.
+	answer := func(allow bool, card string) {
+		q, ok := awaitCard(s)
+		if !ok {
+			t.Error("no card on the phone")
+			return
+		}
+		if q.Summary != card {
+			t.Errorf("card %q, want %q", q.Summary, card)
+		}
+		raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+		if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: q.ID, Answer: raw}); err != nil {
+			t.Error(err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		def  bool
+	}{{"main_tasks_quiet", true}, {"start_requested_tasks", true}, {"done_needs_delivery", false}, {"interject_background", false}} {
+		key := "assistant." + c.name
+		get := func() string { out, _ := tool(`{"action":"get","key":"` + key + `"}`); return out }
+		set := func(value string) (string, bool) {
+			return tool(`{"action":"set","key":"` + key + `","value":` + value + `}`)
+		}
+		if out := get(); out != fmt.Sprint(c.def) {
+			t.Fatalf("%s default: %s", key, out)
+		}
+		if out, isErr := set(fmt.Sprint(c.def)); isErr || !(strings.Contains(out, "没有变化") || strings.Contains(out, "is unchanged")) || len(s.pendingQuestions()) != 0 {
+			t.Fatalf("%s set to what it is: %s", key, out)
+		}
+		if out, isErr := set(`"yes"`); !isErr || !strings.Contains(out, "true or false") {
+			t.Fatalf("%s set to a string: %s", key, out)
+		}
+		card := i18n.T(i18n.Default, "assistant-settings_tool.change_"+c.name, i18n.Args{"before": word[c.def], "after": word[!c.def]})
+		go answer(false, card)
+		if out, _ := set(fmt.Sprint(!c.def)); !strings.Contains(out, "declined") || get() != fmt.Sprint(c.def) {
+			t.Fatalf("%s declined: %s", key, out)
+		}
+		go answer(true, card)
+		if out, _ := set(fmt.Sprint(!c.def)); !strings.HasPrefix(out, key+" is "+fmt.Sprint(!c.def)) || get() != fmt.Sprint(!c.def) {
+			t.Fatalf("%s approved: %s", key, out)
+		}
 	}
 }
 

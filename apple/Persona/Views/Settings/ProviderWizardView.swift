@@ -123,7 +123,7 @@ struct ProviderWizard: View {
         let presetStep = step == .key
         return ProviderComputersPage(scope: $wizard.scope, old: presetStep ? nil : wizard.existing,
                                      kind: presetStep ? wizard.preset?.kind ?? "launcher" : wizard.existing?.kind ?? "launcher",
-                                     agent: presetStep ? nil : wizard.existing?.agent, assign: presetStep && wizard.assign)
+                                     agent: presetStep ? nil : wizard.existing?.agent, assign: presetStep && wizard.preset?.runsClaude != false && wizard.assign)
     }
 
     private var title: String {
@@ -359,15 +359,22 @@ struct ProviderWizard: View {
             } header: { Text("Test") } footer: {
                 if p.testable { Text("Once pasted, it's tested once: a very short request that may cost a little.") }
             }
-            Section {
-                Toggle(isOn: Binding(get: { wizard.assign }, set: { wizard.assignChoice = $0 })) {
-                    Text("Use it for the main conversation and new agents").lineLimit(2)
+            if p.runsClaude {
+                Section {
+                    Toggle(isOn: Binding(get: { wizard.assign }, set: { wizard.assignChoice = $0 })) {
+                        Text("Use it for the main conversation and new agents").lineLimit(2)
+                    }
+                    .accessibilityIdentifier("wizard.assign")
+                } footer: { Text("Only changes what nobody has set; models you picked stay.") }
+            } else {
+                Section {
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary)
                 }
-                .accessibilityIdentifier("wizard.assign")
-            } footer: { Text("Only changes what nobody has set; models you picked stay.") }
+            }
             if wizard.scopeShown {
                 Section {
-                    ProviderComputersRow(scope: $wizard.scope, old: nil, kind: p.kind, assign: wizard.assign)
+                    ProviderComputersRow(scope: $wizard.scope, old: nil, kind: p.kind, assign: p.runsClaude && wizard.assign)
                 } footer: { Text("Which computers can run it and get its key.") }
             }
             Section {
@@ -388,7 +395,7 @@ struct ProviderWizard: View {
 
     @ViewBuilder private func keyTestRow(_ p: LauncherPreset) -> some View {
         if !p.testable {
-            Text("A Responses API key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
+            Text("This API protocol's key can't be tested here; save it and use it.").font(Theme.Font.label).foregroundStyle(.secondary)
         } else if wizard.keyTesting {
             HStack(spacing: Theme.Space.s) {
                 ProgressView()
@@ -451,7 +458,10 @@ struct ProviderWizard: View {
                 ForEach(summary.kept, id: \.self) { k in
                     Text(k).font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                if summary.assigned.isEmpty {
+                if let p = wizard.preset, !p.runsClaude {
+                    Text("The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.")
+                        .font(Theme.Font.secondary).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                } else if summary.assigned.isEmpty {
                     Text("To use it for the main conversation or agents, pick it in Model Settings.").font(Theme.Font.secondary).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }

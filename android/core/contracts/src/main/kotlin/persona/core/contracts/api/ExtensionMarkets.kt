@@ -126,7 +126,7 @@ data class ExtensionMarket(
 }
 
 /**
- * A market's signature (docs/extensions/extensions.md "Signatures"): `signed` (signed with the key the hub trusts; `verified` counts too,
+ * A market's signature (docs/extensions/extensions.md "Signing"): `signed` (signed with the key the hub trusts; `verified` counts too,
  * #4812), `unsigned` (an older market: still usable), or anything else (the signature fails or the key changed): the hub
  * then neither refreshes nor installs from it until its owner trusts the new key on the hub's machine. [detail] says why,
  * for people.
@@ -172,6 +172,10 @@ data class CatalogExtension(
     @SerialName("installed_source") val installedSource: String? = null,
     @SerialName("from_this_market") val fromThisMarket: Boolean = false,
     val upgradable: Boolean = false,
+    /** The ID this one takes over in its market (a rename, docs/extensions/extensions.md "Declared identity changes"). */
+    val replaces: String? = null,
+    /** The installed extension this one upgrades under a new ID, once the hub checked it came from this market. */
+    @SerialName("rename_from") val renameFrom: String? = null,
 ) {
     val label: String get() = name.ifBlank { id }
 }

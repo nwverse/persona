@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText, sessionPath } from "../../lib/api";
 import { ago, externalLink, resumeCommand, sessionCan, sessionTitle, shortPath, tabLabel } from "../../lib/format";
 import { openLink } from "../../lib/links";
-import { BYPASS_MODE, BYPASS_WARNING, effortOptions, effortTitle, modeTitle, renameBody, switchableModes } from "../../lib/session-actions";
+import { BYPASS_MODE, BYPASS_WARNING, canSwitchToBypass, effortOptions, effortTitle, modeTitle, renameBody, switchableModes } from "../../lib/session-actions";
 import { canSwitchModel, onModelPicker } from "../../lib/model-switch";
 import { CODEX_ULTRA, ultracodeOn } from "../../lib/ultracode";
 import { href, navigate, parse, showsSession } from "../../lib/router";
@@ -13,12 +13,15 @@ import type { Session } from "../../lib/types";
 import { Button, copyText, cx, Dialog, Loading, Menu, Switch, toast, useMenu } from "../../ui/atoms";
 import { removeAgentWorktree, worktreeLoss, worktreeStatus, type WorktreeStatus } from "../../lib/worktree";
 import { Icon, type IconName } from "../../ui/icons";
-import { ModelEffortPopover } from "./ModelEffortPopover";
+import { lazyOverlay } from "../LazyOverlay";
 import { UltraMark } from "./Ultracode";
 import { t } from "../../i18n";
 import { AlwaysPermissions } from "./AlwaysPermissions";
 import { DelegatedHistory } from "./Delegated";
 import { appArchiveDeps, archiveAgent } from "../../lib/agent-archives";
+
+// the model and effort popover loads on the chip's first tap, not with every chat's header
+const ModelEffortPopover = lazyOverlay(() => import("./ModelEffortPopover").then((m) => m.ModelEffortPopover));
 
 interface SessionInfo {
   session_id?: string;
@@ -317,7 +320,16 @@ export function ModeChips({ session, effortOnly, assistant, withInfo }: { sessio
           side="top"
           width={300}
           header={t("chat-sessiondialogs.permission_mode")}
-          items={switchableModes(assistant || session.assistant, session.agent).map((m) => ({ key: m.id, label: m.title, detail: m.detail, radio: true, checked: mode === m.id, onSelect: () => void set({ permission_mode: m.id }) }))}
+          items={switchableModes(assistant || session.assistant, session.agent, canSwitchToBypass(session)).map((m) => ({
+            key: m.id,
+            label: m.title,
+            detail: m.detail,
+            radio: true,
+            checked: mode === m.id,
+            // an agent switched to "Allow all" while it runs (#1379): in red, and asked again first
+            ...(m.id === BYPASS_MODE && mode !== BYPASS_MODE && !(assistant || session.assistant || session.agent === "agy") ? { danger: true, confirm: t("chat-sessiondialogs.bypass_confirm"), confirmDetail: BYPASS_WARNING } : {}),
+            onSelect: () => void set({ permission_mode: m.id }),
+          }))}
         />
       )}
       {effortMenu.anchor && !withModel && (
@@ -533,7 +545,8 @@ export function CloseAgentDialog({ open, onClose, onClosed, session, machineName
   }, [open]);
   const go = async () => {
     // the agent went away while the dialog was open: nothing left to close, so don't leave a button that does nothing
-    if (!sessionCan(getSession(session.machine_id, session.session_id), "terminal")) {
+    const current = getSession(session.machine_id, session.session_id);
+    if (!current || current.status === "offline" || !sessionCan(current, "close")) {
       onClose();
       return;
     }
@@ -568,7 +581,7 @@ export function CloseAgentDialog({ open, onClose, onClosed, session, machineName
       }
     >
       <p className="text-[13px] leading-relaxed text-ink-2">
-        {t("chat-chatview.close_agent_detail", { machine: machineName, where: [session.space_name, tabLabel(session)].filter(Boolean).join(" › ") || sessionTitle(session) })}
+        {t(session.source_kind === "runtime" ? "chat-chatview.close_runtime_detail" : "chat-chatview.close_agent_detail", { machine: machineName, title: sessionTitle(session), where: [session.space_name, tabLabel(session)].filter(Boolean).join(" › ") || sessionTitle(session) })}
       </p>
       {wt && <WorktreeCleanup st={wt} value={cleanup} onChange={setCleanup} />}
     </Dialog>

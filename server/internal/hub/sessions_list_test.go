@@ -1,19 +1,26 @@
 package hub
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
+	neturl "net/url"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/sessionlist"
+	"github.com/nwverse/persona/server/internal/sessionorigin"
 )
 
 type listTestPage struct {
@@ -68,7 +75,7 @@ func TestRuntimeExactLookupFullRow(t *testing.T) {
 	other := newMachine(h, MachineConfig{ID: "other"})
 	other.sessions = []proto.Session{{MachineID: "other", SessionID: full.SessionID, Title: "Other machine"}}
 	h.machines, h.byID["other"] = append(h.machines, other), other
-	q := "summary=0&limit=50&machine_id=demo&session_id=" + url.QueryEscape(full.SessionID)
+	q := "summary=0&limit=50&machine_id=demo&session_id=" + neturl.QueryEscape(full.SessionID)
 	exact := runtimePage(t, h, q)
 	legacy := runtimePage(t, h, "machine_id=demo")
 	if exact.Total != 1 || len(exact.Sessions) != 1 || exact.HasMore || exact.Cursor != "" || len(exact.Remove) != 0 || exact.Revision == "" ||
@@ -82,8 +89,8 @@ func TestRuntimeExactLookupFullRow(t *testing.T) {
 	if page := runtimePage(t, h, "summary=1&limit=50&machine_id=demo"); slices.ContainsFunc(page.Sessions, func(s proto.Session) bool { return s.SessionID == full.SessionID }) {
 		t.Fatal("test target should be beyond the first ordinary page")
 	}
-	for _, q := range []string{"machine_id=demo&session_id=missing", "machine_id=missing&session_id=" + url.QueryEscape(full.SessionID),
-		"machine_id=demo&session_id=" + url.QueryEscape(full.SessionID) + "&state=offline"} {
+	for _, q := range []string{"machine_id=demo&session_id=missing", "machine_id=missing&session_id=" + neturl.QueryEscape(full.SessionID),
+		"machine_id=demo&session_id=" + neturl.QueryEscape(full.SessionID) + "&state=offline"} {
 		page := runtimePage(t, h, q)
 		if page.Total != 0 || len(page.Sessions) != 0 || page.Sessions == nil || page.Remove == nil || page.HasMore || page.Cursor != "" {
 			t.Fatalf("missing: %+v", page)
@@ -104,6 +111,7 @@ func TestRuntimeExactLookupFullRow(t *testing.T) {
 	m.mu.Unlock()
 	h.deleted.mu.Lock()
 	h.deleted.loaded, h.deleted.m = true, map[string]time.Time{"demo/" + full.SessionID: time.Now().UTC()}
+	h.deleted.byMachine = notesByMachine(h.deleted.m)
 	h.deleted.mu.Unlock()
 	h.sessionsChanged(m)
 	if page := runtimePage(t, h, q); page.Total != 0 || len(page.Sessions) != 0 {
@@ -180,11 +188,11 @@ func TestRuntimeListPagesAndSummary(t *testing.T) {
 	m.sessions[1].UpdatedAt = time.Unix(200, 0)
 	m.mu.Unlock()
 	h.sessionsChanged(m)
-	second := runtimePage(t, h, "summary=1&limit=1&cursor="+url.QueryEscape(first.Cursor))
+	second := runtimePage(t, h, "summary=1&limit=1&cursor="+neturl.QueryEscape(first.Cursor))
 	if second.Sessions[0].SessionID != "b" || second.Revision != first.Revision || len(second.Sessions[0].Background) != 0 || len([]rune(second.Sessions[0].LastText)) != 180 {
 		t.Fatalf("second: %+v", second)
 	}
-	third := runtimePage(t, h, "summary=1&limit=1&cursor="+url.QueryEscape(second.Cursor))
+	third := runtimePage(t, h, "summary=1&limit=1&cursor="+neturl.QueryEscape(second.Cursor))
 	if third.HasMore || third.Sessions[0].SessionID != "c" {
 		t.Fatalf("third: %+v", third)
 	}
@@ -209,7 +217,7 @@ func TestRuntimeListDeltaTransitionsAndMachineRemoval(t *testing.T) {
 	m.sessions[0].Title = "Now working"
 	m.mu.Unlock()
 	h.sessionsChanged(m)
-	delta := runtimePage(t, h, "summary=1&state=needs_you&since="+url.QueryEscape(first.Revision))
+	delta := runtimePage(t, h, "summary=1&state=needs_you&since="+neturl.QueryEscape(first.Revision))
 	if len(delta.Sessions) != 0 || len(delta.Remove) != 1 || delta.Remove[0] != runtimeListID("demo", "s/with/slashes") || delta.Total != 0 {
 		t.Fatalf("exit: %+v", delta)
 	}
@@ -218,7 +226,7 @@ func TestRuntimeListDeltaTransitionsAndMachineRemoval(t *testing.T) {
 	h.machines = nil
 	delete(h.byID, "demo")
 	h.mu.Unlock()
-	gone := runtimePage(t, h, "summary=1&since="+url.QueryEscape(all.Revision))
+	gone := runtimePage(t, h, "summary=1&since="+neturl.QueryEscape(all.Revision))
 	if len(gone.Remove) != 1 || gone.Total != 0 {
 		t.Fatalf("gone: %+v", gone)
 	}
@@ -250,7 +258,7 @@ func TestRuntimeListCountsAndErrors(t *testing.T) {
 	p := runtimePage(t, h, "limit=1")
 	other := newTestHub(t)
 	w := httptest.NewRecorder()
-	other.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?since="+url.QueryEscape(p.Revision), nil))
+	other.listSessions(w, httptest.NewRequest("GET", "/api/v1/sessions?since="+neturl.QueryEscape(p.Revision), nil))
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "revision_expired") {
 		t.Fatalf("restart: %d %s", w.Code, w.Body)
 	}
@@ -263,7 +271,7 @@ func TestRuntimeListSubscriberOnlyReceivesRevision(t *testing.T) {
 	m.sessions = []proto.Session{{MachineID: "demo", SessionID: "s", State: "idle", Title: "Old"}}
 	h.sessionListIndex()
 	c := &client{hub: h, listMode: true, delta: true, out: make(chan []byte, 4), role: roleFull}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	h.sessionListNotice(c)
 	assertNotice := func() {
 		t.Helper()
@@ -297,7 +305,7 @@ func TestRuntimeListFollowsRevs(t *testing.T) {
 	m.sessions = []proto.Session{{MachineID: "demo", SessionID: "a", Rev: 1}, {MachineID: "demo", SessionID: "b", Rev: 1}}
 	first := runtimePage(t, h, "summary=1")
 	c := &client{hub: h, listMode: true, delta: true, out: make(chan []byte, 4), role: roleFull}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	m.onEvent("sessions.revs", json.RawMessage(`{"revs":{"a":7}}`))
 	var notified bool
 	for len(c.out) > 0 {
@@ -308,7 +316,7 @@ func TestRuntimeListFollowsRevs(t *testing.T) {
 	if !notified {
 		t.Fatal("paged client not told about the new revs")
 	}
-	delta := runtimePage(t, h, "summary=1&since="+url.QueryEscape(first.Revision))
+	delta := runtimePage(t, h, "summary=1&since="+neturl.QueryEscape(first.Revision))
 	if len(delta.Sessions) != 1 || delta.Sessions[0].SessionID != "a" || delta.Sessions[0].Rev != 7 {
 		t.Fatalf("delta: %+v", delta)
 	}
@@ -317,5 +325,490 @@ func TestRuntimeListFollowsRevs(t *testing.T) {
 		if want := map[string]int64{"a": 7, "b": 1}[s.SessionID]; s.Rev != want {
 			t.Fatalf("%s rev %d, want %d", s.SessionID, s.Rev, want)
 		}
+	}
+}
+
+// A paged-index id is json.Marshal's tuple of the machine and session ids, written by hand only when neither has a
+// byte the encoder escapes.
+func TestRuntimeListIDMatchesMarshal(t *testing.T) {
+	for _, sid := range []string{"", "s", "a/b@c?d+e", `q"uote`, `back\slash`, "<b>&", "标题", "line\u2028", "\xff", "\x7f", "tab\t", "~ !#$%'()*,-.:;=[]^_`{|}"} {
+		for _, pair := range [][2]string{{"demo", sid}, {sid, "s"}} {
+			want, _ := json.Marshal(pair)
+			if got := runtimeListID(pair[0], pair[1]); got != string(want) {
+				t.Fatalf("%q: %s, want %s", pair, got, want)
+			}
+		}
+	}
+}
+
+// fullIndexItems is what indexSessionsLocked indexed before it reused rows: every row's summary, full row and search
+// text built from the row itself. The oracle of TestIndexRowReuseMatchesFullPath.
+func fullIndexItems(mid string, list []proto.Session, encoded []sentSession) []sessionlist.Item {
+	full := make(map[string]json.RawMessage, len(encoded))
+	for _, row := range encoded {
+		full[row.id] = row.raw
+	}
+	var items []sessionlist.Item
+	seen := map[string]bool{}
+	for _, row := range list {
+		if row.SessionID == "" || seen[row.SessionID] || len(full[row.SessionID]) == 0 {
+			continue
+		}
+		seen[row.SessionID] = true
+		id, _ := json.Marshal([2]string{mid, row.SessionID})
+		summary, _ := json.Marshal(runtimeSummary(row))
+		items = append(items, sessionlist.Item{
+			ID: string(id), Machine: mid, Project: cmp.Or(row.RepoRoot, row.WorkspaceCwd, row.Cwd), Group: cmp.Or(row.SpaceID, row.WorkspaceID),
+			PaneSource: sessionorigin.Of(row), State: row.State, BackgroundWaiting: row.BackgroundWaiting, Source: row.SourceKind,
+			Provider: row.Agent, UpdatedAt: row.UpdatedAt,
+			SearchText: strings.Join([]string{row.Title, row.Cwd, row.RepoRoot, row.SpaceName, row.SlotName, row.AgentName, row.LastText}, "\n"),
+			Summary:    json.RawMessage(summary),
+			Full: runtimeListFields(full[row.SessionID], struct {
+				PaneSource string `json:"pane_source"`
+			}{sessionorigin.Of(row)}),
+		})
+	}
+	return items
+}
+
+// The paged index a hub keeps while it reuses rows whose encoding it already holds is the index the full computation
+// gives, at every step of lists whose rows change in what the index reads (cuts, zones, work, background, origin,
+// grouping, folded invalid UTF-8), gain, lose, repeat or reorder rows, or whose machine goes and comes back: the same
+// pages, summaries, counts, revisions and deltas. A list that did not change makes no revision, and an unchanged row
+// keeps the bytes it was indexed with.
+func TestIndexRowReuseMatchesFullPath(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	base := time.Date(2026, 1, 2, 3, 4, 5, 6, time.UTC)
+	for i := range 12 {
+		m.sessions = append(m.sessions, proto.Session{MachineID: "demo", SessionID: fmt.Sprintf("s%02d", i), Title: fmt.Sprintf("needle %d", i),
+			Cwd: "/demo/app", State: "idle", Status: proto.StatusIdle, UpdatedAt: base.Add(time.Duration(i) * time.Minute), LastText: "Demo preview"})
+	}
+	var ref sessionlist.Index
+	index := func() {
+		list := h.shown("demo", h.decorated(m))
+		enc := encodeSessions(list)
+		h.sessionsMu.Lock()
+		h.indexSessionsLocked("demo", list, enc)
+		h.sessionsMu.Unlock()
+		ref.Replace("demo", fullIndexItems("demo", list, enc))
+	}
+	got := h.sessionListIndex()
+	index()
+	cycle := func(n int, values ...string) string { return values[n%len(values)] }
+	rowEdits := []func(r *proto.Session, n int){
+		func(r *proto.Session, n int) { r.Title = strings.Repeat("题", 255+n%3) },             // around the summary's 256-rune cut
+		func(r *proto.Session, n int) { r.Title = strings.Repeat("t", 256) + fmt.Sprint(n) }, // past the cut: the full row only
+		func(r *proto.Session, n int) { r.LastText = strings.Repeat("é", 179+n%3) },
+		func(r *proto.Session, n int) { r.Title = "needle " + string([]byte{0xfe + byte(n%2)}) }, // the same bytes once encoded
+		func(r *proto.Session, n int) { r.UpdatedAt = r.UpdatedAt.In(time.FixedZone("demo", 3600*(n%3))) },
+		func(r *proto.Session, n int) { r.UpdatedAt = r.UpdatedAt.Add(time.Second) },
+		func(r *proto.Session, n int) {
+			wake := base.Add(time.Hour)
+			r.Work = []*proto.WorkState{nil, {Phase: "blocked", On: "external", WakeAt: &wake}, {Phase: "blocked", On: "user", Wait: "answer"},
+				{Phase: "done", Line: strings.Repeat("w", 181)}}[n%4]
+		},
+		func(r *proto.Session, n int) {
+			r.Plan, r.Goal, r.Loop = nil, nil, nil
+			switch n % 4 {
+			case 1:
+				r.Plan = &proto.PlanInfo{Done: 1, Total: 3, Current: strings.Repeat("p", 200)}
+			case 2:
+				r.Goal = &proto.GoalInfo{Objective: "Ship the demo", Status: "active"}
+			case 3:
+				r.Loop = &proto.LoopInfo{Kind: "interval", Prompt: "Check the demo", IntervalSeconds: 60}
+			}
+		},
+		func(r *proto.Session, n int) { r.Background = make([]proto.BackgroundTask, n%3) },
+		func(r *proto.Session, n int) {
+			r.Subagents = []proto.Subagent{{ID: "sub", Running: n%2 == 0}}
+			r.Workflows = []proto.Workflow{{TaskID: "flow", Running: n%3 == 0}}
+		},
+		func(r *proto.Session, n int) { // pane_source: desktop, feishu, terminal, unknown
+			r.SourceKind, r.SourceInstanceID, r.PaneID = cycle(n, "runtime", "", "", ""), cycle(n, "orca", "", "", ""), cycle(n, "", "botmux:topic", "herdr:1", "")
+			r.Agent = cycle(n, "claude", "codex")
+		},
+		func(r *proto.Session, n int) {
+			r.SpaceID, r.WorkspaceID = cycle(n, "", "space", ""), cycle(n, "", "", "workspace")
+		},
+		func(r *proto.Session, n int) {
+			r.RepoRoot, r.WorkspaceCwd, r.Cwd = cycle(n, "", "/demo/repo", ""), cycle(n, "", "", "/demo/real"), cycle(n, "/demo/app", "/demo/b")
+		},
+		func(r *proto.Session, n int) {
+			r.State, r.BackgroundWaiting = cycle(n, "working", "needs_you", "idle"), n%2 == 0
+		},
+		func(r *proto.Session, n int) { r.Rev++ },
+		func(r *proto.Session, n int) { r.Archived = n%2 == 0 }, // hidden from the lists while archived
+	}
+	listEdits := []func(list []proto.Session, n int) []proto.Session{
+		func(list []proto.Session, n int) []proto.Session {
+			return append(list, proto.Session{MachineID: "demo", SessionID: fmt.Sprintf("new%03d", n), UpdatedAt: base})
+		},
+		func(list []proto.Session, n int) []proto.Session {
+			return slices.Delete(list, n%len(list), n%len(list)+1)
+		},
+		func(list []proto.Session, n int) []proto.Session {
+			r := list[n%len(list)]
+			return append([]proto.Session{r}, slices.Delete(list, n%len(list), n%len(list)+1)...)
+		},
+		func(list []proto.Session, n int) []proto.Session { // a second row under an id: summary of one, bytes of the other
+			r := list[n%len(list)]
+			r.Title = "another row under the same id"
+			return append(list, r)
+		},
+		func(list []proto.Session, n int) []proto.Session { // the duplicates go, the last of each stays
+			last := map[string]int{}
+			for i, r := range list {
+				last[r.SessionID] = i
+			}
+			var out []proto.Session
+			for i, r := range list {
+				if last[r.SessionID] == i {
+					out = append(out, r)
+				}
+			}
+			return out
+		},
+	}
+	view := func(i *sessionlist.Index, since ...string) []any {
+		epoch := strings.Split(i.Revision(), ".")[1]
+		var out []any
+		for _, o := range []sessionlist.Options{{Limit: 200}, {Limit: 200, Summary: true}, {Limit: 200, Q: "needle"}, {Limit: 200, Since: since[0]},
+			{Limit: 200, Summary: true, Since: since[1]}} {
+			p, err := i.Query(o)
+			p.Revision = strings.Replace(p.Revision, epoch, "E", 1)
+			out = append(out, p, fmt.Sprint(err))
+		}
+		c, err := i.Counts(sessionlist.Options{})
+		c.Revision = strings.Replace(c.Revision, epoch, "E", 1)
+		return append(out, c, fmt.Sprint(err))
+	}
+	first := [2]string{got.Revision(), ref.Revision()}
+	prev := first
+	check := func(step string) {
+		t.Helper()
+		if a, b := view(got, prev[0], first[0]), view(&ref, prev[1], first[1]); !reflect.DeepEqual(a, b) {
+			t.Fatalf("%s: the reused index differs from the full one\nreused: %v\nfull:   %v", step, a, b)
+		}
+		prev = [2]string{got.Revision(), ref.Revision()}
+	}
+	edit := func(step string, f func([]proto.Session) []proto.Session) {
+		t.Helper()
+		m.mu.Lock()
+		m.sessions = f(slices.Clone(m.sessions))
+		m.mu.Unlock()
+		index()
+		check(step)
+	}
+	rng := rand.New(rand.NewPCG(2432, 1))
+	for step := range 110 {
+		n := rng.IntN(1 << 20)
+		switch k := rng.IntN(len(rowEdits) + len(listEdits) + 1); {
+		case step < len(rowEdits): // each edit once, in order, then at random
+			edit(fmt.Sprint("row edit ", step), func(l []proto.Session) []proto.Session { rowEdits[step](&l[n%len(l)], n); return l })
+		case step < len(rowEdits)+len(listEdits):
+			edit(fmt.Sprint("list edit ", step-len(rowEdits)), func(l []proto.Session) []proto.Session { return listEdits[step-len(rowEdits)](l, n) })
+		case k < len(rowEdits):
+			edit(fmt.Sprint("step ", step, " row edit ", k), func(l []proto.Session) []proto.Session { rowEdits[k](&l[n%len(l)], n); return l })
+		case k < len(rowEdits)+len(listEdits):
+			edit(fmt.Sprint("step ", step, " list edit ", k-len(rowEdits)), func(l []proto.Session) []proto.Session { return listEdits[k-len(rowEdits)](l, n) })
+		default: // the machine goes (RemoveSource) and comes back
+			h.mu.Lock()
+			h.machines = nil
+			delete(h.byID, "demo")
+			h.mu.Unlock()
+			h.pruneSessionListMachines()
+			ref.RemoveSource("demo")
+			check(fmt.Sprint("step ", step, " machine removed"))
+			h.mu.Lock()
+			h.machines, h.byID["demo"] = []*Machine{m}, m
+			h.mu.Unlock()
+			edit(fmt.Sprint("step ", step, " machine back"), func(l []proto.Session) []proto.Session { return l })
+		}
+	}
+	m.mu.Lock()
+	m.sessions = slices.DeleteFunc(slices.Clone(m.sessions), func(s proto.Session) bool { return s.Archived })
+	m.sessions[0].Rev++
+	m.mu.Unlock()
+	index()
+	check("settle")
+	id := runtimeListID("demo", m.sessions[1].SessionID)
+	kept := got.Items([]string{id})[0].Full.(json.RawMessage)
+	revision := got.Revision()
+	index()
+	m.mu.Lock()
+	m.sessions = slices.Clone(m.sessions)
+	m.sessions[0].Rev++
+	m.mu.Unlock()
+	index()
+	if after := got.Items([]string{id})[0].Full.(json.RawMessage); &after[0] != &kept[0] {
+		t.Fatal("an unchanged row was indexed again rather than kept")
+	}
+	if got.Revision() == revision {
+		t.Fatal("the changed row made no revision")
+	}
+	revision = got.Revision()
+	index()
+	if got.Revision() != revision {
+		t.Fatal("an unchanged list made a revision")
+	}
+	check("end")
+}
+
+// A sessions.revs reindexes the machine from its kept list and kept rows (indexKeptLocked) to the index the full
+// computation gives for its decorated list: the same items (full row, summary with its manager, search text, every
+// scalar) under the same ids, and a new revision exactly when the full computation makes one. The lists hide rows
+// (archived, deleted), name a session twice or come without their bytes; the manager changes between two revs, and
+// revs name sessions that are hidden or not listed.
+func TestReindexKeptMatchesDecorated(t *testing.T) {
+	h := newTestHub(t)
+	m := newMachine(h, MachineConfig{ID: "demo"})
+	h.machines, h.byID["demo"] = []*Machine{m}, m
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	h.deleted.mu.Lock()
+	h.deleted.loaded, h.deleted.m = true, map[string]time.Time{"demo/s03": base.Add(time.Hour)}
+	h.deleted.byMachine = notesByMachine(h.deleted.m)
+	h.deleted.mu.Unlock()
+	rows := func() []proto.Session {
+		var out []proto.Session
+		for i := range 8 {
+			out = append(out, proto.Session{MachineID: "demo", SessionID: fmt.Sprintf("s%02d", i), Title: fmt.Sprintf("needle %d", i),
+				Cwd: "/demo/app", State: "idle", Status: proto.StatusIdle, UpdatedAt: base.Add(time.Duration(i) * time.Minute),
+				LastText: "Demo preview", Archived: i == 2})
+		}
+		return out
+	}
+	take := func(list []proto.Session, withBytes bool) { // a manager's list (takeFleetSessionsFrom)
+		var raws []string
+		for i := range list {
+			if b, _ := json.Marshal(list[i]); withBytes {
+				raws = append(raws, string(b))
+			}
+		}
+		m.setSessionListRaws(list, raws)
+		h.broadcastSessions(m, m.keptSessions())
+	}
+	revs := func(revs string) { m.onEvent("sessions.revs", json.RawMessage(`{"revs":`+revs+`}`)) }
+	got := h.sessionListIndex()
+	var ref sessionlist.Index
+	ids := []string{runtimeListID("demo", "gone")}
+	for i := range 8 {
+		ids = append(ids, runtimeListID("demo", fmt.Sprintf("s%02d", i)))
+	}
+	for _, step := range []struct {
+		name string
+		do   func()
+	}{
+		{"a list with its bytes", func() { take(rows(), true) }},
+		{"revs", func() { revs(`{"s00":2}`) }},
+		{"the same revs", func() { revs(`{"s00":2}`) }},
+		{"a revs naming a session not listed", func() { revs(`{"s01":3,"gone":9}`) }},
+		{"a revs of a hidden session", func() { revs(`{"s02":4,"s03":4}`) }},
+		{"the manager changes", func() {
+			h.devices.mu.Lock()
+			h.devices.kept = map[string]string{"demo": "m-0b0b0b"}
+			h.devices.mu.Unlock()
+			revs(`{"s01":5}`)
+		}},
+		{"a session listed twice", func() {
+			list := rows()
+			twice := list[5]
+			twice.Title = "another row under the same id"
+			take(append(list, twice), true)
+		}},
+		{"revs of a session listed twice", func() { revs(`{"s05":6,"s06":6}`) }},
+		{"a list without its bytes", func() { take(rows(), false) }},
+		{"revs without the bytes", func() { revs(`{"s00":7}`) }},
+	} {
+		before := [2]string{got.Revision(), ref.Revision()}
+		step.do()
+		list := h.shown("demo", h.decorated(m))
+		ref.Replace("demo", fullIndexItems("demo", list, encodeSessions(list)))
+		if a, b := got.Items(ids), ref.Items(ids); !reflect.DeepEqual(a, b) {
+			t.Fatalf("%s: the index differs from the full computation\nkept: %+v\nfull: %+v", step.name, a, b)
+		}
+		if moved, want := got.Revision() != before[0], ref.Revision() != before[1]; moved != want {
+			t.Fatalf("%s: new revision %v, want %v", step.name, moved, want)
+		}
+	}
+	if s := got.Items(ids[2:3])[0].Summary.(json.RawMessage); !strings.Contains(string(s), `"manager":"m-0b0b0b"`) {
+		t.Fatalf("a summary without its new manager: %s", s)
+	}
+}
+
+// ?manager=<id> lists and counts only the sessions on that manager's computers (feature sessions_manager): the paged
+// list, its counts, an exact lookup and the whole list alike. Without the key every manager's are listed as before,
+// whatever X-Persona-Manager says. A computer that moves to another manager leaves the old one's list as a removal.
+func TestSessionsOfOneManager(t *testing.T) {
+	h, url, _, _ := reachHub(t) // A (assistant) has ma with s3, B (m-0b0b0b) has mb with b1
+	if !slices.Contains(h.features(), featureSessionsManager) {
+		t.Fatalf("features lack %s: %v", featureSessionsManager, h.features())
+	}
+	get := func(path string, header map[string]string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", url+path, nil)
+		req.Header.Set("Authorization", "Bearer "+h.cfg.Token)
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out json.RawMessage
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, string(out)
+	}
+	page := func(query string) listTestPage {
+		t.Helper()
+		code, out := get("/api/v1/sessions?"+query, nil)
+		var p listTestPage
+		if err := json.Unmarshal([]byte(out), &p); code != 200 || err != nil {
+			t.Fatalf("%s: %d %s %v", query, code, out, err)
+		}
+		return p
+	}
+	ids := func(p listTestPage) string {
+		var out []string
+		for _, s := range p.Sessions {
+			out = append(out, s.MachineID+"/"+s.SessionID+"@"+s.Manager)
+		}
+		slices.Sort(out)
+		return strings.Join(out, " ")
+	}
+	const a, b = "ma/s3@assistant", "mb/b1@m-0b0b0b"
+	for query, want := range map[string]string{
+		"limit=10":                                               a + " " + b,
+		"limit=10&manager=assistant":                             a,
+		"limit=10&manager=m-0b0b0b":                              b,
+		"summary=1&limit=10&manager=m-0b0b0b":                    b,
+		"limit=10&manager=m-0b0b0b&machine_id=ma":                "", // both filters hold
+		"limit=10&manager=m-0b0b0b&q=b-session":                  b,
+		"limit=10&machine_id=mb&session_id=b1&manager=m-0b0b0b":  b,
+		"limit=10&machine_id=mb&session_id=b1&manager=assistant": "", // an exact lookup is filtered too
+		"manager=assistant":                                      a,  // the whole list
+		"manager=m-0b0b0b":                                       b,
+		"manager=m-0b0b0b&machine_id=ma":                         "",
+		"":                                                       a + " " + b,
+	} {
+		p := page(query)
+		if got := ids(p); got != want {
+			t.Errorf("%q: got %q, want %q", query, got, want)
+		}
+		if strings.Contains(query, "limit=") && p.Total != len(p.Sessions) {
+			t.Errorf("%q: total %d of %d sessions", query, p.Total, len(p.Sessions))
+		}
+	}
+	// The header alone filters nothing here: an app that sends it with every request gets what it got.
+	if code, out := get("/api/v1/sessions?limit=10", map[string]string{ManagerHeader: "m-0b0b0b"}); code != 200 ||
+		!strings.Contains(out, "A-SESSION") || !strings.Contains(out, "B-SESSION") {
+		t.Errorf("the header filtered the list: %d %s", code, out)
+	}
+	counts := func(query string) sessionlist.Counts {
+		t.Helper()
+		code, out := get("/api/v1/sessions?counts=1"+query, nil)
+		var c sessionlist.Counts
+		if err := json.Unmarshal([]byte(out), &c); code != 200 || err != nil {
+			t.Fatalf("counts %s: %d %s %v", query, code, out, err)
+		}
+		return c
+	}
+	if c := counts("&manager=m-0b0b0b"); c.Total != 1 || !reflect.DeepEqual(c.Machine, map[string]int{"mb": 1}) {
+		t.Errorf("B's counts: %+v", c)
+	}
+	if c := counts("&manager=assistant"); c.Total != 1 || !reflect.DeepEqual(c.Machine, map[string]int{"ma": 1}) {
+		t.Errorf("A's counts: %+v", c)
+	}
+	if c := counts(""); c.Total != 2 {
+		t.Errorf("everyone's counts: %+v", c)
+	}
+	for path, want := range map[string]struct {
+		status int
+		code   string
+	}{
+		"/api/v1/sessions?limit=10&manager=m-ffffff":                   {404, "no_manager"},
+		"/api/v1/sessions?manager=m-ffffff":                            {404, "no_manager"},
+		"/api/v1/sessions?counts=1&manager=m-ffffff":                   {404, "no_manager"},
+		"/api/v1/sessions?limit=10&manager=":                           {400, "invalid_query"},
+		"/api/v1/sessions?manager=":                                    {400, "invalid_query"},
+		"/api/v1/sessions?limit=10&manager=assistant&manager=m-0b0b0b": {400, "invalid_query"},
+	} {
+		if code, out := get(path, nil); code != want.status || !strings.Contains(out, want.code) {
+			t.Errorf("%s: %d %s", path, code, clip(out, 200))
+		}
+	}
+	// B's extension: its own manager named is as not naming one; another is refused, on every form of the list.
+	for _, path := range []string{"/api/v1/sessions?limit=10&manager=assistant", "/api/v1/sessions?manager=assistant", "/api/v1/sessions?counts=1&manager=assistant"} {
+		if code, out := extDo(t, url, "GET", path, "", nil); code != http.StatusForbidden || !strings.Contains(out, codeOtherManager) {
+			t.Errorf("an extension naming another manager, %s: %d %s", path, code, clip(out, 200))
+		}
+	}
+	for _, path := range []string{"/api/v1/sessions?limit=10&manager=m-0b0b0b", "/api/v1/sessions?manager=m-0b0b0b"} {
+		if code, out := extDo(t, url, "GET", path, "", nil); code != 200 || !strings.Contains(out, "B-SESSION") || strings.Contains(out, "A-SESSION") {
+			t.Errorf("an extension naming its own manager, %s: %d %s", path, code, clip(out, 300))
+		}
+	}
+
+	// ma moves to B: it leaves A's list (a removal for an app that follows A's with since) and joins B's.
+	mine, theirs := page("summary=1&limit=10&manager=assistant"), page("summary=1&limit=10&manager=m-0b0b0b")
+	if _, err := h.moveMachine(context.Background(), "ma", "m-0b0b0b"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, "A's list is empty after the move", func() bool { return page("limit=10&manager=assistant").Total == 0 })
+	left := page("summary=1&limit=10&manager=assistant&since=" + neturl.QueryEscape(mine.Revision))
+	if len(left.Remove) != 1 || left.Remove[0] != runtimeListID("ma", "s3") || len(left.Sessions) != 0 || left.Total != 0 {
+		t.Errorf("A's delta after the move: %+v", left)
+	}
+	came := page("summary=1&limit=10&manager=m-0b0b0b&since=" + neturl.QueryEscape(theirs.Revision))
+	if got := ids(came); got != "ma/s3@m-0b0b0b" || came.Total != 2 || len(came.Remove) != 0 {
+		t.Errorf("B's delta after the move: %q %+v", got, came)
+	}
+	if c := counts("&manager=m-0b0b0b"); c.Total != 2 || !reflect.DeepEqual(c.Machine, map[string]int{"ma": 1, "mb": 1}) {
+		t.Errorf("B's counts after the move: %+v", c)
+	}
+	// A cursor of one manager's list is not another's.
+	first := page("limit=1&manager=m-0b0b0b")
+	if !first.HasMore || first.Total != 2 {
+		t.Fatalf("B's first page: %+v", first)
+	}
+	if code, out := get("/api/v1/sessions?limit=1&manager=assistant&cursor="+neturl.QueryEscape(first.Cursor), nil); code != 400 {
+		t.Errorf("B's cursor on A's list: %d %s", code, clip(out, 200))
+	}
+	if next := page("limit=1&manager=m-0b0b0b&cursor=" + neturl.QueryEscape(first.Cursor)); next.HasMore || len(next.Sessions) != 1 || next.Sessions[0].SessionID == first.Sessions[0].SessionID {
+		t.Errorf("B's second page: %+v", next)
+	}
+}
+
+// An extension of a manager with two computers asks for its own sessions: the bounded page, the counts and the
+// whole list come from its computers only (one computer would fall back to a machine_id lookup and skip ownPage / ownCounts).
+func TestSessionsOfOneManagerSeveralComputersExtension(t *testing.T) {
+	h, url, _, b := reachHub(t) // A has ma (s3); B has mb (b1)
+	h.cfg.Machines = append(h.cfg.Machines, MachineConfig{ID: "mc", Name: "mc", Kind: "local"})
+	if _, err := h.moveMachine(context.Background(), "mc", "m-0b0b0b"); err != nil {
+		t.Fatal(err)
+	}
+	b.report(t, devicewire.State{Machine: proto.Machine{ID: "mb", Name: "mb"}}, devicewire.State{Machine: proto.Machine{ID: "mc", Name: "mc"}}) // one report is B's whole share
+	eventually(t, 5*time.Second, "mc", func() bool { return h.localMachine("mc") != nil })
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{{MachineID: "mb", SessionID: "b1", Title: "B-SESSION"}}})
+	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mc", Sessions: []proto.Session{{MachineID: "mc", SessionID: "c1", Title: "C-SESSION"}}})
+
+	for _, path := range []string{"/api/v1/sessions?limit=10&manager=m-0b0b0b", "/api/v1/sessions?summary=1&limit=10&manager=m-0b0b0b", "/api/v1/sessions?manager=m-0b0b0b"} {
+		code, out := extDo(t, url, "GET", path, "", nil)
+		if code != 200 || !strings.Contains(out, "B-SESSION") || !strings.Contains(out, "C-SESSION") || strings.Contains(out, "A-SESSION") {
+			t.Errorf("%s: %d %s", path, code, clip(out, 300))
+		}
+		if strings.Contains(path, "limit=") {
+			var p listTestPage
+			if err := json.Unmarshal([]byte(out), &p); err != nil || p.Total != 2 || len(p.Sessions) != 2 {
+				t.Errorf("%s: total %d of %d sessions (%v)", path, p.Total, len(p.Sessions), err)
+			}
+		}
+	}
+	code, out := extDo(t, url, "GET", "/api/v1/sessions?counts=1&manager=m-0b0b0b", "", nil)
+	var c sessionlist.Counts
+	if err := json.Unmarshal([]byte(out), &c); code != 200 || err != nil || c.Total != 2 || !reflect.DeepEqual(c.Machine, map[string]int{"mb": 1, "mc": 1}) {
+		t.Errorf("B's counts through its extension: %d %s %v", code, out, err)
 	}
 }

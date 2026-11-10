@@ -4,7 +4,7 @@ import UIKit
 import WebKit
 #endif
 
-/// Settings › hub › the in-app tunnel (docs/operations/network.md「经 App 内隧道连 hub」): one paired hub's tunnel, the account it signs
+/// Settings › hub › the in-app tunnel (docs/operations/network.md「Connecting to hub through an in-app tunnel」): one paired hub's tunnel, the account it signs
 /// in with, and what it is doing now. Only a hub whose extension contributes a tunnel has the page, titled with the
 /// tunnel's name; where the tunnel goes is that extension's setting on the hub, shown here as it is. 「总是走隧道」 is
 /// this phone's.

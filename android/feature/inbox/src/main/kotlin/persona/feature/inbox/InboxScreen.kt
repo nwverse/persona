@@ -5,6 +5,8 @@ import persona.core.designsystem.text
 import androidx.compose.ui.platform.LocalResources
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
+import persona.core.domain.inbox.InboxGroups
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -27,7 +29,11 @@ import kotlinx.coroutines.launch
 /** [onOpenCard]: the app opens a request card outside any session on Agents (#5610); without it, Agents opens. */
 @Composable
 fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: ((persona.core.navigation.RequestRef) -> Unit)? = null) {
-    val snapshot by repository.snapshot.collectAsStateWithLifecycle()
+    // The page lists the current assistant's inbox (docs/assistant/managers.md "Clients"): the hub's list is every
+    // manager's, each item with its own, so another assistant's item still opens from a notification or a link.
+    val listed by repository.snapshot.collectAsStateWithLifecycle()
+    val assistant = currentAssistant()
+    val snapshot = remember(listed, assistant) { listed.ofAssistant(assistant) }
     val connection by repository.connectionState.collectAsStateWithLifecycle(ConnectionState.Connecting)
     val onlineSince = rememberOnlineSince(connection)
     val shownConnection = rememberSettledConnection(connection)
@@ -46,6 +52,8 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val kind = currentFilters.kind
     val section = currentFilters.section
     val expanded = currentFilters.expanded
+    val grouping = currentFilters.grouping
+    val folds = currentFilters.folds
     var preferenceError by remember { mutableStateOf(false) }
     val preferenceWrites = remember(repository) { kotlinx.coroutines.sync.Mutex() }
     fun filter(value: InboxPreferences) {
@@ -61,12 +69,31 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     val listStates = rememberSaveableStateHolder()
     var error by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(repository, snapshot.refreshes) {
+        if (snapshot.refreshes > 0 && snapshot.error == null) error = null
+    }
     var refreshing by remember { mutableStateOf(false) }
     val pending = remember { mutableStateMapOf<String, Boolean>() }
-    val roster = LocalManagerRoster.current
-    val records = snapshot.records.associateBy { it.item.id }
+    // Selection (#2576): a long-press on a row starts it, Back or the bar's ← ends it.
+    var selecting by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var picked by androidx.compose.runtime.saveable.rememberSaveable(stateSaver = androidx.compose.runtime.saveable.listSaver<Set<String>, String>(
+        { it.toList() }, { it.toSet() })) { mutableStateOf(emptySet<String>()) }
+    fun endSelection() { selecting = false; picked = emptySet() }
+    androidx.activity.compose.BackHandler(selecting) { endSelection() }
+    // Picked rows are the assistant's whose inbox showed them: another assistant ends the selection, so nothing it no
+    // longer shows is acted on.
+    var selectionOf by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(assistant.id) }
+    LaunchedEffect(assistant.id) { if (selectionOf != assistant.id) { selectionOf = assistant.id; endSelection() } }
+    // Named on the history's requests and in the keys of what it read; "" (one manager, or a hub without a roster)
+    // names none, as before.
+    val historyManager = assistant.id.takeIf { assistant.roster?.isMulti == true }.orEmpty()
+    // Done's history past the list's few days (#2576): merged in under Done; the list's own copy of an item wins.
+    val history = remember(repository, historyManager) { InboxDoneHistory(repository, scope) }
+    val listedIds = remember(snapshot.records) { snapshot.records.mapTo(HashSet()) { it.item.id } }
+    val allRecords = if (history.records.isEmpty()) snapshot.records else snapshot.records + history.records.filter { it.item.id !in listedIds }
+    val records = allRecords.associateBy { it.item.id }
     val interactions = snapshot.interactions.associateBy { it.id }
-    val items = orderHubInbox(snapshot.records.map { record ->
+    val items = orderHubInbox(allRecords.map { record ->
         pending[record.item.id]?.let { done ->
             record.item.copy(doneAt = if (done) java.time.Instant.now().toString() else null)
         } ?: record.item
@@ -103,7 +130,6 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     val groups = displayGroups.filter { section.isEmpty() || it.id == section }
     val needsCount = needsYouCount(result, ::working)
-    val doneCount = result.groups.firstOrNull { it.id == "done" }?.count ?: 0
     val allCount = result.groups.sumOf { it.count }
     val sources = listOf("" to res.getString(R.string.inbox_all_sources)) + snapshot.records.map { record ->
         record.item.account to record.sourceLabel.ifBlank { if (record.feedId != null) res.getString(R.string.inbox_source_lark) else record.item.account.ifBlank { res.getString(R.string.inbox_source_mail) } }
@@ -122,21 +148,12 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             try { if (collectNow) repository.refreshNow() else repository.refresh(); error = null }
             catch (e: CancellationException) { throw e }
             // Background refreshes stay quiet; a pull or tap reports its result.
-            catch (e: Exception) { if (feedback?.failure(e, operation = collectNow) != true) error = res.getString(R.string.inbox_refresh_failed) }
+            catch (e: Exception) { error = res.getString(R.string.inbox_refresh_failed) }
             finally { refreshing = false }
         }
     }
-    fun markDone(id: String, done: Boolean) {
-        if (id in pending) return
-        pending[id] = done
-        // As iOS InboxStore: filing buzzes success at once, putting back a light tap.
-        haptics(doneHaptic(done))
-        scope.launch {
-            try { repository.setDone(id, done); error = null }
-            catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (feedback?.failure(e) != true) error = res.getString(R.string.inbox_failed_restored) }
-            finally { pending.remove(id) }
-        }
+    val failedCompletions = remember(repository) {
+        mutableStateMapOf<String, Pair<persona.core.contracts.api.InboxDoneTarget, InboxBulkAction>>()
     }
     // Clean up all / Mark all as seen / Clear all, and their Undo: one request for them all (the hub skips the ones that took new
     // messages since this list), shown at once, then a notice with Undo when something was filed.
@@ -144,13 +161,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         val done = action != InboxBulkAction.Reopen
         val asked = targets.filter { it.id !in pending }
         if (asked.isEmpty()) return
-        asked.forEach { pending[it.id] = done }
+        asked.forEach { pending[it.id] = done; failedCompletions.remove(it.id) }
         haptics(doneHaptic(done))
         scope.launch {
             try {
                 val result = repository.bulk(asked, action)
                 // The hub could not write some of them: they are back as they were.
-                error = if (result.failed.isEmpty()) null else res.getString(R.string.inbox_failed_restored)
+                asked.filter { it.id in result.failed }.forEach { failedCompletions[it.id] = it to action }
                 val notice = if (undoable) bulkNotice(res, result, cleaned = action == InboxBulkAction.Dismiss) else null
                 if (notice != null) {
                     val back = result.changed.map { persona.core.contracts.api.InboxDoneTarget(it) }
@@ -159,8 +176,22 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 }
             }
             catch (e: CancellationException) { throw e }
-            catch (e: Exception) { if (feedback?.failure(e) != true) error = res.getString(R.string.inbox_failed_restored) }
+            catch (e: Exception) { asked.forEach { failedCompletions[it.id] = it to action } }
             finally { asked.forEach { pending.remove(it.id) } }
+        }
+    }
+    fun markDone(id: String, done: Boolean) {
+        val record = records[id] ?: return
+        if (id in pending) return
+        val action = if (done) InboxBulkAction.Done else InboxBulkAction.Reopen
+        pending[id] = done
+        failedCompletions.remove(id)
+        haptics(doneHaptic(done))
+        scope.launch {
+            try { repository.setDone(id, done) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { failedCompletions[id] = persona.core.contracts.api.InboxDoneTarget(id, record.item.version) to action }
+            finally { pending.remove(id) }
         }
     }
     // "Mute this repository / chat / sender" from a row's menu (iOS `InboxStore.mute`): what it covers is filed at once.
@@ -175,8 +206,12 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         }
     }
     var showMutes by remember { mutableStateOf(false) }
+    var showRules by remember { mutableStateOf(false) }
+    var ruleTarget by remember { mutableStateOf<InboxPolicyTarget?>(null) }
     val sectionReader = rememberInboxSectionReader(conversations, conversationRows)
     if (showMutes) InboxMutesSheet(repository, onDismiss = { showMutes = false })
+    if (showRules) InboxRulesSheet(repository, onDismiss = { showRules = false })
+    ruleTarget?.let { InboxPolicySheet(repository, it, onDismiss = { ruleTarget = null }) }
     LaunchedEffect(repository) { refresh(collectNow = false) }
     // The title while the hub is out of reach opens why, since when and "Retry now" in place (iOS ConnectionTitle).
     val connectionDetails = rememberConnectionDetails(shownConnection, { navigator.navigate(ConnectionSettingsRoute) }, onRetry = { refresh(collectNow = false) })
@@ -184,6 +219,51 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
         .filter { it.type == InboxRowType.Item }.flatMap { row -> conversationRows[row.id]?.records ?: listOfNotNull(records[row.id]) }
         .filterNot { it.item.isDone }.distinctBy { it.item.id }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) }
     val bulk = allTargets(groups)
+    // Groups (#2576): a row's records (a Lark conversation's, or the item's), and which rows a selection can pick: open
+    // ones Persona isn't working on (not an agent's card, not a done item).
+    fun rowRecords(row: InboxRow): List<InboxRecord> = conversationRows[row.id]?.records ?: listOfNotNull(records[row.id])
+    fun selectable(row: InboxRow): Boolean = row.type == InboxRowType.Item && !working(row) &&
+        rowRecords(row).any { !(pending[it.item.id] ?: it.item.isDone) }
+    val zone = java.time.ZoneId.systemDefault()
+    val locale = currentLocale
+    val now = java.time.Instant.now()
+    // Done's counts from the hub (#3016), per manager ("" the default): only with no filter or search on, since they count
+    // everything; then each group shows "n" of what is loaded and Show older pages back from the newest.
+    val filtering = query.isNotBlank() || source.isNotEmpty() || kind.isNotEmpty()
+    fun subsOf(group: InboxGroup, manager: String = ""): List<InboxShownGroup> = if (group.folded) emptyList() else
+        inboxSectionGroups(group.id, group.rows, grouping, now, zone, res, locale, ::rowRecords,
+            cardAt = { row -> interactions[row.id]?.createdAt?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() } },
+            doneDays = if (group.id == "done" && !filtering) history.days[manager] else null)
+    // What "Select all" picks: the rows shown now (a folded group is picked with its own tick).
+    fun shownRows(group: InboxGroup): List<InboxRow> = subsOf(group).takeIf { it.isNotEmpty() }
+        ?.filter { InboxGroups.isOpen(group.id, it.key, folds) }?.flatMap { it.rows } ?: group.visibleRows
+    val visiblePickable = if (!selecting) emptyList() else groups.flatMap(::shownRows).filter(::selectable).map { it.id }.distinct()
+    val allPicked = visiblePickable.isNotEmpty() && visiblePickable.all { it in picked }
+    val foldedPicked = picked.count { it !in visiblePickable }
+    val pickedTargets = picked.flatMap { id -> conversationRows[id]?.records ?: listOfNotNull(records[id]) }
+        .filterNot { pending[it.item.id] ?: it.item.isDone }.distinctBy { it.item.id }
+        .map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) }
+    var pickedMenu by remember { mutableStateOf(false) }
+    var jumpMenu by remember { mutableStateOf<InboxJumpMenu?>(null) }
+    var jumpTo by remember { mutableStateOf<String?>(null) }
+    val listIndex = remember { InboxListIndex() }
+    fun setFolds(value: List<String>) = filter(currentFilters.copy(folds = value))
+    // Done's history: the first page when Done opens, then "Show older".
+    val historyManagers = listOf(historyManager.ifEmpty { null })
+    val doneOpen = groups.any { it.id == "done" && !it.folded }
+    // Another assistant is another history (a new [history]): read it too when Done is already open.
+    LaunchedEffect(doneOpen, history) { if (doneOpen && !history.started) history.start(historyManagers, zone) }
+    // Done's total with the hub's counts (#3016): what its groups add up to, folded or not, for the Done chip and Done's
+    // title alike; with a filter or search on, or no counts, what is loaded.
+    fun doneTotal(done: InboxGroup, manager: String): Int {
+        val days = history.days[manager]?.takeIf { !filtering } ?: return done.count
+        return inboxSectionGroups("done", done.rows, grouping, now, zone, res, locale, ::rowRecords, cardAt = { null }, doneDays = days)
+            .takeIf { it.isNotEmpty() }?.sumOf { it.count } ?: done.count
+    }
+    val doneCount = result.groups.firstOrNull { it.id == "done" }?.let { done -> doneTotal(done, historyManager) } ?: 0
+    // Show older at the end of Done: for the managers whose hub doesn't count, and for all of them while filtering.
+    val olderManagers = if (filtering) historyManagers else historyManagers.filter { it.orEmpty() !in history.days }
+    val showOlder = doneOpen && !history.counting && olderManagers.isNotEmpty() && (history.more || history.failed || history.loading)
     val scopeText = bulkScope(res, section, sources.firstOrNull { it.first == source && source.isNotEmpty() }?.second,
         if (kind == "agent") "Agent" else kindLabel(res, kind), query)
     var showMore by remember { mutableStateOf(false) }
@@ -198,8 +278,31 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             actions = listOf(
                 JAction(bulkLabel(res, bulk.size, scopeText), PhIcons.Checks, enabled = bulk.isNotEmpty()) { cleanAll() },
                 JAction(res.getString(R.string.inbox_mutes_title), PhIcons.Prohibit, separatorBefore = true) { showMutes = true },
+                JAction(res.getString(R.string.inbox_rules_title), PhIcons.Target) { showRules = true },
             ),
             note = if (scopeText == null) stringResource(R.string.inbox_bulk_note_all) else stringResource(R.string.inbox_bulk_note_scope, scopeText))
+    }
+    // One picked row: what its long-press offered before the selection took it (Hand to AI, mutes, rules).
+    if (pickedMenu) picked.singleOrNull()?.let { one ->
+        val record = records[one]
+        JActionSheet(title = record?.item?.title ?: conversationRows[one]?.title.orEmpty(), onDismiss = { pickedMenu = false }, actions = buildList {
+            add(JAction(res.getString(R.string.inbox_hand_to_ai), PhIcons.Robot) { handingOff = conversationRows[one]?.itemId ?: one; endSelection() })
+            if (record != null) addAll(muteAndRuleActions(res, record, { mute(record, it); endSelection() },
+                { ruleTarget = InboxPolicyTarget.of(record, it); endSelection() }))
+        })
+    }
+    jumpMenu?.let { menu ->
+        JActionSheet(title = stringResource(R.string.inbox_jump_to), onDismiss = { jumpMenu = null }, actions = menu.groups.map { group ->
+            JAction("${group.title} · ${group.count}") {
+                if (!InboxGroups.isOpen(menu.section, group.key, folds)) setFolds(InboxGroups.toggle(menu.section, group.key, folds))
+                jumpTo = "group:${menu.prefix}${menu.section}/${group.key}"
+            }
+        } + listOf(
+            JAction(res.getString(R.string.inbox_fold_all), PhIcons.CaretUp, separatorBefore = true) {
+                setFolds(InboxGroups.setAll(menu.section, menu.groups.map { it.key }, open = false, flipped = folds)) },
+            JAction(res.getString(R.string.inbox_unfold_all), PhIcons.CaretDown) {
+                setFolds(InboxGroups.setAll(menu.section, menu.groups.map { it.key }, open = true, flipped = folds)) },
+        ))
     }
     confirmBulk?.let { targets ->
         JDialog(onDismiss = { confirmBulk = null },
@@ -242,14 +345,34 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     // typing would drop the search field's focus (and the keystroke) and folding a section would jump to the top.
     listStates.SaveableStateProvider(listOf(source, kind, section).toString()) {
         val scroll = rememberLazyListState()
+        // "Jump to" scrolls once the page has been built with the group open (the list scrolls only by index).
+        LaunchedEffect(jumpTo) {
+            val key = jumpTo ?: return@LaunchedEffect
+            androidx.compose.runtime.withFrameNanos { }
+            androidx.compose.runtime.withFrameNanos { }
+            listIndex.positions[key]?.let { at -> scroll.scrollToItem((scroll.layoutInfo.totalItemsCount - listIndex.counted).coerceAtLeast(0) + at) }
+            jumpTo = null
+        }
         JListPage(
-            title = stringResource(R.string.inbox_title),
-            summary = inboxSummary(res, overall, ::working),
-            subtitle = inboxTitle(shownConnection).takeIf { shownConnection != ConnectionState.Online },
-            titleBusy = shownConnection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
-            onTitleClick = if (shownConnection == ConnectionState.Online) null else connectionDetails,
+            title = if (selecting) androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_selected_count, picked.size, picked.size)
+                else stringResource(R.string.inbox_title),
+            summary = if (selecting) null else inboxSummary(res, overall, ::working),
+            subtitle = if (selecting) foldedPicked.takeIf { it > 0 }?.let { androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_picked_folded, picked.size, picked.size, it) }
+                else inboxTitle(shownConnection).takeIf { shownConnection != ConnectionState.Online },
+            titleBusy = !selecting && shownConnection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
+            onTitleClick = if (selecting || shownConnection == ConnectionState.Online) null else connectionDetails,
+            onBack = if (selecting) ({ endSelection() }) else null,
+            largeTitle = !selecting,
             state = scroll, refreshing = refreshing, onRefresh = { refresh() },
-            actions = {
+            actions = if (selecting) ({
+                // Select all: the rows shown now; then Deselect all takes them back out.
+                JTextButton(stringResource(if (allPicked) R.string.inbox_deselect_all else R.string.inbox_select_all), {
+                    picked = if (allPicked) picked - visiblePickable.toSet() else picked + visiblePickable
+                }, enabled = visiblePickable.isNotEmpty())
+                JButton(stringResource(R.string.inbox_mark_done), { markAll(pickedTargets, InboxBulkAction.Done); endSelection() },
+                    size = JButtonSize.Small, enabled = pickedTargets.isNotEmpty())
+                if (picked.size == 1) JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { pickedMenu = true })
+            }) else ({
                 if (mailTransport != null) {
                     JIconButton(PhIcons.PencilSimple, stringResource(R.string.inbox_compose_mail), {
                         composeDraft = MailDraft(accountId = "")
@@ -257,8 +380,11 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 }
                 JIconButton(PhIcons.FunnelSimple, stringResource(R.string.inbox_filter), { showFilters = true }, badge = source.isNotEmpty() || kind.isNotEmpty())
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { showMore = true })
-            },
+            }),
         ) {
+          listIndex.positions.clear()
+          val keyed = KeyedListScope(this, listIndex.positions)
+          with(keyed) {
             item("filters") {
                 QuickFilterBar(listOf(Bay(stringResource(R.string.inbox_bay_needs_you), needsCount, Status.NeedsYou), Bay(stringResource(R.string.inbox_bay_all), allCount),
                     Bay(stringResource(R.string.inbox_done), doneCount)),
@@ -266,12 +392,29 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     onSelect = { filter(currentFilters.copy(section = listOf("action", "", "done")[it])) })
                 Spacer(Modifier.height(Tokens.Space.s))
                 JSearchField(query, { filter(currentFilters.copy(query = it)) }, stringResource(R.string.inbox_search_hint))
+                // Needs you, FYI and Collapsed by source or by time (#2576); Done is always by time.
+                if (section != "done") {
+                    Spacer(Modifier.height(Tokens.Space.s))
+                    JSegmented(listOf(JSegment(stringResource(R.string.inbox_grouping_source)), JSegment(stringResource(R.string.inbox_grouping_time))),
+                        if (grouping == InboxGroups.TIME) 1 else 0,
+                        { filter(currentFilters.copy(grouping = if (it == 1) InboxGroups.TIME else InboxGroups.SOURCE)) })
+                }
             }
             // New items waiting outside the list for triage (#1773): one line over the first item until triage is ok.
             InboxTriageText.banner(res, snapshot.triage)?.let { banner -> item("triage") { InboxTriageNotice(banner) } }
+            // Sources the hub could not read this round (#1849): what they show is the last round's.
+            InboxTriageText.unread(res, snapshot.triage)?.let { text -> item("triage-unread") { InboxUnreadNotice(text) } }
             if (loadingFirst) item("loading") { JLoading(text = stringResource(R.string.inbox_loading)) }
             if (!failedEmpty) (error ?: snapshot.error?.takeIf { feedback == null || connection == ConnectionState.Online })?.let { message ->
-                item("error") { StatusText(message, isError = true) }
+                item("error") { JNotice(message, actionLabel = stringResource(R.string.inbox_retry),
+                    onAction = { refresh(collectNow = false) }) }
+            }
+            if (failedCompletions.isNotEmpty()) item("completion-error") {
+                JNotice(stringResource(R.string.inbox_failed_restored), actionLabel = stringResource(R.string.inbox_retry), onAction = {
+                    failedCompletions.values.toList().groupBy({ it.second }, { it.first }).forEach { (action, targets) ->
+                        markAll(targets, action, undoable = false)
+                    }
+                })
             }
             if (preferenceError) item("preference-error") { StatusText(stringResource(R.string.inbox_filters_not_saved), isError = true) }
             sectionReader.notice?.let { notice -> item("section-read-result") {
@@ -290,61 +433,104 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     else -> JEmptyState(stringResource(R.string.inbox_empty_filtered_title), stringResource(R.string.inbox_empty_filtered_text), icon = PhIcons.CheckCircle)
                 }
             }
-            // Several managers (docs/assistant/managers.md step 4): each one's inbox under its name, its sections inside.
-            val byManager = inboxByManager(roster, groups) { row ->
-                if (row.type == InboxRowType.Interaction) interactions[row.id]?.manager else records[row.id]?.manager
+            // Rows of a group (#2576: in a selection a tap picks, a long-press starts one).
+            fun rows(prefix: String, shown: List<InboxRow>) = itemsIndexed(shown, key = { _, row -> "$prefix${row.type}:${row.id}" }, contentType = { _, row -> row.type }) { index, row ->
+                val position = GroupPosition.of(index, shown.size)
+                val selection = InboxRowSelection(checked = if (selecting) row.id in picked else null, selectable = selectable(row),
+                    onToggle = { picked = if (row.id in picked) picked - row.id else picked + row.id },
+                    onStart = { selecting = true; picked = setOf(row.id); haptics(Haptic.Tap) })
+                if (row.type == InboxRowType.Interaction) {
+                    interactions[row.id]?.let { interaction ->
+                        MessageItem(sender = "Persona", title = interaction.sessionTitle.ifBlank { interaction.title },
+                            preview = interaction.summary ?: interaction.title, position = position, status = Status.NeedsYou, dimmed = selecting,
+                            onClick = {
+                                if (selecting) return@MessageItem
+                                // A card outside any session (`personad ask` in a plain terminal) has no chat to open.
+                                if (interaction.sessionId.isNotBlank()) navigator.navigate(ChatRoute(interaction.machineId, interaction.sessionId))
+                                else onOpenCard?.invoke(persona.core.navigation.RequestRef(interaction.machineId, interaction.id))
+                                    ?: navigator.selectTab(persona.core.navigation.AppTab.Agents)
+                            })
+                    }
+                } else conversationRows[row.id]?.let { conversation ->
+                    val done = conversation.records.all { pending[it.item.id] ?: it.item.isDone }
+                    InboxConversationItemRow(conversation, navigator, position, onlineSince,
+                        done = done, busy = conversation.records.any { it.item.id in pending },
+                        onHandOff = { handingOff = conversation.itemId },
+                        onDone = { markAll(conversation.records.filter { it.item.isDone == done }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) },
+                            if (done) InboxBulkAction.Reopen else InboxBulkAction.Done, undoable = false) },
+                        selection = selection)
+                } ?: records[row.id]?.let { record ->
+                    val done = pending[record.item.id] ?: record.item.isDone
+                    InboxItemRow(record, repository, navigator, composers, position, done, record.item.id in pending, onlineSince,
+                        onDone = { markDone(record.item.id, !done) }, onHandOff = { handingOff = record.item.id },
+                        onMute = { option -> mute(record, option) }, onRule = { ruleTarget = InboxPolicyTarget.of(record, it) },
+                        selection = selection)
+                }
             }
             val sections: (String, List<InboxGroup>) -> Unit = { prefix, shownGroups -> shownGroups.forEach { group ->
+                val manager = prefix.removeSuffix(":")
+                val subs = subsOf(group, manager)
+                val sectionPickable = if (selecting && subs.isEmpty()) group.rows.filter(::selectable).map { it.id } else emptyList()
                 item("section:$prefix${group.id}", contentType = "section") {
+                    val title = if (group.id == "working") group.title.text() else inboxGroupTitle(group)
                     JSectionHeader(
-                        title = if (group.id == "working") group.title.text() else inboxGroupTitle(group),
-                        count = group.count,
+                        title = title,
+                        // Done with the hub's counts (#3016): all of it, as its groups add up, not just what is loaded.
+                        count = if (group.id == "done") doneTotal(group, manager) else group.count,
                         status = when (group.id) { "action" -> Status.NeedsYou; "working" -> Status.Working; else -> null },
                         trailing = if (group.id == "working") null else if (group.folded) stringResource(R.string.inbox_expand) else stringResource(R.string.inbox_collapse),
                         onClick = if (group.id == "working") null else ({
                             filter(currentFilters.copy(section = if (section == group.id) "" else section,
                                 expanded = if (group.id in expanded) expanded - group.id else expanded + group.id))
                         }),
-                        action = if (group.id in setOf("action", "fyi", "noise")) ({
-                            JTextButton(if (group.id != "noise") stringResource(R.string.inbox_conversations_read_all) else stringResource(R.string.inbox_clear_all), {
-                                if (group.id != "noise") sectionReader.read(group) else markAll(allTargets(listOf(group)), InboxBulkAction.Done)
-                            }, enabled = !sectionReader.busy)
-                        }) else null,
+                        // A section without groups is one group: its tick picks it all, folded or not.
+                        leading = if (sectionPickable.isNotEmpty()) ({ InboxGroupTick(sectionPickable, picked, title) { picked = it } }) else null,
+                        action = when {
+                            selecting -> null
+                            group.id == "done" && subs.isNotEmpty() -> ({
+                                JTextButton(stringResource(R.string.inbox_jump_to), { jumpMenu = InboxJumpMenu(prefix, group.id, subs) })
+                            })
+                            group.id in setOf("action", "fyi", "noise") -> ({
+                                JTextButton(if (group.id != "noise") stringResource(R.string.inbox_conversations_read_all) else stringResource(R.string.inbox_clear_all), {
+                                    if (group.id != "noise") sectionReader.read(group) else markAll(allTargets(listOf(group)), InboxBulkAction.Done)
+                                }, enabled = !sectionReader.busy)
+                            })
+                            else -> null
+                        },
                     )
                 }
-                itemsIndexed(group.visibleRows, key = { _, row -> "$prefix${row.type}:${row.id}" }, contentType = { _, row -> row.type }) { index, row ->
-                    val position = GroupPosition.of(index, group.visibleRows.size)
-                    if (row.type == InboxRowType.Interaction) {
-                        interactions[row.id]?.let { interaction ->
-                            MessageItem(sender = "Persona", title = interaction.sessionTitle.ifBlank { interaction.title },
-                                preview = interaction.summary ?: interaction.title, position = position, status = Status.NeedsYou,
-                                onClick = {
-                                    // A card outside any session (`personad ask` in a plain terminal) has no chat to open.
-                                    if (interaction.sessionId.isNotBlank()) navigator.navigate(ChatRoute(interaction.machineId, interaction.sessionId))
-                                    else onOpenCard?.invoke(persona.core.navigation.RequestRef(interaction.machineId, interaction.id))
-                                        ?: navigator.selectTab(persona.core.navigation.AppTab.Agents)
-                                })
-                        }
-                    } else conversationRows[row.id]?.let { conversation ->
-                        val done = conversation.records.all { pending[it.item.id] ?: it.item.isDone }
-                        InboxConversationItemRow(conversation, navigator, position, onlineSince,
-                            done = done, busy = conversation.records.any { it.item.id in pending },
-                            onHandOff = { handingOff = conversation.itemId },
-                            onDone = { markAll(conversation.records.filter { it.item.isDone == done }.map { persona.core.contracts.api.InboxDoneTarget(it.item.id, it.item.version) },
-                                if (done) InboxBulkAction.Reopen else InboxBulkAction.Done) })
-                    } ?: records[row.id]?.let { record ->
-                        val done = pending[record.item.id] ?: record.item.isDone
-                        InboxItemRow(record, repository, navigator, composers, position, done, record.item.id in pending, onlineSince,
-                            onDone = { markDone(record.item.id, !done) }, onHandOff = { handingOff = record.item.id },
-                            onMute = { option -> mute(record, option) })
+                if (subs.isEmpty()) rows(prefix, group.visibleRows)
+                else subs.forEach { sub ->
+                    val open = InboxGroups.isOpen(group.id, sub.key, folds)
+                    // A group's title stays at the top while its rows scroll under it (#2059 "Jump to").
+                    stickyHeader("group:$prefix${group.id}/${sub.key}", contentType = "group") { index ->
+                        val pickable = sub.rows.filter(::selectable).map { it.id }
+                        val n = sub.rows.count { it.id in picked }
+                        // Opaque only while pinned over the rows: at rest it shows the page (Glass's light) as the other headers do.
+                        val pinned by remember(index) { derivedStateOf { scroll.firstVisibleItemIndex >= index } }
+                        JSectionHeader(sub.title, if (pinned) Modifier.background(PersonaTheme.palette.background) else Modifier,
+                            count = sub.count, sub = true, open = open,
+                            onClick = { setFolds(InboxGroups.toggle(group.id, sub.key, folds)) },
+                            leading = if (selecting && pickable.isNotEmpty()) ({ InboxGroupTick(pickable, picked, sub.title) { picked = it } }) else null,
+                            trailing = if (selecting && n > 0) androidx.compose.ui.res.pluralStringResource(R.plurals.inbox_group_picked, n, n) else null)
+                    }
+                    if (open) rows("$prefix${group.id}/${sub.key}:", sub.rows)
+                    // A counted group not all in (#3016): its own first page as it opens, then Show older inside it.
+                    val pageId = "$manager/${sub.key}"
+                    if (open && !sub.whole && pageId !in history.endedGroups) item("older:$prefix${group.id}/${sub.key}", contentType = "older") {
+                        val end = InboxGroups.span(sub.key, now, zone).second
+                        LaunchedEffect(pageId) { if (!history.fetched(pageId)) history.loadGroup(manager, sub.key, end) }
+                        InboxOlderRow(pageId in history.loadingGroups, pageId in history.failedGroups) { history.loadGroup(manager, sub.key, end) }
                     }
                 }
             } }
-            if (byManager == null) sections("", groups)
-            else byManager.forEach { (manager, shownGroups) ->
-                item("manager:${manager.id}", contentType = "manager") { JManagerHeader(manager, count = manager.items.size) }
-                sections("${manager.id}:", shownGroups)
+            sections(if (historyManager.isEmpty()) "" else "$historyManager:", groups)
+            // Older done items, after the list's few days (#2576).
+            if (showOlder) item("done-older") {
+                InboxOlderRow(history.loading, history.failed) { history.load(olderManagers) }
             }
+          }
+          listIndex.counted = keyed.counted
         }
     }
     handingOff?.let { id -> records[id] }?.let { record ->
@@ -362,19 +548,17 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
 }
 
 /**
- * The inbox's sections split by the manager each row belongs to ([managerOf]; no stamp is the default's), the default
- * manager first, then the roster's order; a manager with no rows is left out. Null with one manager.
+ * The current assistant's share of the hub's inbox: its items, and the cards of its agents (a card is its own
+ * manager's; one that names none is the default's, as an item is).
  */
-internal fun inboxByManager(
-    roster: persona.core.contracts.api.ManagerRoster?, groups: List<InboxGroup>, managerOf: (InboxRow) -> String?,
-): List<Pair<persona.core.contracts.api.ManagerGroup<InboxRow>, List<InboxGroup>>>? {
-    val byManager = roster?.groups(groups.flatMap { it.rows }.distinct(), managerOf) ?: return null
-    return byManager.map { manager ->
-        val mine = manager.items.toSet()
-        manager to groups.mapNotNull { group ->
-            group.rows.filter { it in mine }.takeIf { it.isNotEmpty() }?.let { rows -> group.copy(rows = rows, visibleRows = group.visibleRows.filter { it in mine }) }
-        }
-    }
+internal fun InboxSnapshot.ofAssistant(assistant: persona.core.contracts.api.CurrentAssistant): InboxSnapshot {
+    val mine = records.filter { assistant.owns(it.manager) }
+    val cards = interactions.filter { assistant.ownsOn(it.machineId, it.manager) }
+    // The merged list's triage is the default manager's: said only on its own inbox.
+    val default = assistant.roster?.defaultManagerId ?: assistant.choice.defaultId
+    val sorting = triage.takeIf { assistant.id == default }
+    return if (mine.size == records.size && cards.size == interactions.size && sorting == triage) this
+    else copy(records = mine, interactions = cards, triage = sorting)
 }
 
 /** A section's title by its id; :core:domain's titles are Chinese, and a group this app does not know keeps its own. */

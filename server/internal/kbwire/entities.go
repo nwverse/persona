@@ -7,8 +7,11 @@ import (
 
 // DayMessage is one message of a day page.
 type DayMessage struct {
-	N    int    `json:"n"`
-	Text string `json:"text"`
+	SentBy       string     `json:"sent_by,omitempty"`
+	SentLedgerID int64      `json:"sent_ledger_id,omitempty"`
+	RecalledAt   *time.Time `json:"recalled_at,omitempty"`
+	N            int        `json:"n"`
+	Text         string     `json:"text"`
 }
 
 // Detail is everything about one entity: its metadata, compressed context, a project's timeline, a chat's latest text.
@@ -26,6 +29,8 @@ type Detail struct {
 	Moments []MomentRef `json:"moments,omitempty"`
 	// Segments: a recording's transcript (the app shows it; Recent has it as text for the assistant).
 	Segments []RecordingSegment `json:"segments,omitempty"`
+	// Minutes: a recording's meeting minutes (minutes.json, docs/assistant/meeting-minutes.md), once written.
+	Minutes json.RawMessage `json:"minutes,omitempty"`
 }
 
 // MomentRef is a Moments post as a project shows it.

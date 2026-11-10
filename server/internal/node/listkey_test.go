@@ -34,7 +34,7 @@ func listKeyFmt(list []proto.Session) string {
 		if len(s.Efforts) > 0 {
 			fmt.Fprintf(&b, "effort:%s/%v\n", s.Effort, s.Efforts)
 		}
-		fmt.Fprintf(&b, "source:%s/%s/%s/%s/%v/%v/%s/%s\n", s.SourceKind, s.SourceThreadID, s.SourceInstanceID, s.ReadOnlyReason, s.Capabilities, s.Attached, s.CodexRoute, s.CodexRouteNote)
+		fmt.Fprintf(&b, "source:%s/%s/%s/%s/%v/%v/%s/%s\n", s.SourceKind, s.SourceThreadID, s.SourceInstanceID, s.ReadOnlyReason, capsFmt(s.Capabilities), s.Attached, s.CodexRoute, s.CodexRouteNote)
 		for _, t := range s.Background {
 			b.WriteString(t.ID + ",")
 		}
@@ -46,7 +46,7 @@ func listKeyFmt(list []proto.Session) string {
 				if a.LatestTool != nil {
 					name = a.LatestTool.Name
 				}
-				fmt.Fprintf(&b, "%s/%d,", name, a.Calls)
+				fmt.Fprintf(&b, "%s/%s/%d,", a.ID, name, a.Calls)
 			}
 		}
 		if s.Loop != nil {
@@ -70,6 +70,38 @@ func listKeyFmt(list []proto.Session) string {
 		}
 	}
 	return b.String()
+}
+
+// capsFmt is the capabilities as %v printed them before Modes, with Modes by value (%v of the pointer is its address).
+func capsFmt(c *proto.SessionCapabilities) string {
+	if c == nil {
+		return "<nil>"
+	}
+	modes := "<nil>"
+	if c.Modes != nil {
+		modes = fmt.Sprint(*c.Modes)
+	}
+	return fmt.Sprintf("&{%v %v %v %v %v %v %s}", c.Read, c.Send, c.Interrupt, c.Approve, c.Terminal, c.Attach, modes)
+}
+
+// Capabilities are keyed by value: two rows built apart with equal modes give one key (outsideCapabilities makes a new
+// Modes pointer every poll), and a change of modes, absent included, is a change.
+func TestListKeyCapabilitiesModes(t *testing.T) {
+	key := func(modes *bool) string {
+		return listKey([]proto.Session{{SessionID: "s1", Capabilities: &proto.SessionCapabilities{Read: true, Modes: modes}}})
+	}
+	if key(proto.CanModes(false)) != key(proto.CanModes(false)) {
+		t.Fatal("two rows with modes false give different keys")
+	}
+	if key(proto.CanModes(true)) != key(proto.CanModes(true)) {
+		t.Fatal("two rows with modes true give different keys")
+	}
+	if key(proto.CanModes(false)) == key(proto.CanModes(true)) {
+		t.Fatal("modes false -> true does not change the key")
+	}
+	if key(nil) == key(proto.CanModes(false)) || key(nil) == key(proto.CanModes(true)) {
+		t.Fatal("absent modes keys the same as a set one")
+	}
 }
 
 // listKeyFixture is n sessions; every other one is busy (background tasks, subagents, ports, an activity, a pane).
@@ -174,6 +206,7 @@ func listKeyVariants() (proto.Session, map[string]proto.Session) {
 		"read_only":     func(s *proto.Session) { s.ReadOnlyReason = "" },
 		"caps":          func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Send: true} },
 		"caps_nil":      func(s *proto.Session) { s.Capabilities = nil },
+		"caps_modes":    func(s *proto.Session) { s.Capabilities = &proto.SessionCapabilities{Modes: proto.CanModes(false)} },
 		"attached":      func(s *proto.Session) { s.Attached = false },
 		"codex_route":   func(s *proto.Session) { s.CodexRoute = "terminal" },
 		"route_note":    func(s *proto.Session) { s.CodexRouteNote = "" },
@@ -283,6 +316,7 @@ func TestListKeyWorkflowProgress(t *testing.T) {
 			w.Agents[2].LatestTool, w.Agents[2].Calls = &proto.WorkflowTool{Name: "Read"}, 1
 		}, true},
 		"same tool again":    {func(w *proto.Workflow) { w.Agents[1].Calls++ }, true},
+		"retried agent":      {func(w *proto.Workflow) { w.Agents[2].ID = "a4" }, true}, // #2323: no count changes
 		"timestamp":          {func(w *proto.Workflow) { w.UpdatedAt = time.Now() }, false},
 		"tokens":             {func(w *proto.Workflow) { w.Agents[1].Tokens += 10; w.Tokens += 10 }, false},
 		"last text":          {func(w *proto.Workflow) { w.Agents[1].LastText = "halfway" }, false},

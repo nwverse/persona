@@ -9,7 +9,7 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | `AskClaudeIntent` | Ask Claude | Sends a message to the most recent live session on a machine, or starts a new one with the remembered directory / launcher | Background |
 | `PersonaStatusIntent` | Persona Status | "N working, M need you" + the content of the first pending item | Background |
 | `ApproveFirstIntent` | Approve First Pending | Allows the oldest tool permission request, or approves a plan (`acceptEdits`); asks for an unlock on a locked phone | Background |
-| `OpenSessionIntent` | Open Session | Switches the app to the chat page and jumps to that session (`AppModel.shared.openChat`) | Foreground |
+| `OpenSessionIntent` | Open Session | Opens that session as a notification does (`AppModel.open`): a Persona conversation on Assistant, an Agent's on Agents | Foreground |
 
 `OpenSessionIntent` is not meant to be used on its own: `AskClaudeIntent` returns it, so one tap on the button in the Siri result card opens that session.
 
@@ -22,6 +22,7 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | `OpenSessionIntent.swift` | `SessionEntity` + `SessionEntityQuery`, `OpenSessionIntent` |
 | `AskClaudeIntent.swift` / `PersonaStatusIntent.swift` / `ApproveFirstIntent.swift` | The three business intents |
 | `AskPersonaIntent.swift` / `PersonalAgentIntents.swift` / `AddTodoIntent.swift` | Ask Persona, personal Agents, new to-do (`docs/apple/siri.md`) |
+| `ClipboardIntents.swift` | Send Clipboard to Computer / Get Computer's Clipboard (#3064, `docs/apple/ios.md` "Clipboard with your computers"): optional computer (default: the one last sent to, else the first online one that shares its clipboard); Send takes optional Text instead of the clipboard, so a shortcut that starts with Get Clipboard never sees the paste prompt; Get writes the phone's clipboard and returns the text. Listed in Shortcuts, not as App Shortcut phrases; the network part is `ClipboardIntentFlow` (`ClipboardIntentsTests`) |
 | `IntentAnswerSnippet.swift` | The answer card for Ask Persona (question + full text) |
 | `PersonaShortcuts.swift` | `AppShortcutsProvider`, Chinese phrases and icons |
 
@@ -106,7 +107,7 @@ The project sets `SWIFT_DEFAULT_ACTOR_ISOLATION=MainActor`, while the AppIntent 
 The fix is to mark each protocol member `nonisolated` (`init`, `perform`, `title`, `supportedModes`, `parameterSummary`, the query methods),
 and put the pure logic they call into a `nonisolated enum`. `@Parameter` wraps mutable stored properties, which cannot be `nonisolated`; leaving them on MainActor is fine.
 
-`OpenSessionIntent` is the only place that touches `AppModel`; it uses `await MainActor.run { … }` to change `selectedTab` / `openChat`.
+`OpenSessionIntent` is the only place that touches `AppModel`; it uses `await MainActor.run { … }` to call `AppModel.open`.
 Its `target` is a `SessionEntity` whose `id` looks like `machine/session`, the same shape as the DEBUG `-openSession` argument.
 
 ## Tests

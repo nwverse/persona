@@ -100,12 +100,17 @@ const val ManagerQuery = "manager"
 
 /**
  * [this] naming the manager the calling coroutine's request is for (persona.core.contracts.api.RequestManager, an inbox
- * item's): on the request itself, so it holds wherever the request goes later; "" (the default's) is taken off again by
- * the client, together with any stamp a list noted for the path. Unchanged outside one, or when it names one already.
+ * item's; else the calling page's ManagerPins for its path): on the request itself, so it holds wherever the request goes
+ * later; "" (the default's) is taken off again by the client, together with any stamp a list noted for the path.
+ * Unchanged outside both, or when it names one already.
  */
 internal suspend fun HttpUrl.withRequestManager(): HttpUrl {
-    val named = kotlinx.coroutines.currentCoroutineContext()[persona.core.contracts.api.RequestManager]?.id
-    return if (named == null || queryParameter(ManagerQuery) != null) this else newBuilder().addQueryParameter(ManagerQuery, named).build()
+    if (queryParameter(ManagerQuery) != null) return this
+    val context = kotlinx.coroutines.currentCoroutineContext()
+    val named = context[persona.core.contracts.api.RequestManager]?.id
+        ?: apiSegments(this)?.let { context[persona.core.contracts.api.ManagerPins]?.manager(it) }
+        ?: return this
+    return newBuilder().addQueryParameter(ManagerQuery, named).build()
 }
 
 /**
@@ -120,6 +125,22 @@ internal fun isAssistantPath(url: HttpUrl): Boolean {
     return api.firstOrNull() == "assistant" && !(api.size > 2 && api[1] == "conversations")
 }
 
+/**
+ * The requests that are the current assistant's (docs/assistant/managers.md "Clients"): the assistant page's
+ * ([isAssistantPath]), the knowledge base (`kb…`, `kb-search`), and a new to-do (`POST todos`). The to-dos list itself
+ * is asked of every manager (its items carry `manager`, and a to-do's own routes name the one it was listed under), as
+ * the inbox is.
+ */
+internal fun isCurrentAssistantPath(url: HttpUrl, method: String = "GET"): Boolean {
+    if (isAssistantPath(url)) return true
+    val api = apiSegments(url) ?: return false
+    return when (api.firstOrNull()) {
+        "kb", "kb-search" -> true
+        "todos" -> api.size == 1 && method.equals("POST", ignoreCase = true)
+        else -> false
+    }
+}
+
 /** The segments after `api/v1`, under whatever sub-path the hub sits at; null for another path. */
 private fun apiSegments(url: HttpUrl): List<String>? {
     val segments = url.pathSegments
@@ -130,13 +151,14 @@ private fun apiSegments(url: HttpUrl): List<String>? {
 }
 
 /**
- * The `X-Persona-Manager` a request to [url] carries, if any (docs/protocol/protocol.md「Per-manager routing」): the assistant
- * page's pick on its routes; else a pin or a list's stamp (an inbox item, an extension's page, a conversation the page
- * listed) of [hubId]'s hub.
+ * The `X-Persona-Manager` a request to [url] carries, if any (docs/protocol/protocol.md「Per-manager routing」): the current
+ * assistant on its routes ([isCurrentAssistantPath]); else a list's stamp (an inbox item, a to-do, an extension, a
+ * conversation the page listed) of [hubId]'s hub. A page's pins name theirs on the URL where the request is made
+ * (withRequestManager).
  */
-internal fun managerHeaderFor(url: HttpUrl, hubId: String?): String? {
+internal fun managerHeaderFor(url: HttpUrl, hubId: String?, method: String = "GET"): String? {
     val choice = persona.core.contracts.api.AssistantManagerChoice
-    if (isAssistantPath(url)) choice.header(hubId)?.let { return it }
+    if (isCurrentAssistantPath(url, method)) choice.header(hubId)?.let { return it }
     return apiSegments(url)?.let { choice.itemHeader(it, hubId) }
 }
 
@@ -230,14 +252,14 @@ class HubHttpClient(
                 ProtocolCompatibility.operationHeaders.firstNotNullOfOrNull { request.header(it) }?.let { id ->
                     ProtocolCompatibility.operationHeaders.forEach { builder.header(it, id) }
                 }
-                // The manager the assistant page shows (docs/assistant/managers.md): its requests name it; none for the default.
+                // The current assistant (docs/assistant/managers.md): its requests name it; none for the default.
                 // A thing a merged list showed as another manager's (an inbox item, an extension) names that one. A
                 // request pinned to one (`?manager=`) keeps it: the default's (empty) goes without either.
                 var url = request.url
                 val pinned = url.queryParameter(ManagerQuery)
                 if (pinned != null) {
                     if (pinned.isEmpty()) url = url.newBuilder().removeAllQueryParameters(ManagerQuery).build().also(builder::url)
-                } else if (request.header(ManagerHeader) == null) managerHeaderFor(url, hubId)?.let { builder.header(ManagerHeader, it) }
+                } else if (request.header(ManagerHeader) == null) managerHeaderFor(url, hubId, request.method)?.let { builder.header(ManagerHeader, it) }
                 if (!url.isHttps) {
                     // WebSocket upgrades skip network interceptors. Freeze the checked DNS
                     // result into the URL so the upgrade cannot resolve to a different peer.

@@ -2,6 +2,7 @@
 import { BASE } from "./base";
 import type { Item } from "./types";
 import { injectedOf } from "./injected";
+import { taskCalls } from "./task-association";
 
 const PREFIX = "persona.feedCache.v1:";
 export const FEED_CACHE_MAX_BYTES = 256 * 1024;
@@ -57,6 +58,7 @@ export function feedCacheScope(): string | null {
 /** Sign-out and credential replacement remove every cached feed of this origin, including other proxy prefixes. */
 export function clearFeedCache(): void {
   generation++;
+  clearMemoryPages();
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const stored = localStorage.key(i);
@@ -148,19 +150,38 @@ function containsCredential(raw: string): boolean {
 }
 
 /** Only the newest two user-question turns, matching GET items?turns=2; injected prompts do not consume the budget. */
+function newestTurns(value: FeedCache): FeedCache {
+  const userQuestion = (item: Item) => item.role === "user" && item.kind === "text" && !item.queued && !item.wake && !injectedOf(item);
+  let start = value.items.length, turns = 0;
+  while (start > 0 && turns < 2) {
+    if (userQuestion(value.items[--start])) turns++;
+  }
+  // A retained report must not lose the earlier launch it belongs under. Extend the contiguous prefix, including
+  // that call's user turn, rather than caching a detached call that would break paging coverage.
+  const calls = taskCalls(value.items);
+  const needed = new Set<string>();
+  for (let at = value.items.length - 1; at >= 0 && (at >= start || needed.size); at--) {
+    const item = value.items[at];
+    if (item.task?.kind === "agent") {
+      const call = item.tool_use_id || calls.get(item.id);
+      if (call) needed.add(call);
+    }
+    if (item.kind === "tool_use" && (item.tool_name === "Agent" || item.tool_name === "Task") && needed.delete(item.tool_use_id ?? "") && at < start) {
+      start = at;
+      while (start > 0 && !userQuestion(value.items[start])) start--;
+    }
+  }
+  while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
+  return {
+    machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,
+    items: value.items.slice(start), hasMore: value.hasMore || start > 0, history: value.history,
+  };
+}
+
 export function writeFeedCache(scope: string | null, value: FeedCache): boolean {
   if (!scope || scope !== feedCacheScope()) return false;
   try {
-    let start = value.items.length, turns = 0;
-    while (start > 0 && turns < 2) {
-      const item = value.items[--start];
-      if (item.role === "user" && item.kind === "text" && !item.queued && !item.wake && !injectedOf(item)) turns++;
-    }
-    while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
-    const page: FeedCache = {
-      machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,
-      items: value.items.slice(start), hasMore: value.hasMore || start > 0, history: value.history,
-    };
+    const page = newestTurns(value);
     const raw = JSON.stringify(page, withoutImageBodies);
     if (!validFeed(page) || new TextEncoder().encode(raw).length > FEED_CACHE_MAX_BYTES || containsCredential(raw)) {
       discardFeedCache(scope);
@@ -172,4 +193,39 @@ export function writeFeedCache(scope: string | null, value: FeedCache): boolean 
     discardFeedCache(scope);
     return false;
   }
+}
+
+// Every other chat's newest page, for reopening it at once while the hub refreshes it. Memory only, unlike the main
+// conversation's above. The key starts with the scope, so another hub or login never matches an entry.
+export const MEMORY_PAGES = 20;
+const memory = new Map<string, FeedCache>();
+const memoryKey = (scope: string, mid: string, sid: string) => JSON.stringify([scope, mid, sid]);
+
+export function clearMemoryPages(): void {
+  memory.clear();
+}
+
+export function readMemoryPage(scope: string | null, mid: string, sid: string): FeedCache | null {
+  if (!scope || scope !== feedCacheScope()) return null;
+  const key = memoryKey(scope, mid, sid);
+  const page = memory.get(key);
+  if (!page) return null;
+  // A Map iterates in insertion order: the first key is always the least recently used.
+  memory.delete(key);
+  memory.set(key, page);
+  return page;
+}
+
+export function discardMemoryPage(scope: string | null, mid: string, sid: string): void {
+  if (scope) memory.delete(memoryKey(scope, mid, sid));
+}
+
+/** An empty page is not kept: it would stand in for the loading state with nothing to show. */
+export function writeMemoryPage(scope: string | null, value: FeedCache): void {
+  if (!scope || scope !== feedCacheScope()) return;
+  const key = memoryKey(scope, value.machineID, value.sessionID);
+  memory.delete(key);
+  if (!value.items.length) return;
+  memory.set(key, newestTurns(value));
+  if (memory.size > MEMORY_PAGES) memory.delete(memory.keys().next().value!);
 }

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The menu bar item: the Mac's stand-in for the Live Activity / Dynamic Island (docs/apple/mac.md「和 iOS 的对应」).
+/// The menu bar item: the Mac's stand-in for the Live Activity / Dynamic Island (docs/apple/mac.md「Mapping from iOS」).
 /// The icon carries how many agents need you; the menu lists them (answer, allow or approve right there), what is
 /// working, and what finished and is still unread. It stays when the main window is closed.
 enum MacMenuBar {
@@ -233,6 +233,8 @@ extension MacMenuBar {
             let plain = d.options.filter { $0.kind == .plain && $0.label.count <= 24 }
             guard (1...4).contains(plain.count) else { return nil }
             return plain.map { QuickAnswer(title: $0.label, resolution: Resolution(option: $0.key)) }
+        case .elicitation:
+            return nil
         }
     }
 
@@ -243,7 +245,7 @@ extension MacMenuBar {
         switch ix.kind {
         case .question: fallback = String(localized: "Claude Has a Question")
         case .screen: fallback = String(localized: "The terminal is asking you")
-        case .plan, .permission: fallback = ""
+        case .plan, .permission, .elicitation: fallback = ""
         }
         return String((ix.askLine(includeToolName: true) ?? fallback).prefix(80))
     }

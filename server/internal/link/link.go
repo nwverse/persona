@@ -73,11 +73,16 @@ func PingTimesMS(every, timeout int64) (time.Duration, time.Duration, bool) {
 
 // Message is one JSON message on the link.
 type Message struct {
-	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed
+	Type string `json:"type"` // hello | endpoints | node | open | open_failed | rename | renamed | attention | presence | rang
 	// hello (persona-link → hub, the first message): which machine, which build, and the hub URL it went to.
 	Machine string `json:"machine,omitempty"`
 	Version string `json:"version,omitempty"`
 	Address string `json:"address,omitempty"`
+	// hello: what this persona-link takes besides the node's streams (FeatureAttention). Older ones send none, and
+	// older managers ignore it.
+	Features []string `json:"features,omitempty"`
+	// attention (hub → persona-link): the "Needs you" summary, to links whose hello listed FeatureAttention.
+	Attention *Attention `json:"attention,omitempty"`
 	// endpoints (hub → persona-link): where else to look for the hub; and, from hubs that know (hub mesh, #293),
 	// what the hub is called and how many hubs its mesh has, itself included. Older hubs send neither.
 	Endpoints []Endpoint `json:"endpoints,omitempty"`
@@ -103,6 +108,14 @@ type Message struct {
 	ID string `json:"id,omitempty"`
 	// open_failed, node, renamed: why not.
 	Error string `json:"error,omitempty"`
+	// presence (persona-link → hub): whether the user is at this computer and its notifications show, and for how
+	// many more milliseconds an active one counts (PresenceInfo, presence.go). Left out: false. Older managers ignore it.
+	Active   bool  `json:"active,omitempty"`
+	Notifies bool  `json:"notifies,omitempty"`
+	TTLMS    int64 `json:"ttl_ms,omitempty"`
+	// rang (persona-link → hub): the menu bar app handed the notification of this card (its interaction id, as the
+	// summary names it) to Notification Center. Older managers ignore it.
+	InteractionID string `json:"interaction_id,omitempty"`
 }
 
 // Endpoint is a hub URL on its TLS port, or a reverse proxy's https URL with the path the hub sits under (no trailing
@@ -250,7 +263,7 @@ func Update(path string, change func(*Config) error) error {
 	return os.Rename(tmp, path)
 }
 
-// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route choice").
+// kindOf says what kind of address a hub URL is: the link tries lan first (docs/operations/link.md "Route selection").
 func kindOf(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {

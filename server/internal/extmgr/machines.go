@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/streams"
 )
 
-// The computers are the manager's (internal/devices, docs/server/machines.md "Who connects the computers"): the code moved
+// The computers are the manager's (internal/devices, docs/server/machines.md "Who connects to computers"): the code moved
 // here from the hub reaches them as it did, through a Machine per computer; its calls go to the devices in this
 // process. A Machine keeps what this code keeps of a computer (Cua's and ego's state) across the devices' reconnects.
 
@@ -83,13 +83,6 @@ func (m *Machine) isOnline() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.online
-}
-
-// setSessions keeps the node's list (tests set it; the devices keep their own).
-func (m *Machine) setSessions(list []proto.Session) {
-	m.mu.Lock()
-	m.sessions = slices.Clone(list)
-	m.mu.Unlock()
 }
 
 // devicesPeer is a computer's node through the devices in this process.
@@ -176,9 +169,6 @@ func (h *Manager) machinesNow() []*Machine {
 	h.machines = order
 	return slices.Clone(order)
 }
-
-// newMachine is a computer (tests put it in h.machines, h.byID).
-func newMachine(_ *Manager, cfg MachineConfig) *Machine { return &Machine{cfg: cfg} }
 
 func (h *Manager) machineByID(id string) *Machine {
 	if id == "" {

@@ -450,7 +450,7 @@ type LookAvatar struct {
 	Dark *LookAvatarDark `json:"dark,omitempty"`
 }
 
-// LookPalette: an appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+// LookPalette: an appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
 type LookPalette struct {
 	Primary    string `json:"primary,omitempty"`
 	Secondary  string `json:"secondary,omitempty"`
@@ -486,8 +486,8 @@ type LookDot struct {
 	States LookDotStates `json:"states"`
 }
 
-// LookItem: A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona
-// package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+// LookItem: A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a
+// persona package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
 type LookItem struct {
 	ID              string      `json:"id"`
 	Name            string      `json:"name"`
@@ -918,6 +918,25 @@ type UIParams struct {
 	Machine      *UIMachine        `json:"machine,omitempty"`
 	Launcher     *UILauncher       `json:"launcher,omitempty"`
 	Item         *UIInboxItem      `json:"item,omitempty"`
+}
+
+// UIImageParams: ui.image's parameters (UI version 6): the hub asks the extension for a picture it drew as a ref, for
+// the ui contribution that drew it. width is the pixel width the app wants (320, 640, 1280 or 2048; 0 when it says
+// nothing); the extension may ignore it.
+type UIImageParams struct {
+	Contribution string `json:"contribution"`
+	Ref          string `json:"ref"`
+	Width        int    `json:"width,omitempty"`
+	Placement    string `json:"placement,omitempty"`
+}
+
+// UIImage: what ui.image answers: the picture's bytes in base64 (png, jpeg, webp or gif, at most 4 MB decoded and
+// 8192 pixels a side; the hub reads the type from the bytes, not from mime) and how long the hub may keep it
+// (seconds, 60 when absent; a camera 5 to 10, a still 86400).
+type UIImage struct {
+	Mime   string `json:"mime"`
+	Data   string `json:"data"`
+	MaxAge *int   `json:"max_age,omitempty"`
 }
 
 type UIMachine struct {
@@ -2228,16 +2247,18 @@ type Review struct {
 	Discard     *Action          `json:"discard,omitempty"`
 }
 
-// Values of PersonaCardKind.
+// PersonaCardKind: ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days,
+// people).
 const (
 	PersonaCardKindStat       = "stat"
 	PersonaCardKindStackedBar = "stacked_bar"
 	PersonaCardKindLine       = "line"
 	PersonaCardKindBar        = "bar"
+	PersonaCardKindRing       = "ring"
 )
 
 // PersonaCardKinds are the values of PersonaCardKind, in order.
-var PersonaCardKinds = []string{"stat", "stacked_bar", "line", "bar"}
+var PersonaCardKinds = []string{"stat", "stacked_bar", "line", "bar", "ring"}
 
 // PersonaCard: the assistant's ```persona-card block (#886): one JSON object. Joins the components in #1850; this
 // form keeps drawing.
@@ -3014,10 +3035,11 @@ var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "nod
 
 // ConnectorCapability: what a connector declares (ConnectorItem.capabilities): the hub calls only the methods of
 // declared ones. fallback has no method: every inbox thing promises extra.rule_tier. recall is the program's word
-// that it can take back what it sent: the hub then calls connector.recall (only after the user agreed), and the
-// install preview says so. history (needs archive) is history.chats and archive.history, history_anchors (needs
-// history) is history.anchors. catalog lists subscribable read-only sources and calls their short tool names. An
-// extension's connector with one this hub does not know loses only that capability.
+// that it can take back what it sent: the hub calls recall.can / recall.do after the user agreed, or legacy
+// connector.recall for a program without those methods, and the install preview says so. history (needs archive) is
+// history.chats and archive.history, history_anchors (needs history) is history.anchors. catalog lists subscribable
+// read-only sources and calls their short tool names. An extension's connector with one this hub does not know loses
+// only that capability.
 const (
 	ConnectorCapabilityStatus         = "status"
 	ConnectorCapabilityTools          = "tools"
@@ -3265,11 +3287,60 @@ type ConnectorRecallParams struct {
 	At time.Time `json:"at,omitzero"`
 }
 
-// ConnectorRecallResult: recall's answer: recalled true is the program's word that the service confirmed the message
-// is no longer there. Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing, writes
-// nothing and lets the user ask again.
+// ConnectorRecallResult: legacy recall's answer: recalled true is the program's word that the service confirmed the
+// message is no longer there. Anything else (no recalled, false) is not taken for a yes: the hub then knows nothing,
+// writes nothing and lets the user ask again.
 type ConnectorRecallResult struct {
 	Recalled bool `json:"recalled"`
+}
+
+// ConnectorRecallCanParams: recall.can's read-only, memory-only preflight. The hub asks it immediately before
+// recall.do, not for every row of a ledger page. age_seconds is the sent row's age, clamped at zero for a future
+// timestamp.
+type ConnectorRecallCanParams struct {
+	Contribution string `json:"contribution"`
+	Action       string `json:"action"`
+	AgeSeconds   int    `json:"age_seconds"`
+}
+
+// ConnectorRecallCanResult: recall.can's answer. can false stops before any write and means not_recallable.
+type ConnectorRecallCanResult struct {
+	Can bool `json:"can"`
+}
+
+// ConnectorRecallDoParams: recall.do takes back one message after the user agreed on their own full device.
+// request_id is stable for this connector and external message: concurrent duplicates share one operation, and a
+// confirmed success can be replayed after a lost answer. A failure or unknown outcome may be tried again explicitly.
+// at is retained for connectors whose own recall window counts from the send. No message text, origin, approval
+// record, account or credential is included.
+type ConnectorRecallDoParams struct {
+	Contribution string                     `json:"contribution"`
+	RequestID    string                     `json:"request_id"`
+	Action       string                     `json:"action"`
+	MessageRef   string                     `json:"message_ref"`
+	Target       map[string]json.RawMessage `json:"target,omitempty"`
+	At           time.Time                  `json:"at,omitzero"`
+}
+
+// ConnectorRecallOutcome: recall.do's outcome. Only done and already_recalled say the message is known to be gone.
+// unknown may have taken effect and is never success.
+const (
+	ConnectorRecallOutcomeDone            = "done"
+	ConnectorRecallOutcomeAlreadyRecalled = "already_recalled"
+	ConnectorRecallOutcomeNotRecallable   = "not_recallable"
+	ConnectorRecallOutcomeUnavailable     = "unavailable"
+	ConnectorRecallOutcomeRefused         = "refused"
+	ConnectorRecallOutcomeUnknown         = "unknown"
+)
+
+// ConnectorRecallOutcomes are the values of ConnectorRecallOutcome, in order.
+var ConnectorRecallOutcomes = []string{"done", "already_recalled", "not_recallable", "unavailable", "refused", "unknown"}
+
+// ConnectorRecallDoResult: recall.do's result. error is one human-readable sentence for a non-success status, never a
+// secret or the message's text. An empty or unrecognized status is treated as unknown by the hub.
+type ConnectorRecallDoResult struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 // ConnectorThreadParams: thread.page: one page of an inbox thread, oldest first; no before is the newest page.
@@ -4306,6 +4377,8 @@ type KBDetail struct {
 	Links    []KBEntry            `json:"links,omitempty"`
 	Moments  []KBMomentRef        `json:"moments,omitempty"`
 	Segments []KBRecordingSegment `json:"segments,omitempty"`
+	// A recording's meeting minutes, once written (docs/assistant/meeting-minutes.md); kept as the hub sends them.
+	Minutes json.RawMessage `json:"minutes,omitempty"`
 }
 
 // KBMomentRef: A feed post linked to a project.
@@ -4339,12 +4412,22 @@ type KBDayResult struct {
 	Messages []KBDayMessage `json:"messages"`
 	Prev     string         `json:"prev"`
 	Next     string         `json:"next"`
+	// available means ledger matching ran, not that unmarked messages are human-authored. missing_scope requires
+	// sent.read; unavailable means the service cannot provide provenance. Older hosts omit this field: treat absence as
+	// unavailable.
+	SentOrigin string `json:"sent_origin"`
 }
 
 type KBDayMessage struct {
 	// The message's first line in the day's file, from 1.
 	N    int    `json:"n"`
 	Text string `json:"text"`
+	// Present only for a unique match in the sent-as-user ledger, with sent.read.
+	SentBy string `json:"sent_by,omitempty"`
+	// The matching ledger row.
+	SentLedgerID int64 `json:"sent_ledger_id,omitempty"`
+	// When this matched send was recalled; the archive may still contain its text.
+	RecalledAt time.Time `json:"recalled_at,omitzero"`
 }
 
 // KBSearchParams: kb.search: lines that match, messages too unless messages is false.
@@ -4449,17 +4532,20 @@ type TodoEventThread struct {
 }
 
 // TodoChangedEvent: event.todo.changed: a to-do was created or deleted, or its title, whether it is done (or failed
-// to start), or the thread it is bound to changed. Changes within about a second of each other are told once, as the
-// to-do is at the end of them. title, thread and done are as after the change (the last ones for a deleted to-do);
-// thread is left out when the to-do has none, done unless the to-do is done (closed, or its task failed to start).
-// Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the to-do again if
-// it matters.
+// to start), its supervisor, or the thread it is bound to changed. Changes within about a second of each other are
+// told once, as the to-do is at the end of them. title, thread and done are as after the change (the last ones for a
+// deleted to-do); thread is left out when the to-do has none, done unless the to-do is done (closed, or its task
+// failed to start). supervisor is the conversation that supervises it (the main conversation or a leader, see
+// leaders.schema.json), left out when none does; a change of supervisor (the task moved to another leader) sends it
+// too. Notes, agents and decisions changing do not send it (decisions have event.todo.decision). Read the to-do again
+// if it matters.
 type TodoChangedEvent struct {
-	ID     string           `json:"id"`
-	Title  string           `json:"title"`
-	Thread *TodoEventThread `json:"thread,omitempty"`
-	Done   bool             `json:"done,omitempty"`
-	What   string           `json:"what"`
+	ID         string           `json:"id"`
+	Title      string           `json:"title"`
+	Thread     *TodoEventThread `json:"thread,omitempty"`
+	Done       bool             `json:"done,omitempty"`
+	Supervisor string           `json:"supervisor,omitempty"`
+	What       string           `json:"what"`
 }
 
 // TodoEventDecision: A decision on a to-do: what was asked and chosen (reason and supersedes_id left out when empty),
@@ -4484,6 +4570,35 @@ type TodoDecisionEvent struct {
 	Title    string            `json:"title"`
 	Thread   *TodoEventThread  `json:"thread,omitempty"`
 	Decision TodoEventDecision `json:"decision"`
+}
+
+// LeaderChangedEvent: event.leader.changed: a leader conversation was made (a side conversation added to
+// assistant.leaders), its title changed, it was filed under another knowledge-base project, it ended (it left
+// assistant.leaders; nothing is deleted) or it was made a leader again. id is the leader conversation's session id,
+// the key a work-log record keeps; title its title as the apps show it; project the knowledge-base project's slug,
+// left out while it has none; ended true once it is no longer a leader, left out while it is.
+type LeaderChangedEvent struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Project string `json:"project,omitempty"`
+	Ended   bool   `json:"ended,omitempty"`
+}
+
+// LeaderReportEvent: event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it),
+// needs the owner's decision (decision: its review says needs_user), or is stuck (stuck: in Waiting on you or stopped
+// unfinished for 24 hours, told at most once per 24 hours). Written by the hub from the task's ledger, never by a
+// model; progress is never reported. id names the report (never sent twice; key on it to be safe), leader the leader
+// conversation's id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it), text at most 300
+// characters in the owner's language, link the task's PR or delivery link when it has one, at when what it reports
+// happened.
+type LeaderReportEvent struct {
+	ID     string    `json:"id"`
+	Leader string    `json:"leader"`
+	Kind   string    `json:"kind"`
+	Todo   string    `json:"todo"`
+	Text   string    `json:"text"`
+	Link   string    `json:"link,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // ModelErrorCode: error.code of model.complete besides permission_denied (data {scope: "models"}): invalid_params;
@@ -5574,6 +5689,8 @@ var newDef = map[string]func() any{
 	"ExtensionInfo":                 func() any { return new(ExtensionInfo) },
 	"InitializeResult":              func() any { return new(InitializeResult) },
 	"UIParams":                      func() any { return new(UIParams) },
+	"UIImageParams":                 func() any { return new(UIImageParams) },
+	"UIImage":                       func() any { return new(UIImage) },
 	"UIMachine":                     func() any { return new(UIMachine) },
 	"UILauncher":                    func() any { return new(UILauncher) },
 	"UIInboxItem":                   func() any { return new(UIInboxItem) },
@@ -5733,6 +5850,10 @@ var newDef = map[string]func() any{
 	"ConnectorDoParams":             func() any { return new(ConnectorDoParams) },
 	"ConnectorRecallParams":         func() any { return new(ConnectorRecallParams) },
 	"ConnectorRecallResult":         func() any { return new(ConnectorRecallResult) },
+	"ConnectorRecallCanParams":      func() any { return new(ConnectorRecallCanParams) },
+	"ConnectorRecallCanResult":      func() any { return new(ConnectorRecallCanResult) },
+	"ConnectorRecallDoParams":       func() any { return new(ConnectorRecallDoParams) },
+	"ConnectorRecallDoResult":       func() any { return new(ConnectorRecallDoResult) },
 	"ConnectorThreadParams":         func() any { return new(ConnectorThreadParams) },
 	"ConnectorThreadPage":           func() any { return new(ConnectorThreadPage) },
 	"ConnectorThreadChat":           func() any { return new(ConnectorThreadChat) },
@@ -5853,6 +5974,8 @@ var newDef = map[string]func() any{
 	"TodoChangedEvent":              func() any { return new(TodoChangedEvent) },
 	"TodoEventDecision":             func() any { return new(TodoEventDecision) },
 	"TodoDecisionEvent":             func() any { return new(TodoDecisionEvent) },
+	"LeaderChangedEvent":            func() any { return new(LeaderChangedEvent) },
+	"LeaderReportEvent":             func() any { return new(LeaderReportEvent) },
 	"ModelMessage":                  func() any { return new(ModelMessage) },
 	"ModelCompleteParams":           func() any { return new(ModelCompleteParams) },
 	"ModelUsage":                    func() any { return new(ModelUsage) },
@@ -5930,6 +6053,8 @@ var Calls = map[string]Call{
 	"connector.actions.describe":     {Name: "connector.actions.describe", From: "hub", Params: "ConnectorCallParams", Result: "ConnectorDescribeResult"},
 	"connector.actions.do":           {Name: "connector.actions.do", From: "hub", Params: "ConnectorDoParams", Result: "ConnectorCallResult"},
 	"connector.recall":               {Name: "connector.recall", From: "hub", Params: "ConnectorRecallParams", Result: "ConnectorRecallResult"},
+	"connector.recall.can":           {Name: "connector.recall.can", From: "hub", Params: "ConnectorRecallCanParams", Result: "ConnectorRecallCanResult"},
+	"connector.recall.do":            {Name: "connector.recall.do", From: "hub", Params: "ConnectorRecallDoParams", Result: "ConnectorRecallDoResult"},
 	"connector.thread.page":          {Name: "connector.thread.page", From: "hub", Params: "ConnectorThreadParams", Result: "ConnectorThreadPage"},
 	"connector.thread.media":         {Name: "connector.thread.media", From: "hub", Params: "ConnectorMediaParams", Result: "ConnectorMedia"},
 	"connector.inbox.collect":        {Name: "connector.inbox.collect", From: "hub", Params: "ConnectorParams", Result: "ConnectorCollectResult"},
@@ -5979,6 +6104,8 @@ var Calls = map[string]Call{
 	"event.kb.forgotten":             {Name: "event.kb.forgotten", From: "hub", Params: "KBForgottenEvent", Result: "", Event: true},
 	"event.todo.changed":             {Name: "event.todo.changed", From: "hub", Params: "TodoChangedEvent", Result: "", Event: true},
 	"event.todo.decision":            {Name: "event.todo.decision", From: "hub", Params: "TodoDecisionEvent", Result: "", Event: true},
+	"event.leader.changed":           {Name: "event.leader.changed", From: "hub", Params: "LeaderChangedEvent", Result: "", Event: true},
+	"event.leader.report":            {Name: "event.leader.report", From: "hub", Params: "LeaderReportEvent", Result: "", Event: true},
 	"model.complete":                 {Name: "model.complete", From: "program", Params: "ModelCompleteParams", Result: "ModelCompleteResult"},
 	"assistant.conversations":        {Name: "assistant.conversations", From: "program", Params: "AssistantConversationsParams", Result: "AssistantConversationsResult"},
 	"assistant.messages":             {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},

@@ -77,7 +77,7 @@ fun JIcon(
     val vector = when {
         selected -> icon.fill
         PersonaTheme.style == AppStyle.Board -> icon.bold
-        decorative && PersonaTheme.style == AppStyle.Glass -> icon.duotone
+        decorative && PersonaTheme.style == AppStyle.Glass -> icon.regular
         else -> icon.regular
     }
     Icon(vector, contentDescription, modifier.size(size), tint = tint)
@@ -334,20 +334,41 @@ fun JSwitch(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: M
 
 @Composable
 fun JCheckbox(checked: Boolean, onCheckedChange: ((Boolean) -> Unit)?, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    val palette = PersonaTheme.palette
-    val style = PersonaTheme.style
-    val shape = when (style) { AppStyle.Glass -> CircleShape; AppStyle.Brief -> RoundedCornerShape(7.dp); AppStyle.Board -> RoundedCornerShape(4.dp) }
-    val on = if (style == AppStyle.Brief) palette.action else palette.accent
     Box(
         modifier.size(48.dp).then(if (onCheckedChange != null) Modifier.clickable(enabled = enabled, role = Role.Checkbox) { onCheckedChange(!checked) } else Modifier)
             .semantics { toggleableState = ToggleableState(checked) }.stableAlpha(if (enabled) 1f else 0.4f),
         contentAlignment = Alignment.Center,
+    ) { JCheckMark(ToggleableState(checked)) }
+}
+
+/**
+ * A checkbox of three states (#2576): a group's tick in a selection, none, some (–) or all (✓) of its items picked.
+ * A tap reports [onClick]; the caller decides what the group becomes.
+ */
+@Composable
+fun JTriCheckbox(state: ToggleableState, onClick: (() -> Unit)?, modifier: Modifier = Modifier, label: String? = null) {
+    Box(
+        modifier.size(48.dp).then(if (onClick != null) Modifier.clickable(role = Role.Checkbox, onClickLabel = label, onClick = onClick) else Modifier)
+            .semantics { toggleableState = state; if (label != null) contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) { JCheckMark(state) }
+}
+
+/** The box a checkbox draws, without its tap target: a row in a selection shows it before its avatar. */
+@Composable
+fun JCheckMark(state: ToggleableState, modifier: Modifier = Modifier) {
+    val palette = PersonaTheme.palette
+    val style = PersonaTheme.style
+    val shape = when (style) { AppStyle.Glass -> CircleShape; AppStyle.Brief -> RoundedCornerShape(7.dp); AppStyle.Board -> RoundedCornerShape(4.dp) }
+    val on = if (style == AppStyle.Brief) palette.action else palette.accent
+    val filled = state != ToggleableState.Off
+    Box(
+        modifier.size(22.dp).clip(shape).background(if (filled) on else Color.Transparent)
+            .border(if (filled) 0.dp else 1.5.dp, palette.ink3, shape),
+        contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier.size(22.dp).clip(shape).background(if (checked) on else Color.Transparent)
-                .border(if (checked) 0.dp else 1.5.dp, palette.ink3, shape),
-            contentAlignment = Alignment.Center,
-        ) { if (checked) JIcon(PhIcons.Check, null, size = 15.dp, tint = if (palette.customRoles) ExtensionThemeColors.on(on) else if (style == AppStyle.Brief) palette.onAction else Color.White, selected = false) }
+        if (filled) JIcon(if (state == ToggleableState.On) PhIcons.Check else PhIcons.Minus, null, size = 15.dp,
+            tint = if (palette.customRoles) ExtensionThemeColors.on(on) else if (style == AppStyle.Brief) palette.onAction else Color.White, selected = false)
     }
 }
 
@@ -433,8 +454,27 @@ fun JSegmented(options: List<JSegment>, selected: Int, onSelect: (Int) -> Unit, 
 }
 
 /**
+ * The filter chip's measurements, shared by every control that must read as one of these short capsules (the old All /
+ * task chips above the composer, and now the Assistant's Pending / Progress / Agents entries).
+ */
+object JChipTokens {
+    /** A tappable chip's minimum height. */
+    val height = 36.dp
+    /** A quiet (not tappable) chip's minimum height. */
+    val quietHeight = 28.dp
+    val horizontalPadding = 12.dp
+    val border = 1.dp
+    val dotSize = 8.dp
+    val dotGap = 6.dp
+    val iconSize = 15.dp
+    val iconGap = 5.dp
+    val countGap = 5.dp
+}
+
+/**
  * A filter or a fact. With [onClick] it toggles; without, it is a quiet label. [onLongClick] (with [onClick]) is a long
- * press for more (a menu of other ways to use it); the chip looks the same.
+ * press for more (a menu of other ways to use it); the chip looks the same. [dot] is a plain colored mark in the place
+ * of a [status] dot, for a category rather than a state.
  */
 @Composable
 fun JChip(
@@ -448,6 +488,7 @@ fun JChip(
     /** Greyed text (not selected): what it stands for is not reachable now, like an offline manager. */
     muted: Boolean = false,
     onLongClick: (() -> Unit)? = null,
+    dot: Color? = null,
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
@@ -459,21 +500,22 @@ fun JChip(
     }
     val ink = if (muted && (!selected || style == AppStyle.Board)) palette.ink3 else plainInk
     Row(
-        modifier.heightIn(min = if (onClick != null) 36.dp else 28.dp).clip(shape).background(fill).border(1.dp, border, shape)
+        modifier.heightIn(min = if (onClick != null) JChipTokens.height else JChipTokens.quietHeight).clip(shape).background(fill).border(JChipTokens.border, border, shape)
             .then(when {
                 onClick != null && onLongClick != null ->
                     Modifier.combinedClickable(role = Role.Checkbox, onClick = onClick, onLongClick = onLongClick).semantics { this.selected = selected }
                 onClick != null -> Modifier.clickable(role = Role.Checkbox, onClick = onClick).semantics { this.selected = selected }
                 else -> Modifier
             })
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = JChipTokens.horizontalPadding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        status?.let { JStatusDot(it, size = 8.dp); Spacer(Modifier.width(6.dp)) }
-        icon?.let { JIcon(it, null, size = 15.dp, tint = ink); Spacer(Modifier.width(5.dp)) }
+        status?.let { JStatusDot(it, size = JChipTokens.dotSize); Spacer(Modifier.width(JChipTokens.dotGap)) }
+        if (status == null) dot?.let { Box(Modifier.size(JChipTokens.dotSize).clip(CircleShape).background(it)); Spacer(Modifier.width(JChipTokens.dotGap)) }
+        icon?.let { JIcon(it, null, size = JChipTokens.iconSize, tint = ink); Spacer(Modifier.width(JChipTokens.iconGap)) }
         Text(text, style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium), color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
         count?.let {
-            Spacer(Modifier.width(5.dp))
+            Spacer(Modifier.width(JChipTokens.countGap))
             Text("$it", style = PersonaTheme.type.micro, color = if (selected && style != AppStyle.Board) ink else palette.ink3)
         }
     }
@@ -484,6 +526,15 @@ fun JChip(
 fun JBadge(count: Int, modifier: Modifier = Modifier, text: String? = null) {
     val palette = PersonaTheme.palette
     val label = text ?: if (count > 99) "99+" else "$count"
+    if (LocalHomeDrawer.current && PersonaTheme.style == AppStyle.Glass) {
+        val fill = sidebarActionFill(palette)
+        Box(modifier.heightIn(min = HomeTokens.sidebarBadgeSize).widthIn(min = HomeTokens.sidebarBadgeSize)
+            .clip(CircleShape).background(fill).padding(horizontal = Tokens.Space.xs), contentAlignment = Alignment.Center) {
+            Text(label, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+                color = ExtensionThemeColors.on(fill), maxLines = 1)
+        }
+        return
+    }
     val shape = if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(4.dp) else CircleShape
     Box(
         modifier.heightIn(min = 18.dp).widthIn(min = 18.dp).clip(shape).background(palette.needsYou.dot)
@@ -504,6 +555,11 @@ fun JTag(text: String, modifier: Modifier = Modifier, status: Status? = null) =
 @Composable
 fun JTag(text: String, tone: Tone, modifier: Modifier = Modifier, animated: Boolean = false) =
     JTagColored(text, modifier, PersonaTheme.palette.tone(tone).takeIf { tone != Tone.Neutral }, animated)
+
+/** A small label in a named colour ([JHue], UI version 6): a category ("客厅") rather than a meaning. */
+@Composable
+fun JTag(text: String, hue: JHue, modifier: Modifier = Modifier, animated: Boolean = false) =
+    JTagColored(text, modifier, PersonaTheme.palette.hue(hue), animated)
 
 @Composable
 internal fun JTagColored(text: String, modifier: Modifier, tone: StatusColors?, animated: Boolean = false) {
@@ -541,17 +597,17 @@ fun JSpinner(modifier: Modifier = Modifier, color: Color = if (PersonaTheme.styl
 }
 
 @Composable
-fun JLinearProgress(progress: Float?, modifier: Modifier = Modifier, tone: Tone? = null) {
+fun JLinearProgress(progress: Float?, modifier: Modifier = Modifier, tone: Tone? = null, color: Color? = null) {
     val palette = PersonaTheme.palette
     // A toned bar (an extension's progress) takes the role colour; otherwise the style's ink or accent.
-    val color = tone?.takeIf { it != Tone.Neutral }?.let { palette.tone(it).dot }
+    val effectiveColor = color ?: tone?.takeIf { it != Tone.Neutral }?.let { palette.tone(it).dot }
         ?: if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent
     Box(modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(palette.surfaceStrong)) {
-        if (progress != null) Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().clip(CircleShape).background(color))
+        if (progress != null) Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().clip(CircleShape).background(effectiveColor))
         else {
             val shift by rememberInfiniteTransition(label = "bar").animateFloat(0f, 1f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "shift")
             BoxWithConstraints(Modifier.fillMaxSize()) {
-                Box(Modifier.offset(x = maxWidth * (shift * 1.3f - 0.3f)).width(maxWidth * 0.3f).fillMaxHeight().clip(CircleShape).background(color))
+                Box(Modifier.offset(x = maxWidth * (shift * 1.3f - 0.3f)).width(maxWidth * 0.3f).fillMaxHeight().clip(CircleShape).background(effectiveColor))
             }
         }
     }

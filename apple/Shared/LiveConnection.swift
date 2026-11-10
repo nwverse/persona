@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// One message of a terminal stream (docs/protocol/protocol.md「终端流」).
+/// One message of a terminal stream (docs/protocol/protocol.md「Terminal stream」).
 nonisolated enum TerminalEvent: Sendable {
     /// VT bytes for a cols × rows grid; a full one is the whole screen.
     case frame(epoch: String, seq: Int, full: Bool, cols: Int, rows: Int, data: Data)
@@ -22,7 +22,7 @@ nonisolated enum ServerEvent: Sendable {
     case machines([Machine])
     case sessions(machineID: String, [Session])
     /// What changed in a machine's list since the last (a hub that has `sessions_delta`, asked for on connect): the
-    /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「会话增量」).
+    /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「Session deltas」).
     case sessionsDelta(machineID: String, upsert: [Session], remove: [String])
     /// A lightweight hint, never an authoritative row checkpoint.
     case sessionsList(revision: String)
@@ -43,7 +43,7 @@ nonisolated enum ServerEvent: Sendable {
     /// Feishu conversations with new or changed messages (the Lark gateway's realtime events, relayed by the hub); account:
     /// the Feishu account they are in when it is not the hub's own (`ol_account`).
     case lark(feedIDs: [String], settingsChanged: Bool, account: Int?)
-    /// A messaging source's changes (#2138, docs/extensions/extension-messaging.md「九」): its conversations, of `account` (nil: the
+    /// A messaging source's changes (#2138, docs/extensions/extension-messaging.md「Live events and the Inbox」): its conversations, of `account` (nil: the
     /// default one).
     case messaging(source: String, conversations: [String], settingsChanged: Bool, account: String?)
     /// Personal agent sessions (the gateway's agent-bridge, hub/agents.go) that changed: `<source>:<sessionKey>` ids, empty
@@ -55,10 +55,12 @@ nonisolated enum ServerEvent: Sendable {
     case fleet(FleetState)
     /// The hub updating itself: checking, downloading, waiting for idle, restarting… (docs/operations/hub-update.md).
     case hubUpdate(HubUpdateStatus)
-    /// An extension install / upgrade / removal moved on (#3307): the whole operation as it stands.
-    case extensionOperation(ExtensionOperation)
+    /// An extension install / upgrade / removal moved on (#3307): the whole operation as it stands. `manager`: the
+    /// manager whose extension it is, as the event says (nil: the hub's own assistant, docs/assistant/managers.md
+    /// "Clients"); the same for the two below.
+    case extensionOperation(ExtensionOperation, manager: String?)
     /// An extension's sign-in changed (#4507): signed in, out, expired; nil, it no longer signs in.
-    case extensionAuth(extension: String, ExtensionAuth?)
+    case extensionAuth(extension: String, ExtensionAuth?, manager: String?)
     /// The desktop apps connected to the hub now (sent on connect and whenever one comes or goes).
     case desktops([DesktopDevice])
     /// Tasks from an assistant conversation (docs/assistant/unified-entry.md): the todos changed (pull them), a conversation's
@@ -66,6 +68,9 @@ nonisolated enum ServerEvent: Sendable {
     case todos
     /// The personas the hub offers changed, e.g. a tiered look moved to another tier (docs/apple/persona.md): list them again.
     case personas
+    /// The avatar chosen on the hub changed (another device chose one, or the hub went back to the default when its
+    /// package or extension went; docs/apple/persona.md): `effective` is the one to show, `id` the one chosen.
+    case look(id: String?, effective: String?)
     /// The hub's roster of managers changed (docs/assistant/managers.md): Settings › Managers reads it again. Sent only to a
     /// socket that asked for feature `managers` (`queryItems`).
     case managers
@@ -76,10 +81,10 @@ nonisolated enum ServerEvent: Sendable {
     case taskPlan(TaskPlan)
     case terminal(SessionKey, TerminalEvent)
     /// Folders a Files / Git pane watches (`fs_watch`) changed on the computer, or the Git status of `cwd` did (#2439,
-    /// docs/protocol/protocol.md「文件自动刷新」).
+    /// docs/protocol/protocol.md「File auto-refresh」).
     case fsChanged(machineID: String, cwd: String, dirs: [String], git: Bool)
-    /// A plugin changed the badge on one of its main-navigation entries (docs/extensions/extensions.md「UI 插槽」 badges): nil clears it.
-    case pluginBadge(plugin: String, id: String, badge: ExtensionBadge?)
+    /// A plugin changed the badge on one of its main-navigation entries (docs/extensions/extensions.md「UI slots」 badges): nil clears it.
+    case pluginBadge(plugin: String, id: String, badge: ExtensionBadge?, manager: String?)
     /// An extension's data changed (`ui.invalidate`, docs/extensions/extensions.md「ui.invalidate」): its interface `id` (nil: all of
     /// them) is drawn again where it is shown.
     case extensionInvalidate(extension: String, id: String?)
@@ -152,6 +157,8 @@ nonisolated enum ServerEvent: Sendable {
         var key: String?
         var conversation: String?
         var plan: TaskPlan?
+        /// look's: the avatar to show (`id` is the one chosen).
+        var effective: String?
         var plugin: String?
         /// extension_ui's (plugin_ui says `plugin`).
         var extensionID: String?
@@ -166,11 +173,15 @@ nonisolated enum ServerEvent: Sendable {
         var answers: JSONValue?
         /// interaction_reanswered's.
         var resolution: JSONValue?
+        /// The manager a manager's own message is from, when not the hub's own assistant (docs/protocol/protocol.md
+        /// "Messages to the App"); raw, so another event's `manager` of another shape cannot break the envelope.
+        var manager: JSONValue?
 
         enum CodingKeys: String, CodingKey {
             case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
-            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution
+            case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
+            case effective
             case answeredBy = "answered_by"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
@@ -204,8 +215,8 @@ nonisolated enum ServerEvent: Sendable {
                                              channel: e.channel, build: e.build, protocolVersion: e.protocolVersion,
                                              minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) }))
         case "hub_update": return e.update.map { .hubUpdate($0) }
-        case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0) }
-        case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value) }
+        case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0, manager: e.manager?.string) }
+        case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value, manager: e.manager?.string) }
         case "machines": return e.machines.map { .machines($0) }
         case "sessions":
             guard let m = e.machineID else { return nil }
@@ -224,7 +235,7 @@ nonisolated enum ServerEvent: Sendable {
         case "delta":
             guard let key else { return nil }
             return .delta(key, text: e.text ?? "")
-        case "interaction": return e.interaction.map { .interaction($0) }
+        case "interaction": return e.interaction.map { .interaction(Elicitation.withFieldOrder($0, from: data)) }
         case "interaction_resolved":
             guard let id = e.id else { return nil }
             let assistant = e.answeredBy?.string == AssistantAnswer.assistant
@@ -254,6 +265,9 @@ nonisolated enum ServerEvent: Sendable {
         case "inbox": return .inbox
         case "todos": return .todos
         case "personas": return .personas
+        case "look":
+            guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
+            return .look(id: e.id, effective: e.effective)
         case "managers": return .managers
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
@@ -283,7 +297,7 @@ nonisolated enum ServerEvent: Sendable {
             // An invalidate comes as extension_ui only (an older app would take a plugin_ui for a badge).
             if e.invalidate == true, let ext = e.extensionID ?? e.plugin { return .extensionInvalidate(extension: ext, id: e.id) }
             guard let plugin = e.extensionID ?? e.plugin, let id = e.id else { return nil }
-            return .pluginBadge(plugin: plugin, id: id, badge: e.badge.flatMap { $0.text.isEmpty ? nil : $0 })
+            return .pluginBadge(plugin: plugin, id: id, badge: e.badge.flatMap { $0.text.isEmpty ? nil : $0 }, manager: e.manager?.string)
         case "fs_changed":
             guard let m = e.machineID, let cwd = e.cwd, !cwd.isEmpty else { return nil }
             return .fsChanged(machineID: m, cwd: cwd, dirs: e.dirs ?? [], git: e.git ?? false)
@@ -316,7 +330,7 @@ nonisolated extension ServerEvent {
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .personas, .look, .managers, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth: return self
         }
     }
@@ -438,7 +452,7 @@ final class LiveConnection {
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var prepareEvent: (@Sendable (ServerEvent) -> Void)?
     @ObservationIgnored var onConnected: (() -> Void)?
-    /// Picks where each attempt goes when a group has several hubs (HubRoute, docs/protocol/multi-hub.md「选路」): asked before
+    /// Picks where each attempt goes when a group has several hubs (HubRoute, docs/protocol/multi-hub.md「Connections and routing」): asked before
     /// every attempt; nil keeps the config given to `connect`.
     @ObservationIgnored var route: (@MainActor () async -> ServerConfig?)?
     /// The credential each attempt goes with (AppModel.currentCredential): a pairing token this device already traded
@@ -607,9 +621,10 @@ final class LiveConnection {
 
     /// The socket URL's query: session lists as deltas (an older hub ignores the question and sends whole lists), the
     /// extensions' install steps (`extension_operation`, #3307), the managers' roster changes (`managers`,
-    /// docs/assistant/managers.md), and where to resume the broadcasts from once a hello gave a stream.
+    /// docs/assistant/managers.md), Persona Link entries in the `desktops` event (`desktops_link`, `DesktopDevice`), and
+    /// where to resume the broadcasts from once a hello gave a stream.
     static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false) -> [URLQueryItem] {
-        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionList ? "sessions_list," : "") + "sessions_delta,extension_operations,managers," + HubNaming.feature)] + cursor.queryItems
+        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionList ? "sessions_list," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
     }
 
     private func heartbeat(_ t: URLSessionWebSocketTask, _ gen: Int) {
@@ -813,12 +828,30 @@ final class LiveConnection {
         }
     }
 
-    /// client_hello (docs/protocol/protocol.md, docs/protocol/i18n.md「协议」): this connection's interface language, so the hub's
+    /// client_hello (docs/protocol/protocol.md, docs/protocol/i18n.md「Protocol: telling hub the language」): this connection's interface language, so the hub's
     /// notices and errors on it, and the user's language for what it produces later, match the app. The naming
-    /// contract is also advertised here; older hubs ignore unknown fields and keep their existing defaults.
+    /// contract and MCP forms and links are advertised here (`helloFeatures`), with the platform and version this app's
+    /// requests carry (`X-Persona-Client`): the hub lists those cards in a REST answer only to a client whose hello
+    /// matches it. Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
-        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": [HubNaming.feature]])
+        let client = RequestClientMetadata.current
+        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
+              "platform": client.platform, "version": client.version])
     }
+
+    /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
+    /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
+    /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
+    /// card_compat.go), which every build before the ring draws.
+    nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
+        let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
+        let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
+        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : []) + (chatApps.contains(client.platform) ? [cardRingFeature] : [])
+    }
+
+    /// The client_hello feature that says this app draws ```persona-card rings (#3068).
+    nonisolated static let cardRingFeature = "persona_card_ring"
 
     func send(_ object: [String: Any]) {
         if let local {

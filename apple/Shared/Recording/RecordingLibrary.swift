@@ -35,8 +35,12 @@ final class RecordingLibrary {
     nonisolated func audio(_ id: UUID, _ index: Int) -> URL { folder(id).appendingPathComponent(RecordingSegment.fileName(index)) }
     func entry(_ id: UUID) -> RecordingEntry? { entries.first { $0.id == id } }
 
-    @discardableResult func create(source: RecordingEntry.Source, locale: String = "zh-CN") throws -> RecordingEntry {
-        let entry = RecordingEntry(id: UUID(), createdAt: .now, source: source, locale: locale)
+    @discardableResult func create(source: RecordingEntry.Source, locale: String = "zh-CN", title: String = "",
+                                   meeting: RecordingMeeting? = nil, kind: RecordingEntry.Kind = .clip) throws -> RecordingEntry {
+        var entry = RecordingEntry(id: UUID(), createdAt: .now, source: source, locale: locale,
+                                   kind: kind == .rolling ? .rolling : nil)
+        entry.title = title
+        entry.meeting = meeting
         try save(entry)
         return entry
     }
@@ -74,6 +78,14 @@ final class RecordingLibrary {
     }
 
     func addSegment(_ id: UUID, _ segment: RecordingSegment) {
+        guard let current = entry(id) else { return }
+        // A segment already registered keeps its audio: the writer re-adds its finished segments when capture stops.
+        guard !current.segments.contains(where: { $0.index == segment.index }) else { return }
+        // Segments that finish after being pruned or erased are dropped.
+        guard !current.isPruned(segment.index), !current.isErased(segment) else {
+            try? FileManager.default.removeItem(at: audio(id, segment.index))
+            return
+        }
         change(id) { entry in
             guard !entry.segments.contains(where: { $0.index == segment.index }) else { return }
             entry.segments.append(segment)
@@ -89,14 +101,37 @@ final class RecordingLibrary {
             try? FileManager.default.removeItem(at: folder(transfer.id))
             return
         }
-        var entry = entry(transfer.id) ?? RecordingEntry(id: transfer.id, createdAt: transfer.createdAt, source: .watch, locale: transfer.locale)
+        var entry = entry(transfer.id) ?? RecordingEntry(id: transfer.id, createdAt: transfer.createdAt, source: .watch,
+                                                          locale: transfer.locale, kind: transfer.kind)
         entry.marks = Array(Set(entry.marks + transfer.marks)).sorted()
+        // A meeting started on the watch: the phone names it after the calendar (`MeetingRecorder.tagWatchRecording`).
+        if transfer.meeting == true, entry.meeting == nil { entry.meeting = RecordingMeeting() }
+        if let erased = transfer.erased, !erased.isEmpty {
+            var merged = entry.erased ?? []
+            for range in erased where !merged.contains(range) { merged.append(range) }
+            entry.erased = merged.isEmpty ? nil : merged
+            let snapshot = entry
+            for segment in entry.segments where snapshot.isErased(segment) {
+                try? FileManager.default.removeItem(at: audio(entry.id, segment.index))
+            }
+            entry.segments.removeAll { snapshot.isErased($0) }
+        }
         if var segment = transfer.segment, !entry.segments.contains(where: { $0.index == segment.index }) {
             segment.sentences = nil; segment.delivered = false
-            entry.segments.append(segment)
-            entry.segments.sort { $0.index < $1.index }
+            // The watch holds bookmarked segments it couldn't send for longer; one arriving after newer segments
+            // were pruned still gets checked instead of falling into the tombstone.
+            let tombstoned = entry.isPruned(segment.index) && !RecordingRolling.nearMark(segment, marks: entry.marks)
+            if tombstoned || entry.isErased(segment) {
+                try? FileManager.default.removeItem(at: audio(entry.id, segment.index))
+            } else {
+                entry.segments.append(segment)
+                entry.segments.sort { $0.index < $1.index }
+            }
         }
-        if let total = transfer.total { entry.active = false; entry.expectedSegments = total }
+        if let total = transfer.total {
+            entry.active = false; entry.expectedSegments = total
+            if entry.endedAt == nil { entry.endedAt = .now }
+        }
         try save(entry)
     }
 
@@ -108,6 +143,81 @@ final class RecordingLibrary {
         entries.removeAll { $0.id == id }
     }
 
+    /// Rolling recordings drop expired segments and remember which indexes went, so late copies of them never return while a segment that never arrived is not tombstoned.
+    func prune(_ id: UUID, indexes: [Int]) {
+        guard !indexes.isEmpty, entry(id) != nil else { return }
+        let gone = Set(indexes)
+        change(id) { entry in
+            entry.segments.removeAll { gone.contains($0.index) }
+            var floor = entry.prunedBelow ?? 0
+            var above = Set(entry.prunedAbove ?? []).union(gone.filter { $0 >= floor })
+            while above.remove(floor) != nil { floor += 1 }
+            entry.prunedBelow = floor
+            entry.prunedAbove = above.isEmpty ? nil : above.sorted()
+        }
+        for index in gone { try? FileManager.default.removeItem(at: audio(id, index)) }
+    }
+
+    /// Segments kept for bookmarks, heart-rate spikes, or mood. Already-kept ones stay as they are.
+    func keep(_ id: UUID, _ keeps: [Int: RecordingKeep]) {
+        guard !keeps.isEmpty else { return }
+        change(id) { entry in
+            for position in entry.segments.indices where entry.segments[position].kept == nil {
+                if let keep = keeps[entry.segments[position].index] { entry.segments[position].kept = keep }
+            }
+        }
+    }
+
+    /// Erase a wall-clock range; later syncs that land in it are refused too.
+    func erase(_ id: UUID, from: Date, to: Date) {
+        let range = RecordingErase(from: from, to: to)
+        guard range.valid, entry(id) != nil else { return }
+        var removed: [Int] = []
+        change(id) { entry in
+            entry.erased = (entry.erased ?? []) + [range]
+            removed = entry.segments.filter { $0.overlaps(from, to) }.map(\.index)
+            entry.segments.removeAll { $0.overlaps(from, to) }
+        }
+        for index in removed { try? FileManager.default.removeItem(at: audio(id, index)) }
+    }
+
+    /// Save the chosen segments as a normal clip: indexes renumbered, transcript and bookmarks shifted.
+    func saveClip(from id: UUID, indexes: [Int]) throws -> RecordingEntry {
+        guard let original = entry(id) else { throw CocoaError(.fileNoSuchFile) }
+        let chosen = Set(indexes)
+        let picked = original.segments.filter { chosen.contains($0.index) && FileManager.default.fileExists(atPath: audio(id, $0.index).path) }
+            .sorted { $0.index < $1.index }
+        var clip = RecordingEntry(id: UUID(), createdAt: picked.first?.startedAt ?? .now, source: original.source, locale: original.locale)
+        try FileManager.default.createDirectory(at: folder(clip.id), withIntermediateDirectories: true)
+        var placed: [(old: RecordingSegment, start: Double)] = []
+        var start = 0.0
+        for segment in picked {
+            do { try FileManager.default.copyItem(at: audio(id, segment.index), to: audio(clip.id, placed.count)) } catch { continue }
+            let shift = start - segment.start
+            var next = segment
+            next.index = placed.count
+            next.start = start
+            next.delivered = true
+            next.kept = nil
+            next.sentences = segment.sentences?.map { RecordingSentence(start: $0.start + shift, end: $0.end + shift, text: $0.text) }
+            placed.append((segment, start))
+            clip.segments.append(next)
+            start += segment.duration
+        }
+        guard !clip.segments.isEmpty else {
+            try? FileManager.default.removeItem(at: folder(clip.id))
+            throw CocoaError(.fileNoSuchFile)
+        }
+        clip.marks = original.marks.compactMap { mark in
+            placed.first { mark >= $0.old.start && mark < $0.old.start + $0.old.duration }.map { $0.start + mark - $0.old.start }
+        }.sorted()
+        clip.active = false
+        clip.expectedSegments = clip.segments.count
+        clip.endDelivered = true
+        try save(clip)
+        return clip
+    }
+
     /// Hourhand's cleanup after an abnormal exit: keep only finalized segments, delete half-written ones with no tail.
     func recover(source: RecordingEntry.Source) {
         for var entry in entries where entry.active && entry.source == source {
@@ -117,7 +227,8 @@ final class RecordingLibrary {
                 try? FileManager.default.removeItem(at: file)
             }
             entry.active = false
-            entry.expectedSegments = (entry.segments.map(\.index).max() ?? -1) + 1
+            entry.expectedSegments = entry.nextIndex
+            entry.endedAt = .now
             do { try save(entry) } catch { self.error = String(localized: "The end of the last recording wasn't saved") }
         }
     }

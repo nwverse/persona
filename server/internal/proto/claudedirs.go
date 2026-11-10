@@ -2,10 +2,11 @@ package proto
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-// Blocked Claude Code config directories (docs/integrations/claude-integration.md "Blocked config directories"): per machine, patterns the user
+// Blocked Claude Code config directories (docs/integrations/claude-integration.md "Blocking configuration directories"): per machine, patterns the user
 // keeps out of Persona — the node neither looks in nor reports a matching directory, the hub does not remember it, and
 // its sessions are not listed. Both the hub and the node match with ClaudeDirBlocked.
 
@@ -19,7 +20,7 @@ func CleanClaudeDirPatterns(in []string) []string {
 			continue
 		}
 		p = strings.TrimRight(p, "/")
-		if !containsString(out, p) {
+		if !slices.Contains(out, p) {
 			out = append(out, p)
 		}
 	}
@@ -76,15 +77,6 @@ func ClaudeDirBlockedBy(dir, home string, patterns []string) string {
 		}
 	}
 	return ""
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 // ClaudeDir is one config directory of a machine as the settings page lists it (GET /api/v1/machines/{mid}/claude-dirs).

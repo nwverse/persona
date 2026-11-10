@@ -101,7 +101,7 @@ type Interaction struct {
 	// (docs/assistant/assistant.md "Always allow in this session"). Absent on Agents sessions' cards.
 	AlwaysKeys []string `json:"always_keys,omitempty"`
 	// Delegating: the assistant is deciding whether it may answer this question for the user (agents.delegate,
-	// docs/assistant/assistant.md "The assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
+	// docs/assistant/assistant.md "Assistant answers questions first"); nothing was pushed yet. The card shows in the apps meanwhile, and an answer
 	// given there wins.
 	Delegating bool `json:"delegating,omitempty"`
 	// Delegate is what the assistant found when it left the question to the user: the context it filled in.

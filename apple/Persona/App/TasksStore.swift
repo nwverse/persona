@@ -148,7 +148,7 @@ final class TasksStore {
             .sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
     }
 
-    /// The agents going on that the conversation's dock and board show after its tasks (#1113): in the main
+    /// The agents going on that the conversation's action bar and board show besides its tasks (#1113): in the main
     /// conversation the ones no task stands for (opened by hand on the Agents page); in the others none.
     func agents(of conversation: String) -> [DockAgent] {
         let model = AppModel.shared
@@ -180,7 +180,7 @@ final class TasksStore {
     }
 
     func state(_ todo: TodoItem) -> TaskState {
-        let state = TaskState(todo: todo, agents: sessions(todo).map(\.state))
+        let state = TaskState(todo: todo, sessions: sessions(todo))
         // A hub from before #1077 leaves the todo open when the agent did not start; its plan still says why.
         if state == .notStarted, todo.agents.isEmpty, planError(todo) != nil { return .failed }
         return state
@@ -198,6 +198,9 @@ final class TasksStore {
         return error
     }
 
+    /// What a waiting task waits for (#3274): the first of its agents that waits to be woken, in its own words.
+    func waitLine(_ todo: TodoItem) -> String? { sessions(todo).lazy.compactMap(\.waitLine).first }
+
     /// The task's agent to open first: the one that waits for the user, then the one working, then the latest.
     func leadSession(_ todo: TodoItem) -> Session? {
         sessions(todo).min { a, b in
@@ -209,17 +212,6 @@ final class TasksStore {
     func interactions(_ todo: TodoItem) -> [Interaction] {
         let keys = Set(sessions(todo).map(\.key))
         return AppModel.shared.pendingInteractions.filter { keys.contains($0.sessionKey) }
-    }
-
-    /// The dock: the conversation's tasks still going on, or finished and not looked at; what waits first.
-    func dock(_ conversation: String) -> [TodoItem] {
-        let rows: [(todo: TodoItem, state: TaskState)] = tasks(of: conversation).map { ($0, state($0)) }
-        let going = rows.filter { $0.state != .done && $0.state != .followup && $0.state != .failed }
-        let sorted = going.sorted { a, b in
-            if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
-            return (a.todo.createdAt ?? .distantPast) > (b.todo.createdAt ?? .distantPast)
-        }
-        return sorted.map(\.todo)
     }
 
     /// The main conversation's Today card, once a day: the hub makes it on the first ask and answers it after that.
@@ -239,7 +231,7 @@ final class TasksStore {
     func sendMessage(_ card: FeedItem, itemID: String, text: String) async {
         guard messageState(card, itemID: itemID) == .open else { return }
         let inbox = InboxStore.shared
-        if let item = inbox.items.first(where: { $0.id == itemID }) {
+        if let item = Self.cardItem(itemID) {
             // A refusal comes back as the hub's words; the reload brings the item as the hub has it (handled elsewhere).
             if await inbox.send(item, text: text, card: card.id) { sentMessages.insert(itemID) } else { inbox.reload() }
             return
@@ -262,8 +254,14 @@ final class TasksStore {
 
     enum MessageState { case open, sent, filed }
 
+    /// A message card's inbox item: the default manager's, as the feed and the reply without the item go to it (each
+    /// manager numbers its own items).
+    private static func cardItem(_ itemID: String) -> InboxItem? {
+        InboxStore.shared.items.first { $0.id == itemID && AppModel.shared.pushedBy($0.manager) == nil }
+    }
+
     func messageState(_ card: FeedItem, itemID: String) -> MessageState {
-        Self.messageState(card, inbox: InboxStore.shared.items.first { $0.id == itemID },
+        Self.messageState(card, inbox: Self.cardItem(itemID),
                           sentHere: sentMessages.contains(itemID), refused: filedMessages.contains(itemID))
     }
 

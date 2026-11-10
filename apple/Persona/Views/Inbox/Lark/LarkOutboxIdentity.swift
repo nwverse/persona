@@ -57,25 +57,32 @@ extension APIClient {
     }
 }
 
-/// Last verified identity is only for opening local drafts offline. Every send verifies again.
+/// Last verified identity is only for opening local drafts offline. Every send verifies again. A named manager's chat
+/// (`manager`) may be signed in as another user: its own file, in the same group's directory, so it is forgotten with the
+/// group. nil: the default's, the file it always was.
 actor LarkOutboxAccounts {
     static let shared = LarkOutboxAccounts()
     private(set) var revision = 0
 
-    func cached(group: String, base: URL) -> String? {
-        let file = LarkOutboxIdentity.groupDirectory(group, base: base).appending(path: "account.json")
+    private static func file(_ manager: String?) -> String {
+        guard let manager, !manager.isEmpty else { return "account.json" }
+        return "account@" + LarkOutboxIdentity.digest(manager) + ".json"
+    }
+
+    func cached(group: String, manager: String? = nil, base: URL) -> String? {
+        let file = LarkOutboxIdentity.groupDirectory(group, base: base).appending(path: Self.file(manager))
         guard let bytes = try? Data(contentsOf: file) else { return nil }
         return try? JSON.decoder.decode(String.self, from: bytes)
     }
 
-    func remember(_ account: String, group: String, base: URL, expectedRevision: Int? = nil) throws {
+    func remember(_ account: String, group: String, manager: String? = nil, base: URL, expectedRevision: Int? = nil) throws {
         guard expectedRevision == nil || expectedRevision == revision else { throw LarkOutboxIdentity.Failure.removed }
         var directory = LarkOutboxIdentity.groupDirectory(group, base: base)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
         var values = URLResourceValues(); values.isExcludedFromBackup = true
         try directory.setResourceValues(values)
-        let url = directory.appending(path: "account.json")
+        let url = directory.appending(path: Self.file(manager))
         try JSON.encoder.encode(account).write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }

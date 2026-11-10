@@ -230,6 +230,8 @@ data class SessionCapabilities(
     val approve: Boolean = false,
     val terminal: Boolean = false,
     val attach: Boolean = false,
+    /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
+    val modes: Boolean? = null,
 )
 
 /**
@@ -323,7 +325,7 @@ data class Session(
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
     /**
-     * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant conversations", #3264): user, channel, inbox, task, spawned,
+     * Who opened an assistant conversation (docs/protocol/protocol.md "Origin of assistant chats", #3264): user, channel, inbox, task, spawned,
      * lark_agent, extension, or one this app doesn't know yet; null is the user's (older hubs never say).
      */
     @SerialName("origin") val origin: String? = null,
@@ -352,13 +354,15 @@ data class Session(
     @SerialName("queued") val queued: List<String>? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
     /**
-     * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflow, Monitor"): a running one is
+     * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
      */
     val workflows: List<Workflow>? = null,
     @SerialName("loop") val loop: LoopInfo? = null,
     /** The goal it works toward, when one is set (docs/integrations/agent-goal.md); older hubs never send it. */
     val goal: GoalInfo? = null,
+    /** The agent's counted task list, as reported by the node. */
+    val plan: PlanInfo? = null,
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("last_text") val lastText: String? = null,
     /** What its last reply asks the user, when its closing words put a question or a decision to them (#5096). */
@@ -414,6 +418,15 @@ data class Session(
      * app-server, where only the effort changes (node/codex_effort.go). Empty for every other session.
      */
     val efforts: List<String> = emptyList(),
+    /**
+     * Claude Code's ultracode as the node last saw it (docs/protocol/protocol.md "Claude Code ultracode"): null is unknown
+     * (no evidence yet, an older node or hub, another agent), not off.
+     */
+    val ultracode: Boolean? = null,
+    /** The node's reason the switch can't be used, was refused or still waits; null when there is none. */
+    @SerialName("ultracode_note") val ultracodeNote: String? = null,
+    /** A change of it waits for the agent's turn to end (or a draft / dialog in the terminal): a queue flag, not the value. */
+    @SerialName("ultracode_pending") val ultracodePending: Boolean = false,
     /** Present on bounded summary rows; absent on legacy complete rows. */
     val waiting: Boolean? = null,
     @SerialName("background_count") val backgroundCountHint: Int? = null,
@@ -535,7 +548,7 @@ data class Item(
     /** On a notice: the context was compacted here (Claude Code's compact_boundary); the chat draws it as a divider. */
     val compact: CompactBoundary? = null,
     /** A message Persona typed in for the model (a task's notice, a scheduled run…), not by the user; the hub marks it
-     *  (docs/protocol/protocol.md "Messages Persona injects"), older hubs do not (core/domain `injectedOf`). */
+     *  (docs/protocol/protocol.md "Messages injected by Persona"), older hubs do not (core/domain `injectedOf`). */
     val injected: Injected? = null,
     /** Optional provenance for model input that was not typed by the user. Older hubs omit it. */
     val source: MessageSource? = null,
@@ -607,9 +620,13 @@ data class Question(
 
 @KeepGeneratedSerializer
 @Serializable(with = DialogOptionSerializer::class)
-data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null)
+data class DialogOption(@SerialName("key") val key: String = "", @SerialName("label") val label: String = "", @SerialName("detail") val detail: String? = null, @SerialName("kind") val kind: String? = null, val keys: List<String>? = null,
+    /** Ticked at the computer (a multi-select box) when the dialog was read. */
+    @SerialName("checked") val checked: Boolean = false)
 
-/** A terminal dialog the hub parsed (server/internal/screen); answer with Resolution.option. */
+/** A terminal dialog the hub parsed (server/internal/screen). One answer shape for both: a single-choice dialog
+ *  answers with [Resolution.option]; a multi-select one ([multi]) ticks options and sends them all in
+ *  [Resolution.options], its free text in [Resolution.text]. */
 @KeepGeneratedSerializer
 @Serializable(with = ScreenDialogSerializer::class)
 data class ScreenDialog(
@@ -618,6 +635,10 @@ data class ScreenDialog(
     @SerialName("detail") val detail: String? = null,
     @SerialName("options") val options: List<DialogOption> = emptyList(),
     @SerialName("rev") val rev: String = "",
+    /** Options are checkboxes, sent together by the submit row, instead of one answer on tap. */
+    @SerialName("multi") val multi: Boolean = false,
+    /** The submit row's own label ("Submit", or "Next" when another question follows). */
+    @SerialName("submit") val submit: String? = null,
 )
 
 /** Something a permission card asks to fill in before approving (`proto.Field`, a password); see [Interaction.fields]. */

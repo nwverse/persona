@@ -271,7 +271,7 @@ The WeChat extension runs it (`TestWeChatProgramIsAChannel` in `extmgr/wechat_te
 
 Every call above is described in `schema/extension/channel.schema.json` (its `x-methods`), with the SDKs' types generated from it. With the Go SDK alone: answer the `channel` namespace with `ext.Methods{"send": ext.Method(…), "typing": …}.For(<channel id>)`, hand over the owner's messages with `ext.Hub.ChannelReceive`, refuse with `ext.CannotSend` while there is nowhere to send to, and test it with `exttest.CheckChannels` (the conformance checks above, every message held to the schema). `channel/conformance.Check` holds every message both ways to the schema too.
 
-In the server's own tree, use `connector/serve.MainWith`; the connector implements `channel.Transport` (`Send`, optional `Typing`, `Edit`), and calls the `channel.Hub.Receive` supplied by `serve` on incoming messages.
+In the server's own tree, do the same: the WeChat program (`server/plugins/wechat`) is the SDK's `ext.Serve` with these methods and `ext.Hub.ChannelReceive`. `connector/serve`'s runner is left only for the conformance kit and tests.
 Other languages follow the protocol above, one JSON line per message (`docs/extensions/extensions.md` ("Process extension protocol")).
 
 ## 5. Compatibility and migration
@@ -293,7 +293,7 @@ Other languages follow the protocol above, one JSON line per message (`docs/exte
 | GET | `/api/v1/channels` | `{channels: [View]}`: built-ins, extension-contributed channels (installed, including disabled ones), and not-yet-installed market entries with `channel` contributions. Ordered by `app`, connected, not connected, market |
 | GET | `/api/v1/channels/{id}` | `View` plus `waiting: {answers, asks}`, `conversations` (the channel's recent chats, up to 5: `{machine_id, session_id, title, at}`), `settings_url` (for channels like the Lark bot with a full settings page of their own, linked by the App) |
 | PUT | `/api/v1/channels/{id}` | `{enabled?, target?, features?: {id: bool}}`, changes only supplied fields; returns `View`. `target.kind` is `main` / `new` / `conversation` (with `machine_id`, `session_id`; must be an assistant chat) |
-| POST | `/api/v1/channels/{id}/bind` | `{step?, values?}` → `connector.Prompt` (the step-by-step login in `docs/extensions/connectors.md`: fields, QR scan `qr`, pairing code `pair_code`). Empty `step` starts over. Extension channels forward to their connector; Lark bot: one step for App ID / Secret if no credentials, then a pairing code once they exist |
+| POST | `/api/v1/channels/{id}/bind` | `{step?, values?}` → `connector.Prompt` (the step-by-step login in `docs/extensions/connectors.md`: fields, QR scan `qr`, pairing code `pair_code`). Empty `step` starts over. Extension channels forward to their connector; Lark bot: one step for App ID / Secret if no credentials, then a pairing code once they exist. A step's `Prompt` may carry `link` + `link_text`: the page shows a button that opens the provider's console (the Lark bot's credentials step links to the developer console, and after the credentials verify, the bot's scopes, events, long-connection mode and publish are configured through the platform's server API — `docs/extensions/bots.md` "What to do on the Open Platform") |
 | DELETE | `/api/v1/channels/{id}/binding` | Unbind: connector logout for extension channels; unpair for the Lark bot. Clears runs and pending questions together, as signing out of the channel's connector does |
 | POST | `/api/v1/channels/{id}/test` | Send a test message to **the owner themselves** (only the bound person) |
 

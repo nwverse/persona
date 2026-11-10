@@ -60,11 +60,30 @@ type Target struct {
 	HTTP bool
 }
 
+// IsLoopbackHost reports whether h is a loopback host on this machine (127.0.0.1, localhost, ::1 or LocalHost).
+func IsLoopbackHost(h string) bool {
+	h = strings.ToLower(strings.TrimSuffix(strings.Trim(strings.TrimSpace(h), "[]"), "."))
+	return slices.Contains(loopbackNames, h)
+}
+
 // target says whether host:port is one of r's Targets, for a CONNECT tunnel (connect) or a plain http request.
 func (r Rule) target(host, port string, connect bool) bool {
 	return slices.ContainsFunc(r.Targets, func(t Target) bool {
 		return t.Host == host && t.Port == port && (connect || t.HTTP)
 	})
+}
+
+// loopbackTarget says whether r has a loopback Target on port for connect/http, returning the loopback IP to dial.
+func (r Rule) loopbackTarget(port string, connect bool) (string, bool) {
+	for _, t := range r.Targets {
+		if IsLoopbackHost(t.Host) && t.Port == port && (connect || t.HTTP) {
+			if strings.Trim(t.Host, "[]") == "::1" {
+				return "::1", true
+			}
+			return "127.0.0.1", true
+		}
+	}
+	return "", false
 }
 
 // Local says whether the rule lets its extension reach LocalHost: its permissions.network lists a loopback address
@@ -91,7 +110,7 @@ type Proxy struct {
 	// Upstream is the proxy the hub itself goes out through for u (nil, nil: straight). Default: the hub's
 	// environment (HTTPS_PROXY / HTTP_PROXY / NO_PROXY).
 	Upstream func(u *url.URL) (*url.URL, error)
-	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Observability").
+	// OnDecision is told each connection allowed or denied (the hub's metrics, docs/extensions/extensions.md "Egress").
 	OnDecision func(ext, host string, allowed bool)
 	// LocalAddrs are this machine's addresses (nil: its interfaces); tests replace it.
 	LocalAddrs func() []net.IP
@@ -111,7 +130,10 @@ type Proxy struct {
 	active        map[string]map[*ioLease]struct{}
 	runtimeActive map[string]int
 	runtimeTotal  int
-	runtimeSlots  chan struct{} // shared by every runtimeListener (runtimeSlotsPerProxy)
+	runtimeSlots  chan struct{}     // shared by every runtimeListener (runtimeSlotsPerProxy)
+	lastGood      map[string]string // CONNECT host:port → responding address; bounded by connectCacheMost
+	connectWait   time.Duration     // tests may shorten the client first-flight wait
+	connectBudget time.Duration     // tests may shorten the per-address response budget
 }
 
 // Start listens on loopback (an unused port).
@@ -141,6 +163,15 @@ func (p *Proxy) Addr() string {
 func (p *Proxy) ownPort(port string) bool {
 	_, own, err := net.SplitHostPort(p.Addr())
 	return err == nil && own == port
+}
+
+// hubPort says whether port is the hub's own listener port (or 18660 when HubAddr is unset).
+func (p *Proxy) hubPort(port string) bool {
+	if p.HubAddr == "" {
+		return port == "18660"
+	}
+	_, hp, err := net.SplitHostPort(p.HubAddr)
+	return err != nil || hp == port
 }
 
 // Close stops every listener.
@@ -434,6 +465,9 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			return
 		}
 		defer finish()
+		if r.Method == http.MethodConnect {
+			ctx = context.WithValue(ctx, connectDialKey{}, true)
+		}
 		r = r.WithContext(ctx)
 		if fixed != "" && r.URL.Host == "" && r.URL.Path == RuntimeFetchPath {
 			p.runtimeFetch(w, r, fixed)
@@ -462,16 +496,31 @@ func (p *Proxy) handler(fixed string) http.Handler {
 		}
 		host = strings.ToLower(strings.Trim(host, "[]"))
 		hub, local := host == HubHost, host == LocalHost
+		connect := r.Method == http.MethodConnect || r.URL.Scheme == "https"
 		var allowed, configured bool
+		loopbackDial := "127.0.0.1"
 		switch {
 		case hub:
 			allowed = rule.Hub
 		case local:
-			allowed = rule.Local() && !p.ownPort(port)
+			if rule.Local() && !p.ownPort(port) {
+				allowed = true
+			} else if lip, ok := rule.loopbackTarget(port, connect); ok && !p.ownPort(port) && !p.hubPort(port) {
+				allowed, loopbackDial = true, lip
+			}
 		default:
 			allowed = Matches(host, rule.Hosts)
-			if !allowed && rule.target(host, port, r.Method == http.MethodConnect || r.URL.Scheme == "https") {
-				allowed, configured = true, true
+			if !allowed && rule.target(host, port, connect) {
+				if IsLoopbackHost(host) {
+					if !p.ownPort(port) && !p.hubPort(port) {
+						allowed, local = true, true
+						if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+							loopbackDial = "::1"
+						}
+					}
+				} else {
+					allowed, configured = true, true
+				}
 			}
 		}
 		p.count(ext, host, allowed)
@@ -492,7 +541,7 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			case hub:
 				c, err = p.dial(ctx, "tcp", p.HubAddr)
 			case local:
-				c, err = p.dial(ctx, "tcp", net.JoinHostPort("127.0.0.1", port))
+				c, err = p.dial(ctx, "tcp", net.JoinHostPort(loopbackDial, port))
 			case configured:
 				if broker {
 					c, err = p.runtimeDial(ctx, host, port, true)
@@ -595,7 +644,7 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 	if len(ok) == 0 {
 		return nil, last
 	}
-	return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) })
+	return p.dialResolved(ctx, host, port, ok)
 }
 
 // fromEnvironment is the hub's own proxy for u, from its environment.
@@ -681,6 +730,9 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, dial func() (net.
 		far.Close()
 		return
 	}
+	client := near
+	stopNear := context.AfterFunc(r.Context(), func() { _ = client.Close() })
+	defer stopNear()
 	if r.Method == http.MethodConnect {
 		_, err = near.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
 	} else {
@@ -697,6 +749,23 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, dial func() (net.
 		far.Close()
 		return
 	}
+	if plan, ok := far.(*connectPlan); ok {
+		// Detach from net/http's connReader before probing with deadlines: a
+		// timeout through that reader cancels the request, even after Hijack.
+		pending := make([]byte, buf.Reader.Buffered())
+		_, _ = io.ReadFull(buf.Reader, pending)
+		near = prependConnect(near, pending)
+		buf = nil
+		near, far, err = p.prepareConnect(r.Context(), near, plan)
+		if err != nil {
+			p.logf("egress CONNECT %s: %v", r.Host, err)
+			client.Close()
+			return
+		}
+	}
+	server := far
+	stopFar := context.AfterFunc(r.Context(), func() { _ = server.Close() })
+	defer stopFar()
 	// The extension ending its side (EOF) only half-closes the far end: the reply still on its way comes back, as
 	// the hub's other relays keep a half-close. Both close once the far end is done, or on an error either way.
 	var once sync.Once
@@ -806,7 +875,8 @@ var metadataIPs = []string{"fd00:ec2::254", "100.100.100.200"}
 
 // dialConfigured reaches an address an extension's settings name: resolved here, every address checked, and the one
 // dialled is the one checked (a name that resolves again to somewhere else is not followed). Through the hub's
-// upstream proxy when it has one, after the same check.
+// upstream proxy when it has one, after the same check, each attempt a CONNECT to one checked address: the proxy
+// never sees the name, so it cannot resolve it again to an address the check refused (#3121).
 func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn, error) {
 	ips, err := p.resolveAll(ctx, host)
 	if err != nil {
@@ -828,9 +898,9 @@ func (p *Proxy) dialConfigured(ctx context.Context, host, port string) (net.Conn
 		upstream = fromEnvironment
 	}
 	if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
-		return p.connectVia(ctx, up, target)
+		return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.connectVia(ctx, up, target) })
 	}
-	return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) { return p.dial(ctx, "tcp", target) })
+	return p.dialResolved(ctx, host, port, ok)
 }
 
 // resolveAll is host's addresses (itself, for an IP).

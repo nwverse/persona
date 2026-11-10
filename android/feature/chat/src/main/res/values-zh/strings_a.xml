@@ -251,6 +251,11 @@
     <string name="chat_tasks_since_hours_minutes">%1$d 小时 %2$d 分</string>
     <string name="chat_tasks_default_title">任务</string>
     <string name="chat_tasks_routed_to">对「%1$s」说</string>
+    <string name="chat_tasks_sent_to">发给「%1$s」</string>
+    <string name="chat_tasks_sent_interrupting">打断「%1$s」后发送</string>
+    <plurals name="chat_tasks_sent_count">
+        <item quantity="other">已发 %1$d 条指令</item>
+    </plurals>
     <string name="chat_tasks_collapse">收起</string>
     <string name="chat_tasks_expand">展开</string>
     <string name="chat_tasks_expanded">已展开</string>
@@ -259,6 +264,7 @@
     <string name="chat_tasks_answered_default">回答了</string>
     <string name="chat_tasks_permission_accept_edits">可以改文件</string>
     <string name="chat_tasks_permission_plan">先出方案</string>
+    <string name="chat_tasks_permission_auto">自动判断</string>
     <string name="chat_tasks_permission_bypass">全部放行</string>
     <string name="chat_tasks_permission_default">每步都问</string>
     <plurals name="chat_tasks_plan_started">
@@ -453,6 +459,7 @@
     <string name="chat_review_title">验收标准</string>
     <string name="chat_review_none">派活时没写验收标准</string>
     <string name="chat_review_open">还没验收</string>
+    <string name="chat_review_unchecked">未检查</string>
     <string name="chat_review_met">达成</string>
     <string name="chat_review_missing">缺口</string>
     <string name="chat_review_note">督办说明：%1$s</string>

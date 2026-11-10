@@ -16,6 +16,7 @@
       "endpoints": [],
       "features": [
         "persona_contracts_v1",
+        "look_uploads",
         "locale",
         "assistant_compact",
         "assistant_main_new",
@@ -77,6 +78,7 @@
         "extension_shortcuts",
         "extension_notify_actions",
         "desktops",
+        "desktops_link",
         "sessions_delta",
         "connectors",
         "channels",
@@ -86,10 +88,13 @@
         "upload_dir",
         "file_edit",
         "launcher_scope",
+        "file_inbox",
+        "file_transfer",
         "task_push",
         "sessions_list",
         "sessions_lookup",
         "sessions_pane_source",
+        "sessions_manager",
         "machine_rename"
       ],
       "fp": "",
@@ -119,6 +124,7 @@
       "fields": {
         "/features": [
           "persona_contracts_v1",
+          "look_uploads",
           "locale",
           "assistant_compact",
           "assistant_main_new",
@@ -180,6 +186,7 @@
           "extension_shortcuts",
           "extension_notify_actions",
           "desktops",
+          "desktops_link",
           "sessions_delta",
           "connectors",
           "channels",
@@ -189,10 +196,13 @@
           "upload_dir",
           "file_edit",
           "launcher_scope",
+          "file_inbox",
+          "file_transfer",
           "task_push",
           "sessions_list",
           "sessions_lookup",
           "sessions_pane_source",
+          "sessions_manager",
           "machine_rename"
         ],
         "/type": "hello"
@@ -211,8 +221,10 @@
     "input": {
       "build": 0,
       "channel": "",
+      "commit": "",
       "features": [
         "persona_contracts_v1",
+        "look_uploads",
         "locale",
         "assistant_compact",
         "assistant_main_new",
@@ -274,6 +286,7 @@
         "extension_shortcuts",
         "extension_notify_actions",
         "desktops",
+        "desktops_link",
         "sessions_delta",
         "connectors",
         "channels",
@@ -283,10 +296,13 @@
         "upload_dir",
         "file_edit",
         "launcher_scope",
+        "file_inbox",
+        "file_transfer",
         "task_push",
         "sessions_list",
         "sessions_lookup",
         "sessions_pane_source",
+        "sessions_manager",
         "machine_rename"
       ],
       "fp": "",
@@ -306,6 +322,7 @@
       "fields": {
         "/features": [
           "persona_contracts_v1",
+          "look_uploads",
           "locale",
           "assistant_compact",
           "assistant_main_new",
@@ -367,6 +384,7 @@
           "extension_shortcuts",
           "extension_notify_actions",
           "desktops",
+          "desktops_link",
           "sessions_delta",
           "connectors",
           "channels",
@@ -376,10 +394,13 @@
           "upload_dir",
           "file_edit",
           "launcher_scope",
+          "file_inbox",
+          "file_transfer",
           "task_push",
           "sessions_list",
           "sessions_lookup",
           "sessions_pane_source",
+          "sessions_manager",
           "machine_rename"
         ],
         "/ok": true,

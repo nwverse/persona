@@ -81,7 +81,7 @@ type ComputerItem struct {
 }
 
 // ShortcutItem is a contribution to shortcuts: an action of the extension the system runs — Shortcuts and Siri on
-// iPhone, Mac and Apple Watch (docs/extensions/extensions.md "System-level places"). The hub asks shortcut.run with its values.
+// iPhone, Mac and Apple Watch (docs/extensions/extensions.md "System-level placements"). The hub asks shortcut.run with its values.
 type (
 	ShortcutItem  = wire.ShortcutItem
 	ShortcutParam = wire.ShortcutParam
@@ -165,7 +165,7 @@ type (
 )
 
 // APIItem is a contribution to api: a part of the app's API the plugin serves on its HTTP side, under /api/v1/<prefix>/
-// (docs/extensions/extensions.md "App API").
+// (docs/extensions/extensions.md "App endpoints").
 type APIItem struct {
 	ID     string `json:"id"`
 	Prefix string `json:"prefix"`
@@ -699,7 +699,7 @@ var Points = map[string]Point{
 		}
 		return c.ID, nil
 	}},
-	// channel: a way to talk to Persona, a chat app's bot (docs/extensions/channels.md "How extensions contribute channels"). The hub follows the
+	// channel: a way to talk to Persona, a chat app's bot (docs/extensions/channels.md "Contributing a channel"). The hub follows the
 	// turns; the program only talks to the chat app.
 	"channel": {Name: "channel", Namespace: "channel", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var c channel.Item

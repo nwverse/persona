@@ -21,6 +21,9 @@ type modelExecution struct {
 	// when empty so a fingerprint from before #2455 stays the same.
 	Runtime string `json:",omitempty"`
 	IsMain  bool   `json:",omitempty"`
+	// Interject: a message this one carries, sent while the conversation answers, moves its foreground work to the
+	// background (assistant_interject.go). Per message, never part of the fingerprint.
+	Interject bool `json:"-"`
 }
 
 // check refuses a model that is not a model id (proto.ValidModelID, #1644) before anything runs; the error's text is

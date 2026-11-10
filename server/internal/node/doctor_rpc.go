@@ -10,7 +10,7 @@ import (
 )
 
 // The web machine page's "What this computer can do" card asks the node for the same report `personad node doctor` prints
-// (docs/server/machines.md "Self-check"). The checks run in this process, so the sockets are looked at by the node that owns them.
+// (docs/server/machines.md "Doctor: what this computer can do"). The checks run in this process, so the sockets are looked at by the node that owns them.
 // node.doctor reads and nothing else; the only thing either method may write is what `--fix` writes
 // (writeGeneratedConfig, Persona's own generated files), and only when the caller says fix. The LaunchAgent fix is
 // the command line's alone (InsideNode).

@@ -15,6 +15,10 @@ cd "$(dirname "$0")/../.."
 if [ "${PERSONA_OPERATION_DEPLOY_LOCKED:-}" != 1 ]; then
   exec python3 scripts/operations/operation_lock.py deploy -- bash "$PWD/scripts/deploy/deploy.sh" "$@"
 fi
+# Shared default-branch resolution and detached-worktree helper; sourcing it keeps this script and out-of-tree build
+# orchestration from hardcoding master (#1064, #2361).
+# shellcheck source=scripts/deploy/default-branch.sh
+source "$PWD/scripts/deploy/default-branch.sh"
 # Normalize caller overrides before reading deployment options; never print their values.
 eval "$(python3 scripts/persona_identity.py --env)"
 # The question and its explanations live in install.sh (the public installer asks the same).
@@ -40,18 +44,12 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 # Only from a checkout that has everything already on the default branch: a hub or web deploy from an older branch
 # puts back what other people deployed since (docs/lessons/server.md "Deploying from a stale branch").
 # PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway, e.g. to roll back on purpose.
-# The default branch is the one the remote names now; else the clone's origin/HEAD, which is set at clone time and
-# can name a branch the remote no longer has; else master. The remote's answer counts only if it is a valid branch
-# name, and the branch is fetched as refs/heads/<name>: a bare name starting with "-" would be a git fetch option.
+# The default branch is the remote's current one (remote symref, else the clone's possibly-stale origin/HEAD, else
+# master), validated and fetched as refs/heads/<name>; persona_default_branch / persona_fetch_default_branch in
+# default-branch.sh hold that logic and are shared with build orchestration.
 if [ -z "${PERSONA_DEPLOY_ANY_COMMIT:-}" ]; then
-  DEFAULT_BRANCH=$(git ls-remote --symref origin HEAD 2>/dev/null |
-    awk '$1 == "ref:" && $3 == "HEAD" && sub("^refs/heads/", "", $2) { print $2; exit }') || true
-  if [ -z "$DEFAULT_BRANCH" ] || ! git check-ref-format "refs/heads/$DEFAULT_BRANCH"; then
-    DEFAULT_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null) || true
-    DEFAULT_BRANCH=${DEFAULT_BRANCH#refs/remotes/origin/}
-  fi
-  DEFAULT_BRANCH=${DEFAULT_BRANCH:-master}
-  if ! git fetch -q origin "refs/heads/$DEFAULT_BRANCH" 2>/dev/null; then
+  DEFAULT_BRANCH=$(persona_default_branch)
+  if ! persona_fetch_default_branch "$DEFAULT_BRANCH" 2>/dev/null; then
     echo "deploy: could not fetch origin/$DEFAULT_BRANCH to check this checkout is up to date; PERSONA_DEPLOY_ANY_COMMIT=1 deploys anyway" >&2
     exit 2
   fi
@@ -129,20 +127,22 @@ $command"
 }
 mkdir -p bin
 # The commit it is built from, "-dirty" after it with changes in server/ not committed: a release installs itself over
-# this build only when its code contains that commit (docs/operations/hub-update.md "No rollback").
+# this build only when its code contains that commit (docs/operations/hub-update.md "No regression").
 COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 [ -n "$COMMIT" ] && [ -n "$(git status --porcelain -- . 2>/dev/null)" ] && COMMIT="$COMMIT-dirty"
 LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$COMMIT${PERSONA_PUBLISH_URL:+ -X main.updateURL=$PERSONA_PUBLISH_URL/dl}"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 go generate ./internal/runtimepkg
+# The release's tags (server/build-tags.txt): without the tailscale.com features persona never uses.
+TAGS="$(cat build-tags.txt)"
 # Every platform a machine can run, the same four the release and the Docker image build (docs/operations/release.md): each
 # machine gets the one it runs (machine_platform), and the hub keeps all four for "Redeploy" (#3103).
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
 # persona-node is the device's own program (cmd/persona-node): the hub keeps it beside personad, and "Redeploy" gives it
 # to a machine whose node runs it (devices/deploy.go nodeBinary). Machines this script installs get personad.
 for plat in "${PLATFORMS[@]}"; do
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
 done
 echo "built $VERSION"
 # The web client goes with the hub: built here with the binaries, uploaded after the hub restarts.
@@ -227,7 +227,7 @@ install_bin() {
     root=$(state_root "$role")
     mkdir -p "$root/bin" || return 1
     # The hub's binary before it is replaced: hub-systemd.sh switches the running edge to the new one and goes back
-    # to this one if it fails while taking over (docs/operations/hub-restart.md "Blue-green switch").
+    # to this one if it fails while taking over (docs/operations/hub-restart.md "Blue-green switching: the hub's edge").
     if [ "$role" = hub ]; then
       local previous
       previous=$(python3 ../scripts/persona_identity.py --service hub --shell) || return 1
@@ -273,7 +273,7 @@ $command")
 install_program() {
   local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
   case $name in persona-hub | persona-manager)
     keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
   esac

@@ -32,10 +32,12 @@ export function ReviewBadge({ todo, className }: { todo: Todo; className?: strin
   );
 }
 
-const MARK: Record<CheckMark, { icon: "check" | "x" | "clock"; className: string; label: () => string }> = {
+const MARK: Record<CheckMark, { icon: "check" | "x" | "clock" | "minus"; className: string; label: () => string }> = {
   met: { icon: "check", className: "text-green", label: () => t("assistant-tasks.review_met") },
   missing: { icon: "x", className: "text-red", label: () => t("assistant-tasks.review_missing") },
   open: { icon: "clock", className: "text-ink-3", label: () => t("assistant-tasks.review_open") },
+  // added after the acceptance, which still stands (#3156): nothing waits on it
+  unchecked: { icon: "minus", className: "text-ink-3", label: () => t("assistant-tasks.review_unchecked") },
 };
 
 /** The task's criteria, each as its latest review found it, and what the supervisor said last. */
@@ -122,7 +124,7 @@ export function ReportLine(props: { item: FeedItem; title: string; onOpenTask?: 
 }
 
 function ReportBody({ item, title, onOpenTask }: { item: FeedItem; title: string; onOpenTask?: () => void }) {
-  const body = (item.body ?? {}) as { kind?: string; text?: string; step?: number; steps?: number; evidence?: string[]; later?: boolean };
+  const body = (item.body ?? {}) as { kind?: string; text?: string; step?: number; steps?: number; later?: boolean };
   // A question that can wait is no call on the owner now: it is drawn quietly, with its mark.
   const tone = !body.later && (body.kind === "blocked" || body.kind === "question") ? "text-orange" : "text-ink-2";
   return (
@@ -139,13 +141,6 @@ function ReportBody({ item, title, onOpenTask }: { item: FeedItem; title: string
         {body.later && <span className="shrink-0 font-normal" data-testid="report-later">· {t("assistant-tasks.report_later")}</span>}
       </span>
       <div className="rounded-[18px] bg-field px-3.5 py-2 text-[14.5px] whitespace-pre-wrap">{reportLine(body.kind ?? "", body.text ?? "", body.step, body.steps)}</div>
-      {body.evidence && body.evidence.length > 0 && (
-        <ul className="flex flex-col gap-0.5 pl-1 text-[12px] text-ink-3">
-          {body.evidence.slice(0, 8).map((e) => (
-            <li key={e} className="truncate">· {e}</li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

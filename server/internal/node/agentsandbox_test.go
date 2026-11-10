@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"io"
 	"log"
 	"os"
@@ -152,7 +153,7 @@ func TestAgentSandboxFallsBack(t *testing.T) {
 		state string
 	}{
 		{"no sandbox-exec", sandbox.Support{OS: "darwin", Why: "机器上没有 sandbox-exec"}, nil, sandbox.AgentUnavailable},
-		{"linux", sandbox.Support{OS: "linux", Bwrap: "/usr/bin/bwrap"}, nil, sandbox.AgentUnsupported},
+		{"linux without bwrap", sandbox.Support{OS: "linux", Why: "机器上没有 bwrap"}, nil, sandbox.AgentUnavailable},
 		{"claude's own sandbox in the user's settings", macSandbox, func(t *testing.T, n *Node, cwd string) []string {
 			writeFile(t, filepath.Join(n.home, ".claude", "settings.json"), enabled)
 			return nil
@@ -409,13 +410,16 @@ func TestAgentSandboxCoversPathGuard(t *testing.T) {
 	}
 	both := []string{"secret.key", "secret.key.bak", "handles.key~", "launch.key", "hub.key-old", "hub.json", "hub.json.bak", "link.json",
 		"tailcat.json", "tailcat-hub.json", "daemons.json", "manager.json", "apns.json", "apns.p8", "relay.json", "relay.secret",
+		"relay-tunnel.token", "edge.token", "edge.secret", "edge.password", "edge.token.bak",
 		"devices.json", "mail_accounts.json.1", "tls/hub.key", "tls/hub.crt", "tls/.tls-1", "link-tls/id.key",
+		"docker/db-password",
 		"launcher-settings/claude-x.json", "managers/m1/manager.json", "managers/m1/secret.key", "managers/m1/tls/hub.key",
 		"extensions/data/notes/token", "extensions/data/notes/sub/session.json", "extensions/staging/uninstall-x-1/0/token",
 		"plugins/notes/manifest.json", "plugins/data/notes/token", "node-plugins/notes/data/session.json"}
 	neither := []string{"mcp.json", "claude-settings.json", "assistant/notes.md", "data/proj/link.json", "data/certs/dev.pem",
 		"extensions/notes/manifest.json", "data/extensions/data/x",
-		"data/talk.key", "bin/personad", "uploads/a.png", "runtime-packages/x/node_modules/y/index.js", "node.sock"}
+		"data/talk.key", "bin/personad", "uploads/a.png", "runtime-packages/x/node_modules/y/index.js", "node.sock",
+		"data/proj/edge.token"}
 	sandboxOnly := []string{".hub.json.12345", "managers/m1/manager.log", "extensions/run/notes/proxy.sock", "run/hub-edge.sock"}
 	for _, rel := range both {
 		if !dataSecret(rel) || !closed(rel) {
@@ -431,5 +435,56 @@ func TestAgentSandboxCoversPathGuard(t *testing.T) {
 		if dataSecret(rel) || !closed(rel) {
 			t.Errorf("%s: path guard %v, sandbox %v; want the sandbox only", rel, dataSecret(rel), closed(rel))
 		}
+	}
+}
+
+// An agent the node starts in a herdr or Orca pane runs outside the sandbox unless its launcher is a managed one
+// (`personad launch` records its own start): with the switch on, the start is recorded as skipped, so the doctor's
+// line warns instead of reading as if every agent were covered.
+func TestPaneStartOutsideTheSandboxIsRecorded(t *testing.T) {
+	agentSandboxFakes(t, macSandbox)
+	for _, on := range []bool{true, false} {
+		withPaneShell(t, "/bin/zsh")
+		n, f, home := herdrNode(t)
+		if on {
+			writeFile(t, filepath.Join(n.dir, sandbox.AgentOnFile), "")
+		}
+		f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+		f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
+		ctx, cancel := context.WithCancel(context.Background())
+		f.after(func(c herdrCall) {
+			if c.Method == "pane.send_input" {
+				cancel() // started: the record is written before the command is typed
+			}
+		})
+		_, _ = n.start(ctx, home, "claude", "", "", "w1", "", "", "", startID, "")
+		cancel()
+		got, ok := readAgentSandboxStatus(n.dir)[paneStartWhere]
+		if !on {
+			if ok {
+				t.Errorf("off: recorded %+v", got)
+			}
+			continue
+		}
+		if !ok || got.State != sandbox.AgentSkipped || !strings.Contains(got.Why, "「claude」") || !strings.Contains(got.Why, "personad launch") {
+			t.Fatalf("on: %+v %v", got, ok)
+		}
+		if c := checkAgentSandbox(n.dir); c.Status != DoctorWarn || !strings.Contains(c.Detail, paneStartWhere+"：跳过") {
+			t.Errorf("doctor: %+v", c)
+		}
+	}
+
+	// A managed launcher records its own start, and clears an earlier unwrapped one: the user did what the doctor said.
+	n := agentNode(t, true)
+	n.managed.byID = map[string]proto.ManagedLauncher{"work": {Name: "work"}}
+	n.notePaneStart("claude")
+	recordAgentSandbox(n.dir, "launch claude", sandbox.AgentStatus{State: sandbox.AgentActive})
+	n.notePaneStart("work")
+	all := readAgentSandboxStatus(n.dir)
+	if _, ok := all[paneStartWhere]; ok || all["launch claude"].State != sandbox.AgentActive {
+		t.Errorf("after a managed start: %+v", all)
+	}
+	if c := checkAgentSandbox(n.dir); c.Status != DoctorOK {
+		t.Errorf("doctor after a managed start: %+v", c)
 	}
 }

@@ -2,18 +2,22 @@
 // (a title, one line why, one button), the "chat only" note, a refused start or send as a card with the original text under
 // "Details" (4.6), and the help those buttons and the local example questions open in place. "Add computer" and "Confirm computer" open the
 // machines page's own flow (views/machines/AddComputer.tsx) in place where the hub has it (machines_add, machine_trust).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { canAddComputer, canConfirmComputer, pendingToConfirm } from "../../lib/add-computer";
 import {
-  actionLabel, ADMIN_MACHINES, blockingStep, knownAction, readinessChanged, runAction, sendLabel, useReadiness, type CodedFailure, type HelpTopic,
+  actionLabel, ADMIN_MACHINES, blockingStep, knownAction, readinessChanged, refreshReadiness, retryWhileBlocked, runAction, sendLabel, useReadiness, type CodedFailure, type HelpTopic,
   type Readiness, type ReadinessStep,
 } from "../../lib/readiness";
 import { navigate } from "../../lib/router";
 import { getState, useStore } from "../../lib/store";
-import { AddComputer, type PendingComputer } from "../machines/AddComputer";
+import type { PendingComputer } from "../machines/AddComputer";
+import { lazyDialog } from "../LazyOverlay";
 import { Button, Collapse, copyText, cx, Dialog, IconButton } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { t } from "../../i18n";
+
+// the machines page's dialog loads on its first open, not with the main conversation
+const AddComputer = lazyDialog(() => import("../machines/AddComputer").then((m) => m.AddComputer));
 
 // ── the gate ────────────────────────────────────────────
 
@@ -57,11 +61,20 @@ export function useReadinessGate(on = true): ReadinessGate {
     else navigate("/machines");
   };
   const act = (id: string) => runAction(id, { launcher: step?.launcher, onHelp: help, onConfirm: confirm });
+  // a step can be done without this page hearing of it: ask again while it holds the button, and at once when the user tries
+  const isBlocked = Boolean(step);
+  useEffect(() => (isBlocked ? retryWhileBlocked() : undefined), [isBlocked]);
   const blocked = step
     ? {
         label: sendLabel(step),
-        onClick: step.action && knownAction(step.action.id) ? () => act(step.action!.id) : undefined,
-        onNudge: () => setNudged((n) => n + 1),
+        onClick: () => {
+          void refreshReadiness({ force: true });
+          if (step.action && knownAction(step.action.id)) act(step.action.id);
+        },
+        onNudge: () => {
+          void refreshReadiness({ force: true });
+          setNudged((n) => n + 1);
+        },
       }
     : undefined;
   return {

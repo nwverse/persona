@@ -68,7 +68,7 @@ internal fun LazyListScope.keyStep(
         }
     }
     item("key-test") { KeyTestStatus(state, preset, onRetest) }
-    if (state.hubNames) item("key-assign") {
+    if (state.hubNames && preset.runsClaude) item("key-assign") {
         val checking = state.readinessPending && state.assignSet == null
         val machine = state.readiness?.machine?.name?.takeIf { it.isNotBlank() }
         val hint = when {
@@ -81,6 +81,9 @@ internal fun LazyListScope.keyStep(
             if (checking) JRow(stringResource(R.string.settings_onb_assign_label), subtitle = hint, subtitleLines = 4, trailing = { JSpinner() })
             else JSwitchRow(stringResource(R.string.settings_onb_assign_label), state.assign, onAssign, subtitle = hint, enabled = editable)
         }
+    }
+    if (state.hubNames && !preset.runsClaude) item("key-direct-note") {
+        JNotice(stringResource(R.string.settings_onb_direct_note), Modifier.padding(top = Tokens.Space.m), status = Status.Idle)
     }
     item("key-more") {
         JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
@@ -145,10 +148,12 @@ internal fun LazyListScope.doneStep(state: NewProviderState, added: WizardAdded)
         val summary = assignSummary(added.result, added.asked)
         val machine = state.readiness?.machine?.name?.takeIf { it.isNotBlank() }
         val toMain = added.asked && added.result.assigned?.contains("assistant") == true
+        val direct = state.selected?.runsClaude == false
         JEmptyState(stringResource(R.string.settings_onb_done_title, added.result.title),
-            summary.assigned?.text() ?: stringResource(R.string.settings_onb_done_pick_later), icon = PhIcons.CheckCircle)
+            if (direct) stringResource(R.string.settings_onb_direct_note)
+            else summary.assigned?.text() ?: stringResource(R.string.settings_onb_done_pick_later), icon = PhIcons.CheckCircle)
         summary.kept.forEach { SettingsCaption(it.text(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.xs)) }
-        if (stillNoClaude(added, state.readiness)) {
+        if (!direct && stillNoClaude(added, state.readiness)) {
             val words = when {
                 toMain && machine != null -> stringResource(R.string.settings_onb_done_no_claude, machine)
                 toMain -> stringResource(R.string.settings_onb_done_no_claude_any)

@@ -1,6 +1,7 @@
 // Overview: what needs you, what is running, what just finished — Beautiful UI's Task Rows — and the computers.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ago, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
+import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
 import { answerLines, type Resolution } from "../lib/answered";
@@ -16,11 +17,11 @@ import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { useAgentSessions, useCounts } from "../lib/sessions";
-import { getSession, useStore } from "../lib/store";
+import { useScopedAgentSessions, useScopedCounts, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
+import { getSession, useStore, withTaskRows } from "../lib/store";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
-import { heldDelivery, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
+import { heldDelivery, makeSessionLookup, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
 import { Button, Collapse, cx, EASE, IconButton, Loading, useNow } from "../ui/atoms";
@@ -43,24 +44,26 @@ function greeting() {
 }
 
 export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; onToggleSidebar: () => void }) {
-  const machines = useStore((s) => s.machines);
-  const interactions = useStore((s) => s.interactions);
+  // with several assistants, the current one's computers, cards, agents and tasks (docs/assistant/managers.md "Clients")
+  const machines = useScopedMachines();
+  const interactions = useScopedInteractions();
   const answered = useStore((s) => s.answered);
   // a card answered here moves its agent out of "Stuck" at once, not at the hub's next push (#4286)
-  const agentSessions = useAgentSessions();
+  const agentSessions = useScopedAgentSessions();
   const sessions = useMemo(() => answeredSessions(agentSessions, interactions, answered), [agentSessions, interactions, answered]);
   const loaded = useStore((s) => s.loaded);
   const noMachines = loaded && machines.length === 0;
-  const counts = useCounts();
+  const counts = useScopedCounts();
   const now = useNow(5000, counts.working > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
   // something to do, and "Mark all as seen" marks every unread agent, wherever its tab is filed
   const { groups, unread, markAllAt, quiet } = useMemo(() => homeOverview(sessions, interactions), [sessions, interactions]);
   // every open task with where it stands (#6450, the web side of the Lark bot's /tasks)
-  const todos = useStore((s) => s.todos);
+  const todos = useScopedTodos();
+  const taskRows = useStore((s) => s.taskRows);
   // read as the Tasks page reads them: a card answered here moves its task at once too
-  const tasks = useMemo(() => homeTasks(todos, answeredLookup(agentSessions, interactions, answered)), [todos, agentSessions, interactions, answered]);
+  const tasks = useMemo(() => homeTasks(todos, answeredLookup(withTaskRows(makeSessionLookup(agentSessions), taskRows), interactions, answered)), [todos, agentSessions, taskRows, interactions, answered]);
   const name = (mid: string) => machineWithHub(mid, machines);
   const [confirmSeen, setConfirmSeen] = useState<Session[] | null>(null);
   const markAll = <MarkAllSeen count={unread.length} onClick={() => setConfirmSeen(unread)} />;
@@ -145,7 +148,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                         detail={(tool && ask && ask !== tool ? t("home.permission_detail", { tool, what: ask }) : ask) || undefined}
                         pill={!done && <Pill>{KIND[ix.kind]}</Pill>}
                         entry={cardState(ix.id)}
-                        actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
+                        actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
                       />
                     </div>
                   </Collapse>
@@ -291,7 +294,7 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
         </a>
         <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[TODO_STATUS_INFO[status].tone])}>{todoStatusLabel(todo, status)}</span>
       </div>
-      <TodoStageBar stage={todo.stage} prURL={todo.pr_url} />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
       {line && <p className={cx("truncate text-[11.5px]", held ? "text-orange" : "text-ink-3")}>{line}</p>}
     </div>
   );
@@ -443,14 +446,18 @@ function ContinueAction({ s, title, several }: { s: Session; title: string; seve
 
 const ANSWERED_HOLD_MS = 1600;
 
-/** A row's one-tap answers (lib/quick-answers.ts), under its words; the one being sent spins, the others wait. */
-function QuickAnswers({ choices, sending, onPick }: { choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
+/** A row's one-tap answers (lib/quick-answers.ts), under its words; the one being sent spins, the others wait. An answer
+ *  on its way from anywhere (this row, the chat's card, a notification) holds them all too, also after leaving Overview
+ *  and coming back, and the row says which one, as the chat's card does (#2793). */
+function QuickAnswers({ ix, choices, sending, onPick }: { ix: Interaction; choices: QuickChoice[]; sending?: string; onPick: (c: QuickChoice) => void }) {
+  const { pending, line } = usePendingLine(ix);
   return (
     <div className="flex flex-wrap gap-1.5 px-3 pb-2 pl-10.5">
+      {line && <p data-row-pending role="status" className="basis-full truncate text-[12px] text-ink-2">{line}</p>}
       {choices.map((c) => {
         const shown = optionDisplay(c.label);
         return (
-          <Button key={c.key} tone={c.primary ? "primary" : "secondary"} busy={sending === c.key} disabled={sending !== undefined} title={c.hint || shown.text} onClick={() => onPick(c)} className="max-w-full">
+          <Button key={c.key} tone={c.primary ? "primary" : "secondary"} busy={sending === c.key} disabled={sending !== undefined || pending} title={c.hint || shown.text} onClick={() => onPick(c)} className="max-w-full">
             <span className="min-w-0 truncate">{shown.text}</span>
             {shown.recommended && <RecommendedTag />}
           </Button>

@@ -10,13 +10,14 @@ and the [architecture](server/architecture.md). The [protocol](protocol/protocol
 
 | Directory | Scope | Entry points |
 | --- | --- | --- |
+| [design/](design/) | Product design principles, cross-platform design system and Apple HIG audit | [Principles](design/PRINCIPLES.md), [design system](design/DESIGN_SYSTEM.md), [HIG audit](design/HIG_AUDIT.md), [proposal: owner at a glance](design/proposals/owner-at-a-glance.md) |
 | [server/](server/) | Hub architecture, managers' infrastructure, mesh, computers and usage | [Server](server/server.md), [mesh](server/mesh.md), [machines](server/machines.md) |
 | [apple/](apple/) | iPhone, Apple Watch, Mac and Vision Pro; native design and phone data | [iOS and watch](apple/ios.md), [icons](apple/icons.md), [sidebars](apple/sidebar.md), [Mac](apple/mac.md) (frozen), [design](apple/mac-design.md), [Vision Pro](apple/vision.md) |
 | [android/](android/) | Android modules and design system | [Android](android/android.md), [design](android/android-design.md) |
 | [web/](web/) | Browser client and workspace board | [Web](web/web.md), [workspace board](web/workspace-board.md) |
 | [assistant/](assistant/) | Main chat, managers, knowledge, Inbox, tasks, models, prompts and voice | [Assistant](assistant/assistant.md), [managers](assistant/managers.md), [knowledge](assistant/knowledge.md) |
 | [integrations/](integrations/) | Agent runtimes, engines, sessions, launchers and terminal | [Runtime contract](integrations/runtimes.md), [engines](integrations/engines.md), [Claude Code](integrations/claude-integration.md), [Codex](integrations/codex.md) |
-| [extensions/](extensions/) | Extension system, data connectors, messaging and channels | [Extensions](extensions/extensions.md), [connectors](extensions/connectors.md), [channels](extensions/channels.md) |
+| [extensions/](extensions/) | Extension system, data connectors, messaging and channels | [Extensions](extensions/extensions.md), [extension settings](extensions/extension-settings.md), [connectors](extensions/connectors.md), [channels](extensions/channels.md) |
 | [protocol/](protocol/) | Wire protocol, connector protocol, states, localization and rolling compatibility | [API](protocol/protocol.md), [connector protocol](protocol/connector-protocol.md), [localization](protocol/i18n.md) |
 | [operations/](operations/) | Setup, configuration, network, deployment, testing, releases and collaboration | [Docker](operations/docker.md), [upgrading to the split hub and manager](operations/upgrade.md), [network](operations/network.md), [testing](operations/testing.md), [releases](operations/release.md), [collaboration](operations/collaboration.md) |
 | [plans/](plans/) | Proposals with open decisions or unfinished scope, not implementation guarantees | [Extension roadmap](plans/plan-extensions.md), [connector roadmap](plans/plan-connectors.md) |
@@ -39,4 +40,5 @@ Issue and PR numbers in lines written up to 2026-11-07 (check `git blame`) refer
   this documentation tree retains only the README assets. Interactive design prototypes are text, live beside their
   module guide (or in its archive), and do not depend on stored verification images.
 - Run `python3 scripts/test/test_doc_paths.py`, `python3 scripts/test/test_doc_go_paths.py`, and
-  `python3 scripts/test/test_readme_languages.py` after changing document or asset paths.
+  `python3 scripts/test/test_readme_languages.py` after changing document or asset paths, and
+  `python3 scripts/test/test_doc_sections.py` after renaming a heading: names quoted after a doc path must still match one.

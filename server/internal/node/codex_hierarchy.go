@@ -81,7 +81,10 @@ func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy st
 		s.Capabilities.Send, s.Capabilities.Attach, s.Capabilities.Interrupt = false, false, false
 	}
 	if !origin.desktop {
-		return
+		// An App chat whose rollout is gone is grouped as one with a rollout (codex_appdb.go).
+		if _, app := codexAppThreadOf(src); !app {
+			return
+		}
 	}
 	s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
 	app := loadCodexAppState(src.home)
@@ -146,12 +149,12 @@ func resolveCodexHierarchy(sessions []proto.Session) {
 // programRun: a one-shot run a program started (`codex exec`, an SDK; an evaluation opens dozens at once, #2131),
 // known only from its rollout: not one of the user's agents. A thread a shared app-server holds is drivable and stays,
 // as does a run the Codex App lists in its sidebar.
-func (n *Node) programRun(id string, src codexSource) bool {
+func (n *Node) programRun(id string, src codexSource, pass *codexListPass) bool {
 	if src.path == "" || !readCodexOrigin(src.path).exec {
 		return false
 	}
 	if _, _, err := n.codexOwner(id); err != errCodexNoOwner {
 		return false
 	}
-	return !codexDesktopChat(src)
+	return !codexDesktopChatIn(src, pass)
 }

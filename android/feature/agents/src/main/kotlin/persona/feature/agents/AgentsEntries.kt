@@ -100,11 +100,12 @@ fun EntryProviderScope<NavKey>.agentsEntries(
         ) {
             val operations = LocalAgentsOperations.current
             val tasksStore = dependencies.tasks() ?: wiring.tasks
+            val assistant = persona.core.designsystem.currentAssistant()
             val model = viewModel(key = "agents:${wiring.scope}:${operations?.operations?.scope.orEmpty()}") {
                 AgentsViewModel(dependencies.sessions(), dependencies.interactions(), dependencies.connection(), dependencies.sender(), dependencies.preferences(), operations, wiring.mainSender,
                     wiring.scope.ifEmpty { operations?.operations?.scope.orEmpty() }, renamer, tasksStore, hubUpdates = dependencies.hubUpdates(), machineManagement = dependencies.machines(),
                     hubGroups = dependencies.groups(), listContext = kotlinx.coroutines.Dispatchers.Default, archiveService = wiring.archives)
-                    .also { it.machine(initialMachine) }
+                    .also { it.machine(initialMachine); it.show(assistant) }
             }
             val source = LocalAgentsDraftSource.current
             val draftsFlow = remember(dependencies, source) {
@@ -147,8 +148,10 @@ fun EntryProviderScope<NavKey>.agentsEntries(
         val sessions by dependencies.sessions().sessions.collectAsStateWithLifecycle()
         val todos by (tasksStore?.todos ?: flowOf(emptyList())).collectAsStateWithLifecycle(emptyList())
         val pending by dependencies.interactions().pending.collectAsStateWithLifecycle()
+        // The current assistant's to-dos (docs/assistant/managers.md "Clients"): the hub's list is every manager's.
+        val assistant = persona.core.designsystem.currentAssistant()
         TodosScreen(
-            todos = todos,
+            todos = remember(todos, assistant) { todos.filter { assistant.owns(it.manager) } },
             sessions = sessions,
             pending = pending,
             tasks = tasksStore,
@@ -170,6 +173,10 @@ fun EntryProviderScope<NavKey>.agentsEntries(
         val machines by dependencies.sessions().machines.collectAsStateWithLifecycle()
         val todos by (tasksStore?.todos ?: flowOf(emptyList())).collectAsStateWithLifecycle(emptyList())
         val creationService = wiring.creation ?: LocalAgentCreationService.current
+        // New Agent's memory on this hub, which "Start a new one" starts from (#2134).
+        val creationStore = remember(context, wiring.creationPreferences) {
+            wiring.creationPreferences?.let { AgentCreationPreferences(context, it) } ?: AgentCreationPreferences(context)
+        }
         var handOffTodo by remember { mutableStateOf<Todo?>(null) }
         val scope = rememberCoroutineScope()
         val pending by dependencies.interactions().pending.collectAsStateWithLifecycle()
@@ -197,6 +204,8 @@ fun EntryProviderScope<NavKey>.agentsEntries(
                 onDismiss = { handOffTodo = null; handOffError = null },
                 starting = handOffStarting,
                 error = handOffError?.resolve(),
+                store = creationStore.takeIf { creationService != null },
+                scope = creationService?.scope.orEmpty(),
                 onHandOffNew = { machineId, cwd, launcher, permissionMode, prompt ->
                     handOffStarting = true
                     handOffError = null
@@ -229,14 +238,20 @@ fun EntryProviderScope<NavKey>.agentsEntries(
                 },
                 onHandOffExisting = { target, prompt ->
                     handOffStarting = true
+                    handOffError = null
                     scope.launch {
-                        try {
-                            tasksStore?.linkTodoAgent(targetTodo.id, target.machineId, target.sessionId)
-                            dependencies.sender().send(target, prompt, java.util.UUID.randomUUID().toString())
+                        val failed = try {
+                            handOffToRunningAgent(
+                                link = { tasksStore?.linkTodoAgent(targetTodo.id, target.machineId, target.sessionId) },
+                                send = { dependencies.sender().send(target, prompt, java.util.UUID.randomUUID().toString()) },
+                            )
+                        } finally { handOffStarting = false }
+                        if (failed != null) {
+                            handOffError = failed
+                        } else {
                             handOffTodo = null
                             navigator.navigate(ChatRoute(target.machineId, target.sessionId))
-                        } catch (_: Exception) {}
-                        handOffStarting = false
+                        }
                     }
                 }
             )

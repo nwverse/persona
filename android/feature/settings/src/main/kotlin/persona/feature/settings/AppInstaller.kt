@@ -1,7 +1,6 @@
 package persona.feature.settings
 
 import android.app.Activity
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
@@ -33,11 +32,14 @@ internal object AppInstaller {
 
     suspend fun install(context: Context, updates: AppUpdates, update: AppUpdate) = withContext(Dispatchers.IO) {
         check(gate.tryLock()) { "Another installation is being prepared" }
+        var stage = UpdateStage.Verification
         try {
             val checksum = requireNotNull(update.sha256) { "Missing SHA-256" }
             require(checksum.matches(Regex("[a-fA-F0-9]{64}"))) { "Invalid SHA-256" }
             requireNewerVersion(context, update)
+            stage = UpdateStage.Permission
             check(context.packageManager.canRequestPackageInstalls()) { "Install permission required" }
+            stage = UpdateStage.Install
             val installer = context.packageManager.packageInstaller
             val sessions = installer.mySessions.filter { it.appPackageName == context.packageName }
             // Unsealed sessions cannot be pending user confirmation. A previous process may have died while writing one.
@@ -48,15 +50,18 @@ internal object AppInstaller {
                 context.cacheDir.listFiles()?.filter { it.name.startsWith("persona-update-") && it != apk }?.forEach {
                     check(it.delete() || !it.exists()) { "Could not clear old APK" }
                 }
+                stage = UpdateStage.Download
                 if (!apk.exists() || !apk.inputStream().use { verifySha256(it, checksum) }) {
                     try { apk.outputStream().use { updates.download(update, it) } }
                     catch (error: Exception) { apk.delete(); throw error }
                 }
+                stage = UpdateStage.Verification
                 check(apk.inputStream().use { verifySha256(it, checksum) }) { "SHA-256 mismatch" }
                 val archive = context.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
                 check(archive?.packageName == context.packageName && archive.longVersionCode == update.versionCode) { "Package identity mismatch" }
                 // Another installation may have completed while this APK was downloading.
                 requireNewerVersion(context, update)
+                stage = UpdateStage.Install
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                     setAppPackageName(context.packageName)
                     setSize(apk.length())
@@ -72,10 +77,7 @@ internal object AppInstaller {
                             apk.inputStream().use { it.copyTo(output) }
                             session.fsync(output)
                         }
-                        val result = Intent(context, InstallResultActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            .putExtra(PackageInstaller.EXTRA_SESSION_ID, sessionId)
-                        val pending = PendingIntent.getActivity(context, sessionId, result, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                        session.commit(pending.intentSender)
+                        session.commit(installResultCallback(context, sessionId).intentSender)
                     }
                 } catch (error: Exception) {
                     installer.abandonSession(sessionId)
@@ -85,6 +87,29 @@ internal object AppInstaller {
                 check(apk.delete() || !apk.exists()) { "Could not clear failed APK" }
                 throw error
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            val failedStage = if ((error as? persona.core.hub.HubFailure)?.code == "apk_checksum_mismatch")
+                UpdateStage.Verification else stage
+            throw AppUpdateFailure(failedStage, error)
+        }
+        finally { gate.unlock() }
+    }
+
+    suspend fun pendingSessions(context: Context): Set<Int> = withContext(Dispatchers.IO) {
+        context.packageManager.packageInstaller.mySessions
+            .filter { it.appPackageName == context.packageName && it.isSealed }
+            .mapTo(mutableSetOf()) { it.sessionId }
+    }
+
+    /** Only an explicit confirmation may cancel sealed sessions; never include a newer session. */
+    suspend fun cancelPending(context: Context, confirmed: Set<Int>) = withContext(Dispatchers.IO) {
+        check(gate.tryLock()) { "Another installation is being prepared" }
+        try {
+            val installer = context.packageManager.packageInstaller
+            installer.mySessions.filter {
+                it.sessionId in confirmed && it.appPackageName == context.packageName && it.isSealed
+            }.forEach { installer.abandonSession(it.sessionId) }
         } finally { gate.unlock() }
     }
 

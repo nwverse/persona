@@ -373,33 +373,31 @@ func (b *runtimeRegistry) ownerOf(id string) *runtimeConn {
 	return b.owner[id]
 }
 
-// sessions lists every connected runtime's sessions, each id once.
-func (b *runtimeRegistry) sessions() []proto.Session {
+// appendSessions appends every connected runtime's sessions to dst, each id once, in the order the runtimes connected:
+// straight into the caller's list (sessionList's), not into a slice of their own grown row by row and copied again.
+// b.mu is held while each connection's rows are read under its h.mu, the order setSessions takes them in; nothing
+// here calls out of the registry.
+func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 	if b == nil {
-		return nil
+		return dst
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	conns := make([]*runtimeConn, 0, len(b.conns))
 	for _, h := range b.conns {
 		conns = append(conns, h)
 	}
-	owner := make(map[string]*runtimeConn, len(b.owner))
-	for id, h := range b.owner {
-		owner[id] = h
-	}
-	b.mu.Unlock()
 	sort.Slice(conns, func(i, j int) bool { return conns[i].serial < conns[j].serial })
-	var out []proto.Session
 	for _, h := range conns {
 		h.mu.Lock()
-		for _, s := range h.sessions {
-			if owner[s.SessionID] == h {
-				out = append(out, s)
+		for i := range h.sessions {
+			if b.owner[h.sessions[i].SessionID] == h {
+				dst = append(dst, h.sessions[i])
 			}
 		}
 		h.mu.Unlock()
 	}
-	return out
+	return dst
 }
 
 // launcherOwners maps each launcher name the runtimes offer to the one connection that answers for it: the one
@@ -512,9 +510,10 @@ func (b *runtimeRegistry) pushed(id string, seq int) {
 	}
 }
 
-// sessionInPane is the session a runtime runs in the terminal pane (its list's pane_id), "" when none says so. Only
-// sessions it lists as running: a pane outlives the pi that told it.
-func (b *runtimeRegistry) sessionInPane(pane string) string {
+// sessionInPane is the session a runtime runs in the terminal pane (its list's pane_id, as own writes it: node ownPane
+// takes the node's own herdr session off), "" when none says so. Only sessions it lists as running: a pane outlives
+// the pi that told it.
+func (b *runtimeRegistry) sessionInPane(pane string, own func(string) string) string {
 	if b == nil || pane == "" {
 		return ""
 	}
@@ -523,7 +522,8 @@ func (b *runtimeRegistry) sessionInPane(pane string) string {
 	for _, h := range b.conns {
 		h.mu.Lock()
 		for _, s := range h.sessions {
-			if h.panes[s.SessionID] == pane && s.Status != proto.StatusOffline {
+			// The hint as the node writes panes, or bare as an extension that does not name the session sends it.
+			if p := h.panes[s.SessionID]; p != "" && (p == pane || own(p) == pane) && s.Status != proto.StatusOffline {
 				h.mu.Unlock()
 				return s.SessionID
 			}

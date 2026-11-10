@@ -1,5 +1,21 @@
 # Bounded Agents list verification
 
+## Direct completion of a decision task
+
+```sh
+node web/e2e/direct-completion.mjs <loopback-web-origin> --shots <artifact-directory> [--chromium <executable>]
+```
+
+Run against an exclusively owned local web server with web dependencies installed. The runner opens the real Assistant app in a fresh headless browser, intercepts all hub HTTP/WebSocket traffic with synthetic conversations, to-dos and an idle Agent, and never uses an existing profile or a live hub. It verifies Open / Finish now / Take recommendation ordering and emphasis, light/dark wide and narrow layouts, all three languages, failure/retry, completion removal and reload. Only `PATCH /todos/{id}` with `{"done":true}` is admitted as a task action; Agent sends, resumes and recommendation acceptance fail the run. Screenshots include before, after and a synthetic save failure. A 180-second watchdog exits with a timeout verdict. These are browser/UI checks, not production-hub delivery evidence.
+
+## Ask card above the composer (#3083)
+
+```sh
+node web/e2e/ask-card-dock.mjs <loopback-web-origin> <artifact-directory> [--chromium <executable>]
+```
+
+Opens the real app against a loopback web server (Vite or a preview build) with every hub request and the socket answered in the browser by invented data. The main conversation shows an ask_user card with four described options in the Pending tray at 1280 × 600, 1024 × 520, 390 × 664 and 360 × 560 (touch), light and dark. It checks the card's send button and the three tray entries are not under the composer before any scrolling, and that "Or write your own" is fully visible (not under the sticky answer row or the tray's title) once tapped and typed into. Writes `results.json` and before/after-typing screenshots; exits nonzero on failure or the four-minute timeout.
+
 ## User-input navigation acceptance
 
 With web dependencies and Chrome already available, point the runner at an **already-running, exclusively owned loopback web server** backed by `scripts/mock/mock_hub.py`. Start the mock on an unused loopback port and configure the web server's `PERSONA_HUB_URL` for that mock; a Vite server proxying a real hub is not acceptable. The runner does not install dependencies, start services, create conversations, or stop the caller's services.
@@ -63,3 +79,20 @@ Artifacts are `results.json`, `agents-scroll.trace.json`, light/dark runtime, pe
 ## Approved rollout
 
 After the deployment owner obtains user approval, deploy the hub binary containing server PR #6086 and the web assets containing #6051. Deploy the backend first (or together in the approved release), then reload the web client so it negotiates `sessions_lookup`. This endpoint extension needs no database migration or new node RPC. Until then the documented older-hub fallback applies. This task does not deploy or restart any production service.
+
+## Shared chat sync cases end to end
+
+`sync-cases.mjs` plays every case in `spec/fixtures/sync/` in a real browser against the mock hub playing it (#2777, #1073 step 4). The page is the real web app, with its own store, socket, composer and cards; nothing in it is faked.
+
+```sh
+(cd web && npx vite build)
+MOCK_WEB=web/dist MOCK_SYNC_CASE=sends.json#send_tied_by_echo PORT=19051 python3 scripts/mock/mock_hub.py &
+node web/e2e/sync-cases.mjs http://127.0.0.1:19051 --hub http://127.0.0.1:19051 [--case <name>] [--out <dir>] [--browser <path>]
+```
+
+- **Setup.** The mock serves the built app itself (`MOCK_WEB` while it plays a case). Behind a dev server's proxy, a write the case cuts would come back as the proxy's own error response, which the page takes as a definite failure. The runner loads each case in turn (`POST /mock/case/load`) and opens one browser context per device, signed in as `mock-<device>`. Each page's clock is Playwright's, so a case's `wait` (35 s, 10 min) passes in moments.
+- **Each step.** The runner asks the mock for the step, then does the user action on the page. A refusal's dialog is closed before the failed bubble's Retry or Delete. After every step it checks the README's three rules and the step's `expect`: messages, cards and streamed text through `web/src/views/chat/sync/project.ts`'s projection; `requests` from `GET /mock/case`. The chat's `status` has no mark on the page and is not compared.
+- **The end.** Every page settles, then is compared with `end`.
+- **Known failures.** `KNOWN` lists cases that fail for a known bug, each with its issue. A known case that passes fails the run, so the list stays true.
+
+Output: one line per case and a verdict, `results.json` in `--out`, and a screenshot of any page where an action failed. It exits 1 on any other failure, and after 20 minutes in any case.

@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -14,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -65,7 +67,16 @@ internal fun AgentsScreen(
     val connection by model.connection.state.collectAsStateWithLifecycle()
     val group by model.group.collectAsStateWithLifecycle()
     val everyRequest by model.interactions.pending.collectAsStateWithLifecycle()
-    val pending = remember(everyRequest, group) { if (group == null) everyRequest else everyRequest.filter { group.admits(it.machineId) } }
+    // The current assistant's agents (docs/assistant/managers.md "Clients"), and the cards that are theirs.
+    val assistant = persona.core.designsystem.currentAssistant()
+    LaunchedEffect(model, assistant) { model.show(assistant) }
+    // The shell keeps the picked computer for the next launch: it follows the filter however that changes (a chip, or
+    // let go by a switch of assistant or hub group).
+    val machineSelected by androidx.compose.runtime.rememberUpdatedState(onMachineSelected)
+    LaunchedEffect(model) { model.listSettings.map { it.machineFilter }.distinctUntilChanged().collect { machineSelected(it) } }
+    val everySession by model.everySession.collectAsStateWithLifecycle()
+    val everyMachine by model.everyMachine.collectAsStateWithLifecycle()
+    val pending = remember(everyRequest, group, assistant, page.sessions) { shownRequests(everyRequest, group, assistant, page.sessions) }
     val outbox by model.sender.outbox.collectAsStateWithLifecycle()
     val delivery by model.delivery.collectAsStateWithLifecycle()
     val requestHistory by model.requestHistory.collectAsStateWithLifecycle()
@@ -93,6 +104,8 @@ internal fun AgentsScreen(
     val snackbar = remember { SnackbarHostState() }
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     var menu by remember { mutableStateOf(false) }
+    var searchVisible by rememberSaveable { mutableStateOf(false) }
+    val homeChrome = LocalHomeChrome.current != null
     var newAgent by rememberSaveable { mutableStateOf(false) }
     var historyMachine by rememberSaveable { mutableStateOf<String?>(null) }
     var historySession by rememberSaveable { mutableStateOf<String?>(null) }
@@ -243,30 +256,42 @@ internal fun AgentsScreen(
         1 -> stringResource(R.string.agents_subtitle_one, parts[0])
         else -> stringResource(R.string.agents_subtitle_two, parts[0], parts[1])
     }
+    val searchPull = remember(listState, homeChrome) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                if (homeChrome && available.y > 0 && !listState.canScrollBackward) searchVisible = true
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+        }
+    }
+    JAgentHomeSurface(page.preferences.grouping == AgentGrouping.Repo) {
     Box(Modifier.fillMaxSize()) {
         JListPage(
             title = if (connection == ConnectionState.Online) names[page.settings.machineFilter] ?: "Agents" else connection.title,
             // The list holds text fields (search, a password card's password, #1581): it ends above the keyboard so the
             // focused one scrolls into view; the root leaves keyboard padding to each page (#867).
-            modifier = Modifier.imePadding(),
+            modifier = Modifier.imePadding().then(Modifier.nestedScroll(searchPull)),
             state = listState,
-            summary = summary, subtitle = subtitle, greet = true,
+            summary = summary, subtitle = subtitle, greet = true, largeTitle = LocalHomeChrome.current == null,
             titleBusy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
-            onTitleClick = if (connection == ConnectionState.Online) null else connectionDetails, refreshing = refreshing, onRefresh = model::refresh,
+            onTitleClick = if (connection != ConnectionState.Online) connectionDetails else ({ menu = true }), refreshing = refreshing, onRefresh = model::refresh,
             actions = {
-                JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
-                JIconButton(PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
-                JIconButton(PhIcons.SlidersHorizontal, stringResource(R.string.agents_action_list_settings), { menu = true })
+                if (LocalHomeChrome.current == null) JIconButton(PhIcons.ListChecks, stringResource(R.string.agents_action_todos), { navigator.navigate(persona.core.navigation.TodosRoute) })
+                JIconButton(if (homeChrome) PhIcons.NotePencil else PhIcons.Plus, stringResource(R.string.agents_action_new_session), { newSession() })
+                if (LocalHomeChrome.current == null) JIconButton(PhIcons.SlidersHorizontal, stringResource(R.string.agents_action_list_settings), { menu = true })
             },
         ) {
             item("search") {
                 val settings by model.listSettings.collectAsStateWithLifecycle()
-                JSearchField(settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
+                androidx.compose.animation.AnimatedVisibility(!homeChrome || searchVisible || settings.query.isNotBlank()) {
+                    JSearchField(settings.query, model::query, stringResource(R.string.agents_search_placeholder), Modifier.padding(bottom = Tokens.Space.xs))
+                }
             }
             if (groups.size > 1) item("groups") {
                 GroupFilterRow(groups, page.groupCounts, group, model::group)
             }
-            item("machines") {
+            if (!homeChrome) item("machines") {
                 // With more than one group a computer's chip says its group too (two groups can both have a MacBook).
                 val chips = if (groups.size > 1) page.machineCounts.map { it.copy(machine = it.machine.copy(name = names[it.machine.id] ?: it.machine.displayName)) }
                     else page.machineCounts
@@ -275,9 +300,14 @@ internal fun AgentsScreen(
             item("quick-filters") {
                 // "Lark groups" / "Terminal" (#2526) only while they have agents (or are chosen), as iOS and the web.
                 val shown = AgentQuickFilter.shown(page.settings.quick, page.list.counts)
-                QuickFilterBar(shown.map { filter ->
+                HomeAgentFilters(shown.map { filter ->
                     Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else page.list.counts[filter] ?: 0, filter.state?.designStatus)
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
+            }
+            if (homeChrome) item("grouping") {
+                Row(Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs)) {
+                    JChip(page.preferences.grouping.label, onClick = { menu = true }, icon = PhIcons.Folder)
+                }
             }
             // "botmux" (web #2786): show or hide botmux's sessions in this list, kept on this phone.
             if (page.botmuxCount > 0 || page.preferences.hideBotmux) item("botmux") {
@@ -459,7 +489,16 @@ internal fun AgentsScreen(
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
+    }
     if (menu) JActionSheet(buildList {
+        if (homeChrome) {
+            add(JAction(stringResource(R.string.agents_action_search), PhIcons.MagnifyingGlass, onClick = { searchVisible = true }))
+            add(JAction(stringResource(R.string.agents_chip_all_machines), PhIcons.Desktop,
+                checked = page.settings.machineFilter.isEmpty(), onClick = { model.machine(""); onMachineSelected("") }))
+            page.machineCounts.forEach { chip -> add(JAction(chip.machine.displayName, PhIcons.Desktop,
+                checked = page.settings.machineFilter == chip.machine.id,
+                onClick = { model.machine(chip.machine.id); onMachineSelected(chip.machine.id) })) }
+        }
         if (archives?.api?.supported == true) add(JAction(stringResource(R.string.agents_archives_title), PhIcons.Archive,
             onClick = { showArchives = true }))
         AgentRange.entries.forEach { range -> add(JAction(stringResource(R.string.agents_menu_range, range.label), checked = page.preferences.range == range, onClick = { model.range(range) })) }
@@ -581,18 +620,45 @@ internal fun AgentsScreen(
         // Every group's requests: a notification's card may belong to a group the list is not showing (#4808).
         val current = everyRequest.firstOrNull { it.id == selected.id && it.sessionKey == selected.sessionKey }
         val request = current ?: selected
+        // Answered here: the sheet goes once the answer is delivered, and the page's notice says what was answered.
+        val openedWith = remember(selected.id, selected.sessionKey) { delivery[selected.id] }
+        LaunchedEffect(openedWith, delivery[selected.id]) {
+            if (RequestDeliveries.closesSheet(openedWith, delivery[selected.id])) requestDetail = null
+        }
+        val (session, machine) = cardContext(request, page.sessions, page.machines, everySession, everyMachine)
         RequestDetail(request, metadata, now, reachable(request), delivery[request.id],
             onDismiss = { requestDetail = null }, onOpenChat = {
                 requestDetail = null
                 open(it.sessionKey)
             }, onAnswer = model::answer, readOnly = current == null || delivery[request.id] == RequestDelivery.Sent,
-            onTerminal = if (page.sessions.firstOrNull { it.key == request.sessionKey }?.canTerminal == false) null else ({
+            onTerminal = if (session?.canTerminal == false) null else ({
                 requestDetail = null
                 navigator.navigate(TerminalRoute(request.machineId, request.sessionId))
-            }), machine = page.machines.firstOrNull { it.id == request.machineId },
-            blockedReason = page.sessions.firstOrNull { it.key == request.sessionKey }?.takeIf { !it.canApprove }
-                ?.let { approveBlocked },
-            terminalHelp = page.sessions.firstOrNull { it.key == request.sessionKey }?.canTerminal != false)
+            }), machine = machine,
+            blockedReason = session?.takeIf { !it.canApprove }?.let { approveBlocked },
+            terminalHelp = session?.canTerminal != false)
+    }
+}
+
+/**
+ * The session and computer a card's sheet reads, looked up in every manager's lists as the card is: a notification's
+ * card may be another assistant's, whose session and computer the page does not list. The page's own session comes
+ * first (it carries what is pending on it), and the hub's computer (the page has placeholders for unknown ones).
+ */
+internal fun cardContext(request: Interaction, pageSessions: List<Session>, pageMachines: List<Machine>,
+    everySession: List<Session>, everyMachine: List<Machine>): Pair<Session?, Machine?> =
+    (pageSessions.firstOrNull { it.key == request.sessionKey } ?: everySession.firstOrNull { it.key == request.sessionKey }) to
+        (everyMachine.firstOrNull { it.id == request.machineId } ?: pageMachines.firstOrNull { it.id == request.machineId })
+
+/**
+ * The cards the page shows: the current assistant's, of the hub group shown. A card names its manager, else it is its
+ * session's (one of a session the list no longer has: its own stamp alone; none: the default's).
+ */
+internal fun shownRequests(requests: List<Interaction>, group: GroupFilter?, assistant: persona.core.contracts.api.CurrentAssistant,
+    sessions: List<Session>): List<Interaction> {
+    val managers = sessions.associate { it.key to it.manager }
+    return requests.filter { request ->
+        (group == null || group.admits(request.machineId)) && assistant.ownsOn(request.machineId, request.manager ?: managers[request.sessionKey])
     }
 }
 

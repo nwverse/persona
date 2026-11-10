@@ -1,6 +1,6 @@
 import Foundation
 
-/// Where requests for a hub actually go (docs/operations/network.md「经 SSH 隧道连 hub」). A hub the app reaches through its SSH
+/// Where requests for a hub actually go (docs/operations/network.md「Connecting to hub through SSH」). A hub the app reaches through its SSH
 /// tunnel keeps its own address everywhere — in the registry, in `LiveConnection.currentConfig`, in every comparison —
 /// and only the URLs put on the wire (`APIClient`, the socket, port forwards) are turned into the tunnel's loopback
 /// address here. Nothing routed: every URL is what it was.
@@ -118,7 +118,7 @@ nonisolated struct SSHRoute: Codable, Hashable, Sendable {
     }
 }
 
-/// A paired hub's in-app tunnel (Settings › hub › the tunnel's name, docs/operations/network.md「经 App 内隧道连 hub」): what the hub's
+/// A paired hub's in-app tunnel (Settings › hub › the tunnel's name, docs/operations/network.md「Connecting to hub through an in-app tunnel」): what the hub's
 /// tunnel extension says (its name, where the hub is from inside the network the tunnel reaches) and whether to go
 /// through it every time. The account the tunnel signs in with is the core's own (one per device, in the app's
 /// container), not part of the pairing.

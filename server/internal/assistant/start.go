@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Starting the assistant's conversations (docs/assistant/assistant.md "Processes", "New main chat"): its directory on the machine is
+// Starting the assistant's conversations (docs/assistant/assistant.md "Process", "New main chat"): its directory on the machine is
 // prepared first (the CLAUDE.md written from what the hub tells it, the connectors' and plugins' skills), the model
 // configuration applied, then the node's assistant.send. The main conversation is one of them; putting it away for a
 // new one keeps what it left for the next one's first message.
@@ -84,8 +84,15 @@ func (s *Service) prepare(ctx context.Context, machine string) (string, error) {
 // prepareSpace is prepare for one of the assistant's spaces: "health" is the health space's directory with its own
 // CLAUDE.md (docs/assistant/health.md); the connectors and plugin skills go there as to the assistant's own.
 func (s *Service) prepareSpace(ctx context.Context, machine, space string) (string, error) {
+	cwd, _, err := s.prepareSpaceIf(ctx, machine, space, false)
+	return cwd, err
+}
+
+// prepareSpaceIf is prepareSpace; onlyChanged skips the node when the CLAUDE.md is the one this hub last wrote there
+// (refreshInstructions), and it answers whether it was written.
+func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onlyChanged bool) (string, bool, error) {
 	if s.isWorkMachine(machine) {
-		return "", errWorkAssistant
+		return "", false, errWorkAssistant
 	}
 	var conns struct {
 		Connectors []string          `json:"connectors"`
@@ -93,14 +100,14 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 		LarkCLI    bool              `json:"lark_cli"`
 	}
 	if err := s.appCall(ctx, AppConnectors, ConnectorsSignedIn, map[string]any{}, &conns); err != nil {
-		return "", err
+		return "", false, err
 	}
 	var plugins struct {
 		Instructions string          `json:"instructions"`
 		Skills       json.RawMessage `json:"skills"`
 	}
 	if err := s.appCall(ctx, AppPlugins, PluginsAssistant, map[string]any{"machine_id": machine}, &plugins); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(plugins.Skills) == 0 {
 		plugins.Skills = json.RawMessage("null")
@@ -109,6 +116,15 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 	if space == SpaceHealth {
 		dir, md = s.healthRel(), s.healthClaudeMD(ctx, machine)
 	}
+	key := machine + "\x00" + dir
+	if onlyChanged {
+		s.preparedMu.Lock()
+		same := s.preparedMD[key] == md
+		s.preparedMu.Unlock()
+		if same {
+			return "", false, nil
+		}
+	}
 	params := map[string]any{"dir": dir, "claude_md": md,
 		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills}
 	var prep struct {
@@ -116,14 +132,69 @@ func (s *Service) prepareSpace(ctx context.Context, machine, space string) (stri
 		Need []string `json:"plugin_skills_need"`
 	}
 	if err := s.call(ctx, machine, DeviceAssistantPrepare, params, &prep); err != nil {
-		return "", err
+		return "", false, err
 	}
+	s.preparedMu.Lock()
+	if s.preparedMD == nil {
+		s.preparedMD = map[string]string{}
+	}
+	s.preparedMD[key] = md
+	s.preparedMu.Unlock()
 	if len(prep.Need) > 0 {
 		if err := s.appCall(ctx, AppPlugins, PluginsSkillsNeed, map[string]any{"machine_id": machine, "names": prep.Need}, nil); err != nil {
 			s.logf("assistant: plugin skills %v: %v", prep.Need, err)
 		}
 	}
-	return prep.Cwd, nil
+	return prep.Cwd, true, nil
+}
+
+// instructionsEvery is how often refreshInstructions looks at the CLAUDE.md the assistant's machine should have.
+const instructionsEvery = time.Minute
+
+// instructionsLoop keeps the CLAUDE.md of the assistant and of the health space on the assistant's machine the ones
+// this hub renders: right after it starts (a new version with new prompts) and whenever what they say changes (notes,
+// machines, plugins). They used to be written only when a conversation started, so the main conversation, which goes
+// on for days, kept the prompts of the hub that started it (#3235: #3068's ring cards never reached it). The node
+// resumes a conversation in a fresh process on its next idle message once its directory's CLAUDE.md changed
+// (node assistantProc.instructionsStale): the next message reads the new one.
+func (s *Service) instructionsLoop(ctx context.Context) {
+	t := time.NewTicker(instructionsEvery)
+	defer t.Stop()
+	for {
+		s.refreshInstructions(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// refreshInstructions writes the assistant's and the health space's CLAUDE.md on the assistant's machine when they
+// differ from the ones this hub last wrote there (none yet after a start: both are written).
+func (s *Service) refreshInstructions(ctx context.Context) {
+	if s.hello(ctx).Assistant.Standby {
+		return // a mesh member: the center's assistant is the one in use (docs/mesh.md)
+	}
+	machine := s.settings(ctx).MachineID
+	if machine == "" || s.isWorkMachine(machine) {
+		return
+	}
+	d, ok := s.device(ctx, machine)
+	if !ok || !d.Online || d.Home == "" {
+		return
+	}
+	for _, space := range []string{"", SpaceHealth} {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, wrote, err := s.prepareSpaceIf(cctx, machine, space, true)
+		cancel()
+		switch {
+		case err != nil:
+			s.logf("assistant: refresh instructions (space %q): %v", space, err)
+		case wrote:
+			s.logf("assistant: wrote the CLAUDE.md of space %q on %s", space, machine)
+		}
+	}
 }
 
 // startOn starts a new conversation on machine: the directory prepared, the model configuration of p.Purpose ("" is
@@ -218,8 +289,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 			s.logf("assistant: note guest conversation %s: %v", short(sess.SessionID), err)
 		}
 	}
-	sess.Origin, sess.OriginRef = firstNonEmpty(p.Origin, OriginUser), p.OriginRef
-	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef)
+	sess.Origin, sess.OriginRef, sess.OpenedBy = firstNonEmpty(p.Origin, OriginUser), p.OriginRef, p.OpenedBy
+	s.originSet(ctx, sess.MachineID, sess.SessionID, sess.Origin, sess.OriginRef, sess.OpenedBy)
 	return sess, nil
 }
 
@@ -303,7 +374,7 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 		p.Text = s.renderHandoff(ctx, handoff, p.Text)
 	}
 	p.MachineID, p.Purpose, p.Main = "", "", false
-	p.Origin, p.OriginRef = OriginUser, "" // the main conversation is the user's, whatever channel opened it
+	p.Origin, p.OriginRef, p.OpenedBy = OriginUser, "", "" // the main conversation is the user's, whatever channel opened it
 	sess, err := s.startConversationOn(ctx, p, true)
 	if err != nil {
 		return proto.Session{}, err
@@ -448,6 +519,15 @@ func requestOrigin(r *http.Request, purpose string) (origin, ref string) {
 	return OriginExtension, ext
 }
 
+// requestOpener is the extension whose token asks POST /api/v1/assistant/conversations to open one (the hub's
+// headers: a client's own are dropped on the way), "" for anyone else.
+func requestOpener(r *http.Request) string {
+	if r.Header.Get(RoleHeader) != roleExtension {
+		return ""
+	}
+	return r.Header.Get(ExtensionHeader)
+}
+
 func (s *Service) startRoutes() {
 	s.handle("POST /api/v1/assistant/conversations", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -458,7 +538,7 @@ func (s *Service) startRoutes() {
 			Effort         string        `json:"effort"`
 			Main           bool          `json:"main"` // becomes the main conversation
 			// Purpose is the model purpose it runs under ("assistant" when empty; a plugin's /agent asks for its own);
-			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "Assistant").
+			// MachineID one of the hub's machines instead of the assistant's (docs/protocol/protocol.md "REST (App → hub)").
 			Purpose   string `json:"purpose"`
 			MachineID string `json:"machine_id"`
 			Space     string `json:"space"` // "health": a conversation of the health space (docs/assistant/health.md)
@@ -513,7 +593,7 @@ func (s *Service) startRoutes() {
 		// The main conversation is the assistant's, on its machine.
 		sess, err := s.Start(ctx, StartParams{Text: in.Prompt, Images: in.Images, Launcher: in.Launcher, PermissionMode: in.PermissionMode,
 			Effort: in.Effort, Purpose: in.Purpose, MachineID: in.MachineID, Main: in.Main, Space: in.Space, Origin: origin, OriginRef: ref,
-			GuestTools: guestTools})
+			OpenedBy: requestOpener(r), GuestTools: guestTools})
 		if err != nil {
 			apierr.Call(w, err)
 			return
@@ -655,6 +735,9 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[string]any) error {
 	cfg := s.settings(ctx)
 	p["is_main"] = cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine
+	if cfg.InterjectBackground != nil && *cfg.InterjectBackground {
+		p["interject_background"] = true
+	}
 	followsSetting := cfg.Main != "" && cfg.Main == sid && cfg.MachineID == machine || s.isTaskConversation(ctx, machine, sid)
 	picked := false // a model picked with this message
 	if m, ok := p["model"].(string); ok && strings.TrimSpace(m) != "" {

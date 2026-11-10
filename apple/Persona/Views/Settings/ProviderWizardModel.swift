@@ -50,7 +50,7 @@ enum LauncherName {
         return r.step("claude")?.state == "ok"
     }
 
-    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「内置预设」).
+    /// The hub's feature for built-in presets, a name it makes up, `display_name` and `assign` (docs/integrations/launchers.md「Built-in presets」).
     static let presetsFeature = "builtin_presets"
     /// The uses a provider added in the wizard takes over while they are still at their default (docs/assistant/onboarding.md 5.4).
     static let assignPurposes = ["assistant", "agent.new"]
@@ -180,7 +180,7 @@ enum LauncherName {
     var presetsFlow: Bool { isNew && deps.features().contains(Self.presetsFeature) }
     var preset: LauncherPreset? { presets.first { $0.id == presetID } }
     /// "Where to get a model": the built-in providers that say where to sign up.
-    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.signup != nil } }
+    var signupPresets: [LauncherPreset] { presets.filter { $0.isBuiltin && $0.runsClaude && $0.signup != nil } }
     var presetNameProblem: String? { LauncherName.problem(presetName) }
     private var trimmedKey: String { presetKey.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// A key long enough to be worth testing on its own: a test costs a request, so not on every keystroke.
@@ -477,12 +477,13 @@ enum LauncherName {
     var presetInput: LauncherInput? {
         guard let p = preset else { return nil }
         let m = presetModel.trimmingCharacters(in: .whitespaces)
+        let assigning = p.runsClaude && assign
         var input = LauncherInput(name: presetName.trimmingCharacters(in: .whitespaces), baseURL: "", model: m == p.defaultModel ? "" : m,
                                   smallModel: "", subagentModel: "", customModel: "", customModelName: "", customModelDescription: "",
                                   args: [], apiKey: trimmedKey, preset: p.id,
                                   displayName: presetDisplayName.trimmingCharacters(in: .whitespaces),
-                                  assign: assign ? Self.assignPurposes : nil)
-        if scopeShown { scope.apply(to: &input, old: nil, machines: deps.machines(), assign: assign, kind: p.kind) }
+                                  assign: assigning ? Self.assignPurposes : nil)
+        if scopeShown { scope.apply(to: &input, old: nil, machines: deps.machines(), assign: assigning, kind: p.kind) }
         return input
     }
 

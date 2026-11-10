@@ -20,6 +20,8 @@ internal class AppNavigator(
      */
     private val openedFrom = mutableMapOf<NavKey, AppTab>()
 
+    init { stacks.values.forEach(::restoreSecondaryParents) }
+
     override fun selectTab(tab: AppTab) {
         if (tab != selectedTab()) openedFrom.clear()
         onSelectTab(tab)
@@ -40,28 +42,22 @@ internal class AppNavigator(
     }
 
     private fun open(key: NavKey) {
+        if (key == ConnectionSettingsRoute) {
+            open(SettingsPageRoute(SettingsPage.Diagnostics))
+            return
+        }
         val chat = when (key) { is ChatRoute -> key; is InteractionRoute -> key.chat; else -> null }
         if (chat != null && openAssistant(chat, true)) return
         if (chat != null && chat.kind != null) {
             Router().parse(RouteInput.Internal(key))?.let { onSelectTab(it.restore(stacks)); return }
         }
-        if (key is SettingsPageRoute || key == PairingRoute) {
-            val route = Router().parse(RouteInput.Internal(key))!!
-            onSelectTab(route.restore(stacks)); return
-        }
         val rootTab = when (key) {
             AssistantRoute -> AppTab.Persona
             AgentsRoute -> AppTab.Agents
-            InboxRoute -> AppTab.Inbox
-            SettingsRoute -> AppTab.Settings
             else -> null
         }
         if (rootTab != null) {
             onSelectTab(rootTab)
-            return
-        }
-        if (key == ConnectionSettingsRoute) {
-            onSelectTab(AppTab.Settings)
             return
         }
         val target = if (key is ChatRoute) chatTab(key)
@@ -72,6 +68,7 @@ internal class AppNavigator(
         if (key is ChatRoute) stacks.filterKeys { it != target }.values.forEach { stack -> stack.removeAll { it == key } }
         val stack = stacks.getValue(target)
         if (stack.last() != key) stack.add(key)
+        restoreSecondaryParents(stack)
     }
 
     /** Repair restored entries once session metadata becomes available. */

@@ -83,6 +83,9 @@ type runtimeHello struct {
 		// Archive: session.archive / session.unarchive go to it, for its own reversible archive (archive.go): a
 		// session the user archives in Persona is archived there too, and restored with it.
 		Archive bool `json:"archive"`
+		// Readonly: a session.start with permission_mode "plan" either starts in a read-only mode before its first
+		// prompt runs or is refused with readonly_unsupported; it never falls back to a writable provider (#3238).
+		Readonly bool `json:"readonly"`
 	} `json:"caps"`
 }
 
@@ -234,6 +237,13 @@ func (h *runtimeConn) row(id string) (proto.Session, bool) {
 		}
 	}
 	return proto.Session{}, false
+}
+
+// listLen is how many rows its last runtime.sessions kept.
+func (h *runtimeConn) listLen() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.sessions)
 }
 
 func (h *runtimeConn) sessionsCopy() []proto.Session {

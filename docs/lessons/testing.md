@@ -1,10 +1,33 @@
 # Lessons: testing and validation
 
+- Bound cold simulator compilation separately from test execution (#2671). A combined `xcodebuild test` can spend
+  most of its deadline compiling before the first test starts. Build for testing, then test without building against
+  the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle
+  inspection rather than increasing the execution timeout or dropping suites.
+
+- Sync replay must wait for its initial session, built transcript and pending-card snapshot before issuing user actions
+  (#1112). Fixed startup sleeps can turn a tap on an unloaded card into a silent no-op; accepting a reply with no held
+  request then falsely labels the later card snapshot as a resurrection. Require an actual request before delivering
+  its reply and test a delayed initial snapshot. Streaming projection must pass the active turn and whether live text
+  is drawn, as the real page does. A pending wake joins the ordinary execution summary while the previous answer stays
+  in place; only when that turn's next words start streaming does the earlier narration fold into the inspectable work.
+  An idle or other-turn presentation still shows the last answer. Cover the ordered/no-tail shape, manual inspection,
+  serialized reload and other turn IDs separately. When a merge retains the maintained renderer, reconcile tests
+  imported from a competing wake model instead of letting their old tail expectations reintroduce it, and do not treat
+  `hasPendingWake` as proof that new words are streaming (#3169).
+
+- UI screenshot evidence must be unobscured, not merely present in the accessibility tree (#2705). A localized
+  notification prompt left the chat's elements discoverable while covering the screenshot. Handle the current
+  language's permission button, assert that the summary and reply are hittable, check for system alerts before
+  capturing, and actually inspect every image before publication.
+
+- A second failed start inside the automatic launcher-health throttle does not schedule another probe (#2600). A retry fixture that models recovery must invoke the supported explicit health check and observe its passing record; polling the record alone cannot create recovery. Keep the production throttle, terminal-only failure rules, and retry assertions unchanged.
+
 - On Linux, replacing a running executable requires a new file and rename; direct writes fail with `ETXTBSY`. Use a ready handshake and reap the fixture process to test the real overlap.
 
 - Run standalone release-worker tests on the oldest supported Python, including receipt verification and verified-artifact retries (#1077). Python 3.9 has no `hashlib.file_digest`; bounded reads into `hashlib.sha256` keep hashing portable without loading an APK into memory. Cover empty files and binary inputs spanning multiple chunks.
 
-Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`, "Lessons"; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
+Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
 - Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
 
@@ -43,6 +66,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - A web test that times out only in the full suite is usually loading or reading something inside its body (2026-11-06, #4955). Vitest reports the timeout as `STACK_TRACE_ERROR` at about 5000 ms (or the test's own budget). On unchanged master with `--maxWorkers=96`, 10 of 10 runs were red. `catalog.test` re-read every language's catalog files and loaded the admin catalogs in each test, `busy-motion.test` walked the whole source tree in each test, and `highlight-lazy.test` did its first `import("rehype-highlight")` inside the test, while the checks themselves take milliseconds. Load or read once at the top of the file instead (collection is not covered by the test timeout), and don't raise the timeout; #5326 (inlined catalogs under Vitest) and #5729 (Persona's warm-up) fixed other cases of the same kind. Two of the failures were not load. `initI18n` applied whichever overlapping call finished last, so a test that timed out mid-switch changed the next test's language (`a、b、c`); now only the latest call applies. `formatList` follows the system region, which under Node is the machine's locale, so on an en-SG machine `a, b and c` failed every run; tests that format set `navigator.languages` themselves.
 
+- A web test that waits a fixed number of `act` turns can still lose to a lazy chunk (2026-11-10, #2874). `RelayAccounts.test` pushed an account's page whose first item is a header, drawn by the `CodeViews` chunk under `lazyPage`; its first draw waits for a dynamic import, and under Vitest even importing a module that is already loaded takes event-loop turns, not just microtasks (2 to 8 `setImmediate` turns in three quiet runs). In one of three loaded full-suite runs that outlasted `settle`'s eight `act` turns and the header was missing; delaying the chunk by 300 ms failed the test every time. Load the chunks first with `beforeAll(() => loadPages(), 60_000)` (as `CodeViews.test` and `ime-enter.test` do), or wait for what the test looks for, rather than adding turns.
+
 - A concurrency test that passes with `-race` can still fail without it (2026-11-06, #5908). `-race` slows the instrumented code, so the goroutines meet in a different order. `TestInstallClaimsOperation` passed 20 of 20 runs with `-race` and failed 13 to 29 of 40 without it. Without `-race` its second install usually ran only after the first had committed and used up the preview, and got a 403 from the market check that the PR's own `-race` runs never reached. Run a new concurrency test with `-count`, both with and without `-race`. For the interleaving that matters, set up the state directly instead of hoping two goroutines meet there (here: claim the operation, drop the preview, then install again).
 
 - Goroutines that outlive a test must not call `t.Logf` or read global switches changed after the test ends (2026-11-06, #4822). `computer.nolock` / `computer.cursor` send in their own goroutines; late logging panics (`Log in goroutine after ... has completed`). A fake Mac node reading global `fakeNodesBuiltin` per request sees changes from the preceding test's cleanup, letting late requests fail an already-finished test. Guard logging with a lock and `over` flag set by `t.Cleanup`; fake nodes capture the switch once at creation.
@@ -52,6 +77,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - When multiple goroutines independently generate and send the same state, generation and sending need one lock (2026-11-06, #4822). On assistant connection, `FleetUp` sends each machine's list, while `Resync` snapshots also resend lists. Previously each called `decorated()` before leaving its lock, then `Tell` afterward; a stale list lacking the snapshot's "Persona" title sometimes reached hub last and stayed, failing `TestTheMainConversationIsAlwaysPersona` about 3% of the time. `publishList` now generates, deduplicates, and sends under `sentMu`. Waiting in tests for "the new list arrived" is insufficient: it may be that stale list.
 
 - Waiting for one effect does not wait for another made on a different goroutine (2026-11-09, #2152). A source page's tree changes first and its frame is sent later by the delivery goroutine (`ui_page_delivery.go`), so `TestPageNativeFiniteLoadStillStartsWithLoading`, which waited for the tree to say `loaded` and then counted delivered frames, failed only on busy CI. Wait for each effect you assert on (`pageAwait` for the frames too). To reproduce such a gap, slow the receiving side in a scratch copy (a fake `Notify` that sleeps 20 ms failed 10 of 10 runs), or run `go test -cpu 1 -count=60` with every core busy (4 of 60 failed); an idle machine passed 40 of 40.
+- A cancel on a fixed deadline counted from the start races the fake's own startup (2026-11-10, #2674). `TestToolCheckTimeoutStopsItsHelpers` gave the call 300 ms, but its fake had to start a shell and write its helper's pid first; on a busy machine the cancel came before there was a helper, and the test failed (1 of 30 runs with every core busy) without checking what it was about. Cancel once the fake shows it started (the pid file), and time the return from the cancel. Do not lengthen the deadline instead: it only makes the race rarer.
 
 - Fixtures must use real response shapes (2026-11-06, #2938 / #2017). Assistant-feed `view_actions` is an object indexed by card key, empty as `{}` too. When both web and acceptance drivers mistook it for an array, array fixtures kept unit tests green while the real model lost answered state after reload. Use protocol objects covering empty objects, answered snapshots, and pagination; in a real browser also reload and check latest version, answered state, and no repeat sends.
 
@@ -83,6 +109,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   These are hang-protection deadlines; allow 30 seconds. This is not load-related: a separate `go test` at the same load stayed fast.
 
 - A deadline that starts at a child's exec also times the child's start-up (2026-11-08, #1110). The path-access preflight tests start the node test binary as the check's child and cut it after a 400 ms stall. Under the whole server suite's load the binary took longer than one 400 ms stall to print its first line, which the old timers counted as a read, so the check read nothing and warned, while each read takes microseconds. Start-up now has its own budget (`preflightStart`: one stall in the product, so a run is still five stalls; 30 s in `TestMain`), and read stalls count from the child's first line. The hung-read test is timed from the moment the child runs (`NODE_TEST_PREFLIGHT_STARTED`) and keeps the short stall, so it still proves the hung read is cut. A child made to start late (`NODE_TEST_PREFLIGHT_SLOW`) fails on the old timers: test that way rather than by raising the stall.
+
+- Hub message discovery scans literal `"type"` keys and `Type` fields throughout the package, including JSON Schema construction (#2597). A schema's `boolean` type can be mistaken for a WebSocket message. Give schema fields an explicit Go name such as `JSONType` with the same `json:"type"` tag, and run `TestBroadcastTypes` alongside the tool-schema golden. Do not add schema types to the broadcast allowlist.
 
 - `.Local()` in timezone scanning is not always `time.Time.Local()` (#2239): Orca terminals have a same-named boolean method for local execution. Inspect AST and return types; exclude only calls explicitly returning bool, conservatively inspect unknown types, and add no whole-file exemptions. A test with boolean and time calls on the same line ensures the exclusion does not hide real timezone calls.
 
@@ -118,8 +146,12 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - macOS Unix-socket regressions need short canonical temp directories (2026-11-03, #277). Long system `TMPDIR` exceeds socket address length; `/tmp` can still resolve to `/private/tmp`, making a Codex fixture's original HOME differ from canonical HOME returned after initialization and appearing as handshake timeout. Use independent `/private/tmp/<short-directory>` as test `TMPDIR`, without changing lexical compatibility rules for runtime roots. Preserve failures first, retest pinned source separately; real `lsof` port-scanning defects belong to #541 / #728, not temp-directory issues.
 - Go 1.27's `testing.T.TempDir()` prefers `GOTMPDIR` over `TMPDIR` (confirmed in the toolchain's `src/testing/testing.go`, #6223). Changing only `TMPDIR` leaves test fixtures under the old root. For Unix-socket and configuration-ancestor tests, set both variables to the same new, real, short system temporary directory and isolate `HOME` separately. A long root can exceed Unix-socket path limits; a symlink into a personal home can expose real Codex configuration to ancestor scans. Verify available disk space and effective roots, preserve build caches separately, and never weaken the security assertions to compensate for a misconfigured runner.
+- A temporary directory can have a Git repository above it (#3017). Node polling tests that require the next push to reflect their own change use a fixture-owned repository and wait for `awaitGitPlace` before polling. Since #2758, cold Git labels arrive asynchronously: their `sessions.changed` can precede a transcript-only revision or a workflow cache refresh. Longer timeouts do not fix consuming that unrelated push. `readGitPlace` walks the filesystem directly, so `GIT_CEILING_DIRECTORIES` does not isolate its tests; an empty `.git` file bounds discovery for a non-repository fixture.
+- A shared offline-session cache can satisfy a reconnected node's list without populating that node's transcript metadata (#3017). Carry tests must exercise the new node's first metadata use and check scan identity, rather than infer a missing carried scan from an empty per-node metadata map. Disable ambient agent-process discovery in the fixture and join `Attach` on failure before restoring global scan settings.
 - The server test wrapper hides macOS `/var` path-spelling mismatches (2026-11-08, #1105). `scripts/test/server_test_env.py`, and so hosted CI, sets `TMPDIR` and `GOTMPDIR` to a resolved directory. A test that compares a path the product resolves with `filepath.EvalSymlinks` (such as `hubBinary`) against one built from `t.TempDir()` passes there and on Linux, but fails under a plain `go test` on a Mac, where `t.TempDir()` is under `/var -> /private/var`. Resolve the expected value at the assertion. Resolving the shared temp home instead would also hide a product that stopped resolving. To check a whole package under `/var` with the wrapper, reset the variables inside its command: `server_test_env.py --database-file <file> -- env -u GOTMPDIR TMPDIR=<macOS temp dir> go test ./internal/hub/`.
 - The same `/var -> /private/var` mismatch hid a release bug in the Python scripts (2026-11-09, #1960). `prune_nodes` compared the resolved `bin/nodes` target with unresolved version directories, so under a root with a linked ancestor it deleted the version in use; `NodeRetentionTests` failed only on a Mac, and resolving the test's temporary directory would have made it pass. Fix such tests at the assertion (or in the product), and build the fixture root through an explicit link so Linux CI catches it too. Separately, `scripts/ci/python-tests.py` runs every `scripts/**/test_*.py` under `unittest`: an argument-driven script with that name runs no tests, which exits 0 on CI's Python 3.11 but 5 ("NO TESTS RAN") on 3.12+, so the runner skips files that are not `unittest` suites.
+- On a Mac the first exec of a newly written executable is slow (2026-11-10, #2706): about 290 ms here, against 13 ms for the second, while the system assesses the new file; Linux CI never sees it. A test that writes a fake binary and gives its first run a deadline shorter than that (`versionWait = 100ms` in `TestBuiltinNewBinaryHangs`) kills the fake before it runs a line, so a count the fake keeps stays empty. Observe the call from the caller's side (wrap the package variable that runs it) and wait for the effect, not for a fixed time after the write. The same latency made the 300 ms deadline in #2674 fail 1 run in 5.
+- A fake server that waits in `Accept` hangs the package when the code under test fails before it connects (2026-11-10, #2706): `TestAuthorityWireReadsPersistedIdentityWithoutMigrationOrWrites` ran into go test's 10 minute timeout on a Mac. Close the listener once the call returns, then read the fake's verdict, and report the call's own error with it.
 
 - `xcodegen` and `xcodebuild` must not concurrently read/write the same worktree's project (2026-11-04, #1045). During iOS revalidation, project regeneration left Mac build temporarily without `project.pbxproj`, exiting 74 before compilation. Generate completely once, then build serially; parallel validation requires separate projects/worktrees, not just separate DerivedData. Preserve original exit code; record serial retest after generation separately.
 
@@ -183,7 +215,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   Add a `-tab` value with every new page. To reproduce "passes alone, fails after other tests", inspect `Library/Preferences/<bundle-id>.plist` in the app container first
   (`simctl spawn … defaults write` does not write into the app container).
 - "Push does not interrupt" must push while the finger is still down or momentum is active. Pushing after scrolling stops misses whole-screen jumps: `LiveUpdateTests` "middle row stays still" was always green,
-  while real-hub Agents lists jumped over 900 pt during scroll. Measure frame by frame with `PerfScroll` (`docs/operations/testing.md`, "Push during scrolling").
+  while real-hub Agents lists jumped over 900 pt during scroll. Measure frame by frame with `PerfScroll` (`docs/operations/testing.md`, "Pushes while scrolling").
 - Mock hubs must answer like real hubs, especially unready states: with Telegram disabled, real hub cannot list its capabilities (the program has never run; capabilities are self-reported),
   but mock always advertised `login`, leaving tests/screenshots green while the real page lacked a switch, said "Configure in hub.json", and could not enable it (2026-11-03, #622).
   Before writing a mock, inspect the real path's response in every state; start tests from what users first see (disabled).
@@ -212,6 +244,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   Use in-app constant-speed scrolling (`AutoScroller`, `-showFileAutoScroll`) and frame counting (`FrameMeter`), opened from an idle session (running sessions redraw each second behind it).
 - Alerts with input: typing raises the keyboard and moves the alert upward; immediately tapping Save misses (alert remains, nothing happens, looking like failed save; 2026-11-01 `AssistantTitlesTests` nearly prompted an app change).
   Pause after typing, tap, then confirm the alert disappeared. Input caret placement is unpredictable; before clearing, tap the field's right edge to place it at the end.
+- A form button can report `isHittable` while the software keyboard still consumes its tap (#2741): `ExtensionSettingsTests` tapped Save without any config PUT, then kept swiping for a refusal that had never been produced. Dismiss the keyboard with Return before Save, preserve the draft, and verify the mock received both the refused and the corrected PUTs rather than adding more swipes or weakening the field-error assertion.
 - Run privacy scans after actual build/deployment configuration is complete: missing configuration means incomplete checks, and `clean` is not a full pass. Rescan after adding configuration.
   Fixture machine identifiers can accidentally match configured values; use neutral placeholders, not exemptions.
 - `xcrun simctl push` does not run notification service extensions (2026-11-01, Xcode 27.1 / iOS 27.0). CoreSimulatorBridge adds pushes directly to Notification Center as local notifications,
@@ -266,6 +299,21 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 - Background builds/tests require pinned source snapshots; do not merge branches or edit their worktree while running. On 2026-11-05, targeted Go regression enumerated old files before a merge introduced a new caller, producing undefined-method compilation errors. Mixed snapshots cannot judge commits or count as passes. Freeze a commit in a separate detached worktree and rerun.
 - A Go test wrapper embedding a narrow `Store` interface does not gain methods by assigning real Postgres to it. Once card handlers checked optional persistence interfaces first, admin-page tests returned 503; old handlers rejected bad JSON first and hid the fixture gap. Real bus regressions explicitly pass the full DB to the assistant, while hub admin login keeps its wrapper. Retain status assertions, not longer waits or 503 as a pass.
 
+## Running the hosted CI lanes on a Mac (2026-11-09)
+
+The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer machine:
+
+- `scripts/ci/server.sh` (all / `node`) first runs "Browser runner resources" (`google-chrome --version`, `free -m`, `df -h /dev/shm`), a Linux runner diagnostic that exits 127 on macOS before any node test. Run `server.sh build`, `managers` and `other`, and the node shard's own step (`scripts/ci/server-shards.py node --database-file …` against the same Postgres 18 fixture); every Go test still runs.
+- `server/internal/extension/denohost` needs `bun` on PATH at the version `.github/workflows/server-test.yml` pins (1.4.2); without it `TestTrustedAdapterMatchesOfficialSDK` fails with "Bun is required", and with another version the committed `adapter.mjs` looks stale. A pinned copy outside the global environment works: `npm install --prefix <dir> bun@1.4.2`.
+- `scripts/ci/scripts.sh` expects Python 3.11 or later with `scripts/ci/requirements.txt` (PyYAML, Pillow) and `actionlint` (CI: `go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`). Xcode's `/usr/bin/python3` (3.9, no PyYAML) fails about twenty suites for reasons unrelated to the change; use a venv first on PATH.
+- `scripts/ci/apple.sh` refuses anything but Xcode 26.0.x (`DEVELOPER_DIR` defaults to `/Applications/Xcode_26.0.1.app`) and creates its own stock 26.0 simulator. On a Mac with only a newer Xcode, run a copy kept outside the repository that changes only those two things (drops the version check, picks the simulator runtime matching the selected Xcode's SDK) and sources the worktree's `common.sh`; every other step runs as written. Say in the PR which Xcode ran it.
+
+## Test database setup (2026-11-10, #2786)
+
+- `TRUNCATE` gives every table it names new files, whether it had a row or not, so clearing two dozen mostly empty tables before each test cost more than many of the tests. Check the tables the cascade reaches in one statement and truncate only those with a row (`db.truncateNonEmpty`). Don't replace it with `DELETE`: it does not cascade, and `devices` has a `BEFORE DELETE` trigger (`devices_guarded_delete`, hub 0435) that refuses an unguarded delete with "push retirement requires a guarded writer".
+- A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
+- Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
+
 ## Dead-code reports depend on the selected build (2026-11-07, #5856)
 
 - `deadcode -test ./...` only analyzes the selected platform and build tags. A default Linux run reports `sysmon.ptr`, the Windows tray notification helpers and `DevelopmentLimits.valid` as unreachable, but macOS, Windows and the `persona_dev_resources` build respectively call them.
@@ -279,8 +327,8 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 - `test-server.sh` only says "server test environment preparation failed; tests were not started". `server_test_env.py` first runs `go env`;
   if hub Go is older than `server/go.mod` requires, it downloads a toolchain, but `go env -w` previously set `GOSUMDB=off` on that machine, preventing verification of the downloaded toolchain and failing `go env`.
-  Not a database-config issue. Download the toolchain first in the repo with `GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn go version`,
-  then put `~/go/pkg/mod/golang.org/toolchain@v0.0.1-go<version>.linux-amd64/bin` in PATH and run the same command with `GOTOOLCHAIN=local`, `GOPROXY=https://goproxy.cn,direct`.
+  Not a database-config issue. Download the toolchain first in the repo with `GOPROXY=<go-proxy> GOSUMDB=sum.golang.google.cn go version`,
+  then put `~/go/pkg/mod/golang.org/toolchain@v0.0.1-go<version>.linux-amd64/bin` in PATH and run the same command with `GOTOOLCHAIN=local`, `GOPROXY=<go-proxy>`.
 - Only hub-cached dependencies build: if `proxy.golang.org` is unreachable, other packages report `[setup failed]`, making it look as though half the tests are broken.
 - If hub Postgres is system-installed (no `persona-postgres` container), `db.sh` cannot create `persona_test` (its output is discarded), and role `persona` lacks CREATEDB:
   `internal/db`, `internal/db/dbtest`, `internal/hub` report `database "persona_test" does not exist`, while others pass.
@@ -301,6 +349,9 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   - The shell assistant drawer (`AssistantDrawerLayout`) continuously recomputed views on the main thread, starving queued work: avatar lists never refreshed and runtime CLI answered ping once only. Reproduce and fix the default tree; changing navigation for screenshots hides the user's failure.
 - **Uninstalling does not clear keychain**: simulator pairing survives reinstall, so the app launches paired directly into the new shell and the runner reports "timed out while preparing". First `xcrun simctl keychain <udid> reset`.
 - **Mac app deployment target is macOS 26**: macOS 15 can build only, not run the app or `PersonaMacTests`.
+- **PersonaKit's `swift test` builds on macOS 15 but its test bundle does not load** (2026-11-10, #2915): `Symbol not found: _$ss18EnumeratedSequenceVyxGSlsSlRzrlMc`,
+  `EnumeratedSequence`'s `Collection` conformance, which only the macOS 26 runtime has (`DocumentText`, `Notebook` use it). To run one suite there, copy its source and test files
+  into a scratch package outside the repository with `platforms: [.macOS(.v15)]`; the package itself still needs a macOS 26 run (or CI) before merging.
 
 ## Web grouping and collapse
 
@@ -310,6 +361,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 ## WebSocket handshake tests
 
+- Hub tests must register and remove clients through `addTestClient` / `removeTestClient`, or hold `h.mu` when already updating related state (#2855). A hello starts `fleetClientsChanged` in a goroutine, which iterates `h.clients` under the mutex; an unlocked test write can race with it even after the hello handler returns. Reads and iterations also need the mutex when clients can connect or disconnect concurrently.
 - `Connection` is a comma-separated token list, so `Contains(..., "upgrade")` is not a valid upgrade check: it also matches `notupgrade`. Iterate `Header.Values`, split/trim, and `EqualFold` whole tokens. Test case, multiple fields, and substring rejection (#692).
 - Go printable rodata can concatenate independent constants, making artifact scans see short terms across boundaries (2026-11-03, #692: protocol-header token adjacent to a VirtualBox NIC prefix). Locate sanitized context and check source first; do not mistake this for actual personal-value insertion, remove sensitive terms, or add exemptions. Store brand prefixes in display case and normalize comparisons; regress unchanged NIC detection, then build/scan actual artifacts for four platforms. Header validation alone does not remove this adjacency.
 
@@ -563,6 +615,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 ## Lazy timelines: unscrolled rows do not exist, and identical text may occur elsewhere (2026-11-04, #1055)
 
 - GitHub thread timelines use `LazyVStack`; the bottom comment is absent from accessibility until scrolled into view, so `waitForExistence` alone waits in vain.
+  Settings forms are the same: an extension's field below the fold (cua's no-auto-lock list, #2446) exists only once scrolled to, so scroll first, then assert.
 - Retained navigation pages may keep Inbox in the tree, whose comment preview has the same text. Text waits accidentally passed in Liquid Glass but failed in BeautifulUI's different previews.
 - Wait for page-specific elements (header), then search row identifiers (`github.entry.<id>`) while swiping up. Before screenshots, move the target into the upper half;
   otherwise "one row barely visible" counts as found and several screenshots capture the same screen.
@@ -579,7 +632,10 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
 
 - **Container `accessibilityIdentifier` overrides its children's identifiers**: identifying a row `VStack` made its `Menu` `market-menu-…` unfindable. Identify only clickable controls,
   or first apply `.accessibilityElement(children: .contain)` to the container.
+  Again in an extension's machine list (#2446): the field row's `plugin-field-…` replaced each Mac's `extension-machine-setup-<id>`; the row now leaves the identifier to the list's title and switches.
 - **A `lineLimit`-cut `Text` still reads in full to XCUITest**: its label is the whole string, so "the last line is not there" never proves folding (#1666, `NewChatLayoutTests`). Assert the fold's control (Expand) and look at the screenshot.
+- **A floating action bar can cover a control XCUITest still reports as hittable** (#2732): after typing in New Agent, the photo's remove button can sit inside the Start Chat bar's frame. Move it clear with the test's slow drag, assert the frames do not intersect before tapping, then wait for Start to become enabled. A tap that happened to work once is not proof of visibility; inspect the before / after screenshots.
+- **"Swipe until hittable" can stop with the element on the screen's bottom edge** (#3079): a row counts as hittable by its top while its controls (a stepper's +) are below the screen, and the page coasts on after the last swipe. `ExtensionPickerTests` tapped below the screen and the value never changed, the same on every run once the form grew. After the swipes, nudge with slow drags (`press(forDuration:thenDragTo:withVelocity: .slow…)`, which do not coast) until the element's whole frame is above the bottom, dragging at the leading edge, clear of switches.
 - **First taps just after sheet dismissal can be swallowed** (keyboard focus is still settling). Immediately tapping a list button after form Add does nothing, with no confirmation dialog.
   Wait for sheet-field `waitForNonExistence`, tap a harmless button (Refresh) first, then the target button.
 - Icon-sized `Menu` (20 pt) often does not expand under XCUITest. Put row actions in a row of `.borderless` text buttons, clearer on both phone and Mac.
@@ -704,9 +760,13 @@ The Mac-only `test_hub_restart_mac.py` fixture used an empty, non-executable `pe
 
 Use an executable fixture that logs calls and returns the documented result: 0 for a successful switch, 3 for no edge to switch. Assert that success avoids launchd and that the no-edge case restarts only the hub agent, skipping node agents. Run this Mac-only suite on macOS; Linux CI skips it: `cd scripts/test && python3 -B -m unittest -v test_hub_restart_mac`.
 
+## macOS awk stops on bytes that are not UTF-8 (2026-11-10, #2722)
+
+In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first invalid byte sequence with `towc: multibyte conversion failure`, prints the record's raw bytes and exits 2; gawk and mawk on Linux read on, so CI never sees it. `install.sh` read every launchd file with awk, and vendors often ship binary property lists: each printed its bytes, and the Python tests reading the script's output with `text=True` crashed with `UnicodeDecodeError`. An awk that reads files it did not write runs with `LC_ALL=C`; plain substring matches mean the same in bytes. The Mac in hand may have no binary plist at all: the regression test writes one with `plistlib` (`FMT_BINARY`) into its own home.
+
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 
-`go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use `-tags public`) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
+`go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use the tags of `server/build-tags.txt`, `public` among them) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
 
 Walking files has pitfalls of its own. Reviews of `server/plugins/guard_test.go` found each of these: the first six let plugin or internal code into a binary unseen, the last two failed on code that is fine.
 
@@ -747,7 +807,7 @@ Two more from the same harness:
 `AppModel()` restores the last Dev snapshot (machines, agents, cards; `Library/Caches/state/dev.json`) and the outbox when the simulator's keychain holds a pairing, which any mock-hub UI test run leaves behind. A unit test that reads everything the model holds (the watch summary, all agents) then counts those too: it passes on a brand-new simulator and on hosted CI and fails on a used one. In the sync scenarios, a snapshot of 145 sessions pushed the case's chat out of the 40 newest that `AgentSync` plans, so its stall check never ran. The model also writes its own snapshot and outbox back over the app's.
 
 - A test that only needs the model empty calls `forgetRestoredForTests()` after making it.
-- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). Nothing it writes reaches the app's files.
+- A test that saves and reads back (a relaunch, the outbox) makes its models with `AppModel(stateFolder:)` on a folder of its own, and again on the same folder for the relaunch (`SyncDevice`, `OutboxRestoreTests`). That folder must also own the chat cache: deleting a shared cache at test startup cannot stop a previous model's queued save or prefetch from filling it again. Capture the immutable folder before asynchronous work, and use it for reads, writes and removal. The default app keeps its existing cache path and format.
 
 To check that a failure is this, move `dev.json` aside in the app's data container and run the test again.
 
@@ -755,3 +815,25 @@ To check that a failure is this, move `dev.json` aside in the app's data contain
 
 - At phone width the web sidebar is a drawer moved off the screen with a transform, not hidden: `getByRole(…).filter({ visible: true })` and `isVisible()` still count its buttons, and a click on one waits out its timeout. Reach a control at that width from the page that shows it (the Agents page's New agent, `web/e2e/launcher-health.mjs`), or scope the locator to `main`.
 - `?token=mock` pairs asynchronously: wait for something only a paired page has (`main textarea`) before setting `localStorage` and reloading, or the reload lands on the sign-in page.
+
+- Real WebSocket nudge tests need observable ordering (#2297): wait until all input audio frames arrive and the answer reaches the app before sending a late caption. Answer text/result frames on receipt rather than after an arbitrary delay. A negative nudge assertion still needs its full observation window; watch incoming frames and fail immediately on an unexpected count, then check the count at the deadline. Do not replace a sleep with an unconditional timer wait or use `synctest.Wait` around real sockets.
+
+- Tests that isolate the runtime home must clear both supported environment names through `compat.EnvNames`; child environments use `compat.ReservedEnv` to filter the reserved prefixes. Reuse the compatibility boundary rather than copying legacy literals into new test carriers (#2347).
+
+- Manager hello also runs on Hub instances without an updater, including the mesh harness. Withhold node deployment until the policy reader is available; do not make hello initialize an updater or assume a startup opt-in overrides an unread persisted choice (#2616).
+
+- In the mock hub's request handler, a local binding can shadow a module helper even in a route that never runs: delayed closures capture the local cell and fail before publishing. Name inbox records explicitly so the transcript item factory remains callable, and retain subprocess stderr when diagnosing missing asynchronous pushes (#2523).
+
+## Inbox hand-off UI tests need the sample item and an unambiguous target (2026-11-10, #1846)
+
+- `MOCK_INBOX_EVENTS=1` replaces the whole `INBOX` fixture list, including the sample mail `mail:acc1:t1:501` used by `NewConversationEntryTests`. Do not combine it with `MOCK_SOURCES=1` for those tests: the cached page may still open, but every `GET /api/v1/inbox/{id}` then returns 404. Check that direct GET before debugging the sheet.
+- On iOS 27 a SwiftUI sheet need not appear as an accessibility `Sheet`; `app.sheets.firstMatch` can be empty while its Send button exists. An app-wide label `firstMatch` can instead hit the same Agent title in the inbox behind the sheet. Pick a unique visible fixture title, terminate the app after each case, and inspect the actual hierarchy rather than assuming the sheet type.
+- The mock must implement the same single-item `POST /api/v1/inbox/{id}/done` route as the hub when a test asserts filing. A 404 makes `InboxStore` roll back its optimistic Done; polling cannot turn that into a pass. Reset the item before each case and poll the server after the successful send because filing is asynchronous.
+
+- Presence tests wait for the existing state notification or report-request counter before checking the result (#2820). A negative observation keeps its entire window and fails immediately on an early result; it does not prove an unobservable internal wait has started. A wall-clock-seeded connection number needs a bounded check of that actual clock boundary, not a fixed startup delay.
+
+- A hosted test can install its app and establish the test-manager session yet never receive a PID from the app-launch request (#2671). Keep that distinct from a test assertion or a later shutdown error. Compare launch options with a passing run before changing them: `wait_for_debugger=1` also occurs in successful XCTest launches. Capture only the owned synthetic app and simulator's launch metadata within the original readiness window, with bounded time and output. An empty or unavailable diagnostic does not establish a cause, and adding diagnostics does not prove the launch fault is repaired.
+
+## Warm allocation measurements need one processor (2026-11-10, #3390)
+
+- Disabling GC preserves `sync.Pool` contents but does not keep a goroutine on the processor whose private pool was warmed. A switch during a byte-allocation measurement can charge a cold JSON encoder's buffer growth to the operation. Measure an explicitly warmed steady state with `GOMAXPROCS(1)` during the window and restore it afterward, as `testing.AllocsPerRun` does. Check warm-up errors and retain the original byte limit; a historical extra-copy implementation measured by the same helper must still fail that limit. This isolates the measurement from processor migration, not from unrelated allocating goroutines: do not run these process-wide measurements in parallel.

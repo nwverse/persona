@@ -20,7 +20,7 @@ The table below is for Orca; where the herdr engine differs is in the table in t
 | Close a session | ✅ | |
 | Create a session from the phone, resume a Claude session that isn't running | ✅ | Since #5548 Orca opens a terminal in the session's worktree and runs `claude --resume` there, as herdr does; other agents' sessions are refused with why (`orca_resume`) |
 | Claude in the desktop app or in a terminal Persona does not drive | ✅ | Listed as running with its own state, transcript streamed; messages go through the session's peer inbox (a named pipe). Questions and permission prompts there stay on the computer. See "Claude outside Persona's terminals" below |
-| Machine monitoring (CPU, memory, swap, network, disk, system info) | ✅ | Win32 calls, no processes spawned; the metrics follow the Windows column of [machines.md](../server/machines.md) ("Collection metrics") (#1943) |
+| Machine monitoring (CPU, memory, swap, network, disk, system info) | ✅ | Win32 calls, no processes spawned; the metrics follow the Windows column of [machines.md](../server/machines.md) ("Collection definitions") (#1943) |
 | Port forwarding | ❌ | Depends on `ps` / `lsof` / `/proc`; silently unavailable on Windows (#1179) |
 | Codex discovery (processes, homes, `--listen` endpoints, which rollouts a process holds open) | ✅ | Win32 calls, no processes spawned: Toolhelp32 and the PEB for `codex.exe`, each one's handle table for its open rollouts ("Codex" below). Compatible Codex forks are still not discovered |
 | Codex desktop App chats: list, state, send text and images | ✅ | Through the App's bus, the named pipe `\\.\pipe\codex-ipc` ("Codex" below) |

@@ -61,6 +61,7 @@ func (h *Hub) routes() http.Handler {
 	})
 	api.HandleFunc("GET /api/v1/ops/{id}", h.getClientOp)
 	h.fleetRoutesRelayed(api) // resolve, history, seen: the manager's (fleet_link.go)
+	h.phoneWriteRoutes(api)
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
 	h.live.routes(api)
@@ -71,8 +72,10 @@ func (h *Hub) routes() http.Handler {
 	h.notifyRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
+	h.lookUploadRoutes(api)
 	// usage windows (#2432): the manager's (devices_routes.go)
 	h.usageRoutesRelayed(api)
+	h.transferRoutesRelayed(api) // computer to computer file transfers, the manager's (devices_routes.go)
 	h.inboxRoutesRelayed(api)
 	// the extensions', connectors', bots', mail's, Cua's and ego's: the manager's (extensions_link.go)
 	h.extensionRoutesRelayed(api)
@@ -97,7 +100,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
 	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
-	return h.outerLayers(jsonRouteErrors(mux))
+	return h.outerLayers(h.plaintextLoopbackOnly(jsonRouteErrors(mux)))
 }
 
 // outerLayers are what every request goes through around the routes, outermost first: the auth layer's marks
@@ -261,6 +264,10 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 				}
 			}
 			if ok, scope := p.extOpens, p.extScope; !ok {
+				if scope == extwire.ScopeAgentsPermissionMode { // audited like every refused mode (extension_modes.go)
+					h.refuseModeScope(w, r, p)
+					return
+				}
 				body := errorBody(http.StatusForbidden, "permission_denied", errors.New("this extension was not granted this part of the hub's API"))
 				if scope != "" {
 					body["scope"] = scope
@@ -444,6 +451,10 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	q := r.URL.Query()
 	params := map[string]any{"session_id": r.PathValue("sid")}
+	userInputs := q.Get("user_inputs") == "1"
+	if userInputs {
+		params["user_inputs"] = true // only a count/position projection, never message bodies
+	}
 	// Only the paging the app gave: one it left out or sent empty (iOS's latest page has before_seq=) is not 0 to a
 	// runtime, which may take before_seq 0 as a bad value and refuse every page, and the app's sync then asks again.
 	for _, k := range []string{"before_seq", "limit", "turns"} {
@@ -465,6 +476,20 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if userInputs {
+		var index proto.UserInputIndex
+		if err := m.call(ctx, "session.items", params, &index); err != nil {
+			callErr(w, err)
+			return
+		}
+		if index.Inputs == nil || index.Total != len(index.Inputs) {
+			writeErr(w, http.StatusBadGateway, errors.New("incomplete user input index"))
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, index)
+		return
+	}
 	var res struct {
 		Items     []proto.Item `json:"items"`
 		HasMore   bool         `json:"has_more"`
@@ -476,7 +501,7 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		callErr(w, err)
 		return
 	}
-	res.Items = localizedItems(h.requestLang(r), h.withInjected(res.Items))
+	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
@@ -496,7 +521,7 @@ func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine
 	// The whole item for the channels that follow the conversation, or show its view (the manager's, fleet_follow.go).
 	h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
 		Items: []proto.Item{it}})
-	writeJSON(w, localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it}))[0])
+	writeJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
 }
 
 // sessionImage serves one item's image as raw bytes. An item's image never changes, so the app may cache it forever.
@@ -587,9 +612,13 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 }
 
 func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
+	named, ok := h.sessionsManager(w, r) // ?manager=<id>: that manager's computers only (sessions_list.go)
+	if !ok {
+		return
+	}
 	_, lookup := r.URL.Query()["session_id"]
 	if lookup || sessionlist.Enabled(r.URL.Query()) {
-		h.pagedSessions(w, r)
+		h.pagedSessions(w, r, named)
 		return
 	}
 	mid := r.URL.Query().Get("machine_id")
@@ -602,10 +631,11 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 	// sessions, a copy of all the lists and the whole answer in one buffer were most of what an answer allocated.
 	var lists []stampedList
 	for _, m := range h.machinesNow() {
-		if mid != "" && m.cfg.ID != mid || em != "" && h.machineOwner(m.cfg.ID) != em {
+		owner := h.machineOwner(m.cfg.ID)
+		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), h.machineOwner(m.cfg.ID)})
+		lists = append(lists, stampedList{h.shown(m.cfg.ID, m.keptSessions()), owner})
 	}
 	writeSessionLists(w, lists)
 }
@@ -706,6 +736,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.extensionsOwn(r, h.sessionOwner(p.MachineID, p.ResumeSessionID)); err != nil {
 		writeErrCode(w, http.StatusForbidden, codeOtherManager, err)
 		return
+	}
+	// Resuming with a permission mode changes that session's mode: an extension's token, only of a conversation its
+	// extension opened (extension_modes.go).
+	if pr := principalOf(r.Context()); pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
+		if why := h.extensionModeRefused(pr, p.MachineID, p.ResumeSessionID, map[string]any{"permission_mode": p.PermissionMode}); why != "" {
+			h.refuseExtensionMode(w, r, pr, p.MachineID, p.ResumeSessionID, p.PermissionMode, why)
+			return
+		}
 	}
 	m := h.localMachine(p.MachineID)
 	if m == nil {
@@ -875,6 +913,7 @@ func startBudget(async bool) time.Duration {
 type client struct {
 	canonicalContracts atomic.Bool
 	cancel             context.CancelFunc
+	done               <-chan struct{} // the phone connection ended; pending writes become uncertain
 	stopping           atomic.Bool
 	dropped            atomic.Bool // closed for falling behind (dropSlow): the close runs once, not once per send that finds it full
 
@@ -961,15 +1000,17 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 		h.events = newEventLog()
 	}
 	b = h.events.add(b, elicitation, time.Now())
+	// Each broadcast has one type and localizer; keep its language forms local to this call.
+	localize := i18n.ExtensionEvent
+	if typ == "machines" {
+		localize = localizedMachineEvent
+	}
+	forms := map[i18n.Lang][]byte{}
 	for c := range h.clients {
 		if elicitation && !c.has("elicitation") {
 			continue
 		}
-		if typ == "machines" {
-			c.queue(localizedMachineEvent(c.lang(), b))
-		} else {
-			c.queue(i18n.ExtensionEvent(c.lang(), b))
-		}
+		c.queue(localizedOnce(forms, c.lang(), b, localize))
 	}
 }
 
@@ -1049,6 +1090,7 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	type form struct {
 		lang i18n.Lang
 		lazy bool
+		ring bool // draws ```persona-card rings (card_compat.go)
 	}
 	msgs := map[form][]byte{}
 	key := [2]string{machineID, sessionID}
@@ -1061,10 +1103,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if !sub {
 			continue
 		}
-		f := form{c.lang(), wantsLazy}
+		f := form{c.lang(), wantsLazy, c.has(featureCardRing)}
 		b, ok := msgs[f]
 		if !ok {
-			its := localizedItems(f.lang, items)
+			its := cardCompatItems(f.lang, f.ring, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
@@ -1081,6 +1123,11 @@ func (h *Hub) phoneClient(tool ...string) *client {
 	// Only connected providers of the requested tool are eligible; prefer real devices, then recent activity.
 	var best *client
 	for c := range h.clients {
+		select {
+		case <-c.done:
+			continue
+		default:
+		}
 		if !c.phone || (len(tool) > 0 && !c.phoneToolNames[tool[0]]) {
 			continue
 		}
@@ -1110,7 +1157,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(64 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	who := principalOf(r.Context())
-	c := &client{cancel: cancel, hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
+	c := &client{cancel: cancel, done: ctx.Done(), hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
 		device: who.ID, role: who.Role, delta: wantsFeature(r, featureSessionsDelta), listMode: wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
 		urlFeatures: urlFeatures(r), acceptLang: i18n.FromRequest(r), meta: clientMeta{updates: make(chan heartbeatConfig, 512), done: ctx.Done()}}
 	c.traffic = h.requestTrafficAttribution(r, who)
@@ -1426,7 +1473,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			c.sendJSON(failure)
 			return
 		}
-		res.Items = localizedItems(c.lang(), h.withInjected(res.Items))
+		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), localizedItems(c.lang(), h.withInjected(res.Items)))
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}

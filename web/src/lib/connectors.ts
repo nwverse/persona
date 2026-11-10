@@ -62,6 +62,10 @@ export interface ConnectorPrompt {
   user_code?: string;
   interval?: number;
   hint?: string;
+  /** Where this step's hint points at (the provider's console, to create the app); the page opens it in a new tab. */
+  link?: string;
+  /** link's button label (the hub localizes it). */
+  link_text?: string;
   error?: string;
   done?: boolean;
   account?: string;
@@ -277,11 +281,6 @@ export function deletedLine(r: ConnectorDeleted, withInbox = true): string {
 export function canSendStep(p: ConnectorPrompt | null, values: Record<string, string>): boolean {
   if (!p?.fields?.length) return false;
   return p.fields.every((f) => (values[f.name] ?? "").trim().length > 0);
-}
-
-/** A code to enter on a web page (GitHub's device flow), asked again until the user has. */
-export function isDeviceCode(p?: ConnectorPrompt | null): boolean {
-  return p?.kind === "device_code" && !!p.user_code;
 }
 
 /** How the page draws a sign-in step: fields to fill in, a device code, a QR code (or, without its modules, the

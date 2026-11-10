@@ -1,6 +1,6 @@
 package conformance_test
 
-// The plugin protocol's schemas (schema/extension/connector.schema.json, channel.schema.json, kb.schema.json, todos.schema.json, models.schema.json) describe what the server's
+// The plugin protocol's schemas (schema/extension/connector.schema.json, channel.schema.json, kb.schema.json, todos.schema.json, leaders.schema.json, models.schema.json) describe what the server's
 // own code sends and reads: every call and event they list is held to the Go types the hub and connector/serve put on
 // the wire, field by field, and every connector method the server knows is in them. The schema is what an extension
 // is written from; this keeps it from drifting from the code.
@@ -46,6 +46,10 @@ var goTypes = map[string]any{
 	"ConnectorDoParams":             serve.DoParams{},
 	"ConnectorRecallParams":         serve.RecallParams{},
 	"ConnectorRecallResult":         serve.RecallResult{},
+	"ConnectorRecallCanParams":      serve.RecallCanParams{},
+	"ConnectorRecallCanResult":      serve.RecallCanResult{},
+	"ConnectorRecallDoParams":       serve.RecallDoParams{},
+	"ConnectorRecallDoResult":       serve.RecallDoResult{},
 	"ConnectorThreadParams":         serve.ThreadParams{},
 	"ConnectorThreadPage":           connector.ThreadPage{},
 	"ConnectorMediaParams":          serve.MediaParams{},
@@ -130,6 +134,9 @@ var goTypes = map[string]any{
 	"TodoChangedEvent":  assistantwire.TodoChangedEvent{},
 	"TodoDecisionEvent": assistantwire.TodoDecisionEvent{},
 
+	"LeaderChangedEvent": assistantwire.LeaderChangedEvent{},
+	"LeaderReportEvent":  assistantwire.LeaderReportEvent{},
+
 	// Storage params are the actual manager-engine decoder types. Dynamic result
 	// objects are validated against these wire DTOs before committing/acknowledging.
 	"StorageEmptyParams":       struct{}{},
@@ -164,7 +171,8 @@ var goTypes = map[string]any{
 // events.
 var serverCalls = []string{
 	serve.MManifest, serve.MStatus, serve.MLoginStep, serve.MLogout, serve.MChanges, serve.MCollect, serve.MReply,
-	serve.MCatalog, serve.MCatalogCall, serve.MTools, serve.MCall, serve.MActions, serve.MDescribe, serve.MDo, serve.MRecall, serve.MThread, serve.MMedia, serve.MItems,
+	serve.MCatalog, serve.MCatalogCall, serve.MTools, serve.MCall, serve.MActions, serve.MDescribe, serve.MDo,
+	serve.MRecall, serve.MRecallCan, serve.MRecallDo, serve.MThread, serve.MMedia, serve.MItems,
 	serve.MDocTitle, serve.MArchiveMedia, serve.MSnapshot, serve.MGroupTool, serve.MGroupAppend, serve.MGroupFallback,
 	serve.MOptionsGet, serve.MOptionsSet, serve.MSettle, serve.MMachineOnline, serve.MAuthGet, serve.MAuthSet,
 	serve.MSecretsLoad, serve.MSecretsSave, serve.MSecretsDelete, serve.MPostsPut, serve.MPostsComments,
@@ -191,6 +199,9 @@ var assistantCalls = []string{assistantwire.MethodAssistantConversations, assist
 // The to-do events the hub tells the extensions granted todos.read (todos.schema.json).
 var todoCalls = []string{"event." + assistantwire.EventTodoChanged, "event." + assistantwire.EventTodoDecision}
 
+// The leader events the hub tells the extensions granted leaders.read (leaders.schema.json).
+var leaderCalls = []string{"event." + assistantwire.EventLeaderChanged, "event." + assistantwire.EventLeaderReport}
+
 var storageCalls = []string{"storage.request", "storage.get", "storage.list", "storage.transaction",
 	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
 	"storage.blob.create", "storage.blob.write", "storage.blob.finish", "storage.blob.delete", "storage.blob.read"}
@@ -205,6 +216,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	}
 	want = append(want, kbCalls...)
 	want = append(want, todoCalls...)
+	want = append(want, leaderCalls...)
 	want = append(want, modelCalls...)
 	want = append(want, assistantCalls...)
 	want = append(want, sentCalls...)
@@ -216,7 +228,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	}
 	for name := range wire.Calls {
 		if (strings.HasPrefix(name, serve.Namespace+".") || strings.HasPrefix(name, channel.Namespace+".") ||
-			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.")) &&
+			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "event.leader.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.")) &&
 			!slices.Contains(want, name) {
 			t.Errorf("%s: schema/extension lists it, the server has no such call", name)
 		}

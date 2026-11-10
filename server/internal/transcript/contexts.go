@@ -12,7 +12,7 @@ import (
 // A message can carry <persona-context kind="…" title="…" url="…"> blocks: context picked on the phone, or everything
 // a Feishu /agent request hands its agent (prompts/lark). The tag is being renamed <persona-context> (#3182): readers
 // take either name. The apps show only the text outside the blocks as what the
-// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How the app shows it").
+// user wrote and fold the blocks into one row (docs/extensions/lark-agent.md "How it shows in the App").
 
 // contextBlockRe is one attributed block (the bare snapshot, ContextRe, is dropped before this).
 var contextBlockRe = lazyre.New(`(?s)(<` + compat.ContextPattern() + `\b[^>]*>)(.*?)(</` + compat.ContextPattern() + `>)`)
@@ -195,6 +195,11 @@ var leadingTagRe = lazyre.New(`^<([A-Za-z][\w.]*[-_][\w.-]*)(?:\s+[\w:.-]+="[^"]
 // closing tag, or to the end when a clip cut it off. Persona's own blocks are gone already (StripInjected).
 func dropLeadingBlocks(s string) string {
 	for {
+		// Most titles start with words: skip the regexp for them, it allocates on every call (the session lists title
+		// every row, #2371).
+		if !strings.HasPrefix(s, "<") {
+			return s
+		}
 		m := leadingTagRe.FindStringSubmatchIndex(s)
 		if m == nil {
 			return s

@@ -5,16 +5,17 @@ import { useSyncExternalStore } from "react";
 import { api, ApiError, enc } from "./api";
 import { formatDate, t } from "../i18n";
 import { parseAPIError } from "./api-errors";
-import { getState, onHubEvent, putTodo, refreshTodos } from "./store";
+import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
 import { applySnapshot } from "./assistant-views";
 import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
-import { deleteTodo, type Todo } from "./todos";
+import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { conversationManager, itemHeaders } from "./manager-choice";
 import { closePanel, getPanel } from "./panel";
 import type { ChatLine } from "./turns";
 import type { Item } from "./types";
+import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
 export interface PlanTask {
   title: string;
@@ -86,7 +87,7 @@ export interface BriefRow {
   /** accept: the verdict line, word for word as the Lark card says it (#1226), in the bot's language; a hub from before leaves it out. */
   verdict?: string;
   /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
-  outcome?: "done" | "cannot" | "decide";
+  outcome?: TodoAsk["outcome"];
   recommend?: string;
 }
 
@@ -144,7 +145,7 @@ export interface BriefBody {
   /** Questions Agents left to wait for a briefing, the oldest first (`id` is the one the Handled button sends). A hub that does not know them leaves the list out. */
   later: BriefRow[];
   later_total: number;
-  progress: { id: string; title: string; stage?: string }[];
+  progress: { id: string; title: string; stage?: string; stage_kind?: Todo["stage_kind"] }[];
   progress_total: number;
 }
 
@@ -280,6 +281,7 @@ export function answeredItems(it: FeedItem): AnsweredItem[] {
 interface FeedState {
   feeds: Record<string, FeedItem[]>;
   plans: Record<string, TaskPlan>;
+  taskCards: Record<string, TaskCardMetadata[]>;
   /** Conversation → the task the next message goes to ("Tell "xx""). */
   routes: Record<string, string>;
   busy: Record<string, boolean>;
@@ -287,7 +289,7 @@ interface FeedState {
   later: Record<string, boolean>;
 }
 
-let st: FeedState = { feeds: {}, plans: {}, routes: {}, busy: {}, later: {} };
+let st: FeedState = { feeds: {}, plans: {}, taskCards: {}, routes: {}, busy: {}, later: {} };
 const listeners = new Set<() => void>();
 function set(patch: Partial<FeedState>) {
   st = { ...st, ...patch };
@@ -350,10 +352,12 @@ function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
   }
   for (const [c, group] of byConversation) feeds[c] = mergeInto(feeds[c] ?? [], [...group.values()]);
   set({ feeds, plans: plans ? { ...st.plans, ...plans } : st.plans });
-  if (items.some((i) => i.kind === "task" || i.kind === "receipt")) void refreshTodos();
+  if (items.some((i) => i.kind === "task" || i.kind === "receipt")) todosPushed();
 }
 
 const loading = new Set<string>();
+/** Conversations asked for again while their read was out: that read's answer may predate what was asked for. */
+const again = new Set<string>();
 const todayAsked = new Map<string, string>();
 
 /** The most items the hub answers at once (docs/protocol/protocol.md: oldest first, at most 500): a full page has more after it. */
@@ -361,30 +365,44 @@ const FEED_PAGE = 500;
 /** Pages read in one load at most. */
 const FEED_PAGES = 40;
 
-/** A conversation's feed: what came since the newest item it has. */
+/** A conversation's feed: what came since the newest item it has. A read asked for while one is out runs once more
+ *  after it (a reconnect's hello during the first read on open was dropped, and what was pushed meanwhile stayed missing). */
 export async function loadFeed(conversation: string) {
-  if (loading.has(conversation)) return;
+  if (loading.has(conversation)) {
+    again.add(conversation);
+    return;
+  }
   loading.add(conversation);
   try {
-    let last = st.feeds[conversation]?.at(-1)?.at;
-    for (let n = 0; n < FEED_PAGES; n++) {
-      const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
-        `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
-      );
-      if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
-      const items = res.items ?? [];
-      received(items, res.plans ?? undefined);
-      // the cards' snapshot comes whole with every page: what an event missed comes back here
-      applySnapshot(conversation, res);
-      const newest = items.at(-1)?.at;
-      // the next page starts after this one's newest; one that did not move on would come back the same
-      if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
-      last = newest;
-    }
+    do {
+      again.delete(conversation);
+      await readFeedPages(conversation);
+    } while (again.has(conversation));
   } catch {
     // an older hub has no feed: the conversation shows as before
   } finally {
+    again.delete(conversation);
     loading.delete(conversation);
+  }
+}
+
+/** One pass of loadFeed: the pages since the newest item the feed has now. */
+async function readFeedPages(conversation: string) {
+  let last = st.feeds[conversation]?.at(-1)?.at;
+  for (let n = 0; n < FEED_PAGES; n++) {
+    const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
+      `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
+    );
+    if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
+    const items = res.items ?? [];
+    received(items, res.plans ?? undefined);
+    if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
+    // the cards' snapshot comes whole with every page: what an event missed comes back here
+    applySnapshot(conversation, res);
+    const newest = items.at(-1)?.at;
+    // the next page starts after this one's newest; one that did not move on would come back the same
+    if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
+    last = newest;
   }
 }
 
@@ -420,7 +438,7 @@ onHubEvent("task_plan", (m) => {
 /** The fields of a plan's task "Edit" lets the user change before it starts (iOS PlanEditSheet), ultracode included (#12). */
 export type PlanTaskEdit = Pick<PlanTask, "title" | "machine" | "cwd" | "model" | "permission" | "prompt"> & { ultracode: boolean };
 
-export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "bypassPermissions"] as const;
+export const PLAN_PERMISSIONS = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"] as const;
 
 /** A plan's tasks as "Edit" starts them: every editable field filled in (an unset permission is "Ask every step").
  *  `ultracode`: the card's own choice per task, where it has one; else the assistant's. */
@@ -473,11 +491,27 @@ export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[
   return edits.some((e) => "ultracode" in e) ? edits : undefined;
 }
 
+/**
+ * The header naming the manager of conversation, for what its feed offers (a plan, a briefing's question): the routes
+ * name no conversation, so the hub would take them to the default manager (docs/protocol/protocol.md "Per-manager
+ * routing"), whichever assistant the conversation is (another made current, or another's conversation opened here).
+ * The manager a page noted for it, else the one the hub's sessions list has it under; none for the default's.
+ */
+export function conversationHeaders(conversation: string): Record<string, string> | undefined {
+  const noted = conversationManager(conversation);
+  if (noted) return itemHeaders(noted);
+  for (const list of Object.values(getState().sessions)) {
+    const s = list.find((x) => x.session_id === conversation);
+    if (s) return itemHeaders(s.manager);
+  }
+  return undefined;
+}
+
 export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
   if (st.busy[plan.id]) return;
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json: { tasks: edits, remember } });
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json: { tasks: edits, remember }, headers: conversationHeaders(plan.conversation) });
     set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
     void refreshTodos();
   } finally {
@@ -489,7 +523,7 @@ export async function dismissPlan(plan: TaskPlan) {
   if (st.busy[plan.id]) return;
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST" });
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST", headers: conversationHeaders(plan.conversation) });
     set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
@@ -533,9 +567,9 @@ export async function acceptBrief(todoId: string, askedAt: string): Promise<"acc
 
 /** The Handled button of a question in a `brief` item's `later` list: "marked", or "handled" when the hub says it is not in
  *  the queue any more (marked before, its to-do ended, or 7 days). Any other failure throws. */
-export async function handledLater(id: string): Promise<"marked" | "handled"> {
+export async function handledLater(id: string, conversation: string): Promise<"marked" | "handled"> {
   try {
-    await api(`/later/${enc(id)}/handled`, { method: "POST" });
+    await api(`/later/${enc(id)}/handled`, { method: "POST", headers: conversationHeaders(conversation) });
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) return "handled";
     throw e;
