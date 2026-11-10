@@ -347,6 +347,7 @@
     <string name="agents_todo_delete_action">删除</string>
     <string name="agents_todo_done_failed">完成待办失败：%1$s</string>
     <string name="agents_todo_delete_failed">删除待办失败：%1$s</string>
+    <string name="agents_todo_state_didnt_start">没开起来</string>
     <string name="agents_todo_start_failed">启动失败：%1$s</string>
     <string name="agents_todo_in_progress">正在进行</string>
     <plurals name="agents_todo_agents">

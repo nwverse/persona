@@ -362,6 +362,7 @@
     <string name="agents_todo_delete_action">Delete</string>
     <string name="agents_todo_done_failed">Couldn\'t complete the to-do: %1$s</string>
     <string name="agents_todo_delete_failed">Couldn\'t delete the to-do: %1$s</string>
+    <string name="agents_todo_state_didnt_start">Didn\'t start</string>
     <string name="agents_todo_start_failed">Couldn\'t start: %1$s</string>
     <string name="agents_todo_in_progress">In progress</string>
     <plurals name="agents_todo_agents">
