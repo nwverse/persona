@@ -1,6 +1,7 @@
 // Derived lists the sidebar, the home page and the palette share.
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { api, credentialOwner } from "./api";
+import { credentialOwner } from "./api";
+import { CompleteSessions } from "./complete-sessions";
 import { stateOf } from "./format";
 import { getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
@@ -15,8 +16,8 @@ export function useAgentSessions(): Session[] {
 
 const EMPTY_FULL_LIST = { sessions: [] as Session[], loaded: false, base: {} as Record<string, Session[]> };
 const FULL_LIST_RETRY_MS = 5_000;
-// Working agents emit list hints for every display update. Space complete reads from their completion
-// so a large fallback list cannot be downloaded back-to-back while those hints keep arriving.
+// Working agents emit list hints for every display update. Space reads from their completion so hints that keep
+// arriving share one read. The complete list is read once; later reads ask only for what changed (complete-sessions.ts).
 const FULL_LIST_REFRESH_MS = 3_000;
 
 // A short handoff window covers Sidebar → AgentsPage and StrictMode remounts, not a permanent
@@ -36,6 +37,7 @@ function createFullCache(owner: string) {
   let stopped = false, consumers = 0, pending = false, dirty = false, urgent = false;
   let nextReadAt = 0;
   let controller: AbortController | undefined;
+  const complete = new CompleteSessions();
   let retry: ReturnType<typeof setTimeout> | undefined;
   let trailing: ReturnType<typeof setTimeout> | undefined;
   let expiry: ReturnType<typeof setTimeout> | undefined;
@@ -59,9 +61,10 @@ function createFullCache(owner: string) {
     controller = new AbortController();
     const base = getState().sessions;
     try {
-      const result = await api<{ sessions: Session[] }>("/sessions", { signal: controller.signal });
-      if (valid()) {
-        fullSnapshot = { sessions: (result.sessions ?? []).filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
+      const result = await complete.read(controller.signal);
+      // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
+      if (valid() && (result.changed || !fullSnapshot.loaded)) {
+        fullSnapshot = { sessions: result.sessions.filter((s) => !s.assistant), loaded: true, base, epoch: fullSnapshot.epoch };
         fullChanged();
       }
     } catch {
@@ -77,7 +80,11 @@ function createFullCache(owner: string) {
       if (valid() && consumers && dirty && retry === undefined) void read(urgent);
     }
   };
-  const off = ["sessions_list", "session", "sessions", "sessions_delta", "hello"].map((event) => onHubEvent(event, () => { void read(event === "hello"); }));
+  const off = ["sessions_list", "session", "sessions", "sessions_delta", "hello"].map((event) => onHubEvent(event, (msg) => {
+    // A hint for the revision this copy already holds (the one on connect, a burst's repeat) needs no read.
+    if (event === "sessions_list" && complete.holds(msg?.revision)) return;
+    void read(event === "hello");
+  }));
   const dispose = () => {
     if (stopped) return;
     stopped = true;
