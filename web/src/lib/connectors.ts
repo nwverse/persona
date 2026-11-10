@@ -374,6 +374,8 @@ export interface LarkCLIInboxOptions {
   documents: string[];
   wiki_spaces: string[];
   owned_all_comments: boolean;
+  /** What counts as Needs you / FYI / Collapsed for these items, in the user's words (empty: the Inbox's own rules). */
+  triage_rules: string;
 }
 
 /** lark-cli's options as the hub gives them, or null when it gives none (or not that shape). */
@@ -382,7 +384,7 @@ export function larkcliOptions(raw: unknown): LarkCLIInboxOptions | null {
   const o = raw as Record<string, unknown>;
   if (!Array.isArray(o.documents)) return null;
   const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-  return { inbox_all_chats: strings(o.inbox_all_chats), documents: strings(o.documents), wiki_spaces: strings(o.wiki_spaces), owned_all_comments: o.owned_all_comments === true };
+  return { inbox_all_chats: strings(o.inbox_all_chats), documents: strings(o.documents), wiki_spaces: strings(o.wiki_spaces), owned_all_comments: o.owned_all_comments === true, triage_rules: typeof o.triage_rules === "string" ? o.triage_rules : "" };
 }
 
 /** The CI choices, most quiet first. */

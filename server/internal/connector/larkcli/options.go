@@ -16,6 +16,8 @@ type InboxOptions struct {
 	WikiSpaces    []string `json:"wiki_spaces"`
 	// OwnedAllComments: every comment on a watched document the user owns (DocumentOptions).
 	OwnedAllComments bool `json:"owned_all_comments"`
+	// TriageRules: what counts as Needs you / FYI / Collapsed for lark-cli's items, in the user's words.
+	TriageRules string `json:"triage_rules"`
 }
 
 func (c *Connector) Options() json.RawMessage {
@@ -25,6 +27,7 @@ func (c *Connector) Options() json.RawMessage {
 	for id := range c.inboxAllChats {
 		ids = append(ids, id)
 	}
+	rules := c.triageRules
 	c.inboxMu.Unlock()
 	sort.Strings(ids)
 
@@ -42,6 +45,7 @@ func (c *Connector) Options() json.RawMessage {
 		Documents:        documents.Documents,
 		WikiSpaces:       documents.WikiSpaces,
 		OwnedAllComments: documents.OwnedAllComments,
+		TriageRules:      rules,
 	})
 	return b
 }
@@ -49,6 +53,7 @@ func (c *Connector) Options() json.RawMessage {
 func (c *Connector) SetOptions(raw json.RawMessage) error {
 	var wire struct {
 		InboxAllChats json.RawMessage `json:"inbox_all_chats"`
+		TriageRules   *string         `json:"triage_rules"`
 	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		return fmt.Errorf("options: %v", err)
@@ -82,11 +87,29 @@ func (c *Connector) SetOptions(raw json.RawMessage) error {
 		return err
 	}
 	c.ensureDocuments()
+	rules := ""
+	if wire.TriageRules != nil {
+		rules = strings.TrimSpace(*wire.TriageRules)
+	}
+	if len([]rune(rules)) > maxTriageRules {
+		return fmt.Errorf("options.triage_rules is longer than %d characters", maxTriageRules)
+	}
 	c.inboxMu.Lock()
 	c.inboxAllChats = chats
+	c.triageRules = rules
 	c.inboxMu.Unlock()
 	c.docs.setOptions(documents)
 	return nil
+}
+
+// maxTriageRules is the Inbox's limit for a source's rules.
+const maxTriageRules = 4000
+
+// rules are the user's triage rules for lark-cli's items.
+func (c *Connector) rules() string {
+	c.inboxMu.Lock()
+	defer c.inboxMu.Unlock()
+	return c.triageRules
 }
 
 func (c *Connector) ensureDocuments() {

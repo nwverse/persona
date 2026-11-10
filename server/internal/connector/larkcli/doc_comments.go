@@ -844,7 +844,7 @@ func (c *Connector) documentThing(doc *watchedDocument, comment adapter.Comment,
 	thing := connector.InboxThing{
 		Thread: thread, Kind: "doc", Label: i18n.T(lang, "hub-connectors.doc_comment_label"), Title: documentFirstNonEmpty(doc.Title, doc.URL), Sender: event.UserID,
 		Preview: preview, Context: contextText, At: at, Last: last, URL: commentURL,
-		Extra: &connector.ThingExtra{Count: 1, Doc: docBlock},
+		Extra: &connector.ThingExtra{Count: 1, Doc: docBlock}, Rules: c.rules(),
 	}
 	if event.Mention {
 		// A comment that mentions the user asks for them; replies and comments on documents they own are left to the

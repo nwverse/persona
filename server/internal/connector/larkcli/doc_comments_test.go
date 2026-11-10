@@ -313,3 +313,25 @@ func TestOwnedAllCommentsCoversRecentOwnDocumentsWithoutAWatchList(t *testing.T)
 		t.Fatalf("an owned document was read after the option was turned off")
 	}
 }
+
+func TestTriageRulesRoundTripAndReachTheItems(t *testing.T) {
+	c := docTestConnector(t, "comments_owned")
+	t.Setenv("LARKCLI_FAKE_OWNER", "ou_example_user")
+	rules := "Build and alert bots are FYI unless they name me."
+	opts, _ := json.Marshal(map[string]any{"documents": []string{"https://example.feishu.cn/docx/doc_example"}, "owned_all_comments": true, "triage_rules": " " + rules + " "})
+	if err := c.SetOptions(opts); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(c.Options()), rules) {
+		t.Fatalf("options = %s", c.Options())
+	}
+	c.pollDocuments(context.Background())
+	things, _ := c.Collect(context.Background())
+	if len(things) == 0 || things[0].Rules != rules {
+		t.Fatalf("things = %+v", things)
+	}
+	long, _ := json.Marshal(map[string]any{"triage_rules": strings.Repeat("x", maxTriageRules+1)})
+	if err := c.SetOptions(long); err == nil {
+		t.Fatal("over-long rules accepted")
+	}
+}

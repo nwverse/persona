@@ -30,11 +30,14 @@ type Connector struct {
 	now     func() time.Time
 	profile string
 
-	inboxMu          sync.Mutex
-	inboxThings      map[string]connector.InboxThing
-	inboxSeen        map[string]struct{}
-	inboxTopics      map[string]struct{}
-	inboxAllChats    map[string]struct{}
+	inboxMu       sync.Mutex
+	inboxThings   map[string]connector.InboxThing
+	inboxSeen     map[string]struct{}
+	inboxTopics   map[string]struct{}
+	inboxAllChats map[string]struct{}
+	// triageRules are the user's triage rules for lark-cli's Inbox items, in their words (options.triage_rules): the
+	// Inbox's triage reads them instead of the global inbox.rules.
+	triageRules      string
 	inboxState       persistedInboxState
 	inboxStateLoaded bool
 	inboxCollecting  bool

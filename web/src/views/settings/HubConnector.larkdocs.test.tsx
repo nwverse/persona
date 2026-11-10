@@ -9,7 +9,7 @@ import type { HubConnector } from "../../lib/connectors";
 const saved = vi.hoisted(() => [] as unknown[]);
 const lark: HubConnector = {
   id: "larkcli", name: "飞书 · 我的消息", status: "ok", account: "示例用户", enabled: true, capabilities: ["read"],
-  options: { inbox_all_chats: ["oc_example"], documents: [], wiki_spaces: [], owned_all_comments: false },
+  options: { inbox_all_chats: ["oc_example"], documents: [], wiki_spaces: [], owned_all_comments: false, triage_rules: "" },
 };
 vi.mock("../../lib/connectors", async (original) => ({
   ...(await original<typeof import("../../lib/connectors")>()),
@@ -49,7 +49,7 @@ describe("lark-cli's watched documents", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => input.form!.requestSubmit());
-    expect(saved).toEqual([{ inbox_all_chats: ["oc_example"], documents: ["https://example.feishu.cn/docx/doc_example"], wiki_spaces: [], owned_all_comments: false }]);
+    expect(saved).toEqual([{ inbox_all_chats: ["oc_example"], documents: ["https://example.feishu.cn/docx/doc_example"], wiki_spaces: [], owned_all_comments: false, triage_rules: "" }]);
     expect(host.textContent).toContain("https://example.feishu.cn/docx/doc_example");
   });
 
@@ -57,6 +57,6 @@ describe("lark-cli's watched documents", () => {
     const sw = host.querySelector<HTMLElement>('[role="switch"][aria-label="我拥有的文档收全部评论"]')!;
     expect(sw.getAttribute("aria-checked")).toBe("false");
     await act(async () => sw.click());
-    expect(saved).toEqual([{ inbox_all_chats: ["oc_example"], documents: [], wiki_spaces: [], owned_all_comments: true }]);
+    expect(saved).toEqual([{ inbox_all_chats: ["oc_example"], documents: [], wiki_spaces: [], owned_all_comments: true, triage_rules: "" }]);
   });
 });

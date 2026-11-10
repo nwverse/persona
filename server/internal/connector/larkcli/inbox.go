@@ -644,6 +644,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Last:     latest.MessageID,
 		ReplyTo:  latest.MessageID,
 		CanReply: latest.MessageID != "",
+		Rules:    c.rules(),
 		Tags:     tags,
 	}
 	if thing.At.IsZero() {

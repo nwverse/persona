@@ -207,6 +207,7 @@ export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string
       )}
 
       {c && id === "github" && githubOptions(c.options) && <GitHubInbox key={JSON.stringify(c.options)} options={githubOptions(c.options)!} onSaved={setC} />}
+      {c && id === "larkcli" && larkcliOptions(c.options) && <LarkCLITriage key={`t:${JSON.stringify(c.options)}`} options={larkcliOptions(c.options)!} onSaved={setC} />}
       {c && id === "larkcli" && larkcliOptions(c.options) && <LarkCLIDocuments key={JSON.stringify(c.options)} options={larkcliOptions(c.options)!} onSaved={setC} />}
     </div>
   );
@@ -872,5 +873,35 @@ function LinkList({ label, placeholder, values, disabled, onChange }: { label: s
         <Button type="submit" tone="secondary" icon="plus" disabled={!canAdd || disabled}>{t("settings-hubconnector.add")}</Button>
       </form>
     </>
+  );
+}
+
+/** lark-cli's triage rules: what counts as Needs you for its items, in the user's words (sent with the other options). */
+function LarkCLITriage({ options, onSaved }: { options: LarkCLIInboxOptions; onSaved: (c: HubConnector) => void }) {
+  const [text, setText] = useState(options.triage_rules);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const changed = text.trim() !== options.triage_rules.trim();
+  const save = async () => {
+    setSaving(true);
+    try {
+      onSaved(await setConnector("larkcli", { options: { ...options, triage_rules: text } }));
+      setError("");
+    } catch (e) {
+      setError(t("settings-hubconnector.save_failed", { error: errorText(e) }));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Group title={t("settings-hubconnector.lark_triage")} footer={t("settings-hubconnector.lark_triage_footer")}>
+      <div className="flex flex-col gap-2 px-4 py-3">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} maxLength={4000} rows={4} placeholder={t("settings-hubconnector.lark_triage_placeholder")} aria-label={t("settings-hubconnector.lark_triage")} disabled={saving} className={cx(fieldClass, "min-h-24 resize-y py-2")} />
+        <div className="flex justify-end">
+          <Button tone="primary" busy={saving} disabled={!changed || saving} onClick={() => void save()}>{t("settings-hubconnector.lark_triage_save")}</Button>
+        </div>
+        {error && <p className="text-[12px] text-red">{error}</p>}
+      </div>
+    </Group>
   );
 }
