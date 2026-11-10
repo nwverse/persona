@@ -1,7 +1,7 @@
 import PersonaKit
 import SwiftUI
 
-/// What the table viewer knows how to open (docs/apple/ios.md「表格」): CSV / TSV as text, xlsx as a workbook. Old .xls and
+/// What the table viewer knows how to open (docs/apple/ios.md「Tables」): CSV / TSV as text, xlsx as a workbook. Old .xls and
 /// Numbers stay with QuickLook.
 nonisolated enum TableFileType {
     static let delimited: Set<String> = ["csv", "tsv", "tab"]

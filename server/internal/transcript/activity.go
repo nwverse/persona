@@ -43,7 +43,7 @@ func (m *Meta) trackActivity(it proto.Item) {
 const activityLen = 40
 
 // Activity says in a few words what a tool call is doing: "running tests", "reading tasks.go", "waiting for CI". Shown on the task cards
-// and agent rows while an agent only runs tools (docs/assistant/unified-entry.md "Progress on task cards").
+// and agent rows while an agent only runs tools (docs/assistant/unified-entry.md "Task cards").
 func Activity(name string, input json.RawMessage) string {
 	var in map[string]any
 	_ = json.Unmarshal(input, &in)

@@ -343,6 +343,7 @@ class PersonaDeploymentScriptTests(unittest.TestCase):
         self.base = Path(temporary.name)
         self.repo = self.base / 'repo'; self.repo.mkdir()
         (self.repo / 'server').mkdir(); (self.repo / 'web').mkdir()
+        shutil.copy(ROOT / 'server/build-tags.txt', self.repo / 'server/build-tags.txt')
         shutil.copytree(ROOT / 'scripts', self.repo / 'scripts', ignore=shutil.ignore_patterns('__pycache__'))
         (self.repo / 'web/package.json').write_text('{}')
         (self.repo / 'web/package-lock.json').write_text('{}')

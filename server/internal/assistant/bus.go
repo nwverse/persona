@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -36,7 +38,7 @@ type BusOptions struct {
 	Token      string // the assistant's bus token (jb_…)
 	HTTPClient *http.Client
 	Version    string        // this build's, for the hub's roster
-	Deploy     string        // how it was started: "child" (the hub's), "external"
+	Deploy     string        // how it was started: "child" (the hub's), DeployService, "external", "docker"
 	Backoff    time.Duration // before dialing again, doubling to a minute (zero: the protocol's 1 s; tests shorten it)
 	Logf       func(format string, args ...any)
 	// Devices is the manager's own connections to the computers (devices.go); nil: the hub has them (tests).
@@ -116,7 +118,10 @@ func NewBusHub(o BusOptions) *BusHub {
 		Cancels: map[string]bool{assistantwire.MethodApp: true},
 		Hub:     o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
 		StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.StopWhenRejected,
-		HelloMethod: assistantwire.MethodHello,
+		// The hub's own manager (its child, or the built-in one's service dialing the hub's local address) is on the
+		// hub's machine: compressing its messages saves no network, and costs both ends the compressor's state.
+		Uncompressed: o.Deploy == "child" || o.Deploy == DeployService && id == assistantwire.AssistantID && loopbackHub(o.Hub),
+		HelloMethod:  assistantwire.MethodHello,
 		HelloParams: func() any {
 			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
@@ -136,6 +141,19 @@ func NewBusHub(o BusOptions) *BusHub {
 		},
 	}
 	return b
+}
+
+// loopbackHub says the hub's URL is this machine's loopback address.
+func loopbackHub(hub string) bool {
+	u, err := url.Parse(hub)
+	if err != nil {
+		return false
+	}
+	if u.Hostname() == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(u.Hostname())
+	return ip != nil && ip.IsLoopback()
 }
 
 // Run keeps the connection to the hub up and serves it with svc, and runs svc's own work (its schedule) from when it

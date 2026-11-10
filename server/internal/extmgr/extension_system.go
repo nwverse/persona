@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Places outside the app (docs/extensions/extensions.md "System-level places"): an extension's widgets (the ui slot widget: a home
+// Places outside the app (docs/extensions/extensions.md "System-level placements"): an extension's widgets (the ui slot widget: a home
 // screen widget, a Lock Screen or watch face complication) and its shortcuts (actions Shortcuts and Siri run). The apps
 // list them, draw a widget for a family (held to what the family draws, kept until it is due again) and run a shortcut;
 // each device says which widgets it has, so an extension's ui.invalidate wakes the devices that show it.

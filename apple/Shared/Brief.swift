@@ -1,6 +1,6 @@
 import Foundation
 
-/// The `brief` item of a morning or evening routine's conversation (docs/protocol/protocol.md "Conversation feed", #2320):
+/// The `brief` item of a morning or evening routine's conversation (docs/protocol/protocol.md "Tasks and the chat feed", #2320):
 /// the fixed part of a run as the hub worked it out when the run started, the same rows as its Lark card. Hubs since the
 /// item (2026-11-07) send different shapes, so every section and field may be missing, a row that can't be read is left
 /// out on its own, and values that may grow (`outcome`, `stage`) stay strings.

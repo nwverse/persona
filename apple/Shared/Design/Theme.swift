@@ -704,7 +704,7 @@ nonisolated enum Theme {
     static let primaryText = Color(light: 0x1C1C1E, dark: 0xF2F2F7)
     static let codeBackground = Color(light: 0xF3F1EC, dark: 0x1C1D21)
 
-    /// Syntax colors in the file viewer (docs/apple/ios.md「文件查看器」), on `codeBackground` in every style (it does not
+    /// Syntax colors in the file viewer (docs/apple/ios.md「File viewer」), on `codeBackground` in every style (it does not
     /// change with the style, so neither do they): GitHub's palette, every one ≥ 4.5:1 on that background in light
     /// and dark (`SyntaxPaletteTests`). Words that are none of these stay `.primary`.
     enum Syntax {

@@ -47,7 +47,7 @@ enum ToolPresentation {
         if n.hasPrefix("phone_") { return "iPhone" }
         if n.hasPrefix("mail_") { return String(localized: "Mail [Assistant View 3d708e]") }
         switch n {
-        // Persona managing its own conversations (docs/assistant/assistant.md「管理自己的对话」).
+        // Persona managing its own conversations (docs/assistant/assistant.md「Managing its own conversations」).
         case "conversations_list": return String(localized: "List Chats")
         case "conversation_read": return String(localized: "Read Chat")
         case "conversation_rename": return String(localized: "Rename Chat")
@@ -1157,7 +1157,7 @@ extension EnvironmentValues {
     @Entry var openFold: ((Item) async throws -> Void)? = nil
 }
 
-/// Work the page left out (`Item.fold`, docs/protocol/protocol.md「折叠的工作」). It shows only once its work line is open, and
+/// Work the page left out (`Item.fold`, docs/protocol/protocol.md「Folded work」). It shows only once its work line is open, and
 /// then fetches the steps, which take its place.
 struct FoldedWorkRow: View {
     @Environment(\.openFold) private var openFold

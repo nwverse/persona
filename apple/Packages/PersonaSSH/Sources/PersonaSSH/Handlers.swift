@@ -30,7 +30,7 @@ final class KeyAuth: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable
 }
 
 /// Takes the server's key only when it is the pinned one. Not pinned yet: refused too, with the fingerprint, for the
-/// user to confirm (docs/operations/network.md「经 SSH 隧道连 hub」).
+/// user to confirm (docs/operations/network.md「Connecting to hub through SSH」).
 final class HostKeyCheck: NIOSSHClientServerAuthenticationDelegate, @unchecked Sendable {
     private let pinned: String?
     // Set on the connection's event loop, read once the connection attempt is over.

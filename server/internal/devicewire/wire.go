@@ -1,5 +1,5 @@
 // Package devicewire is what the hub and the manager that carries the user's computers say to each other over the
-// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects the computers"): the manager (internal/devices, in
+// bus about them (docs/protocol/protocol.md "Computers (devices.*)", docs/server/machines.md "Who connects to computers"): the manager (internal/devices, in
 // `personad assistant`) connects every computer — the local node, ssh, tailcat, Persona Link in both modes, the ones
 // reached through another hub of the mesh — and holds what is known of each; the hub never dials or accepts a
 // computer. It hands the manager hub.json's machines as defaults, relays the apps' calls and streams to it, and keeps
@@ -203,7 +203,7 @@ type LinkEndpoint struct {
 	Kind string `json:"kind"`
 }
 
-// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Several ways"): whether this hub leaves its computers to
+// Mesh is what the manager needs of the mesh group (docs/server/mesh.md "Multiple paths to one computer"): whether this hub leaves its computers to
 // the center, and the members' computers the center reaches through them.
 type Mesh struct {
 	// Member: this hub is a member; its computers are connected by the center (through it), not from here.

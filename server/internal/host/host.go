@@ -202,7 +202,7 @@ type FocusState struct {
 }
 
 // Focuser moves and reports the focus a host shares among its clients (herdr: pane.focus, and the focus events with
-// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus sync").
+// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus synchronization").
 type Focuser interface {
 	// Focused is what the host shows now; Pane is empty when the host does not say.
 	Focused(ctx context.Context) (FocusState, error)

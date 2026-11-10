@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The assistant is the chief manager, and the user's computers are its (docs/server/machines.md "Who connects the computers"): its process
+// The assistant is the chief manager, and the user's computers are its (docs/server/machines.md "Who connects to computers"): its process
 // connects them itself (internal/devices), the hub only relays to it. This file is how the bus connection (bus.go)
 // takes the hub's devices.* calls and events to that layer, and how the assistant's own calls to a machine go to it
 // directly instead of round the hub.

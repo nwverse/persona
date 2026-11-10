@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-/// The shell's composer (docs/apple/ios.md「新外壳」), ChatGPT's: one line — [+] Ask Persona… [mic] — that grows into a card
+/// The shell's composer (docs/apple/ios.md「New shell」), ChatGPT's: one line — [+] Ask Persona… [mic] — that grows into a card
 /// while typing, the field on top and a row under it: [+] … [model · effort] [mic] [send]. With Voice Chat offered
 /// (`voice`, docs/assistant/voice.md 6.1) the line is [+] … [mic] [voice], or [+] … [voice] [stop] while the agent works (dictation
 /// is then in the card's row), and the card's row has voice in send's place while nothing is typed. The assistant's

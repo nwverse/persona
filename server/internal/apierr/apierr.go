@@ -1,4 +1,4 @@
-// Package apierr writes the JSON bodies of the hub's HTTP API (docs/protocol/protocol.md "Errors"): a result, or an error with a
+// Package apierr writes the JSON bodies of the hub's HTTP API (docs/protocol/protocol.md "Error body"): a result, or an error with a
 // stable code. It is shared by the hub and the services whose requests the hub relays (internal/assistant), so an
 // error reads the same whichever of them answered.
 package apierr
@@ -213,9 +213,10 @@ var rpcFailureKeys = map[string]string{
 	"readonly_unsupported":     "rpc-errors.readonly_unsupported",
 	"assistant_in_doubt":       "rpc-errors.in_doubt",
 	// queued messages sent now (#6088)
-	"nothing_queued":       "rpc-errors.nothing_queued",
-	"send_now_unsupported": "rpc-errors.send_now_unsupported",
-	"send_now_in_doubt":    "rpc-errors.in_doubt",
+	"nothing_queued":        "rpc-errors.nothing_queued",
+	"send_now_unsupported":  "rpc-errors.send_now_unsupported",
+	"send_now_unrecognized": "rpc-errors.send_now_unrecognized", // #2467
+	"send_now_in_doubt":     "rpc-errors.in_doubt",
 	// a new agent's worktree (#6115)
 	"not_a_repository":  "rpc-errors.not_a_repository",
 	"not_our_worktree":  "rpc-errors.not_our_worktree",

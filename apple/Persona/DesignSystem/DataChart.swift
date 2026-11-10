@@ -1,7 +1,7 @@
 import Charts
 import SwiftUI
 
-/// A chart of values over categories (a plugin's `chart` item, docs/extensions/extensions.md「UI 插槽」): bars (side by side or
+/// A chart of values over categories (a plugin's `chart` item, docs/extensions/extensions.md「UI slots」): bars (side by side or
 /// stacked) or lines, one to a few series, in the design system's colors. A series without a color of its own takes
 /// the data hues in order (the first is the accent). Holding (iPhone) or hovering (Mac) a category shows its label and
 /// every series' value above the plot. Compact (a card): no axis text, only the marks and the first and last labels.

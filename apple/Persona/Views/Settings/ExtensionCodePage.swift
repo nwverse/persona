@@ -1,6 +1,6 @@
 import SwiftUI
 
-// An extension's page with UI version 4's code-hosting parts (#2961, docs/extensions/extensions.md「UI 版本 4」): tabs at the
+// An extension's page with UI version 4's code-hosting parts (#2961, docs/extensions/extensions.md「UI version 4: code hosting」): tabs at the
 // top, a header across, and on a wide display (iPad, Mac) the `side` sections (a file tree) in a column on the left
 // beside the rest; on a phone the side sections are the page and what they open (a file's code, the diffs) is pushed
 // on top, a directory at a time. Everything is a block of one lazy stack, a diff a block per line, so a diff of

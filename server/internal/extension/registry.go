@@ -105,6 +105,8 @@ type Extension struct {
 	Schema   *Schema
 	// Dir is the package's directory ("" for one installed from remote: or a hub.json plugin).
 	Dir string
+	// L10n are the package's translations of its manifest's text (l10n.go), read with it; never changed after.
+	L10n Translations
 	// Problem is why it cannot run on this hub (engines, a missing package); it is then not started.
 	Problem  string
 	Warnings []string
@@ -344,6 +346,10 @@ func (r *Registry) fromRow(row Record) *Extension {
 		if !hasManifest(p.Dir) {
 			p.problemErr = i18n.Err("extension-status.package_missing", i18n.Args{"path": p.Dir})
 			p.Problem = p.problemErr.Error()
+		} else {
+			var warnings []string
+			p.L10n, warnings = ReadTranslations(p.Dir)
+			p.Warnings = append(p.Warnings, warnings...)
 		}
 	}
 	if w, err := CheckEngines(m, r.build); err != nil {
