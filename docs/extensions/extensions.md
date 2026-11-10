@@ -1297,9 +1297,11 @@ Canonical `initialize` replies advertise `ui_page_cancellation: 1` for component
 
 These are SDK/manager lifecycle contracts, not new pages, permissions, source release defaults or production isolation acceptance. An installed package must include the matching official SDK and be rebuilt; native JSON remains the only UI content sent to clients.
 
-### Opt-in exact JSON integer request params (#1201)
+### Opt-in exact JSON integer inbound params (#1201, #1640)
 
-The TypeScript SDK keeps `Handler(method, params)` and its default `JSON.parse` / `Number` behavior. A namespace that needs the original request tokens explicitly wraps its handler with `withExactParams`. Only inbound namespace RPC requests get the third `ExactCall` argument; events get `undefined`. This does not change tool schemas, replies, outbound calls/events, state, HTTP response parsing, authorization, egress or resource gates.
+The TypeScript SDK keeps `Handler(method, params)` and its default `JSON.parse` / `Number` behavior. A namespace that needs the original request tokens explicitly wraps its handler with `withExactParams`. Inbound namespace RPC requests and notifications get the third `ExactCall` argument. This does not change tool schemas, replies, outbound calls/events, state, HTTP response parsing, authorization, egress or resource gates.
+
+Notifications still dispatch only after initialization has completed: events before or during initialization are dropped, not queued. Their return values and errors are ignored, with no reply even when a frame carries an `id`. Exact parsing/lexical errors follow that same notification behavior. Ordinary unwrapped handlers still receive exactly two arguments.
 
 ```ts
 import { withExactParams, type Program } from "@persona/extension";

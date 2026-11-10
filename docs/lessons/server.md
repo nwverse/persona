@@ -187,6 +187,10 @@ fleet, preferences, foreground state and tokens, and recheck after a slow claim.
 Empty/done, an open phone or a fresh update token suppresses a queued start. Restart
 reconstructs its deadline from the durable budget and the current manager snapshot.
 
+## Exact input must cover notification dispatch too (#1640)
+
+A request-only raw-params hook cannot preserve a notification's int64 fields after `JSON.parse` rounds them. Share the explicit branded namespace dispatch path for requests and inbound events, but retain their distinct lifecycle: requests may wait for initialization and answer errors; notifications before initialization are dropped and never reply. Test raw event frames with unsafe signed integers and ordered duplicate/null/type failures, including separately bundled SDK copies. Do not infer exact replies or outbound serialization from exact input.
+
 ## A custom HTTPS dial must opt into HTTP/2 (#1620)
 
 A custom `http.Transport.DialContext` conservatively disables Go's automatic HTTP/2 negotiation. Keep the checked-address dial callback and explicitly enable `ForceAttemptHTTP2`; do not replace it with a default dialer or let an upstream proxy resolve the name again. Verify real local TLS HTTP/2 negotiation, HTTP/1.1 fallback and request cancellation. A successful transport test is not evidence that a particular upstream challenge disappeared: verify the installed source separately, without raising budgets or substituting host-downloaded content.
@@ -363,6 +367,11 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 ## Equivalent cached results on source UI resume (#5956)
 
 - Resuming hooks can read the same cached data and still publish a fresh wrapper, unnecessarily changing the render version and invalidating a displayed legacy callback. Preserve equivalent results using their service/request identity, cached timestamps, item references and missed/error semantics, while still publishing genuine changes and new requests. A bundled Program regression plus actual HTTP callback/navigation tests catches this; merely checking that a fitted View loads does not.
+
+## Exact notification input belongs at the shared namespace dispatch (#1640)
+
+- Keep requests and notifications on the same opt-in raw-parameter path, while leaving ordinary two-argument handlers unchanged. Do not add a custom Program transport just to recover int64 tokens or duplicate fields. Notifications retain no-reply/error behavior and initialization gating; the raw view does not promise exact replies or outbound serialization.
+- Preserve page cancellation as a separate request argument when sharing dispatch. Test a bundled source notification against an independently bundled host SDK, including raw signed-int64 bounds, lexical decimals, folded duplicate params, null versus absence, pre-init input and malformed frames.
 
 ## Finite source-page snapshots (#1184)
 

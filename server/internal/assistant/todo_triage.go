@@ -297,7 +297,7 @@ func triageDueBy(t Todo, loc *time.Location) (time.Time, bool) {
 		return *t.DueAt, true
 	}
 	if loc == nil {
-		loc = time.Local
+		loc = time.UTC
 	}
 	day, err := time.ParseInLocation("2006-01-02", t.DueDate, loc)
 	if err != nil {

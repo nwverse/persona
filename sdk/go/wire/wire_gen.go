@@ -3911,9 +3911,13 @@ type ConnectorPrompt struct {
 	// Seconds between asks of a device_code or qr step.
 	Interval int              `json:"interval,omitempty"`
 	Qr       *ConnectorQRCode `json:"qr,omitempty"`
-	Hint     string           `json:"hint,omitempty"`
-	Error    string           `json:"error,omitempty"`
-	Done     bool             `json:"done,omitempty"`
+	// An absolute URL where this step's action is completed; empty means no link.
+	Link string `json:"link,omitempty"`
+	// The label for the optional link.
+	LinkText string `json:"link_text,omitempty"`
+	Hint     string `json:"hint,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Done     bool   `json:"done,omitempty"`
 	// Who is signed in, once done.
 	Account string `json:"account,omitempty"`
 }
