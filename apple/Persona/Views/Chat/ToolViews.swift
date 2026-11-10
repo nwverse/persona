@@ -797,8 +797,11 @@ struct ToolArgumentsDetail: View {
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Theme.Space.m, verticalSpacing: Theme.Space.xs) {
                     ForEach(arguments) { a in
                         GridRow {
+                            // A cap, not a flexible frame: `scaledFrame(maxWidth:)` grows to its whole maximum whenever it
+                            // is offered more, so the label column always took 120 pt and short labels ("Title") cut the
+                            // values early. The cap makes the column as wide as its widest label, up to 120 pt.
                             Text(a.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
-                                .scaledFrame(maxWidth: Theme.Size.box120, alignment: .leading)
+                                .scaledWidthCap(Theme.Size.box120)
                             Text(a.value).font(a.code ? Theme.Font.code : Theme.Font.caption)
                                 .lineLimit(a.lines)
                                 .frame(maxWidth: .infinity, alignment: .leading)
