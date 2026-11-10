@@ -414,10 +414,13 @@ fun JEmptyState(
     action: (@Composable () -> Unit)? = null,
     /** A named colour for the icon and its well (an extension's `icon_color`); none: the quiet ink. */
     iconHue: JHue? = null,
+    /** Drawn where the icon goes, in its place (an assistant's monogram, [JAssistantOffline]). */
+    leading: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        icon?.let {
+        if (leading != null) { leading(); Spacer(Modifier.height(16.dp)) }
+        else icon?.let {
             val hue = iconHue?.let { h -> palette.hue(h) }
             Box(
                 Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(hue?.tint ?: palette.surfaceStrong),

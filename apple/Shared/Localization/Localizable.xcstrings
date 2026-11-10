@@ -45677,6 +45677,69 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't dismiss draft: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Couldn't dismiss draft: %@" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "下書きを非表示にできませんでした：%@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "无法忽略草稿：%@" } }
+      }
+    },
+    "Couldn't restore draft: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Couldn't restore draft: %@" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "下書きを復元できませんでした：%@" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "无法恢复草稿：%@" } }
+      }
+    },
+    "Task updates aren't fully loaded. Refresh to continue.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Task updates aren't fully loaded. Refresh to continue." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "タスクの更新をすべて読み込めませんでした。再読み込みして続けてください。" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "任务更新尚未完整载入，请刷新后继续。" } }
+      }
+    },
+    "Draft dismissed. Nothing was sent.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Draft dismissed. Nothing was sent." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "下書きを非表示にしました。何も送信していません。" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "草稿已忽略，未发送任何内容。" } }
+      }
+    },
+    "Draft dismissed, not sent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Draft dismissed, not sent" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "非表示の下書き（未送信）" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "已忽略，未发送的草稿" } }
+      }
+    },
+    "Do not handle [Task Draft]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Do not handle"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "対応しない"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不处理"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Doc comments": {
       "localizations": {
         "en": {

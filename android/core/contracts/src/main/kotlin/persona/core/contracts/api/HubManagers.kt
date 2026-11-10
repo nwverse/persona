@@ -178,11 +178,13 @@ object AssistantManagerChoice {
      * The manager a request to [path] (segments under /api/v1) of [hubId]'s hub is for, from a list that showed it (or
      * the thing it is under); null: send none (none known, or the default). A page's own pins are [ManagerPins].
      */
-    fun itemHeader(path: List<String>, hubId: String? = state.value.hubId): String? {
-        val default = state.value.defaultId
+    fun itemHeader(path: List<String>, hubId: String? = state.value.hubId): String? =
+        itemManager(path, hubId)?.takeIf { it != state.value.defaultId }
+
+    /** The recorded owner, including the default; delayed card actions must not follow the current selection. */
+    fun itemManager(path: List<String>, hubId: String? = state.value.hubId): String? {
         for (n in path.size downTo 1) {
-            val owner = items[hubId to path.subList(0, n)] ?: continue
-            return owner.takeIf { it != default }
+            items[hubId to path.subList(0, n)]?.let { return it }
         }
         return null
     }
