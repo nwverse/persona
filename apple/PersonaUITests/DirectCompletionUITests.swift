@@ -35,6 +35,8 @@ final class DirectCompletionUITests: XCTestCase {
         complete.tap()
         XCTAssertTrue(complete.waitForNonExistence(timeout: 15), "the completed decision stayed in Pending")
         XCTAssertFalse(recommendation.exists, "the completed decision can still resume its Agent")
+        XCTAssertFalse(tray.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "补齐网络层的单元测试")).firstMatch.exists,
+                       "the finished task remains in Pending as a task or an idle Agent")
         let (data, _) = try await URLSession.shared.data(from: URL(string: hub + "/api/v1/todos")!)
         let response = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let todos = try XCTUnwrap(response["todos"] as? [[String: Any]])

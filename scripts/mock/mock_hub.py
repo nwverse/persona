@@ -3092,6 +3092,10 @@ if MOCK_TASKS:
             "outcome": "decide", "verdict": "🤔 要你拍板：测试已通过，是否继续更换缓存方案？",  # i18n-ignore
             "recommend": "保留当前缓存，下次再评估新方案",  # i18n-ignore
         }
+        for _session in SESSIONS:
+            if _session["session_id"] == TESTS:
+                _session.update(state="idle", status="idle", pending_interactions=0)
+                ORIG_STATE[TESTS] = ("idle", "idle")
 
     def _plan(pid, state, minutes, tasks):
         return {"id": pid, "conversation": ASK1, "state": state, "created_at": ago(minutes=minutes), "updated_at": ago(minutes=minutes),
