@@ -3,7 +3,8 @@
 //! `pair` reaches the phone's `remotepairingdeviced` through the lockdown service over usbmuxd, which needs the phone
 //! to trust this computer already (the "Trust This Computer?" prompt, answered once). It then runs RemotePairing's
 //! manual pairing: the phone asks its user to allow it and for the passcode, and hands back the key (`altIRK`) its
-//! Bonjour advertisements are tagged with. The record (`record::Record`) keeps both. Not verified on a real device.
+//! Bonjour advertisements are tagged with. The record (`record::Record`) keeps both. `usb-list` is checked on a real
+//! iPhone; `pair` is not verified on a real device yet.
 
 use std::path::Path;
 
@@ -18,6 +19,9 @@ use crate::error::{BridgeError, Code, Phase, from_idevice};
 use crate::record::{Record, Stored};
 
 const LABEL: &str = "persona-iphone-bridge";
+
+/// The PIN of an iPhone's manual RemotePairing when it shows none: always 000000.
+const PAIRING_PIN: &str = "000000";
 
 /// Phones attached over USB: `[{"udid", "name", "product_version", "model"}]`.
 pub async fn usb_list() -> Result<Value, BridgeError> {
@@ -58,10 +62,12 @@ pub async fn pair(udid: &str, out: &Path) -> Result<Value, BridgeError> {
     let mut client = service
         .into_client(&record.sending_host)
         .map_err(|e| from_idevice(e, Phase::Pairing, "start pairing"))?;
-    // An iPhone asks its user to allow the pairing and uses a fixed PIN itself; the callback is for devices that
-    // show a PIN to type, which this flow doesn't support.
+    // The PIN for the pairing's SRP exchange. The library uses 000000 itself when the phone asks its user to allow
+    // the pairing, and asks this callback when the phone answers with pairing data straight away. An iPhone that
+    // already trusts this computer does the latter (seen on a real iPhone, iOS 18.7.3), and its manual pairing uses
+    // the same fixed PIN; an empty one made the library panic slicing it.
     client
-        .connect(&mut record.pairing, || async { String::new() })
+        .connect(&mut record.pairing, || async { PAIRING_PIN.to_owned() })
         .await
         .map_err(|e| from_idevice(e, Phase::Pairing, "pair"))?;
     if record.pairing.alt_irk().is_none() {
