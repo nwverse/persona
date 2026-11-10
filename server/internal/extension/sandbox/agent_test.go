@@ -45,7 +45,7 @@ func newAgentFixture(t *testing.T) agentFixture {
 	files := map[string]string{
 		"secret.key": "k", "secret.key.bak": "k", "handles.key": "k", "launch.key": "k", "hub.json": "{}", "hub.json.bak": "{}",
 		"link.json":       "{}",
-		".hub.json.12345": "{}", "tls/hub.key": "k", "tls/.tls-1": "k", "link-tls/id.key": "k",
+		".hub.json.12345": "{}", "hub.json.tmp-12345": "{}", "tls/hub.key": "k", "tls/.tls-1": "k", "link-tls/id.key": "k",
 		"managers/m1/manager.json": "{}", "managers/m1/secret.key": "k", "extensions/data/notes/token": "t",
 		"launcher-settings/claude-ours.json": "{}", "launcher-settings/other-claude-settings.json": "{}",
 		"mcp.json": "{}", "claude-settings.json": "{}", "data/talk.key": "keynote", "data/proj/link.json": "{}",
@@ -272,6 +272,7 @@ func TestDarwinAgentSandboxForReal(t *testing.T) {
 		"cat HUB.JSON":                       "cat " + q(D+"/HUB.JSON"),
 		"cat hub.json.bak":                   "cat " + q(D+"/hub.json.bak"),
 		"cat .hub.json.12345":                "cat " + q(D+"/.hub.json.12345"),
+		"cat hub.json.tmp-12345":             "cat " + q(D+"/hub.json.tmp-12345"),
 		"cat link-tls/id.key":                "cat " + q(D+"/link-tls/id.key"),
 		"cat tls/hub.key":                    "cat " + q(D+"/tls/hub.key"),
 		"cat tls/.tls-1":                     "cat " + q(D+"/tls/.tls-1"),

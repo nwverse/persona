@@ -298,8 +298,10 @@ class RealInboxRepository(
         }
     }
 
-    override suspend fun inboxMutes(): List<persona.feature.inbox.InboxMute> =
-        persona.feature.inbox.inboxMutes(requireTransport().inboxMutes())
+    override suspend fun inboxMutes(manager: String?): List<persona.feature.inbox.InboxMute> {
+        val transport = requireTransport()
+        return persona.feature.inbox.inboxMutes(asStamped(manager) { transport.inboxMutes() })
+    }
 
     // "Mute this repository / chat / sender": the items it covers are done at once (the hub files them too), back if it fails.
     override suspend fun mute(record: InboxRecord, option: persona.feature.inbox.InboxMuteOption) {
@@ -319,11 +321,15 @@ class RealInboxRepository(
         quietly { refresh() }
     }
 
-    override suspend fun unmute(id: String) = requireTransport().unmuteInbox(id)
-
-    override suspend fun inboxPolicies(record: InboxRecord?): List<persona.feature.inbox.InboxPolicy> {
+    override suspend fun unmute(id: String, manager: String?) {
         val transport = requireTransport()
-        return persona.feature.inbox.inboxPolicies(asItem(record) { transport.inboxPolicies() })
+        asStamped(manager) { transport.unmuteInbox(id) }
+    }
+
+    override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<persona.feature.inbox.InboxPolicy> {
+        val transport = requireTransport()
+        val read = suspend { transport.inboxPolicies() }
+        return persona.feature.inbox.inboxPolicies(if (record != null) asItem(record, read) else asStamped(manager, read))
     }
 
     // A rule's tier reaches the open, triaged items it covers at once (the hub moves them too), back if it fails.
@@ -337,19 +343,22 @@ class RealInboxRepository(
         val id = target.policy?.id
         require(id != null || record != null) { "A new rule needs its item" }
         val default = AssistantManagerChoice.current.value.defaultId
-        fun ownerOf(r: InboxRecord?) = r?.manager?.takeIf { it.isNotBlank() && it != default } ?: ""
-        val owner = ownerOf(record)
+        fun ownerOf(manager: String?) = manager?.takeIf { it.isNotBlank() && it != default } ?: ""
+        val owner = ownerOf(target.manager)
         val moved = refreshLock.withLock {
             val before = current.value.records
-            val after = persona.feature.inbox.applyPolicyTier(before, target.source, target.option, tier) { ownerOf(it) == owner }
+            val after = persona.feature.inbox.applyPolicyTier(before, target.source, target.option, tier) { ownerOf(it.manager) == owner }
             current.update { it.copy(records = after) }
             before.zip(after).filter { (old, new) -> old !== new }
         }
+        val removing = tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None
+        val send = suspend {
+            if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
+            else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
+        }
         val result = try {
-            asItem(record) {
-                if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
-                else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
-            }
+            // Opened from "Rules" (no item): removing names the manager the list read it from, even when that is the default now.
+            if (record == null && removing) asStamped(target.manager, send) else asManager(target.manager, send)
         } catch (e: Exception) {
             // Back only the ones still as this left them: a refresh meanwhile has the hub's.
             if (owns(transport)) refreshLock.withLock {
@@ -359,11 +368,14 @@ class RealInboxRepository(
             throw e
         }
         quietly { refresh() }
-        if (tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None) return null
+        if (removing) return null
         return result.obj("policy")?.let { persona.feature.inbox.inboxPolicy(it) }
     }
 
-    override suspend fun removePolicy(id: String) = requireTransport().removeInboxPolicy(id)
+    override suspend fun removePolicy(id: String, manager: String?) {
+        val transport = requireTransport()
+        asStamped(manager) { transport.removeInboxPolicy(id) }
+    }
 
     override suspend fun setDone(items: List<InboxDoneTarget>, done: Boolean): InboxBulkResult =
         bulk(items, if (done) InboxBulkAction.Done else InboxBulkAction.Reopen)
@@ -1089,12 +1101,22 @@ class RealInboxRepository(
      * default's names none, and so overrides what a list noted for an id another manager has too. With no record known
      * nothing is named: what the page pinned (its chat's manager) still decides.
      */
-    private suspend fun <T> asItem(record: InboxRecord?, block: suspend () -> T): T {
-        if (record == null) return block()
+    private suspend fun <T> asItem(record: InboxRecord?, block: suspend () -> T): T = asManager(record?.let { it.manager.orEmpty() }, block)
+
+    /** Runs requests naming [manager] where they are made, as [asItem] does: the default (or "") names none; null names nothing. */
+    private suspend fun <T> asManager(manager: String?, block: suspend () -> T): T {
+        if (manager == null) return block()
         val default = AssistantManagerChoice.current.value.defaultId
-        val manager = record.manager?.takeIf { it.isNotBlank() && it != default } ?: ""
-        return withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
+        return withContext(persona.core.contracts.api.RequestManager(manager.takeIf { it.isNotBlank() && it != default } ?: "")) { block() }
     }
+
+    /**
+     * Runs a list's read from each manager, or a change to what it read stamped [manager] (several managers), naming it even
+     * when it is the default: the default may change between the read and the change. Unstamped (one manager): as [asManager].
+     */
+    private suspend fun <T> asStamped(manager: String?, block: suspend () -> T): T =
+        if (manager.isNullOrBlank()) asManager(manager, block)
+        else withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
 
     /**
      * One item as the hub has it. An answer about one item comes from its manager alone, unstamped (only the merged
@@ -1157,15 +1179,15 @@ class RealInboxRepository(
         return fresh.copy(item = fresh.item.copy(id = previous.item.id), manager = fresh.manager ?: previous.manager)
     }
 
-    override suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost {
+    override suspend fun momentsPost(postId: String, manager: String?): persona.core.contracts.LarkMomentsPost {
         val transport = requireTransport()
-        val json = transport.momentsPost(postId)
+        val json = asManager(manager) { transport.momentsPost(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsPost.serializer(), json)
     }
 
-    override suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> {
+    override suspend fun momentsComments(postId: String, manager: String?): List<persona.core.contracts.LarkMomentsComment> {
         val transport = requireTransport()
-        val json = transport.momentsComments(postId)
+        val json = asManager(manager) { transport.momentsComments(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsCommentsResponse.serializer(), json).comments
     }
 

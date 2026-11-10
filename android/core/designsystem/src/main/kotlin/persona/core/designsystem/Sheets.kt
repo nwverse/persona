@@ -50,6 +50,9 @@ fun JSheet(
     onBlockedDismiss: (() -> Unit)? = null,
     /** Scroll the whole content; leave false when the content has its own lazy list. */
     scrollable: Boolean = false,
+    contentPadding: androidx.compose.ui.unit.Dp? = null,
+    bottomPadding: androidx.compose.ui.unit.Dp? = null,
+    showDragHandle: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -67,7 +70,7 @@ fun JSheet(
         sheetState = sheetState,
         shape = PersonaTheme.shapes.sheetShape, containerColor = container, contentColor = palette.ink,
         scrimColor = palette.scrim, tonalElevation = 0.dp,
-        dragHandle = { Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.5f))) },
+        dragHandle = if (!showDragHandle) null else ({ Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(36.dp, 4.dp).clip(CircleShape).background(palette.ink3.copy(alpha = 0.5f))) }),
     ) {
         // Opaque over a scrim: glass inside the sheet must not sample (and show through) the page behind it.
         androidx.compose.runtime.CompositionLocalProvider(LocalReadingInset provides 0.dp, LocalGlassSource provides null) {
@@ -77,7 +80,7 @@ fun JSheet(
             .onSizeChanged {
                 if (skipPartiallyExpanded && sheetState.targetValue == SheetValue.Expanded) scope.launch { sheetState.expand() }
             }
-            .then(if (scrollable) Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier).padding(horizontal = pagePadding).padding(bottom = 16.dp)) {
+            .then(if (scrollable) Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier).padding(horizontal = contentPadding ?: pagePadding).padding(bottom = bottomPadding ?: 16.dp)) {
             title?.let {
                 Text(it, style = PersonaTheme.type.title, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(12.dp))

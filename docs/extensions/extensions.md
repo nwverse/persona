@@ -3,7 +3,7 @@
 Persona's extension foundation (#1101): the open-source repository holds only general capabilities and **extension points**. Anything that only makes sense for one company or one service is built as an extension: install it and you have it; without it, everything still runs.
 The skeleton follows VS Code (manifest + `contributes` + on-demand activation + separate process), permissions follow Chrome (declared explicitly, shown at install time), and from WordPress we borrow only event notifications, not filters.
 Design trade-offs, the step plan and what is not done yet are in `docs/plans/plan-extensions.md`. Code: manifest, schema subset, permissions and registry in `server/internal/extension`, process host in `extension/host`,
-the program side is the official SDK `sdk/go/ext` (built-in programs use it via `extension/serve`), conformance tests in `extension/conformance`; the wiring lives in the manager (see "Who owns what" below): `server/internal/extmgr/extensions.go`, `extension_routes.go`, `extension_cli.go`, and the admin UI endpoints in `admin_extensions.go`.
+the program side is the official SDK `sdk/go/ext` (the built-in WeChat program uses it as is, `ext.Serve` in `server/plugins/wechat`; `extension/serve` wraps it for the conformance kit and tests), conformance tests in `extension/conformance`; the wiring lives in the manager (see "Who owns what" below): `server/internal/extmgr/extensions.go`, `extension_routes.go`, `extension_cli.go`, and the admin UI endpoints in `admin_extensions.go`.
 
 Extensions come from three places; the App and the API show them as one list:
 
@@ -386,18 +386,19 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 
 | Scope | Wording on the install page | Routes opened |
 | --- | --- | --- |
+| `sent.read` | Identify messages Persona sent as you in the knowledge base | No HTTP route: adds provenance to `kb.day`; also requires `kb.read` |
 | `kb.read` | Read the knowledge base | `GET /api/v1/kb/…`, `GET /api/v1/kb-search` |
-| `kb.write` | Change entries in the knowledge base | `PUT /api/v1/kb/{kind}/{id}` |
+| `kb.write` | Change entries in the knowledge base | `PUT /api/v1/kb/{kind}/{id}`, not with terminal control characters (see below) |
 | `inbox.read` | Read the Inbox | `GET /api/v1/inbox`, `/inbox/{id}`, `/inbox/mutes`, `/inbox/policies` |
 | `inbox.write` | Handle the Inbox | Mark as handled, draft, reply (text only: replies with `changes` or `/agent` still require full access), document status, mute, set policies, refresh |
 | `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/agents…` (personal Agents), `/workspaces`, `/workspace-board` |
-| `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), sending messages to and marking read for personal Agents |
+| `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), `/choose` and `/reanswer`, sending messages to and marking read for personal Agents; with no terminal control characters in the text it sends (messages, prompts, notes, titles, answers; see below) |
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
 | `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed` |
 | `todos.read` | See to-dos | `GET /api/v1/todos`, `GET /api/v1/todos/{id}/decisions` |
-| `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"); deleting to-dos, superseding decisions, completion checks and retries still require full access |
+| `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `extensions.call:<extension id>` | Call the API of extension "…" | That extension's own HTTP: `/api/v1/extensions/<id>/…` (excluding the hub's `/-/` endpoints) |
@@ -416,7 +417,7 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
   Nothing recorded is read back as a credential. When a manager starts, before any extension starts, it marks its own rows still live from its last run as `manager_restart`, so a restart never revives a revoked token or one of an extension that is now switched off or uninstalled; other managers' rows are left alone. Revoked rows are dropped after 7 days.
   On a manager other than the built-in one, the manager signs it the same way, and `PERSONA_HUB_URL` / `hub.url` is that manager's relay to the hub on the loopback of its computer; the extension also gets `PERSONA_MANAGER` / `hub.manager` (`docs/assistant/managers.md`, "Extensions and the hub's API").
 - Local only: requests with an extension token coming from the public internet return 403 `extension_token_local_only`, unless they came through the extension's manager's relay with its proof (`X-Persona-Manager-Proof`, `docs/assistant/managers.md` "Extensions and the hub's API", which also has the answers to a proof that is the manager's but not taken: `clock_skew`, `proof_replayed`, `proof_busy`, and `manager_offline` for one naming a manager the hub has no bus connection to): a relayed manager's computer may reach the hub no other way. Routes without a scope return 403 `{"code": "permission_denied"}`, and a missing scope also carries `scope` (the missing one).
-- When an extension calls these routes with its token, it is treated like a device with full access (not limited the way read-only devices like the watch are: answering cards and sending messages work as usual), except Inbox replies with `changes` / `/agent`.
+- When an extension calls these routes with its token, it is treated like a device with full access (not limited the way read-only devices like the watch are: answering cards and sending messages work as usual), except Inbox replies with `changes` / `/agent` and terminal control characters (below).
 - **Permission mode** (`agents.permission_mode`): a chat is the extension's when the extension opened it with its token (`POST /api/v1/assistant/conversations`, whatever its `purpose`), on its own manager's computer.
   That includes a chat it opened for a `/agent …` it received: an Inbox reply starting with `/agent` is posted as the user (it still needs full access) and comes back to the extension like any message, so the chat it then opens is its own.
   The manager notes who opened each chat when it opens, from the token's extension and nothing else (`opened_by`, `docs/protocol/protocol.md` "Origin of assistant chats"), and reports it in its snapshot to the hub (`assistantwire.SessionView`); the hub compares it with the token's extension before the computer hears of the change (`server/internal/hub/extension_modes.go`).
@@ -427,6 +428,10 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
   A terminal card (`kind: "screen"`) is answered with keys pressed in the chat's terminal, where a dialog's option or shift+tab can change the mode, so any answer that presses keys (`option`, `options`, `keys`, `pre_keys`, `text`) is checked the same way (the audit's `mode` is empty); a bare `dismiss`, which only drops the card, is not, and keys for a card the hub does not hold pending are refused (`not_opened`).
   `POST /api/v1/sessions` starting a new chat with a `permission_mode` is unchanged (`agents.control`): the mode is chosen when the chat is opened.
   A chat opened before `opened_by` was noted has none (it is never backfilled), so a change of its mode is refused (`not_opened`); so is every change through a manager older than this, which reports none.
+- **Terminal control characters**: an extension's token may not send them on the routes that type what it sends into an agent's terminal, or keep it for an agent's prompt, where control characters are keys rather than text, and keys can do what the extension was not granted.
+  The routes: `POST /api/v1/sessions`, a chat's `messages`, `queue`, `queue/send-now` and `rename`, `POST /api/v1/interactions/{id}/resolve` and `/reanswer`, those of personal Agents under `/api/v1/agents/`, `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, `POST /api/v1/todos/{id}/decisions` and `PUT /api/v1/kb/{kind}/{id}` (`server/internal/hub/terminal_controls.go`).
+  On them a request with a control character other than newline, carriage return and tab (Unicode `Cc`: C0, DEL and C1) in its path, its query or any string, key or value, of its JSON body gets 403 `{"code": "terminal_control_refused"}`, in any chat, those its extension opened included; a body there that is not JSON gets 400.
+  The extension's manager records each refusal in that extension's audit log (`terminal_control_refused`, with the `route` and `path`; never the text); a manager older than this does not take the record, and the hub logs the refusal instead. Text in any language, emoji, line breaks and tabs go through as before, and the apps' and devices' tokens are not held to it.
 - **Compatibility**: old extensions with `hub_api: true` still get the hub's full token (only in env vars), with an extra warning on install and upgrade, "hub_api is the legacy form"; extensions in manager.json still get the full token. On a manager other than the built-in one, both get a token of every scope instead (none of the routes open to full credentials only): that manager has no token of the hub's to hand on. Every other extension's token there opens the scopes it asked for and no more.
   An attached package ("Attaching an installed package") granted `hub_api` gets a token of every scope too, on any manager, in `initialize` only: its program is not the manager's child, so it never gets the hub's own token.
   One installed from `remote:` and granted `hub_api` gets no hub token (one granted scopes gets a token of those).
@@ -447,7 +452,7 @@ so the extension does not need to read the hub's or the manager's data directory
 | `kb.list` | `{kind,tag?,limit?,offset?,since?}` | `{items,tags,total,next_offset?}` | `kb.read` |
 | `kb.recent` | `{since,until?,kinds?,limit?,offset?}` | `{items,total,next_offset?}`: what came in from every source, newest first | `kb.read` |
 | `kb.get` | `{kind,id,recent_chars?}` | `{detail}` | `kb.read` |
-| `kb.day` | `{id,day}`, day is `YYYY-MM-DD` | `{day,messages,prev,next}`; `messages[].n` is the 1-based line number in the source file | `kb.read` |
+| `kb.day` | `{id,day}`, day is `YYYY-MM-DD` | `{day,messages,prev,next,sent_origin}`; `messages[].n` is the 1-based line number in the source file | `kb.read`; `sent.read` adds origin marks |
 | `kb.search` | `{query,messages?,limit?}` | `{hits}` | `kb.read` |
 | `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?}` | `kb.write` |
 | `kb.owner` | `{}` | `{name,aliases,handles:[{kind,value}]}` | `kb.read` |
@@ -463,6 +468,20 @@ Internal methods such as `kb.forget`, `kb.context`, `kb.posts_*` are not on this
 
 `since` / `until` are RFC 3339 times (an entity's update time: a chat's last message, a document's, meeting's or event's time, a recording's start). `kb.recent` defaults to chats, docs, meetings, events and recordings,
 50 a page, at most 200; list entries for chats carry `source` (lark, mail, wechat, github…), so one pass covers every source; read a chat's text with `kb.day` and the rest with `kb.get`.
+
+**Messages sent as the user** (#2814): declare `{"permissions":{"hub":["kb.read","sent.read"]}}` to distinguish matching assistant sends from other archive lines. `sent.read` is shown during install and permission upgrades in the user's language. It adds no ledger-list endpoint and does not grant archive access by itself; the legacy full `hub_api` grant includes it. The extension manager checks the actual grant and forwards the privileged read as internal `kb.extension_day`, which extensions cannot invoke directly.
+
+Every `kb.day` response includes `sent_origin`:
+
+- `available`: ledger matching completed. Only matched lines have `sent_by: "assistant"` and `sent_ledger_id`; a matched recalled send also has `recalled_at` (RFC 3339). Recall does not turn archived assistant words into the user's words.
+- `missing_scope`: `kb.read` was granted but `sent.read` was not. All per-line origin fields are absent.
+- `unavailable`: this service cannot provide the marks, including an older assistant during a rolling upgrade. Older hosts may omit `sent_origin`; treat that absence as unavailable too. A database or archive read error fails the call instead of pretending that matching found nothing.
+
+Matching is deliberately conservative. New live archive ingestion retains a receipt binding the provider's message ID, original time and owner flag to the rendered speaker/body hash. It resolves that receipt only when both the receipt and archive line are unique at that minute. Matching first uses an exact provider reference within the connector; GitHub's comment/review resource types remain distinct. Generic connectors also need an exact destination. Without a reference on one side, fallback requires the connector, an exact chat destination, the owner's archive speaker, the entire normalized text, and a timestamp within two minutes of the archived minute (ledger time in `[minute - 2m, minute + 3m)`). Normalization removes whitespace like echo matching, but keeps case and punctuation and never accepts a truncated prefix. Destination fields recognized as scalar source IDs are `chat`, `thread`, `channel`, `conversation`, `recipient`, `to` and `ref`; display names, subjects and recipient arrays are insufficient.
+
+A ledger row marks at most one archive line. Multiple possible lines or ledger rows are left unmarked; an already matched line remains an ambiguity candidate for other ledger records. Adjacent days participate in ambiguity checks, so a send near midnight cannot mark a line on both pages. Day boundaries use the archive's stored time zone, including daylight-saving changes; repeated wall-clock minutes need an original receipt timestamp. The manager queries the ledger once per connector/day with the two-minute boundary allowance using its `(connector, at)` index, then matches in memory.
+
+**An unmarked line is not proof of human authorship.** Older archives and history imports have no receipt hashes; identical text, missing IDs or targets, changed rendering, truncated ledger text, clock differences beyond the window, retained text after ledger expiry (90 days by default), and unrecorded sends can all miss. The built-in mail archive uses IMAP UIDs and formatted bodies, which do not reliably map to ledger Message-IDs and recipient targets. GitHub's legacy flattened chat IDs are not used to guess a destination; new receipts can match its exact typed references. Curation must treat unavailable and unmarked provenance as unknown where learning a false user preference would matter. Option 1 supplies the provenance needed alongside the text; a more general read-only ledger API remains future work.
 
 **Writes are the extension's** (#6100): the manager attributes `kb.update` to the calling extension (internally `kb.extension_update`; an extension cannot call that or name another). It may write fields nobody holds and fields it holds itself;
 a field the user (or another extension) holds refuses the whole update with `conflict`, data `{owners: {<field>: "user" | "ext:<id>"}}` (a linked entity's field as `<kind>/<id>.<field>`), and nothing is written: put it to the user, don't retry.
@@ -632,6 +651,12 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
   one attempt. The request budgets and the broker's admission limits are unchanged.
   Known limits: within a 15-second budget only the first eight addresses get an attempt (the ninth would start at 20 s; dialing one by one reached no further); and the process path
   bounds sockets per request, not in total: an extension's 128 pending requests can hold up to 512 attempts at once, with no cap across extensions.
+- **TCP connects but TLS stays silent** (#2745): direct CONNECT tunnels with several checked addresses keep the TCP race, then buffer a complete TLS ClientHello (up to 64 KiB). TLS on port 443 and other ports is recognized by its initial handshake record (`0x16`).
+  Each address gets 4 s to write the hello and return its first byte; a silent connection is closed and the hello is replayed to the remaining checked addresses, with each retry's TCP dial included in that budget.
+  Any server byte commits the connection, including a TLS alert: there is no switching after that, and TLS early application data is never replayed. When all addresses fail, the proxy logs the causes and closes the tunnel (CONNECT 200 has already been sent).
+  The responding address is preferred on the next CONNECT to that host:port, but only if it appears in the freshly checked DNS answer. This in-memory hint cache holds at most 1024 destinations.
+  Server-first protocols pass their banner through immediately. Clients get up to 1 s to send a complete hello; idle, incomplete, oversized or unrecognized input falls back to ordinary relay with its bytes preserved, without retries.
+  Single-address destinations, tunnels through an upstream proxy, plain HTTP, HTTP upgrades and the source-runtime fetch broker keep their existing behavior and timeouts. There is no new configuration.
 - Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Node (libraries that apply the proxy themselves), Python and curl all honor them;
   old clients that only honor `HTTPS_PROXY` still can't get out from the sandbox, which is the intended effect.
 
@@ -895,14 +920,14 @@ CLI: `personad extension contributions <id>` (list), `personad extension contrib
 
 ### Command line
 
-Only used on the hub machine: it reads the master token and the `listen` port from hub.json in the state directory (default `~/.persona`, see "Naming and compatibility"; the port defaults to 18660 if unset, overridden by the env var `PERSONA_LISTEN`, the old name `PERSONA_LISTEN` is also accepted), and calls "The hub's API" via `127.0.0.1`.
+Only used on the hub machine: it reads the master token and the `listen` port from hub.json in the state directory (default `~/.persona`, see "Naming and compatibility"; the port defaults to 18660 if unset, overridden by the env var `PERSONA_LISTEN`; its old name is also accepted, [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md)), and calls "The hub's API" via `127.0.0.1`.
 If there is no hub.json on this machine it errors out; it does not connect anywhere else. `personad ext …` and `personad plugin …` (the name before #1844) are the same command. `help` prints usage to stdout; with no subcommand, usage is printed to stderr as an error with exit code 1; `contributions` / `contribution` are only listed together when a subcommand is mistyped.
 An option the command does not take, a missing argument or an extra one is refused with exit code 1 before anything is sent to the hub (a mistyped `--keep-data` does not delete the data).
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
 
 ```text
 personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "还缺：…" (missing: …)
-personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set
+personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set, its data directory (data_dir)
 personad extension install <source> [--yes]          First prints what it can do, the dependencies it uses, what gets installed with it and what cannot be found, then asks "继续吗？[y/N]" (continue?);
                                                      installs only on y / yes; --yes skips the question. Afterwards prints "<id> <version>：<status>", and what is missing if settings are missing
 personad extension upgrade <id> <source> [--yes]     Same as install, but upgrades the installed <id>
@@ -1169,6 +1194,7 @@ An extension installed from a package (a marketplace, `file:`, `dir:`, …) can 
 `personad extension detach <id>` (`…/-/detach`) runs the package's program on the hub machine again. Code is in `server/internal/extension/registry_attach.go`.
 
 - **What stays**: the package and its version, the tools installed with it, the settings, the secrets, the data directory, the permissions granted, and what the package contributes without its program (skills, instructions, gates, …). Only where the program runs changes; `origin` still says where the package came from.
+  `data_dir` in the details (`personad extension show <id>`) says where that data directory is, so a program run on its own on the same machine can keep using it in place.
 - **What is checked**: the sockets must be the ones the package's runtime uses (`rpc` for one that speaks the protocol, `http` when it serves HTTP), and the program on them must answer `manifest` (`GET /manifest` for an HTTP-only one) with the package's id and version, so attaching grants nothing the package did not have. Each connection asks again before `initialize` ("Refused" above), so a program swapped for another one or version later gets nothing either.
   A package with no program, or a source runtime one, cannot be attached; one installed from `remote:` has no package and is attached already.
 - **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope (but `agents.permission_mode`) when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
@@ -1377,7 +1403,7 @@ The `-` endpoints below exist only when `features` in `/health` and hello includ
 | Endpoint | Who can call | Notes |
 | --- | --- | --- |
 | `GET /api/v1/extensions` | Any device | `{"extensions": [ExtensionView], "can_install"}`. `ExtensionView`: the old `id`, `name`, `kind` (the first extension point; voice extensions are still `voice`, connectors are `connectors`), `status`, `error`, plus `version`, `source`, `enabled`, `description`, `contributes` (extension point → id), `needs_setup` (what is still missing, human-readable), `warnings` |
-| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, items, min_items, max_items, unique_items, fields}]}`), `config`, `secrets: [{name, title, description, required, set}]`, `permissions` (a few human-readable lines). Ones from manager.json do not return `config` or `secrets` |
+| `GET /api/v1/extensions/{id}/-/` | Full-access devices | Details: `ExtensionView` plus `publisher`, `homepage`, `origin`, `previous_version`, `read_only`, `form` (`{fields: [{name, type, title, description, default, required, enum: [{value, title}], format, pattern, min_length, max_length, minimum, maximum, items, min_items, max_items, unique_items, fields}]}`), `config`, `secrets: [{name, title, description, required, set}]`, `permissions` (a few human-readable lines). Ones from manager.json do not return `config` or `secrets`. `data_dir` is the extension's data directory on the manager's machine (the one its program is given there; an attached package keeps it, none for one installed from `remote:`, one from hub.json or manager.json, or one with no program on the manager), returned to the master token over loopback and the admin UI only, never to a device |
 | `PUT /api/v1/extensions/{id}/-/enabled` `{enabled}` | Full-access devices | Returns the details; enabling an extension that uses the Inbox and has no fallback while **Message triage** cannot be called returns 409 `needs_triage_model` ("General Inbox rules" above); the same for install and upgrade |
 | `PUT /api/v1/extensions/{id}/-/config` `{config}` | Full-access devices | Replaces the whole thing; not matching the schema returns 400 `{code: "invalid_config", field, message}` |
 | `PUT /api/v1/extensions/{id}/-/secrets/{name}` `{value}`, `DELETE …` | Full-access devices | At most 16 KB; the value is never echoed and never goes into logs or the audit log |
@@ -2640,7 +2666,7 @@ Program-to-hub calls and events follow the same pattern (`connector.secrets.load
 **Error codes**: `not_initialized`, `unknown_method`, `wrong_protocol`, `no_capability`, `no_contribution` (missing contribution), `permission_denied`, `timeout` (generated locally by the hub).
 Other errors have only `message`, a human-readable sentence without secrets or message bodies. Changing field semantics or removing fields increments the protocol version; adding optional fields does not.
 
-Use the official SDK for extensions ("Writing extensions: SDK, templates and command line" below); hub built-in connector programs use `connector/serve.MainWith`, accepting both handshakes.
+Use the official SDK for extensions ("Writing extensions: SDK, templates and command line" below); the built-in WeChat program does too (`server/plugins/wechat`). `connector/serve`'s runner, which also accepts the standalone handshake, is left only for the connector conformance kit and tests.
 
 ## Programs running on computers (`node` section, #1830)
 
@@ -2723,7 +2749,7 @@ extension repos copy a versioned snapshot (the main repo is private, and their C
 ### Go: `sdk/go`
 
 Module `github.com/nwverse/persona/sdk/go`, standard library only. The hub uses it too (`server/go.mod` replaces with the same code, Docker builds copy `sdk/go/`),
-and built-in programs use the thin forwarding layer `server/internal/extension/serve` (converts to hub `InitializeParams` and `rpc.Error`).
+and the built-in WeChat program uses `ext` directly (`server/plugins/wechat`); the conformance kit and the hub's tests run programs through the thin wrapper `server/internal/extension/serve` (converts to hub `InitializeParams` and `rpc.Error`).
 
 | Package | Contents |
 | --- | --- |

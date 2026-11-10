@@ -195,11 +195,8 @@ func openSourceBundle(root string, s *SourceRuntime) (*os.File, string, error) {
 	return f, p, nil
 }
 
-// CheckSelfContained never parses source in the caller: it sends bounded bytes
+// CheckSelfContainedContext never parses source in the caller: it sends bounded bytes
 // to the same resource-bounded validator used for installation and activation.
-func CheckSelfContained(b []byte) error {
-	return CheckSelfContainedContext(context.Background(), b)
-}
 func CheckSelfContainedContext(ctx context.Context, b []byte) error {
 	if len(b) == 0 || len(b) > SourceBundleMost {
 		return errors.New("JavaScript artifact exceeds its size budget")

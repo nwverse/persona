@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"cmp"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -188,7 +189,7 @@ func (m *Meta) workflowStarted(t *proto.BackgroundTask, toolUseID, result string
 	}
 	t.RunID = w.RunID
 	if t.Description == "" {
-		t.Description = cmpOr(w.Name, w.Summary)
+		t.Description = cmp.Or(w.Name, w.Summary)
 	}
 	for i, o := range m.Workflows {
 		if o.TaskID == w.TaskID {
@@ -230,13 +231,6 @@ func scriptName(path string) string {
 		base = base[:i]
 	}
 	return base
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func outputFile(result string) string {

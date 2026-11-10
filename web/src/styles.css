@@ -375,6 +375,18 @@ button:disabled { cursor: default; }
 /* The avatar's circle over the crop: everything outside it dimmed (a spread wider than any box; the box clips it), and
    its edge drawn as wide as a selected card's. */
 @utility crop-ring { border-radius: 9999px; box-shadow: 0 0 0 200vmax var(--crop-scrim), inset 0 0 0 1.5px var(--crop-edge); }
+/* Every exchange remembers the height it was last drawn at (only used while it skips drawing, below): one that starts
+   skipping off screen when a new exchange comes in keeps that height instead of the guess, and nothing on screen moves. */
+section[data-segment] { contain-intrinsic-block-size: auto var(--seg-est, 0px); }
+/* A finished exchange before the last two (SegmentView `offscreen`): off screen the browser skips its layout and paint,
+   and it takes its guessed height (--seg-est) until first drawn, then the drawn one. Not while it holds an open menu's
+   button, a full-screen overlay drawn inside it (a zoomed diagram) or the search hit; the selection, focus and the
+   browser's find keep it drawn by themselves. Its paint is clipped to its box, so the hover bar beside your bubble and
+   focus rings get 32 px around it. */
+.seg-cv:not(:has([aria-haspopup][aria-expanded="true"], [aria-modal="true"], [data-search-hit])) {
+  content-visibility: auto;
+  overflow-clip-margin: 32px;
+}
 /* A tap target of at least 44 × 44 on touch screens without changing how big the control looks: an invisible square
    centred on it (smaller only where the control is already bigger). */
 @utility touch-hit {

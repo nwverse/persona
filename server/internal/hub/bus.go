@@ -56,23 +56,6 @@ func handleBus(method string, fn busCall) {
 	busMethods[method] = fn
 }
 
-// handleBusCall registers fn for method with the codec around it: params decoded into P (invalid_params when they
-// do not fit), fn's answer encoded as the result. It is how a hub function with its own types is put on the bus, e.g.
-// the assistant's boundary:
-//
-//	handleBusCall("device.call", func(h *Hub, ctx context.Context, p assistant.DeviceCall) (json.RawMessage, error) {
-//		return assistantLink{h}.DeviceCall(ctx, p)
-//	})
-func handleBusCall[P, R any](method string, fn func(h *Hub, ctx context.Context, p P) (R, error)) {
-	handleBus(method, func(h *Hub, ctx context.Context, _ *busConn, params json.RawMessage) (any, error) {
-		var p P
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": " + err.Error()}
-		}
-		return fn(h, ctx, p)
-	})
-}
-
 // handleBusEvent registers what takes event (a one-way message) once a connection said its handshake; unregistered
 // events are dropped.
 func handleBusEvent(event string, fn busEvent) {
@@ -133,6 +116,8 @@ type busConn struct {
 
 	// mutesSettled: its first word after the handshake was heard, and the mutes went once more (fleet_link.go).
 	mutesSettled atomic.Bool
+	// clientsSettled: likewise, and it was told what the apps can take (fleet.clients, clientsSettle).
+	clientsSettled atomic.Bool
 
 	// proofKey is the key of its manager's proofs that a request with one of its extensions' tokens came through it
 	// (extwire.ProofKey of the token it connected with, extensions_proof.go): made from the token as it connects, kept
@@ -339,6 +324,7 @@ func (h *Hub) busRequest(ctx context.Context, c *busConn, method string, params 
 		return nil, &rpc.Error{Code: bus.CodeStaleConnection, Message: "say " + busHello + " on the current connection first"}
 	}
 	h.mutesSettle(c)
+	h.clientsSettle(c)
 	fn, ok := busMethods[method]
 	if !ok {
 		return nil, &rpc.Error{Code: bus.CodeUnknownMethod, Message: "unknown method " + clip(method, 80)}
@@ -351,6 +337,7 @@ func (h *Hub) busEvent(c *busConn, event string, params json.RawMessage) {
 		return // before the handshake, or replaced: not heard
 	}
 	h.mutesSettle(c)
+	h.clientsSettle(c)
 	if f := busEvents[event]; f != nil {
 		f(h, c, params)
 	}

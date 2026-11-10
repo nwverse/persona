@@ -39,6 +39,23 @@ nonisolated enum AppStyle: String, CaseIterable, Identifiable, Sendable {
 }
 
 nonisolated enum Theme {
+    #if os(iOS)
+    /// By Repository's tree on iOS (#2531): a card per repository, its worktrees and their agents a level in each, every
+    /// line's mark in one column per level, a worktree's agents on a thin line down from its mark.
+    enum Tree {
+        /// A level in.
+        static let indent: CGFloat = 22
+        /// The column a line's mark sits in: the folder, a worktree's mark, an agent's state.
+        static let column: CGFloat = 18
+        /// Above and below a line: its height is its own, so the guide line runs on from row to row.
+        static let rowPadding = Space.sm
+        /// The line down a worktree's agents.
+        static let guide = Color(uiColor: .separator)
+        /// The agent or worktree open beside the list (regular width).
+        static let selected = Palette.systemBlue.opacity(0.1)
+    }
+    #endif
+
     /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
     enum WorkspaceSidebar {
         static let background = Color(light: 0xF5F5F5, dark: 0x2A2A2A)

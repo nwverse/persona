@@ -121,15 +121,10 @@ func (h *Manager) claimBotMessage(id string) bool {
 // feishuMaxUUID is the open platform's uuid length cap on the send/reply message APIs.
 const feishuMaxUUID = 50
 
-// feishuReplyUUID is the deterministic idempotency key for a reply: same parent message, same purpose (kind:
+// feishuReplyUUIDIn is the deterministic idempotency key for a reply: same parent message, same purpose (kind:
 // c card, f rich-text fallback, t plain text, n note) and same content replay the same key even across a restart;
 // different content (the several cards of one turn, or the card vs its fallback) gets a different key, so the
-// gateway does not dedupe it.
-func feishuReplyUUID(messageID, kind, content string) string {
-	return feishuReplyUUIDIn(messageID, kind, content, false)
-}
-
-// feishuReplyUUIDIn is feishuReplyUUID for a reply that may go into the parent's thread. The thread flag is part of
+// gateway does not dedupe it. inThread: the reply may go into the parent's thread. The thread flag is part of
 // the key: otherwise a plain reply and a thread reply with the same parent and content would share one, and the
 // gateway would drop whichever came second within its dedupe window. Not in a thread, the key is the same bytes as
 // ever.
@@ -601,12 +596,8 @@ func botSendChat(set FeishuBotSettings, chatID string) (string, error) {
 	return chatID, nil
 }
 
-// botNote replies to a message with a line of text; a parent withdrawn meanwhile gets the note in the chat instead.
-func (h *Manager) botNote(ctx context.Context, api *feishubot.Client, chatID, messageID, text string) {
-	h.botNoteIn(ctx, api, chatID, messageID, text, false)
-}
-
-// botNoteIn is botNote that may go into the parent's thread: for a message that came in a topic.
+// botNoteIn replies to a message with a line of text; a parent withdrawn meanwhile gets the note in the chat instead.
+// inThread: it may go into the parent's thread, for a message that came in a topic.
 func (h *Manager) botNoteIn(ctx context.Context, api *feishubot.Client, chatID, messageID, text string, inThread bool) {
 	content := feishubot.TextContent(text)
 	if _, _, err := h.replyOrSend(ctx, api, chatID, messageID, feishubot.TypeText, content, feishuReplyUUIDIn(messageID, "n", text, inThread), inThread); err != nil {

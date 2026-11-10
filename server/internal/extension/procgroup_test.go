@@ -80,12 +80,32 @@ func waitHelperGone(t *testing.T, pidFile string, within time.Duration) {
 	}
 }
 
-// timedOutWithin runs call with a 300ms deadline and answers how long it took and its error.
-func timedOutWithin(call func(ctx context.Context) error) (time.Duration, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+// cancelledOnceStarted runs call, cancels it as soon as the fake has written its helper's pid, and answers how long
+// the call took to return after the cancel, and its error. The production calls treat a cancel like their own
+// deadline. Cancelling only once the helper exists, not on a fixed deadline from the start, keeps a busy machine
+// that is slow to start the fake from cancelling it before there is a helper to stop.
+func cancelledOnceStarted(t *testing.T, pidFile string, call func(ctx context.Context) error) (time.Duration, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- call(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) { // sleep-ok: polls for the pid the fake writes, which nothing signals, until the deadline
+		if _, err := readHelperPid(pidFile); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("the call returned before the fake started its helper: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the fake never started its helper")
+		}
+	}
+	cancel()
 	start := time.Now()
-	err := call(ctx)
+	err := <-done
 	return time.Since(start), err
 }
 
@@ -93,12 +113,12 @@ func TestMarketGitTimeoutStopsItsHelpers(t *testing.T) {
 	dir, pidFile := fakeWithHelper(t, "git", "exec sleep 30")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	m := &Market{Spec: MarketSpec{Kind: "git", URL: "https://example.invalid/x.git"}, Dir: t.TempDir()}
-	took, err := timedOutWithin(func(ctx context.Context) error { return m.git(ctx, m.Dir, "fetch") })
+	took, err := cancelledOnceStarted(t, pidFile, func(ctx context.Context) error { return m.git(ctx, m.Dir, "fetch") })
 	if err == nil || !strings.Contains(err.Error(), i18n.T(i18n.Default, "extension-status.git_timeout")) {
 		t.Fatalf("want the timeout error, got %v", err)
 	}
 	if took > 2*time.Second {
-		t.Fatalf("git returned after %v, not at its 300ms deadline", took)
+		t.Fatalf("git returned %v after it was cancelled, waiting for its helper", took)
 	}
 	waitHelperGone(t, pidFile, 2*time.Second)
 }
@@ -120,7 +140,7 @@ func TestMarketGitSucceedsPastAHelperHoldingItsOutput(t *testing.T) {
 
 func TestToolCheckTimeoutStopsItsHelpers(t *testing.T) {
 	dir, pidFile := fakeWithHelper(t, "tool", "exec sleep 30")
-	took, err := timedOutWithin(func(ctx context.Context) error {
+	took, err := cancelledOnceStarted(t, pidFile, func(ctx context.Context) error {
 		_, err := runCheck(ctx, filepath.Join(dir, "tool"), &ToolCheck{}, os.Environ())
 		return err
 	})
@@ -128,7 +148,7 @@ func TestToolCheckTimeoutStopsItsHelpers(t *testing.T) {
 		t.Fatal("a check that never finished passed")
 	}
 	if took > 2*time.Second {
-		t.Fatalf("the check returned after %v, not at its 300ms deadline", took)
+		t.Fatalf("the check returned %v after it was cancelled, waiting for its helper", took)
 	}
 	waitHelperGone(t, pidFile, 2*time.Second)
 }

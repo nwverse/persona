@@ -10,8 +10,8 @@ struct InboxPolicyTarget: Identifiable, Hashable, Sendable {
     var policy: InboxPolicy?
 
     var id: String { (manager.map { "\($0):" } ?? "") + "\(source):\(option.tag):\(option.value)" }
-    /// Whose rule it is (#1850): the item's manager; the Rules list is the default manager's.
-    var manager: String? { item?.manager }
+    /// Whose rule it is (#1850): the item's manager, else the one the Rules list read it from.
+    var manager: String? { item != nil ? item?.manager : policy?.manager }
 
     init(item: InboxItem, option: InboxItem.MuteOption) {
         self.item = item
@@ -77,9 +77,10 @@ extension InboxPolicy {
         var items: () -> [InboxItem]
         var show: ([InboxItem]) -> Void
         var toast: (Toast) -> Void
+        var roster: () -> ManagerRoster? = { nil }
         static var live: Deps {
             .init(api: { AppModel.shared.api }, items: { InboxStore.shared.items }, show: { InboxStore.shared.showRuleChange($0) },
-                  toast: { AppModel.shared.toast = $0 })
+                  toast: { AppModel.shared.toast = $0 }, roster: { AppModel.shared.managerRoster })
         }
     }
 
@@ -103,21 +104,26 @@ extension InboxPolicy {
     /// Save is off until the rules are read, and for a new rule that sets neither part.
     var canSave: Bool { loaded && !busy && (policy != nil || tier != .unset || twin != .unset) }
 
+    /// The manager the sheet's requests name (`ManagerRoster.naming`).
+    private var named: String? { deps.roster().map { $0.naming(target.manager) } ?? target.manager }
+
     /// Reads the rule this target already has; none from an older hub (no list): start from nothing.
     func load() async {
         guard !loaded else { return }
         defer { loaded = true }
-        guard let list = try? await deps.api()?.manager(target.manager).inboxPolicies() else { return }
+        guard let list = try? await deps.api()?.manager(named).inboxPolicies() else { return }
         let same = list.first { $0.source == target.source && $0.tag == target.option.tag && $0.value == target.option.value }
         policy = same
         tier = same?.tier ?? .unset
         twin = same?.twin ?? .unset
     }
 
-    /// Saves the parts chosen, or neither (`remove`), which removes the rule. True when the hub took it.
+    /// Saves the parts chosen, or neither (`remove`), which removes the rule. True when the hub took it. Removing a rule
+    /// opened from the Rules list names the manager the list read it from, even when that is the default now.
     func save(remove: Bool = false) async -> Bool {
-        guard let api = deps.api()?.manager(target.manager), !busy else { return false }
         let (tier, twin) = remove ? (InboxPolicy.Tier.unset, InboxPolicy.Twin.unset) : (self.tier, self.twin)
+        let stamped = target.item == nil && tier == .unset && twin == .unset
+        guard let api = deps.api()?.manager(stamped ? target.manager : named), !busy else { return false }
         guard policy != nil || target.item != nil else { return false }
         busy = true
         defer { busy = false }
@@ -146,41 +152,92 @@ extension InboxPolicy {
     }
 }
 
-/// Rules (the Inbox's More menu): every source's rules, newest first, each with Edit and Remove.
+/// Rules (the Inbox's More menu): every source's rules, newest first, each with Edit and Remove. With several managers,
+/// each one's rules under its name, read and removed with it named (docs/assistant/managers.md "Grouping").
 @MainActor @Observable final class InboxRulesModel {
     struct Deps {
         var api: () -> APIClient?
         var toast: (Toast) -> Void
-        static var live: Deps { .init(api: { AppModel.shared.api }, toast: { AppModel.shared.toast = $0 }) }
+        var roster: () -> ManagerRoster? = { nil }
+        static var live: Deps {
+            .init(api: { AppModel.shared.api }, toast: { AppModel.shared.toast = $0 }, roster: { AppModel.shared.managerRoster })
+        }
     }
 
+    /// Every rule read, newest first (several managers: all of theirs).
     private(set) var state: Loadable<[InboxPolicy]> = .loading
+    /// Several managers: each one's rules, or why they couldn't be read, the default first; nil with one.
+    private(set) var shares: [ManagerShare<InboxPolicy>]?
     @ObservationIgnored private let deps: Deps
+    /// The latest load: an older one that answers after it doesn't land.
+    @ObservationIgnored private var reads = 0
 
     init(deps: Deps = .live) { self.deps = deps }
+
+    /// What the list follows: a change of the managers reads it again.
+    var rosterKey: [String] { deps.roster()?.readKey ?? [] }
+
+    /// The managers to show: ones with rules or a failure.
+    var shownShares: [ManagerShare<InboxPolicy>]? { shares?.filter { $0.failed != nil || !$0.items.isEmpty } }
+
+    /// Nothing to show: no rules, and no manager whose couldn't be read.
+    var isEmpty: Bool { shownShares?.isEmpty ?? (state.value?.isEmpty == true) }
 
     /// Reads the list; a failure after it showed once is a toast and the list stays.
     func load() async {
         guard let api = deps.api() else { return }
+        reads += 1
+        let read = reads
+        if let roster = deps.roster(), roster.isMulti {
+            guard let each = await roster.readEach(api, said: Self.said, { try await $0.inboxPolicies() }), read == reads else { return }
+            shares = each.map { var s = $0; s.items = InboxPolicy.newestFirst(s.items); return s }
+            state = .loaded(InboxPolicy.newestFirst(each.flatMap(\.items)))
+            return
+        }
         do {
-            state = .loaded(InboxPolicy.newestFirst(try await api.inboxPolicies()))
+            let list = InboxPolicy.newestFirst(try await api.inboxPolicies())
+            guard read == reads else { return }
+            shares = nil
+            state = .loaded(list)
         } catch {
-            if error.isCancellation { return } // the sheet closed: not a failure
+            if error.isCancellation || read != reads { return } // the sheet closed, or a newer load answers: not a failure
             let said = String(localized: "Couldn't load the rules: \(InboxPolicy.said(error))")
             if case .loaded = state { deps.toast(Toast(said, style: .error)) } else { state = .failed(said) }
         }
     }
 
-    /// Takes a rule out at once; a failure puts it back.
+    /// What a manager's place says when its rules couldn't be read.
+    private static func said(_ manager: HubManager, _ error: any Error) -> String {
+        manager.online ? String(localized: "Couldn't load the rules: \(InboxPolicy.said(error))")
+            : String(localized: "Offline: its rules show here once it is back.")
+    }
+
+    /// Takes a rule out at once, naming its manager even when it is the default now (it may have changed since the list
+    /// was read); a failure puts it back, into its manager's group.
     func remove(_ p: InboxPolicy) async {
         guard case .loaded(let list) = state, let api = deps.api() else { return }
-        state = .loaded(list.filter { $0.id != p.id })
+        let gone = { (q: InboxPolicy) in q.id == p.id && q.manager == p.manager }
+        let home = shares?.first { $0.items.contains(where: gone) }?.id
+        state = .loaded(list.filter { !gone($0) })
+        shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }
         do {
-            try await api.deleteInboxPolicy(p.id)
+            try await api.manager(p.manager).deleteInboxPolicy(p.id)
+            // A reload read before the removal reached the hub may have brought it back.
+            if case .loaded(let now) = state { state = .loaded(now.filter { !gone($0) }) }
+            shares = shares?.map { var s = $0; s.items.removeAll(where: gone); return s }
             deps.toast(Toast(String(localized: "Rule removed for “\(p.name)”."), style: .success))
         } catch {
-            state = .loaded(list)
+            // Only this rule: what changed meanwhile (another removal, a reload) stays.
+            state = .loaded(InboxPolicy.newestFirst((state.value ?? []).filter { !gone($0) } + [p]))
+            shares = shares?.map { s in
+                guard s.id == home else { return s }
+                var s = s
+                s.items = InboxPolicy.newestFirst(s.items.filter { !gone($0) } + [p])
+                return s
+            }
             deps.toast(Toast(String(localized: "Couldn't remove the rule: \(InboxPolicy.said(error))"), style: .error))
         }
     }
 }
+
+nonisolated extension InboxPolicy: ManagerStamped {}

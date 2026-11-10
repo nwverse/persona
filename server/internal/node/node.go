@@ -93,6 +93,8 @@ type Node struct {
 	paths   map[string]string           // session id -> transcript path
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
+	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
+	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
 	agents  map[string]host.Agent // session id -> live agent
@@ -111,6 +113,8 @@ type Node struct {
 	spare     *assistantProc             // warm process waiting for the next new conversation
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
+	sent      sentList                   // the last sessions.changed as written, not written twice (sessions_sent.go)
+	listRows  atomic.Int32               // rows the last sessionList gathered before its keep pass: the next one's size
 	lastRevs  map[string]int64           // session id -> rev as last pushed (sessions.changed or sessions.revs)
 	metas     map[string]quickMeta       // transcript path -> cached meta; deleted ones leave it (meta_prune.go)
 	goneDirs  map[string]time.Time       // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
@@ -812,6 +816,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "sessions.list":
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
+		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
 	case "session.start":
 		if !wantsUltracode(p.Ultracode) {
@@ -1453,12 +1458,33 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			mode = tuiMode(screen) // shift+tab in the terminal shows up in the transcript only with the next prompt
 		}
 	}
+	cwd := m.Cwd // an agent's latest directory
+	if n.isAssistantSession(id) {
+		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
+	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": m.Cwd, "model": m.Model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": m.Model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
 	}, nil
+}
+
+// assistantCwd is the directory assistant conversation id runs in: its running process's, else where it started as
+// its record or its transcript at path says it (assistantHome over the quick meta), else latest, its transcript's
+// latest directory. Not where the model's last `cd` left the shell (#2368).
+func (n *Node) assistantCwd(id, path, latest string) string {
+	n.mu.Lock()
+	p := n.procs[id]
+	n.mu.Unlock()
+	if p != nil && p.cwd != "" {
+		return p.cwd
+	}
+	cwd := latest
+	if fi, err := os.Stat(path); err == nil {
+		cwd = firstNonEmpty(n.meta(path, fi).cwd, latest)
+	}
+	return n.assistantHome(id, cwd)
 }
 
 func withSpan(m map[string]any, sp transcript.Span, continues bool) map[string]any {

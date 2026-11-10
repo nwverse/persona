@@ -85,8 +85,6 @@ type InboxMoment struct {
 	ReadAt    *time.Time `json:"read_at,omitempty"`   // when the comments were last read
 }
 
-// momentConcerns: the notifications the inbox takes.
-
 // KindDoc is the kind of a document item (someone @ed or commented on the user in a document).
 const KindDoc = "doc"
 

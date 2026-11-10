@@ -23,7 +23,7 @@ import (
 // says is "safe to be embedded in version control". The device flow needs no client secret.
 const ghCLIClientID = "178c6fc778ccc68e1d6a"
 
-// deviceScopes are what the connector uses (source.go RequiredScopes): repo covers reading private repositories'
+// deviceScopes are what the connector uses (source.go MissingScopes): repo covers reading private repositories'
 // PRs, issues, comments, checks and CI logs, searching code and issues, commenting and reviewing, and notifications.
 const deviceScopes = "repo"
 

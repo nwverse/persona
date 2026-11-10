@@ -181,6 +181,9 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   Only accepted calls write an AgentMessage with `delivery: "async"`. #214 created cards from `function_call`, leaving a permanently unanswerable card; it appeared only in the first of three measured turns (2026-11-02).
 - When finding Codex rollouts by directory, `session_meta`'s `cwd` can be symlink-resolved (Codex uses the shell working directory) or the original `-C` value;
   accept both. macOS temporary `/var/…` is really `/private/var/…`: accepting only resolved paths passed every Linux test but timed out after 60 seconds on Mac (phone-created Codex, 2026-11-02).
+- Canonicalize a path that may not exist yet with `realPath`, not `filepath.EvalSymlinks` alone (2026-11-10, #2695). `EvalSymlinks` fails on a missing path, and keeping the
+  written spelling then gives one place two spellings over time: the node fixed Codex's `LegacyHome` before `~/.codex` existed, resolved `Homes` once it did, and under a linked
+  ancestor every session of the default home got a `c0de-…` ID. `realPath` resolves the longest existing ancestor. A test builds the home through an explicit link so Linux CI catches it.
 - When typing a command into a herdr pane to start Codex, don't type expanded alias words: aliases may contain keys, exposing them on screen and in shell history. Write launcher words and the first message together to a 0600 file;
   type only `personad codex-start <file>` in the pane (`codex_start.go`).
 - **Claude sessions open in Claude desktop (or another terminal)** (2026-11-01, Mac without herdr): Claude desktop runs a real `claude` process and writes
@@ -363,6 +366,12 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 ## Package-level work is paid by every short personad command (2026-11-08, #1308)
 
 - Claude Code runs `personad hook` (or `persona-node hook`) on each of Persona's hook events and waits for it to exit. Most of that run was package initialization of the server it links: the i18n catalogs (parsed at start, and still parsed after they were made lazy because `extension.UISlots` and `assistant.silentTurnError` called `i18n.T` in package variables), every prompt template (parsed at start, and still parsed after they were made lazy because `prompts.peerMessageHead` rendered one in a package variable), about 460 package-level regexps (one `[\p{L}\p{N}_-]{1,64}` alone 0.8 ms and 2.5 MB), and the six garbage collections those 28 MB of allocations set off. On a busy Apple silicon Mac, where a Go program that only reads stdin took 6.8 ms, the hook took 40.4 ms (median of 50 runs; persona-node 45.3 ms); after making them lazy (`internal/lazyre` for patterns, `sync.OnceValue` for the rest and in the contract packages, which use the standard library only) it takes 15.2 ms (persona-node 16.4 ms), with init down from 29.5 ms / 28 MB to 3.6 ms / 1.4 MB and no collection. Keep package-level work out of anything personad links: `GODEBUG=inittrace=1 personad hook </dev/null` lists what each package's init costs, `GODEBUG=gctrace=1` the collections during it; a package-level `i18n.T` or prompt render defeats the lazy catalogs and templates, and `lazyre`'s guard test refuses a package-level `regexp.MustCompile`.
+
+## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
+
+- `pollAgents` rebuilds the whole list every second, so a lookup made once per row is made once per row per second. With 199 Codex rollouts on disk, `codexSessions` resolved each rollout's directory through `realPath` (an `lstat` per path part, a `readlink` per link), stat'ed the rollout up to three times, resolved the Codex home per rollout and rebuilt the assistant's project name with a regexp: about 19 stats per rollout per pass, 5,600 `newfstatat` and 380 `readlinkat` a second from an idle node, half its CPU. A pass-local memo (`codexListPass`) that keeps each directory's resolved path, each rollout's stat, the App socket check per home and the project name for that one call brought it to about 1,000 `newfstatat` and 13 `readlinkat` a second, with the rows unchanged. Keep such a memo local to the call: nothing is shared between callers, and nothing can go stale for longer than one pass. Count with `strace -c -f -p <node pid>` over a steady window against a copy of a real corpus (symlinks to `~/.claude/projects` and `~/.codex/sessions` in a scratch HOME), not on a fixture with a handful of files.
+- A walk of a Go map before a stable sort leaks the map's random order into the result wherever the sort key ties. Live panes with no transcript yet all have a zero `UpdatedAt`, the list key is order-sensitive, and every reshuffle sent the whole list to the hub (67 times a minute with eight such agents). Walk the map in sorted key order when the result is compared or published.
+- On a node's first list, `scanBackground` reads each listed transcript whole and tested each line against 28 markers one by one; that was over half of a reconnect's CPU on a real corpus. One Aho-Corasick pass (`bgmatch.go`) is about four times faster on real lines. It is built on the first scan, never at package init ("Package-level work" above). A new marker still goes into `bgMarkers` or transcript's marker slices; the matcher is built from them.
 
 ## MessageDisplay holds the terminal; measuring it in an isolated claude (2026-11-07, #1309, 2.1.319)
 
@@ -598,6 +607,36 @@ Closing is not durable merely because the card vanished: persist the interaction
   change.
 - Probing herdr from Python with `subprocess.run` in another thread of the same process shows a ~110 ms stall on many
   of the spawns. That is the probe, not herdr: the same spawns from a separate process show none.
+
+## Text an agent is sent can press keys in its terminal
+
+- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename,
+  a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed later, in a prompt. Control
+  characters in that text are keys to the terminal, and the program in it acts on them as on the user's own, which can
+  change what the agent may do.
+- So the hub refuses terminal control characters (Unicode `Cc` but newline, carriage return and tab) from callers whose
+  grant is narrower than the user's, extension tokens, on the routes that type a caller's text into a terminal or keep
+  it for a prompt (`server/internal/hub/terminal_controls.go`). Check kept text as it comes in, while the caller is
+  still known. A new route that types or keeps a caller's text needs the same wrapper.
+- Newline, carriage return and tab pass because those routes deliver text as text, where a line break stays a line
+  break. A path that types text as raw keys would make them Enter and Tab, and needs a stricter rule.
+- Check every string of the body as JSON decodes it, keys included, not one named field: Go's `encoding/json` matches
+  a struct's field names without regard to case, so a check of `p["text"]` misses a body that spells it `"Text"`, and
+  a handler that decodes only the first value of a body leaves the rest to whatever reads it next. Check the decoded
+  path and query too: a route can keep text from them (a knowledge-base entry is named from its id).
+- The hub's refusal covers only extension tokens; channel messages and the apps reach a prompt without one. So the
+  computer also makes those characters inert in every text it prompts an agent with (`inertControls`,
+  `server/internal/node/hosts.go`): an ESC becomes `<ESC>` and any other becomes `<U+XXXX>`, for every host and
+  caller. That covers each paste (`hostPrompt`, the fallback paste, Codex answers) and a compatible CLI's first
+  message, which is shell-quoted onto a command line that may be typed into a shell: there `^U` erases the line,
+  quotes or not, and a carriage return then runs what follows. A shell's line editor acts on more than controls
+  inside quotes: a tab completes the quoted word, closes the quote and leaves the rest to the shell (bash, zsh), and
+  csh ends the command at a line break. So that first message also gets its tabs as spaces, and its line breaks as
+  spaces unless a sh-family shell sources it from a start file (`typedArg`, `server/internal/node/start_agent.go`):
+  Orca types the line itself and does not say which shell it opened, so the user's login shell is only a guess there.
+  Match what the agent shows or its transcript records against that inert text, not the text as sent; a runtime is
+  sent the text itself, so the echo tie accepts either.
+  Keys sent as keys (`session.keys`) are the one way left to press a control key, on purpose.
 
 ## Profile acceptance must include launcher defaults
 

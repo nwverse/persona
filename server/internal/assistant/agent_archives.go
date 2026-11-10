@@ -220,22 +220,6 @@ func overlayAgentArchives(machine string, list []proto.Session, records map[stri
 	return list
 }
 
-// A later archive/restore supersedes an older delete tombstone. A subsequent
-// explicit delete still works, without a non-atomic write to two settings keys.
-func (svc *Service) agentArchiveChanges(machine string) map[string]time.Time {
-	out := map[string]time.Time{}
-	records := svc.agentArchives.snapshot.Load()
-	if records == nil {
-		return out
-	}
-	for _, rec := range *records {
-		if rec.Session.MachineID == machine {
-			out[rec.Session.SessionID] = rec.ChangedAt
-		}
-	}
-	return out
-}
-
 func (svc *Service) archiveStore() Store {
 	if svc.store == nil {
 		return nil

@@ -54,7 +54,7 @@ The build number can also be given by hand: `./scripts/release/release.sh 42`.
 
 What `release.sh` does:
 
-1. `xcodegen generate` (the source is `apple/project.yml`, generating `Persona.xcodeproj`; the old `Persona.xcodeproj` is a symlink to the project entry, and generated content isn't committed).
+1. `xcodegen generate` (the source is `apple/project.yml`, generating `Persona.xcodeproj`; generated content isn't committed).
 2. Release archive to `~/Library/Developer/Xcode/Archives/<date>/Persona <build number>.xcarchive` (dSYMs kept for Organizer symbolication),
    with the watch App embedded.
 3. `check_bundle_strings.py` checks `Persona.app` and `Persona.app/Watch/Persona.app`: `*UsageDescription` in Info.plist
@@ -294,7 +294,7 @@ python3 scripts/release/asc_testflight.py external   # create the group, enable/
 
 ## Mac version (2026-11-02)
 
-The Mac App (target `PersonaMac`, old `PersonaMac` scheme compatible) shares the iPhone's bundle id, so it is **the same app record** in App Store Connect (macOS platform added, version 1.0),
+The Mac App (target and scheme `PersonaMac`) shares the iPhone's bundle id, so it is **the same app record** in App Store Connect (macOS platform added, version 1.0),
 and uses the same TestFlight: the same Internal / Friends groups and public link. Testers install TestFlight on a Mac to see Mac builds.
 
 - **Build numbers**: a number can only be used once per platform; different platforms can reuse it. Rule: **the Mac build and iPhone build in one release use the same number**
@@ -345,7 +345,7 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
 - Web dependencies always install from the official npm registry (`npm ci --registry=https://registry.npmjs.org/`, overridable with `PERSONA_NPM_REGISTRY`), ignoring local npm config. `package-lock.json` already points to the official registry; a locally configured mirror may lack packages (on 2026-11-06 it lacked `elkjs`, stopping release before web bundling).
 - Build four platforms (linux / darwin × amd64 / arm64), with `-tags public -trimpath -s -w`, embedding `channel=release`, build number (UTC `YYYYMMDDHHMM`) and `updateURL`:
   - **Web bundled into the binary** (`server/internal/hub/webdist`, `go:embed`): the hub uses it when the hub machine has no `~/.persona/web`; otherwise it still uses the directory.
-    The plain copy is privacy-scanned first, then its hashed assets are kept gzipped (`go run ./internal/webasset/precompress`); the script stops if none are, or if a compressible asset of 1 KB or more is left plain (`docs/web/web.md` "Precompressed assets").
+    The plain copy is privacy-scanned first, then its hashed assets and `third-party-licenses.txt` are kept gzipped (`go run ./internal/webasset/precompress`); the script stops if none are, or if a compressible asset of 1 KB or more is left plain. The first screen's brotli copies (`name.br`) come from `npm run build` and stay as they are (`docs/web/web.md` "Precompressed assets").
   - **No skills included**: the skill connecting to the Lark gateway was copied from a private upstream repository (GPL-3.0) and cannot be redistributed. Skills live in `~/.persona/skills/` on each machine,
     so there is only one binary, used by our own hub too (`docs/operations/hub-update.md`). The script ensures the binary only contains skills registered as redistributable (`scripts/release/check_bundle_skills.py`).
     `-tags public` changes no code (`TestOneBuild`); it is only a privacy-scan marker.
@@ -478,6 +478,14 @@ an old checkpoint without that identity is rejected rather than silently attribu
 When moving to rewritten history, pause the existing publisher, retain its evidence and use a separate `state_directory` for the new
 repository. Keep the existing package, signing certificate and signing entry. Never post an old commit's status to the new repository
 or treat an old verified APK as a build of the new source. Compare migrated file content when commit IDs have changed.
+
+The release APK is shrunk by R8 without obfuscation (docs/android/android.md "Release shrinking"). After `:app:assembleRelease` and
+before the APK is copied for signing, the worker runs `scripts/release/check_android_shrink.py` on it and on R8's
+output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app reaches only by name and
+that R8 removed fails the build, so nothing is signed or published. Before the first shrunk release, install it on a phone and
+open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings
+tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`
+and the test line that pins it, docs/android/android.md "Release shrinking").
 
 Versions are `version_base + first-parent commit count`; `version_base` defaults to 100000. Before enabling the new lane, choose a
 fixed nonnegative base so its first version exceeds the currently published APK. Keep that base stable thereafter. The worker rejects
