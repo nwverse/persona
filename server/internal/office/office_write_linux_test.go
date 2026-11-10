@@ -199,6 +199,90 @@ func TestMainLeavesAReadOnlyOutputAlone(t *testing.T) {
 	}
 }
 
+// What is wrong with the input is said first, whatever the output: an Office file as input exits 2 and a missing one
+// is named, even when -o is an earlier output the user cannot write. Neither touches that output.
+func TestMainReportsTheInputBeforeAReadOnlyOutput(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may write any file")
+	}
+	dir := t.TempDir()
+	md := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(md, []byte("# A\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"docx", md}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	doc := filepath.Join(dir, "notes.docx")
+	other := filepath.Join(dir, "other.docx")
+	if code := Main([]string{"docx", md, "-o", other}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	v1, err := os.ReadFile(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(other, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "missing.md")
+	for _, c := range []struct {
+		args []string
+		code int
+		want string
+	}{
+		{[]string{"docx", doc, "-o", other}, 2, "is an Office file"},
+		{[]string{"docx", missing, "-o", other}, 1, missing},
+	} {
+		var errOut bytes.Buffer
+		if code := Main(c.args, io.Discard, &errOut); code != c.code || !strings.Contains(errOut.String(), c.want) {
+			t.Errorf("%q: exit %d, want %d with %q: %s", c.args, code, c.code, c.want, errOut.String())
+		}
+		if after, err := os.ReadFile(other); err != nil || !bytes.Equal(after, v1) {
+			t.Errorf("%q changed the output (%d bytes, was %d): %v", c.args, len(after), len(v1), err)
+		}
+	}
+}
+
+// The output's folder must be writable (docs/assistant/office.md): the temporary file beside the output cannot be
+// made there, so the command exits 1 and the earlier output stays as it was, even one the user may write.
+func TestMainLeavesTheOutputAloneInAReadOnlyFolder(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may write into any folder")
+	}
+	dir := t.TempDir()
+	md := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(md, []byte("# A\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"docx", md}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	doc := filepath.Join(dir, "notes.docx")
+	v1, err := os.ReadFile(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(md, []byte("# B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	// Before t.TempDir removes the folder, which it could not empty while read-only.
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	var errOut bytes.Buffer
+	if code := Main([]string{"docx", md}, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "permission denied") {
+		t.Errorf("exit %d: %s", code, errOut.String())
+	}
+	if after, err := os.ReadFile(doc); err != nil || !bytes.Equal(after, v1) {
+		t.Errorf("the earlier output changed (%d bytes, was %d): %v", len(after), len(v1), err)
+	}
+	if names := dirNames(t, dir); !slices.Equal(names, []string{"notes.docx", "notes.md"}) {
+		t.Errorf("left behind: %q", names)
+	}
+}
+
 // setUmask sets the process's umask for the test and puts the old one back after it. The umask is the whole
 // process's, which is safe because no test here is parallel.
 func setUmask(t *testing.T, mask int) {

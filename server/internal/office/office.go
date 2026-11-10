@@ -95,9 +95,20 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
+	src, err := os.ReadFile(in)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// An Office file is a zip, never the text these are made from.
+	if bytes.HasPrefix(src, []byte("PK\x03\x04")) {
+		fmt.Fprintf(stderr, "office %s: %s is an Office file, not Markdown, JSON or CSV\n", kind, in)
+		return 2
+	}
 	// An earlier output (a file; a link is replaced, its target never opened) is replaced only if the user may write
 	// it, as writing into it was (cp refuses a read-only file too), and keeps its permissions. The probe does not
-	// truncate, so it changes nothing.
+	// truncate, so it changes nothing. It runs after the checks on the input, so their errors come first, and before
+	// the conversion, so a refused output costs no work.
 	var keep *os.FileMode
 	if st, err := os.Lstat(abs); err == nil && st.Mode().IsRegular() {
 		f, err := os.OpenFile(abs, os.O_WRONLY, 0)
@@ -108,16 +119,6 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		f.Close()
 		perm := st.Mode().Perm()
 		keep = &perm
-	}
-	src, err := os.ReadFile(in)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	// An Office file is a zip, never the text these are made from.
-	if bytes.HasPrefix(src, []byte("PK\x03\x04")) {
-		fmt.Fprintf(stderr, "office %s: %s is an Office file, not Markdown, JSON or CSV\n", kind, in)
-		return 2
 	}
 	dir := filepath.Dir(in)
 	if *title == "" {
