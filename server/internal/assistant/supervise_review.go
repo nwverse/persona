@@ -187,7 +187,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			if ok, err := s.verifyBySupervisor(ctx, t.ID); err != nil {
 				s.logf("task %s: supervisor verify: %v", t.ID, err)
 			} else if ok {
-				return fmt.Sprintf("Task %s is accepted, closed and marked verified by you: its \"Please verify\" card now says so and the "+
+				return fmt.Sprintf("Task %s is accepted and closed, and marked verified by you: its \"Please verify\" card now says so and the "+
 					"user is not asked to pass it. Its agent is closed once it stays still. Tell the user the result in a line only if "+
 					"they are waiting for it, and hand out or schedule anything that follows (TestFlight, closing an issue).", t.ID), nil
 			}
