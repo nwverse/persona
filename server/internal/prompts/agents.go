@@ -199,3 +199,14 @@ type AgentCloseoutRequired struct {
 func RenderAgentCloseoutRequired(c AgentCloseoutRequired) string {
 	return render("agents/closeout_required", c)
 }
+
+// AgentCloseoutAsk is the status question to an agent nobody supervises whose turn did work and ended without a
+// closeout (#3616): the same form and rules (agents/closeout_form), about work already done.
+type AgentCloseoutAsk struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutAsk(c AgentCloseoutAsk) string {
+	return render("agents/closeout_ask", c)
+}
