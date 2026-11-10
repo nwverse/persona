@@ -1,4 +1,4 @@
-// The Agents list's "herdr isn't running on <computer>" rows with "Start" (#1916, docs/integrations/engines.md "When herdr isn't running"), as on iOS
+// The Agents list's "herdr isn't running on <computer>" rows with "Start" (#1916, docs/integrations/engines.md "When herdr is not running"), as on iOS
 // (HerdrNotice.swift) and Android (#2066): told before a message to an agent there fails, not after. Only classic herdr
 // (engines herdr and herdr-both): Herdr App's herdr-core has no server for the node to start.
 

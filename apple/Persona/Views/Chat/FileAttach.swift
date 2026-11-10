@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// Sending files to an agent (docs/protocol/protocol.md「发送文件」): picked files are copied out of the picker's sandbox,
+// Sending files to an agent (docs/protocol/protocol.md「Sending files」): picked files are copied out of the picker's sandbox,
 // uploaded one after another to the temp directory of the machine the conversation runs on, and each path lands in
 // the input box at the cursor. Nothing is sent: the user goes on typing. Pictures keep using image attachments.
 
@@ -71,7 +71,7 @@ final class FileUploads {
     @ObservationIgnored private var last: Task<Void, Never>?
 
     /// Queues picked files for machine; done gets each one's path on the machine, in the order picked.
-    /// dest "health": a report for the health space, kept in its reports/ (docs/assistant/health.md「体检报告」); nil the temp directory.
+    /// dest "health": a report for the health space, kept in its reports/ (docs/assistant/health.md「Checkup reports」); nil the temp directory.
     func start(_ urls: [URL], machine: MachineRef, model: AppModel, dest: String? = nil, done: @escaping (String) -> Void) {
         let features = model.features(machine.group)
         if !features.isEmpty, !features.contains("file_upload") {

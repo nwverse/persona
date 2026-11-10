@@ -81,7 +81,7 @@ data class ExtensionUpgradeNote(
     val at: String? = null,
 )
 
-/** An extension's program on one machine (docs/extensions/extensions.md "Programs that run on computers"). */
+/** An extension's program on one machine (docs/extensions/extensions.md "Programs running on computers"). */
 @Serializable
 data class ExtensionNodeState(
     @SerialName("machine_id") val machineId: String = "",

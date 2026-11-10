@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// The Persona tab's top bar (docs/apple/ios.md「Persona 顶栏和侧边栏」), floating over the conversation with a fog under it
+/// The Persona tab's top bar (docs/apple/ios.md「Persona top bar and sidebar」), floating over the conversation with a fog under it
 /// instead of a solid bar: Chat History (the sidebar) on the left, Persona's face and name in the middle, New Chat on the right.
 /// The face opens a menu: Knowledge, Details (the profile), the copy items (the working directory, a block of facts to
 /// paste to another agent, the session id), the launcher, the session info card, Interrupt. While the hub is out of reach
 /// the name pill shows the spinner and Waiting for Network / Connecting… / Updating….
 struct AssistantTopBar: View {
     @Environment(AppModel.self) private var model
-    /// In the shell (docs/apple/ios.md「新外壳」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
+    /// In the shell (docs/apple/ios.md「New shell」) the middle is the Assistant | Agents switch; its Assistant opens this bar's menu.
     @Environment(\.shell) private var shell
     /// The system's bars down the side (iPhone Duo): the shell's bar is the side rail there.
     @Environment(\.shellRailEdge) private var railEdge
@@ -425,7 +425,7 @@ struct AssistantTopBar: View {
 
     @ViewBuilder private func menuItems(_ link: ConnectionStatus.Phase) -> some View {
         if model.isMultiHub, let current = model.hub?.group {
-            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「hub 级页面」); pick whose.
+            // Several groups of hubs: each has its own Persona (docs/protocol/multi-hub.md「Terminology」); pick whose.
             Section("hub") {
                 Picker("hub", selection: Binding(get: { current }, set: { model.selectHub($0) })) {
                     ForEach(model.groupIDs, id: \.self) { g in
@@ -591,7 +591,7 @@ extension AppModel {
         key?.machineID ?? assistantConfig?.machineID ?? hubMachineID
     }
 
-    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「状态」): Offline when the hub or
+    /// What the persona's face shows for Persona's conversation `key` (docs/apple/persona.md「States」): Offline when the hub or
     /// Persona's machine is out of reach, Waiting for you when the conversation waits on the user, Thinking / Working while a turn
     /// runs (thinking until it writes or calls a tool), else Idle. Read only by the face's own view (`TopBarDot`,
     /// `ShellPersonaButton`): every hub push changes what it reads. `inFront`: the page's `tabIsActive`; behind another

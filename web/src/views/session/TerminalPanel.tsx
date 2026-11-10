@@ -4,7 +4,7 @@
 // width; driving, the key bar has the keys a phone's keyboard lacks. The logic is in terminal/feed.ts; xterm loads only
 // when a terminal opens.
 //
-// Beside that single-pane surface the panel has a second, "Full view" (docs/integrations/terminal.md "The full herdr UI"): herdr's own
+// Beside that single-pane surface the panel has a second, "Full view" (docs/integrations/terminal.md "Full herdr UI"): herdr's own
 // client with its sidebar, tabs and splits (terminal/FullTerminal.tsx). The header's switch chooses, and the two give
 // way to each other with a short slide and fade. Each surface draws its own controls into the header's slot.
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";

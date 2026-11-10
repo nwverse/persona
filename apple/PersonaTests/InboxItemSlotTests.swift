@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The inbox_item slot (docs/extensions/extensions.md「收件箱条目」, #1682): which sources' items a plugin draws, the item's body as
+/// The inbox_item slot (docs/extensions/extensions.md「Inbox items」, #1682): which sources' items a plugin draws, the item's body as
 /// the plugin's View (`context.item`, its buttons), today's body whenever that cannot be (quietly, or with a line and
 /// Retry when the plugin failed), and View in Session (persona://inbox/<id>/source) back to today's body.
 @MainActor struct InboxItemSlotTests {

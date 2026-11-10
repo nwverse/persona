@@ -127,7 +127,7 @@ $command"
 }
 mkdir -p bin
 # The commit it is built from, "-dirty" after it with changes in server/ not committed: a release installs itself over
-# this build only when its code contains that commit (docs/operations/hub-update.md "No rollback").
+# this build only when its code contains that commit (docs/operations/hub-update.md "No regression").
 COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 [ -n "$COMMIT" ] && [ -n "$(git status --porcelain -- . 2>/dev/null)" ] && COMMIT="$COMMIT-dirty"
 LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$COMMIT${PERSONA_PUBLISH_URL:+ -X main.updateURL=$PERSONA_PUBLISH_URL/dl}"
@@ -227,7 +227,7 @@ install_bin() {
     root=$(state_root "$role")
     mkdir -p "$root/bin" || return 1
     # The hub's binary before it is replaced: hub-systemd.sh switches the running edge to the new one and goes back
-    # to this one if it fails while taking over (docs/operations/hub-restart.md "Blue-green switch").
+    # to this one if it fails while taking over (docs/operations/hub-restart.md "Blue-green switching: the hub's edge").
     if [ "$role" = hub ]; then
       local previous
       previous=$(python3 ../scripts/persona_identity.py --service hub --shell) || return 1

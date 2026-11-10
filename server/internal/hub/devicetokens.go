@@ -237,7 +237,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 var (
 	answerReads = lazyre.New(`^/api/v1/(machines|sessions|sessions/archived|interactions|inbox|workspace-board|workspaces|sessions/[^/]+/[^/]+/items|` +
 		`extensions/-/(widgets|shortcuts))$`)
-	// The watch draws extensions' widgets on its faces and runs their shortcuts (docs/extensions/extensions.md "System-level places").
+	// The watch draws extensions' widgets on its faces and runs their shortcuts (docs/extensions/extensions.md "System-level placements").
 	answerWrites = lazyre.New(`^/api/v1/(interactions/[^/]+/(resolve|choose)|sessions/[^/]+/[^/]+/(messages|seen|interrupt)|` +
 		`inbox/[^/]+/(done|reply|draft|suggestion)|extensions/[^/]+/-/(widget|shortcut)/[^/]+)$`)
 	answerPuts = lazyre.New(`^/api/v1/devices/[^/]+/widgets$`)

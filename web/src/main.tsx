@@ -5,7 +5,7 @@ import "./styles.css";
 import { applyLook } from "./ui/look";
 import { logCaughtError } from "./lib/caught-error";
 
-// Theme color and text size (docs/web/web.md "Appearance") before anything draws.
+// Theme color and text size (docs/web/web.md "Theme color and text size") before anything draws.
 applyLook();
 
 // The language's catalog loads before the rest of the app: their modules call t() as they load (docs/web/web.md "Internationalization").

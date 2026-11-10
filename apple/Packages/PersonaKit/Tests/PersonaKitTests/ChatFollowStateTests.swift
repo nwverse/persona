@@ -3,7 +3,7 @@ import Testing
 @testable import PersonaKit
 
 /// The chat's one truth about its newest end (`ChatFollow`, #1046): every way in and out, and what ↓, following and
-/// holding back read from it. The cases measured in docs/apple/ios-state.md「回到最新」are named after their number there.
+/// holding back read from it. The cases measured in docs/apple/ios-state.md「Back to latest」are named after their number there.
 struct ChatFollowStateTests {
     /// The user drags to `gap` and lets go.
     private func drag(_ f: inout ChatFollow, to gap: CGFloat) {

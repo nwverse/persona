@@ -323,7 +323,7 @@ def mock_workspaces():
     return list({(w["machine_id"], w["source"], w["source_id"]): w for w in result}.values())
 
 
-# ---------- node self-check (#2429, docs/server/machines.md "Self-check") ----------
+# ---------- node self-check (#2429, docs/server/machines.md "Doctor: what this computer can do") ----------
 # GET /api/v1/machines/{mid}/doctor and POST …/doctor/fix: the report `personad node doctor` prints, as the hub relays it.
 #   MOCK_TOKENS=none (a hub without per-machine token usage: no card tokens, the usage route 404s) | empty (nothing ran)
 #               | lopsided (the server ran nearly everything, the others a thousandth as much)
@@ -692,7 +692,7 @@ SESSIONS = [
          "计划写好了，等你批准后开始改。", pending=1, permission_mode="plan", effort="xhigh"),
     sess("server", ORDERS, "排查 /orders 接口变慢", "/home/me/code/shop-api", "working", "working", "shop-api", 1, "perf", 1, 1,
          "慢在订单列表的 N+1 查询，正在改成一次 JOIN 并补索引。", agent="codex",
-         # how Persona reaches it (docs/integrations/codex.md "Sessions on daemons"); MOCK_CODEX_ROUTE=terminal: the terminal, with why
+         # how Persona reaches it (docs/integrations/codex.md "Sessions on the daemon"); MOCK_CODEX_ROUTE=terminal: the terminal, with why
          codex_route=os.environ.get("MOCK_CODEX_ROUTE", "app_server"),
          codex_route_note="不在共享的 app-server 上（带 -c 的启动器、在自己进程里跑的会话、没有守护进程的 0.153）"
          if os.environ.get("MOCK_CODEX_ROUTE") == "terminal" else None),
@@ -1385,7 +1385,7 @@ ASSISTANT = [
     assistant_sess(ASK4, "整理这个季度的读书笔记", 60 * 50, "第 30 本整理好了。"),
 ]
 
-# MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Assistant conversation sources"): conversations the hub opened by itself — the inbox's AI twin,
+# MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
 # waits for the user. The sidebar keeps them out of "Recent" under "Automatic conversations".
 if os.environ.get("MOCK_ORIGINS") == "1":
@@ -1458,7 +1458,7 @@ if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
                   pending_interactions=1 if _state == "needs_you" else 0)
         ASSISTANT.append(_s)
 
-# MOCK_AUTO_CONVERSATIONS=1 (#3264, docs/protocol/protocol.md "Assistant conversation sources"): the hub says who opened each assistant
+# MOCK_AUTO_CONVERSATIONS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): the hub says who opened each assistant
 # conversation (`origin`, feature conversation_origin): the user's own say "user", and ten more were opened by Persona
 # itself: Inbox's AI twin (one waits for the user, one works), scheduled tasks, Lark /agent and one conversation another
 # started. The sidebar keeps those in "Automatic conversations"; the list of conversations filters them by source.
@@ -4990,7 +4990,7 @@ INBOX = [
      "mail": {"account_id": "acc1", "mailbox": "INBOX", "uids": [503], "from": {"name": "Weekly Digest", "email": "news@example.com"}}},
 ]
 
-# MOCK_DOCS=1: Feishu documents that @'d me (docs/assistant/inbox.md "Cloud documents"): a Base with my rows and their status, a sheet
+# MOCK_DOCS=1: Feishu documents that @'d me (docs/assistant/inbox.md "Docs: mentions in sheets, bases, and documents"): a Base with my rows and their status, a sheet
 # whose AI twin proposes a status move with its draft, a docx comment.
 DOC_STATES = [{"name": "待处理", "color": "#bacefd"}, {"name": "进行中", "color": "#fed4a4"},
               {"name": "待验收", "color": "#b1e8fc"}, {"name": "已完成", "color": "#c5f2bb"}]
@@ -6827,7 +6827,7 @@ if os.environ.get("MOCK_LARK_TOPIC"):
                   "lark": {"feed_id": "f4", "is_group": True, "is_topic": True, "start_position": "405", "read_position": "404"}})
 
 
-# MOCK_LARK_RICH=1 (docs/operations/testing.md "Measuring stalls"): f3's history is heavier, like a busy work group's: every third message
+# MOCK_LARK_RICH=1 (docs/operations/testing.md "Jank measurement"): f3's history is heavier, like a busy work group's: every third message
 # before the unread ones is a card, a picture or a rich post instead of a line of chatter.
 if os.environ.get("MOCK_LARK_RICH"):
     for _i, _m in enumerate(m for m in LARK_MESSAGES["f3"] if int(m["position"]) < 300 and not m.get("is_mine")):
@@ -7220,7 +7220,7 @@ def _w(label, ratio=None, used=None, limit=None, unit="percent", resets=None, ex
     if resets: w["resets_at"] = resets
     if exhausted: w["exhausted"] = True
     return w
-LAUNCHER_QUOTAS = {  # as a quota plugin would answer (docs/extensions/extensions.md "Quotas"); gateway_name is what the app shows
+LAUNCHER_QUOTAS = {  # as a quota plugin would answer (docs/extensions/extensions.md "Usage quota"); gateway_name is what the app shows
     "cc_main": {"gateway": "example-gateway", "gateway_name": "示例网关", "key_name": "cc_main",
         "budget": [_w("每周预算", 0.62, 496, 800, "usd", later(hours=60))],
         "pools": [
@@ -8189,7 +8189,7 @@ if os.environ.get("MOCK_API_ERRORS") == "1":
            "\"request_id\":\"req_011CUdExampleExample01\"} · Please run /login"),
     ]
 
-# MOCK_CHAT_CONTENT=1: what a conversation draws beyond plain text (docs/android/android.md "Conversation content"). A "Images, files and plans"
+# MOCK_CHAT_CONTENT=1: what a conversation draws beyond plain text (docs/android/android.md "Chat content"). A "Images, files and plans"
 # session on the MacBook: photos sent from the phone (<attached_images>, one of them gone), file paths in the messages,
 # a photo-only message, a plan / a question / a sub-agent, and a reply the hub cut ("View full text" loads it). The /orders Codex
 # session gets two file changes (a patch and a new file), so its live work line shows them; a Persona conversation gets a
@@ -8279,7 +8279,7 @@ if os.environ.get("MOCK_DRAWER") == "1":
             "```\n\n同一秒拍的会自动加上 -1、-2。")),
     ]
 
-# MOCK_TITLES=1: the assistant's conversations have the hub's titles (docs/assistant/assistant.md "Conversation titles"), one with a topic
+# MOCK_TITLES=1: the assistant's conversations have the hub's titles (docs/assistant/assistant.md "Chat titles"), one with a topic
 # too long for a narrow drawer; "Rename" is recorded at /mock/renamed (AssistantTitlesTests).
 RENAMED = []
 if os.environ.get("MOCK_TITLES") == "1":
@@ -8288,7 +8288,7 @@ if os.environ.get("MOCK_TITLES") == "1":
 
 # MOCK_LONG_ASSISTANT=1: the Persona tab's main conversation is a long one, like the one a user keeps for weeks: sixty
 # exchanges, each with a few tool calls and a long Markdown reply (headings, lists, a table, a code block), for measuring
-# the Persona page's frames (docs/operations/testing.md "Measuring stalls").
+# the Persona page's frames (docs/operations/testing.md "Jank measurement").
 if os.environ.get("MOCK_LONG_ASSISTANT") == "1":
     _long = []
     for _n in range(60):
@@ -8495,7 +8495,7 @@ def port_listening(port):
 
 
 # MOCK_LINKS=1: links in the Persona tab's main conversation and in an inbox item, to open in the link sheet
-# (docs/android/android.md "Links"): a plain web page, a persona:// link that only navigates, and a javascript: link that is dropped.
+# (docs/android/android.md "Terminal and links"): a plain web page, a persona:// link that only navigates, and a javascript: link that is dropped.
 if os.environ.get("MOCK_LINKS") == "1":
     ITEMS[ASK1] = ITEMS[ASK1] + [it("assistant", "text", 1, text=(
         "资料在 [示例页面](https://example.com/) 里；要看那个 Agent 就点 [这里](persona://session/macbook/" + RICH +
@@ -9341,7 +9341,7 @@ def set_persona_tier(key):
             pass
 
 
-# ---------- looks (docs/extensions/extensions.md "Persona look", #3200) ----------
+# ---------- looks (docs/extensions/extensions.md "Avatars", #3200) ----------
 # MOCK_LOOKS=example (or a package directory): an extension's looks (schema/extension/examples/example-looks), listed
 # and served as the hub does (a made persona.json; only the files a look names). GET /api/v1/looks lists the built-in
 # looks, the packages and these; PUT /api/v1/looks/current chooses one (MOCK_LOOK: chosen at start) and pushes "look".
@@ -10434,7 +10434,7 @@ def mock_files(p, q):
 # --- end of Files & Git ---
 
 
-# --- Files & Git on Android (docs/android/android.md "Files and Git in conversations"): a PDF in the tree, a tag in the history, the
+# --- Files & Git on Android (docs/android/android.md "Files and Git in chat"): a PDF in the tree, a tag in the history, the
 # folders above the home (the browser can walk up to /), and with MOCK_FILES=1 the tree's files readable too (the
 # big-file set answers …/file first). MOCK_TIME_OFFSET=+08:00: file and commit times carry the machine's own offset,
 # as a real node sends them ("2026-10-31T13:58:40.205893083+08:00"), not Z.
@@ -10613,7 +10613,7 @@ if os.environ.get("MOCK_OFFICE"):
         _ext = os.path.splitext(_name)[1]
         MOCK_TREE[MOCK_REPO + "/docs/" + _name] = _body if isinstance(_body, str) else _body.decode() if _ext == ".rtf" else (
             MOCK_MIMES.get(_ext, "audio/wav" if _ext == ".wav" else "application/octet-stream"), base64.b64encode(_body).decode())
-# MOCK_TURN_IMAGES=one|many: the pictures the agent looked at in a turn, under its answer (docs/protocol/protocol.md "Images viewed in this turn"),
+# MOCK_TURN_IMAGES=one|many: the pictures the agent looked at in a turn, under its answer (docs/protocol/protocol.md "Images viewed this turn"),
 # with the Office files it made as cards. `many`: the blog conversation's last turn reads design pictures, a phone
 # screenshot and a picture too big to keep (only its path), looks at the browser and the screen; the weather one is
 # still at it (two so far); the assistant looked at a Mac's screen. `one`: the blog turn looked at one page. All
@@ -10725,7 +10725,7 @@ if os.environ.get("MOCK_TURN_IMAGES"):
             "mcp__persona__computer_state", {"machine": "studio"}, "屏幕上：Safari（首页）、备忘录", 2, (SHOT_SCREEN, 504, 328)) + [
             it("assistant", "text", 1, text="Studio 上开着 Safari（博客首页）和备忘录，备忘录里是一张发布前的检查清单。")]
     ITEMS[BLOG] = ITEMS[BLOG] + _ask  # it() numbers lines in order: appended ones come after
-# MOCK_RENDER=1: formulas and a diagram (docs/apple/ios.md "Formulas and diagrams"): the last turn of the release-notes conversation, and the algorithm document fixture.
+# MOCK_RENDER=1: formulas and a diagram (docs/apple/ios.md "Math and diagrams"): the last turn of the release-notes conversation, and the algorithm document fixture.
 RENDER_MD = ("降雨概率按逻辑回归估：$p = \\sigma(w^\\top x + b)$，其中 \\(\\sigma(z) = 1/(1+e^{-z})\\)。损失是交叉熵：\n\n"
              "$$\nL = -\\frac{1}{n}\\sum_{i=1}^{n} \\big[y_i \\log p_i + (1-y_i)\\log(1-p_i)\\big]\n$$\n\n"
              "刷新流程：\n\n```mermaid\nflowchart LR\n  A[小组件请求] --> B{缓存新鲜?}\n  B -- 是 --> C[读缓存]\n"
@@ -12667,7 +12667,7 @@ def _catalog_item(c):
     return {k: v for k, v in it.items() if v not in (None, "", False)} | {"tags": c.get("tags", [])}
 
 
-# Auto-upgrade (docs/extensions/extensions.md "Automatic upgrades"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
+# Auto-upgrade (docs/extensions/extensions.md "Auto-upgrade"): example-gateway, from a market at 1.0.0, has 1.1.0 there asking for one more
 # host. MOCK_PLUGIN_UPGRADE picks how it stands: needs_permission (default), waiting_idle, skipped, upgraded (the last
 # one went in by itself), disabled (switched off: auto-upgrade paused, its own switch kept), rolled_back_by_user (the
 # user rolled back from 1.1.0 by hand: skipped as the user's, #1826), renamed (the market lists 1.1.0 under a new ID,
@@ -12813,7 +12813,7 @@ def system_route(handler, p, req):
     return False
 
 
-# ---------- MOCK_EXTENSION_OPS: installs in steps (docs/protocol/protocol.md "Extension installation, upgrade and removal progress", #3277, #3307) ----------
+# ---------- MOCK_EXTENSION_OPS: installs in steps (docs/protocol/protocol.md "Extension install, upgrade and uninstall progress", #3277, #3307) ----------
 # MOCK_EXTENSION_OPS=1 (with MOCK_EXTENSIONS): the hub says extension_operations. A preview asked for with async answers
 # 202 {"operation"} at once and goes through download (in four parts) → verify → unpack → check, then waits at consent
 # (needs_consent, GET …/-/operations/{id} carries the preview); the install or upgrade agreed to with async goes on with
@@ -13441,7 +13441,7 @@ MOCK_HELP = [
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
     "PORT=<端口>  监听端口，默认 18760；0 表示自动分配（启动时打印 mock hub on <地址>:<端口>）",
     "MOCK_HUB_ID=<id>  固定 hub_id（默认每次启动随机）：换 MOCK_* 开关重启后，已配对的 App 不用重新配对",
-    "MOCK_VOICE=1|drop|bad-model|missing-model|old-hub|error|off|slow  语音插件和它的 WebSocket（docs/android/android.md「语音对话」）",
+    "MOCK_VOICE=1|drop|bad-model|missing-model|old-hub|error|off|slow  语音插件和它的 WebSocket（docs/android/android.md「Voice chat」）",
     "MOCK_NEEDS=none|two  Persona 首页「现在要你处理的事」：什么都没有 / 一个请求加一件收件箱（默认超过三件）",
     "MOCK_HISTORY=1  很长的 Persona 对话历史（最近 30 个 + 查看全部）、一段交接对话、一个置顶，置顶写入会保存",
     "MOCK_MODELS_SECONDS=<秒>  新建 Agent 里列一个启动器的模型要多久（默认 0.8，CLI 起来回答的时间）",
@@ -13920,7 +13920,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,
-            # the file was rewritten: docs/protocol/protocol.md "Item continuity"); /mock/reset puts mock-1 back.
+            # the file was rewritten: docs/protocol/protocol.md "Continuity of items"); /mock/reset puts mock-1 back.
             if q.get("history", [""])[0]: HISTORY_NOW["token"] = q["history"][0]
             args = (SAY_PRESETS.get(q.get("preset", [""])[0]) or q.get("text", ["好了。"])[0], q["user"][0] if "user" in q else None, q.get("stream", ["0"])[0] == "1",
                     int(q.get("steps", ["10"])[0]), int(q.get("ms", ["300"])[0]), int(q.get("late", ["0"])[0]), q.get("drop", ["0"])[0] == "1")
@@ -17811,7 +17811,7 @@ if READINESS or BUILTIN_PRESETS:
 
 
 MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|bad_key|full|demo|unverified|launcher_missing|model_route|rate_limited|node_outdated|assistant_offline  "
-                 "主对话就绪度的场景（#287，docs/operations/testing.md「就绪度场景」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
+                 "主对话就绪度的场景（#287，docs/operations/testing.md「Readiness scenarios」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
                  "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
                  "MOCK_BUILTIN_PRESETS=1 只加内置供应商预设")
 

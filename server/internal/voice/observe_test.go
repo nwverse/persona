@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// docs/assistant/voice.md "Turn tracking", "Announcements" (#3503): turns the call did not hand over, turns that stopped and are not over, a
+// docs/assistant/voice.md "Per-round tracking", "Announcements" (#3503): turns the call did not hand over, turns that stopped and are not over, a
 // heartbeat while it works, and the user cutting in on the model.
 
 const appMsgID = "0c0ffee0-1111-4222-8333-444455556666" // a message the phone sent (its id a UUID)

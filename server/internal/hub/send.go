@@ -186,7 +186,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	defer cancel()
 	id, _ := p["client_msg_id"].(string)
 	if ch := channel.FromClientMsgID(id, []string{"voice"}); ch != "" {
-		h.channelNoted(ch, m.cfg.ID, sid) // a voice conversation's errand (docs/extensions/channels.md "Source marks")
+		h.channelNoted(ch, m.cfg.ID, sid) // a voice conversation's errand (docs/extensions/channels.md "Source markers")
 	}
 	l := h.requestLang(r)
 	external := false

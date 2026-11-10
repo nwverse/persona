@@ -180,7 +180,7 @@ nonisolated enum MessagingShape {
         o["can_unpin"] = m["can_unpin"] ?? true
         if let r = m["reply_to"] as? Object {
             // `recalled` marks a recalled message's kept words: shown with 「已撤回」 after them; a recall the source
-            // does not show comes as its own summary (「消息已撤回」) without the mark (docs/extensions/extension-messaging.md「五」).
+            // does not show comes as its own summary (「消息已撤回」) without the mark (docs/extensions/extension-messaging.md「Conversations and messages」).
             o["reply_to"] = ["id": r["id"] ?? "", "sender_name": r["sender_name"] ?? "", "text": r["summary"] ?? "",
                              "recalled": r["recalled"] ?? false, "retained": r["recalled"] ?? false]
         }

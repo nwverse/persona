@@ -11,7 +11,7 @@ import (
 )
 
 // A message from a channel starts a run: the hub follows the conversation until the turn is over, then sends its
-// answer (the assistant's last words, after its last tool call) back. The rules (docs/extensions/channels.md "Following this turn"):
+// answer (the assistant's last words, after its last tool call) back. The rules (docs/extensions/channels.md "Message flow"):
 // the message is found by its client_msg_id (or a piece of its text, from older nodes); a message queued behind a
 // running turn waits for its own turn; a turn that leaves background work answers now and again when that work
 // reports back; a message sent while one waits on the same conversation is answered with it.

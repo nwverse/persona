@@ -1,7 +1,7 @@
 import Foundation
 
 // An extension being installed, upgraded or removed on the hub, step by step
-// (docs/protocol/protocol.md「扩展的安装、升级、卸载进度」, #3277, #3307): the hub runs it in the background and pushes the whole operation in an
+// (docs/protocol/protocol.md「Extension install, upgrade and uninstall progress」, #3277, #3307): the hub runs it in the background and pushes the whole operation in an
 // `extension_operation` event every time it moves on. Only with a hub that says `extension_operations`; an older hub
 // answers the request itself when it is done. Unknown states and steps are kept as they come: a newer hub may add some.
 

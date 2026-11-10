@@ -338,7 +338,7 @@ type SessionView struct {
 	Title    string   `json:"title,omitempty"`
 	Archived bool     `json:"archived,omitempty"`
 	Queued   []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
-	// Origin is who opened the conversation (docs/protocol/protocol.md "Where assistant chats come from": user, channel, inbox, task, spawned,
+	// Origin is who opened the conversation (docs/protocol/protocol.md "Origin of assistant chats": user, channel, inbox, task, spawned,
 	// lark_agent, extension) and OriginRef what of (the inbox item, the task, the conversation, the channel, the
 	// extension); both "" while it is not known.
 	Origin    string `json:"origin,omitempty"`

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A task's detail, risen from the bottom like a link (docs/assistant/unified-entry.md「任务详情」): opens full, pulled down to
+/// A task's detail, risen from the bottom like a link (docs/assistant/unified-entry.md「Task details」): opens full, pulled down to
 /// 0.6 the conversation behind stays usable. Its agent's page is the Agents page's own chat (`ChatView(style: .dev)`),
 /// so everything that page does works here. That chat's header is the sheet's only one (`HostedChat`, #3255): ✕, the
 /// task's title over the agent's state and place, and ⋯ with the task's own actions; no strip of the space's other

@@ -76,7 +76,7 @@ func (p *Pusher) sendFromTo(manager string, build localized, collapseID string, 
 
 // sendLiveActivity pushes to a Live Activity token (an activity's own, or the push-to-start one): its own push type and
 // topic, the device's APNs environment. gone runs when APNs says the token is dead. Through the relay the payload is
-// not sealed: iOS reads a Live Activity's content-state itself (docs/operations/push-relay.md "Live Activity is plaintext").
+// not sealed: iOS reads a Live Activity's content-state itself (docs/operations/push-relay.md "Live Activities are plaintext").
 // The returned channel closes after the attempt and its retries, so revocation can wait before forgetting the device.
 func (p *Pusher) sendLiveActivity(d Device, token string, payload map[string]any, priority string, gone func()) <-chan struct{} {
 	done := make(chan struct{})

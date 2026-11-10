@@ -1,4 +1,4 @@
-// An inbox item as an event (docs/assistant/inbox.md "Events, handling chain, suggestions", docs/web/web.md "Inbox"): the row's mark ("In progress"'s state
+// An inbox item as an event (docs/assistant/inbox.md "Events and handling chain", docs/web/web.md "Inbox"): the row's mark ("In progress"'s state
 // word, "AI is preparing a suggestion", the suggestion's kind and first line) and the detail's body — ✦ summary, recap, the
 // suggestion card
 // with its buttons right under it, then the handling chain folded to its newest entry, each entry going where its link says.
