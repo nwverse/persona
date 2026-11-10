@@ -40,6 +40,8 @@ var clipboardBackend = func() clipBackend {
 	switch installOS {
 	case "darwin":
 		return macClip{}
+	case "windows":
+		return winClip{}
 	}
 	return unsupportedClip{reason: proto.ClipboardReasonOS}
 }
