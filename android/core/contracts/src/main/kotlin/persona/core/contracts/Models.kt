@@ -695,6 +695,12 @@ data class Interaction(
     @SerialName("always_label") val alwaysLabel: String? = null,
     /** The persisted scope granted by this card; absent on older hubs and terminal-only sessions. */
     @SerialName("always_keys") val alwaysKeys: List<String>? = null,
+    /**
+     * Whether the manager keeps an "always allow" for this card (#3590): false on its own cards, which keep nothing, so
+     * they offer only Allow and Deny; true where it does, another agent's card included. Absent (an older hub, an
+     * Agents session's card): the card's own rule (`offersAlways` in core:domain).
+     */
+    @SerialName("always_honored") val alwaysHonored: Boolean? = null,
     /** Why the agent asks for this permission, in its own words (Codex). */
     val reason: String? = null,
     /** Filled in before approving (adding a mail account's password); the hub refuses allow without the required ones. */

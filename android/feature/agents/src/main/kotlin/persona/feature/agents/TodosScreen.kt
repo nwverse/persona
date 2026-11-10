@@ -31,7 +31,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.domain.tasks.moveTo
 import persona.core.contracts.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -44,6 +46,7 @@ import android.text.format.DateFormat
 import androidx.compose.ui.platform.LocalConfiguration
 import java.time.Instant
 import java.time.ZoneId
+import java.util.Locale
 import java.time.format.DateTimeFormatter
 
 data class TodoMostUrgent(
@@ -155,6 +158,39 @@ fun TodosScreen(
             }
         }
     }
+    // A to-do moved on the calendar (#2045, iOS TodoCalendarMove): drawn there at once; once the hub has it, a success
+    // buzz and "Moved to …" with Undo (which moves it back, without a second notice); a failed save is put back and said
+    // as the shell says failures (an error buzz, a nudge while offline).
+    val feedback = LocalAppFeedback.current
+    val haptics = rememberHaptics()
+    val locale = LocalConfiguration.current.locales[0]
+    fun moveFailed(e: Exception) {
+        if (feedback?.failure(e) != true) onError(res.getString(R.string.agents_todo_calendar_move_failed, e.message.orEmpty()))
+    }
+    val moveTodo: (String, TodoDue) -> Unit = move@{ id, due ->
+        val store = tasks ?: return@move
+        val todo = todos.firstOrNull { it.id == id } ?: return@move
+        val back = todo.due ?: return@move
+        val to = todo.moveTo(due) ?: return@move
+        scope.launch {
+            try {
+                store.setTodoDue(id, to)
+                haptics(Haptic.Success)
+                val undo = FeedbackAction(res.getString(R.string.agents_todo_calendar_undo)) {
+                    scope.launch {
+                        try { store.setTodoDue(id, back) }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { moveFailed(e) }
+                    }
+                }
+                feedback?.notice(res.getString(R.string.agents_todo_calendar_moved, dueWords(to, locale, ZoneId.systemDefault(), now)), undo)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                moveFailed(e)
+            }
+        }
+    }
     val delete: (Todo) -> Unit = { todo ->
         scope.launch {
             try {
@@ -242,6 +278,7 @@ fun TodosScreen(
                     onOpenTodo = onOpenTodo,
                     bottomPadding = padding.calculateBottomPadding(),
                     modifier = Modifier.weight(1f),
+                    onMove = if (tasks != null) moveTodo else null,
                 )
             }
             return@JPage
@@ -514,6 +551,17 @@ internal fun TodoHoldLine(hold: TodoHold, modifier: Modifier = Modifier) {
     )
 }
 
+/** A due date in words, as a to-do's line says it: "Thu, Nov 12, 18:00", or the day alone; the year only when not [now]'s. */
+internal fun dueWords(due: TodoDue, locale: Locale, zone: ZoneId, now: Instant): String {
+    val year = now.atZone(zone).year
+    fun format(skeleton: String, of: Int) =
+        DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, if (of == year) skeleton else "y$skeleton"), locale)
+    return when (due) {
+        is TodoDue.At -> due.at.atZone(zone).let { format("EEEMMMdHHmm", it.year).format(it) }
+        is TodoDue.Day -> format("EEEMMMd", due.day.year).format(due.day)
+    }
+}
+
 /** A to-do's due date ("Due Thu, Nov 12, 18:00", red once past), high priority and a reminder still to push, in a line
  * (iOS `TodoPlanLine`, #1683); nothing without them. */
 @Composable
@@ -522,14 +570,10 @@ internal fun TodoPlanLine(todo: Todo, modifier: Modifier = Modifier) {
     val locale = LocalConfiguration.current.locales[0]
     val now = Instant.now()
     val sameYear = { i: Instant -> i.atZone(zone).year == now.atZone(zone).year }
-    val dateOnly = { i: Instant ->
-        DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, if (sameYear(i)) "EEEMMMd" else "yEEEMMMd"), locale)
-    }
     val withTime = { i: Instant ->
         DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, if (sameYear(i)) "EEEMMMdHHmm" else "yEEEMMMdHHmm"), locale)
     }
-    val dueText = parseTime(todo.dueAt)?.let { withTime(it).format(it.atZone(zone)) }
-        ?: todo.dueDay?.let { d -> dateOnly(d.atStartOfDay(zone).toInstant()).format(d) }
+    val dueText = todo.due?.let { dueWords(it, locale, zone, now) }
     val remind = todo.remind?.takeIf { todo.remindedAt == null && !todo.isDone }
     val high = todo.priority == "high" && !todo.isDone
     if (dueText == null && remind == null && !high) return
