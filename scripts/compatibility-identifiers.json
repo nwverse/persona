@@ -939,6 +939,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "server/internal/node/testdata/session_list_keep.json": {
+      "reason": "Baseline regression fixture or generated carrier asserting an exact versioned contract.",
+      "tokens": [
+        "started_by_jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "server/internal/pgdocker/pgdocker.go": {
       "reason": "Existing storage identity or generated protocol carrier required across upgrades.",
       "tokens": [
