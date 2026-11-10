@@ -108,6 +108,11 @@ type Session struct {
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
+	// BypassAvailable: this Claude Code can be switched to bypassPermissions (Allow All) while it runs, since it was
+	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
+	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
+	// hooks run under; false while unknown (no hook yet, a node too old to say).
+	BypassAvailable bool `json:"bypass_available,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// Pending means a requested change waits for an idle input box; LostAt asks the client to offer reopening
 	// after a resumed process reset an enabled switch. Reopening or dismissing the notice clears LostAt.

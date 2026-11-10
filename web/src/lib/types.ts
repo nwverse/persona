@@ -202,6 +202,8 @@ export interface Session {
   model?: string;
   permission_mode?: string;
   effort?: string;
+  /** This Claude Code may switch to Allow All while it runs: it was started with a flag that allows it (#1379). */
+  bypass_available?: boolean;
   /** What the model saw in the latest reply and the model's window, in tokens (#2430); omitted while the node cannot tell. */
   context_tokens?: number;
   context_window?: number;

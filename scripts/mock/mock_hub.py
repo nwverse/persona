@@ -722,6 +722,12 @@ for _s in SESSIONS:
         if _tokens:
             _s.update(context_tokens=_tokens, context_window=_window)
 
+# MOCK_BYPASS_AVAILABLE=1 (#1379): the widget agent's Claude was started with --dangerously-skip-permissions, so Allow All
+# is in its mode cycle and the apps offer it while it runs (Session.bypass_available).
+if os.environ.get("MOCK_BYPASS_AVAILABLE") == "1":
+    for _s in SESSIONS:
+        if _s["session_id"] == WIDGET: _s["bypass_available"] = True
+
 # MOCK_STALE_DONE=1 (#2069): the widget session as the hub listed it while herdr said done through a turn the phone
 # started (status done, state idle, its activity still moving): the Agents list before the node's fix.
 if os.environ.get("MOCK_STALE_DONE") == "1":
