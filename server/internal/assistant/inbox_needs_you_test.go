@@ -39,16 +39,17 @@ func needsYouTold(t *testing.T, f *fakeHub) []int {
 func waitNeedsYou(t *testing.T, f *fakeHub, want int) []int {
 	t.Helper()
 	var got []int
-	waitFor(t, "the inbox needs-you counts", func() bool {
+	waitFor(t, "the inbox count to reach the hub", func() bool {
 		got = needsYouTold(t, f)
 		return len(got) >= want
 	})
 	return got
 }
 
+// waitNeedsYouIdle waits for the one teller to finish, including a queued change.
 func waitNeedsYouIdle(t *testing.T, s *Service) {
 	t.Helper()
-	waitFor(t, "the inbox needs-you teller", func() bool {
+	waitFor(t, "the inbox count teller to finish", func() bool {
 		s.inbox.needsYouMu.Lock()
 		defer s.inbox.needsYouMu.Unlock()
 		return !s.inbox.needsYou.telling
@@ -65,7 +66,10 @@ func TestInboxNeedsYouToldToTheHub(t *testing.T) {
 	s := New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)})
 	s.inbox.init()
 	waitNeedsYouIdle(t, s)
-	s.tellInboxNeedsYou() // an unloaded inbox is a synchronous no-op, not a reason to wait before checking
+	if got := needsYouTold(t, f); len(got) != 0 {
+		t.Fatalf("told %v before what is stored was read", got)
+	}
+	s.tellInboxNeedsYou()
 	if got := needsYouTold(t, f); len(got) != 0 {
 		t.Fatalf("told %v before what is stored was read", got)
 	}
@@ -153,11 +157,11 @@ func TestInboxNeedsYouDoesNotWaitForTheHub(t *testing.T) {
 		t.Fatal("telling waited for the hub")
 	}
 	f.mu.Unlock()
-	var got []int
-	waitFor(t, "the final needs-you count", func() bool {
-		got = needsYouTold(t, f)
-		return len(got) > 0 && got[len(got)-1] == 5
-	})
+	waitNeedsYou(t, f, 2)
+	got := needsYouTold(t, f)
+	if got[len(got)-1] != 5 {
+		t.Fatalf("the last count told is %v, want 5", got)
+	}
 	if !slices.IsSorted(got) {
 		t.Fatalf("counts out of order: %v", got)
 	}
