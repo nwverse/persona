@@ -197,6 +197,7 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		SessionID     string          `json:"session_id"`
 		InteractionID string          `json:"interaction_id"`
 		Answers       json.RawMessage `json:"answers"`
+		Reason        string          `json:"reason"`
 	}
 	_ = json.Unmarshal(args, &a)
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
@@ -232,16 +233,21 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 	if err != nil {
 		return "", err
 	}
+	// A card handed to this conversation before the user (ask_route.go): its answer is the task's decision.
+	todo, routed := s.routedTo(ix.ID, self)
 	var res struct {
 		OK     bool   `json:"ok"`
 		Status string `json:"status"`
 	}
 	if err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsAnswer, map[string]any{"machine_id": ix.MachineID,
-		"session_id": ix.SessionID, "interaction_id": ix.ID, "answers": answers}, &res); err != nil {
+		"session_id": ix.SessionID, "interaction_id": ix.ID, "answers": answers, "reason": clip(oneLine(a.Reason), 120)}, &res); err != nil {
 		return "", err
 	}
 	if !res.OK {
 		return "", interactionEnded(ix.ID, res.Status)
+	}
+	if routed {
+		s.askAnswered(ctx, todo, self, ix, answers, a.Reason)
 	}
 	var b strings.Builder
 	b.WriteString("Answered for the user:\n")

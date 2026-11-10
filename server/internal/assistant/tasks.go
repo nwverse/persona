@@ -66,6 +66,21 @@ type PlanTask struct {
 	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
+	// the agent must not do. Continues: the to-do this task takes over from (a retry on another computer, a rework
+	// round, a task split off it), for ContinuesWhy: it then works for that to-do's brief instead of a new one. Brief is
+	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
+	// call or a card's edit says.
+	Goal         string   `json:"goal,omitempty"`
+	OutOfBounds  []string `json:"out_of_bounds,omitempty"`
+	Continues    string   `json:"continues,omitempty"`
+	ContinuesWhy string   `json:"continues_why,omitempty"`
+	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
+	StartedWhy string     `json:"started_why,omitempty"`
+	Brief      *TaskBrief `json:"brief,omitempty"`
+	// Supervisor: the leader conversation the main conversation handed the task to (task_plan's supervisor, #3608);
+	// "" the plan's own conversation supervises it, as before.
+	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
@@ -320,6 +335,9 @@ func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref stri
 		return FeedItem{}, err
 	}
 	s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": conversation, "item": it})
+	if kind == feedReceipt {
+		s.interruptsSoon() // a task went on after being cut off (interruptions.go)
+	}
 	return it, nil
 }
 
@@ -328,6 +346,17 @@ const feedPage = 500
 // feedItems is a conversation's items after since, oldest first (with the message cards sent after since: the client
 // has them, not that they went out), without the plans they name: for readers that look only at the items.
 func (s *Service) feedItems(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
+	items, err := s.rawFeed(ctx, conversation, since)
+	if err != nil {
+		return nil, err
+	}
+	s.settleCards(ctx, items)
+	s.fileCards(ctx, items)
+	return s.resolveInterruptions(ctx, conversation, items), nil
+}
+
+// rawFeed is feedItems as stored, with nothing worked out on reading.
+func (s *Service) rawFeed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
 	var items []FeedItem
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
@@ -346,8 +375,6 @@ func (s *Service) feedItems(ctx context.Context, conversation string, since time
 			items = append(items, FeedItem{ID: r.ID, Conversation: r.Conversation, At: r.At, Kind: r.Kind, Ref: r.Ref, Body: r.Body})
 		}
 	}
-	s.settleCards(ctx, items)
-	s.fileCards(ctx, items)
 	return items, nil
 }
 

@@ -108,6 +108,14 @@ internal object NotificationPolicy {
     /** The tags of a session's result notifications (done, assistant): put away once it is seen. Its cards stay. */
     fun resultTags(session: SessionKey): List<String> = listOf("done", "assistant", "reply").map { "$it:${session.path}" }
 
+    /**
+     * The notifications [Notifier.clear] takes down when the phone is unpaired or a notification setting is turned off
+     * (lock-screen details: notifications posted with details are public). Every kind [tag] gives, the request
+     * notifications and their result notices (`interaction:`), and the "stopped" notice; not the ongoing status.
+     */
+    fun cleared(tag: String): Boolean =
+        tag == "stopped" || listOf("interaction:", "failure:", "done:", "reply:", "assistant:", "alert:").any(tag::startsWith)
+
     /** An alert with an id keeps one tag per id (another group's id carries its suffix); one without is its own. */
     fun tag(event: NotifyEvent): String = if (event.kind == "alert") event.id?.takeIf { it.isNotEmpty() }?.let { "alert:id:$it" } ?: "alert:${UUID.randomUUID()}"
         else "${event.kind}:${SessionKey(event.machineId, event.sessionId).path}"

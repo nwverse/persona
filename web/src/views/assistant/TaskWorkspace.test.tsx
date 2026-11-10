@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import type { PlanTask, TaskPlan } from "../../lib/feed";
 import { noteConversation, resetManagerChoice } from "../../lib/manager-choice";
 import { getState } from "../../lib/store";
+import { loadPages } from "../../lib/lazy-page";
 
 const startPlan = vi.fn(async (..._args: unknown[]) => {});
 vi.mock("../../lib/feed", async (orig) => ({
@@ -13,6 +14,7 @@ vi.mock("../../lib/feed", async (orig) => ({
   startPlan: (...args: unknown[]) => startPlan(...args),
 }));
 const { PlanCard } = await import("./Tasks");
+beforeAll(() => loadPages(), 60_000);
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root;
 let host: HTMLDivElement;

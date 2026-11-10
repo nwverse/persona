@@ -46,6 +46,8 @@ type Node struct {
 	decided decisions
 	// questions: AskUserQuestion calls shared by the terminal and the phone (questioncalls.go).
 	questions questionCalls
+	// closeoutBriefs: what the manager said to tell each starting session of the closeout's form (closeout_start.go).
+	closeoutBriefs closeoutBriefs
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).
@@ -512,6 +514,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.handleUpdate(ctx, method, params)
 	}
 	switch method {
+	case "session.share_projection":
+		return n.shareProjection(ctx, params)
 	case "node.doctor": // the machine page's "What this computer can do": node doctor's report, read-only unless {"fix":true} (doctor_rpc.go)
 		return n.doctor(ctx, params, false)
 	case "node.doctor.fix": // the same path as `node doctor --fix`: Persona's own generated files only
@@ -534,6 +538,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Offset           int64         `json:"offset"`
 		Stream           bool          `json:"stream"`
 		SessionID        string        `json:"session_id"`
+		CreationID       string        `json:"creation_id"`
+		Incarnation      string        `json:"incarnation"`
 		Cwd              string        `json:"cwd"`
 		Launcher         string        `json:"launcher"`
 		AgentType        string        `json:"agent_type"`
@@ -581,7 +587,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Async          bool            `json:"async"`
 		Title          *string         `json:"title"`
 		PermissionMode string          `json:"permission_mode"`
+		PlanThen       string          `json:"plan_then"` // session.start in plan mode: the mode after its plan (planthen.go)
 		Effort         string          `json:"effort"`
+		ServiceTier    string          `json:"service_tier"`
 		Ultracode      *bool           `json:"ultracode"`
 		DismissLost    bool            `json:"dismiss_lost"`
 		ResumeOnly     bool            `json:"resume_only"`
@@ -630,6 +638,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if method == "session.retire" { // before the runtimes: a session another tool owns is refused, not handed on
 		closed, err := n.retire(ctx, p.SessionID)
 		return map[string]any{"closed": closed}, err
+	}
+	if method == "session.speed" {
+		return ok(n.setCodexSpeed(ctx, p.SessionID, p.ServiceTier))
 	}
 	if method == "session.ultracode" {
 		return ok(n.setUltracode(ctx, p.SessionID, p.Ultracode, p.DismissLost))
@@ -802,7 +813,8 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.usageSnapshot(false), nil
 	case "launchers.list":
 		ls, err := n.launchers(ctx)
-		if bl := n.runtimes.launchers(); len(bl) > 0 {
+		bl := n.runtimes.launchers()
+		if len(bl) > 0 {
 			// A runtime's launcher (DSH) is offered even when the login shell's list failed; one named like a shell
 			// launcher is not (the shell's runs: runtimeStart).
 			ls, err = append(append([]proto.Launcher(nil), ls...), n.runtimes.besideShell(bl, ls)...), nil
@@ -877,6 +889,14 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
 	case "session.start":
+		if p.CreationID != "" && p.ResumeSessionID == "" && p.SessionID != "" {
+			if _, exists := n.state.get(p.SessionID); exists {
+				return nil, errors.New("creation identifier requires a new session")
+			}
+			if n.transcriptPath(p.SessionID) != "" {
+				return nil, errors.New("creation identifier cannot adopt existing history")
+			}
+		}
 		if !wantsUltracode(p.Ultracode) {
 			p.Ultracode = nil // off is what a new process is anyway: as if left out (no checks, no command)
 		}
@@ -885,10 +905,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if kind == "" {
 				kind = launcherAgentType(p.Launcher)
 			}
+			if kind == ompAgent { // omp's own config decides, not a start's arguments (start_agent.go)
+				return nil, refusal("omp_options", ompOptionsRefusal, nil)
+			}
 			if _, runtime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]; runtime { // the start's host is a runtime (Paseo)
 				kind = "runtime"
 			}
-			if n.runtimes.launcherRuntime(p.Launcher) != nil && !shellLauncherNames()[p.Launcher] {
+			if h, _ := n.startRuntime(p.Launcher); h != nil { // what runtimeStart below would start it in
 				kind = "runtime"
 			}
 			if err := n.checkUltracodeStart(ctx, p.Ultracode, kind); err != nil {
@@ -903,7 +926,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Effort: p.Effort, WorkspaceID: p.WorkspaceID, Resume: p.ResumeSessionID}
 		if p.ResumeSessionID == "" {
 			if s, err, ok := n.runtimeStart(ctx, rp); ok { // a runtime's launcher
-				return map[string]any{"session": s}, err
+				return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 			}
 		}
 		if err := n.checkStartHost(p.Host); err != nil {
@@ -912,15 +935,15 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		ctx := n.reusingKeptTab(withStartHost(ctx, p.Host), p.InPane)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, err := n.startOnEngineRuntime(ctx, rp)
-			return map[string]any{"session": s}, err
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 		}
 		// Only Claude Code has a session id before it starts; another agent picks its own (start_agent.go).
-		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") {
-			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode})
-			return map[string]any{"session": s}, err
+		if p.Async && p.ResumeSessionID == "" && (p.AgentType == "" || p.AgentType == "claude") && launcherAgentType(p.Launcher) != ompAgent {
+			s, err := n.startAsyncIn(p.Host, p.SessionID, p.Cwd, p.Launcher, p.Prompt, p.WorkspaceID, p.PermissionMode, p.Effort, tab, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode})
+			return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 		}
-		s, err := n.start(ctx, p.Cwd, p.Launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, p.PermissionMode, p.Effort, tab, "", p.AgentType, modelExecution{Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode})
-		return map[string]any{"session": s}, err
+		s, err := n.start(ctx, p.Cwd, p.Launcher, p.Prompt, p.ResumeSessionID, p.WorkspaceID, p.PermissionMode, p.Effort, tab, "", p.AgentType, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Ultracode: p.Ultracode})
+		return n.creationResult(s, err, p.ResumeSessionID, p.CreationID, p.Incarnation)
 	case "session.fork": // "Branch to new chat" (fork.go)
 		id, err := n.fork(ctx, p.SessionID, p.AtItemID)
 		return map[string]any{"session_id": id}, err
@@ -938,7 +961,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			sctx = withGuest(ctx, p.Guest.Tools)
 		}
-		id, err := n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, Interject: p.Interject})
+		id, err := n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, Interject: p.Interject})
 		return map[string]any{"session_id": id}, err
 	case "assistant.guest_prepare": // a guest conversation's directory (assistant_guest.go)
 		return n.assistantGuestPrepare(params)
@@ -949,7 +972,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "assistant.handoff": // what a new main conversation is told about the old one
 		return n.assistantHandoff(p.SessionID)
 	case "assistant.warm":
-		return ok(n.assistantWarm(p.Cwd, p.Launcher, modelExecution{Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime)}))
+		return ok(n.assistantWarm(p.Cwd, p.Launcher, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime)}))
 	case "assistant.memory":
 		var a memoryOp
 		if err := json.Unmarshal(params, &a); err != nil {
@@ -966,7 +989,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			return n.sendEchoed(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, func() error { // echo.go
 				if n.isAssistantSession(p.SessionID) {
-					_, err := n.assistantSend(ctx, p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", modelExecution{Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, Interject: p.Interject})
+					_, err := n.assistantSend(ctx, p.SessionID, "", p.Launcher, p.Text, p.Images, "", "", modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: n.sessionRuntime(p.SessionID, p.Runtime, p.ModelFingerprint != ""), IsMain: p.IsMain, Interject: p.Interject})
 					return err
 				}
 				return n.send(ctx, p.SessionID, p.Text, p.Images, opts)

@@ -427,7 +427,7 @@ func (l *link) forward(ctx context.Context, id, target string) error {
 	dctx, dcancel := context.WithTimeout(ctx, dialTimeout) // the handshake only: the stream lives as long as the link
 	defer dcancel()
 	ws, resp, err := websocket.Dial(dctx, wsURL(l.ep.URL, StreamPath+"?id="+id), &websocket.DialOptions{
-		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: websocket.CompressionContextTakeover})
+		HTTPClient: l.streams, HTTPHeader: bearer(l.token), CompressionMode: StreamCompression})
 	if err != nil {
 		return fmt.Errorf("开不了流：%w", handshakeError(resp, err))
 	}
