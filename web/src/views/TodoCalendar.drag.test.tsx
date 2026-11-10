@@ -5,9 +5,10 @@
 // that moves before it is held is the page's swipe. jsdom has no layout: the column and the block say where they are.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import type { DuePatch } from "../lib/todo-calendar";
 import type { Todo } from "../lib/todos";
-import { TodoCalendar } from "./TodoCalendar";
+import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,9 +19,9 @@ const todo = (id: string, extra: Partial<Todo>): Todo => ({ id, title: id, agent
 
 let host: HTMLDivElement;
 let root: Root;
-let onMove: ReturnType<typeof vi.fn>;
-let onOpen: ReturnType<typeof vi.fn>;
-let onAdd: ReturnType<typeof vi.fn>;
+let onMove: Mock<(id: string, patch: DuePatch) => Promise<unknown>>;
+let onOpen: Mock<(id: string) => void>;
+let onAdd: Mock<(slot: CalendarSlot) => void>;
 /** What document.elementFromPoint answers: the drop target under the pointer. */
 let under: Element | null = null;
 
@@ -66,8 +67,8 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
   onMove = vi.fn(async () => {});
-  onOpen = vi.fn();
-  onAdd = vi.fn();
+  onOpen = vi.fn<(id: string) => void>();
+  onAdd = vi.fn<(slot: CalendarSlot) => void>();
 });
 
 afterEach(() => {
