@@ -19,7 +19,7 @@ import { ALLOW_ENTRY, alwaysAllowed, branchItems, branchKey, entryItems, firstTe
 export const RUNTIME_VERSION = '0.3.0'
 const DISK_EVERY = 30_000 // ms: list the sessions on disk at most this often (pi-web)
 const TERMINAL_HOSTS = new Set(['herdr', 'terminal']) // resumed in the machine's terminal engine, not in pi-web
-const RELOAD_COMMAND = 'persona-reload' // the command a session runs on itself to load a new version (docs/integrations/pi.md "Auto-update")
+const RELOAD_COMMAND = 'persona-reload' // the command a session runs on itself to load a new version (docs/integrations/pi.md "Automatic updates")
 const IDLE_EVERY = 5000 // ms: how often to look whether the process is idle enough to switch versions
 
 /**
@@ -40,7 +40,7 @@ const IDLE_EVERY = 5000 // ms: how often to look whether the process is idle eno
  *   maxSessions?: number, retryMs?: number, pushDelayMs?: number, listDisk?: boolean, runtime?: string,
  *   instance?: string, update?: { name: string, hash: string, store: string, exit?: (hash: string) => void } }} [options]
  *   listDisk: list the recent sessions on disk too, and start new ones (the companion; needs web). update: this code
- *   runs from a version in a store (selfPackage), so it takes the node's version (docs/integrations/pi.md "Auto-update"): installs it
+ *   runs from a version in a store (selfPackage), so it takes the node's version (docs/integrations/pi.md "Automatic updates"): installs it
  *   as the store's current, then — exit given (the companion) — calls exit for its supervisor to start the new code,
  *   or reloads this process's sessions onto it once they are all idle and no card of theirs is on the phone.
  *   instance: this process's identity on the node, kept by the next version's host in the same process.
@@ -441,7 +441,7 @@ export function createPiHost(deps, options = {}) {
     return { block: true, reason: '没有人批准（没有界面，手机也没回答）' }
   }
 
-  // ---- the node's version (docs/integrations/pi.md "Auto-update") ----
+  // ---- the node's version (docs/integrations/pi.md "Automatic updates") ----
 
   /** Every session of this process is between turns and no card of this runtime waits on the phone. */
   function idle() {
@@ -590,4 +590,20 @@ export function piWebOf(argv = process.argv, env = process.env) {
   let host = env.PI_WEB_HOSTNAME || '127.0.0.1'
   if (host === '0.0.0.0' || host === '::') host = '127.0.0.1'
   return { port, host, password: env.PI_WEB_PASSWORD || undefined }
+}
+
+/**
+ * The herdr pane this process runs in, as the node writes it: HERDR_PANE_ID, with its named session in front
+ * (`@<session>:<pane>`) when herdr runs it in one other than the default server — HERDR_SESSION, else the session
+ * directory of HERDR_SOCKET_PATH (`…/sessions/<name>/herdr.sock`). undefined outside herdr.
+ */
+export function herdrPaneOf(env = process.env) {
+  const pane = env.HERDR_PANE_ID
+  if (!pane) return undefined
+  let session = env.HERDR_SESSION || ''
+  if (!session) { // as the node reads it (herdr.SocketSession): only a name that can stand in an id
+    const m = /[/\\]sessions[/\\]([^/\\]+)[/\\]herdr\.sock$/.exec(env.HERDR_SOCKET_PATH || '')
+    session = m && /^[A-Za-z0-9._-]{1,128}$/.test(m[1]) && m[1] !== '.' && m[1] !== '..' ? m[1] : ''
+  }
+  return session && session !== 'default' ? `@${session}:${pane}` : pane
 }

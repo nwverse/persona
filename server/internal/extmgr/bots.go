@@ -82,6 +82,10 @@ type BotFeatures struct {
 	// OnlyConclusions: of the task reports only the conclusions are pushed; a finished turn, waiting and interrupted stay
 	// in the task list and the briefing (#1226). Off by default, and for settings saved before it: they have no such key.
 	OnlyConclusions bool `json:"only_conclusions"`
+	// ReportSteps: the task report also pushes the execution steps — each finished turn with the stage bar and what the
+	// agent said, interrupted, closed — as it did before #3218. Off by default, and for settings saved before it: then
+	// only goal-level changes go out (reached, needs your decision, stuck).
+	ReportSteps bool `json:"report_steps"`
 }
 
 var defaultBotFeatures = BotFeatures{Main: true, Cards: true, Reports: true}
@@ -165,7 +169,7 @@ func (h *Manager) saveBotSettingsLocked() {
 	}
 }
 
-// botCredentials: the app's id, secret and domain, from the app's settings, else hub.json.
+// botCredentialsLocked: the app's id, secret and domain, from the app's settings, else hub.json (h.bots.mu held).
 func (h *Manager) botCredentialsLocked() (appID, secret, domain string, fromConfig bool, err error) {
 	s := h.bots.set
 	if s.AppID != "" && s.SecretEnc != "" {

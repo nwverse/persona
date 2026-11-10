@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A task the voice model hands over is a run (docs/assistant/voice.md "Turn tracking"): one channel.Run, as the assistant's channels
+// A task the voice model hands over is a run (docs/assistant/voice.md "Per-round tracking"): one channel.Run, as the assistant's channels
 // have, found in the conversation by its message's client_msg_id (voice-<random>) or its first line, followed until
 // that turn is over and then read whole (channel.ReadTurn over the hub's HTTP API), so what the voice model hears is
 // that turn's whole answer: not the conversation's last 200 characters, not another turn's. Its words go back on the
@@ -49,7 +49,7 @@ type voiceRun struct {
 	// Draft and Clearable (409 input_draft).
 	State, Code, Message, Draft, Clearable string
 	// unsent: the app handed it back while it was being sent: past channel.QueuedMost without its message in the
-	// conversation it is unknown, not answered with the conversation's last words (docs/assistant/voice.md "Reconnecting and resuming").
+	// conversation it is unknown, not answered with the conversation's last words (docs/assistant/voice.md "Reconnect and resume").
 	unsent bool
 	// foldedCalls is how many earlier runs folded into it handed work over on calls that get no answer of their own.
 	foldedCalls int
@@ -106,7 +106,7 @@ func (t *tracker) set(r *voiceRun, state string) {
 	if openState(state) {
 		open = r.task
 	}
-	t.c.setOpen(r.ID, open)
+	t.c.setOpen(r.ID, open, state)
 	if r.State == state && r.Base == r.framed && len(r.MsgIDs) == r.framedIDs {
 		return // a hold moves the base on, a fold adds msg_ids: the app hands them back on a resume
 	}
@@ -272,7 +272,7 @@ func (t *tracker) adopt(r *voiceRun) {
 func (t *tracker) drop(r *voiceRun) {
 	t.runs = slices.DeleteFunc(t.runs, func(o *voiceRun) bool { return o == r })
 	t.link.unwatch(linkKey{r.MachineID, r.SessionID})
-	t.c.setOpen(r.ID, "")
+	t.c.setOpen(r.ID, "", "")
 }
 
 func working(s *proto.Session) bool { return s.Status == proto.StatusWorking || s.Starting }
@@ -359,7 +359,7 @@ func (t *tracker) check(ctx context.Context, r *voiceRun) {
 		return
 	}
 	// Stopped, and not on the user: a turn that may not be over yet, as the hub's triage of it says (observe.go
-	// untilTriaged, docs/assistant/voice.md "Turn tracking" Look).
+	// untilTriaged, docs/assistant/voice.md "Per-round tracking" Look).
 	if sess != nil && !look.Working && !look.Waiting {
 		if r.stopAt.IsZero() || sess.Rev != r.stopRev {
 			// Stopped, or stopped again: a turn may come and go between two looks (woken, gone on from) with its
@@ -456,7 +456,7 @@ func (t *tracker) finish(r *voiceRun, res *channel.Result, look channel.Look) {
 		}
 	}
 	state, empty, told := runDone, strings.TrimSpace(res.Answer) == "", true
-	// The model service failed it: what sort of failure, never its text (docs/assistant/voice.md "Turn tracking").
+	// The model service failed it: what sort of failure, never its text (docs/assistant/voice.md "Per-round tracking").
 	failed := res.End == channel.EndError && !res.Held && r.failure != ""
 	switch {
 	case res.Quiet:

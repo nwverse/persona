@@ -13,11 +13,11 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// persona_settings: Persona changes its own settings for the user (docs/assistant/assistant.md "Operating Persona itself"). The
-// assistant's own ("About me", its launcher, "notify tasks the main chat starts only in the main chat") are its to read and change; the hub's (the
-// inbox's rules, the blocked Claude config directories, mail accounts…) are the hub's settings app's, which asks the
-// user itself (app.tool persona_settings). Reads are free; every change is a card on the phone that says what changes
-// (before → after) and is applied only when approved.
+// persona_settings: Persona changes its own settings for the user (docs/assistant/assistant.md "Current structure", the
+// "Control Persona itself" row). The assistant's own ("About me", its launcher, "notify tasks the main chat starts only
+// in the main chat") are its to read and change; the hub's (the inbox's rules, the blocked Claude config directories,
+// mail accounts…) are the hub's settings app's, which asks the user itself (app.tool persona_settings). Reads are free;
+// every change is a card on the phone that says what changes (before → after) and is applied only when approved.
 
 // ownSetting is one of the assistant's own settings persona_settings offers.
 type ownSetting struct {
@@ -75,6 +75,22 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.doneNeedsDelivery(ctx)), nil },
 			set: s.setDoneNeedsDelivery},
+		{Setting: Setting{Key: "assistant.review_sample_percent", Title: "Share of finished tasks to spot-check", Actions: getSet,
+			About: "100 (the default): every finished supervised task waits for your task_review. Below 100 the done judge also checks each " +
+				"done_when criterion; a task whose criteria are all checkable and met and whose work is live is closed by the judge, and " +
+				"only this share of those still comes to you to spot-check (tasks that fail the check wait for task_review as before). " +
+				"Applies from the next judgment on",
+			Value: "a whole number, 0–100"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.reviewSamplePercent(ctx)), nil },
+			set: s.setReviewSamplePercent},
+		{Setting: Setting{Key: "assistant.leaders", Title: "Leader conversations", Actions: getSet,
+			About: "empty (the default): only the main conversation supervises the tasks it hands out. A leader is a side conversation " +
+				"(one repository or long-running project each) that supervises the tasks it hands out with task_plan itself: their " +
+				"supervision messages go to it and it reviews them with task_review; needs_user and failed starts still come to the " +
+				"main conversation. Applies to tasks handed out from now on",
+			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
+			get: s.getLeaders,
+			set: s.setLeaders},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -193,6 +209,7 @@ func orNone(s string) string {
 var settingTitles = map[string]string{"assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
+	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
 	"model_profiles.tiers": "title_model_tiers"}
 
 // clipped is a value as the card shows it, in l.
@@ -228,54 +245,45 @@ func (s *Service) setNotes(ctx context.Context, v json.RawMessage) (*ownChange, 
 		}}, nil
 }
 
-func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+// setBoolSetting changes one of the assistant's on/off settings: v is the new value, current reads it, unchanged is
+// the summary when v is what it already is, card the approval card's text (before → after, each "on" or "off" in the
+// card's language), field where Settings keeps it, and applied the tool's answer once it is (a format of the value).
+func (s *Service) setBoolSetting(ctx context.Context, v json.RawMessage, current func(context.Context) bool, unchanged string,
+	card func(l i18n.Lang, before, after string) string, field func(*Settings) **bool, applied string) (*ownChange, error) {
 	var on bool
 	if err := json.Unmarshal(v, &on); err != nil {
 		return nil, errors.New("value must be true or false")
 	}
-	before := s.mainTasksQuiet(ctx)
+	before := current(ctx)
 	if on == before {
-		return &ownChange{summary: "「主对话派的任务只在主对话里通知」没有变化"}, nil
+		return &ownChange{summary: unchanged}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
 	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_main_tasks_quiet", i18n.Args{"before": i18n.T(l, word[before]), "after": i18n.T(l, word[on])})
-	},
+	return &ownChange{cardText: func(l i18n.Lang) string { return card(l, i18n.T(l, word[before]), i18n.T(l, word[on])) },
 		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MainTasksQuiet = &on; return nil }); err != nil {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { *field(v) = &on; return nil }); err != nil {
 				return "", err
 			}
 			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.main_tasks_quiet is %v for tasks opened from now on (existing ones keep theirs).", on), nil
+			return fmt.Sprintf(applied, on), nil
 		}}, nil
 }
 
+func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.mainTasksQuiet, "「主对话派的任务只在主对话里通知」没有变化", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_main_tasks_quiet", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.MainTasksQuiet },
+		"assistant.main_tasks_quiet is %v for tasks opened from now on (existing ones keep theirs).")
+}
+
 func (s *Service) setStartRequestedTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var on bool
-	if err := json.Unmarshal(v, &on); err != nil {
-		return nil, errors.New("value must be true or false")
-	}
-	before := s.startRequestedTasks(ctx)
-	if on == before {
-		return &ownChange{summary: "「我在对话里说过的，直接开始」没有变化"}, nil
-	}
-	if s.store() == nil {
-		return nil, errors.New("no database on this hub")
-	}
-	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_start_requested_tasks", i18n.Args{"before": i18n.T(l, word[before]), "after": i18n.T(l, word[on])})
-	},
-		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.StartRequestedTasks = &on; return nil }); err != nil {
-				return "", err
-			}
-			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.start_requested_tasks is %v for plans from now on.", on), nil
-		}}, nil
+	return s.setBoolSetting(ctx, v, s.startRequestedTasks, "「我在对话里说过的，直接开始」没有变化", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_start_requested_tasks", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.StartRequestedTasks },
+		"assistant.start_requested_tasks is %v for plans from now on.")
 }
 
 func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
@@ -304,27 +312,33 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 }
 
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var on bool
-	if err := json.Unmarshal(v, &on); err != nil {
-		return nil, errors.New("value must be true or false")
+	return s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.DoneNeedsDelivery },
+		"assistant.done_needs_delivery is %v from the next judgment and task on.")
+}
+
+func (s *Service) setReviewSamplePercent(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var pct int
+	if err := json.Unmarshal(v, &pct); err != nil || pct < 0 || pct > 100 {
+		return nil, errors.New("value must be a whole number, 0–100")
 	}
-	before := s.doneNeedsDelivery(ctx)
-	if on == before {
-		return &ownChange{summary: "「上线并实测才算做完」没有变化"}, nil
+	before := s.reviewSamplePercent(ctx)
+	if pct == before {
+		return &ownChange{summary: "assistant.review_sample_percent is unchanged"}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
-	word := map[bool]string{true: "assistant-settings_tool.on", false: "assistant-settings_tool.off"}
 	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": i18n.T(l, word[before]), "after": i18n.T(l, word[on])})
+		return i18n.T(l, "assistant-settings_tool.change_review_sample_percent", i18n.Args{"before": before, "after": pct})
 	},
 		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.DoneNeedsDelivery = &on; return nil }); err != nil {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.ReviewSamplePercent = &pct; return nil }); err != nil {
 				return "", err
 			}
 			s.settingsChanged(ctx)
-			return fmt.Sprintf("assistant.done_needs_delivery is %v from the next judgment and task on.", on), nil
+			return fmt.Sprintf("assistant.review_sample_percent is %d from the next judgment on.", pct), nil
 		}}, nil
 }
 

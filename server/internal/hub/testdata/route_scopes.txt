@@ -55,6 +55,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 inbox.write          DELETE /api/v1/inbox/mutes/{id}
 inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/launchers/{name}
+-                    DELETE /api/v1/looks/uploads/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies
 -                    DELETE /api/v1/machines/{mid}/computer/apps/revoke/{bundle}
 -                    DELETE /api/v1/machines/{mid}/computer/apps/{bundle}
@@ -139,6 +140,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/extensions/-/widgets
 -                    GET /api/v1/extensions/{id}/-/auth
 -                    GET /api/v1/extensions/{id}/-/dev/logs
+-                    GET /api/v1/extensions/{id}/-/image/{token}
 -                    GET /api/v1/extensions/{id}/-/storage/retained
 -                    GET /api/v1/extensions/{id}/-/{$}
 -                    GET /api/v1/fleet
@@ -149,6 +151,9 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/imessage/chats
 -                    GET /api/v1/imessage/chats/{id}/messages
 inbox.read           GET /api/v1/inbox
+inbox.read           GET /api/v1/inbox/done
+inbox.read           GET /api/v1/inbox/done/days
+inbox.read           GET /api/v1/inbox/folders
 inbox.read           GET /api/v1/inbox/mutes
 inbox.read           GET /api/v1/inbox/policies
 inbox.read           GET /api/v1/inbox/tree/{kind}/{id...}
@@ -180,6 +185,8 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/claude-dirs
 -                    GET /api/v1/machines/{mid}/claude-live-replies
 -                    GET /api/v1/machines/{mid}/claude-settings
+-                    GET /api/v1/machines/{mid}/clipboard
+-                    GET /api/v1/machines/{mid}/clipboard/settings
 -                    GET /api/v1/machines/{mid}/codex-settings
 -                    GET /api/v1/machines/{mid}/computer
 -                    GET /api/v1/machines/{mid}/computer/apps
@@ -187,6 +194,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/dirs
 -                    GET /api/v1/machines/{mid}/doctor
 -                    GET /api/v1/machines/{mid}/file
+-                    GET /api/v1/machines/{mid}/file-transfer/settings
 -                    GET /api/v1/machines/{mid}/file/convert
 -                    GET /api/v1/machines/{mid}/file/download
 -                    GET /api/v1/machines/{mid}/file/thumb
@@ -222,6 +230,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/ops/{id}
 -                    GET /api/v1/personas
 -                    GET /api/v1/personas/{id}/{file...}
+-                    GET /api/v1/phone/write-queue
 -                    GET /api/v1/pins
 -                    GET /api/v1/recordings
 agents.read          GET /api/v1/sessions
@@ -296,6 +305,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/feishu/notices/action
 -                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
+-                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
 -                    POST /api/v1/assistant/places
@@ -325,8 +335,10 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
 -                    POST /api/v1/extensions/-/preview
+-                    POST /api/v1/extensions/{id}/-/attach
 -                    POST /api/v1/extensions/{id}/-/auth/logout
 -                    POST /api/v1/extensions/{id}/-/auth/step
+-                    POST /api/v1/extensions/{id}/-/detach
 -                    POST /api/v1/extensions/{id}/-/dev/restart
 -                    POST /api/v1/extensions/{id}/-/rollback
 -                    POST /api/v1/extensions/{id}/-/shortcut/{sid}
@@ -358,6 +370,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/launchers/test
 -                    POST /api/v1/launchers/{name}/check
 -                    POST /api/v1/launchers/{name}/restore
+-                    POST /api/v1/looks/uploads
 -                    POST /api/v1/machines/{id}/confirm
 -                    POST /api/v1/machines/{id}/reject
 -                    POST /api/v1/machines/{mid}/browser/cookies
@@ -406,6 +419,9 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/model-profiles/{id}/apply
 notify               POST /api/v1/notify
 -                    POST /api/v1/phone/runtime-cli
+-                    POST /api/v1/phone/write-queue/{id}/cancel
+-                    POST /api/v1/recordings/{id}/minutes
+-                    POST /api/v1/recordings/{id}/minutes/todos
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach
@@ -414,10 +430,10 @@ agents.control       POST /api/v1/sessions
 agents.control       POST /api/v1/sessions/{mid}/{sid}/interrupt
 -                    POST /api/v1/sessions/{mid}/{sid}/keys
 agents.control       POST /api/v1/sessions/{mid}/{sid}/messages
--                    POST /api/v1/sessions/{mid}/{sid}/modes
+agents.permission_mode POST /api/v1/sessions/{mid}/{sid}/modes
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue
 agents.control       POST /api/v1/sessions/{mid}/{sid}/queue/send-now
--                    POST /api/v1/sessions/{mid}/{sid}/rename
+agents.control       POST /api/v1/sessions/{mid}/{sid}/rename
 -                    POST /api/v1/sessions/{mid}/{sid}/rewind
 -                    POST /api/v1/sessions/{mid}/{sid}/screen/before
 agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
@@ -472,6 +488,8 @@ todos.write          POST /api/v1/todos/{id}/decisions
 -                    PUT /api/v1/extensions/{id}/-/secrets/{name}
 -                    PUT /api/v1/hub/update/settings
 -                    PUT /api/v1/imessage/settings
+inbox.write          PUT /api/v1/inbox/folders
+inbox.write          PUT /api/v1/inbox/{id}/folder
 inbox.write          PUT /api/v1/inbox/{id}/parent
 -                    PUT /api/v1/kb/selection
 kb.write             PUT /api/v1/kb/{kind}/{id}
@@ -484,9 +502,12 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/claude-dirs/blocked
 -                    PUT /api/v1/machines/{mid}/claude-live-replies
 -                    PUT /api/v1/machines/{mid}/claude-settings
+-                    PUT /api/v1/machines/{mid}/clipboard
+-                    PUT /api/v1/machines/{mid}/clipboard/settings
 -                    PUT /api/v1/machines/{mid}/codex-settings
 -                    PUT /api/v1/machines/{mid}/computer
 -                    PUT /api/v1/machines/{mid}/engine
+-                    PUT /api/v1/machines/{mid}/file-transfer/settings
 -                    PUT /api/v1/machines/{mid}/herdr
 -                    PUT /api/v1/machines/{mid}/omp-settings
 -                    PUT /api/v1/model-config/purposes/{id}

@@ -18,7 +18,7 @@ type MCPTool struct {
 }
 
 // mcp/<scene>/<tool>.md: the description (one paragraph), an empty line, then the input schema in a ```json block.
-// Not templates: read as they are, on first use (as tmpl).
+// Not templates: read as they are, on first use (as the templates are).
 var mcpTools = sync.OnceValue(loadMCP)
 
 const schemaFence = "\n\n```json\n"
@@ -62,13 +62,4 @@ func Tool(name string) MCPTool {
 		panic("prompts: no MCP tool " + name)
 	}
 	return t
-}
-
-// ToolNames lists every MCP tool defined here (for tests).
-func ToolNames() []string {
-	out := make([]string, 0, len(mcpTools()))
-	for n := range mcpTools() {
-		out = append(out, n)
-	}
-	return out
 }

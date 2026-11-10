@@ -128,6 +128,35 @@ func TestStartEntersAFirstMessageLeftInTheBox(t *testing.T) {
 	}
 }
 
+// A first message with a control character goes in inert, and the box showing it so is that message left there: it gets
+// its Enter.
+func TestStartEntersAnInertFirstMessageLeftInTheBox(t *testing.T) {
+	withSubmitGrace(t, 100*time.Millisecond)
+	n, f, home := herdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	startPane(t, f, screenFixture(t, "claude-2.1.312-empty-162.txt"), screenFixture(t, "claude-2.1.312-empty-162.ansi"))
+	inert := func(s string) string {
+		return strings.Replace(s, "fix the flaky test", "<U+0007>fix the flaky test", 1)
+	}
+	typedTxt, typedANSI := inert(screenFixture(t, "claude-2.1.312-typed-162.txt")), inert(screenFixture(t, "claude-2.1.312-typed-162.ansi"))
+	f.after(func(c herdrCall) {
+		switch {
+		case c.Method == "agent.prompt":
+			f.setScreens("w1:p2", typedTxt, typedANSI)
+		case isKeys("enter")(c):
+			writeUserLine(t, home, cwd, startedID(f), "<U+0007>fix the flaky test")
+		}
+	})
+	if _, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "workspace_id": "w1", "prompt": "\afix the flaky test"}); err != nil {
+		t.Fatal(err)
+	}
+	n.firstWait.Wait()
+	assertTrace(t, f.trace("agent.prompt", "pane.send_keys"), []string{
+		call("agent.prompt", map[string]any{"target": "w1:p2", "text": "<U+0007>fix the flaky test"}),
+		sendKeys("w1:p2", "enter"),
+	})
+}
+
 // A first message that never reaches the transcript is typed firstPromptTries times; then the session is listed as
 // needing the user, saying why, until a message from the phone goes in.
 func TestStartMarksANeverDeliveredFirstMessage(t *testing.T) {

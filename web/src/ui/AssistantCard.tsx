@@ -8,13 +8,14 @@
 // it takes answers (feature assistant_views); while a reply is still being written the card is drawn, nothing sends.
 // An html component is never run on the web (lib/assistant-html.ts): the card shows its plain-text fallback.
 import { createContext, useContext, useMemo, useState } from "react";
-import { assistantView } from "../lib/assistant-view";
+import { assistantView, cardText } from "../lib/assistant-view";
 import { blockKey, blockOf, cardKnown, checkCard, openTarget, type OpenTarget } from "../lib/assistant-blocks";
 import { hasHtml } from "../lib/assistant-html";
 import { conversationCards, draftKey, submitAction, updateDraft, useCards, type CardDraft } from "../lib/assistant-views";
 import type { AssistantView, ViewAction } from "../lib/extension-wire";
 import { fieldValues, numberProblem, readView, type UIAction, type UIItem, type UIView } from "../lib/extension-ui";
 import { openLink } from "../lib/links";
+import { useLinkManager } from "../lib/manager-choice";
 import { openPanel } from "../lib/panel";
 import { navigate } from "../lib/router";
 import { hubHas, useStore } from "../lib/store";
@@ -66,7 +67,9 @@ export function LiveCard({ conversation, id, first }: { conversation: string; id
 
 function LegacyCard({ lang, code, fallback }: { lang: string; code: string; fallback: React.ReactNode }) {
   const view = useMemo(() => assistantView(lang, code), [lang, code]);
-  if (!view) return <>{fallback}</>;
+  // A card no app draws (an unknown type…) reads as its words, never its JSON; one still being written stays code.
+  const words = useMemo(() => (view ? null : cardText(code)), [view, code]);
+  if (!view) return words ? <FallbackCard text={words} /> : <>{fallback}</>;
   return (
     <div className="card-ui my-3 flex flex-col gap-3 text-[13px] leading-normal" data-assistant-card={lang}>
       {view.title && <p className="px-1 text-[13px] font-semibold text-ink">{view.title}</p>}
@@ -173,6 +176,7 @@ interface Asking {
 const NO_DRAFT: CardDraft = { values: {}, stack: [] };
 
 function CardBody({ raw, conversation, cardKey, version, source }: { raw: Record<string, unknown>; conversation: string; cardKey: string; version: number; source: "text" | "live" }) {
+  const manager = useLinkManager();
   const takesAnswers = useStore((s) => hubHas(s.features, VIEWS_FEATURE));
   const keyed = !!conversation && !!cardKey;
   const registered = useCards((s) => keyed && (source === "live" || !!conversationCards(conversation, s).blocks[cardKey]));
@@ -212,7 +216,7 @@ function CardBody({ raw, conversation, cardKey, version, source }: { raw: Record
     if (!sem) return;
     if (sem.pop) return patch((d) => ({ ...d, stack: stack.slice(0, -1) }));
     if (sem.page) return stack.length < STACK_MOST && patch((d) => ({ ...d, stack: [...stack, sem.page!] }));
-    if (sem.open) return openTargetOf(sem.open);
+    if (sem.open) return openTargetOf(sem.open, manager);
     if (!sem.reply || !canReply) return;
     const sent = replyValues(view, values, a, sem, chosen);
     const bad = Object.entries(sent).find(([name]) => view.sections.some((s) => s.items.some((it) => it.type === "field" && it.name === name && it.kind === "number")) && numberProblem(sent[name]));
@@ -348,12 +352,13 @@ function CardStatus({ answer, draft, hint, onRetry }: { answer?: ViewAction; dra
   );
 }
 
-/** Opens what an open action names, inside the app; a target the web does not open says so, never the system. */
-export function openTargetOf(target: string) {
+/** Opens what an open action names, inside the app; a target the web does not open says so, never the system.
+ *  `manager`: the chat's the card is in (openLink). */
+export function openTargetOf(target: string, manager?: string) {
   const to: OpenTarget | undefined = openTarget(target);
   switch (to?.kind) {
     case "web":
-      openLink(to.url);
+      openLink(to.url, undefined, manager);
       return;
     case "session":
       navigate({ name: "session", mid: to.mid, sid: to.sid });

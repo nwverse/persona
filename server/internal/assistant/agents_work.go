@@ -41,6 +41,29 @@ type TriageSwitches struct {
 	ReplyReminder *bool `json:"reply_reminder,omitempty"`
 	// ReplyReminderMinutes: after how long since the user looked. 0: 30 (a PUT with 0 keeps it, a negative one clears it).
 	ReplyReminderMinutes int `json:"reply_reminder_minutes,omitempty"`
+	// TransientRetry: "Continue" after a transient model error (a dropped connection, a 5xx, overloaded), with backoff
+	// and a cap (#3208). A rule, no triage model call: independent of Enabled, and unset is on.
+	TransientRetry *bool `json:"transient_retry,omitempty"`
+}
+
+// transientOn: a transient model error is continued automatically (the switch unset counts as on).
+func (sw TriageSwitches) transientOn() bool { return sw.TransientRetry == nil || *sw.TransientRetry }
+
+// active: the manager follows stopped turns at all: the triage, or only the transient errors it continues.
+func (sw TriageSwitches) active() bool { return sw.Enabled || sw.transientOn() }
+
+// wakes: w's pending wake still goes under sw. A transient error's "Continue" is transient_retry's alone; everything
+// else needs the main switch, then auto_continue for a usage limit's continue and wake for a wait's wake.
+func (sw TriageSwitches) wakes(w proto.WorkState) bool {
+	switch {
+	case w.On == proto.WaitTransient && w.ResetsAt == nil:
+		return sw.transientOn()
+	case !sw.Enabled:
+		return false
+	case continues(w):
+		return sw.AutoContinue
+	}
+	return sw.Wake
 }
 
 const triageSettingKey = "agents.triage"
@@ -48,10 +71,11 @@ const triageSettingKey = "agents.triage"
 func set(b *bool) bool { return b != nil && *b }
 
 func switchesOf(c assistantwire.TriageConfig) TriageSwitches {
-	return TriageSwitches{Enabled: set(c.Enabled), AutoContinue: set(c.AutoContinue), Wake: set(c.Wake), Decide: set(c.Decide), ToolLoop: set(c.ToolLoop)}
+	return TriageSwitches{Enabled: set(c.Enabled), AutoContinue: set(c.AutoContinue), Wake: set(c.Wake), Decide: set(c.Decide), ToolLoop: set(c.ToolLoop),
+		TransientRetry: c.TransientRetry}
 }
 
-func maxRetries(c assistantwire.TriageConfig) int { return cmp0(c.MaxRetries, 3) }
+func maxRetries(c assistantwire.TriageConfig) int { return cmp0(c.MaxRetries, 5) }
 func maxWakes(c assistantwire.TriageConfig) int   { return cmp0(c.MaxWakes, 6) }
 func settleOf(c assistantwire.TriageConfig) time.Duration {
 	return time.Duration(cmp0(c.SettleSeconds, 15)) * time.Second
@@ -64,8 +88,25 @@ func cmp0(n, def int) int {
 	return def
 }
 
-// retryBackoff is how long after a transient error each "Continue" goes (the last repeats).
-var retryBackoff = []time.Duration{30 * time.Second, 2 * time.Minute, 8 * time.Minute}
+// retryBackoff is how long after a transient error the "Continue" numbered attempt (0: the first) goes: the base
+// (retry_base_seconds, 15 s by default) doubled for each attempt before it, four times that for a rate limit, never
+// more than retryBackoffMost. 15 s, 30 s, 60 s, 120 s, 240 s by default; 60 s … 960 s for a rate limit.
+func retryBackoff(c assistantwire.TriageConfig, attempt int, rateLimited bool) time.Duration {
+	d := time.Duration(cmp0(c.RetryBaseSeconds, 15)) * time.Second
+	if rateLimited {
+		d *= 4
+	}
+	for range max(attempt, 0) {
+		if d >= retryBackoffMost {
+			break
+		}
+		d *= 2
+	}
+	return min(d, retryBackoffMost)
+}
+
+// retryBackoffMost caps one transient error's backoff, however large max_retries is set.
+const retryBackoffMost = 30 * time.Minute
 
 // workEvery is how often the manager looks for due wakes and expired cards; workBackfillEvery how often it looks for
 // turns that ended unseen (while it was away, or whose triage failed a while ago).
@@ -178,7 +219,7 @@ type workBook struct {
 	publishing                    atomic.Bool // a snapshot is on its way (publishSoon)
 	// testEvents collects the events when there is no store (tests).
 	testEvents []db.WorkEvent
-	// eventWrites are the event inserts still on their way to the store (waitWorkEvents).
+	// eventWrites are the event inserts still on their way to the store (the tests wait on them).
 	eventWrites sync.WaitGroup
 }
 
@@ -204,7 +245,10 @@ func (b *workBook) init() {
 // approval is the user's "Do it once it's ready" on a risky wait's card: once the wait is over, the agent may take that step. It
 // holds while the agent keeps waiting (a wake, the agent's own check), so the same question is not asked again each
 // turn; anything the user does themselves, a turn that is no wait, or a riskier step ends it.
-type approval struct{ wait, then string }
+type approval struct {
+	wait, then string
+	task       string // the todo whose text authorized it (agents_work_authorized.go); "" the user's own yes
+}
 
 // covers: a may stand for w's next step as far as the words go — w waits, and its step is no riskier than the approved
 // one (each risky word in it was in the approved step). No link: an authorization is the user's to give each time.
@@ -269,6 +313,9 @@ func (s *Service) readTriageSwitches(ctx context.Context) (TriageSwitches, error
 }
 
 func (s *Service) workOn(ctx context.Context) bool { return s.triageSwitches(ctx).Enabled }
+
+// workActive: stopped turns are followed at all (workOn, or only to continue transient errors).
+func (s *Service) workActive(ctx context.Context) bool { return s.triageSwitches(ctx).active() }
 
 // putTriageSwitches saves the switches. What they turn off stops at once: the cards are withdrawn, due retries and
 // wakes dropped; the apps hear of it ({"type":"agents.triage"}) and the lists follow the next snapshot.
@@ -353,8 +400,7 @@ func (s *Service) putTriageSwitches(ctx context.Context, sw TriageSwitches) erro
 	}
 	var stale []db.SessionWork
 	for _, e := range s.work.entries {
-		off := !sw.Enabled || continues(e.Work) && !sw.AutoContinue ||
-			!continues(e.Work) && (e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent) && !sw.Wake
+		off := !sw.wakes(e.Work) && (!sw.Enabled || continues(e.Work) || e.Work.On == proto.WaitExternal || e.Work.On == proto.WaitAgent)
 		if e.InteractionID != "" && (!sw.Enabled || !sw.Decide) {
 			delete(s.work.cards, e.InteractionID)
 			e.InteractionID, e.Work.InteractionID = "", ""
@@ -506,11 +552,6 @@ func (s *Service) workEvent(machine, session, kind string, detail map[string]any
 	}()
 }
 
-// waitWorkEvents returns once the events recorded so far are in the store (or failed): what reads the stats right
-// after acting sees them. For tests only: the caller must know nothing else is recording events meanwhile (no Run,
-// no triage goroutine from workTick), as a WaitGroup's Add from zero must not race its Wait.
-func (s *Service) waitWorkEvents() { s.work.eventWrites.Wait() }
-
 // workEntry is a copy of a session's stored work state.
 func (s *Service) workEntry(k [2]string) (db.SessionWork, bool) {
 	s.work.mu.Lock()
@@ -596,14 +637,17 @@ func (s *Service) workReport(ctx context.Context) *WorkReport {
 	if !s.loadWork(ctx) {
 		return nil
 	}
-	r := &WorkReport{On: s.workOn(ctx), Sessions: []SessionWork{}}
-	if !r.On {
+	r := &WorkReport{On: sw.Enabled, Sessions: []SessionWork{}}
+	if !sw.active() {
 		return r
 	}
 	s.work.mu.Lock()
 	for _, e := range s.work.entries {
 		if e.Work.Phase == "" {
 			continue // unsure: nothing shown
+		}
+		if !r.On && !transientPending(e.Work) {
+			continue // triage off: only a "Continue" on its way is told (fleet_work.go)
 		}
 		w := e.Work
 		w.CI, w.RetiredAt, w.RetiredTurnAt = nil, nil, nil // internal state stays in the manager's store

@@ -160,11 +160,11 @@ type ManagedLauncher struct {
 	// TimeoutMS: API_TIMEOUT_MS; 0 is 3000000 for a gateway (BaseURL set), Claude Code's own default otherwise.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// CompactWindow: CLAUDE_CODE_AUTO_COMPACT_WINDOW; 0 is the default model's context window (none when unknown).
-	// The main conversation keeps its own 200000 whatever this says.
+	// Assistant conversations, the main one included, follow it like agents do (#3066).
 	CompactWindow int `json:"compact_window,omitempty"`
 	// MaxContext: CLAUDE_CODE_MAX_CONTEXT_TOKENS; 0 is the default model's context window when it is over 200K.
 	MaxContext int `json:"max_context,omitempty"`
-	// Effort: the default thinking level (CLAUDE_CODE_EFFORT_LEVEL) when the caller gives none.
+	// Effort: the default thinking level when the caller gives none (passed as --effort by personad launch, #2307).
 	Effort string `json:"effort,omitempty"`
 	// Source: where it came from: "" (made by hand), "zshrc:<alias>@<machine id>" (imported), "preset:<id>".
 	Source string `json:"source,omitempty"`

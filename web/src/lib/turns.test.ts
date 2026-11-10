@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatLines, freshWords, isLoopTick, mergeItems, parseUserText, segments, openRecap, personaToolVerb, toolChip, toolDisplayName, toolLabel, wakeDrawer, workSegment, formatDuration } from "./turns";
+import { chatLines, freshWords, isLoopTick, mergeItems, parseUserText, segments, openRecap, personaToolVerb, toolChip, toolDisplayName, toolLabel, formatDuration } from "./turns";
 import type { Item } from "./types";
 
 const u = (seq: number, text: string, extra: Partial<Item> = {}): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text, ...extra });
@@ -211,10 +211,10 @@ describe("chatLines", () => {
     expect(openRecap(mid, mid[1].kind === "recaps" ? mid[1].items[0] : undefined)).toBeUndefined();
   });
 
-  // #3783: after background tasks woke the agent, the newest words are the answer, at the bottom; the runs since the
-  // first wake are behind the chip above them (the longest run's words used to be the answer, the rest only in there)
+  // #3783: after background tasks woke the agent, the newest words are the answer, at the bottom (the longest run's
+  // words used to be the answer)
   const wakesOf = (l: ReturnType<typeof chatLines>[number] | undefined) => (l?.kind === "segment" ? l.wakes : undefined);
-  it("answers a woken exchange with its newest words, the earlier runs behind the chip", () => {
+  it("answers a woken exchange with its newest words", () => {
     const items = [
       u(1, "run the tests in the background"),
       a(2, "started, I will tell you when it ends — this is the long one"),
@@ -229,18 +229,6 @@ describe("chatLines", () => {
     expect(seg?.answer?.text).toBe("all green");
     const w = wakesOf(ls[0]);
     expect(w?.wakes).toHaveLength(1);
-    const d = wakeDrawer(w!);
-    // the answer is in the chat, not again in the drawer
-    expect(d.groups.map((g) => g.answer?.text)).toEqual([undefined]);
-    expect(d.groups[0].notices.map((n) => n.id)).toEqual(["n3#0"]);
-    expect(d.process.map((p) => p.kind)).toEqual(["tool_use", "tool_result"]);
-  });
-
-  it("puts the latest earlier wake first in the drawer", () => {
-    const items = [u(1, "go"), a(2, "ok"), wake(3, "a"), a(4, "a done"), wake(5, "b"), a(6, "b done"), wake(7, "c"), a(8, "c done")];
-    const ls = chatLines(items);
-    expect(ls[0].kind === "segment" && ls[0].seg.answer?.text).toBe("c done");
-    expect(wakeDrawer(wakesOf(ls[0])!).groups.map((g) => g.answer?.text)).toEqual([undefined, "b done", "a done"]);
   });
 
   it("keeps a long-running agent's newest words at the bottom of a long history", () => {
@@ -264,17 +252,23 @@ describe("chatLines", () => {
     const live = chatLines(before, { live: true });
     const working = live[live.length - 1];
     expect(working.kind === "segment" && working.live).toBe(true);
-    // it lands: the short words are the answer on screen, not only in the drawer
+    // it lands: the short words are the answer on screen
     const done = chatLines([...before, a(6, "deployed")]);
     const last = done[done.length - 1];
     expect(last.kind === "segment" && last.seg.answer?.text).toBe("deployed");
-    expect(wakeDrawer(wakesOf(last)!).groups.every((g) => g.answer?.text !== "deployed")).toBe(true);
   });
 
   it("reopens the exchange a recap closed when a background task reports back", () => {
     const ls = chatLines([u(1, "go"), a(2, "started the build, waiting for it"), recap(3, "waiting for the build"), wake(4, "build"), a(5, "ok")]);
     expect(kinds(ls)).toEqual(["segment", "recaps"]);
     expect(ls[0].kind === "segment" && ls[0].seg.answer?.text).toBe("ok");
+  });
+
+  it("marks the original exchange live when a wake arrives after its recap", () => {
+    const ls = chatLines([u(1, "go"), a(2, "waiting"), recap(3, "context"), wake(4, "build"), tool(5, "x")], { live: true });
+    expect(kinds(ls)).toEqual(["segment", "recaps"]);
+    expect(ls[0].kind === "segment" && ls[0].live).toBe(true);
+    expect(ls.some((line) => line.id === "live")).toBe(false);
   });
 
   it("opens work a wake started on its own with the wake notice", () => {
@@ -313,15 +307,6 @@ describe("chatLines", () => {
     const ls = chatLines([u(1, "go"), a(2, "done"), recap(3, "r")], { live: true });
     expect(kinds(ls)).toEqual(["segment", "recaps", "segment"]);
     expect(ls[2].kind === "segment" && ls[2].live).toBe(true);
-  });
-});
-
-describe("workSegment", () => {
-  it("keeps every step, words included, without an answer", () => {
-    const s = workSegment("w", [tool(1, "x"), res(2, "x"), a(3, "between"), tool(4, "y"), a(5, "end")]);
-    expect(s.answer).toBeUndefined();
-    expect(s.steps.map((x) => x.kind)).toEqual(["tool", "text", "tool", "text"]);
-    expect(s.replies).toBe(2);
   });
 });
 

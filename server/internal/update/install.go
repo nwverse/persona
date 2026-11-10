@@ -80,7 +80,7 @@ func syncDir(dir string) {
 	}
 }
 
-// Pending is an update under way, kept next to the binary across the restart (docs/operations/hub-update.md "Preparing"): the one
+// Pending is an update under way, kept next to the binary across the restart (docs/operations/hub-update.md "Prepare"): the one
 // piece of hub state outside Postgres, because going back must work when the new version cannot reach the database
 // or does not start at all.
 type Pending struct {

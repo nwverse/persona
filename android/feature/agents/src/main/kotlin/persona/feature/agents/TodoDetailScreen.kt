@@ -1,5 +1,7 @@
 package persona.feature.agents
 
+import persona.core.domain.tasks.acceptedAtRest
+
 import persona.core.domain.tasks.hold
 import persona.feature.chat.ReviewChecklist
 import persona.core.designsystem.text
@@ -35,6 +37,7 @@ import persona.core.domain.answer.firstBySession
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.sort.slotLabel
 import persona.core.domain.tasks.TasksStore
+import persona.core.domain.tasks.TodoDecisionsSource
 import java.time.Instant
 
 /** Where an agent on a to-do came from (iOS TodosLogic.agentSource): with a project, sent by another agent, the same chat. */
@@ -68,11 +71,19 @@ fun TodoDetailScreen(
     now: Instant = Instant.now(),
     /** The cards waiting for an answer: a waiting agent's row says what its card asks (#3964). */
     pending: List<Interaction> = emptyList(),
+    /** Where the Decisions section reads and records (#1618); the hub's store unless a test passes its own. */
+    decisions: TodoDecisionsSource? = tasks,
 ) {
     val cards = remember(pending) { pending.firstBySession() }
     val todo = todos.firstOrNull { it.id == todoId }
     val scope = rememberCoroutineScope()
     val res = agentResources()
+    val decisionsState = remember(decisions) { TodoDecisionsState(decisions) }
+    // The hub moves the to-do's updated_at when a decision is written, here or anywhere (an answered card too).
+    LaunchedEffect(decisionsState, todoId, todo?.updatedAt) {
+        decisionsState.select(todoId)
+        decisionsState.load()
+    }
 
     if (todo == null) {
         JPage(title = stringResource(R.string.agents_todo_detail), onBack = onBack) {
@@ -113,6 +124,14 @@ fun TodoDetailScreen(
             },
             destructive = true
         )
+    }
+
+    decisionsState.form?.let { form ->
+        TodoDecisionSheet(form.supersedes, onDismiss = { decisionsState.form = null }) { question, choice, reason ->
+            decisionsState.add(question, choice, reason, form.supersedes) { e ->
+                onError(res.getString(R.string.agents_todo_decision_failed, e.message.orEmpty()))
+            }
+        }
     }
 
     if (menuOpen) {
@@ -157,7 +176,8 @@ fun TodoDetailScreen(
                         },
                         modifier = Modifier.weight(1f)
                     )
-                    JButton(
+                    // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
+                    if (!todo.isDone) JButton(
                         text = stringResource(R.string.agents_todo_hand_to_agent),
                         icon = PhIcons.Robot,
                         onClick = { onHandOff(todo) },
@@ -199,6 +219,9 @@ fun TodoDetailScreen(
                                 } else {
                                     JTag(stringResource(R.string.agents_todos_done))
                                 }
+                            } else if (todo.acceptedAtRest(sessionLookup)) {
+                                // accepted, then reopened by the hub with more work: still Accepted until a new review (#3156)
+                                JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
                             } else {
                                 JTag(state.label)
                             }
@@ -302,6 +325,9 @@ fun TodoDetailScreen(
                 }
             }
 
+            // Decisions made on it, under the notes as on iOS and the web (#1618)
+            todoDecisionsSection(decisionsState, todo, sessionLookup, now)
+
             // Projects (workspaces linked as a whole, iOS TodoSpacesSection)
             val spaces = todo.spaces.orEmpty().takeIf { tasks?.spacesSupported != false }.orEmpty()
             if (spaces.isNotEmpty()) {
@@ -343,7 +369,8 @@ fun TodoDetailScreen(
 
             if (todo.currentAgents.isEmpty()) {
                 item(key = "active-empty") {
-                    JEmptyState(stringResource(R.string.agents_todo_no_agents), stringResource(R.string.agents_todo_no_agents_hint))
+                    JEmptyState(stringResource(R.string.agents_todo_no_agents),
+                        stringResource(if (todo.isDone) R.string.agents_todo_no_agents_done_hint else R.string.agents_todo_no_agents_hint))
                 }
             } else {
                 itemsIndexed(todo.currentAgents, key = { _, a -> a.key.path }) { index, agent ->

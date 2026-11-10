@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -67,10 +66,13 @@ type TaskProgress struct {
 type TaskReview struct {
 	At      time.Time     `json:"at"`
 	Verdict string        `json:"verdict"`
-	By      string        `json:"by,omitempty"`    // "reviewer": the independent reviewer's rework (#2173); "" the supervisor's
+	By      string        `json:"by,omitempty"`    // "reviewer": the independent reviewer's rework (#2173); "judge": the done judge's own acceptance (#3128); "" the supervisor's
 	Round   int           `json:"round,omitempty"` // the rework round it started (rework)
 	Checks  []ReviewCheck `json:"checks,omitempty"`
 	Note    string        `json:"note,omitempty"`
+	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
+	// "Please verify" waits for them instead of being passed by the supervisor (acceptance.go, #3240).
+	UserCheck bool `json:"user_check,omitempty"`
 }
 
 type ReviewCheck struct {
@@ -175,8 +177,6 @@ func (s *Service) superviseTodo(ctx context.Context, id, supervisor string, done
 		s.logf("task %s: supervision: %v", id, err)
 	}
 }
-
-var errNotSupervised = errors.New("not a supervised task")
 
 // updateSupervision changes todo id's ledger (a new one when it has none) with change, which says whether it changed
 // anything; the ledger as it is then. Writes are one at a time.

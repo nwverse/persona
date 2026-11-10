@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -151,6 +150,24 @@ func TestHerdrCoreSendChecksForADialogThenSends(t *testing.T) {
 		t.Fatalf("send into a dialog: %v", err)
 	}
 	assertTrace(t, hc.trace(), []string{call("terminal.read", map[string]any{"terminal": "t1", "lines": 0})})
+}
+
+// terminal.send pastes the text: an escape in it that would end the paste and press keys after it goes in inert, from a
+// send and from any other prompt.
+func TestHerdrCoreSendCannotEndItsPaste(t *testing.T) {
+	withSubmitGrace(t, 50*time.Millisecond)
+	n, hc := hcSession(t)
+	hc.setScreen("t1", screenFixture(t, "claude-2.1.312-typed-162.txt"))
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "hello\x1b[201~\x1b[Z"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.prompt(context.Background(), "herdr-core:t1", "go on\x1b[201~\x1b[Z\u009b"); err != nil {
+		t.Fatal(err)
+	}
+	assertTrace(t, hc.trace("terminal.send"), []string{
+		call("terminal.send", map[string]any{"terminal": "t1", "text": "hello<ESC>[201~<ESC>[Z"}),
+		call("terminal.send", map[string]any{"terminal": "t1", "text": "go on<ESC>[201~<ESC>[Z<U+009B>"}),
+	})
 }
 
 // herdr-core refusing the text (nothing typed) is a refusal the app can retry: a dialog for blocked, else not_delivered.
@@ -455,35 +472,5 @@ func TestHerdrCoreCloseUnknown(t *testing.T) {
 	}
 	if tr := hc.trace(); len(tr) != 0 {
 		t.Errorf("herdr-core called: %v", tr)
-	}
-}
-
-// The Herdr app owns its spaces' and tabs' names: renaming them is unsupported, with nothing sent to herdr-core.
-func TestHerdrCoreRenameUnsupported(t *testing.T) {
-	n, _, hc, home := hcNode(t)
-	writeTranscript(t, home, hcCwd, sidA, time.Now().Add(-time.Minute), `{"type":"custom-title","customTitle":"x"}`)
-	writeClaudePID(t, home, 4242, sidA)
-	hc.setTerminals(hcTerminal("t1", "claude-code", "idle", 4242, "claude", hcCwd, "S1", "T1", "proj / 1"))
-	if m := byID(listSessions(t, n)); m[sidA].SlotID != "T1" {
-		t.Fatalf("not listed: %v", m)
-	}
-	hc.reset()
-	for _, req := range []struct {
-		method string
-		params map[string]any
-	}{
-		{"space.rename", map[string]any{"workspace_id": "S1", "name": "backend"}},
-		{"session.rename", map[string]any{"session_id": sidA, "tab_name": "review"}},
-	} {
-		_, err := request(t, n, req.method, req.params)
-		if err == nil || !strings.Contains(err.Error(), "unsupported") || !strings.Contains(err.Error(), "不能从手机改名") {
-			t.Errorf("%s: %v", req.method, err)
-		}
-	}
-	if tr := hc.trace(); len(tr) != 0 {
-		t.Errorf("herdr-core called: %v", tr)
-	}
-	if err := (&herdrCoreHost{}).RenameSlot(context.Background(), "T1", "x"); !errors.Is(err, host.ErrUnsupported) {
-		t.Errorf("RenameSlot = %v", err)
 	}
 }

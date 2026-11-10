@@ -29,6 +29,7 @@ final class WatchRecordingTransfer {
     @ObservationIgnored private var attempts: [String: Int] = [:]
     @ObservationIgnored private var retryAt: [String: Date] = [:]
     @ObservationIgnored private var lastBatch = Date.distantPast
+    @ObservationIgnored private var lastPrune = Date.distantPast
 
     func start() {
         guard ticker == nil else { return }
@@ -38,10 +39,25 @@ final class WatchRecordingTransfer {
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                self?.pruneRolling()
                 self?.pump(force: false)
             }
         }
         pump(force: true)
+    }
+
+    /// The watch can't read health data, so it only goes by age (kept is never set here); see `RecordingRolling.expiredOnWatch`.
+    private func pruneRolling() {
+        let now = Date()
+        guard now.timeIntervalSince(lastPrune) >= RecordingRolling.pruneInterval else { return }
+        lastPrune = now
+        let library = RecordingLibrary.shared
+        for entry in library.entries where entry.isRolling {
+            library.prune(entry.id, indexes: RecordingRolling.expiredOnWatch(entry, now: now))
+            if !entry.active, entry.endDelivered, library.entry(entry.id)?.segments.isEmpty ?? true {
+                try? library.remove(entry.id)
+            }
+        }
     }
 
     func pending(_ id: UUID) -> Int {

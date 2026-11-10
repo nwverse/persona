@@ -180,7 +180,7 @@ final class TasksStore {
     }
 
     func state(_ todo: TodoItem) -> TaskState {
-        let state = TaskState(todo: todo, agents: sessions(todo).map(\.state))
+        let state = TaskState(todo: todo, sessions: sessions(todo))
         // A hub from before #1077 leaves the todo open when the agent did not start; its plan still says why.
         if state == .notStarted, todo.agents.isEmpty, planError(todo) != nil { return .failed }
         return state
@@ -197,6 +197,9 @@ final class TasksStore {
               let error = plan.tasks.first(where: { $0.todoID == todo.id })?.error, !error.isEmpty else { return nil }
         return error
     }
+
+    /// What a waiting task waits for (#3274): the first of its agents that waits to be woken, in its own words.
+    func waitLine(_ todo: TodoItem) -> String? { sessions(todo).lazy.compactMap(\.waitLine).first }
 
     /// The task's agent to open first: the one that waits for the user, then the one working, then the latest.
     func leadSession(_ todo: TodoItem) -> Session? {
@@ -239,7 +242,7 @@ final class TasksStore {
     func sendMessage(_ card: FeedItem, itemID: String, text: String) async {
         guard messageState(card, itemID: itemID) == .open else { return }
         let inbox = InboxStore.shared
-        if let item = inbox.items.first(where: { $0.id == itemID }) {
+        if let item = Self.cardItem(itemID) {
             // A refusal comes back as the hub's words; the reload brings the item as the hub has it (handled elsewhere).
             if await inbox.send(item, text: text, card: card.id) { sentMessages.insert(itemID) } else { inbox.reload() }
             return
@@ -262,8 +265,14 @@ final class TasksStore {
 
     enum MessageState { case open, sent, filed }
 
+    /// A message card's inbox item: the default manager's, as the feed and the reply without the item go to it (each
+    /// manager numbers its own items).
+    private static func cardItem(_ itemID: String) -> InboxItem? {
+        InboxStore.shared.items.first { $0.id == itemID && AppModel.shared.pushedBy($0.manager) == nil }
+    }
+
     func messageState(_ card: FeedItem, itemID: String) -> MessageState {
-        Self.messageState(card, inbox: InboxStore.shared.items.first { $0.id == itemID },
+        Self.messageState(card, inbox: Self.cardItem(itemID),
                           sentHere: sentMessages.contains(itemID), refused: filedMessages.contains(itemID))
     }
 

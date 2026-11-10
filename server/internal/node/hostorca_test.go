@@ -56,9 +56,18 @@ func TestMain(m *testing.M) {
 	ghFallbackDirs = func() []string { return nil }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
 	os.Setenv("PASEO_HOME", "/tmp/persona-test-no-paseo")
+	// Nor the user's Cindy: its home points nowhere (a test that wants one sets its own).
+	os.Setenv("CINDY_HOME", "/tmp/persona-test-no-cindy")
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
 	// session): the node's own default is then ~/.claude of the test's home (#2140; a test that wants one sets its own).
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	// Nor the user's state directory (these tests run from inside a Persona conversation, or a shell that set it): the
+	// state directory of a test's node is the one under its own home. A PERSONA_HOME, or its former name, left in the
+	// environment won over it, and the health uploads' tests wrote their fake reports into the user's real health
+	// space. A test that wants one sets its own.
+	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME")} {
+		os.Unsetenv(k)
+	}
 	// Nor the user's login shell: herdr's panes run zsh, whatever the machine's is (a test that wants another sets it).
 	herdrPaneShell = func() string { return "/bin/zsh" }
 	// A send looks at the box once after typing and confirms nothing: most fakes never write what was typed into the
@@ -563,7 +572,7 @@ func TestOrcaEngineUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, ok := n.hosts.Get(host.Orca).(*orcaHost)
-	if !ok || len(n.hosts.All()) != 1 {
+	if !ok || len(n.hosts.All()) != 2 || n.hosts.All()[1].Kind() != host.Tmux {
 		t.Fatalf("hosts %v", hostKinds(n))
 	}
 	if m := byID(listSessions(t, n)); m[sidB].PaneID != "orca:tab1:leaf1" || m[sidB].Status != proto.StatusWorking ||
@@ -805,9 +814,9 @@ func TestOrcaPromptSubmitFails(t *testing.T) {
 	}
 }
 
-// A session that is not running on an engine that cannot resume it (Herdr App), or that Orca does not resume (no
-// Claude transcript), is refused, nothing typed, with a reason: its claude not in front when its pane is still there
-// (suspended), else not running — not "unsupported". Orca resumes a Claude session whose pane is gone (#5548).
+// A session that is not running that Orca does not resume (no Claude transcript) is refused, nothing typed, with a
+// reason: its claude not in front when its pane is still there (suspended), else not running — not "unsupported".
+// Orca resumes a Claude session whose pane is gone (#5548); Herdr App resumes one as herdr does (#2532).
 func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 	n, o, procs := orcaSession(t)
 	n.claudeStart, n.claudeReady = 200*time.Millisecond, 200*time.Millisecond
@@ -853,13 +862,24 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 		t.Errorf("codex resumed in Orca: %v", c)
 	}
 
+	// Herdr App resumes it as herdr does (#2532): a new tab, its launcher with --resume through the start file.
 	hn, hc := hcSession(t)
+	hn.claudeStart, hn.claudeReady = 200*time.Millisecond, 200*time.Millisecond // the fake shell never runs claude
+	hc.doc = appDoc(hcCwd)
+	var typed string
+	hc.handle("terminal.send", func(p map[string]any) any {
+		typed, _ = startFileCommand(str(p["text"]))
+		return map[string]any{}
+	})
 	hc.setTerminals()
 	time.Sleep(time.Second) // past the failed-list cache
 	listSessions(t, hn)
 	_, err = request(t, hn, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
-	if code, _ := refusalOf(t, err); code != "not_running" || !strings.Contains(err.Error(), "Herdr App") {
+	if isRefusal(err, "not_running") {
 		t.Fatalf("herdr-core: %v", err)
+	}
+	if r := hc.trace("terminal.run"); len(r) != 1 || !strings.Contains(typed, "--resume "+sidA) {
+		t.Fatalf("herdr-core: not resumed in a new tab: runs %v, typed %q (%v)", r, typed, err)
 	}
 }
 
@@ -939,7 +959,7 @@ func TestOrcaKeyBytes(t *testing.T) {
 		"shift+right": "\x1b[1;2C", "ctrl+up": "\x1b[1;5A", "f1": "\x1bOP", "f5": "\x1b[15~", "f12": "\x1b[24~",
 		"shift+f1": "\x1b[1;2P", "delete": "\x1b[3~", "insert": "\x1b[2~", "pageup": "\x1b[5~", "home": "\x1b[H",
 		"alt+backspace": "\x1b\x7f", "alt+space": "\x1b ", "alt+tab": "\x1b\t", "shift+a": "A", "alt+2": "\x1b2",
-		"shift+enter": "\x1b\r", "ctrl+a": "\x01", "esc": "\x1b",
+		"shift+enter": "\x1b\r", "ctrl+enter": "\x1b[13;5u", "ctrl+a": "\x01", "esc": "\x1b",
 	} {
 		if got, ok := orcaKeyBytes(k); !ok || got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)

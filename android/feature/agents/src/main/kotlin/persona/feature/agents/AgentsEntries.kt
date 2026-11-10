@@ -170,6 +170,10 @@ fun EntryProviderScope<NavKey>.agentsEntries(
         val machines by dependencies.sessions().machines.collectAsStateWithLifecycle()
         val todos by (tasksStore?.todos ?: flowOf(emptyList())).collectAsStateWithLifecycle(emptyList())
         val creationService = wiring.creation ?: LocalAgentCreationService.current
+        // New Agent's memory on this hub, which "Start a new one" starts from (#2134).
+        val creationStore = remember(context, wiring.creationPreferences) {
+            wiring.creationPreferences?.let { AgentCreationPreferences(context, it) } ?: AgentCreationPreferences(context)
+        }
         var handOffTodo by remember { mutableStateOf<Todo?>(null) }
         val scope = rememberCoroutineScope()
         val pending by dependencies.interactions().pending.collectAsStateWithLifecycle()
@@ -197,6 +201,8 @@ fun EntryProviderScope<NavKey>.agentsEntries(
                 onDismiss = { handOffTodo = null; handOffError = null },
                 starting = handOffStarting,
                 error = handOffError?.resolve(),
+                store = creationStore.takeIf { creationService != null },
+                scope = creationService?.scope.orEmpty(),
                 onHandOffNew = { machineId, cwd, launcher, permissionMode, prompt ->
                     handOffStarting = true
                     handOffError = null
@@ -229,14 +235,20 @@ fun EntryProviderScope<NavKey>.agentsEntries(
                 },
                 onHandOffExisting = { target, prompt ->
                     handOffStarting = true
+                    handOffError = null
                     scope.launch {
-                        try {
-                            tasksStore?.linkTodoAgent(targetTodo.id, target.machineId, target.sessionId)
-                            dependencies.sender().send(target, prompt, java.util.UUID.randomUUID().toString())
+                        val failed = try {
+                            handOffToRunningAgent(
+                                link = { tasksStore?.linkTodoAgent(targetTodo.id, target.machineId, target.sessionId) },
+                                send = { dependencies.sender().send(target, prompt, java.util.UUID.randomUUID().toString()) },
+                            )
+                        } finally { handOffStarting = false }
+                        if (failed != null) {
+                            handOffError = failed
+                        } else {
                             handOffTodo = null
                             navigator.navigate(ChatRoute(target.machineId, target.sessionId))
-                        } catch (_: Exception) {}
-                        handOffStarting = false
+                        }
                     }
                 }
             )

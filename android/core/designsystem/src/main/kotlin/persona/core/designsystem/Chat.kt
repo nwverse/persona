@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -110,14 +111,14 @@ fun ChatTopBar(
 }
 
 /** The user's message: a neutral glass bubble, wash bubble or bordered box. Right-aligned, at most 86% wide.
- *  [own] uses a stronger neutral surface; forwarded messages keep the ordinary surface. */
+ *  [own] uses the user's bubble color; forwarded messages keep the ordinary surface. */
 @Composable
 fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Unit)? = null, own: Boolean = true,
     content: @Composable ColumnScope.() -> Unit) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val shape = when (style) {
-        AppStyle.Glass -> RoundedCornerShape(24.dp, 24.dp, 8.dp, 24.dp)
+        AppStyle.Glass -> RoundedCornerShape(Tokens.Radius.bubble)
         AppStyle.Brief -> RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
         AppStyle.Board -> RoundedCornerShape(10.dp)
     }
@@ -125,8 +126,8 @@ fun UserBubbleFrame(modifier: Modifier = Modifier, footer: (@Composable () -> Un
         Column(
             Modifier.fillMaxWidth(0.86f).wrapContentWidth(Alignment.End).clip(shape)
                 .then(when (style) {
-                    AppStyle.Glass -> Modifier.background(if (own) palette.statusSurface else palette.surface)
-                        .border(1.dp, Brush.verticalGradient(listOf(palette.strokeTop.copy(alpha = 0.6f), Color.Transparent)), shape)
+                    AppStyle.Glass -> Modifier.background(if (own) homeUserFill(palette, LocalHomeChrome.current) else palette.surface)
+                        .border(HomeTokens.composerStroke, palette.line, shape)
                     AppStyle.Brief -> Modifier.background(if (own) palette.statusSurface else palette.surface)
                     AppStyle.Board -> Modifier.background(if (own) palette.statusSurface else palette.surface).border(1.dp, palette.line, shape)
                 })
@@ -391,44 +392,87 @@ fun ComposerFrame(
     accessory: (@Composable ColumnScope.() -> Unit)? = null,
     // A tap on the frame's blank space that nothing inside handled (around the field, beside the buttons).
     onBlankTap: (() -> Unit)? = null,
+    expanded: Boolean = false,
     field: @Composable BoxScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
     val blankTap by rememberUpdatedState(onBlankTap)
     val keepsKeyboard = Modifier.keepsKeyboardOnTap { blankTap?.invoke() }
-    when (PersonaTheme.style) {
-        AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).floatingSurface(RoundedCornerShape(28.dp)).then(keepsKeyboard).padding(6.dp)) {
-            accessory?.let { Column(Modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp), content = it) }
-            Row(verticalAlignment = Alignment.Bottom) {
+    if (PersonaTheme.style == AppStyle.Glass && LocalHomeChrome.current != null) {
+        val shape = RoundedCornerShape(HomeTokens.composerRadius)
+        val fill = if (PersonaTheme.darkTheme) HomeTokens.composerDark else HomeTokens.composerLight
+        val stroke = if (PersonaTheme.darkTheme) HomeTokens.composerStrokeDark else HomeTokens.composerStrokeLight
+        Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
+            .shadow(HomeTokens.composerShadow, shape, clip = false,
+                ambientColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha),
+                spotColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha))
+            .clip(shape).background(fill).border(HomeTokens.composerStroke, stroke, shape)
+            .then(keepsKeyboard).padding(Tokens.Space.s)) {
+            accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s), content = it) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.invoke(this)
+                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.android).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
+                    contentAlignment = Alignment.CenterStart, content = field)
+                if (!expanded) trailing?.invoke(this)
+            }
+            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
                 leading?.invoke(this)
-                Box(Modifier.weight(1f).heightIn(min = 44.dp).padding(horizontal = 8.dp, vertical = 11.dp), contentAlignment = Alignment.CenterStart, content = field)
+                Spacer(Modifier.weight(1f))
                 trailing?.invoke(this)
             }
         }
-        AppStyle.Brief -> Column(modifier.fillMaxWidth().background(palette.background).then(keepsKeyboard).padding(horizontal = 12.dp, vertical = 8.dp)) {
-            accessory?.let { Column(Modifier.padding(start = 4.dp, end = 4.dp, bottom = 6.dp), content = it) }
-            Row(verticalAlignment = Alignment.Bottom) {
-                leading?.let { Row(Modifier.padding(bottom = 2.dp)) { it() }; Spacer(Modifier.width(4.dp)) }
+        return
+    }
+    when (PersonaTheme.style) {
+        AppStyle.Glass -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)
+            .floatingSurface(RoundedCornerShape(HomeTokens.composerRadius)).then(keepsKeyboard).padding(Tokens.Space.s)) {
+            accessory?.let { Column(Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs), content = it) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.invoke(this)
+                Box(Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.m),
+                    contentAlignment = Alignment.CenterStart, content = field)
+                if (!expanded) trailing?.invoke(this)
+            }
+            if (expanded) Row(verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke(this)
+                Spacer(Modifier.weight(1f))
+                trailing?.invoke(this)
+            }
+        }
+        AppStyle.Brief -> Column(modifier.fillMaxWidth().background(palette.background).then(keepsKeyboard).padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s)) {
+            accessory?.let { Column(Modifier.padding(start = Tokens.Space.xs, end = Tokens.Space.xs, bottom = Tokens.Space.xs), content = it) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.let { it(); Spacer(Modifier.width(Tokens.Space.xs)) }
                 Row(
-                    Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(24.dp)).background(palette.surface).padding(start = 18.dp, end = 4.dp),
-                    verticalAlignment = Alignment.Bottom,
+                    Modifier.weight(1f).heightIn(min = Tokens.MinTouch.android).clip(RoundedCornerShape(Tokens.Radius.bubble))
+                        .background(palette.surface).padding(start = Tokens.Space.l, end = Tokens.Space.xs),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(Modifier.weight(1f).padding(vertical = 13.dp), contentAlignment = Alignment.CenterStart, content = field)
-                    trailing?.let { Row(Modifier.padding(vertical = 4.dp)) { it() } }
+                    Box(Modifier.weight(1f).padding(vertical = Tokens.Space.m), contentAlignment = Alignment.CenterStart, content = field)
+                    trailing?.let { Row(Modifier.padding(vertical = Tokens.Space.xs)) { it() } }
                 }
+            }
+            if (expanded && leading != null) Row(Modifier.padding(top = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke(this)
+                Spacer(Modifier.weight(1f))
             }
         }
         // The board's grey under a rule, the field a white ticket on it: no white plate across the bottom.
-        AppStyle.Board -> Column(modifier.fillMaxWidth().background(palette.background).drawBehind { drawLine(palette.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx()) }.then(keepsKeyboard).padding(10.dp)) {
-            accessory?.let { Column(Modifier.padding(bottom = 8.dp), content = it) }
-            Row(verticalAlignment = Alignment.Bottom) {
-                leading?.invoke(this)
+        AppStyle.Board -> Column(modifier.fillMaxWidth().background(palette.background)
+            .drawBehind { drawLine(palette.line, Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx()) }.then(keepsKeyboard).padding(Tokens.Space.s)) {
+            accessory?.let { Column(Modifier.padding(bottom = Tokens.Space.s), content = it) }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!expanded) leading?.invoke(this)
                 Box(
-                    Modifier.weight(1f).heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp)).background(palette.surface)
-                        .border(1.dp, palette.line, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 11.dp),
+                    Modifier.weight(1f).heightIn(min = Tokens.MinTouch.ios).clip(RoundedCornerShape(Tokens.Radius.control)).background(palette.surface)
+                        .border(1.dp, palette.line, RoundedCornerShape(Tokens.Radius.control)).padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.m),
                     contentAlignment = Alignment.CenterStart, content = field,
                 )
-                trailing?.let { Spacer(Modifier.width(8.dp)); it() }
+                trailing?.let { Spacer(Modifier.width(Tokens.Space.s)); it() }
+            }
+            if (expanded && leading != null) Row(Modifier.padding(top = Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+                leading?.invoke(this)
+                Spacer(Modifier.weight(1f))
             }
         }
     }

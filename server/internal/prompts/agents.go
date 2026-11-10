@@ -3,7 +3,8 @@ package prompts
 // AgentTriage is the system prompt that reads a stopped agent's last reply and says where its work stands
 // (agents/triage, docs/assistant/agent-work.md).
 type AgentTriage struct {
-	Owner string // "" is the user
+	Owner    string // "" is the user
+	Language string // the line's language when it isn't Chinese (answerLanguage), "" for Chinese
 }
 
 func RenderAgentTriage(t AgentTriage) string { return render("agents/triage", t) }
@@ -12,17 +13,19 @@ func RenderAgentToolLoop() string { return render("agents/tool_loop", nil) }
 
 // AgentTriageInput is the turn to triage (agents/triage_input).
 type AgentTriageInput struct {
-	Now     string // the user's local time, "2006-01-02 15:04 Mon"
-	Agent   string // its tab / title
-	Machine string
-	Cwd     string
-	Project string // the knowledge base's project for its directory, "" when none
-	Ask     string // what the user asked in this turn, "" when it is not known
-	Reply   string // its last reply, clipped
-	Others  []AgentTriageOther
+	Now      string // the user's local time, "2006-01-02 15:04 Mon"
+	Agent    string // its tab / title
+	Machine  string
+	Cwd      string
+	Project  string // the knowledge base's project for its directory, "" when none
+	Ask      string // what the user asked in this turn, "" when it is not known
+	Reply    string // its last reply, clipped
+	Others   []AgentTriageOther
+	Answered []AgentAnswerItem // durable question/answer pairs, newest first; not authorization for automatic actions
 	// The risky step the user already said yes to, once what it waits for is over ("" when none): a turn still
 	// waiting for it is no question for the user.
 	ApprovedWait, ApprovedThen string
+	ApprovedByTask             bool // the agent's task authorized it, not the user on a card (#3246)
 }
 
 // AgentTriageOther is another agent working on the same machine: what this one may be waiting for.
@@ -40,6 +43,8 @@ type AgentWake struct {
 	Agent     string // the agent it waited for, when it is that one stopping that wakes it
 	AgentLine string // what that agent said last
 	Approved  string // the risky step the user already said yes to, once the wait is over ("" when none)
+	// ApprovedByTask: the agent's task asked for that step, not the user on a card (#3246).
+	ApprovedByTask bool
 }
 
 func RenderAgentWake(w AgentWake) string { return render("agents/wake", w) }
@@ -51,7 +56,7 @@ func RenderAgentLimitContinue() string { return render("agents/limit_continue", 
 // AgentAnswer is the user's answers to the hub's decision card, sent on to the agent (agents/answer).
 type AgentAnswer struct {
 	Items []AgentAnswerItem
-	// ByAssistant: the assistant answered for the user (docs/assistant/assistant.md "The assistant answers questions first"), Reason says why.
+	// ByAssistant: the assistant answered for the user (docs/assistant/assistant.md "Assistant answers questions first"), Reason says why.
 	ByAssistant bool
 	Reason      string
 }
@@ -91,7 +96,7 @@ type LauncherRepairItem struct {
 func RenderLauncherRepair(r LauncherRepair) string { return render("agents/launcher_repair", r) }
 
 // AgentReanswer is the user's answers to questions the assistant answered for them, sent on to the agent, which went
-// on with the assistant's (agents/reanswer, docs/assistant/assistant.md "The assistant answers questions first").
+// on with the assistant's (agents/reanswer, docs/assistant/assistant.md "Assistant answers questions first").
 type AgentReanswer struct {
 	Items []AgentReanswerItem
 }
@@ -103,7 +108,7 @@ type AgentReanswerItem struct {
 func RenderAgentReanswer(a AgentReanswer) string { return render("agents/reanswer", a) }
 
 // AgentDelegate is the system prompt that decides whether the assistant answers an agent's question for the user
-// (agents/delegate, docs/assistant/assistant.md "The assistant answers questions first").
+// (agents/delegate, docs/assistant/assistant.md "Assistant answers questions first").
 type AgentDelegate struct {
 	Owner string // "" is the user
 	Rules string // the user's own rules, trimmed: manager.json agents.delegate.rules
@@ -154,3 +159,13 @@ type AgentReview struct {
 }
 
 func RenderAgentReview(r AgentReview) string { return render("agents/review", r) }
+
+// DispatchTask is the first message of an agent another agent started on this computer (agents/dispatch_task,
+// assistant/dispatch.go): who handed it the task, and that its last reply is what goes back.
+type DispatchTask struct {
+	From        string // the calling agent's tab / title, "" when it is not known
+	FromMachine string // the calling agent's computer, by name
+	Prompt      string
+}
+
+func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }

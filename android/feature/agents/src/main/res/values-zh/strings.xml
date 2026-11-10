@@ -30,6 +30,7 @@
     <string name="agents_action_new_session">新建会话</string>
     <string name="agents_action_list_settings">列表设置</string>
     <string name="agents_search_placeholder">搜索空间、会话或最新消息</string>
+    <string name="agents_action_search">搜索</string>
     <string name="agents_requests_title">等你定</string>
     <plurals name="agents_requests_more">
         <item quantity="other">还有 %1$d 个</item>
@@ -283,6 +284,10 @@
     <string name="agents_new_use_directory">使用此目录</string>
     <string name="agents_new_retry_check">重试核对结果</string>
     <string name="agents_new_start">开始对话</string>
+    <string name="agents_new_recent">最近</string>
+    <string name="agents_new_recent_separator">" · "</string>
+    <string name="agents_new_recent_remove">从最近中移除</string>
+    <string name="agents_new_recent_clear">清除最近配置</string>
     <string name="agents_mode_follow">跟随启动器</string>
     <string name="agents_mode_default">手动确认</string>
     <string name="agents_mode_accept_edits">自动改文件</string>
@@ -369,6 +374,39 @@
     <string name="agents_todo_cancel">取消</string>
     <string name="agents_todo_save">保存</string>
     <string name="agents_todo_save_failed">保存失败：%1$s</string>
+    <string name="agents_todo_decisions">决策</string>
+    <string name="agents_todo_decisions_add">记一条</string>
+    <string name="agents_todo_decisions_failed">决策没加载出来：%1$s</string>
+    <string name="agents_todo_decisions_retry">重试</string>
+    <string name="agents_todo_decisions_loading">正在加载决策…</string>
+    <string name="agents_todo_decisions_empty">这件事上拍过的板记在这里：Agent 提问时你的回答会自动记一条，任务做完时会记下结论、做过的决定和踩过的坑，也可以手动记。交给 Agent 时会带上生效的这些。</string>
+    <string name="agents_todo_decisions_current_only">只看生效的</string>
+    <string name="agents_todo_decisions_history">看全历史（%1$d 条已改判）</string>
+    <string name="agents_todo_decision_chose">选了：%1$s</string>
+    <string name="agents_todo_decision_reason">原因：%1$s</string>
+    <string name="agents_todo_decision_revised">已被改判</string>
+    <string name="agents_todo_decision_revises">改判了「%1$s」</string>
+    <string name="agents_todo_decision_revise">改判</string>
+    <string name="agents_todo_decision_source_outcome">Agent 做完时记的</string>
+    <string name="agents_todo_decision_source_agent">Agent 干活时记的</string>
+    <string name="agents_todo_decision_source_thread">在飞书话题里回的</string>
+    <string name="agents_todo_decision_source_manual">手动记的</string>
+    <string name="agents_todo_decision_source_card">在 Agent 的提问里答的</string>
+    <string name="agents_todo_decision_source_card_named">在「%1$s」的提问里答的</string>
+    <string name="agents_todo_decision_revise_note">原来选的「%1$s」会保留、划掉，交给 Agent 时只带新的这条。</string>
+    <string name="agents_todo_decision_question">问题</string>
+    <string name="agents_todo_decision_question_hint">要定的是什么…</string>
+    <string name="agents_todo_decision_choice">选了什么</string>
+    <string name="agents_todo_decision_choice_hint">定下来的方案…</string>
+    <string name="agents_todo_decision_reason_label">原因（选填）</string>
+    <string name="agents_todo_decision_reason_hint">为什么这么定、否了什么…</string>
+    <string name="agents_todo_decision_record_title">记一条决策</string>
+    <string name="agents_todo_decision_record">记下</string>
+    <string name="agents_todo_decision_failed">决策没记下：%1$s</string>
+    <string name="agents_todo_decision_discard_title">放弃这条决策？</string>
+    <string name="agents_todo_decision_discard_body">填的内容不会记下。</string>
+    <string name="agents_todo_decision_discard">放弃</string>
+    <string name="agents_todo_decision_keep_editing">继续填写</string>
     <string name="agents_todo_notes_empty">点击编辑添加任务说明与要求…</string>
     <string name="agents_todo_auto_reason">自动完成理由：%1$s</string>
     <string name="agents_todo_hold_pr">停在 PR</string>
@@ -385,6 +423,8 @@
     <string name="agents_todo_active_agents">正在做的 Agent</string>
     <string name="agents_todo_no_agents">暂无分配的 Agent</string>
     <string name="agents_todo_no_agents_hint">点击底部「交给 Agent」指派任务。</string>
+    <string name="agents_todo_no_agents_done_hint">要交给 Agent，先重新打开。</string>
+    <string name="agents_todo_hand_off_failed">没交出去：%1$s</string>
     <string name="agents_todo_session_short">会话 %1$s</string>
     <string name="agents_todo_not_listed">（不在当前活跃列表）</string>
     <string name="agents_todo_remove_agent">移出</string>
@@ -403,6 +443,7 @@
     <string name="agents_handoff_directory">工作目录</string>
     <string name="agents_handoff_mode_default">默认 (default)</string>
     <string name="agents_handoff_mode_bypass">允许一切 (bypassPermissions)</string>
+    <string name="agents_handoff_mode_named">%1$s (%2$s)</string>
     <string name="agents_handoff_pick_agent">选择已有 Agent</string>
     <string name="agents_handoff_no_agents">没有运行中的 Agent</string>
     <string name="agents_handoff_no_agents_hint">当前电脑没有可直接分配任务的活跃 Agent。</string>
@@ -454,4 +495,19 @@
     <string name="agents_page_loaded">已加载 %1$d / %2$d 个会话</string>
     <string name="agents_page_more">加载更多</string>
     <string name="agents_page_previous">加载之前的会话</string>
+    <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
+    <string name="agents_todos_section_waiting">需要你</string>
+    <string name="agents_todos_section_working">工作中</string>
+    <string name="agents_todos_section_just_done">刚做完</string>
+    <string name="agents_todos_section_pr">PR 待合并</string>
+    <string name="agents_todos_section_other">其他未完成</string>
+    <string name="agents_todos_section_shelved">已搁置</string>
+    <string name="agents_todos_summary">%1$d 个未完成 · %2$d 个搁置 · %3$d 个已完成</string>
+    <string name="agents_todo_restore">恢复</string>
+    <string name="agents_todo_pr_moved">%1$s · %2$s有动静</string>
+    <string name="agents_todo_pr">PR</string>
+    <string name="agents_todo_state_accepted">已验收</string>
+    <plurals name="agents_todos_related">
+        <item quantity="other">%1$d 个相关</item>
+    </plurals>
 </resources>

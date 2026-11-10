@@ -46,6 +46,8 @@
   "triage_waiting_other": "{count}件のメッセージが仕分け待ちです",
   "triage_waiting_named_other": "{count}件の{name}メッセージが仕分け待ちです",
   "triage_waiting_reason": "{waiting}：{reason}",
+  "read_failed": "今回は読み取れませんでした。一覧が不完全な可能性があります",
+  "read_failed_line": "{name}：{reason}",
   "refresh_failed": "更新できませんでした：{error}",
   "done_failed": "対応済みにできませんでした：{error}",
   "undone_failed": "戻せませんでした：{error}",
@@ -92,5 +94,14 @@
   "policy_reason": "あなたのルール：{name}",
   "policy_saved": "「{name}」のルールを保存しました",
   "policy_removed": "「{name}」のルールを削除しました",
-  "policy_failed": "ルールを保存できませんでした：{error}"
+  "policy_failed": "ルールを保存できませんでした：{error}",
+  "group_just": "たった今",
+  "group_today": "今日",
+  "group_yesterday": "昨日",
+  "group_week": "7日以上前",
+  "group_month": "1か月以上前",
+  "group_lark": "Lark",
+  "group_mail": "メール · {account}",
+  "group_agents": "あなたを待っている Agent",
+  "folder_failed": "移動できませんでした：{error}"
 }

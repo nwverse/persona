@@ -84,7 +84,10 @@ func TestStandbyAnswers(t *testing.T) {
 	if r := reply(hookReq("PreToolUse", "Bash", nil)); r["retry"] != nil {
 		t.Fatalf("a Bash PreToolUse is not held: %v", r)
 	}
-	if r := reply(hookReq("PreToolUse", "AskUserQuestion", func(r *sockRequest) { r.Resume = true })); r["retry"] != true {
+	if r := reply(hookReq("PreToolUse", "AskUserQuestion", nil)); r["retry"] != nil {
+		t.Fatalf("a question PreToolUse is not held: %v", r)
+	}
+	if r := reply(hookReq("PermissionRequest", "AskUserQuestion", func(r *sockRequest) { r.Resume = true })); r["retry"] != true {
 		t.Fatalf("a resumed question: %v", r)
 	}
 	if r := reply(hookReq("Stop", "", func(r *sockRequest) { r.ReportOnly = true })); r["output"] != nil {
@@ -124,8 +127,8 @@ func TestStandbyAnswers(t *testing.T) {
 		_ = json.Unmarshal(e.Request.Input, &in)
 		kept = append(kept, e.Kind+":"+in.HookEventName+in.ToolName)
 	}
-	// The resumed question was reported by the node it first reached; the report-only PostToolUse is not reported.
-	want := "hook:Stop hook:PermissionRequestBash hook:PreToolUseBash hook:Stop notify:"
+	// The non-resumed PreToolUse is spooled but not held; the resumed PermissionRequest was already reported by its first node.
+	want := "hook:Stop hook:PermissionRequestBash hook:PreToolUseBash hook:PreToolUseAskUserQuestion hook:Stop notify:"
 	if strings.Join(kept, " ") != want {
 		t.Fatalf("kept %v\nwant %s", kept, want)
 	}
@@ -173,12 +176,13 @@ func TestStandbyOnTheSocket(t *testing.T) {
 
 // replayHub records what the manager gets from a replay.
 type replayHub struct {
-	mu  sync.Mutex
-	got []string
-	ids map[string]int
+	mu    sync.Mutex
+	got   []string
+	ids   map[string]int
+	onGot func(count int) // runs (under mu) after each event or notification the hub got
 }
 
-func newReplayHub(t *testing.T, n *Node) *replayHub {
+func newReplayHub(t testing.TB, n *Node) *replayHub {
 	ctx, cancel := context.WithCancel(context.Background())
 	n2hR, n2hW := io.Pipe()
 	h2nR, h2nW := io.Pipe()
@@ -193,6 +197,9 @@ func newReplayHub(t *testing.T, n *Node) *replayHub {
 		id, _ := p["spool_id"].(string)
 		rec.ids[id]++
 		rec.got = append(rec.got, what)
+		if rec.onGot != nil {
+			rec.onGot(len(rec.got))
+		}
 	}
 	hub.OnEvent = func(event string, params json.RawMessage) {
 		if event == "hook.event" {
@@ -272,4 +279,187 @@ func TestReplayHandsTheManagerWhatStandbyTookInOrderOnce(t *testing.T) {
 		t.Fatalf("a second replay sent %v", rec.got)
 	}
 	rec.mu.Unlock()
+}
+
+// Standby appends to the spool, and a replay takes what it handed over out of the file spoolRemoveEvery entries at a
+// time and once at the end: neither rewrites the whole file for every entry.
+func TestSpoolWritesInBatches(t *testing.T) {
+	n, _ := testNode(t)
+	n.logger = log.New(io.Discard, "", 0)
+	n.panes = map[string]string{}
+	rec := newReplayHub(t, n)
+	sp := openSpool(filepath.Join(t.TempDir(), spoolFile))
+	const kept = 150
+	for range kept {
+		if _, err := sp.add(spoolEntry{ID: newUUID(), At: time.Now(), Kind: "hook", Request: hookReq("Stop", "", nil)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sp.rewrites != 1 {
+		t.Fatalf("filling the spool rewrote it %d times, want 1 (the first add makes the file, the rest append)", sp.rewrites)
+	}
+	sp.rewrites = 0
+	n.replayed, n.stateReady = make(chan struct{}), make(chan struct{})
+	close(n.stateReady)
+	n.replaySpool(context.Background(), sp)
+	if want := (kept + spoolRemoveEvery - 1) / spoolRemoveEvery; sp.rewrites != want {
+		t.Fatalf("the replay rewrote the spool %d times, want %d", sp.rewrites, want)
+	}
+	if left := sp.load(); len(left) != 0 {
+		t.Fatalf("%d left in the spool", len(left))
+	}
+	waitFor(t, "the replay to arrive", func() bool { rec.mu.Lock(); defer rec.mu.Unlock(); return len(rec.got) == kept })
+}
+
+// A replay cut short (the connection ended) still takes out what it handed over before it returns: the next one sends
+// none of it again, and has the rest in order.
+func TestReplayCutShortTakesOutWhatItHandedOver(t *testing.T) {
+	n, _ := testNode(t)
+	n.logger = log.New(io.Discard, "", 0)
+	n.panes = map[string]string{}
+	rec := newReplayHub(t, n)
+	sp := openSpool(filepath.Join(t.TempDir(), spoolFile))
+	var ids []string
+	for range 200 {
+		e := spoolEntry{ID: newUUID(), At: time.Now(), Kind: "hook", Request: hookReq("Stop", "", nil)}
+		if _, err := sp.add(e); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, e.ID)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec.mu.Lock()
+	rec.onGot = func(count int) {
+		if count == spoolRemoveEvery+6 {
+			cancel()
+		}
+	}
+	rec.mu.Unlock()
+	n.replayed, n.stateReady = make(chan struct{}), make(chan struct{})
+	close(n.stateReady)
+	n.replaySpool(ctx, sp)
+	left := sp.load()
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(left) == 0 || len(left) > len(ids)-len(rec.got) {
+		t.Fatalf("%d left after the manager got %d of %d", len(left), len(rec.got), len(ids))
+	}
+	for i, e := range left {
+		if e.ID != ids[len(ids)-len(left)+i] {
+			t.Fatalf("left %d is %s, want the rest in order", i, e.ID)
+		}
+		if rec.ids[e.ID] > 0 {
+			t.Fatalf("%s is still kept, though the manager got it", e.ID)
+		}
+	}
+}
+
+// A torn last line (a crash in an append) makes the next add rewrite the file, which leaves the torn line out.
+func TestSpoolAddAfterATornLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), spoolFile)
+	sp := openSpool(path)
+	if _, err := sp.add(spoolEntry{ID: "a", Kind: "hook"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(`{"id":"b","ki`)
+	_ = f.Close()
+	if _, err := sp.add(spoolEntry{ID: "c", Kind: "hook"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n"); len(lines) != 2 || !strings.Contains(lines[0], `"a"`) || !strings.Contains(lines[1], `"c"`) {
+		t.Fatalf("spool file %q, want the entries a and c, one per line", b)
+	}
+}
+
+func TestSpoolFaults(t *testing.T) {
+	// 1. Truncated lines and invalid JSON
+	dir := t.TempDir()
+	path := filepath.Join(dir, spoolFile)
+	corruptContent := strings.Join([]string{
+		`{"id":"e1","kind":"notify"}`,
+		`{"id":"e2", truncated`,
+		`not-even-json`,
+		`{"id":"e3","kind":"notify"}`,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(corruptContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs []string
+	sp := openSpool(path)
+	sp.logf = func(format string, args ...any) {
+		logs = append(logs, strings.TrimSpace(format))
+	}
+	entries, _, err := sp.loadLocked()
+	if err != nil {
+		t.Fatalf("loadLocked: %v", err)
+	}
+	if len(entries) != 2 || entries[0].ID != "e1" || entries[1].ID != "e3" {
+		t.Fatalf("entries = %+v, want e1 and e3", entries)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected bad lines to be logged")
+	}
+
+	// 2. Unreadable / permission denied file
+	if os.Getuid() != 0 { // skip if running as root
+		unreadable := filepath.Join(dir, "unreadable.jsonl")
+		if err := os.WriteFile(unreadable, []byte(`{"id":"e1"}`), 0o000); err != nil {
+			t.Fatal(err)
+		}
+		spUnreadable := openSpool(unreadable)
+		_, _, err = spUnreadable.loadLocked()
+		if err == nil {
+			t.Fatal("expected permission error on unreadable file, got nil")
+		}
+	}
+}
+
+func TestLegacyStateFaults(t *testing.T) {
+	dir := t.TempDir()
+	legacyPath := filepath.Join(dir, "sessions.json")
+
+	// 1. Corrupt legacy file must be quarantined to .corrupt and logged
+	if err := os.WriteFile(legacyPath, []byte(`{invalid-json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	logf := func(format string, args ...any) {
+		logs = append(logs, strings.TrimSpace(format))
+	}
+	res := legacyState(legacyPath, logf)
+	if len(res) != 0 {
+		t.Fatalf("expected empty result from corrupt file, got %+v", res)
+	}
+	if _, err := os.Stat(legacyPath + ".corrupt"); err != nil {
+		t.Fatalf("expected %s to be quarantined to .corrupt: %v", legacyPath, err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("expected original %s to be moved: %v", legacyPath, err)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected corrupt legacy state to be logged")
+	}
+
+	// 2. Migration: notify failure must prevent the rename
+	n, _ := testNode(t)
+	n.dir = dir
+	validLegacy := filepath.Join(dir, "sessions.json")
+	if err := os.WriteFile(validLegacy, []byte(`{"sessions":{"s1":{"created":100}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// With peer == nil, Notify cannot succeed, migration must keep original file
+	n.loadState(context.Background())
+	if _, err := os.Stat(validLegacy); err != nil {
+		t.Fatalf("expected %s to be preserved when Notify fails, got %v", validLegacy, err)
+	}
+	if _, err := os.Stat(validLegacy + ".migrated"); !os.IsNotExist(err) {
+		t.Fatalf("expected %s.migrated not to exist when Notify fails", validLegacy)
+	}
 }

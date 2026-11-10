@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,8 @@ type Node struct {
 
 	// decided: calls another PermissionRequest hook answered (hookdecided.go).
 	decided decisions
+	// questions: AskUserQuestion calls shared by the terminal and the phone (questioncalls.go).
+	questions questionCalls
 
 	// bootAt: when this node started. A session whose record says it was started in a pane before this ran in the
 	// previous herdr server, so the restart is what ended it (interrupted.go).
@@ -55,6 +58,13 @@ type Node struct {
 	// claudeStart, claudeReady: when set, how long a start waits for the shell to run claude, then for claude's
 	// input box, in place of claudeStartWait and claudeReadyWait (tests; claudeready.go).
 	claudeStart, claudeReady time.Duration
+	// shellSettle, shellQuiet, shellAsk: when set, how long a start waits at most for a new tab's shell to settle, how
+	// long its screen must stay the same, and how long a startup question may stay on screen, in place of
+	// shellSettleWait, shellQuietFor and shellQuestionWait (tests; shellsettle.go).
+	shellSettle, shellQuiet, shellAsk time.Duration
+	// shellPause: when set, a start pauses this long instead of watching the new tab's shell, the fixed pause before
+	// #2570 (tests whose herdr call traces have no room for the settle wait's reads; shellsettle.go).
+	shellPause time.Duration
 
 	// doctorAt replaces the places node.doctor looks at (tests; doctor_rpc.go).
 	doctorAt func() DoctorOptions
@@ -77,6 +87,8 @@ type Node struct {
 	engEpoch uint64
 	peer     *rpc.Peer
 	logger   *log.Logger
+	// hubPersonaContracts is connection-local: Attach makes a fresh Node on each reconnect.
+	hubPersonaContracts atomic.Bool
 	// lcu drives amontlabs/lcu for the computer-use plugin when that backend is selected (lcu_mcp.go).
 	lcuMu   sync.Mutex
 	lcuSess *lcuSession
@@ -93,6 +105,8 @@ type Node struct {
 	paths   map[string]string           // session id -> transcript path
 	pathsAt map[string]time.Time        // when a path was last reported or chosen (transcriptPath looks again after 30 s)
 	watches map[string]*watch
+	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
+	pumping bool
 	// waiting: watches of sessions with no transcript yet (watchFor), so session.unwatch finds them (#5389).
 	waiting map[string]*watch
 	agents  map[string]host.Agent // session id -> live agent
@@ -111,6 +125,8 @@ type Node struct {
 	spare     *assistantProc             // warm process waiting for the next new conversation
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
+	sent      sentList                   // the last sessions.changed as written, not written twice (sessions_sent.go)
+	listRows  atomic.Int32               // rows the last sessionList gathered before its keep pass: the next one's size
 	lastRevs  map[string]int64           // session id -> rev as last pushed (sessions.changed or sessions.revs)
 	metas     map[string]quickMeta       // transcript path -> cached meta; deleted ones leave it (meta_prune.go)
 	goneDirs  map[string]time.Time       // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
@@ -161,10 +177,10 @@ type Node struct {
 	runtimeHost *RuntimeHost
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
-	// replayed is closed once what standby took while no manager was connected went to this one (spool.go): new
+	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
 	// hooks wait for it, so the manager hears them after the older ones. nil (tests' Nodes): nothing waits.
 	replayed chan struct{}
-	// ahead: the sessions and panes of live hooks that went before the replay (spool.go).
+	// ahead: the sessions and panes of live hooks that went before the replay (spool_replay.go).
 	ahead replayAhead
 	// spool is the resident node's (Attach), nil elsewhere: a node that serves by itself neither keeps nor replays.
 	spool *spool
@@ -175,6 +191,10 @@ type Node struct {
 
 	// codexStarting: panes a Codex start is opening (codex_start.go): no thread is guessed for them meanwhile.
 	codexStarting map[string]bool
+	// codexAbandoned: failed starts whose pane could not be closed; a retry must close it before opening another.
+	codexAbandoned map[string][]codexAbandonedStart
+	// keptStarts: the tabs of failed starts kept open for a while, by pane (shellsettle.go keepStartTab); n.mu.
+	keptStarts map[string]keptStart
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -357,8 +377,8 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 }
 
 // startState loads the session state for this connection and, on a resident node's, replays what its standby took
-// (spool.go): the replay waits for the state, and new hooks for the replay (serveSock). A first try that fails is
-// tried again on this connection (reloadState).
+// (spool_replay.go): the replay waits for the state, and new hooks for the replay (serveSock). A first try that
+// fails is tried again on this connection (reloadState).
 func (n *Node) startState(ctx context.Context, adopted []*assistantProc) {
 	n.stateReady, n.stateMissed = make(chan struct{}), make(chan struct{})
 	// Before anything lists or takes a hook: nothing is written or cached on a guess about a session not loaded yet.
@@ -396,16 +416,30 @@ func (n *Node) loadState(ctx context.Context) bool {
 	defer n.ultracodeStateLoaded()
 	n.state.mu.Lock()
 	n.state.persist = func(id string, v sessionState) {
-		_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		if n.peer != nil {
+			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+		}
 	}
 	n.state.mu.Unlock()
 	legacyPath := filepath.Join(n.dir, "sessions.json")
-	if legacy := legacyState(legacyPath); len(legacy) > 0 {
+	if legacy := legacyState(legacyPath, n.logf); len(legacy) > 0 {
+		allOk := true
 		for id, v := range legacy {
-			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
+			if n.peer == nil {
+				allOk = false
+				break
+			}
+			if err := n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v}); err != nil {
+				allOk = false
+				n.logf("legacy migration: state.put for %s failed: %v", id, err)
+			}
 		}
 		n.state.merge(legacy)
-		_ = os.Rename(legacyPath, legacyPath+".migrated")
+		if allOk {
+			_ = os.Rename(legacyPath, legacyPath+".migrated")
+		} else {
+			n.logf("legacy migration: kept %s for retry because not all entries could be notified", legacyPath)
+		}
 	}
 	return n.fetchState(ctx)
 }
@@ -428,6 +462,9 @@ func (n *Node) reloadState(ctx context.Context) bool {
 
 // fetchState is one try of state.load: what it brings is merged under what this connection already has.
 func (n *Node) fetchState(ctx context.Context) bool {
+	if n.peer == nil {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(ctx, stateLoadTimeout)
 	defer cancel()
 	var res struct {
@@ -459,6 +496,10 @@ func (n *Node) fetchState(ctx context.Context) bool {
 // writeClaudeConfig writes the files the sessions Persona starts load (hooks, MCP, skills; generatedFiles).
 func (n *Node) writeClaudeConfig() error { return writeGeneratedConfig(n.dir, n.bin) }
 
+// hubSupportsPersonaContracts snapshots the hub capability for one process start.
+// Until the authenticated hub's configuration arrives, keep the legacy MCP alias.
+func (n *Node) hubSupportsPersonaContracts() bool { return n.hubPersonaContracts.Load() }
+
 func (n *Node) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
 	if strings.HasPrefix(method, "node.update.") {
 		return n.handleUpdate(ctx, method, params)
@@ -473,6 +514,12 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	}
 	if strings.HasPrefix(method, "plugin.node.") { // plugins' programs on this computer (plugins.go)
 		return n.handlePlugins(ctx, method, params)
+	}
+	switch method { // sharing the clipboard with the phone (clipshare.go)
+	case "clipboard.get":
+		return clipboardGet(ctx)
+	case "clipboard.set":
+		return clipboardSet(ctx, params)
 	}
 	var p struct {
 		Path             string        `json:"path"`
@@ -506,11 +553,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		Skip             int           `json:"skip"`
 		Turns            int           `json:"turns"`
 		LazyImages       bool          `json:"lazy_images"`
+		UserInputs       bool          `json:"user_inputs"`
 		FoldWork         bool          `json:"fold_work"`
 		FromSeq          int           `json:"from_seq"`
 		ThroughSeq       int           `json:"through_seq"`
 		Name             string        `json:"name"`
 		Pane             string        `json:"pane"`      // panes.*: a pane the host lists
+		InPane           string        `json:"in_pane"`   // session.start: a failed start's kept tab to start in (startremedy.go)
 		Direction        string        `json:"direction"` // panes.split: right or down
 		TabID            string        `json:"tab_id"`    // tabs.*
 		Label            string        `json:"label"`     // tabs.rename
@@ -645,13 +694,18 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			n.runtimeHost.setPaseoBridge(n.hostEnabled(proto.EnginePaseo))
 			// Orca's chats come through a bridge the node runs too (orcabridge.go); its terminals, the Orca host.
 			n.runtimeHost.setOrcaBridge(n.hostEnabled(proto.EngineOrca))
+			// Cindy's agents come through its bridge (cindybridge.go).
+			n.runtimeHost.setCindyBridge(n.hostEnabled(proto.EngineCindy))
 		}
 		n.configured()
 		c := n.engineChoice()
 		return map[string]any{"engine": n.engine(), "hosts": c.Hosts, "default": c.Default}, nil
 	case "node.configure":
 		var c struct {
-			ClaudeDirs []string `json:"claude_dirs"`
+			// HubFeatures comes from the authenticated hub through devices.connected. Partial
+			// configuration updates omit it; a full handover without it means an older hub.
+			HubFeatures *[]string `json:"hub_features"`
+			ClaudeDirs  []string  `json:"claude_dirs"`
 			// ClaudeDirsBlocked: patterns of config directories kept out (claudedirs.go); nil leaves them as they are.
 			ClaudeDirsBlocked *[]string          `json:"claude_dirs_blocked"`
 			Codex             *proto.CodexConfig `json:"codex"`
@@ -685,6 +739,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
+		}
+		if c.HubFeatures != nil || c.MachineID != "" {
+			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 		}
 		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
@@ -809,6 +866,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "sessions.list":
 		n.configured()          // a hub that lists without engine.use keeps herdr (engine.go)
 		n.useBotmux(true, true) // and one that lists without saying botmux keeps it, as before (hostbotmux.go)
+		n.sent.answering(ctx)   // the manager may take this list as its own: the next push goes whatever it is
 		return map[string]any{"sessions": n.sessionList(ctx, true)}, nil
 	case "session.start":
 		if !wantsUltracode(p.Ultracode) {
@@ -843,7 +901,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		if err := n.checkStartHost(p.Host); err != nil {
 			return nil, err
 		}
-		ctx := withStartHost(ctx, p.Host)
+		ctx := n.reusingKeptTab(withStartHost(ctx, p.Host), p.InPane)
 		if _, ok := engineRuntimes[n.startKind(ctx)]; ok { // the start's host is a runtime (Paseo): it is its (runtimecontrol.go)
 			s, err := n.startOnEngineRuntime(ctx, rp)
 			return map[string]any{"session": s}, err
@@ -914,6 +972,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return nil, err
 		}
 		n.restoreEchoes(a.Echoes)
+		return ok(nil)
+	case "start.keys": // into a failed start's kept tab (startremedy.go, #2570)
+		if err := n.startKeys(ctx, p.Pane, p.Text, p.Keys); err != nil {
+			return nil, err
+		}
 		return ok(nil)
 	case "session.keys":
 		if a, ok := n.agent(p.SessionID); ok {
@@ -1108,11 +1171,19 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		f, err := n.file(p.SessionID)
 		if err != nil {
 			if n.startingSession(p.SessionID) { // nothing written yet: an empty chat, not an error
+				if p.UserInputs {
+					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
+				}
 				return map[string]any{"items": []proto.Item{}, "has_more": false}, nil
 			}
 			return nil, err
 		}
-		n.refresh(p.SessionID, f)
+		if err := n.refresh(p.SessionID, f); err != nil && p.UserInputs {
+			return nil, err
+		}
+		if p.UserInputs {
+			return f.UserInputs(ctx)
+		}
 		// Items are kept without their image data; a caller that did not ask for lazy images (an older hub) gets it.
 		items := func(items []proto.Item) []proto.Item {
 			if !p.LazyImages {
@@ -1271,7 +1342,11 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	case "fs.stat":
 		return map[string]any{"stats": n.statPaths(p.Paths, p.Cwd)}, nil
 	case "space.rename":
-		return ok(n.renameSpace(ctx, p.WorkspaceID, p.Name))
+		name, err := n.renameSpace(ctx, p.WorkspaceID, p.Name)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true, "name": name}, nil
 	case "worktree.rename":
 		return ok(n.renameWorktree(ctx, p.Kind, p.WorkspaceID, p.Name))
 	case "session.rename":
@@ -1309,7 +1384,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"commits": list}, err
 	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
-	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Moving skills out of the binary")
+	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Skills move out of the binary")
 		cwd := p.Cwd
 		if cwd == "" {
 			cwd = n.assistantDirOf(".persona/assistant")
@@ -1438,12 +1513,33 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			mode = tuiMode(screen) // shift+tab in the terminal shows up in the transcript only with the next prompt
 		}
 	}
+	cwd := m.Cwd // an agent's latest directory
+	if n.isAssistantSession(id) {
+		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
+	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": m.Cwd, "model": m.Model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": m.Model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
 	}, nil
+}
+
+// assistantCwd is the directory assistant conversation id runs in: its running process's, else where it started as
+// its record or its transcript at path says it (assistantHome over the quick meta), else latest, its transcript's
+// latest directory. Not where the model's last `cd` left the shell (#2368).
+func (n *Node) assistantCwd(id, path, latest string) string {
+	n.mu.Lock()
+	p := n.procs[id]
+	n.mu.Unlock()
+	if p != nil && p.cwd != "" {
+		return p.cwd
+	}
+	cwd := latest
+	if fi, err := os.Stat(path); err == nil {
+		cwd = firstNonEmpty(n.meta(path, fi).cwd, latest)
+	}
+	return n.assistantHome(id, cwd)
 }
 
 func withSpan(m map[string]any, sp transcript.Span, continues bool) map[string]any {
@@ -1506,6 +1602,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramIDs,
+		Clipboard:          clipboardSupport(),
 	}
 }
 
@@ -1592,14 +1689,24 @@ func writeAtomic(path string, r io.Reader) error {
 	return err
 }
 
+// shellQuote makes s one word that reads back as s in the shells a node runs commands in or types them into: the sh
+// family and fish. Safe characters stay bare; anything else is single-quoted, with each quote and each backslash put
+// outside the quotes, backslash-escaped. Inside single quotes fish still takes \' and \\ as escapes, so a backslash
+// before a quote used to keep the quotes open there and run the rest of a first message as commands (#2867); outside
+// quotes every one of these shells reads \' and \\ alike.
 func shellQuote(s string) string {
 	if s != "" && strings.IndexFunc(s, func(r rune) bool {
 		return !(r == '/' || r == '.' || r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
 	}) < 0 {
 		return s
 	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return "'" + shellQuoteEscapes.Replace(s) + "'"
 }
+
+// shellQuoteEscapes closes shellQuote's quotes around each quote and backslash in the text (one pass, so the
+// replacements are not escaped again): anyShellQuote's scheme (devices/deploy.go) for the sh family and fish, with
+// csh's `!` left as it is.
+var shellQuoteEscapes = strings.NewReplacer(`'`, `'\''`, `\`, `'\\'`)
 
 // herdrVersion is the herdr host's version ("" without one): node.info's herdr_version.
 func (n *Node) herdrVersion(ctx context.Context) string {

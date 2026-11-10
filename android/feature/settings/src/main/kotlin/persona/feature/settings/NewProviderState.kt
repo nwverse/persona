@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * "New model provider" (docs/integrations/launchers.md "From extension"): typed in, or - when the hub's extensions offer presets - taken from one,
+ * "New model provider" (docs/integrations/launchers.md "Adding from extensions"): typed in, or - when the hub's extensions offer presets - taken from one,
  * where only the name, the key and maybe another of its models are filled in and the hub adds the rest.
  */
 internal data class NewProviderDraft(
@@ -232,7 +232,7 @@ internal class NewProviderModel(
 
     /**
      * ②'s test of the key as it is now: the hub fills in the preset's address and its default model. A test overtaken by
-     * another edit lands nowhere. Nothing for a key too short, or a preset the hub cannot test (a Responses API).
+     * another edit lands nowhere. Nothing for a key too short, or a protocol the hub cannot test.
      */
     suspend fun testKey() {
         val s = state.value
@@ -254,8 +254,8 @@ internal class NewProviderModel(
     }
 
     /**
-     * ② saved: the provider from the preset, with `assign` unless the switch is off (never decided on "not known yet":
-     * the readiness is awaited first). Then the readiness again, for ③'s Claude Code note.
+     * ② saved: a Claude-compatible preset takes `assign` when asked (after the readiness answer) and refreshes readiness
+     * for ③. A direct API cannot run the main conversation or Agents, so neither readiness nor assign concerns it.
      */
     suspend fun saveKey(): Boolean {
         val current = state.value
@@ -263,15 +263,15 @@ internal class NewProviderModel(
         if (!current.canSaveKey) return false
         mutable.update { it.copy(busy = true, error = null) }
         return try {
-            readinessAnswer?.await()
+            if (preset.runsClaude) readinessAnswer?.await()
             val before = state.value.readiness
-            val give = current.hubNames && (state.value.assignSet ?: !claudeWorks(before))
+            val give = preset.runsClaude && current.hubNames && (state.value.assignSet ?: !claudeWorks(before))
             val d = state.value.draft
             val model = d.presetModel.trim().takeIf { it.isNotEmpty() && it != preset.defaultModel }
             val result = api.create(NewProvider(d.name.trim(), d.apiKey.trim(), preset = preset.id, model = model,
                 assign = AssignPurposes.takeIf { give }))
-            mutable.update { it.copy(step = WizardStep.Done, added = WizardAdded(result, give, claudeMissing(before))) }
-            readiness?.let { source ->
+            mutable.update { it.copy(step = WizardStep.Done, added = WizardAdded(result, give, preset.runsClaude && claudeMissing(before))) }
+            if (preset.runsClaude) readiness?.let { source ->
                 try { mutable.update { it.copy(readiness = source()) } }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) {}

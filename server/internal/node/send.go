@@ -32,6 +32,10 @@ func (n *Node) paneFor(ctx context.Context, id string) (string, error) {
 			return a.PaneID, nil
 		}
 	}
+	// A claude the user started in tmux has no host agent: its own record names the pane (#2562).
+	if pane := n.outsidePaneOf(id); pane != "" {
+		return pane, nil
+	}
 	return "", fmt.Errorf("session %s is not running", id)
 }
 
@@ -128,6 +132,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 		// In a tag so it never mixes with what the user typed; the phone shows these as thumbnails.
 		text = strings.TrimSpace(text) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 	}
+	text = inertControls(text) // as the host pastes it (hostPrompt): the box and the transcript are matched against it
 	var watch *promptWatch
 	if kind == "claude" {
 		text = keepImagePaths(text)
@@ -164,7 +169,7 @@ func (n *Node) prompt(ctx context.Context, pane, text string) error {
 	if err := n.typeable(ctx, pane); err != nil {
 		return err
 	}
-	paste := pasteStart + strings.ReplaceAll(text, "\x1b", inertEscape) + pasteEnd
+	paste := pasteStart + inertControls(text) + pasteEnd
 	if err := n.sendText(ctx, pane, paste); err != nil {
 		return err
 	}

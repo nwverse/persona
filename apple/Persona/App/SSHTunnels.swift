@@ -5,7 +5,7 @@ import PersonaSSH
 import UIKit
 #endif
 
-/// This device's SSH key (docs/operations/network.md「经 SSH 隧道连 hub」): one Ed25519 key per device, made the first time it is
+/// This device's SSH key (docs/operations/network.md「Connecting to hub through SSH」): one Ed25519 key per device, made the first time it is
 /// needed, its private half only in this device's keychain (never synced, never restored onto another device, never
 /// logged).
 enum SSHKeys {
@@ -41,7 +41,7 @@ enum SSHKeys {
     @MainActor static var comment: String { "persona-" + UIDevice.current.name }
 }
 
-/// The SSH tunnels the app runs, one per paired hub that needs its own (docs/operations/network.md「经 SSH 隧道连 hub」). A tunnel
+/// The SSH tunnels the app runs, one per paired hub that needs its own (docs/operations/network.md「Connecting to hub through SSH」). A tunnel
 /// that is up routes its hub's requests through it (HubTransport); closing it sends them straight to the hub again.
 @MainActor @Observable
 final class SSHTunnels {
@@ -136,7 +136,8 @@ final class SSHTunnels {
         close(id, forget: true)
     }
 
-    private func close(_ id: String, forget: Bool) {
+    /// `forget`: no longer the way to start first next time (`recent`).
+    func close(_ id: String, forget: Bool) {
         directWatch.removeValue(forKey: id)?.cancel()
         routed.remove(id)
         if forget { recent.remove(id) }
@@ -211,7 +212,7 @@ extension SSHRoute {
 }
 
 extension AppModel {
-    // MARK: SSH tunnel (docs/operations/network.md「经 SSH 隧道连 hub」)
+    // MARK: SSH tunnel (docs/operations/network.md「Connecting to hub through SSH」)
 
     /// Settings › hub › SSH Tunnel saved (nil: removed): the hub's tunnel is made again from it, and the group's socket picks
     /// its way again.

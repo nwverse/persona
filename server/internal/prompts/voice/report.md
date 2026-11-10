@@ -1,5 +1,5 @@
 {{- /* The first sentence and the <agent_output> block are the wording measured to keep the model from doing what an
-agent wrote (docs/lessons/voice.md「注入实测用的原文」): keep them as they are. .To names who did the work (a call
+agent wrote (docs/lessons/voice.md「Verbatim injection-test text」): keep them as they are. .To names who did the work (a call
 bound to an agent: its name); "" is the Persona main conversation. .Observed: a turn the conversation began otherwise
 (no .Tasks); .Failure: the sort of model error a failed turn ended on, said instead of its text (voice/failure), with
 done: what it wrote before that. */ -}}

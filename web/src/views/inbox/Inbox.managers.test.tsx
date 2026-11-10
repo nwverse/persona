@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// The inbox with several managers (docs/assistant/managers.md "Clients"): each manager's group keeps its own sections open or
-// closed, a route opens the copy of its manager, the Muted and Rules dialogs list each manager's under its name, and
-// a rule from another manager's item is read and saved with that manager.
+// The inbox with several managers (docs/assistant/managers.md "Clients"): the list is the current assistant's (no manager
+// headings), with its own sections open or closed, a route opens the copy of its manager, the Muted dialog lists the
+// current assistant's, and a rule from another manager's item is read and saved with that manager.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,7 +33,7 @@ vi.mock("../../lib/store", async (orig) => {
 });
 
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
-import { resetManagerChoice } from "../../lib/manager-choice";
+import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster } from "../../lib/managers";
 import { routedItem } from "./Inbox";
 import { InboxList } from "./InboxList";
@@ -83,14 +83,25 @@ const clickText = async (text: string) => {
 };
 
 describe("the inbox of several managers", () => {
-  it("keeps each manager's sections open or closed on their own", async () => {
+  it("lists the current assistant's items only, and keeps each one's sections open or closed on their own", async () => {
     act(() => root.render(<InboxList />));
     await flush();
-    expect(sections()).toEqual([["action", "true"], ["fyi", "true"], ["action", "true"], ["fyi", "true"]]);
-    // close the first group's FYI (the default's): the other group's stays open
-    const fyi = host.querySelectorAll<HTMLElement>('[data-section="fyi"] button[aria-expanded]')[0];
-    act(() => fyi.click());
-    expect(sections()).toEqual([["action", "true"], ["fyi", "false"], ["action", "true"], ["fyi", "true"]]);
+    const rows = () => [...host.querySelectorAll<HTMLElement>("[data-item]")].map((r) => `${r.dataset.manager}:${r.dataset.item}`);
+    // the default's two items, in its two sections; nothing of the other manager, and no manager's name over them
+    expect(sections()).toEqual([["action", "true"], ["fyi", "true"]]);
+    expect(rows()).toEqual(["assistant:lark:f1:1", "assistant:lark:f3:1"]);
+    expect(host.textContent).not.toContain("工作");
+    // close the default's FYI, then switch: the other assistant's list, with its FYI open as at first
+    act(() => host.querySelector<HTMLElement>('[data-section="fyi"] button[aria-expanded]')!.click());
+    expect(sections()).toEqual([["action", "true"], ["fyi", "false"]]);
+    act(() => chooseManager("m-1"));
+    await flush();
+    expect(sections()).toEqual([["action", "true"], ["fyi", "true"]]);
+    expect(rows()).toEqual(["m-1:lark:f1:1", "m-1:lark:f2:1"]);
+    // and back: the default's FYI is still closed
+    act(() => chooseManager(null));
+    await flush();
+    expect(sections()).toEqual([["action", "true"], ["fyi", "false"]]);
   });
 
   it("opens the copy of the manager the route names; a route without one opens the default's", () => {
@@ -101,17 +112,19 @@ describe("the inbox of several managers", () => {
     expect(routedItem(items, "lark:f3:1", "m-1")).toBeUndefined();
   });
 
-  it("lists each manager's mutes under its name, and unmutes with it", async () => {
+  it("lists the current assistant's mutes, and unmutes with it", async () => {
+    act(() => chooseManager("m-1"));
     act(() => root.render(<InboxList />));
     await flush();
     await clickText("更多操作");
     await clickText("已静音");
     const groups = [...document.body.querySelectorAll<HTMLElement>("[data-mutes-manager]")];
-    expect(groups.map((g) => g.dataset.mutesManager)).toEqual(["assistant", "m-1"]);
-    expect(groups[1].textContent).toContain("工作");
-    expect(groups[1].textContent).toContain("Work group");
-    expect(calls.list.filter((c) => c.path === "/inbox/mutes").map((c) => c.header)).toEqual([undefined, "m-1"]);
-    const unmute = groups[1].querySelector("button")!;
+    expect(groups.map((g) => g.dataset.mutesManager)).toEqual(["m-1"]);
+    expect(groups[0].textContent).toContain("Work group");
+    expect(groups[0].textContent).not.toContain("工作"); // no heading: the list is one assistant's
+    // the read names the assistant: what it answers is stamped with the one asked
+    expect(calls.list.filter((c) => c.path === "/inbox/mutes").map((c) => c.header)).toEqual(["m-1"]);
+    const unmute = groups[0].querySelector("button")!;
     await act(async () => unmute.click());
     await flush();
     expect(calls.list.find((c) => c.path === "/inbox/mutes/u1")).toMatchObject({ method: "DELETE", header: "m-1" });

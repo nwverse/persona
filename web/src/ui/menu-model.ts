@@ -1,5 +1,6 @@
 // The pure half of the menu in atoms.tsx (#2329): what a key does in an open menu, whether a row needs a second
 // activation, where the context-menu key opens it. No React, so every rule is tested without a DOM.
+import type { ReactNode } from "react";
 import type { AgentState } from "../lib/types";
 import type { IconName } from "./icons";
 
@@ -25,6 +26,16 @@ export interface MenuItem {
    *  label off the row, and screen readers read it as the row's description. */
   detail?: string;
   icon?: IconName;
+  /** Something drawn before the label in the icon's place, as a mark that the label names: an assistant's avatar. */
+  lead?: ReactNode;
+  /** A word beside the label that says what the row is among the others ("Default"), drawn as a small tag. */
+  tag?: string;
+  /** How many things wait behind the row (an assistant's agents and inbox items), as a count at its end; 0: none. */
+  badge?: number;
+  /** What a screen reader says for `badge` ("3 things waiting for you"); the number alone without it. */
+  badgeLabel?: string;
+  /** The whole row is drawn faded (an offline assistant) yet chosen like any other, unlike `disabled`. */
+  dim?: boolean;
   state?: AgentState;
   checked?: boolean;
   /** The row is one choice of a set and `checked` marks the chosen one (permission mode, effort, model): it is a
@@ -42,6 +53,9 @@ export interface MenuItem {
   accel?: string;
   /** Asks again before running: the first choice turns the row into this label ("Close"), the second runs it. */
   confirm?: string;
+  /** What the question means, under it while the row asks (and the body of the command palette's dialog): a push
+   *  says where it goes and that it is never forced. */
+  confirmDetail?: string;
   /** The row ⌫ / Delete chooses (the menu's close action). */
   closes?: boolean;
   /** A submenu (→ opens it, ← goes back). A function loads the rows when it opens ("Loading…" meanwhile). */
@@ -108,6 +122,8 @@ export type Intent =
   | { type: "choose"; index: number }
   | { type: "back" }
   | { type: "close" }
+  /** Tab and Shift+Tab: the menu closes and the key keeps its default, so the focus moves on from the menu's button. */
+  | { type: "leave" }
   | { type: "none" };
 
 const NONE: Intent = { type: "none" };
@@ -117,6 +133,8 @@ export function keyIntent(e: KeyInput, items: readonly MenuItem[], active: numbe
   switch (e.key) {
     case "Escape":
       return { type: "close" };
+    case "Tab":
+      return { type: "leave" };
     case "ArrowDown":
     case "ArrowUp": {
       const index = step(items, active, e.key === "ArrowDown" ? 1 : -1);

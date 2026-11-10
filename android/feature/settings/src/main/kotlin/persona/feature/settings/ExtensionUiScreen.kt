@@ -41,7 +41,6 @@ internal fun nativePageBinding(owner: persona.core.contracts.api.ExtensionStream
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
                     onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null) {
-    PinnedExtension(extensionId, manager)
     val defaultBinding = extensions?.nativeStream?.collectAsState(initial = null)?.value
     val binding = remember(defaultBinding, manager) { nativePageBinding(defaultBinding, manager) }
     val owned = if (availableAdapter == null && binding != null) androidx.lifecycle.viewmodel.compose.viewModel(
@@ -69,8 +68,9 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
         JListPage(title = title, onBack = onBack) { item { JNotice(stringResource(if (nativeUnsupported) R.string.settings_ext_native_unsupported else R.string.settings_ext_demo_none)) } }
         return
     }
-    val model = remember(extensions, extensionId, uiId, initialState) {
-        ExtensionViewModel(extensions, extensionId, uiId, initialState = initialState)
+    val api = rememberPinned(extensions, extensionPrefixes(extensionId), manager)
+    val model = remember(api, extensionId, uiId, initialState) {
+        ExtensionViewModel(api, extensionId, uiId, initialState = initialState)
     }
     val state by model.state.collectAsState()
     val scope = rememberCoroutineScope()

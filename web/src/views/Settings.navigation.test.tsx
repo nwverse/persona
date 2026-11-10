@@ -10,16 +10,33 @@ vi.hoisted(() => {
 });
 vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
-  useStore: (select: (state: { features: string[] }) => unknown) => select({ features: ["channels", "extension_manager"] }),
+  useStore: (select: (state: { features: string[]; machines: unknown[]; conn: string; link: { networkUp: boolean; restarting: boolean }; hubName: string; mesh: unknown[] }) => unknown) => select({ features: ["channels", "extension_manager"], machines: [], conn: "online", link: { networkUp: true, restarting: false }, hubName: "", mesh: [] }),
 }));
 vi.mock("./settings/ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
 vi.mock("./settings/NotificationSettings", () => ({ NotificationSettings: () => <div data-page="notifications" /> }));
 vi.mock("./settings/ModelConfiguration", () => ({ ModelConfiguration: ({ open }: { open: string | null }) => <div data-page="model-config" data-open={open} /> }));
-vi.mock("./settings/Extensions", () => ({ Extensions: ({ open }: { open: string | null }) => <div data-page="extensions" data-open={open} /> }));
+vi.mock("./settings/KnowledgeSelection", () => ({ KnowledgeSelection: () => <div data-page="knowledge-selection" /> }));
+vi.mock("./settings/TranslationSettings", () => ({ TranslationSettings: () => <div data-page="translation" /> }));
+vi.mock("./settings/AssistantSettings", () => ({ AssistantSettings: () => <div data-page="persona" /> }));
+vi.mock("./settings/SidebarPages", () => ({ SidebarPagesGroup: () => <div data-page="sidebar-pages" /> }));
+vi.mock("../lib/pwa", async (original) => ({ ...(await original<typeof import("../lib/pwa")>()), useInstall: () => "installed" }));
+vi.mock("../lib/api", async (original) => ({ ...(await original<typeof import("../lib/api")>()), api: () => Promise.resolve({ accounts: [] }) }));
+vi.mock("./settings/AgentSettings", () => ({ AgentSettings: ({ agent }: { agent: string }) => <div data-page="agent" data-agent={agent} /> }));
+vi.mock("./settings/Extensions", () => ({
+  Extensions: ({ open, onOpen }: { open: string | null; onOpen: (id: string | null) => void }) => (
+    <div data-page="extensions" data-open={open}>
+      <button type="button" data-item="open" onClick={() => onOpen("example")} />
+      <button type="button" data-item="close" onClick={() => onOpen(null)} />
+    </div>
+  ),
+}));
+vi.mock("./settings/FeishuBot", () => ({ FeishuBot: () => null }));
+vi.mock("./settings/HubConnector", () => ({ ConnectorList: () => <div data-page="connector-list" />, ConnectorDetail: () => <div data-page="connector-detail" /> }));
+vi.mock("./settings/SentSettings", () => ({ SentSettings: () => <div data-page="sent" /> }));
 
 import { t } from "../i18n";
 import { Settings } from "./Settings";
-import { FROM_LIST } from "./settings/nav";
+import { FROM_LIST, openedFromSub } from "./settings/nav";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let host: HTMLDivElement;
@@ -35,20 +52,37 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 const mount = async (url: string) => {
   history.replaceState(null, "", url);
   await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
 };
 const nav = () => host.querySelector("nav")!;
+/** Runs `go`, then waits for the Back it causes (history.back() is asynchronous). */
+const popped = (go: () => void) => act(async () => {
+  const pop = new Promise<void>((done, fail) => {
+    const timer = setTimeout(() => fail(new Error("no Back happened")), 1_000);
+    addEventListener("popstate", () => (clearTimeout(timer), done()), { once: true });
+  });
+  go();
+  await pop;
+});
 const category = (label: string) => [...nav().querySelectorAll("button")].find((button) => button.textContent?.startsWith(label))!;
 
 describe("Settings category navigation", () => {
+  it("opens knowledge selection and retains its explicit configuration manager", async () => {
+    await mount("/settings?tab=models&manager=remote");
+    await act(async () => category(t("settings-nav.tab_knowledge")).click());
+    expect(host.querySelector('[data-page="knowledge-selection"]')).not.toBeNull();
+    expect(location.search).toBe("?tab=knowledge&manager=remote");
+    expect(category(t("settings-nav.tab_knowledge")).getAttribute("aria-current")).toBe("page");
+  });
   it("places desktop navigation beside a separately focusable, named content region", async () => {
     await mount("/settings?tab=shortcuts");
     const region = host.querySelector('[role="region"]')!;
     expect(host.querySelector("header nav")).toBeNull();
-    expect(nav().nextElementSibling).toBe(region);
+    expect(nav().parentElement!.nextElementSibling).toBe(region);
     expect(nav().getAttribute("aria-label")).toBe(t("settings.categories"));
     expect(nav().classList.contains("overflow-y-auto")).toBe(true);
     expect(region.classList.contains("overflow-y-auto")).toBe(true);
@@ -79,9 +113,49 @@ describe("Settings category navigation", () => {
 
   it("keeps deep-linked configuration purpose and manager when choosing its category again", async () => {
     await mount("/settings?tab=model-config&purpose=agent.triage&manager=example");
+    expect(location.search).toBe("?tab=models&purpose=agent.triage&manager=example");
+    expect(location.hash).toBe("#settings-model-config");
     expect(host.querySelector('[data-page="model-config"]')?.getAttribute("data-open")).toBe("agent.triage");
-    await act(async () => category(t("settings-nav.tab_model_config")).click());
-    expect(location.search).toBe("?tab=model-config&manager=example");
+    await act(async () => category(t("settings-nav.tab_models")).click());
+    expect(location.search).toBe("?tab=models&manager=example");
+  });
+
+  it("redirects old agent, translation, and assistant links to their new categories", async () => {
+    await mount("/settings?tab=codex");
+    expect(location.pathname + location.search + location.hash).toBe("/settings?tab=agents#settings-codex");
+    expect([...host.querySelectorAll('[data-page="agent"]')].map((el) => el.getAttribute("data-agent"))).toEqual(["claude", "codex", "agy", "omp"]);
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(false);
+    expect(host.querySelector("#settings-claude-body")?.hasAttribute("hidden")).toBe(false);
+    await act(async () => root.render(null));
+    await mount("/settings?tab=translate");
+    expect(location.pathname + location.search + location.hash).toBe("/settings?tab=general#settings-translation");
+    expect(host.querySelector('[data-page="translation"]')).not.toBeNull();
+    await act(async () => root.render(null));
+    await mount("/settings?tab=assistant");
+    expect(location.search).toBe("?tab=persona");
+    expect(host.querySelector('[data-page="persona"]')).not.toBeNull();
+  });
+
+  it("starts with every agent open, and a heading folds just that one", async () => {
+    await mount("/settings?tab=agents");
+    const rows = [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")];
+    expect(rows.map((b) => b.textContent)).toEqual(["Claude Code", "Codex", "Antigravity", "omp"]);
+    expect(rows.map((b) => b.getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true"]);
+    await act(async () => rows[1].click());
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(true);
+    expect(host.querySelector("#settings-claude-body")?.hasAttribute("hidden")).toBe(false);
+    await act(async () => rows[1].click());
+    expect(host.querySelector("#settings-codex-body")?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("scrolls a shared old link to its section in the combined page", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    await mount("/settings?tab=agy");
+    expect(location.hash).toBe("#settings-agy");
+    await act(async () => {});
+    expect(scroll).toHaveBeenCalledWith({ block: "start" });
   });
 
   it("preserves legacy extension deep links", async () => {
@@ -110,6 +184,82 @@ describe("Settings category navigation", () => {
     });
     expect(host.querySelector("nav")).not.toBeNull();
     expect(host.querySelector("h1")?.textContent).toBe(t("settings.title"));
+  });
+
+  it.each([false, true])("opens Sent from the Connectors bottom row and returns to Connectors (phone: %s)", async (phone) => {
+    viewport.phone = phone;
+    await mount("/settings?tab=connectors");
+    expect(nav()?.textContent ?? "").not.toContain(t("settings-sent.entry_label"));
+    const entry = host.querySelector('[data-settings-group="sent"]')!;
+    expect(entry.parentElement?.lastElementChild).toBe(entry);
+    expect(entry.textContent).toContain(t("settings-sent.hint"));
+    await act(async () => entry.querySelector("button")!.click());
+    expect(location.search).toBe("?tab=connectors&connector=-sent");
+    expect(host.querySelector('[data-page="sent"]')).not.toBeNull();
+    expect(host.querySelector('[data-page="connector-detail"]')).toBeNull();
+    expect(host.querySelector('[data-settings-group="sent"]')).toBeNull();
+    const back = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === t("settings-hubconnector.back"))!;
+    await popped(() => back.click());
+    expect(location.search).toBe("?tab=connectors");
+    expect(host.querySelector('[data-settings-group="sent"]')).not.toBeNull();
+  });
+
+  it.each(["/settings?tab=sent", "/settings/sent", "/settings/sent/"])("redirects %s to the secondary Sent page", async (url) => {
+    await mount(url);
+    expect(location.pathname + location.search).toBe("/settings?tab=connectors&connector=-sent");
+    expect(host.querySelector('[data-page="sent"]')).not.toBeNull();
+    expect(category(t("settings-nav.tab_connectors")).getAttribute("aria-current")).toBe("page");
+  });
+
+  it("normalizes a legacy Sent URL reached by browser history while Settings stays mounted", async () => {
+    await mount("/settings?tab=connectors");
+    await act(async () => {
+      history.replaceState(null, "", "/settings/sent");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(location.pathname + location.search).toBe("/settings?tab=connectors&connector=-sent");
+    expect(host.querySelector('[data-page="sent"]')).not.toBeNull();
+  });
+
+  // An item's page is pushed over its category's page (#2800): Back steps out of it one level, its own Back leaves no
+  // entry to come back to, and switching categories adds none.
+  const item = (which: "open" | "close") => [...host.querySelectorAll<HTMLButtonElement>(`[data-item="${which}"]`)].at(-1)!;
+  const browserBack = () => popped(() => history.back());
+  it.each([
+    { name: "wide: Back from an extension returns to the extension list", phone: false, url: "/settings?tab=extensions", steps: [
+      { go: () => act(async () => item("open").click()), at: "?tab=extensions&extension=example", entries: 1 },
+      { go: browserBack, at: "?tab=extensions", entries: 1 },
+      { go: () => act(async () => item("open").click()), at: "?tab=extensions&extension=example", entries: 1 },
+      { go: () => popped(() => item("close").click()), at: "?tab=extensions", entries: 1 },
+    ] },
+    { name: "phone: Back goes from an extension to the extension list, then to the Settings list", phone: true, url: "/settings", steps: [
+      { go: () => act(async () => category(t("settings-nav.tab_extensions")).click()), at: "?tab=extensions", entries: 1 },
+      { go: () => act(async () => item("open").click()), at: "?tab=extensions&extension=example", entries: 2 },
+      { go: browserBack, at: "?tab=extensions", entries: 2 },
+      { go: browserBack, at: "", entries: 2 },
+    ] },
+    { name: "phone: the header's Back from an extension goes to the Settings list", phone: true, url: "/settings", steps: [
+      { go: () => act(async () => category(t("settings-nav.tab_extensions")).click()), at: "?tab=extensions", entries: 1 },
+      { go: () => act(async () => item("open").click()), at: "?tab=extensions&extension=example", entries: 2 },
+      { go: () => popped(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back")}"]`)!.click()), at: "", entries: 2 },
+    ] },
+    { name: "switching categories adds no entries", phone: false, url: "/settings?tab=extensions", steps: [
+      { go: () => act(async () => category(t("settings-nav.tab_general")).click()), at: "", entries: 0 },
+      { go: () => act(async () => category(t("settings-nav.tab_notifications")).click()), at: "?tab=notifications", entries: 0 },
+      { go: () => act(async () => category(t("settings-nav.tab_extensions")).click()), at: "?tab=extensions", entries: 0 },
+    ] },
+  ])("$name", async ({ phone, url, steps }) => {
+    viewport.phone = phone;
+    history.pushState(null, "", "/"); // drops forward entries other cases left, so the length counts this one's
+    await mount(url);
+    const start = history.length;
+    for (const step of steps) {
+      await step.go();
+      expect(location.search).toBe(step.at);
+      expect(history.length - start).toBe(step.entries);
+      expect([...host.querySelectorAll("[data-page=extensions]")].at(-1)?.getAttribute("data-open") ?? null).toBe(step.at.includes("extension=") ? "example" : null);
+    }
+    expect(openedFromSub(history.state)).toBe(false); // no way back into the extension from here
   });
 
   it("returns to the phone list from a shared detail URL without navigating away", async () => {

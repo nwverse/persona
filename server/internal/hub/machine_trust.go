@@ -60,7 +60,7 @@ type machineTrust struct {
 	mu      sync.Mutex
 	pending map[string]time.Time // machine id -> since
 	// leaving is the computers rejected or expired that the manager still reports: no row is a confirmed computer, so
-	// until it lets them go they are kept out as a pending one is (applyDeviceStates drops them from here).
+	// until it lets them go they are kept out as a pending one is (applyDeviceStatesFrom drops them from here).
 	leaving map[string]bool
 	// unknown: the pending computers could not be read (loadMachineTrust); every computer is kept out until they are.
 	// A hub that never read them (tests that do not run it) has none.
@@ -271,6 +271,28 @@ func (h *Hub) rejectMachine(ctx context.Context, id, actor, action string) error
 	return nil
 }
 
+// dropPending ends a pending computer that went without a reject (dropped with the manager that kept it,
+// ownership_moves.go releaseMachines), as rejectMachine ends one: its Persona Link credentials and pairing codes are
+// revoked, and its row and its place among the pending go. A failure is logged; the expiry removes it later.
+func (h *Hub) dropPending(ctx context.Context, id, why string) {
+	ts := h.trustStore()
+	if ts == nil || !h.machinePending(id) {
+		return
+	}
+	revoked, err := h.revokeComputer(ctx, id)
+	if err == nil {
+		err = ts.ForgetMachineTrust(ctx, id)
+	}
+	if err != nil {
+		h.logf("[%s] %s, but it still waits to be confirmed: %v", id, why, err)
+		return
+	}
+	h.setPendingLocal(id, time.Time{}, false)
+	detail, _ := json.Marshal(map[string]any{"credentials_revoked": revoked, "why": why})
+	h.machineAudit(ctx, id, "remove", "hub", detail)
+	h.broadcastMachines()
+}
+
 // machineAudit writes one audit row; a failure is logged, the change stands.
 func (h *Hub) machineAudit(ctx context.Context, id, action, actor string, detail json.RawMessage) {
 	ts := h.trustStore()
@@ -450,7 +472,7 @@ func removeMachineEntry(dir, id string) (bool, error) {
 		if !found {
 			return nil
 		}
-		return o.set("machines", kept)
+		return o.Set("machines", kept)
 	})
 	return found, err
 }

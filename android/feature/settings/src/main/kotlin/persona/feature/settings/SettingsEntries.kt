@@ -59,6 +59,8 @@ data class SettingsServices(
     val feishuBot: persona.core.contracts.api.FeishuBotSettings? = null,
     /** The phone's hub groups (settings › hub); null where there is no real pairing (demo mode). */
     val hubs: HubGroups? = null,
+    /** Settings › hub › SSH Tunnel and Local Proxy of each paired hub; null in demo mode. */
+    val tunnels: HubTunnelSettings? = null,
     /** Pairs one more hub instead of replacing the pairing (settings › hub › "Add hub"). */
     val addHub: PairingService? = null,
     /** Settings › Connectors on the paired hub; null in demo mode. */
@@ -67,7 +69,7 @@ data class SettingsServices(
     val hubUpdates: HubUpdates? = null,
     /** Settings › Managers (the hub's roster of managers and their install codes) on the paired hub; null in demo mode. */
     val managers: HubManagers? = null,
-    /** Settings › Sent as you (what was written in the user's name through the connectors) on the paired hub; null in demo mode. */
+    /** Settings › Connectors › Records sent as you on the paired hub; null in demo mode. */
     val sent: HubSent? = null,
     /** Settings › Translation, kept on this phone; null in demo mode. */
     val translation: TranslationSettings? = null,

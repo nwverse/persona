@@ -412,7 +412,7 @@ export interface LookAvatar {
 }
 
 /**
- * An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+ * An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
  */
 export interface LookPalette {
   primary?: string;
@@ -454,8 +454,8 @@ export interface LookDot {
 }
 
 /**
- * A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
- * app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+ * A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+ * package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
  */
 export interface LookItem {
   id: string;
@@ -888,6 +888,29 @@ export interface UIParams {
   machine?: UIMachine;
   launcher?: UILauncher;
   item?: UIInboxItem;
+}
+
+/**
+ * ui.image's parameters (UI version 6): the hub asks the extension for a picture it drew as a ref, for the ui
+ * contribution that drew it. width is the pixel width the app wants (320, 640, 1280 or 2048; 0 when it says nothing);
+ * the extension may ignore it.
+ */
+export interface UIImageParams {
+  contribution: string;
+  ref: string;
+  width?: number;
+  placement?: Placement;
+}
+
+/**
+ * What ui.image answers: the picture's bytes in base64 (png, jpeg, webp or gif, at most 4 MB decoded and 8192 pixels
+ * a side; the hub reads the type from the bytes, not from mime) and how long the hub may keep it (seconds, 60 when
+ * absent; a camera 5 to 10, a still 86400).
+ */
+export interface UIImage {
+  mime: string;
+  data: string;
+  max_age?: number;
 }
 
 export interface UIMachine {
@@ -2312,8 +2335,11 @@ export interface Review {
   discard?: Action;
 }
 
-export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | (string & {});
-export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar"] as const;
+/**
+ * ring: one day's total and its parts (a donut); stacked_bar: parts side by side to compare (days, people).
+ */
+export type PersonaCardKind = "stat" | "stacked_bar" | "line" | "bar" | "ring" | (string & {});
+export const PERSONA_CARD_KINDS = ["stat", "stacked_bar", "line", "bar", "ring"] as const;
 
 /**
  * The assistant's ```persona-card block (#886): one JSON object. Joins the components in #1850; this form keeps

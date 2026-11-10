@@ -29,10 +29,10 @@ import (
 // (docs/assistant/prompts.md).
 var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "delete_routine", "list_followups",
 	"cancel_followup", "list_places", "save_place", "machines_list", "agents_list", "agent_read", "agent_send", "agent_interrupt", "agent_start", "agent_supervise", "agent_archive", "agent_unarchive", "interaction_answer", "inbox_suggest", "inbox_draft",
-	"kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
+	"inbox_folders", "inbox_move", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
-	"conversation_new", "conversation_send", "task_plan", "task_review",
+	"conversation_new", "conversation_send", "task_plan", "task_review", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete"}
 
 // Tools are the assistant's tools (assistant.tools).
@@ -72,6 +72,12 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	switch call.Name {
 	case "persona_settings":
 		return s.toolPersonaSettings(ctx, call, args) // settings_tool.go
+	case "task_plan", "agent_start":
+		// A task's agent does the work itself (supervise_leader.go); the hub's own starts (an inbox hand-off) are not
+		// a model's call and come through runTool.
+		if err := s.workerRefusal(ctx, call.MachineID, call.SessionID); err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
 	}
 	res, err := s.runTool(ctx, call.MachineID, call.SessionID, call.Name, args)
 	if err != nil {
@@ -91,7 +97,7 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	// Health stays in the health space (docs/assistant/health.md "Isolation"): it writes nothing to the knowledge base,
+	// Health stays in the health space (docs/assistant/health.md "How directories and memory are isolated"): it writes nothing to the knowledge base,
 	// nor changes or starts what is imported into it (kb_history_status only reads).
 	if name == "kb_update" || strings.HasPrefix(name, "kb_history_") && name != "kb_history_status" {
 		if space, _ := s.selfSpace(ctx, self); space == SpaceHealth {
@@ -106,9 +112,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 	case "view_show", "view_update", "view_get":
 		return s.toolView(ctx, machine, self, name, args)
 	case "task_plan":
-		return s.toolTaskPlan(ctx, self, args)
+		return s.toolTaskPlanFrom(ctx, machine, self, args)
 	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback":
 		return s.toolModelProfile(ctx, self, name, args)
+	case "task_start_screen": // a failed start's kept tab (start_remedy.go)
+		return s.toolTaskStartScreen(ctx, self, args)
+	case "task_start_keys":
+		return s.toolTaskStartKeys(ctx, self, args)
+	case "task_retry":
+		return s.toolTaskRetry(ctx, self, args)
 	case "task_review":
 		res, err := s.toolTaskReview(ctx, self, args) // supervise_review.go
 		if err == nil {
@@ -138,6 +150,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolInboxDraft(ctx, self, args)
 	case "inbox_suggest":
 		return s.toolInboxSuggest(ctx, self, args)
+	case "inbox_folders":
+		return s.toolInboxFolders(ctx, args) // inbox_folders.go
+	case "inbox_move":
+		return s.toolInboxMove(ctx, args)
 	case "notify_user":
 		var a struct{ Title, Body string }
 		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Title+a.Body) == "" {
@@ -148,7 +164,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		// Asked for explicitly: every device, the Feishu bot too, and no separate push when this turn ends.
 		s.push(ctx, Notification{Subtitle: "Persona", DeviceID: machine, SessionID: self, Title: a.Title, Body: a.Body, Asked: true})
-		s.channelsPushed(machine, self, a.Title, a.Body) // the Feishu bot and the channels with pushes on (channels.go)
+		// The Feishu bot and the channels with pushes on (channels_handler.go).
+		s.channelsPushed(machine, self, a.Title, a.Body)
 		s.promoteSupervision(self)
 		return "Notification sent.", nil
 	case "conversations_list":
@@ -212,6 +229,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			DismissNotice bool `json:"dismiss_notice"`
 			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go).
 			Task *sendTask `json:"task"`
+			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
+			Attachments []string `json:"attachments"`
 		}
 		_ = json.Unmarshal(args, &a)
 		am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
@@ -227,6 +246,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if strings.TrimSpace(a.Text) == "" {
 			return "", fmt.Errorf("text is empty")
+		}
+		atts, err := cleanAttachments(a.Attachments)
+		if err == nil {
+			atts, err = s.checkAttachments(ctx, machine, self, atts)
+		}
+		if err != nil {
+			return "", fmt.Errorf("%w; nothing was sent", err)
 		}
 		if a.Task != nil { // refused before the user is asked to confirm a send that would not go
 			if err := s.sendTaskAllowed(ctx, self, am, c, *a.Task, a.Text); err != nil {
@@ -253,20 +279,28 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				text = prompts.RenderSideConversation(prompts.SideConversation{From: self, Text: a.Text})
 			}
 		}
+		// The user's attachments, copied to the agent's computer when it is another one: the text ends with them, the
+		// pictures in the <attached_images> block a picture sent straight to the agent ends with (#2437).
+		params := sendParams(c.SessionID, text, a.DismissNotice)
+		var handed handedAttachments
+		if mentioned := s.mentionedAttachments(ctx, machine, self, a.Text, atts); len(atts)+len(mentioned) > 0 {
+			handed = s.handAttachments(ctx, machine, am.ID, atts, mentioned)
+			params["text"] = withAttachments(text, handed)
+		}
 		if c.Status != proto.StatusOffline {
-			if err := s.call(ctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, text, a.DismissNotice), nil); err != nil {
+			if err := s.call(ctx, am.ID, DeviceSessionSend, params, nil); err != nil {
 				return "", task.sendFailed(ctx, s, err)
 			}
-			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + task.sent(ctx, s, a.Text), nil
+			return fmt.Sprintf("Sent to %s on %s.", agentLabel(c), am.Name) + handed.said() + task.sent(ctx, s, a.Text), nil
 		}
 		// Not running (a finished task's agent is closed: hub tasks_close.go): its node resumes it first, which can
 		// take minutes and goes on if this call stops waiting.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
-		if err := s.call(sctx, am.ID, DeviceSessionSend, sendParams(c.SessionID, text, a.DismissNotice), nil); err != nil {
+		if err := s.call(sctx, am.ID, DeviceSessionSend, params, nil); err != nil {
 			return "", task.sendFailed(sctx, s, err)
 		}
-		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + task.sent(sctx, s, a.Text), nil
+		return fmt.Sprintf("Resumed %s on %s (same session, directory and launcher) and sent.", agentLabel(c), am.Name) + handed.said() + task.sent(sctx, s, a.Text), nil
 	case "agent_interrupt":
 		return s.toolAgentInterrupt(ctx, machine, self, args) // agent_control.go
 	case "agent_supervise":
@@ -286,6 +320,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				Branch string `json:"branch"`
 			} `json:"worktree"`
 			Ultracode bool `json:"ultracode"`
+			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
+			Attachments []string `json:"attachments"`
 		}
 		_ = json.Unmarshal(args, &a)
 		am, ok := s.machineByName(ctx, a.Machine)
@@ -296,7 +332,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Model = strings.TrimSpace(a.Model); a.Model != "" && !proto.ValidModelID(a.Model) {
 			return "", fmt.Errorf("model %q is not a model id: %s; no agent was started", a.Model, proto.ModelIDRule)
 		}
+		atts, err := cleanAttachments(a.Attachments)
+		if err == nil {
+			atts, err = s.checkAttachments(ctx, machine, self, atts)
+		}
+		if err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
 		a.Cwd = proto.ExpandHome(a.Cwd, am.Home)
+		own := startPick{launcher: strings.TrimSpace(a.Launcher), effort: strings.TrimSpace(a.Effort)} // before the tier
 		// The tier is resolved first (an unknown one asks and starts nothing), then Model Settings' Agents laid over it as
 		// the start lays it: what runs is said on the card (a hand-off from the health space asks) and in the answer.
 		tier, runs := strings.TrimSpace(a.Tier), ""
@@ -317,12 +361,30 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				}
 			}
 		}
+		// What it runs on this computer, before the user is asked (#2640, launcher_fit.go): a launcher named here that
+		// the computer lacks starts nothing; a default it lacks gives way to one it has, and the card and answer say so.
+		run := map[string]any{"launcher": a.Launcher, "model": a.Model, "effort": a.Effort}
+		if err := s.applyModel(ctx, "agent.new", run); err != nil {
+			return "", err
+		}
+		swapped, err := s.fitLauncher(ctx, am, own, run)
+		if err != nil {
+			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if swapped != "" {
+			a.Launcher, _ = run["launcher"].(string)
+			a.Model, _ = run["model"].(string)
+			a.Effort, _ = run["effort"].(string)
+			tier, runs = "", "" // the tier's launcher is not what runs
+		}
 		branch := strings.TrimSpace(a.Worktree.Branch)
 		where := am.Name + " · " + a.Cwd
 		if branch != "" {
 			where += i18n.T(s.lang(ctx), "assistant-tools.new_worktree", i18n.Args{"branch": branch})
 		}
 		switch { // the user sees what it will run on before saying yes
+		case swapped != "":
+			where += " · " + swapped
 		case runs != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
@@ -367,6 +429,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if runs != "" {
 			note = " Preset " + tier + ": runs on " + runs + "." + note
 		}
+		if swapped != "" {
+			note = " Note: " + swapped + "." + note
+		}
 		if branch != "" { // the machine's engine makes the worktree (herdr's or Orca's own), the agent starts in it
 			wt, err := s.newWorktree(sctx, am.ID, a.Cwd, branch)
 			if err != nil {
@@ -375,6 +440,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			a.Cwd = wt.Path
 			params["cwd"], params["workspace_id"] = wt.Path, wt.WorkspaceID
 			note = fmt.Sprintf(" It runs in a new worktree on branch %s.", wt.Branch) + note
+		}
+		// The user's attachments, after any detour: to the machine the agent starts on (#2437).
+		if mentioned := s.mentionedAttachments(ctx, machine, self, a.Prompt, atts); len(atts)+len(mentioned) > 0 {
+			handed := s.handAttachments(sctx, machine, am.ID, atts, mentioned)
+			params["prompt"] = withAttachments(params["prompt"].(string), handed)
+			note += handed.said()
 		}
 		// Remember the sessions already there, so an unanswered start can adopt only the session it created:
 		// UpdatedAt is last sign of life, so a cwd match alone could be another agent already busy there. The
@@ -542,9 +613,34 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if err := json.Unmarshal(args, &a); err != nil || len(a.Questions) == 0 {
 		return "", fmt.Errorf("questions are required")
 	}
+	var da askDeadlineArgs
+	if err := json.Unmarshal(args, &da); err != nil {
+		return "", fmt.Errorf("arguments: %v", err) // a deadline or reversible of the wrong type is no deadline to ignore
+	}
+	now := time.Now()
+	deadline, err := readAskDeadline(da, now)
+	if err != nil {
+		return "", err
+	}
+	expires := now.Add(askUserWait)
+	if !deadline.At.IsZero() {
+		// The deadline is kept as a time in the question's arguments (askDeadlineOf reads it back when it expires), and
+		// the card waits no longer than it.
+		var m map[string]any
+		if err := json.Unmarshal(args, &m); err != nil {
+			return "", fmt.Errorf("arguments: %v", err)
+		}
+		m["deadline"] = deadline.At.Format(time.RFC3339Nano)
+		if args, err = json.Marshal(m); err != nil {
+			return "", err
+		}
+		if deadline.At.Before(expires) {
+			expires = deadline.At
+		}
+	}
 	ix := proto.Interaction{
 		ID: "ix_" + randomHex(6), MachineID: machine, SessionID: sessionID, SessionTitle: "Persona", Kind: proto.IxQuestion, CanCancel: true,
-		ToolName: "ask_user", ToolInput: args, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(askUserWait).UTC(),
+		ToolName: "ask_user", ToolInput: args, CreatedAt: now.UTC(), ExpiresAt: expires.UTC(),
 	}
 	if c, ok := s.session(ctx, machine, sessionID); ok {
 		ix.Cwd = c.Cwd
@@ -555,6 +651,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	for _, q := range a.Questions {
 		ix.Questions = append(ix.Questions, proto.Question{Question: q.Question, Header: q.Header, MultiSelect: q.MultiSelect, Options: q.Options})
 	}
+	markRecommended(s.lang(ctx), s.location(ctx), ix.Questions, deadline)
 	// Answers come back keyed by question text: two questions with the same text would lose one answer.
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
@@ -573,7 +670,7 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
 		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
 		if err == nil {
-			return prompts.RenderQuestionMovedToTodo(prompts.QuestionMovedToTodo{TodoID: t.ID, Title: t.Title}), nil
+			return s.askExpiredResult(context.WithoutCancel(ctx), ix, t, deadline), nil
 		}
 		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}

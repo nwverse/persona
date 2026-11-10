@@ -84,12 +84,15 @@ type fakeHub struct {
 	agents       int
 	offline      map[string]bool
 	failStart    error
-	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
-	failWorktree error            // worktree.create's answer when set
-	slowStart    bool             // session.start blocks until the call's context ends, then answers with its error (a node that builds the session before answering late)
-	judged       int              // the done judge's calls to the model
-	judge        string           // what they answer ("": an error)
-	outcome      string           // what the outcome model answers (todo_outcome.go; "": an error)
+	worktrees    []map[string]any          // worktree.prepare / worktree.create params, {"method": …} added
+	failWorktree error                     // worktree.create's answer when set
+	slowStart    bool                      // session.start blocks until the call's context ends, then answers with its error (a node that builds the session before answering late)
+	judged       int                       // the done judge's calls to the model
+	judge        string                    // what they answer ("": an error)
+	judgeFails   int                       // the done judge's next calls that fail before f.judge answers
+	judgeAsked   []string                  // what the done judge was given (its input)
+	judgeBy      func(input string) string // when set, what the done judge answers to its input (instead of f.judge)
+	outcome      string                    // what the outcome model answers (todo_outcome.go; "": an error)
 	outcomeAsked []modelCall
 	retired      []string // session.retire's session ids
 	retireErr    error
@@ -223,6 +226,12 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	var a map[string]any
 	_ = json.Unmarshal(p.Params, &a)
 	switch p.Method {
+	case "fs.stat":
+		var stats []map[string]string
+		for _, path := range a["paths"].([]any) {
+			stats = append(stats, map[string]string{"path": path.(string), "kind": "dir"})
+		}
+		return json.Marshal(map[string]any{"stats": stats})
 	case DeviceSessionSendOnce:
 		if sid, _ := a["session_id"].(string); f.failSendOnce[p.Device+"/"+sid] != nil {
 			return nil, f.failSendOnce[p.Device+"/"+sid]
@@ -680,6 +689,9 @@ func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 func (noPlans) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
 }
+func (noPlans) TaskPlans(context.Context, string) ([]db.TaskPlanRow, error) {
+	return nil, nil
+}
 func (noPlans) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
 }
@@ -1068,7 +1080,16 @@ func (f *fakeHub) fakeModel(t *testing.T) {
 			reply, fail = f.outcome, f.outcome == ""
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
+			f.judgeAsked = append(f.judgeAsked, user)
 			reply, fail = f.judge, f.judge == ""
+			if f.judgeBy != nil {
+				reply = f.judgeBy(user)
+				fail = reply == ""
+			}
+			if f.judgeFails > 0 {
+				f.judgeFails--
+				fail = true
+			}
 		case f.noModel:
 			fail = true
 		default:

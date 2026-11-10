@@ -1,36 +1,36 @@
-// Settings › Extensions (docs/extensions/extensions.md "App: Settings › Extensions", iOS ExtensionsView / ExtensionDetailView): the hub's extensions (built in,
-// from hub.json, installed on the hub's machine) and their states; an extension's page has its switch, its settings as a
-// form drawn from its schema (`form.fields`, saved as a whole), its secrets (typed in, never shown again), what it
-// contributes, what it may do and where it came from. An extension written in hub.json is only looked at here. Installing,
-// upgrading and removing are done on the hub's side (`personad extension` on its machine, or its admin UI at /admin).
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { enc, errorText } from "../../lib/api";
+// Settings › Extensions: all sources use the host-owned layout in ExtensionSettingsPage.
+// This controller owns manager routing, configuration drafts, authentication and mutation results;
+// extensions supply only their configuration fields and custom content (docs/extensions/extension-settings.md).
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { defaultManager, pinManagerAt, useKnownDefault } from "../../lib/manager-choice";
 import { groupByManager, multiManager, useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useStore } from "../../lib/store";
 import { EXTENSIONS_CHANGED } from "../../lib/extension-prompts";
 import { operations, operationsListed, opOf, watchOperations } from "../../lib/extension-operations";
-import { marketOf, extensionsRoute, routeSub } from "../../lib/extension-market";
-import { ago } from "../../lib/format";
+import { extensionsRoute, routeSub } from "../../lib/extension-market";
 import { composing } from "../../lib/send-history";
 import {
-  changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
-  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
-  channelOf, machineStatus, nodeProgramStatus, sandboxEgress, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, upgradeAction, upgradeDetail, upgradeNote, valueAt,
+  asksFirst, changed, checkError, choiceLabel, clearedSecrets, clearExtensionSecret, compact, configError, fieldLabel, fieldTitle, isDirty, listItems, listExtensionsInfo, listSummary, numberProblems,
+  placeholder, extensionDetail, extensionState, extensionTone, pointText, readNumber, rebaseDraft, runNote, same, secretState, setAt, setContribution, setExtensionConfig, setExtensionEnabled,
+  channelOf, machineStatus, nodeProgramStatus, pickerChoices, sandboxEgress, sandboxState, saveFooter, setExtensionAutoUpgrade, setExtensionSecret, sourceText, stateLine, valueAt,
   type HubExtension, type HubExtensionDetail, type Json, type JsonObject, type ExtensionField, type ExtensionNodeState, type ExtensionSandbox, type ExtensionSecret,
+  type PickerLauncher,
 } from "../../lib/extensions";
+import { loadLaunchers } from "../../lib/launcher-list";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { TriageRuleField } from "../../ui/TriageRuleField";
 import { Icon } from "../../ui/icons";
 import { ChannelLink } from "./Channels";
 import { MarketCatalog, MarketItem, Markets, UninstallDialog } from "./ExtensionMarket";
+import { ExtensionSettingsPage } from "./ExtensionSettingsPage";
 import { ExtensionUI } from "./ExtensionView";
 import { ExtensionConnectorInbox } from "./HubConnector";
-import { getAuth, listAuthNote, onAuthChange, shownPages, signInAsked, takeSignIn, toolText, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
+import { getAuth, listAuthNote, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
 import { AuthGroup } from "./ExtensionAuth";
 import { dependencyText, dependentError, type Contribution, type Dependent } from "../../lib/extension-model";
-import { Group, Pill, Row, Switch } from "./SettingsParts";
+import { Group, Pill, Row, Switch, SettingsHint } from "./SettingsParts";
 import { ManagerHeading } from "../ManagerParts";
 import { formatList, t } from "../../i18n";
 
@@ -175,7 +175,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
     const mine = ++reads.current;
     setLoading(true);
     listExtensionsInfo()
-      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError("")))
+      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError(""), dropGone(r.extensions)))
       .catch((e) => mine === reads.current && setError(errorText(e)))
       .finally(() => mine === reads.current && setLoading(false));
   };
@@ -208,6 +208,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
   // with several managers, each one's extensions under its name (docs/assistant/managers.md "Clients"); one: as before
   const roster = useRoster();
   const groups = groupByManager(extensions ?? [], roster, (x) => x.manager);
+  const drafts = useUnsaved();
 
   return (
     <>
@@ -216,7 +217,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
       </p>
       {/* Extension market first, above the installed list (#5017): where a phone or a browser gets another extension. */}
       {markets && (
-        <Group title={t("settings-extensions.market_title")} footer={t("settings-extensions.market_footer")}>
+        <Group title={t("settings-extensions.market_title")} footer={t("settings-extensions.market_footer")} anchor="market">
           <Row
             label={
               <span className="flex items-center gap-2">
@@ -238,6 +239,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
         </Group>
       )}
       <Group
+        anchor="extensions"
         title={
           <span className="flex items-center gap-2">
             {t("settings-extensions.title")}
@@ -245,7 +247,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           </span>
         }
         right={<IconButton icon="retry" label={t("settings-extensions.refresh")} onClick={load} disabled={loading} size={24} iconSize={13} className="-mb-1" />}
-        footer={t("settings-extensions.list_footer")}
+        footer={markets ? t("settings-extensions.list_footer_market") : t("settings-extensions.list_footer")}
       >
         {!extensions && !error && (
           <div className="px-4 py-3">
@@ -277,6 +279,10 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
           ),
           ...g.items.map((p) => {
             const i = (extensions ?? []).indexOf(p);
+            const kept = drafts.has(unsavedKey(p.id, p.manager));
+            // the kept edits' mark goes before what is still missing, not instead of it
+            const needs = p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : "";
+            const note = p.error || [kept ? t("settings-extensions.unsaved") : "", needs].filter(Boolean).join(" · ") || p.description;
             return (
               <button
                 key={`${p.manager ?? ""}:${p.id}`}
@@ -293,9 +299,9 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
                     <span className="truncate text-[13px] text-ink">{p.name}</span>
                     {p.source && p.source !== "installed" && <Pill>{sourceText(p.source)}</Pill>}
                   </div>
-                  {(p.needs_setup?.length || p.error || p.description) && (
-                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : p.needs_setup?.length ? "text-orange" : "text-ink-3")}>
-                      {p.error || (p.needs_setup?.length ? t("settings-extensions.needs_setup", { items: formatList(p.needs_setup, NARROW_LIST) }) : p.description)}
+                  {note && (
+                    <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : kept || needs ? "text-orange" : "text-ink-3")}>
+                      {note}
                     </div>
                   )}
                 </div>
@@ -320,50 +326,83 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
 /** A number field as typed, by dotted path, until it reads as one. */
 type Typed = Record<string, { text: string; integer: boolean }>;
 
-/**
- * A market extension's upgrades (docs/extensions/extensions.md "Auto-upgrade"): its own switch, its newer version (opening the market's
- * upgrade when it waits for the user) or what happened last. The App's "Upgrades" section.
- */
-function UpgradeGroup({ p, busy, onToggle, onUpgrade }: { p: HubExtension; busy: boolean; onToggle: (on: boolean) => void; onUpgrade: (market: string, id: string) => void }) {
-  const u = p.upgrade;
-  const note = !u && p.upgrade_note ? upgradeNote(p.upgrade_note) : null;
-  const action = u ? upgradeAction(u) : null;
-  // Switched off, the extension is not upgraded: its own switch shows off and waits (kept by the hub) until it is on.
-  const paused = !!p.auto_upgrade_paused;
-  const line = (title: string, detail: string, attention: boolean) => (
-    <div className="min-w-0 flex-1">
-      <div className="text-[13px] text-ink">{title}</div>
-      {detail && <div className={cx("mt-0.5 text-[11.5px] leading-snug", attention ? "text-orange" : "text-ink-3")}>{detail}</div>}
-    </div>
-  );
-  return (
-    <Group title={t("settings-extensions.upgrade_title")} footer={t(paused ? "settings-extensions.upgrade_paused_footer" : "settings-extensions.upgrade_footer")}>
-      <div className="flex items-center gap-3 px-4 py-2.5">
-        <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t("settings-extensions.auto_upgrade")}</span>
-        <Switch on={!paused && (p.auto_upgrade ?? true)} onChange={onToggle} disabled={busy || paused} label={t("settings-extensions.auto_upgrade")} />
-      </div>
-      {u &&
-        (action ? (
-          <button type="button" onClick={() => onUpgrade(u.market, u.id)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover">
-            {line(t("settings-extensions.new_version", { version: u.to }), upgradeDetail(u), u.state === "needs_permission" || u.state === "skipped")}
-            <span className="shrink-0 whitespace-nowrap text-[12.5px] text-accent-ink">{action}</span>
-            <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
-          </button>
-        ) : (
-          <div className="flex items-center gap-3 px-4 py-2.5">{line(t("settings-extensions.new_version", { version: u.to }), upgradeDetail(u), false)}</div>
-        ))}
-      {note && p.upgrade_note && <div className="flex items-center gap-3 px-4 py-2.5">{line(note, ago(p.upgrade_note.at), p.upgrade_note.kind === "rolled_back")}</div>}
-    </Group>
-  );
-}
-
 /** Requests about extension id (its details, settings, models, pages) go to manager while the view is open: the same
  *  id may be installed under several managers (each one's built-ins), and the default's own keep going to it elsewhere. */
 function usePinnedExtension(id: string, manager: string | undefined) {
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
 }
 
-function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, onConnector }: {
+// ── unsaved configuration ──────────────────────────────────
+
+/** A form's unsaved edits: the draft and the configuration it was made on (`base`), so that only what the user changed is
+ *  put back on a newer read (lib/extensions.ts rebaseDraft). */
+type Unsaved = { base: JsonObject; draft: JsonObject; typed: Typed };
+
+/** Configuration edits not saved yet, by manager and extension (`unsavedKey`). They stay in memory while the page is
+ *  closed, so leaving it any way (another extension, another category or page, Back) and coming back finds them on top of
+ *  the configuration read then; saving or Revert drops them, and so does a new credential. Never written to storage: a
+ *  reload asks first instead. */
+const unsaved = new Map<string, Unsaved>();
+/** A detail without a configuration: one object, so reading it again is not a change. */
+const NO_CONFIG: JsonObject = {};
+const unsavedListeners = new Set<() => void>();
+let unsavedVersion = 0;
+
+/** The default manager's extension has no manager in its route (the list's rows, OwnedExtension): both name it "". */
+const unsavedOwner = (manager?: string) => (manager && manager !== defaultManager() ? manager : "");
+const unsavedKey = (id: string, manager?: string) => `${unsavedOwner(manager)}|${id}`;
+
+function warnUnsaved(e: BeforeUnloadEvent) {
+  e.preventDefault();
+  e.returnValue = true; // browsers before preventDefault() counted here (Chrome before 119) ask only when it is set
+}
+
+function unsavedChanged() {
+  unsavedVersion++;
+  if (unsaved.size) addEventListener("beforeunload", warnUnsaved);
+  else removeEventListener("beforeunload", warnUnsaved);
+  unsavedListeners.forEach((l) => l());
+}
+
+/** Keep an extension's unsaved edits, or drop them (null). The list and the reload prompt follow whether any are kept. */
+function keepUnsaved(key: string, kept: Unsaved | null) {
+  const had = unsaved.has(key);
+  if (kept) unsaved.set(key, kept);
+  else unsaved.delete(key);
+  if (had !== unsaved.has(key)) unsavedChanged();
+}
+
+/** After the list is read: the kept edits of an extension it no longer has (uninstalled while its page was closed) go, or
+ *  a reload would keep asking about edits nobody can open. Only for managers the list has rows of: another one may just
+ *  not have answered. */
+function dropGone(list: HubExtension[]) {
+  const there = new Set(list.map((x) => unsavedKey(x.id, x.manager)));
+  const owners = new Set(list.map((x) => unsavedOwner(x.manager)));
+  const gone = [...unsaved.keys()].filter((k) => !there.has(k) && owners.has(k.slice(0, k.indexOf("|"))));
+  if (!gone.length) return;
+  gone.forEach((k) => unsaved.delete(k));
+  unsavedChanged();
+}
+
+// Signing out or pairing again: another person's hub (or none), so the edits are not theirs.
+subscribeCredentialOwner(() => {
+  if (!unsaved.size) return;
+  unsaved.clear();
+  unsavedChanged();
+});
+
+function subscribeUnsaved(listener: () => void) {
+  unsavedListeners.add(listener);
+  return () => void unsavedListeners.delete(listener);
+}
+
+/** The kept edits, redrawn when an extension gains or loses them. */
+function useUnsaved(): ReadonlyMap<string, Unsaved> {
+  useSyncExternalStore(subscribeUnsaved, () => unsavedVersion);
+  return unsaved;
+}
+
+function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChannel, onConnector }: {
   id: string;
   /** Whose extension it is (several managers); none: the default's. */
   manager?: string;
@@ -374,6 +413,8 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   onConnector?: (id: string, manager?: string) => void;
 }) {
   usePinnedExtension(id, manager);
+  const roster = useRoster();
+  const offline = roster?.managers.find((m) => m.id === (manager || defaultManager()))?.online === false;
   const [removing, setRemoving] = useState(false);
   const [detail, setDetail] = useState<HubExtensionDetail | null>(null);
   const [error, setError] = useState("");
@@ -388,8 +429,9 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
-  const [leaving, setLeaving] = useState(false);
   const [dependents, setDependents] = useState<Dependent[] | null>(null);
+  // Switching a pack off takes its members along: they are named before anything changes (#1830).
+  const [packOff, setPackOff] = useState(false);
 
   const apply = (d: HubExtensionDetail) => {
     setDetail(d);
@@ -440,15 +482,43 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
 
   const problems = useMemo(() => numberProblems(typed), [typed]);
   const dirty = !!detail && (isDirty(draft, detail.config) || Object.keys(problems).length > 0);
-  const canSave = dirty && !Object.keys(problems).length && !saving;
+  const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
   const fields = detail?.form?.fields ?? [];
-  const editable = !!detail && !detail.read_only;
+  const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
+
+  // The draft is the user's edits on top of `base`, the configuration last read (null until the page's first read is
+  // shown). Each newer configuration the hub sends (another device's or app's change, an upgrade, a save) takes the
+  // fields the user did not touch, so the form never shows or saves back an old value of them; the touched ones keep
+  // the edit. Edits outlive the page: kept while the form is dirty, and put back on the first read of the next visit,
+  // where the save bar shows them as unsaved. Saving or Revert leaves the form clean, which drops them.
+  const keptKey = unsavedKey(id, manager);
+  const base = useRef<JsonObject | null>(null);
+  useEffect(() => {
+    if (base.current) keepUnsaved(keptKey, dirty ? { base: base.current, draft, typed } : null);
+  }, [keptKey, dirty, draft, typed]);
+  const config = detail ? (detail.config ?? NO_CONFIG) : null;
+  useEffect(() => {
+    if (!config) return;
+    const edits = base.current ? { base: base.current, draft, typed } : unsaved.get(keptKey);
+    base.current = config;
+    if (!edits) return;
+    const next = rebaseDraft(edits, config);
+    setDraft(next.draft);
+    setTyped(next.typed);
+  }, [config, keptKey]);
+  /** Back to the list once the extension is gone (uninstalled here or elsewhere): its edits go with it. */
+  const onBack = () => {
+    base.current = null;
+    keepUnsaved(keptKey, null);
+    back();
+  };
 
   // An operation of this extension that succeeds while the page is open (an upgrade, also the hub's auto-upgrade, or
   // an install or uninstall from another device): its version, upgrades and permissions are read again. A dirty form
-  // keeps its draft, as a switch does; an uninstall goes back to the list. Those that ended before the page opened
-  // are not acted on: when this page is the first to start listening, the hub's list (which keeps ended operations a
-  // while) arrives after it opened, and what it brings that was not pushed meanwhile is old.
+  // keeps the user's edits, as a switch does (the fields not touched follow the new read); an uninstall goes back to
+  // the list. Those that ended before the page opened are not acted on: when this page is the first to start listening,
+  // the hub's list (which keeps ended operations a while) arrives after it opened, and what it brings that was not
+  // pushed meanwhile is old.
   const dirtyNow = useRef(dirty);
   dirtyNow.current = dirty;
   const backNow = useRef(onBack);
@@ -544,9 +614,11 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
       // A switch never overwrites the unsaved configuration draft.
       wrote(n, d);
       setDependents(null);
+      setPackOff(false);
       toast(t(on ? "settings-extensions.enabled_name" : "settings-extensions.disabled_name", { name: d.name }), "ok");
     } catch (e) {
       const deps = dependentError(e);
+      setPackOff(false);
       if (!on && deps) setDependents(deps);
       else toast(t(on ? "settings-extensions.enable_failed" : "settings-extensions.disable_failed", { error: errorText(e) }), "error");
     } finally {
@@ -582,32 +654,22 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
   };
   const computers = !!detail?.contributes?.computer;
   const nodes = detail?.node_machines ? { field: detail.node_machines, states: detail.nodes ?? [] } : undefined;
+  const launchers = useFormLaunchers(!!detail?.form?.fields?.some((f) => f.format === "launcher" || f.fields?.some((g) => g.format === "launcher")), detail?.id);
 
   // A secret's answer is a whole detail too; keep the form's draft as it is.
   // The dialog's request is numbered as it leaves, like the page's own writes.
   const secretStart = () => writing();
   const secretDone = (n: number, d: HubExtensionDetail) => wrote(n, d);
 
-  const back = () => (dirty ? setLeaving(true) : onBack());
   const p = detail;
 
   return (
-    <div className={cx(dirty && "pb-16")}>
+    <div>
       <div className="relative mb-3 flex items-center gap-2">
+        {/* unsaved edits stay (the list marks them); Revert in the save bar drops them */}
         <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2">
           {t("settings-extensions.title")}
         </Button>
-        {leaving && (
-          <span className="absolute top-full left-0 z-10 mt-1 flex items-center gap-1 rounded-control bg-surface p-1 shadow-overlay" style={{ animation: `pop-in 160ms ${EASE} both` }}>
-            <span className="px-2 text-[12px] whitespace-nowrap text-ink-2">{t("settings-extensions.unsaved")}</span>
-            <Button tone="quiet" onClick={() => setLeaving(false)}>
-              {t("settings-extensions.keep_editing")}
-            </Button>
-            <Button tone="danger" onClick={onBack}>
-              {t("settings-extensions.discard")}
-            </Button>
-          </span>
-        )}
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.reload")} onClick={load} disabled={loading} />
       </div>
@@ -638,31 +700,22 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
         )}
       </section>
 
-      {/* a way of talking to Persona: binding it, its switch and where its messages go are on the channel's page */}
-      {p?.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
-
-      {p && onChannel && channelOf(p) && <ChannelLink id={channelOf(p)!} manager={manager} onOpen={onChannel} />}
-
       {p && (
-        <>
-          {p.read_only ? (
-            <Group title={t("settings-extensions.switch_and_settings")}>
-              <div className="flex items-start gap-3 px-4 py-3">
-                <Icon name="lock" size={14} className="mt-0.5 shrink-0 text-ink-3" />
-                <p className="text-[12.5px] leading-relaxed text-ink-2">{t("settings-extensions.read_only")}</p>
-              </div>
-            </Group>
-          ) : (
-            <Group footer={t("settings-extensions.enable_footer")}>
-              <div className="flex items-center gap-3 px-4 py-2.5">
-                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t("settings-extensions.enable")}</span>
-                {toggling && <Spinner />}
-                <Switch on={p.enabled ?? true} onChange={(on) => void toggle(on)} disabled={toggling} label={t("settings-extensions.enable")} />
-              </div>
-            </Group>
-          )}
-
-          {p.auto_upgrade !== undefined && <UpgradeGroup p={p} busy={toggling} onToggle={(on) => void toggleAutoUpgrade(on)} onUpgrade={onUpgrade} />}
+        <ExtensionSettingsPage
+          detail={p}
+          manager={manager}
+          busy={toggling || saving}
+          offline={offline}
+          onEnabled={(on) => (!on && p.pack_members_follow && p.pack_on?.length ? setPackOff(true) : void toggle(on))}
+          onAutoUpgrade={(on) => void toggleAutoUpgrade(on)}
+          onUpgrade={onUpgrade}
+          onUninstall={() => setRemoving(true)}
+          onChecked={async () => { await readDetail((d) => dirtyNow.current ? setDetail(d) : apply(d), (error) => { throw error; }); }}
+          configuration={<>
+          {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
+          {onChannel && channelOf(p) && <ChannelLink id={channelOf(p)!} manager={manager} onOpen={onChannel} />}
+          {!editable && <Group><Row label={t(p.read_only || p.source === "hub.json" ? "settings-extensions.read_only" : "settings-extensions.externally_managed")} wrapHint /></Group>}
+          {editable && !fields.length && !p.secrets?.length && !shownPages(p.ui, p.auth).length && !p.auth && !channelOf(p) && !p.contributes?.connectors?.length && <Group><Row label={t("settings-extensions.no_configuration")} /></Group>}
 
           {shownPages(p.ui, p.auth).length > 0 && (
             <Group title={t("settings-extensions.pages_title")} footer={t("settings-extensions.pages_footer")}>
@@ -687,11 +740,11 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
             <>
               {fieldErrors[""] && <p role="alert" className="mb-3 rounded-[8px] bg-red-tint px-3 py-2 text-[12px] break-words text-red">{t("settings-extensions.not_saved", { error: fieldErrors[""] })}</p>}
               {fields.some((f) => f.type !== "object") && (
-                <Group title={t("settings-extensions.settings_title")} footer={saveFooter(fields)}>
+                <Group footer={saveFooter(fields)}>
                   {fields
                     .filter((f) => f.type !== "object")
                     .map((f) => (
-                      <FieldRow key={f.name} field={f} path={[f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} />
+                      <FieldRow key={f.name} field={f} path={[f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} launchers={launchers} />
                     ))}
                 </Group>
               )}
@@ -700,7 +753,7 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
                 .map((g) => (
                   <Group key={g.name} title={fieldLabel(g)} footer={g.description}>
                     {(g.fields ?? []).map((f) => (
-                      <FieldRow key={f.name} field={f} path={[g.name, f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} />
+                      <FieldRow key={f.name} field={f} path={[g.name, f.name]} draft={draft} typed={typed} errors={fieldErrors} problems={problems} onEdit={edit} onType={type} onSaveNow={saveNow} computers={computers} nodes={nodes} launchers={launchers} />
                     ))}
                   </Group>
                 ))}
@@ -727,6 +780,8 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
             </Group>
           )}
 
+          </>}
+          information={<>
           {!!p.depends?.length && (
             <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
               {p.depends.map((d) => <Row key={d.id} label={d.name || d.id} hint={d.version}><span className={cx(d.state !== "ok" && "text-orange")}>{dependencyText(d)}</span></Row>)}
@@ -741,7 +796,7 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
             <Group title={t("settings-extensions.contributions_title")} footer={t("settings-extensions.contributions_footer")}>
               {p.contributions.map((c) => (
                 <Row key={`${c.point}/${c.id}`} label={c.title || c.id} hint={`${pointText(c.point)} · ${c.id}${c.via === "connector" ? t("settings-extensions.via_connector") : c.via === "config" ? t("settings-extensions.via_config") : ""}`}>
-                  <Switch label={c.title || c.id} on={c.enabled} disabled={!editable || toggling || !c.can_disable} onChange={(on) => void toggleContribution(c, on)} />
+                  <Switch label={c.title || c.id} on={c.enabled} disabled={!editable || toggling || offline || !c.can_disable} onChange={(on) => void toggleContribution(c, on)} />
                 </Row>
               ))}
             </Group>
@@ -771,41 +826,30 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
             </Group>
           )}
 
-          <About d={p} />
-
-          {marketOf(p.origin) && (
-            <Group footer={t("settings-extensions.market_installed_footer")}>
-              <button type="button" onClick={() => setRemoving(true)} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-[13px] whitespace-nowrap text-red transition-colors hover:bg-red-tint">
-                <Icon name="trash" size={13} className="shrink-0" />
-                {t("settings-extensions.uninstall")}
-              </button>
+          </>}
+          saveBar={dirty && (
+            <Group>
+              {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
+              <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
+                <Button tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
+                <Button tone="accent" busy={saving} disabled={!canSave} onClick={() => void save()}>{t("common.save")}</Button>
+              </Row>
             </Group>
           )}
-        </>
+        />
       )}
-      {removing && p && <UninstallDialog id={p.id} name={p.name} pack={p.extension_pack} onClose={() => setRemoving(false)} onDone={onBack} />}
+      {removing && p && <UninstallDialog id={p.id} name={p.name} version={p.version} pack={p.extension_pack} onClose={() => setRemoving(false)} onDone={onBack} />}
+      {packOff && p && !dependents && (
+        <Dialog open title={t("settings-extensions.disable_pack_title", { name: p.name })} onClose={() => !toggling && setPackOff(false)} footer={<><Button tone="quiet" disabled={toggling} onClick={() => setPackOff(false)}>{t("common.cancel")}</Button><Button tone="danger" busy={toggling} onClick={() => void toggle(false)}>{t("settings-extensions.disable_all")}</Button></>}>
+          <p className="text-ink-2">{t("settings-extensions.disable_pack_body", { names: (p.pack_on ?? []).map((m) => m.name || m.id).join(t("settings-extensionmarket.list_separator")) })}</p>
+        </Dialog>
+      )}
       {dependents && p && (
         <Dialog open title={t("settings-extensions.disable_dependents_title", { name: p.name })} onClose={() => !toggling && setDependents(null)} footer={<><Button tone="quiet" disabled={toggling} onClick={() => setDependents(null)}>{t("common.cancel")}</Button><Button tone="danger" busy={toggling} onClick={() => void toggle(false, true)}>{t("settings-extensions.disable_all")}</Button></>}>
           <p className="text-ink-2">{t("settings-extensions.dependents_body", { names: formatList(dependents.map((d) => d.name), NARROW_LIST) })}</p>
         </Dialog>
       )}
 
-      {dirty && (
-        <div className="sticky bottom-3 z-10 mt-2 flex flex-col gap-2 rounded-card bg-surface px-3 py-2 shadow-overlay" style={{ animation: `fade-up 220ms ${EASE} both` }}>
-          {checkFailed && <p role="alert" className="rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] break-words text-red select-text">{t("settings-extensions.not_saved", { error: checkFailed })}</p>}
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-2">
-              {Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}
-            </span>
-            <Button tone="quiet" onClick={revert} disabled={saving}>
-              {t("settings-extensions.revert")}
-            </Button>
-            <Button tone="accent" busy={saving} disabled={!canSave} onClick={() => void save()}>
-              {t("common.save")}
-            </Button>
-          </div>
-        </div>
-      )}
 
       {secret && <SecretDialog extension={id} secret={secret} onClose={() => setSecret(null)} onStart={secretStart} onDone={secretDone} />}
     </div>
@@ -837,59 +881,6 @@ export function SandboxGroup({ s }: { s: ExtensionSandbox }) {
   );
 }
 
-function About({ d }: { d: HubExtensionDetail }) {
-  const source = sourceText(d.source);
-  let home = "";
-  try {
-    home = d.homepage && new URL(d.homepage).protocol === "https:" ? d.homepage : "";
-  } catch {
-    home = "";
-  }
-  return (
-    <Group title={t("settings-extensions.about_title")}>
-      {d.version && <Row label={t("settings-extensions.version")} mono>{d.version}</Row>}
-      {d.previous_version && <Row label={t("settings-extensions.previous_version")} mono>{d.previous_version}</Row>}
-      {source && <Row label={t("settings-extensions.source")}>{source}</Row>}
-      {d.origin && (
-        <Row label={t("settings-extensions.installed_from")} mono>
-          <span className="max-w-[360px] truncate select-text" title={d.origin}>
-            {d.origin}
-          </span>
-        </Row>
-      )}
-      {d.publisher && <Row label={t("settings-extensions.publisher")}>{d.publisher}</Row>}
-      {(d.tools ?? []).map((x) => (
-        <Row
-          key={x.name}
-          label={
-            <span className="flex min-w-0 items-center gap-2">
-              <Icon name="terminal" size={13} className="shrink-0 text-ink-3" />
-              <span className="truncate">{x.title || x.name}</span>
-              {x.title && x.title !== x.name && <span className="shrink-0 font-mono text-[11.5px] text-ink-3">{x.name}</span>}
-            </span>
-          }
-          hint={t("settings-extensions.tool_title")}
-        >
-          {toolText(x)}
-        </Row>
-      ))}
-      {home && (
-        <a href={home} target="_blank" rel="noreferrer noopener" className="flex items-center gap-3 px-4 py-2.5 whitespace-nowrap transition-colors hover:bg-hover">
-          <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t("settings-extensions.homepage")}</span>
-          <span className="min-w-0 truncate text-[12.5px] text-ink-3">{new URL(home).host}</span>
-          <Icon name="external" size={12} className="shrink-0 text-ink-3" />
-        </a>
-      )}
-      {(d.warnings ?? []).map((w) => (
-        <div key={w} className="flex items-start gap-2.5 px-4 py-2.5">
-          <Icon name="info" size={14} className="mt-0.5 shrink-0 text-orange" />
-          <span className="min-w-0 text-[12px] leading-snug break-words text-ink-2">{w}</span>
-        </div>
-      ))}
-    </Group>
-  );
-}
-
 // ── the form ────────────────────────────────────────────
 
 const inputClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -909,6 +900,13 @@ interface FieldProps {
   computers: boolean;
   /** The plugin's program on computers: the field that picks them, and how it is on each (their rows say). */
   nodes?: { field: string; states: ExtensionNodeState[] };
+  /** The hub's launchers, for a field of format launcher. */
+  launchers: FormLaunchers;
+}
+
+interface FormLaunchers {
+  list: PickerLauncher[] | null;
+  loading: boolean;
 }
 
 /** One field of the form, by its type; its title above (or beside a switch), its description and error below. */
@@ -929,19 +927,7 @@ function FieldRow(props: FieldProps) {
     </>
   );
 
-  if (f.type === "boolean") {
-    const v = valueAt(draft, path);
-    const on = typeof v === "boolean" ? v : f.default === true;
-    return (
-      <div className="px-4 py-2.5" data-field={key}>
-        <div className="flex items-center gap-3">
-          <span className="min-w-0 flex-1 text-[13px] text-ink">{title}</span>
-          <Switch on={on} onChange={(x) => onEdit(path, x)} label={fieldLabel(f)} />
-        </div>
-        {below}
-      </div>
-    );
-  }
+  if (f.type === "boolean") return <BooleanField field={f} path={path} draft={draft} onEdit={onEdit} title={title} below={below} />;
 
   return (
     <div className="px-4 py-2.5" data-field={key}>
@@ -954,7 +940,43 @@ function FieldRow(props: FieldProps) {
   );
 }
 
-function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, computers, nodes, id, invalid }: FieldProps & { id: string; invalid: boolean }) {
+/** A boolean's switch, beside its title; with x-confirm, turning it on asks the field's sentence first (turning off is not asked). */
+function BooleanField({ field: f, path, draft, onEdit, title, below }: Pick<FieldProps, "field" | "path" | "draft" | "onEdit"> & { title: string; below: React.ReactNode }) {
+  const [asking, setAsking] = useState(false);
+  const v = valueAt(draft, path);
+  const on = typeof v === "boolean" ? v : f.default === true;
+  return (
+    <div className="px-4 py-2.5" data-field={path.join(".")}>
+      <div className="flex items-center gap-3">
+        <span className="min-w-0 flex-1 text-[13px] text-ink">{title}</span>
+        <Switch on={on} onChange={(x) => (asksFirst(f, x) ? setAsking(true) : onEdit(path, x))} label={fieldLabel(f)} />
+      </div>
+      {below}
+      <TurnOnDialog name={asking ? fieldLabel(f) : null} sentence={f.confirm} onCancel={() => setAsking(false)} onConfirm={() => { onEdit(path, true); setAsking(false); }} />
+    </div>
+  );
+}
+
+/** x-confirm's dialog before something named is turned on: the field's sentence, Cancel and Turn On. Closed while name is null. */
+function TurnOnDialog({ name, sentence, onCancel, onConfirm }: { name: string | null; sentence?: string; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <Dialog
+      open={name !== null}
+      onClose={onCancel}
+      title={name !== null ? t("settings-extensions.turn_on_title", { name }) : undefined}
+      footer={
+        <>
+          <Button tone="quiet" onClick={onCancel}>{t("common.cancel")}</Button>
+          <Button tone="primary" onClick={onConfirm}>{t("settings-extensions.turn_on")}</Button>
+        </>
+      }
+    >
+      <p className="text-[13px] leading-relaxed text-ink-2">{sentence}</p>
+    </Dialog>
+  );
+}
+
+function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, computers, nodes, launchers, id, invalid }: FieldProps & { id: string; invalid: boolean }) {
   const ring = invalid ? "shadow-[inset_0_0_0_1px_var(--red)]" : "shadow-inset-field";
   const v = valueAt(draft, path);
 
@@ -964,6 +986,9 @@ function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, comp
     return <MachineSwitches field={f} path={path} draft={draft} onSaveNow={onSaveNow} computers={computers} nodes={nodes?.field === f.name ? nodes.states : undefined} id={id} />;
   }
   if (f.type === "array") return <ListControl field={f} path={path} draft={draft} onEdit={onEdit} id={id} ring={ring} />;
+  if (f.type === "string" && (f.format === "machine" || f.format === "launcher") && !f.enum?.length) {
+    return <PickerControl field={f} path={path} draft={draft} onEdit={onEdit} launchers={launchers} id={id} ring={ring} />;
+  }
 
   if (f.enum?.length) {
     const at = f.enum.findIndex((c) => v !== undefined && same(c.value, v));
@@ -1016,6 +1041,60 @@ function Control({ field: f, path, draft, typed, onEdit, onType, onSaveNow, comp
   );
 }
 
+/** The hub's launchers for the form's launcher pickers, read once while the page is open (GET /launchers asks every
+ *  machine): null while they load, or when they could not be read. */
+function useFormLaunchers(on: boolean, page: string | undefined): FormLaunchers {
+  const [state, setState] = useState<FormLaunchers>({ list: null, loading: false });
+  useEffect(() => {
+    if (!on) return;
+    let live = true;
+    setState({ list: null, loading: true });
+    loadLaunchers<PickerLauncher>().then(
+      (r) => live && setState({ list: r.launchers, loading: false }),
+      () => live && setState({ list: null, loading: false }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [on, page]);
+  return state;
+}
+
+/** One of the hub's machines (format machine, of the systems x-os names) or launchers (format launcher) by name, "Not set"
+ *  first; a value naming none of them still shows. Launchers that are not in yet, or could not be read, are typed. */
+function PickerControl({ field: f, path, draft, onEdit, launchers, id, ring }: Pick<FieldProps, "field" | "path" | "draft" | "onEdit" | "launchers"> & { id: string; ring: string }) {
+  const machines = useStore((s) => s.machines);
+  const v = valueAt(draft, path);
+  const choices = pickerChoices(f, v, machines, launchers.list);
+  if (!choices) {
+    return (
+      <div className="flex items-center gap-2">
+        <input
+          id={id}
+          value={typeof v === "string" ? v : ""}
+          onChange={(e) => onEdit(path, e.target.value === "" ? undefined : e.target.value)}
+          placeholder={placeholder(f)}
+          spellCheck={false}
+          autoComplete="off"
+          autoCapitalize="off"
+          className={cx(inputClass, ring, "max-w-[320px] font-mono")}
+        />
+        {launchers.loading && <span className="text-[11px] whitespace-nowrap text-ink-3">{t("lib-extensions.launchers_loading")}</span>}
+      </div>
+    );
+  }
+  return (
+    <select id={id} value={typeof v === "string" ? v : ""} onChange={(e) => onEdit(path, e.target.value === "" ? undefined : e.target.value)} className={cx(inputClass, ring, "max-w-[320px]")}>
+      <option value="">{placeholder(f)}</option>
+      {choices.map((c) => (
+        <option key={c.value} value={c.value}>
+          {c.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** A list of texts (each removable, more added), or of choices (each one pressed in or out). */
 /** A list of the hub's machines (format machine): a switch per machine of the systems the field names, by name and how
  *  it is, in effect at once; a value naming no machine still shows, to be turned off. */
@@ -1032,7 +1111,7 @@ function MachineSwitches({ field: f, path, draft, onSaveNow, computers, nodes, i
     if (on) next.push(mid);
     onSaveNow(path, next.length ? next : undefined);
   };
-  const flip = (mid: string, name: string, on: boolean) => (on && f.confirm ? setAsking({ id: mid, name }) : save(mid, on));
+  const flip = (mid: string, name: string, on: boolean) => (asksFirst(f, on) ? setAsking({ id: mid, name }) : save(mid, on));
   // The field picking where the plugin's program runs: a machine switched on says how the program is there.
   const status = (m: (typeof machines)[number]) =>
     nodes && items.includes(m.id) ? `${m.online ? t("settings-extensions.online") : t("settings-extensions.offline")} · ${nodeProgramStatus(nodes.find((n) => n.machine_id === m.id))}` : machineStatus(m, computers);
@@ -1049,19 +1128,7 @@ function MachineSwitches({ field: f, path, draft, onSaveNow, computers, nodes, i
           <Switch on={items.includes(r.id)} onChange={(on) => flip(r.id, r.name, on)} label={r.name} />
         </div>
       ))}
-      <Dialog
-        open={!!asking}
-        onClose={() => setAsking(null)}
-        title={asking ? t("settings-extensions.turn_on_title", { name: asking.name }) : undefined}
-        footer={
-          <>
-            <Button tone="quiet" onClick={() => setAsking(null)}>{t("common.cancel")}</Button>
-            <Button tone="primary" onClick={() => { if (asking) save(asking.id, true); setAsking(null); }}>{t("settings-extensions.turn_on")}</Button>
-          </>
-        }
-      >
-        <p className="text-[13px] leading-relaxed text-ink-2">{f.confirm}</p>
-      </Dialog>
+      <TurnOnDialog name={asking?.name ?? null} sentence={f.confirm} onCancel={() => setAsking(null)} onConfirm={() => { if (asking) save(asking.id, true); setAsking(null); }} />
     </div>
   );
 }

@@ -24,21 +24,21 @@ var offlineCache struct {
 	list []proto.Session
 }
 
-// offline lists recent transcripts without a live agent; the directory scan is cached for 20s.
-func (n *Node) offline(live map[string]bool) []proto.Session {
+// appendOffline appends to dst the recent transcripts without a live agent, straight into the caller's list (sessionList's);
+// the directory scan is cached for 20s.
+func (n *Node) appendOffline(dst []proto.Session, live map[string]bool) []proto.Session {
 	offlineCache.Lock()
 	defer offlineCache.Unlock()
 	if time.Since(offlineCache.at) > 20*time.Second || offlineCache.home != n.offlineCacheKey() {
 		offlineCache.list = n.scanOffline()
 		offlineCache.at, offlineCache.home = time.Now(), n.offlineCacheKey()
 	}
-	var out []proto.Session
-	for _, s := range offlineCache.list {
-		if !live[s.SessionID] {
-			out = append(out, s)
+	for i := range offlineCache.list {
+		if !live[offlineCache.list[i].SessionID] {
+			dst = append(dst, offlineCache.list[i])
 		}
 	}
-	return out
+	return dst
 }
 
 // setKept replaces the sessions that are always listed; the next list has them.
@@ -67,11 +67,20 @@ func (n *Node) scanOffline() []proto.Session {
 	var out []proto.Session
 	files := n.globProjects("*", "*.jsonl")
 	n.maybePruneGoneMetas(files)
+	// Which count a transcript is listed under: the assistant's conversations are counted on their own (a script running
+	// `claude -p` hundreds of times a day filled the 80 newest with its sessions, and the "Chat" tab lost every conversation
+	// quieter than a couple of hours, #2105); kept ones are not counted.
+	const (
+		others = iota
+		assistants
+		keptOnes
+	)
 	type cand struct {
-		path string
-		st   os.FileInfo
+		path  string
+		st    os.FileInfo
+		count int
 	}
-	var cands, assistant, kept []cand
+	var cands []cand
 	keep := n.keptSessions()
 	n.mu.Lock()
 	forked := maps.Clone(n.forked) // "Branch to New Chat"'s copies (fork.go)
@@ -87,14 +96,14 @@ func (n *Node) scanOffline() []proto.Session {
 			continue
 		}
 		if keep[id] { // the main conversation: listed however long it has been quiet and however busy the machine
-			kept = append(kept, cand{p, st})
+			cands = append(cands, cand{p, st, keptOnes})
 			continue
 		}
 		if time.Since(st.ModTime()) > offlineWindow || (st.Size() < 2048 && !forked[id]) {
 			continue
 		}
 		if isAssistantProject(filepath.Base(filepath.Dir(p)), own) {
-			assistant = append(assistant, cand{p, st})
+			cands = append(cands, cand{p, st, assistants})
 			continue
 		}
 		// Another platform's runs (agentfilters.go) go before the newest are counted: hundreds a day would crowd out
@@ -102,20 +111,13 @@ func (n *Node) scanOffline() []proto.Session {
 		if !forked[id] && n.agentFiltered("claude", p) {
 			continue
 		}
-		cands = append(cands, cand{p, st})
+		cands = append(cands, cand{p, st, others})
 	}
-	newest := func(list []cand, limit int) []cand {
-		sort.Slice(list, func(i, j int) bool { return list[i].st.ModTime().After(list[j].st.ModTime()) })
-		if len(list) > limit {
-			list = list[:limit]
-		}
-		return list
-	}
-	// The assistant's conversations are counted on their own: a script running `claude -p` hundreds of times a day
-	// filled the 80 newest with its sessions, and the "Chat" tab lost every conversation quieter than a couple of hours (#2105).
-	cands = append(newest(cands, 80), newest(assistant, maxAssistantOffline)...)
-	cands = append(cands, kept...)
+	// Newest first, and only what is listed counts: a session the filters below leave out (a blocked or out-of-scope
+	// directory, a probe that never said anything, an older copy) took one of the 80 and pushed a listed one out.
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].st.ModTime().After(cands[j].st.ModTime()) })
+	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands)}
+	var counted [3]int
 	listed := map[string]bool{}
 	for _, c := range cands {
 		id := strings.TrimSuffix(filepath.Base(c.path), ".jsonl")
@@ -123,11 +125,19 @@ func (n *Node) scanOffline() []proto.Session {
 			continue // an older copy in another config directory (newest first): it used to win, and list the session twice
 		}
 		listed[id] = true
-		m := n.meta(c.path, c.st)
-		if !n.sessionScopeAllows(m.cwd) {
+		if counted[c.count] >= limit[c.count] {
 			continue
 		}
-		if m.cwd != "" && n.cwdBlocked(m.cwd) {
+		m := n.meta(c.path, c.st)
+		if isLauncherCheckRun(c.path, m) {
+			continue // a launcher health check's run, a hundred a day on each computer: no session of the user's (#2959)
+		}
+		// Where the session is: an assistant conversation's start directory, before the filters look at it.
+		cwd := n.assistantHome(id, m.cwd)
+		if !n.sessionScopeAllows(cwd) {
+			continue
+		}
+		if cwd != "" && n.cwdBlocked(cwd) {
 			continue
 		}
 		// Sessions that never produced output (hook probes): small files read whole with no title and no words. A bigger
@@ -139,7 +149,7 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		n.setPath(id, c.path)
 		s := proto.Session{
-			SessionID: id, Title: m.title, Cwd: m.cwd, Status: proto.StatusOffline, Model: m.model,
+			SessionID: id, Title: m.title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
 			Agent: "claude", AgentSurface: m.surface,
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}
@@ -149,6 +159,7 @@ func (n *Node) scanOffline() []proto.Session {
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
 		untitled(&s, m)
 		out = append(out, s)
+		counted[c.count]++
 	}
 	return out
 }
@@ -221,6 +232,33 @@ func (n *Node) assistantProject() string {
 	return nonAlnum.ReplaceAllString(identity.AssistantDir(n.home), "-")
 }
 
+// assistantDirOfProject is the directory of this node's assistant (or its health space) whose projects directory
+// Claude Code names base, "" for any other. Only this node's own names map back: the projects directory's name is
+// lossy ("/", ".", "-" and "_" all become "-"), so the former state directory's or a symlinked home's cannot be told
+// apart from another directory's (assistant-bin, another manager's assistant-m-<hex>).
+func (n *Node) assistantDirOfProject(base string) string {
+	switch own := n.assistantProject(); base {
+	case own:
+		return identity.AssistantDir(n.home)
+	case strings.TrimSuffix(own, "-assistant") + "-health":
+		return identity.HealthDir(n.home)
+	}
+	return ""
+}
+
+// assistantHome is the directory session id is listed in at rest: the directory its node record says it started in,
+// when that is an assistant or health directory (the unresolved path its running process and resumes use), else cwd
+// (what its transcript says: where an assistant conversation started, an agent's latest directory, #2368).
+func (n *Node) assistantHome(id, cwd string) string {
+	if n.state == nil {
+		return cwd
+	}
+	if st, ok := n.state.get(id); ok && identity.IsAssistantDir(st.Cwd) {
+		return st.Cwd
+	}
+	return cwd
+}
+
 // isAssistantProject: base is the name of the projects directory Claude Code keeps for the assistant's directory
 // (own: this node's, assistantProject). The assistant may have run under ~/.persona or the former state directory
 // (compat.StateDir), through a symlinked home, so the name is matched by its end as well (#1423: a copy under the
@@ -230,11 +268,33 @@ func isAssistantProject(base, own string) bool {
 	if base == own || base == strings.TrimSuffix(own, "-assistant")+"-health" {
 		return true
 	}
-	former := "-" + nonAlnum.ReplaceAllString(compat.StateDir, "-") // "." becomes "-" as in the project's name
-	for _, suffix := range []string{"--persona-assistant", former + "-assistant", "--persona-health", former + "-health"} {
+	for _, suffix := range assistantProjectSuffixes() {
 		if strings.HasSuffix(base, suffix) {
 			return true
 		}
 	}
 	return false
+}
+
+// assistantProjectSuffixes are the ends isAssistantProject matches, built on first use (not at start: every short
+// personad command would pay for the regexp) instead of on every call, once per Codex thread and transcript per list.
+var assistantProjectSuffixes = sync.OnceValue(func() []string {
+	former := "-" + nonAlnum.ReplaceAllString(compat.StateDir, "-") // "." becomes "-" as in the project's name
+	return []string{"--persona-assistant", former + "-assistant", "--persona-health", former + "-health"}
+})
+
+// isLauncherCheckRun: the transcript at path is a launcher health check's: its directory — a temp directory the check
+// made and removed when it ended — no longer exists, and the run started there (the head's start directory, which
+// Claude Code names even after `cd`s; the check never runs a Bash that could move). A directory of the user's own with
+// a similar name exists, so the name alone is not enough (#2959). The head is the meta the listing has already read.
+func isLauncherCheckRun(path string, m quickMeta) bool {
+	if !isLauncherCheckProject(filepath.Base(filepath.Dir(path))) {
+		return false
+	}
+	if st, err := os.Stat(m.start); err == nil && st.IsDir() {
+		return false // the directory exists: not one of the check's
+	}
+	// Before a big first read the head is still running: it holds the check's prompt or nothing, never a start
+	// directory; decide on what is known, and let the next pass (the read finishes) be exact.
+	return m.start == "" || isLauncherCheckDir(m.start)
 }

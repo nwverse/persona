@@ -4,7 +4,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 
 import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { BASE } from "./base";
-import { discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
+import { clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { useRef, useSyncExternalStore } from "react";
 import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, setAgentListMode } from "./agents";
 import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE } from "./runtime-list";
@@ -12,7 +12,8 @@ import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
-import { api, ApiError, CLIENT_FEATURES, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
+import { probeEdge } from "./edge-auth";
+import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, sessionPath } from "./api";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { stateOf } from "./format";
@@ -22,7 +23,7 @@ import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from
 import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
 import type { AgentLaunch } from "./new-agent";
-import { isSpacesSupported, type Todo } from "./todos";
+import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo } from "./todos";
 import { releaseAttachments } from "./attachments";
 import { dropElicitationDraft } from "./elicitation";
 import type { OutboxEntry } from "./outbox";
@@ -63,6 +64,9 @@ export interface State {
   /** Compact list rows never overwrite a chat's complete details in sessions. */
   sessionSummaries: Session[];
   sessionCounts: ListCounts | null;
+  /** List rows of open tasks' agents the Agents window does not hold, by runtimeIdentity (#3274): the list's deltas
+   *  for them and an exact lookup for one no list has, so a task's state never reads a missing agent as stopped. */
+  taskRows: Record<string, Session>;
   /** Finished agents this page marked seen that the hub has not recorded yet, by runtimeIdentity (lib/seen-outbox.ts):
    *  the rows in `sessions` and `sessionSummaries` are held seen meanwhile, the paged list's rows by the row itself. */
   seen: SeenMarks;
@@ -101,6 +105,7 @@ let state: State = {
   sessions: {},
   sessionSummaries: [],
   sessionCounts: null,
+  taskRows: {},
   seen: {},
   interactions: [],
   answered: {},
@@ -208,7 +213,76 @@ onRuntimeChanges((upsert, remove) => {
   const known = new Set(Object.values(state.sessions).flat().map(runtimeIdentity));
   const updates = runtimeSessions.isSummary() ? [] : upsert.filter((row) => known.has(runtimeIdentity(row)));
   applyCompleteSessions(updates, remove);
+  keepTaskRows(upsert, remove.map(runtimeRemoval));
 });
+
+/** The runtime identities of the open tasks' agents. */
+function openTaskAgents(): Set<string> {
+  const out = new Set<string>();
+  for (const todo of state.todos) {
+    if (todo.done_at) continue;
+    for (const a of todo.agents ?? []) if (!a.released_at) out.add(runtimeIdentity({ machine_id: a.machine_id, session_id: a.session_id } as Session));
+  }
+  return out;
+}
+
+/** Keeps the list's newest rows of open tasks' agents (`taskRows`), whether the Agents window holds them or not. */
+function keepTaskRows(upsert: Session[], remove: string[] = []) {
+  const agents = openTaskAgents();
+  let rows = state.taskRows;
+  const change = () => { if (rows === state.taskRows) rows = { ...rows }; };
+  for (const row of upsert) {
+    const id = runtimeIdentity(row);
+    if (agents.has(id) && rows[id] !== row) { change(); rows[id] = row; }
+  }
+  for (const id of remove) if (id in rows) { change(); delete rows[id]; }
+  for (const id of Object.keys(rows)) if (!agents.has(id)) { change(); delete rows[id]; }
+  if (rows !== state.taskRows) set({ taskRows: rows });
+}
+
+/** `base`, and for an agent it does not have, the list's row of an open task's agent (`taskRows`). */
+export function withTaskRows(base: SessionLookup, rows: Record<string, Session>): SessionLookup {
+  return (mid, sid) => base(mid, sid) ?? rows[runtimeIdentity({ machine_id: mid, session_id: sid } as Session)];
+}
+
+/** How a task's agents are now, for its status, card and pill (#3274): the newest of the list's row (the Agents window or
+ *  `taskRows`, which the list's deltas keep current) and the chat's complete row, which stops being refreshed once its
+ *  chat closes. The complete row stands while it says the same about the agent's state, for its subagents and steps. */
+export function taskSessionLookup(s: Pick<State, "sessions" | "sessionSummaries" | "taskRows">): SessionLookup {
+  const full = makeSessionLookup(s.sessions);
+  const listed = withTaskRows(s.sessionSummaries.length ? makeSessionLookup(s.sessionSummaries) : () => undefined, s.taskRows);
+  return (mid, sid) => {
+    const detail = full(mid, sid);
+    const row = listed(mid, sid);
+    if (!row || !detail || row === detail) return row ?? detail;
+    if ((detail.rev ?? 0) > (row.rev ?? 0)) return detail;
+    const same = row.state === detail.state && !!row.background_working === !!detail.background_working
+      && (row.pending_interactions ?? 0) === (detail.pending_interactions ?? 0) && sameValue(row.work, detail.work);
+    return same ? detail : row;
+  };
+}
+
+const taskRowsAsked = new Set<string>();
+/** An open task's agent that no list row or chat detail has (outside the Agents window and quiet since it loaded): one
+ *  exact lookup for it (`sessions_lookup`), then the list's deltas keep it (#3274). */
+async function lookUpTaskAgents() {
+  if (!state.features.includes(SESSIONS_LOOKUP_FEATURE)) return;
+  const listed = new Set(state.sessionSummaries.map(runtimeIdentity));
+  const missing = [...openTaskAgents()].filter((id) => !taskRowsAsked.has(id) && !listed.has(id) && !(id in state.taskRows)
+    && !(state.sessions[JSON.parse(id)[0]] ?? []).some((s) => runtimeIdentity(s) === id));
+  for (const id of missing.slice(0, 20)) {
+    taskRowsAsked.add(id);
+    const [mid, sid] = JSON.parse(id) as [string, string];
+    const params = new URLSearchParams({ summary: "1", limit: "1", machine_id: mid, session_id: sid });
+    try {
+      const page = await api<{ sessions?: Session[] }>(`/sessions?${params}`);
+      const row = page?.sessions?.[0];
+      if (row && runtimeIdentity(row) === id) keepTaskRows([row]);
+    } catch {
+      taskRowsAsked.delete(id); // asked again with the next todos or connection
+    }
+  }
+}
 
 /** A clicked filtered row may not belong to the unfiltered first page. Keep a small hint until exact lookup finishes. */
 export function rememberSessionRow(row: Session) {
@@ -363,11 +437,15 @@ export interface ItemsEvent {
   from_seq?: number;
   backlog?: boolean;
   more_after?: boolean;
+  /** Only on a replay counted back from the end (a subscribe without since_seq): whether older items exist. */
+  has_more?: boolean;
 }
 
 type SessionListener = {
   items?: (e: ItemsEvent) => void;
   delta?: (text: string) => void;
+  /** The hub's `revs` event: the transcript grew to this rev; the list's row keeps the rev it had (lib/stale-page.ts). */
+  rev?: (rev: number) => void;
   reconnected?: () => void;
 };
 const sessionListeners = new Map<string, Set<SessionListener>>();
@@ -466,7 +544,7 @@ export function connect() {
   sock.onopen = () => {
     // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
     // and what it can render: MCP forms and links come only to a socket that says so
-    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage() }));
+    sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: CLIENT_FEATURES, locale: currentLanguage(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
     retry = 0;
     fastTries = 0;
     lastMessage = Date.now();
@@ -496,10 +574,14 @@ export function connect() {
   };
   sock.onclose = (ev) => {
     if (ws !== sock) return;
+    const wasLive = authenticatedSocket === sock;
     ws = null;
     setCompatibilityFeatures([]);
     socketChanged(false);
     if (stopped) return;
+    // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
+    // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
+    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge();
     const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
     // the drop starts while online; a restart announced on a later attempt stretches its grace
@@ -615,6 +697,8 @@ function onMessage(msg: Record<string, unknown>) {
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
       runtimeSessions.setSummary(summaryMode);
       setAgentListMode(state.features.includes(SESSIONS_LIST_FEATURE));
+      taskRowsAsked.clear();
+      void lookUpTaskAgents();
       // subscriptions are per connection: chats resubscribe from what they have either way
       sessionListeners.forEach((ls) => ls.forEach((l) => l.reconnected?.()));
       // a seen sent over the socket that went may be lost with it
@@ -681,6 +765,14 @@ function onMessage(msg: Record<string, unknown>) {
     case "items": {
       const e = msg as unknown as ItemsEvent;
       sessionListeners.get(key(e.machine_id, e.session_id))?.forEach((l) => l.items?.(e));
+      break;
+    }
+    case "revs": {
+      // Transcripts that grew while their rows' other fields stayed: only an open chat uses it, to notice a lost push.
+      const mid = msg.machine_id as string;
+      for (const [sid, rev] of Object.entries((msg.revs as Record<string, unknown> | undefined) ?? {})) {
+        if (typeof rev === "number") sessionListeners.get(key(mid, sid))?.forEach((l) => l.rev?.(rev));
+      }
       break;
     }
     case "agents.prefs":
@@ -1070,7 +1162,10 @@ function applyTodos(todos: PromiseSettledResult<{ todos: Todo[] }>, fresh: () =>
     for (const t of list) {
       if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
     }
-    return set({ todos: list, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    set({ todos: list, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    keepTaskRows([]);
+    void lookUpTaskAgents();
+    return;
   }
   const reason = todos.reason;
   if (reason instanceof ApiError && reason.status === 404) return set({ todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
@@ -1087,6 +1182,8 @@ export function setSpacesSupported(supported: boolean) {
 
 /** Puts a todo the hub just answered in place of the one we have (a retried task shows starting at once). */
 export function putTodo(todo: Todo) {
+  // A confirmed write is newer than every list read that is still in flight.
+  todosAsked.forget();
   if (todo.manager) noteItemManager(`/todos/${encodeURIComponent(todo.id)}`, todo.manager);
   set({ todos: state.todos.map((t) => (t.id === todo.id ? { ...t, ...todo } : t)) });
 }
@@ -1141,9 +1238,10 @@ const assistantByManager = new Map<string, AssistantInfo>();
 /** The assistant page asked for: "" the default's (no header goes, whichever manager the default turns out to be),
  *  else the manager picked on it. */
 const pageOf = () => chosenManager() ?? "";
-/** Where the page's answer is kept: under its manager once the roster's default is known; "" before (the default's,
- *  whose id is not known yet), moved under the default's id when it is. */
-const cacheKey = () => (defaultKnown() ? shownManager() : "");
+/** Where the page's answer is kept: under its manager, the one picked (kept across reloads, so it may be there before
+ *  the roster is read) or the default once the roster said which that is; "" before (the default's, whose id is not
+ *  known yet), moved under the default's id when it is. */
+const cacheKey = () => chosenManager() ?? (defaultKnown() ? defaultManager() : "");
 
 // The manager whose page is drawn (null: the default's, before the roster said which that is).
 let drawnPage = { page: pageOf(), manager: null as string | null };
@@ -1295,8 +1393,10 @@ export function reset() {
   sessionsPushed.clear();
   resetAgents();
   rowHints.clear();
+  taskRowsAsked.clear();
   listedFull.clear();
   runtimeSessions.reset();
+  clearMemoryPages();
   clearTimeout(seenTimer);
   seenTimer = undefined;
   Object.values(state.launches).forEach((launch) => releaseAttachments(launch.attachments));
@@ -1305,6 +1405,7 @@ export function reset() {
     sessions: {},
   sessionSummaries: [],
   sessionCounts: null,
+    taskRows: {},
     seen: {},
     interactions: [],
     answered: {},

@@ -79,7 +79,7 @@ func dialResident(ctx context.Context, path string, wait time.Duration) (net.Con
 }
 
 // residentProgram and residentVersion are what the resident node of this process runs as (SetResident), for standby's
-// answer to ping while no Node serves (spool.go).
+// answer to ping while no Node serves (spool_standby.go).
 var residentProgram, residentVersion atomic.Value
 
 // SetResident says which program and build the resident node of this process is (nodecmd runResident, before Attach).
@@ -146,7 +146,8 @@ func Attach(ctx context.Context, newNode func() (*Node, error), extra <-chan net
 	}()
 
 	keeper := newAssistantKeeper()
-	// No manager connected yet (or between connections): standby answers node.sock (spool.go).
+	scans := &bgCarry{} // background-task scans go on from one connection's Node to the next (carry.go)
+	// No manager connected yet (or between connections): standby answers node.sock (spool_standby.go).
 	sp := openSpool(SpoolPath())
 	sb := newStandby(sp, logf)
 	sb.want()
@@ -215,12 +216,14 @@ func Attach(ctx context.Context, newNode func() (*Node, error), extra <-chan net
 			if runtimes != nil {
 				n.runtimeHost = runtimes // Serve attaches it for this connection
 			}
+			n.adoptBgScans(scans)
 			n.keeper = keeper                        // conversations go on from one connection to the next (assistant_keep.go)
 			n.spool = sp                             // what standby took goes to this connection first (spool.go)
 			go func() { <-cctx.Done(); c.Close() }() // a replaced connection stops reading at once
 			if err := n.Serve(cctx, c, c); err != nil && !errors.Is(err, io.EOF) && cctx.Err() == nil {
 				n.logger.Printf("connection ended: %v", err)
 			}
+			n.handOverBgScans(scans)
 		}()
 	}
 }

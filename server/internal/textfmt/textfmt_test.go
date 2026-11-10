@@ -1,19 +1,38 @@
 package textfmt
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// Clip and Cut count runes, not bytes; a cut replaces invalid bytes the way []rune does, an uncut string keeps them.
+func TestClipAndCut(t *testing.T) {
+	for _, c := range []struct {
+		name, s   string
+		n         int
+		clip, cut string
+	}{
+		{"ascii", "abcdef", 3, "abc…", "abc"},
+		{"cjk", "一二三四五", 3, "一二三…", "一二三"},
+		{"exactly n runes", "一二三", 3, "一二三", "一二三"},
+		{"invalid utf-8 cut", "a\xffbcd", 3, "a\uFFFDb…", "a\uFFFDb"},
+		{"invalid utf-8 kept", "a\xff", 3, "a\xff", "a\xff"},
+		{"n=0", "abc", 0, "…", ""},
+		{"n=0 empty", "", 0, "", ""},
+	} {
+		if got := Clip(c.s, c.n); got != c.clip {
+			t.Errorf("%s: Clip(%q, %d) = %q, want %q", c.name, c.s, c.n, got, c.clip)
+		}
+		if got := Cut(c.s, c.n); got != c.cut {
+			t.Errorf("%s: Cut(%q, %d) = %q, want %q", c.name, c.s, c.n, got, c.cut)
+		}
+	}
+}
+
 func TestFormatting(t *testing.T) {
-	if got := Clip("一二三四五", 3); got != "一二三…" {
-		t.Errorf("Clip = %q", got)
-	}
-	if got := Clip("一二三", 3); got != "一二三" {
-		t.Errorf("Clip kept = %q", got)
-	}
 	if got := OneLine("  a\n\tb   c \n"); got != "a b c" {
 		t.Errorf("OneLine = %q", got)
 	}
@@ -29,6 +48,25 @@ func TestFormatting(t *testing.T) {
 	}
 	if StateNames[proto.StateNeedsYou] != "需要你" {
 		t.Error("StateNames")
+	}
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	for _, c := range []struct {
+		in   []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{""}, ""},
+		{[]string{"", " \t\n", ""}, ""},
+		{[]string{"a", "b"}, "a"},
+		{[]string{"", "b", "c"}, "b"},
+		{[]string{"  ", " b "}, " b "}, // as given, not trimmed
+		{[]string{"\u00a0", "x"}, "x"}, // a no-break space is white space too
+	} {
+		if got := FirstNonEmpty(c.in...); got != c.want {
+			t.Errorf("FirstNonEmpty(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 
@@ -107,6 +145,35 @@ func TestPushTextKeepsWhatItIsGiven(t *testing.T) {
 		if got := PushText(tc.in); got != tc.want {
 			t.Errorf("PushText(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// PlainMarkdown is a reply's text without its markup, for a push or a one-line preview.
+func TestPlainMarkdown(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"## 根因\nhub 和 node 的 **会话** 不同步", "根因\nhub 和 node 的 会话 不同步"},
+		{"**网页的改动**\n- **底部的「收起」**：改成 `Collapse`\n- 第二条", "网页的改动\n底部的「收起」：改成 Collapse\n第二条"},
+		{"调 `POST /api/v1/sessions/{mid}/{sid}/interrupt` 停下", "调 POST /api/v1/sessions/{mid}/{sid}/interrupt 停下"},
+		{"看 [PR](https://github.com/o/r/pull/1) 和 <https://example.com>", "看 PR 和 https://example.com"},
+		{"> 引用 ~~删掉~~ *斜体*\n\n```go\nx := 1\n```", "引用 删掉 斜体\nx := 1"},
+		{"| a | b |\n| - | - |\n| 1 | 2 |", "a\nb\n1\n2"},
+		{"剪在 **加粗中间…", "剪在 加粗中间…"},
+		{"剪在 `代码中间…", "剪在 代码中间…"},
+		{"完成了", "完成了"},
+		{"", ""},
+	} {
+		if got := PlainMarkdown(tc.in); got != tc.want {
+			t.Errorf("PlainMarkdown(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// An assistant card's push says its fallback, not the card's JSON.
+func TestPlainMarkdownOfACardIsItsFallback(t *testing.T) {
+	text := "**Result**\n```persona-view\n{\"fallback\":\"Build complete\",\"sections\":[]}\n```\n"
+	got := PlainMarkdown(text)
+	if strings.Contains(got, "sections") || strings.Contains(got, "persona-view") || !strings.Contains(got, "Build complete") {
+		t.Fatalf("push text %q", got)
 	}
 }
 
