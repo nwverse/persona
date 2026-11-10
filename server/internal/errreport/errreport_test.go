@@ -70,6 +70,22 @@ func TestScrubText(t *testing.T) {
 	if got := s.Message(`send "the user's words" and 「日本語」 'it''s' failed`); strings.Contains(got, "words") || strings.Contains(got, "日本語") {
 		t.Errorf("quoted spans stay: %q", got)
 	}
+	// a quoted body with a newline in it is still the user's content
+	multiline := []struct{ in, want string }{
+		{"send \"hello there\nmy secret plan\" failed", `send "<redacted>" failed`},
+		{"post “first line\nsecond line” failed", `post "<redacted>" failed`},
+		{"title 「一行\n二行」 bad", `title "<redacted>" bad`},
+		{"run `ls\nrm -rf x` failed", `run "<redacted>" failed`},
+		// two quotes on separate lines stay two spans, and the text between them stays
+		{"open \"a.txt\" failed\nthen \"b.txt\" failed", "open \"<redacted>\" failed\nthen \"<redacted>\" failed"},
+		// apostrophes in prose do not pair across lines
+		{"it's broken\nwe're done", "it's broken\nwe're done"},
+	}
+	for _, c := range multiline {
+		if got := s.Message(c.in); got != c.want {
+			t.Errorf("Message(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
 }
 
 func TestScrubReportLimits(t *testing.T) {
@@ -91,6 +107,29 @@ func TestScrubReportLimits(t *testing.T) {
 	}
 	if _, ok := r.Tags["Bad Key"]; ok || r.Tags["screen"] != "inbox" {
 		t.Fatalf("tags: %v", r.Tags)
+	}
+}
+
+func TestScrubCrumbLevelAndTime(t *testing.T) {
+	r := wire.ErrorReport{Breadcrumbs: []wire.ErrorBreadcrumb{
+		{Category: "nav", Level: "/home/alice", Time: "token=abcdefghijk me@example.com"},
+		{Category: "nav", Level: "Info", Time: "2026-11-06T10:00:00.123+01:00"},
+		{Category: "nav", Level: "warning", Time: "2026-11-06T09:00:00Z"},
+		{Category: "nav", Level: "debug", Time: "2026-11-06 09:00:00"},
+		{Category: "nav"},
+	}}
+	NewScrubber().Report(&r)
+	want := []struct{ level, time string }{
+		{"", ""},
+		{"info", "2026-11-06T09:00:00.123Z"},
+		{"warning", "2026-11-06T09:00:00Z"},
+		{"debug", ""},
+		{"", ""},
+	}
+	for i, w := range want {
+		if c := r.Breadcrumbs[i]; c.Level != w.level || c.Time != w.time {
+			t.Errorf("crumb %d: level %q time %q, want %q %q", i, c.Level, c.Time, w.level, w.time)
+		}
 	}
 }
 

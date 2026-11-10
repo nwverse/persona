@@ -6,6 +6,7 @@ package errreport
 import (
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -83,8 +84,9 @@ var (
 	ipv6 = lazyre.New(`(?i)\[?\b([0-9a-f]{1,4}:){1,7}(:[0-9a-f]{1,4}){1,6}\b\]?|\[?\b([0-9a-f]{1,4}:){1,7}:\]?|\[?\b([0-9a-f]{1,4}:){4,7}[0-9a-f]{1,4}\b\]?|\[?::ffff:[0-9.]+\]?|\[::1\]`)
 	// the user's name in home directories: /Users/x/, /home/x/, /data00/home/x/, C:\Users\x\
 	homeDir = lazyre.New(`(?i)(/Users/|/home/|/data\d*/home/|/var/home/|/root\b|[A-Z]:\\Users\\|[A-Z]:/Users/)([^/\\\s"'<>]*)`)
-	// quoted spans: what errors carry of the user's content most often
-	quoted = lazyre.New("\"[^\"\\n]*\"|“[^”\\n]*”|「[^」\\n]*」|『[^』\\n]*』|`[^`\\n]*`|'[^'\\n]{2,}'")
+	// quoted spans: what errors carry of the user's content most often. A quoted body may span lines (a message the
+	// user wrote); only the single-quote form stays on one line, so apostrophes in prose do not pair across lines.
+	quoted = lazyre.New("\"[^\"]*\"|“[^”]*”|「[^」]*」|『[^』]*』|`[^`]*`|'[^'\\n]{2,}'")
 )
 
 // Text scrubs one string of a report.
@@ -219,8 +221,8 @@ func (s *Scrubber) Report(r *wire.ErrorReport) {
 		c := &r.Breadcrumbs[i]
 		c.Category = cut(s.Text(c.Category), 64)
 		c.Message = cut(s.Message(c.Message), CrumbMost)
-		c.Level = cut(c.Level, 16)
-		c.Time = cut(c.Time, 40)
+		c.Level = crumbLevel(c.Level)
+		c.Time = crumbTime(c.Time)
 	}
 	if len(r.Tags) > 0 {
 		tags := map[string]string{}
@@ -232,6 +234,25 @@ func (s *Scrubber) Report(r *wire.ErrorReport) {
 		}
 		r.Tags = tags
 	}
+}
+
+// crumbLevels are the levels a breadcrumb may have; any other value is dropped, so the field never carries free text.
+var crumbLevels = []string{"debug", "info", "warning", "error", "fatal"}
+
+func crumbLevel(v string) string {
+	if v = strings.ToLower(v); slices.Contains(crumbLevels, v) {
+		return v
+	}
+	return ""
+}
+
+// crumbTime keeps a breadcrumb's time only as an RFC 3339 time, in UTC; anything else is dropped.
+func crumbTime(v string) string {
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 var tagKey = lazyre.New(`^[a-z][a-z0-9_.]{0,31}$`)
