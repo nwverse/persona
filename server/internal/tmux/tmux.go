@@ -1,13 +1,16 @@
 // Package tmux drives a pane of a tmux server through the tmux command: what its screen shows and the keys pressed in
 // it. A pane id is tmux's own ("%11"), unique within one server; the server is the default one unless Socket names
-// another (a server started with -L or -S). Nothing here reads tmux's layout or streams its output: a pane Persona did
-// not start is reached by the id Claude Code itself wrote down (sessions/<pid>.json "tmux").
+// another (a server started with -L or -S), even for a node started inside a pane of another server: tmux runs without
+// the node's own TMUX. Nothing here reads tmux's layout or streams its output: a pane Persona did not start is reached
+// by the id Claude Code itself wrote down (sessions/<pid>.json "tmux").
 package tmux
 
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync/atomic"
 )
@@ -33,6 +36,11 @@ func (c Client) run(ctx context.Context, stdin string, args ...string) (string, 
 		args = append([]string{"-S", c.Socket}, args...)
 	}
 	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	if c.Socket == "" {
+		// tmux without -S runs against the server $TMUX names: a node started inside a pane of another server would
+		// read and type into that server's pane of the same id.
+		cmd.Env = envWithout(os.Environ(), "TMUX", "TMUX_PANE")
+	}
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if stdin != "" {
@@ -45,6 +53,17 @@ func (c Client) run(ctx context.Context, stdin string, args ...string) (string, 
 		return out.String(), fmt.Errorf("tmux %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
 	return out.String(), nil
+}
+
+// envWithout is env without the variables named.
+func envWithout(env []string, names ...string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if name, _, _ := strings.Cut(kv, "="); !slices.Contains(names, name) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // Version is the tmux client's version ("tmux 3.6a"), "" when tmux is not installed or not running.
