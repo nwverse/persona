@@ -57,8 +57,10 @@ Since #3387 the actions are two, **Needs you** and **In progress**, and each thi
 ([unified-entry.md](../assistant/unified-entry.md#needs-you-and-in-progress-each-thing-once-3387)). Needs you takes Pending's
 rows, with a task's cards folded into one row for the task (its oldest card first) and the main chat's hand-opened Agents
 that ask; In progress takes the open tasks that do not wait on the user and the hand-opened working Agents (the old Agents
-entry), keeps the quiet supervision group and gets the board's **All N**. Finished and shelved tasks are in neither. The
-list below describes the earlier three entries.
+entry), keeps the quiet supervision group and gets the board's **All N**. Finished and shelved tasks are in neither. A
+task row says **In progress** on the right while one of its Agents works or starts; once they all stopped (unread or
+seen) and it waits on nobody, it says **Stopped** (已停下) and draws only a counted bar, never the indeterminate one, as the
+web row does (#3576). The list below describes the earlier three entries.
 
 The existing **Assistant / Agents** home tabs do not change. Above the Assistant composer, the old All/task/Agent chip
 strip becomes three single-line actions, ordered **Pending**, **Progress**, **Agents**. Tapping opens a bounded, scrollable

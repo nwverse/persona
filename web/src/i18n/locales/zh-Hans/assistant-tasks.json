@@ -146,6 +146,7 @@
   "report_done": "说做完了：{text}",
   "report_step_of": "第 {step}/{steps} 步 · {text}",
   "report_step": "第 {step} 步 · {text}",
+  "report_latest": "最新汇报",
   "report_from": "「{title}」向 Persona 汇报",
   "report_later": "不急，等下次早晚报",
   "said_to_interrupting": "打断「{title}」并告诉它",
