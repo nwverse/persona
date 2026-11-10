@@ -135,11 +135,18 @@ func (e *routeEnv) noticeWith(to, want string) string {
 	return got
 }
 
-// settle lets the supervision messages due go out.
+// settle waits until the supervision messages due have gone out: nothing pending and no digest armed, then the one
+// being delivered (sendDigest holds dedupMu while it delivers) done.
 func (e *routeEnv) settle() {
-	time.Sleep(10 * shortSuperviseTimings.gather)
-	e.s.supervise.dedupMu.Lock()
-	e.s.supervise.dedupMu.Unlock()
+	e.t.Helper()
+	b := &e.s.supervise
+	waitFor(e.t, "the supervision messages due to go out", func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.pending) == 0 && b.timer == nil
+	})
+	b.dedupMu.Lock()
+	b.dedupMu.Unlock()
 }
 
 // A worker's question goes to its leader, not the user: no push, the card shown as delegating, the main
