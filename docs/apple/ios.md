@@ -508,6 +508,7 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
 
 - **Top bar** floats over the chat, with no system navigation bar or solid bar: a downward-fading fog (`TopFog`: page background + material, extending under the status bar), with chat scrolling beneath.
   Chat-list top reserves `AssistantTopBar.height` (70pt); the home page reserves the same via `contentMargins(.top)`. The bar stays fixed while scrolling (unlike the collapsible Agents header).
+- **Footer fog** (#3696): the chat runs on behind the capsule row over Persona's composer (`ChatView.underDock`, with as much more room at the list's newest end, so nothing moves) and fades out under `FooterFog`, the page color along the top fog's eased curve, from `ChatView.newestGap` above the footer to solid at the list's edge; in Agents chats it ends at the composer's edge. Jump to Latest and the edge navigator are drawn over the fog. Rules: `docs/design/DESIGN_SYSTEM.md` ("3.12 Chat edges under floating chrome").
 - Centered **Persona avatar + name capsule** (main and new chats use the avatar name, default Persona; side chats use the chat title). The avatar is the current avatar's **state dot**
   (`PersonaDot`): Idle / Thinking / Working / Needs you / Offline animations, see `docs/apple/persona.md` ("States"). Tap for Knowledge, Details (profile
   `AssistantProfileView`), Return to main chat (side chats); Copy directory (assistant cwd), Copy info (chat name, session ID, machine, cwd, launcher / model,
