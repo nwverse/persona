@@ -565,8 +565,11 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     The simulators take no snapshots in another width (a trip to the home screen keeps the sheet on the open Duo simulator without the fix too): that the hold works on the way to the background is checked on a real iPhone Duo open.
     `-swapTreeAt` alone flips only `RootView`'s choice (the tree swap above); with `-swapTreeAway YES` the whole app's width class flips instead, from above `RootView` (`TreeSwapFlip`), while the app counts as away,
     and the pages report they never saw it change (`probe.tree-inner`, `TreeSwapAwayTests`).
-    A real fold or unfold while the app is active still builds the tree again, and the pages' own width class changes with it: an open New Agent sheet and Health's uploads under way are lost then,
-    and in a simulation that flips the pages too the Agents page did not open its chat again (#2836, open).
+    A real fold or unfold while the app is active still builds the tree again, the pages' own width class with it (`-swapTreeWhole YES` flips the whole app's while it is active, `TreeSwapFoldTests`).
+    What must outlive it is kept above the tree: `RootView` presents the Agents page's New Agent sheet (`\.newAgentShown`; the Mac keeps its own), and `AppModel` holds Health's report uploads
+    per hub group (`healthReportUploads`), as #2626 keeps a chat's attachments. The tree on its way out lives on a moment after the swap (about two seconds on an iPad simulator), and its Agents page
+    took the chat the new page asked for again, opening it where no one saw it: each tree `RootView` builds has a `BuiltTree` of its own, `ShownTree` holds the shown one, and a page
+    of another tree (on its way out) leaves the chats asked for, and the remembered chat, to the shown tree's page (#2836).
   - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
     `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
