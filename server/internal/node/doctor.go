@@ -158,14 +158,31 @@ const agentPluginGroup = "agent-plugin"
 // dir: the agents' (assistant false) or the assistant's, which add the Feishu gate on Bash (larkgate.go). The hook
 // names dir itself (rootAssign): Claude Code runs it with the claude's environment, which is its pane's (agentenv.go).
 func hookSettings(bin, dir string, assistant bool) map[string]any {
+	return hookSettingsForOS(runtime.GOOS, bin, dir, assistant)
+}
+
+func hookSettingsForOS(goos, bin, dir string, assistant bool) map[string]any {
 	cmd := shellQuote(bin) + " hook"
 	if dir != "" {
 		cmd = rootAssign(dir, shellQuote) + cmd
 	}
-	blocking := func(matcher string) map[string]any {
-		return map[string]any{"matcher": matcher, "hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 86400}}}
+	hook := func(timeout int) map[string]any {
+		h := map[string]any{"type": "command", "command": cmd, "timeout": timeout}
+		if goos == "windows" {
+			// Native hook argv avoids Git Bash consuming the quotes around Windows paths.
+			// Keep the same node and gates, with its data directory passed explicitly.
+			args := []string{"hook"}
+			if dir != "" {
+				args = append(args, nodeclient.HomeFlag, dir)
+			}
+			h["command"], h["args"] = bin, args
+		}
+		return h
 	}
-	notify := map[string]any{"hooks": []any{map[string]any{"type": "command", "command": cmd, "timeout": 10}}}
+	blocking := func(matcher string) map[string]any {
+		return map[string]any{"matcher": matcher, "hooks": []any{hook(86400)}}
+	}
+	notify := map[string]any{"hooks": []any{hook(10)}}
 	postQuestion := map[string]any{"matcher": "AskUserQuestion", "hooks": notify["hooks"]}
 	pre := []any{blocking("AskUserQuestion")}
 	if assistant {

@@ -782,7 +782,7 @@ function onMessage(msg: Record<string, unknown>) {
       agentsChanged(Array.isArray(msg.session_ids) ? (msg.session_ids as string[]) : []);
       break;
     case "todos":
-      void refreshTodos();
+      todosPushed();
       break;
     case "delta":
       sessionListeners.get(key(msg.machine_id as string, msg.session_id as string))?.forEach((l) => l.delta?.(msg.text as string));
@@ -1196,6 +1196,27 @@ export function dropTodo(id: string) {
   set({ todos: state.todos.filter((t) => t.id !== id) });
 }
 
+// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts: the hub sends one per write,
+// and a supervised task's report, stage and links land within the same second. Every GET /todos is the whole list (tens
+// of KB on a busy hub), so pushes read it one at a time: one that lands while such a read is out asks for one more read
+// after it, however many land meanwhile. What this page itself just changed still reads at once (refreshTodos).
+let pushedRead = false;
+let pushedAgain = false;
+
+export function todosPushed() {
+  if (pushedRead) {
+    pushedAgain = true;
+    return;
+  }
+  pushedRead = true;
+  void refreshTodos().finally(() => {
+    pushedRead = false;
+    if (!pushedAgain) return;
+    pushedAgain = false;
+    todosPushed();
+  });
+}
+
 export async function refreshTodos() {
   const asked = todosAsked.ask();
   try {
@@ -1383,6 +1404,7 @@ export function reset() {
   endedHere.clear();
   // a /todos or /assistant answer still on its way belongs to the old login
   todosAsked.forget();
+  pushedAgain = false; // the next login reads its own list
   assistantAsked.forget();
   assistantByManager.clear();
   // and so do the pins and mutes of a refresh() or a failed save still on its way

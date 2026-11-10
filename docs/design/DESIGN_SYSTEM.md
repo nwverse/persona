@@ -354,6 +354,16 @@ The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home 
 
 Toasts: error, success or info; one slot, so a new toast replaces the old. Duration 2.5 s, 4 s for errors, 5 s with an action (`apple/Persona/DesignSystem/Toasts.swift:57`). Drawn in a pass-through window and announced to VoiceOver. About 255 call sites. Loading and error shapes are inconsistent across screens (DS-15, DS-16). Web toasts are dark capsules at the bottom (2.8 / 5.2 / 6 s). Android uses Snackbar, per-feature hosts and system Toast (DS-25).
 
+### 3.11 Code blocks, inline code and quotes in replies
+
+Drawn as Telegram draws them (#2984), with one look on every platform: the web first; iPhone / iPad (#3209) and Android (#3212) add their sources here as they land. The frozen Mac keeps its hover Copy and plain quotes. There was no component for these: replies used the Markdown renderer's defaults (a plain code box with Copy on hover, a thin bar).
+
+| Piece | Look | Interaction | Source |
+| --- | --- | --- | --- |
+| Code block | a title bar on top with the fence's language (none when it names none) and Copy (icon and word); the code under it in the monospaced font on the code well (`--inset`), scrolling sideways | Copy takes the whole block, with the "Copied" toast. Copy's hit area is 44 px (`touch-hit`) | web `CodeBar` (`web/src/ui/ReplyBlocks.tsx`), `CodeBlock` (`web/src/ui/Markdown.tsx`) |
+| Inline code | the body's color on its gray, monospaced | a click copies it ("Copied"), and so do Enter or Space when it is focused; a click ending a drag that selected words doesn't. Blue is kept for what opens: code inside a link (a path that opens the file) is the link's | web `copyInlineCode`, `rehypeLinkedCode` |
+| Quote | the accent bar on a faint accent card (`--accent` at 8%), a quote mark at the top end | longer than about four lines it folds with its end faded; a click opens it, its chevron (44 px) folds it again. A reply still being written never folds its quotes | web `ReplyQuote`, `ReplyStreaming` |
+
 ## 4. Interaction patterns
 
 ### 4.1 Navigation hierarchy (super rule 3)
@@ -388,6 +398,8 @@ Severity ladder to adopt:
 2. Destructive with one object: `confirmationDialog` with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
 4. `.alert` for short prompts and text entry.
+
+The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
 
 Today there are seven mechanisms and the same action can use different ones (DS-24). Archive in the sidebar, to-do swipe delete and mail-account delete have no confirmation and no Undo. Only the Mac discards edits with a prompt.
 

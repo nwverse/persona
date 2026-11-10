@@ -110,6 +110,8 @@ export interface SessionCapabilities {
   approve?: boolean;
   terminal?: boolean;
   attach?: boolean;
+  /** Closing the agent independently of terminal access. Older nodes retain terminal-only closing. */
+  close?: boolean;
   /** The permission mode and effort chips can change it (session.modes, #1843): the node's word, absent from older nodes. */
   modes?: boolean;
 }
@@ -672,6 +674,9 @@ export interface AssistantInfo {
   timezone?: string;
   notes?: string;
   notes_effective?: string;
+  /** The side conversations the user made leaders (docs/assistant/unified-entry.md "Leader conversations"): absent
+   *  when there are none or from an older hub. The sidebar shows them first among the Persona chats, as pinned. */
+  leaders?: string[];
   conversations: Session[];
 }
 

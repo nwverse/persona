@@ -984,6 +984,7 @@ internal fun AssistantDrawer(
             }
             pages.forEach { page -> more {
                 JRow(page.label, onClick = { onPage(page.key) }, leading = { JIcon(page.icon, null) },
+                    chevron = true,
                     trailing = {
                         if (page.badge > 0) JBadge(page.badge)
                         else if (page.dot) JStatusDot(Status.NeedsYou)

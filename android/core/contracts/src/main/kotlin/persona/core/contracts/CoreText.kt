@@ -302,6 +302,8 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         EndpointProtocol("Unexpected response format"),
         EndpointRejected("The hub refused the request"),
         EndpointRateLimited("Too many requests. Try again later"),
+        EndpointAccessRequired("This hub is behind Cloudflare Access and needs a service token"),
+        EndpointAccessRejected("Cloudflare Access rejected the service token"),
         EndpointFailed("Connection failed"),
         AddressEmpty("Enter an address"),
         AddressSpaces("The address can’t contain spaces"),
