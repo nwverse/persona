@@ -14428,6 +14428,8 @@ def system_route(handler, p, req):
 # the same operation (install → start; nodes skipped). A removal, async or not, is recorded as an operation too.
 # =fail: the first install or upgrade of each extension stops at start (retryable: …/retry starts a new operation, its
 # download from the cache and the consent already given, so it goes on by itself); the first removal stops at remove.
+# =stall (#3692): the first preview of each extension stops half-way through its download, three steps later, with
+# download_stalled (retryable: …/retry downloads it again and waits for consent).
 # MOCK_EXTENSION_OPS_STEP=<seconds> per step (default 0.6).
 EXT_OPS = os.environ.get("MOCK_EXTENSION_OPS", "") if os.environ.get("MOCK_EXTENSIONS") else ""
 EXT_OPS_STEP = float(os.environ.get("MOCK_EXTENSION_OPS_STEP", "0.6"))
@@ -14440,6 +14442,8 @@ _UNINSTALL_STEPS = ["stop", "remove", "nodes"]
 _PACKAGE_BYTES = 4 * 1024 * 1024
 # MOCK_EXTENSION_INSTALL_DELAY=<seconds>: a hub without operations takes that long to answer an install or a removal.
 EXT_INSTALL_DELAY = float(os.environ.get("MOCK_EXTENSION_INSTALL_DELAY", "0"))
+# MOCK_EXTENSION_PREVIEW_DELAY=<seconds>: a synchronous preview takes that long to answer (a slow download, #3692).
+EXT_PREVIEW_DELAY = float(os.environ.get("MOCK_EXTENSION_PREVIEW_DELAY", "0"))
 
 
 def _ext_now():
@@ -14507,7 +14511,24 @@ def _ext_preview_run(op, c, cached=False):
         _ext_step(op, "download", "running", bytes=0, total=_PACKAGE_BYTES)
         for part in range(1, 5):
             time.sleep(EXT_OPS_STEP)
+            if op["state"] == "canceled": return
             _ext_step(op, "download", "running", bytes=_PACKAGE_BYTES * part // 4, total=_PACKAGE_BYTES)
+            if part == 2 and EXT_OPS == "stall" and ("preview", c["id"]) not in _EXT_FAILED:
+                _EXT_FAILED.add(("preview", c["id"]))
+                time.sleep(EXT_OPS_STEP * 3)
+                with _EXT_OPS_LOCK:
+                    for st in op["steps"]:
+                        if st["id"] == "download": st["state"] = "failed"
+                    op.update(state="failed", step="download", error="包下载停滞，请重试。", error_code="download_stalled",  # i18n-ignore: the hub's words
+                              retryable=True, updated_at=_ext_now(), ended_at=_ext_now())
+
+                    def retry(c=c, was=op):
+                        nxt = _ext_op_new(was["kind"], c["id"], c["name"], version=c["version"], frm=was.get("from"), market=c["market"])
+                        threading.Thread(target=_ext_preview_run, args=(nxt, c), daemon=True).start()
+                        return nxt
+                    EXT_OP_JOBS[op["id"]]["retry"] = retry
+                _ext_op_push(op)
+                return
         _ext_step(op, "download", "done")
     for sid in ("verify", "unpack", "check"):
         _ext_step(op, sid, "running"); time.sleep(EXT_OPS_STEP); _ext_step(op, sid, "done")
@@ -14666,6 +14687,7 @@ def markets_route(handler, p, body):
             _PREVIEWS.pop(pid, None); _PREVIEW_BODIES.pop(pid, None)  # the operation makes its own
             threading.Thread(target=_ext_preview_run, args=(op, c), daemon=True).start()
             handler.send_json({"operation": _ext_op_view(op)}, 202); return True
+        time.sleep(EXT_PREVIEW_DELAY)
         handler.send_json(pv); return True
     if p in ("/api/v1/plugins/-/install",) or (p.startswith("/api/v1/plugins/") and p.endswith("/-/upgrade")):
         c = _PREVIEWS.pop(req.get("preview_id", ""), None)
@@ -15750,6 +15772,8 @@ class H(BaseHTTPRequestHandler):
             # ExtensionMarketTests' update installed (#2988): example-gateway at 1.0.0 again, its newer version waiting.
             PLUGINS.pop("example-gateway-next", None); _UPGRADE_WHILE_ON.pop("example-gateway", None)
             PLUGINS["example-gateway"] = copy.deepcopy(_GATEWAY_START)
+            # MOCK_EXTENSION_OPS=stall: the next preview of each extension stalls again (ExtensionSettingsReviewTests).
+            _EXT_FAILED.difference_update({k for k in _EXT_FAILED if k[0] == "preview"})
             for m in MACHINES:
                 m["engine"] = "herdr"
                 if m["id"] == "lab":
