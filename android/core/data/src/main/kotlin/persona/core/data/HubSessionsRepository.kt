@@ -171,12 +171,15 @@ class HubSessionsRepository(
             val job = currentCoroutineContext().job
             val (epoch, filter) = lock.withLock {
                 activeRequest = job
-                mutableListStatus.update { it.copy(loading = true) }
+                mutableListStatus.update { it.copy(loading = true, failed = false) }
                 generation to mutableListStatus.value.filter
             }
+            var failed = false
             try { block(epoch, filter) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { failed = true; throw error }
             finally { withContext(NonCancellable) { lock.withLock {
-                if (generation == epoch) mutableListStatus.update { it.copy(loading = false) }
+                if (generation == epoch) mutableListStatus.update { it.copy(loading = false, failed = failed) }
                 if (activeRequest === job) activeRequest = null
             } } }
         }
