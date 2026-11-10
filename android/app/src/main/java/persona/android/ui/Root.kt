@@ -750,11 +750,21 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                   sidebarColumnShown.value = true
               }
           }
+          // A switch of assistant closes the current assistant's settings pages over the list (docs/assistant/managers.md
+          // "Clients"): none shows one assistant's settings once another is current; the list shows the new one's.
+          var settingsAssistant by remember { mutableStateOf(currentAssistant.id) }
+          LaunchedEffect(currentAssistant.id) {
+              if (settingsAssistant == currentAssistant.id) return@LaunchedEffect
+              settingsAssistant = currentAssistant.id
+              val first = settingsSheetStack.indexOfFirst { persona.feature.settings.isAssistantSettingsDestination(it) }
+              if (first > 0) while (settingsSheetStack.size > first) settingsSheetStack.removeAt(settingsSheetStack.lastIndex)
+          }
           if (settingsOpened) {
               val settingsNavigator = remember(navigator, settingsSheetStack) {
                   SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
               }
               JSettingsSheet(onDismiss = { settingsOpened = false }) {
+                CompositionLocalProvider(LocalAssistantWaiting provides waiting) {
                   val settingsEntries = entryProvider<NavKey> {
                       entry<SettingsRoute> { ShellSettings(services, settingsNavigator, shell, onClose = { settingsOpened = false }) }
                       entry<SettingsPageRoute> { route ->
@@ -787,6 +797,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                               })
                       }
                   }
+                }
               }
           }
         }

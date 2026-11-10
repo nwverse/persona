@@ -1,6 +1,12 @@
 package persona.feature.settings
 
+import persona.core.navigation.AssistantSettingsRoute
+import persona.core.navigation.ConnectorRoute
+import persona.core.navigation.ManagerRoute
+import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.SettingsPage
+import persona.core.navigation.SettingsPageRoute
+import persona.core.navigation.SettingsRoute
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -53,5 +59,22 @@ class SettingsNavigationTest {
 
     @Test fun rootAndUnknownNamesHaveNoDetailDestination() {
         listOf("settings", "assistant", "", "unknown", "DIAG").forEach { assertNull(settingsPageFromInitialPage(it)) }
+    }
+
+    /** What a switch of assistant closes: the first group's pages and what they open, never this device's or the hub's. */
+    @Test fun aSwitchClosesOnlyTheCurrentAssistantsPages() {
+        val assistants = listOf(SettingsPage.Providers, SettingsPage.ModelConfig, SettingsPage.Triage, SettingsPage.Connectors,
+            SettingsPage.Mail, SettingsPage.Feishu, SettingsPage.FeishuBot, SettingsPage.Sent, SettingsPage.Extensions,
+            SettingsPage.Channels, SettingsPage.ClaudeCode, SettingsPage.Codex)
+        SettingsPage.entries.forEach { page ->
+            assertEquals(page.name, page in assistants, isAssistantSettingsDestination(SettingsPageRoute(page)))
+            assertEquals(page.name, page in assistants, isAssistantSettingsPage(page.toInitialPage()))
+        }
+        listOf(AssistantSettingsRoute, ModelPurposeRoute("agent.triage", "m-2"), ConnectorRoute("github", "m-2"))
+            .forEach { assertTrue("$it", isAssistantSettingsDestination(it)) }
+        listOf(SettingsRoute, ManagerRoute("m-2")).forEach { assertFalse("$it", isAssistantSettingsDestination(it)) }
+        assertTrue(isAssistantSettingsPage("connector/github"))
+        assertTrue(isAssistantSettingsPage("mail-add"))
+        assertFalse(isAssistantSettingsPage("settings"))
     }
 }

@@ -20,24 +20,21 @@ import kotlinx.coroutines.launch
 
 /**
  * Settings › Model configuration (docs/assistant/model-config.md): each AI use of the hub with what is in effect for it. The hub owns the
- * catalog; a row opens that use's page.
+ * catalog; a row opens that use's page. The current assistant's (docs/assistant/managers.md "Clients"): another one current, the
+ * page reads that one's.
  */
 @Composable
 internal fun ModelConfigurationPage(models: ModelConfiguration?, onBack: () -> Unit, onPurpose: (String, String) -> Unit, providers: ProviderSetup? = null) {
-    val roster = LocalManagerRoster.current
-    var owner by androidx.compose.runtime.saveable.rememberSaveable(LocalManagerGroup.current) {
-        mutableStateOf(roster?.defaultManagerId ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER)
-    }
+    val owner = currentAssistant().id
     key(models, owner) {
         ModelConfigurationDetails(models, onBack, { onPurpose(it, owner) },
-            remember(providers, owner) { providers?.forManager(owner) }, owner,
-            switcher = { JManagerSwitcher(roster, owner, { owner = it }) })
+            remember(providers, owner) { providers?.forManager(owner) }, owner)
     }
 }
 
 @Composable
 private fun ModelConfigurationDetails(models: ModelConfiguration?, onBack: () -> Unit, onPurpose: (String) -> Unit,
-    providers: ProviderSetup?, owner: String, switcher: @Composable () -> Unit) {
+    providers: ProviderSetup?, owner: String) {
     if (models == null) {
         JListPage(title = stringResource(R.string.settings_src_model_title), onBack = onBack) { item { JNotice(stringResource(R.string.settings_src_model_demo)) } }
         return
@@ -63,7 +60,7 @@ private fun ModelConfigurationDetails(models: ModelConfiguration?, onBack: () ->
             if (providers != null) JIconButton(PhIcons.Plus, stringResource(R.string.settings_src_provider_new), { adding = "manual" })
             JIconButton(PhIcons.ArrowClockwise, stringResource(R.string.settings_src_refresh), { scope.launch { model.load() } }, enabled = !state.loading)
         }) {
-        item("manager") { ModelConfigurationOwner(owner); switcher() }
+        item("manager") { ModelConfigurationOwner(owner) }
         item("search") {
             Column(Modifier.padding(top = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JSearchField(query, { query = it }, stringResource(R.string.settings_src_model_search))
