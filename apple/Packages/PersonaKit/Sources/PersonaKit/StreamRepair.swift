@@ -29,6 +29,7 @@ public nonisolated enum StreamRepair {
     /// `md` made whole for the moment (see the type).
     public static func repair(_ md: String) -> String {
         guard !md.isEmpty else { return md }
+        if let shorter = withoutIndentSoFar(md) { return repair(shorter) }
         let x = Scan(md)
         guard let lastLine = x.lines.last else { return md }
         let last = x.lines.count - 1
@@ -57,6 +58,7 @@ public nonisolated enum StreamRepair {
     /// Where `md` (as it came, not repaired) ends.
     public static func end(of md: String) -> End {
         guard !md.isEmpty else { return .text }
+        if let shorter = withoutIndentSoFar(md) { return end(of: shorter) }
         let x = Scan(md)
         if x.fence != nil { return .code }
         if x.mathOpen { return .math }
@@ -64,6 +66,16 @@ public nonisolated enum StreamRepair {
         if !x.endsWithNewline, let last = x.lines.last, MathMarkdown.display(x.trimmed(last)) != nil { return .math }
         if x.table != nil { return .table }
         return .text
+    }
+
+    /// `md` without its last line when that line, not ended, is only the indentation of the next one so far. It draws as
+    /// nothing; read as a blank line it ended the block above, and in a list item's table the caret after it was a row.
+    private static func withoutIndentSoFar(_ md: String) -> String? {
+        let u = md.unicodeScalars
+        var i = u.endIndex
+        while i > u.startIndex, u[u.index(before: i)] == " " || u[u.index(before: i)] == "\t" { i = u.index(before: i) }
+        guard i < u.endIndex, i == u.startIndex || u[u.index(before: i)] == "\n" else { return nil }
+        return String(u[..<i])
     }
 
     /// `md` with the info string of the code fence still open at its end taken off when `drawn` says that fence is

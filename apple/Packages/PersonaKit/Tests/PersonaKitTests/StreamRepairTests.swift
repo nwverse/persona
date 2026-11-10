@@ -109,6 +109,11 @@ struct StreamRepairTests {
         #expect(repair("1. 项\n   | a | b |\n   | -") == "1. 项\n   | a | b |\n   | --- | --- |")
         #expect(repair("- 项\n  | a | b |\n  | --- | --- |\n  | 1") == "- 项\n  | a | b |\n  | --- | --- |\n")
         #expect(StreamRepair.end(of: "- 项\n  | a | b |\n  | --- | --- |\n  | 1") == .table)
+        // the next row's indentation, written before the row, is not a blank line ending the table
+        #expect(repair("- 项\n\n  | a | b |\n  | --- | --- |\n  ") == "- 项\n\n  | a | b |\n  | --- | --- |\n")
+        #expect(StreamRepair.end(of: "- 项\n\n  | a | b |\n  | --- | --- |\n  ") == .table)
+        #expect(StreamRepair.end(of: "- 项\n\n  | a | b |\n") == .table)
+        #expect(StreamRepair.end(of: "- 项\n\n  | a | b |\n  ") == .table)
     }
 
     @Test func findsNoTableInALazyLine() {
@@ -205,6 +210,13 @@ struct StreamRepairTests {
     @Test func leavesALineThatHasEnded() {
         #expect(repair("这是 **重要\n") == "这是 **重要\n")
         #expect(repair("-\n") == "-\n")
+    }
+
+    @Test func leavesOutALineOfOnlyIndentationSoFar() {
+        #expect(repair("```\na\n  ") == "```\na\n```")
+        #expect(repair("正文\n\t") == "正文\n")
+        #expect(repair("   ") == "")
+        #expect(repair("a  b") == "a  b")
     }
 
     // MARK: Only the end changes
