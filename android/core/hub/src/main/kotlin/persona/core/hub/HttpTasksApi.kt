@@ -125,17 +125,38 @@ class HttpTasksApi internal constructor(
     }
 
     private val feedOwners = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val conversationOwners = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     override fun noteFeedOwner(item: FeedItem, manager: String?) {
-        feedOwners[item.id] = persona.core.contracts.pushManager(manager)
+        val owner = persona.core.contracts.pushManager(manager)
+        feedOwners[item.id] = owner
+        conversationOwners[item.conversation] = owner
     }
 
-    override suspend fun feed(conversation: String, since: String?): FeedResponse {
-        val owner = AssistantManagerChoice.itemManager(listOf("assistant", "conversations", conversation))
-            ?: AssistantManagerChoice.current.value.defaultId
-        val response: FeedResponse = JsonCodec.decodeFromJsonElement(call(path("assistant", "conversations", conversation, "feed",
-            query = since?.let { mapOf("since" to it) } ?: emptyMap())))
+    private fun feedOwner(conversation: String): String = conversationOwners[conversation]
+        ?: AssistantManagerChoice.itemManager(listOf("assistant", "conversations", conversation))
+        ?: AssistantManagerChoice.current.value.defaultId
+
+    override suspend fun feed(conversation: String, since: String?): FeedResponse =
+        readFeed(conversation, since, null, feedOwner(conversation), paginated = false)
+
+    override fun feedPages(conversation: String): persona.core.contracts.api.FeedPageReader {
+        val owner = feedOwner(conversation)
+        return persona.core.contracts.api.FeedPageReader { since, cursor -> readFeed(conversation, since, cursor, owner, paginated = true) }
+    }
+
+    private suspend fun readFeed(conversation: String, since: String?, cursor: String?, owner: String, paginated: Boolean): FeedResponse {
+        val query = buildMap {
+            if (paginated) put(ManagerQuery, owner)
+            if (cursor != null) put("cursor", cursor)
+            else {
+                if (paginated) put("paginate", "1")
+                since?.let { put("since", it) }
+            }
+        }
+        val response: FeedResponse = JsonCodec.decodeFromJsonElement(call(path("assistant", "conversations", conversation, "feed", query = query)))
         response.items.forEach { feedOwners.putIfAbsent(it.id, owner) }
+        conversationOwners.putIfAbsent(conversation, owner)
         return response
     }
 

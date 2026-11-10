@@ -78,6 +78,8 @@ class MessageCardTest {
         var feedGate: CompletableDeferred<Unit>? = null
         var dismissError: Throwable? = null
         var undoError: Throwable? = null
+        var pageReader: persona.core.contracts.api.FeedPageReader? = null
+        override fun feedPages(conversation: String) = pageReader ?: super<TasksApi>.feedPages(conversation)
         override suspend fun todos() = emptyList<Todo>()
         // As the hub: after `since`, only items made later and cards sent later (filed_at is worked out on each read, no event).
         override suspend fun feed(conversation: String, since: String?): FeedResponse {
@@ -207,6 +209,118 @@ class MessageCardTest {
         assertEquals(restored, store.feeds.value["c1"]!!.first())
         assertTrue(store.feeds.value["c1"]!!.first().canSend)
         assertEquals(progress, store.feeds.value["c1"]!!.last())
+    }
+
+    @Test fun stablePaginationReachesProgressBeyondAFullPageOfUpdatedOldDismissals() = kotlinx.coroutines.test.runTest {
+        val start = java.time.Instant.parse("2026-11-04T00:00:00Z")
+        val old = (0 until 500).map { index ->
+            card("old-$index", mapOf("draft" to "Old reply $index", "dismissed_at" to start.plusSeconds(1000).toString(),
+                "dismissal_updated_at" to start.plusSeconds(1000).toString()))
+                .copy(at = start.plusSeconds(index.toLong()).toString())
+        }
+        val api = Api(CompletableDeferred(Unit), old)
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        val progress = FeedItem("new-progress", "c1", start.plusSeconds(500).toString(), "task", "task-one")
+        val reads = mutableListOf<Pair<String?, String?>>()
+        api.pageReader = persona.core.contracts.api.FeedPageReader { since, cursor ->
+            reads += since to cursor
+            when (cursor) {
+                null -> FeedResponse(old, nextCursor = "opaque-next")
+                "opaque-next" -> FeedResponse(listOf(progress), nextCursor = "")
+                else -> error("unexpected cursor")
+            }
+        }
+        store.load("c1"); runCurrent()
+        assertEquals(listOf(old.last().at to null, old.last().at to "opaque-next"), reads)
+        assertEquals(progress, store.feeds.value["c1"]!!.last())
+        assertEquals(501, store.feeds.value["c1"]!!.size)
+    }
+
+    @Test fun paginationUsesExplicitEofAndContinuesAcrossEmptyPages() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original"))
+        val api = Api(CompletableDeferred(Unit), emptyList())
+        val reads = mutableListOf<String?>()
+        api.pageReader = persona.core.contracts.api.FeedPageReader { _, cursor ->
+            reads += cursor
+            when (cursor) {
+                null -> FeedResponse(emptyList(), nextCursor = "next")
+                "next" -> FeedResponse(List(500) { original.copy(id = "card-$it") }, nextCursor = "")
+                else -> error("explicit EOF was ignored")
+            }
+        }
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        assertEquals(listOf(null, "next"), reads)
+        assertEquals(500, store.feeds.value["c1"]!!.size)
+        val legacy = TasksStore(Api(CompletableDeferred(Unit), listOf(original)), Connection(), backgroundScope)
+        legacy.load("c1"); runCurrent()
+        assertEquals(listOf(original), legacy.feeds.value["c1"])
+    }
+
+    @Test fun aLaterPageCannotResurrectADismissalAcceptedAfterTheFirstPage() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original"))
+        val api = Api(CompletableDeferred(Unit), listOf(original))
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        val gate = CompletableDeferred<Unit>()
+        val progress = FeedItem("new-progress", "c1", kind = "task", ref = "task-one")
+        api.pageReader = persona.core.contracts.api.FeedPageReader { _, cursor ->
+            if (cursor == null) FeedResponse(listOf(original), nextCursor = "next")
+            else { gate.await(); FeedResponse(listOf(original, progress), nextCursor = "") }
+        }
+        store.load("c1", whole = true); runCurrent()
+        store.dismissMessage(original, { throw it }) { }; runCurrent()
+        gate.complete(Unit); runCurrent()
+        assertFalse(store.feeds.value["c1"]!!.first { it.id == original.id }.canSend)
+        assertEquals(progress, store.feeds.value["c1"]!!.first { it.id == progress.id })
+    }
+
+    @Test fun failedOrRepeatedCursorRangesKeepConfirmedDataAndRestartWithoutAdvancingSince() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original", "dismissed_at" to "2026-11-04T10:01:00Z"))
+        val api = Api(CompletableDeferred(Unit), listOf(original))
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        var reads = 0
+        val partial = original.copy(id = "partial")
+        api.pageReader = persona.core.contracts.api.FeedPageReader { _, _ ->
+            reads++
+            FeedResponse(listOf(partial), nextCursor = "repeated")
+        }
+        store.load("c1"); runCurrent()
+        assertEquals(2, reads)
+        assertEquals(listOf(original), store.feeds.value["c1"])
+        var retrySince: String? = "not-read"
+        api.pageReader = persona.core.contracts.api.FeedPageReader { since, _ ->
+            retrySince = since
+            FeedResponse(listOf(original), nextCursor = "")
+        }
+        store.load("c1"); runCurrent()
+        assertNull(retrySince)
+        reads = 0
+        api.pageReader = persona.core.contracts.api.FeedPageReader { _, cursor ->
+            reads++
+            if (cursor != null) throw IllegalStateException("Page refused")
+            FeedResponse(listOf(partial), nextCursor = "next")
+        }
+        store.load("c1"); runCurrent()
+        assertEquals(2, reads)
+        assertEquals(listOf(original), store.feeds.value["c1"])
+    }
+
+    @Test fun paginationStopsAtTheFinitePageBudgetWithoutPublishingPartialRows() = kotlinx.coroutines.test.runTest {
+        val original = card(extra = mapOf("draft" to "Original"))
+        val api = Api(CompletableDeferred(Unit), listOf(original))
+        val store = TasksStore(api, Connection(), backgroundScope)
+        store.load("c1"); runCurrent()
+        var reads = 0
+        api.pageReader = persona.core.contracts.api.FeedPageReader { _, _ ->
+            reads++
+            FeedResponse(listOf(original.copy(id = "partial-$reads")), nextCursor = "next-$reads")
+        }
+        store.load("c1"); runCurrent()
+        assertEquals(64, reads)
+        assertEquals(listOf(original), store.feeds.value["c1"])
     }
 
     @Test fun websocketOnlyCardsCaptureTheirOwnerBeforeTheyAreShown() = kotlinx.coroutines.test.runTest {

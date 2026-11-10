@@ -160,6 +160,53 @@ class HttpTasksApiTest {
         } finally { choice.reset(); choice.forgetItems() }
     }
 
+    @Test fun paginatedFeedUsesOpaqueContinuationAndPinsBothDefaultAndExplicitOwners() = runBlocking {
+        val choice = persona.core.contracts.api.AssistantManagerChoice
+        try {
+            for (owner in listOf(null, "assistant-one")) MockWebServer().use { server ->
+                choice.choose(null, "shown-assistant", "assistant")
+                val api = api(server)
+                api.noteFeedOwner(persona.core.contracts.FeedItem("live", "conversation/one"), owner)
+                val reader = api.feedPages("conversation/one")
+                choice.pick("another-assistant")
+                val since = "2026-11-11T08:00:00+09:00"
+                val cursor = "opaque /+?&="
+                server.enqueue(MockResponse().setBody("""{"items":[],"next_cursor":"$cursor"}"""))
+                assertEquals(cursor, reader.read(since, null).nextCursor)
+                val first = server.takeRequest()
+                assertEquals("GET", first.method)
+                assertEquals("/api/v1/assistant/conversations/conversation%2Fone/feed", first.requestUrl?.encodedPath)
+                assertEquals("1", first.requestUrl?.queryParameter("paginate"))
+                assertEquals(since, first.requestUrl?.queryParameter("since"))
+                assertNull(first.requestUrl?.queryParameter("cursor"))
+                assertEquals(persona.core.contracts.pushManager(owner), first.requestUrl?.queryParameter("manager"))
+                choice.choose(null, "third-assistant", "different-default")
+                server.enqueue(MockResponse().setBody("""{"items":[],"next_cursor":""}"""))
+                assertEquals("", reader.read(since, cursor).nextCursor)
+                val next = server.takeRequest()
+                assertEquals(cursor, next.requestUrl?.queryParameter("cursor"))
+                assertNull(next.requestUrl?.queryParameter("since"))
+                assertNull(next.requestUrl?.queryParameter("paginate"))
+                assertEquals(persona.core.contracts.pushManager(owner), next.requestUrl?.queryParameter("manager"))
+            }
+        } finally { choice.reset(); choice.forgetItems() }
+    }
+
+    @Test fun olderFeedResponsesRetainMissingCursorAndInvalidContinuationKeepsItsError() = runBlocking {
+        MockWebServer().use { server ->
+            val reader = api(server).feedPages("conversation")
+            server.enqueue(MockResponse().setBody("""{"items":[]}"""))
+            assertNull(reader.read(null, null).nextCursor)
+            server.takeRequest()
+            server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":"Invalid cursor"}"""))
+            try { reader.read("original-since", "invalid/cursor"); fail("invalid continuation was not refused") }
+            catch (error: HubFailure) { assertEquals(400, error.status) }
+            val request = server.takeRequest()
+            assertEquals("invalid/cursor", request.requestUrl?.queryParameter("cursor"))
+            assertNull(request.requestUrl?.queryParameter("since"))
+        }
+    }
+
     @Test fun draftDismissalAndUndoKeepConflictAndMissingErrors() = runBlocking {
         MockWebServer().use { server ->
             val api = api(server)

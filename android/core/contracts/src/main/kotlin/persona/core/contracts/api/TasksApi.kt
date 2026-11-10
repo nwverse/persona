@@ -8,6 +8,11 @@ import persona.core.contracts.Todo
 /** A confirmed card-scoped dismissal, retaining the token required for a lightweight Undo. */
 data class MessageDraftDismissal(val item: FeedItem, val dismissalId: String)
 
+/** One bounded feed range, with its request owner captured before the first page. */
+fun interface FeedPageReader {
+    suspend fun read(since: String?, cursor: String?): FeedResponse
+}
+
 /** Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and the chat feed"). */
 interface TasksApi {
     /** Exact metadata for a bound agent, independent of the Agents list filter and page. */
@@ -30,6 +35,8 @@ interface TasksApi {
 
     /** A conversation's feed after [since] (an ISO time; null: all of it), with the plans its `plan` items name. */
     suspend fun feed(conversation: String, since: String?): FeedResponse
+    /** Paginated reads retain the original since and owner; transports without cursors keep their existing read. */
+    fun feedPages(conversation: String): FeedPageReader = FeedPageReader { since, _ -> feed(conversation, since) }
     suspend fun startPlan(id: String, remember: Boolean): TaskPlan
     /** "Start" after "Edit": [tasks] replaces the plan's tasks by index with what the user changed (null: as planned). */
     suspend fun startPlan(id: String, remember: Boolean, tasks: List<persona.core.contracts.PlanTask>?): TaskPlan = startPlan(id, remember)

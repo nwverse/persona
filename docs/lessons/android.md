@@ -15,7 +15,10 @@ the same source item remains visible. Apply the hub's complete returned item, ra
 already changed that card. Retain its captured assistant manager across selection changes. Use the shell's existing Undo
 snackbar, with only Send primary; large-text and narrow action groups stack primary-first through `DraftDecisionButtons`.
 Exclude persistently dismissed cards from the oldest-unsent read anchor, but retain dynamically filed cards. Undo catch-up
-uses the retained `dismissal_updated_at`. A whole page of recently updated old rows still needs server-side pagination.
+uses the retained `dismissal_updated_at`. Stable pagination starts with `paginate=1` and continues with only the opaque
+`cursor`, never a newer `since`; a captured-owner reader pins the whole range. `next_cursor` alone decides completion
+(missing means an older hub, empty means EOF), not the number of items. Bound the range to 64 pages and reject repeated
+cursors. Publish only a complete range under its original mutation fence, and restart incomplete reads without advancing.
 A snackbar action can pass semantic visibility assertions while its text is invisible. `JAppSnackbarHost` uses the inverse
 message-text role for its action, not the accent; inspect light/dark images and test contrast on the actual inverse surface.
 

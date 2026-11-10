@@ -409,6 +409,8 @@ data class FeedResponse(
     @SerialName("view_blocks") val viewBlocks: List<String> = emptyList(),
     /** Null on older hubs or a failed projection read; an empty incremental page removes nothing. */
     @SerialName("task_cards") val taskCards: List<AssistantTaskCard>? = null,
+    /** Stable pagination: null on older hubs, empty at EOF, otherwise an opaque continuation cursor. */
+    @SerialName("next_cursor") val nextCursor: String? = null,
 )
 
 /** The todos changed: pull them again. */

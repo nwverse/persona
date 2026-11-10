@@ -22,6 +22,7 @@ import persona.core.contracts.AssistantViewActionEvent
 import persona.core.contracts.AssistantViewBlockEvent
 import persona.core.contracts.AssistantViewEvent
 import persona.core.contracts.FeedItem
+import persona.core.contracts.FeedResponse
 import persona.core.contracts.Session
 import persona.core.contracts.PlanTask
 import persona.core.contracts.TaskPlan
@@ -48,6 +49,7 @@ interface TodoCache {
 
 /** How long a Today card is held before an open asks the hub again whether its day has moved on (#5194). */
 private val todayRecheck = Duration.ofMinutes(10)
+private const val maximumFeedPages = 64
 
 class TasksStore(
     private val api: TasksApi,
@@ -290,7 +292,7 @@ class TasksStore(
                 else -> held.lastOrNull()?.at
             }
             val versions = synchronized(feedLock) { feedVersions.toMap() }
-            runCatching { api.feed(conversation, since) }.onSuccess { res ->
+            runCatching { readFeedPages(conversation, since) }.onSuccess { res ->
                 if (res.plans.isNotEmpty()) _plans.update { it + res.plans }
                 res.taskCards?.takeIf { it.isNotEmpty() }?.let { cards ->
                     _taskCards.update { held ->
@@ -308,8 +310,35 @@ class TasksStore(
                 cards.snapshot(conversation, res.views, res.viewActions, res.viewBlocks)
                 received(res.items, conversation, versions)
                 loaded.update { it + conversation }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                // Do not advance the next read past a partial range, including rows with tied creation times.
+                loaded.update { it - conversation }
             }
         }
+    }
+
+    private suspend fun readFeedPages(conversation: String, since: String?): FeedResponse {
+        val reader = api.feedPages(conversation)
+        val seen = HashSet<String>()
+        var cursor: String? = null
+        var result = FeedResponse()
+        repeat(maximumFeedPages) {
+            val page = reader.read(since, cursor)
+            val heldCards = result.taskCards
+            val pageCards = page.taskCards
+            result = page.copy(items = result.items + page.items, plans = result.plans + page.plans,
+                taskCards = when {
+                    heldCards == null -> pageCards
+                    pageCards == null -> heldCards
+                    else -> heldCards + pageCards
+                })
+            val next = page.nextCursor
+            if (next.isNullOrEmpty()) return result // Missing: an older hub; empty: explicit EOF, even on a full page.
+            check(seen.add(next)) { "Repeated feed cursor" }
+            cursor = next
+        }
+        error("Feed page limit exceeded")
     }
 
     private var main: String? = null
