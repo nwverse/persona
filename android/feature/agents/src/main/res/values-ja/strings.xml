@@ -68,6 +68,7 @@
     <string name="agents_range_running">実行中</string>
     <string name="agents_range_all">すべて</string>
     <string name="agents_range_history">履歴</string>
+    <string name="agents_grouping_current">グループ化：%1$s</string>
     <string name="agents_grouping_repo">リポジトリ別</string>
     <string name="agents_grouping_state">状態別</string>
     <string name="agents_grouping_todo">ToDo別</string>

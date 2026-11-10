@@ -304,11 +304,16 @@ Normal receipts are written before judgment for both supervised and unsupervised
 | `unsure` | Cannot tell | No |
 
 - Caveats do not prevent completion: platforms without screenshots, unmeasured environments and reminders to user are not unfinished work. Routine waits after delivery (TestFlight external-group Beta review, CI rerun) do not count as waiting either; addressing App Store / Mac App Store review feedback then awaiting review outcome does count as `waiting`.
-- Prefer leaving open: unavailable model, timeout, invalid JSON or verdict other than `done` leave to-do untouched and only log; receipt still sends.
+- Prefer leaving open: unavailable model, timeout, invalid JSON or verdict other than `done` leave the to-do open and log; receipt still sends. A verdict is kept as the to-do's `check` (below).
 - No judgment for a turn interrupted by model service (#1516): if an Agent stops on an API error (`turn_error`: Claude Code's last message such as "API Error: …", Codex reported by node from this turn's error, #2185), receipt has `state: "interrupted"` (summary "Model-service error interrupted the task", original error in `error`); no judgment-model call or closing to-do. `done-check` directly returns `not_done` when the last reply is such an error.
 - No judgment for a turn with no output either (#2349): latest stopped Agent's turn (node `session.items`, `turns: 1`) contains no assistant text, tool calls or images and no `turn_error` (model service returns 200 with empty content; Claude Code adds an invisible "no visible output" notice, retries, then ends silently). Receipt is `interrupted` (error "这一轮没有任何输出：…", "This turn had no output: …"), notification uses interrupted, no judgment or to-do close. Unreadable items (node unreachable/no items) or user pressing Esc ("已中断" notice, "Interrupted") do not count.
 - Cheap signals: final reply has a GitHub PR link and mentions merging (merged / 已合并 / 合入, the latter two meaning merged), or mentions TestFlight plus a build number. Assistant includes these as hints only, never enough alone for completion.
 - Prompts: `server/internal/prompts/assistant/task_done.md`, `task_done_input.md` (`docs/assistant/prompts.md`).
+
+**The check on the to-do** (#3180): every automatic judgment, supervised tasks included (before `superviseJudged`), writes `check: {"verdict", "reason", "at", "work_since"}` on the to-do, so an open task can say why it is not done: `verdict` as judged (a made-up one becomes `unsure`; with Delivery on, `undelivered` too), `reason` the judge's line, `at` when it was judged, `work_since` the start of the stretch of work it judged. It is written only while the judgment is still current (`taskCompletionCurrent`, and no new turn since under `completionMu`), so one overtaken by new work writes nothing; a reopen and an Agent's new turn clear it. No model or a model error writes nothing.
+- **Language**: the judge writes `reason` in the user's language (`{{if .Language}}` in `task_done.md`) without internal ids. The hub's own reasons (no reply read, a cut-off turn, a side-conversation reply with no evidence for this task) and the `done_reason` fallback for an empty reason come from the hub's i18n (`assistant-tasks.*`).
+- **Storage**: next to `delivery` in the `assistant.todo_stages` setting (`task_check.go`, `reports.go`), no migration. It is additive: no field changes meaning, `task_cards` is unchanged, and clients that don't know it show the to-do as before.
+- **Clients**: web `ProgressTaskRow` and Android `trayProgress` say "Stopped, not done yet · <reason>" for a task neither working nor done whose current check is not `done` / `unsure` (`docs/assistant/unified-entry.md` "Progress tray"). iOS doesn't draw it yet (#2879).
 
 **Visible and reversible**: auto-completion writes `done_at`, `done_by = "auto"`, `done_reason`. iOS / Mac / web list/detail show **Auto-completed** beside Done; detail shows reason. **Reopen**, like manual completion, returns to unfinished, clears `done_by`/`done_reason`, records `reopened_at`.
 
@@ -316,7 +321,7 @@ Normal receipts are written before judgment for both supervised and unsupervised
 
 **After completion**: same path as user marking done: sessions lose to-do field, node reconciliation clears `persona_todo` / `persona_todo_ref`, whole-project linking/spawn following stop, Inbox AI twin no longer associates messages with it; assistant live snapshot marks task "Done (automatically closed after hub judged complete)", omitted after 24 hours.
 
-**Diagnosis**: `POST /api/v1/todos/{id}/done-check` judges the same inputs, returns verdict only without database writes (read-only role 403):
+**Diagnosis**: `POST /api/v1/todos/{id}/done-check` judges the same inputs, returns verdict only without database writes, `check` included (read-only role 403):
 
 ```jsonc
 {"verdict": "waiting", "reason": "Waiting for App review", "would_close": false, "skip": "", "replies": 1, "signals": {"merged_pr": false, "build": false}}
@@ -423,7 +428,7 @@ Something the owner raises in the main conversation and wants an answer to is a 
 - **Never closes on its own**: the hub's judge ("Automatic completion"), a review or cancellation, a failed start, `todo_complete` and `PATCH {"done": true}` (an app, an extension) all leave it open (the PATCH answers 409, the tool says to report instead). The store refuses each of them for `kind = concern`, and memory refuses a row that would close one without `done_by = reported`. Reopened (`PATCH {"done": false}`, `todo_reopen`), it needs another report; deleting it stays the owner's choice.
 - **Extensions**: `todo.changed` carries `kind: "concern"` (created, reopened, closed by its report), and each report is a `todo.decision` with `source: "reported"`, so a work-log extension can keep the concern in its record and show its answer.
 - `todo_list {kind: "concern"}` lists the open concerns; `todo_list` / `todo_get` mark them `concern`.
-- Clients: `kind` is on the to-do's JSON (left out for others), `done_by` `reported` on a closed one; clients that do not know them show it as a to-do. The SOP rule (an open concern sits in Working while a task of it runs, else in Other open, labelled Concern and not folded) and the secretary's prompt (P1) come later; until P1 the main conversation records and reports concerns only when told to.
+- Clients: `kind` is on the to-do's JSON (left out for others), `done_by` `reported` on a closed one; clients that do not know them show it as a to-do. The SOP rule (an open concern sits in Working while a task of it runs, else in Other open, labelled Concern and not folded) is on the hub (`todo_triage.go`: never shelvable, #3610, so a leader's stuck report and the counts see it right); the clients follow with W1 / I1 / A1 (#3582), and the shared fixtures with them. Until the secretary's prompt (P1) the main conversation records and reports concerns only when told to.
 
 ## Questions nobody answered
 

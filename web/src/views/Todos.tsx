@@ -67,7 +67,7 @@ import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
 import type { Route } from "../lib/router";
-import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
+import { LatestReport, ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
 import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
@@ -1427,6 +1427,7 @@ function TodoDetail({
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
       <ReviewChecklist todo={todo} />
+      <LatestReport todo={todo} />
 
       {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
       <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />

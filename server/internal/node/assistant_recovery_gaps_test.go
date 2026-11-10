@@ -247,20 +247,11 @@ func TestAssistantInterruptCancelsBeforeWaiting(t *testing.T) {
 		_ = n.assistantInterrupt(id)
 		close(done)
 	}()
-	deadline := time.Now().Add(time.Second)
-	for {
+	waitWithin(t, time.Second, "Stop cancels the recovery before the send lock is released", func() bool {
 		n.mu.Lock()
-		left := n.recoveries[id] != nil
-		n.mu.Unlock()
-		if !left {
-			break
-		}
-		if time.Now().After(deadline) {
-			unlock()
-			t.Fatal("Stop waited behind the send before cancelling the recovery")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		defer n.mu.Unlock()
+		return n.recoveries[id] == nil
+	})
 	unlock()
 	<-done
 }
