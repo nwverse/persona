@@ -49,7 +49,7 @@ func TestHTTPUnknownAccountLocalized(t *testing.T) {
 	}{
 		{"", http.MethodGet, "/api/v1/mail/messages/none/1", english},
 		{i18n.En, http.MethodGet, "/api/v1/mail/messages/none/1", english},
-		{i18n.ZhHans, http.MethodGet, "/api/v1/mail/messages/none/1", "邮箱账号“none”已不在这个管理者上了。"},
+		{i18n.ZhHans, http.MethodGet, "/api/v1/mail/messages/none/1", "邮箱账号“none”已不在这个助手上了。"},
 		{i18n.Ja, http.MethodGet, "/api/v1/mail/messages/none/1", "メールアカウント「none」はこのマネージャーに接続されていません。"},
 		{i18n.Ja, http.MethodDelete, "/api/v1/mail/accounts/none", "メールアカウント「none」はこのマネージャーに接続されていません。"},
 	} {
