@@ -339,7 +339,7 @@ The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home 
 
 ### 3.9 Empty states
 
-`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`.
+`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
 
@@ -388,6 +388,8 @@ Severity ladder to adopt:
 2. Destructive with one object: `confirmationDialog` with a destructive button that repeats the verb, a message that says what is lost, and Cancel.
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
 4. `.alert` for short prompts and text entry.
+
+The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
 
 Today there are seven mechanisms and the same action can use different ones (DS-24). Archive in the sidebar, to-do swipe delete and mail-account delete have no confirmation and no Undo. Only the Mac discards edits with a prompt.
 

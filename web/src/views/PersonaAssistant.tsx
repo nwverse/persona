@@ -12,7 +12,7 @@ import { codedFailure, helpTopic, passesBySelf, refreshReadiness, type CodedFail
 import { navigate } from "../lib/router";
 import { refreshAssistant, useStore } from "../lib/store";
 import { effectiveLauncher, NEW_CONVERSATION, pickedLauncher, pickLauncher } from "../lib/assistant-chat";
-import { noteSent, outboxMessage } from "../lib/outbox";
+import { adoptedConversation, noteSent, outboxMessage } from "../lib/outbox";
 import { Button, cx, EASE, IconButton, Loading } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { ChatView, Header } from "./chat/ChatView";
@@ -26,8 +26,9 @@ import { ShellHeaderSlots, ShellSwitch } from "./ShellSwitch";
 import { conversationTitle } from "./assistant/conversations";
 import { formatList, t } from "../i18n";
 import { useAssistantTitle, useShownOffline } from "./ManagerParts";
-import { chosenManager, noteConversation, ownerHeaders, shownManager } from "../lib/manager-choice";
+import { chosenManager, noteConversation, ownerHeaders, sameManager, shownManager, useShownManager } from "../lib/manager-choice";
 import { useScopedMachines } from "../lib/current-assistant";
+import type { AssistantInfo, Session } from "../lib/types";
 
 /** The example questions of a hub without readiness (its `suggestions` replace them, docs/assistant/onboarding.md 4.7). */
 const SUGGESTIONS = [t("personaassistant.suggestion_meetings"), t("personaassistant.suggestion_agents"), t("personaassistant.suggestion_lark"), t("personaassistant.suggestion_projects")];
@@ -44,12 +45,31 @@ const noop = () => {};
 // @ in a new conversation: other sessions as context; no chat yet, so no files it touched (typed / and ~ paths still browse)
 const NEW_MENTION: MentionSource = { self: "persona-new", files: () => [], workspaces: true };
 
+/** The computer conversation sid runs on when it is another assistant's than the current one (opened from an inbox
+ *  item's hand-off, a link, the palette): the hub's list of sessions has it under that manager, or a page here started
+ *  it for that manager (lib/outbox.ts adoptConversation). "": the current assistant's (or not known to be another's). */
+export function elsewhere(sid: string, shown: string, assistant: AssistantInfo | null, sessions: Record<string, Session[]>): string {
+  if (assistant && (assistant.main === sid || assistant.conversations.some((c) => c.session_id === sid))) return "";
+  for (const list of Object.values(sessions)) {
+    const s = list.find((x) => x.session_id === sid);
+    if (s) return s.assistant && !sameManager(s.manager, shown) ? s.machine_id : "";
+  }
+  const adopted = adoptedConversation(sid);
+  return adopted && !sameManager(adopted.manager, shown) ? adopted.machine : "";
+}
+
 export function PersonaAssistant({ sid, fresh, onToggleSidebar }: { sid?: string; fresh?: boolean; onToggleSidebar: () => void }) {
   const assistant = useStore((s) => s.assistant);
   const assistantError = useStore((s) => s.assistantError);
   const loaded = useStore((s) => s.loaded);
-  // the shown manager offline (with several, ManagerParts): its history stays, nothing goes
-  const offline = useShownOffline();
+  // another assistant's conversation opens as itself, on its own computer, and the current assistant stays
+  // (docs/assistant/managers.md "Clients")
+  const shown = useShownManager();
+  const away = useStore((s) => (sid && !fresh ? elsewhere(sid, shown, s.assistant, s.sessions) : ""));
+  // the shown manager offline (with several, ManagerParts): its history stays, nothing goes; another's conversation
+  // says its own (ChatView, by the session's manager)
+  const shownOffline = useShownOffline();
+  const offline = away ? null : shownOffline;
   const scope = feedCacheScope();
   const manager = chosenManager() ?? "";
   // A reloaded conversation link needs its machine before the socket reconnects, so its saved outbox can appear.
@@ -62,7 +82,7 @@ export function PersonaAssistant({ sid, fresh, onToggleSidebar }: { sid?: string
     return page && (page.manager ?? "") === manager ? page : null;
   }, [scope, manager, sid, fresh, assistant]);
   const main = assistant?.main ?? cached?.sessionID;
-  const machine = assistant?.machine_id ?? cached?.machineID;
+  const machine = away || (assistant?.machine_id ?? cached?.machineID);
   if (fresh) return <Starter onToggleSidebar={onToggleSidebar} />;
   const id = sid ?? main;
   if (id) {

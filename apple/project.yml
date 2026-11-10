@@ -781,6 +781,8 @@ targets:
       - path: PersonaTests/DelegateTests.swift
       - path: PersonaTests/GitReadFailureTests.swift
       - path: PersonaTests/ChatSupervisionLinesTests.swift
+      - path: PersonaTests/SubagentResultTests.swift
+      - path: PersonaTests/SubagentDeliveryTests.swift
       - path: PersonaTests/SupervisionTests.swift
       - path: PersonaTests/BriefCardTests.swift
       - path: PersonaTests/TodoDecisionCompletionTests.swift
