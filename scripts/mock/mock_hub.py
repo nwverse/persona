@@ -18887,6 +18887,45 @@ def features():
 MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 agent_session_archives 和 agent_session_archive_close（archive：只有归档，像旧管理器）；"
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 
+# MOCK_TASK_TRAY_ACTIVITY=1: four deterministic tray rows for Apple UI verification.
+# Parent turns have ended: a command, a workflow, a subagent, and a wake-up with no background work.
+if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") == "1":
+    activity_rows = [
+        ("tray-command", WIDGET, "Background build verification"),
+        ("tray-workflow", ORDERS, "Workflow review verification"),
+        ("tray-subagent", REVIEW, "Subagent review verification"),
+        ("tray-wait", BLOG, "Scheduled wake-up verification"),
+    ]
+    keep = {sid for _, sid, _ in activity_rows}
+    SESSIONS[:] = [s for s in SESSIONS if s.get("assistant") or s["session_id"] in keep]
+    TODOS_INIT[:] = []
+    for index, (tid, sid, title) in enumerate(activity_rows):
+        session = next(s for s in SESSIONS if s["session_id"] == sid)
+        session.update(state="working", status="working", pending_interactions=0,
+                       background_working=True, background_waiting=False, title=title)
+        for field in ("background", "subagents", "workflows", "loop", "activity", "work"):
+            session.pop(field, None)
+        if sid == WIDGET:
+            session["background"] = [{"id": "tray-build", "kind": "shell", "description": "Build verification"},
+                                     {"id": "tray-monitor", "kind": "monitor", "description": "Test verification"}]
+        elif sid == ORDERS:
+            session["workflows"] = [{"task_id": "tray-run", "run_id": "tray-workflow-run", "name": "Review changes",
+                                     "running": True, "status": "running", "phases": ["Review", "Verify"],
+                                     "phase": "Verify", "phase_index": 2, "agents_started": 6, "agents_done": 5,
+                                     "agents_running": 1}]
+            session["background"] = [{"id": "tray-run", "kind": "workflow", "run_id": "tray-workflow-run"}]
+        elif sid == REVIEW:
+            session["subagents"] = [{"id": "tray-child", "session_id": sid + "@tray-child", "running": True,
+                                     "description": "Verify changes", "background": True}]
+        else:
+            session.update(background_working=False, background_waiting=True)
+        ORIG_STATE[sid] = ("working", "working")
+        todo = _task_todo(tid, title, "", session["machine_id"], sid, "/demo", index + 1, "")
+        TODOS_INIT.append(todo)
+    TODOS = copy.deepcopy(TODOS_INIT)
+    TASK_PLANS.clear()
+    TASK_FEED[ASK1] = []
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")
     parser.add_argument("--tls-port", type=int, help="额外的 TLS 监听端口；0 表示自动分配")

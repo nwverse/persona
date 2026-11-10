@@ -64,6 +64,16 @@ The split is one pure function per client: web `assistantEntries` (`web/src/lib/
 which entry every case goes to (Apple: `AssistantEntriesFixtureTests`). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
+On Apple clients, a parent waiting for a background command, workflow or subagent does not look idle (#3591): the row
+uses the existing Working spinner and a second line naming the active work. Commands show how many background tasks
+are running; workflows reuse the session header's phase and done/started counts (including the trailing `+` while running);
+subagents show their running count. Workflow compatibility markers and duplicate session references are not counted twice.
+A waiting row with no background activity retains the clock. This changes presentation, not entry membership or counts.
+Task rows read only their linked sessions; manual-Agent rows carry a value-only activity snapshot in `DockAgent`, which
+updates when phase or progress changes without making the composer observe every session. The opt-in mock
+`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASK_TRAY_ACTIVITY=1` supplies four deterministic rows for
+`AssistantTrayActivityUITests` on iPhone and Mac.
+
 ### Progress tray: one task, one row (#2878)
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.

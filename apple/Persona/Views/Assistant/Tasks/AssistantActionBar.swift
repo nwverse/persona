@@ -449,6 +449,7 @@ struct AssistantActionBar: View {
         case .task(let id, let status, let agents):
             if let todo = store.todos[id] {
                 let state = status.taskState
+                let activity = AssistantTrayActivity(sessions: store.sessions(todo))
                 if let ask = todo.openAsk, todo.doneAt == nil {
                     BriefAcceptRow(row: ask.row(for: todo), group: AppModel.shared.hub?.group ?? "")
                         .padding(.horizontal, Theme.Space.m)
@@ -457,8 +458,18 @@ struct AssistantActionBar: View {
                         open = nil
                         store.detailTask = id
                     } label: {
-                        line(title: todo.title, detail: detail(todo, status: status, agents: agents), waiting: open == .needsYou) {
-                            TaskMark(state: state)
+                        line(title: todo.title,
+                             detail: activity.isActive && status == .waiting ? StateName.working.text : detail(todo, status: status, agents: agents),
+                             waiting: open == .needsYou, activity: activity) {
+                            if open != .needsYou && (activity.isActive || status == .working) {
+                                WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
+                            } else if status == .waiting {
+                                ThemedIcon(Theme.Icon.backgroundWaiting).font(Theme.Font.labelStrong)
+                                    .foregroundStyle(StatusPalette.backgroundWaiting.dot)
+                                    .accessibilityIdentifier("action-tray.waiting-mark")
+                            } else {
+                                TaskMark(state: state)
+                            }
                         }
                     }
                     .buttonStyle(.plain)
@@ -471,8 +482,15 @@ struct AssistantActionBar: View {
                 open = nil
                 store.detailAgent = agent.key
             } label: {
-                line(title: agent.title, detail: agent.isWaiting ? StateName.needsYou.text : StateName.working.text, waiting: agent.isWaiting) {
-                    StatusDot(state: agent.state, size: Theme.Size.dotL)
+                line(title: agent.title,
+                     detail: agent.isWaiting ? StateName.needsYou.text : (agent.backgroundWaiting && !agent.activity.isActive ? StateName.taskWaiting.text : StateName.working.text),
+                     waiting: agent.isWaiting, activity: agent.activity) {
+                    if !agent.isWaiting && (agent.activity.isActive || !agent.backgroundWaiting) {
+                        WorkingIndicator().accessibilityIdentifier("action-tray.working-mark")
+                    } else {
+                        StatusDot(state: agent.state, size: Theme.Size.dotL, waiting: agent.backgroundWaiting)
+                            .accessibilityIdentifier(agent.backgroundWaiting ? "action-tray.waiting-mark" : "action-tray.state-mark")
+                    }
                 }
             }
             .buttonStyle(.plain)
@@ -526,17 +544,59 @@ struct AssistantActionBar: View {
         return parts.joined(separator: " · ")
     }
 
-    private func line<Mark: View>(title: String, detail: String, waiting: Bool, @ViewBuilder mark: () -> Mark) -> some View {
+    private func line<Mark: View>(title: String, detail: String, waiting: Bool,
+                                  activity: AssistantTrayActivity = .init(), @ViewBuilder mark: () -> Mark) -> some View {
         HStack(spacing: Theme.Space.s) {
             mark().scaledFrame(width: Theme.Size.markM)
-            Text(title).font(Theme.Font.body).lineLimit(1)
-            Spacer(minLength: Theme.Space.s)
-            Text(detail).font(Theme.Font.caption).lineLimit(1).fixedSize()
-                .foregroundStyle(waiting ? AnyShapeStyle(AgentState.needsYou.tone.text) : AnyShapeStyle(.secondary))
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                HStack(spacing: Theme.Space.s) {
+                    Text(title).font(Theme.Font.body).lineLimit(1)
+                    Spacer(minLength: Theme.Space.s)
+                    Text(detail).font(Theme.Font.caption).lineLimit(1).fixedSize()
+                        .foregroundStyle(waiting ? AnyShapeStyle(AgentState.needsYou.tone.text) : AnyShapeStyle(.secondary))
+                }
+                if activity.isActive {
+                    AssistantTrayActivityLine(activity: activity)
+                }
+            }
         }
         .padding(.horizontal, Theme.Space.m)
         .padding(.vertical, Theme.Space.s)
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension AssistantTrayActivity {
+    /// Workflow phase first, then other active work; progress gets its own untruncated space in the row.
+    var subtitle: String {
+        var parts: [String] = []
+        if workflowCount > 0 {
+            parts.append(String(localized: "Background workflow"))
+            if let lead = workflows.first { parts.append(lead.phase ?? lead.title) }
+        }
+        if backgroundTasks > 0 { parts.append(String(localized: "\(backgroundTasks) background tasks running")) }
+        if subagents > 0 { parts.append(String(localized: "\(subagents) subagents running")) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// A tray's activity subtitle: even a long phase cannot cut the workflow's done/started counts.
+struct AssistantTrayActivityLine: View {
+    var activity: AssistantTrayActivity
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            Text(activity.subtitle).lineLimit(1).truncationMode(.tail)
+            if let counts = activity.workflows.first?.counts {
+                Text("· " + counts).monospacedDigit().lineLimit(1).fixedSize()
+                    .layoutPriority(1)
+                    .accessibilityIdentifier("action-tray.workflow-progress")
+            }
+        }
+        .font(Theme.Font.caption)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("action-tray.activity")
     }
 }
