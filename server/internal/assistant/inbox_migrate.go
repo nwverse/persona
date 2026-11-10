@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,32 +122,104 @@ func fillMigrated(it *InboxItem, t connector.InboxThing) {
 }
 
 func setBlocks(it *InboxItem, x *connector.ThingExtra) {
+	it.Lark, it.Doc, it.Moment = thingBlocks(it, x)
+}
+
+// thingBlocks are the blocks a thing's extra carries, as setBlocks sets them on it: a chat's block keeps the item's
+// start position.
+func thingBlocks(it *InboxItem, x *connector.ThingExtra) (lark *InboxLark, doc *InboxDoc, moment *InboxMoment) {
 	start := ""
 	if it.Lark != nil {
 		start = it.Lark.StartPosition
 	}
-	it.Lark, it.Doc, it.Moment = nil, nil, nil
-	if len(x.Lark) > 0 && json.Unmarshal(x.Lark, &it.Lark) == nil && it.Lark != nil && start != "" {
-		it.Lark.StartPosition = start
+	if len(x.Lark) > 0 && json.Unmarshal(x.Lark, &lark) == nil && lark != nil && start != "" {
+		lark.StartPosition = start
 	}
 	if len(x.Doc) > 0 {
-		_ = json.Unmarshal(x.Doc, &it.Doc)
+		_ = json.Unmarshal(x.Doc, &doc)
 	}
 	if len(x.Moment) > 0 {
-		_ = json.Unmarshal(x.Moment, &it.Moment)
+		_ = json.Unmarshal(x.Moment, &moment)
 	}
+	return lark, doc, moment
 }
 
 // blocksDiffer: the thing's block says something else than the item's (a chat's start position aside: the item keeps
-// its own).
+// its own), as their JSON tells. A collection asks it of every open item its things name, which mostly say the same
+// again: blocks with the same values (sameBlocks) encode alike, so only the others are encoded to compare.
 func blocksDiffer(it *InboxItem, x *connector.ThingExtra) bool {
-	c := *it
-	setBlocks(&c, x)
-	enc := func(it *InboxItem) []byte {
-		b, _ := json.Marshal([]any{it.Lark, it.Doc, it.Moment})
+	lark, doc, moment := thingBlocks(it, x)
+	if sameLark(it.Lark, lark) && sameDoc(it.Doc, doc) && sameMoment(it.Moment, moment) {
+		return false
+	}
+	enc := func(lark *InboxLark, doc *InboxDoc, moment *InboxMoment) []byte {
+		b, _ := json.Marshal([]any{lark, doc, moment})
 		return b
 	}
-	return !bytes.Equal(enc(it), enc(&c))
+	return !bytes.Equal(enc(it.Lark, it.Doc, it.Moment), enc(lark, doc, moment))
+}
+
+// sameLark, sameDoc and sameMoment say two blocks hold the same values, so their JSON is the same. They can say
+// false of two whose JSON is the same all the same (a nil list and an empty one, a time on two zones' clocks, invalid
+// UTF-8): blocksDiffer then compares the JSON. A field added to a block's types is compared here too
+// (TestBlocksDifferAsJSON finds one left out).
+func sameLark(a, b *InboxLark) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func sameDoc(a, b *InboxDoc) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.URL == b.URL && a.Link == b.Link && a.Type == b.Type && a.Notice == b.Notice && a.NoticeID == b.NoticeID &&
+		a.Error == b.Error && sameTime(a.ReadAt, b.ReadAt) && (a.Reply == nil) == (b.Reply == nil) &&
+		(a.Reply == nil || *a.Reply == *b.Reply) && sameList(a.Rows, b.Rows, sameRow)
+}
+
+func sameRow(a, b *DocRow) bool {
+	return a.Ref == b.Ref && a.Table == b.Table && a.Title == b.Title && sameValues(a.Fields, b.Fields) &&
+		sameList(a.Status, b.Status, func(a, b *DocStatus) bool {
+			return a.Field == b.Field && a.Name == b.Name && a.Value == b.Value && sameValues(a.Options, b.Options)
+		})
+}
+
+func sameMoment(a, b *InboxMoment) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.PostID == b.PostID && a.Notice == b.Notice && a.ReplyTo == b.ReplyTo && a.MyPost == b.MyPost &&
+		a.PostText == b.PostText && a.Anonymous == b.Anonymous && sameValues(a.Notices, b.Notices) &&
+		sameTime(a.ReadAt, b.ReadAt)
+}
+
+// sameTime: the same instant on the same zone offset, which JSON writes alike.
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	_, ao := a.Zone()
+	_, bo := b.Zone()
+	return a.Equal(*b) && ao == bo
+}
+
+// sameValues and sameList: lists of the same elements, both nil or neither.
+func sameValues[T comparable](a, b []T) bool {
+	return (a == nil) == (b == nil) && slices.Equal(a, b)
+}
+
+func sameList[T any](a, b []T, same func(a, b *T) bool) bool {
+	if len(a) != len(b) || (a == nil) != (b == nil) {
+		return false
+	}
+	for i := range a {
+		if !same(&a[i], &b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // replyMigrated sends the reply (and a document's status moves) of a Feishu item through the plugin. The client id
