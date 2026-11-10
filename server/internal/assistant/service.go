@@ -48,6 +48,8 @@ type Service struct {
 	id string
 	// nodeAnswering: the computers' requests being answered now, but the ones that wait on a person (idle.go).
 	nodeAnswering atomic.Int64
+	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
+	taskStarting atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
 
@@ -72,6 +74,11 @@ type Service struct {
 	mux    *http.ServeMux
 	routes []string
 
+	// preparedMD is the CLAUDE.md this hub last wrote on a machine for a directory (key: machine id NUL directory),
+	// by prepareSpaceIf; refreshInstructions writes again what differs.
+	preparedMu sync.Mutex
+	preparedMD map[string]string
+
 	epoch string
 	pubMu sync.Mutex
 	seq   uint64
@@ -94,15 +101,19 @@ type Service struct {
 	reports   reportBook     // reports.go
 	upReports reportRate     // agent_control.go: report_to_supervisor
 	noteRate  reportRate     // todo_decisions.go: todo_decision_add
+	dispatch  dispatchBook   // dispatch.go: dispatch_start, dispatch_read
 	adoptMu   sync.Mutex     // agent_control.go: one agent_supervise at a time
 	placeBook placeBook      // places.go
 	accept    acceptBook     // acceptance.go
-	later     laterBook      // later.go: questions that can wait for a briefing
-	brief     briefBook      // briefing.go
-	reporters reporterBook   // reporters.go
-	sched     schedule       // schedule.go
-	tasks     tasksState     // tasks.go
-	questions questions      // tools.go (ask_user)
+	deploy    deployProbe    // deploy_check.go: is the work in the running hub
+	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
+	ownerVerifiesAll bool
+	later            laterBook    // later.go: questions that can wait for a briefing
+	brief            briefBook    // briefing.go
+	reporters        reporterBook // reporters.go
+	sched            schedule     // schedule.go
+	tasks            tasksState   // tasks.go
+	questions        questions    // tools.go (ask_user)
 	// deadlineSweeping: a sweep of the decisions past their deadline is running (decision_deadline.go).
 	deadlineSweeping atomic.Bool
 	askTodos         askTodoBook // ask_todo.go: the questions nobody answered, now to-dos
@@ -117,6 +128,7 @@ type Service struct {
 	fbot       feishuBook        // feishu.go
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
+	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
@@ -166,6 +178,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.reporterRoutes()
+	s.directionRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()
@@ -272,6 +285,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			id, _ := p["session_id"].(string)
 			cfg := s.settings(ctx)
 			p["is_main"] = id != "" && cfg.Main == id && cfg.MachineID == device
+		}
+		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
+			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
@@ -422,6 +438,7 @@ func (s *Service) publish(ctx context.Context) {
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
 		s.logf("assistant: snapshot: %v", err)
 	}
+	s.directionsSoon() // a leader, its title or its tasks may have changed (directions.go)
 }
 
 func (s *Service) Resync(ctx context.Context) { s.publish(ctx) }
@@ -453,6 +470,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
+	}
+	directions, ok := s.directionViews(ctx)
+	snap.Partial = snap.Partial || !ok
+	leadersAt := s.settings(ctx).MachineID // a leader conversation is on the assistant's machine
+	for id, d := range directions {
+		view(id, leadersAt).Direction = d
 	}
 	snap.Tasks = s.taskViews(ctx)
 	snap.Partial = snap.Partial || snap.Tasks == nil
@@ -540,6 +563,7 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 	if f := s.ixResolved; f != nil {
 		f(r)
 	}
+	s.taskPlanApproval()
 	s.taskAnswered(ctx, r.Interaction, r.Resolution, r.Status)
 	s.cardDecisions(ctx, r.Interaction, r.Resolution, r.Status)
 	// A quiet task's waiting notice may still be in its delay window or queued behind a turn: drop it now unless the
@@ -564,6 +588,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
+	s.taskStageSessions(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 }

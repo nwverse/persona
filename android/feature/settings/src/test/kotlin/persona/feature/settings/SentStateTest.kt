@@ -327,10 +327,15 @@ class SentStateTest {
     }
 
     @Test fun anythingElseIsTheUsualErrorTextAndNoNetworkSaysItCannotReachTheHub() {
-        assertEquals(SentProblem.Kind.Error to "读取失败：boom", said(refused(500, "internal", "boom")))
+        // an `internal` 5xx says only the usual retry words, so the hub's raw detail never reaches the page (#3126)
+        assertEquals(SentProblem.Kind.Error to "读取失败：操作未完成，请重试", said(refused(500, "internal", "boom")))
         assertEquals(SentProblem.Kind.Error to "读取失败：连不上 hub", said(HubFailure(HubError.NoNetwork)))
         // the status is read from a failure wrapped in another
         assertEquals(SentProblem.Kind.NoDatabase, SentText.problem(RuntimeException("wrapped", refused(503, "no_database"))).kind)
+    }
+
+    @Test fun a500WithAnyOtherCodeSaysTheHubsWords() {
+        assertEquals(SentProblem.Kind.Error to "读取失败：boom", said(refused(500, "upstream", "boom")))
     }
 
     // ------------------------------------------------------------------ the model, over a fake hub

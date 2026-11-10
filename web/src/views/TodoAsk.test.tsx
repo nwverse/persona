@@ -163,9 +163,10 @@ describe("a to-do's row", () => {
 
   it("a decision with nothing recommended has no button; a conclusion has Got it, a deployed to-do Accept", async () => {
     await drawList([
+      // distinct titles: to-dos with the same title share one row (#3156)
       todo({ ask: { ...decide, recommend: undefined } }),
-      todo({ id: "t2", ask: { outcome: "cannot", verdict: "❌ 做不了：接口不开放", asked_at: ASKED } }),
-      todo({ id: "t3", ask: { verdict: "✅ 做完了，已上线", asked_at: ASKED } }),
+      todo({ id: "t2", title: "接入开放接口", ask: { outcome: "cannot", verdict: "❌ 做不了：接口不开放", asked_at: ASKED } }),
+      todo({ id: "t3", title: "上线新版本", ask: { verdict: "✅ 做完了，已上线", asked_at: ASKED } }),
     ]);
     const byOutcome = Object.fromEntries([...host.querySelectorAll<HTMLElement>("[data-testid=todo-ask]")].map((el) => [el.dataset.ask, el]));
     expect(askButton(byOutcome.decide)).toBeNull();

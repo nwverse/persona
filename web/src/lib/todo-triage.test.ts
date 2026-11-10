@@ -1,0 +1,215 @@
+// @vitest-environment jsdom
+import { beforeEach, describe, expect, it } from "vitest";
+import type { Session } from "./types";
+import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
+import { checkCount, checklist, reviewBadge, type Supervision } from "./supervision";
+import { lastActivity, relatedKeys, SHELVE_AFTER_MS, triage, triageTodos } from "./todo-triage";
+import { resetRestoredCache, restoreTodo } from "./todo-restore";
+
+const NOW = Date.parse("2026-11-10T12:00:00Z");
+const hoursAgo = (h: number) => new Date(NOW - h * 3600_000).toISOString();
+
+const session = (sid: string, state: Session["state"], updatedHoursAgo = 1, patch: Partial<Session> = {}): Session =>
+  ({ machine_id: "m", session_id: sid, state, status: state === "working" ? "working" : "idle", updated_at: hoursAgo(updatedHoursAgo), ...patch }) as Session;
+
+const agent = (sid: string) => ({ machine_id: "m", session_id: sid, linked_at: hoursAgo(200) });
+
+const todo = (id: string, patch: Partial<Todo> = {}): Todo => ({
+  id,
+  title: id,
+  created_at: hoursAgo(300),
+  updated_at: hoursAgo(1),
+  done_at: null,
+  agents: [],
+  origin: "conv",
+  ...patch,
+});
+
+/** An accepted task the hub reopened when its agent was sent more work: eight criteria, the review judged five. */
+const acceptedReopened = (): Supervision => {
+  const when = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
+  return {
+    supervisor: "conv",
+    done_when: when,
+    state: "accepted",
+    round: 1,
+    reviews: [{ at: hoursAgo(5), verdict: "accepted", checks: when.slice(0, 5).map((criterion) => ({ criterion, met: true })) }],
+  };
+};
+
+describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
+  const lookup = makeSessionLookup([
+    session("ask", "needs_you"),
+    session("run", "working"),
+    session("unseen", "unread"),
+    session("idle", "idle", 2),
+    session("old", "idle", 100),
+  ]);
+  const at = (td: Todo) => triage(td, lookup, NOW);
+
+  it("an agent asking is Waiting on you, whatever else holds", () => {
+    expect(at(todo("t", { agents: [agent("ask"), agent("run")] }))).toMatchObject({ section: "waiting", rule: "agent_asks" });
+  });
+
+  it("a decision for the owner is Waiting on you", () => {
+    expect(at(todo("t", { agents: [agent("idle")], supervision: { supervisor: "c", state: "needs_user" } })).rule).toBe("owner_decides");
+    expect(at(todo("t", { ask: { outcome: "decide", verdict: "v", asked_at: hoursAgo(1) } })).section).toBe("waiting");
+  });
+
+  it("a deployed to-do's Please verify, or a done conclusion, is Just finished: the supervisor accepts it, not the owner", () => {
+    const idle = { agents: [agent("idle")] };
+    expect(at(todo("t", { ...idle, ask: { verdict: "done, deployed: verify below", asked_at: hoursAgo(1) } }))).toMatchObject({ section: "just_done", rule: "finished_unseen" });
+    expect(at(todo("t", { ...idle, ask: { outcome: "done", verdict: "done", asked_at: hoursAgo(1) } })).section).toBe("just_done");
+  });
+
+  it("an agent running is Working, even on an old to-do", () => {
+    expect(at(todo("t", { updated_at: hoursAgo(400), agents: [agent("run")] }))).toMatchObject({ section: "working", rule: "agent_running" });
+  });
+
+  it("a closed to-do is Just finished for a day, then Done", () => {
+    expect(at(todo("t", { done_at: hoursAgo(3) })).section).toBe("just_done");
+    expect(at(todo("t", { done_at: hoursAgo(30), updated_at: hoursAgo(30) })).section).toBe("done");
+  });
+
+  it("an accepted task reopened by more work is finished, not Follow up", () => {
+    const td = todo("t", { agents: [agent("idle")], reopened_at: hoursAgo(4), supervision: acceptedReopened() });
+    expect(at(td)).toMatchObject({ section: "just_done", rule: "accepted" });
+    expect(todoStatusLabel(td, todoStatus(td, lookup))).toBe("已验收");
+    expect(reviewBadge(td)?.tone).toBe("green");
+  });
+
+  it("an accepted task whose agent runs again is Working", () => {
+    expect(at(todo("t", { agents: [agent("run")], supervision: acceptedReopened() })).section).toBe("working");
+  });
+
+  it("a deployed delivery is finished", () => {
+    expect(at(todo("t", { delivery: { state: "live", at: hoursAgo(2) } })).rule).toBe("deployed");
+  });
+
+  it("a finished turn nobody saw is Just finished", () => {
+    expect(at(todo("t", { agents: [agent("unseen")] }))).toMatchObject({ section: "just_done", rule: "finished_unseen" });
+  });
+
+  it("an open PR is PR to merge however old, a merged one is not", () => {
+    const old = { updated_at: hoursAgo(300), agents: [agent("old")] };
+    expect(at(todo("t", { ...old, delivery: { state: "pr" } })).section).toBe("pr");
+    expect(at(todo("t", { ...old, pr_url: "https://example.com/pull/1" })).section).toBe("pr");
+    expect(at(todo("t", { ...old, pr_url: "https://example.com/pull/1", delivery: { state: "merged" } })).section).toBe("shelved");
+  });
+
+  it("a PR the stage says is merged is not PR to merge, whatever the delivery (#3205)", () => {
+    const fresh = { updated_at: hoursAgo(1), agents: [agent("old")] };
+    for (const stage of ["merge", "deploy", "verify"]) {
+      expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage })).rule).not.toBe("pr_open");
+    }
+    expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage: "review" })).rule).toBe("pr_open");
+    // merged, not deployed: Other open; deployed: Just finished
+    expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage: "merge", delivery: { state: "merged" } })).section).toBe("other");
+    expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage: "deploy", delivery: { state: "live", at: hoursAgo(1) } })).section).toBe("just_done");
+  });
+
+  it("a task with no move for 48 hours is Shelved; a newer move of its agent keeps it", () => {
+    expect(at(todo("t", { updated_at: hoursAgo(100), agents: [agent("old")] }))).toMatchObject({ section: "shelved", rule: "stale" });
+    expect(at(todo("t", { updated_at: hoursAgo(100), agents: [agent("idle")] })).section).toBe("other");
+  });
+
+  it("the user's own to-do without agents never shelves itself, nor one due ahead", () => {
+    expect(at(todo("t", { updated_at: hoursAgo(100), origin: undefined })).section).toBe("other");
+    expect(at(todo("t", { updated_at: hoursAgo(100), agents: [agent("old")], due_date: "2026-12-01" })).section).toBe("other");
+  });
+
+  it("a restore counts as a move", () => {
+    const td = todo("t", { updated_at: hoursAgo(100), agents: [agent("old")] });
+    expect(triage(td, lookup, NOW, NOW - 3600_000).section).toBe("other");
+    expect(triage(td, lookup, NOW, NOW - SHELVE_AFTER_MS - 1).section).toBe("shelved");
+  });
+
+  it("last activity takes the latest of the to-do, its supervision and its agents", () => {
+    const td = todo("t", { updated_at: hoursAgo(50), agents: [agent("idle")], supervision: { supervisor: "c", progress: { kind: "progress", text: "x", at: hoursAgo(1) } } });
+    expect(lastActivity(td, lookup)).toBe(NOW - 3600_000);
+  });
+});
+
+describe("accepted criteria (#3156)", () => {
+  it("criteria added after a standing acceptance are unchecked, not open, and not counted", () => {
+    const sup = acceptedReopened();
+    expect(checklist(sup).map((c) => c.mark)).toEqual(["met", "met", "met", "met", "met", "unchecked", "unchecked", "unchecked"]);
+    expect(checkCount(sup)).toBe("5/5");
+  });
+
+  it("before any acceptance they stay open and count", () => {
+    const sup = { ...acceptedReopened(), state: "rework" as const, reviews: [{ at: hoursAgo(5), verdict: "rework" as const, checks: [{ criterion: "c1", met: true }] }] };
+    expect(checklist(sup).filter((c) => c.mark === "open")).toHaveLength(7);
+    expect(checkCount(sup)).toBe("1/8");
+  });
+});
+
+describe("triageTodos", () => {
+  const lookup = makeSessionLookup([session("run", "working"), session("old", "idle", 100), session("old2", "idle", 120)]);
+
+  it("merges the same issue, PR, title or plan into one row, led by its most urgent member", () => {
+    const list = [
+      todo("fix", { title: "Fix #412 lost pushes", agents: [agent("run")] }),
+      todo("test", { title: "#412 lost pushes: regression test", updated_at: hoursAgo(100), agents: [agent("old")] }),
+      todo("pr-a", { title: "A", pr_url: "https://example.com/pull/9", agents: [agent("old2")], updated_at: hoursAgo(120) }),
+      todo("pr-b", { title: "B", pr_url: "https://example.com/pull/9/", agents: [agent("old2")], updated_at: hoursAgo(121) }),
+      todo("lone", { title: "Something else", updated_at: hoursAgo(1) }),
+    ];
+    const r = triageTodos(list, lookup, NOW);
+    expect(r.sections.working.map((g) => [g.lead.id, g.members.map((m) => m.id)])).toEqual([["fix", ["fix", "test"]]]);
+    expect(r.sections.pr.map((g) => g.members.map((m) => m.id))).toEqual([["pr-a", "pr-b"]]);
+    expect(r.sections.other.map((g) => g.lead.id)).toEqual(["lone"]);
+  });
+
+  it("never merges a closed to-do into an open one's row", () => {
+    const r = triageTodos([todo("a", { title: "Same title" }), todo("b", { title: "Same title", done_at: hoursAgo(1) })], lookup, NOW);
+    expect(r.sections.other).toHaveLength(1);
+    expect(r.sections.just_done).toHaveLength(1);
+  });
+
+  it("counts a failed start waiting on the owner as open, though the hub set done_at", () => {
+    const r = triageTodos([todo("f", { start_error: "no launcher", done_at: hoursAgo(1) })], lookup, NOW);
+    expect(r.sections.waiting.map((g) => g.lead.id)).toEqual(["f"]);
+    expect(r.open).toBe(1);
+  });
+
+  it("lists quiet tasks on the page, leaves them out for the sidebar", () => {
+    const list = [todo("q", { quiet: true })];
+    expect(triageTodos(list, lookup, NOW).open).toBe(1);
+    expect(triageTodos(list, lookup, NOW, new Map(), { quiet: false }).open).toBe(0);
+  });
+
+  it("counts shelved and finished apart from open, and leaves quiet tasks out", () => {
+    const r = triageTodos(
+      [
+        todo("run", { agents: [agent("run")] }),
+        todo("stale", { updated_at: hoursAgo(100), agents: [agent("old")] }),
+        todo("closed", { done_at: hoursAgo(2) }),
+        todo("accepted", { supervision: acceptedReopened(), agents: [agent("old")] }),
+        todo("quiet", { quiet: true }),
+      ],
+      lookup,
+      NOW,
+      new Map(),
+      { quiet: false },
+    );
+    expect([r.open, r.shelved, r.finished]).toEqual([1, 1, 2]);
+  });
+
+  it("related keys ignore case, spaces, punctuation and a PR link's trailing slash", () => {
+    expect(relatedKeys(todo("a", { title: "Fix: the  Widget!", pr_url: "https://Example.com/pull/3/" }))).toEqual(["pr:https://example.com/pull/3", "title:fixthewidget"]);
+  });
+});
+
+describe("restoreTodo", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetRestoredCache();
+  });
+
+  it("keeps the restore in this browser, dropping ones that would have shelved again", () => {
+    restoreTodo("old", NOW - SHELVE_AFTER_MS - 1);
+    restoreTodo("new", NOW);
+    expect(JSON.parse(localStorage.getItem("persona.todos.restored")!)).toEqual({ new: NOW });
+  });
+});

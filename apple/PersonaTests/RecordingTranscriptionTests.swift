@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import Persona
 
@@ -81,5 +82,59 @@ import Testing
         #expect(lib.entry(entry.id)?.transcribedAll == true)
         #expect(lib.entry(entry.id)?.sentences.map(\.text) == ["seg-000.m4a", "seg-002.m4a"])
         #expect(runner.errors[entry.id] == nil)
+    }
+
+    @Test func pullTranscribesOnlyItsRangeAndAFailureCanBeRetried() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let entry = try lib.create(source: .watch, kind: .rolling)
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        for i in 0..<4 {
+            lib.addSegment(entry.id, RecordingSegment(index: i, start: Double(i) * 60, duration: 60,
+                                                      startedAt: base.addingTimeInterval(Double(i) * 60)))
+        }
+        // Segments 1 and 2 only.
+        let range = base.addingTimeInterval(70)...base.addingTimeInterval(170)
+        let calls = OSAllocatedUnfairLock(initialState: [String]())
+        let runner = RecordingTranscription(library: lib) { url, _ in
+            let first = calls.withLock { $0.append(url.lastPathComponent); return $0.count == 1 }
+            if first { throw CocoaError(.fileReadUnknown) }
+            return [RecordingSentence(start: 1, end: 2, text: url.lastPathComponent)]
+        }
+        runner.pull(entry.id, range: range)
+        for _ in 0..<200 where runner.errors[entry.id] == nil { try await Task.sleep(for: .milliseconds(10)) }
+        var current = try #require(lib.entry(entry.id))
+        let failed = current.pullState(from: range.lowerBound, to: range.upperBound,
+                                       transcribing: runner.current == entry.id, error: runner.errors[entry.id])
+        guard case .failed = failed else { Issue.record("expected a failure, got \(failed)"); return }
+        #expect(failed.message != nil)
+        #expect(current.pullState(from: range.lowerBound, to: range.upperBound, transcribing: false, error: runner.errors[entry.id]) != .ready)
+
+        // Retrying is pulling the same range again.
+        runner.pull(entry.id, range: range)
+        #expect(runner.errors[entry.id] == nil)
+        for _ in 0..<200 where lib.entry(entry.id)?.pullState(from: range.lowerBound, to: range.upperBound, transcribing: false, error: nil) != .ready {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        current = try #require(lib.entry(entry.id))
+        #expect(calls.withLock { $0 } == ["seg-001.m4a", "seg-001.m4a", "seg-002.m4a"])
+        #expect(current.segments.map { $0.sentences == nil } == [true, false, false, true])
+        #expect(current.pullState(from: range.lowerBound, to: range.upperBound, transcribing: false, error: nil) == .ready)
+        #expect(current.pulledSentences(from: range.lowerBound, to: range.upperBound).map(\.1).contains("seg-002.m4a"))
+    }
+
+    @Test func pullStateWithoutTextSaysWhy() {
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        var entry = RecordingEntry(id: UUID(), createdAt: base, source: .watch, kind: .rolling)
+        entry.segments = [RecordingSegment(index: 0, start: 0, duration: 60, startedAt: base)]
+        let to = base.addingTimeInterval(30)
+        #expect(entry.pullState(from: base, to: to, transcribing: false, error: nil) == .waiting)
+        #expect(entry.pullState(from: base, to: to, transcribing: true, error: nil) == .transcribing)
+        #expect(entry.pullState(from: base, to: to, transcribing: false, error: "x") == .failed("x"))
+        #expect(entry.pullState(from: base.addingTimeInterval(600), to: base.addingTimeInterval(700),
+                                transcribing: false, error: nil) == .noAudio)
+        entry.segments[0].sentences = []
+        #expect(entry.pullState(from: base, to: to, transcribing: false, error: nil) == .silent)
     }
 }

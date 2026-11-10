@@ -551,6 +551,90 @@ struct SentModelTests {
         }
     }
 
+    // MARK: recall
+
+    @Test func aRowSaysWhetherItCanBeRecalledAndAHubFromBeforeRecallSaysNo() throws {
+        let page = try JSON.decoder.decode(SentPage.self, from: Data(#"{"items":[{"id":2,"can_recall":true},{"id":1,"can_recall":"yes"},{"id":0}]}"#.utf8))
+        #expect(page.items.map(\.canRecall) == [true, false, false])
+    }
+
+    @Test func eachRecallFailureIsSaidInPlainWordsAndRefusedSaysWhatTheHubSaid() {
+        func say(_ status: Int, _ code: String?, _ message: String = "m") -> String {
+            SentText.recallProblem(APIError(status: status, message: message, fields: code.map { ["code": $0] } ?? [:]))
+        }
+        #expect(say(403, "own_device_only") == String(localized: "Only one of your own devices with full access can recall a message."))
+        #expect(say(404, nil) == String(localized: "This hub's version can't recall messages. Update the hub and try again."))
+        #expect(say(405, nil) == say(404, nil))
+        #expect(say(404, "not_found") == String(localized: "This record is no longer on the hub."))
+        #expect(say(409, "too_old") == String(localized: "This message is too old to recall now."))
+        #expect(say(409, "already_recalled") == String(localized: "This message was already recalled."))
+        #expect(say(409, "not_recallable") == String(localized: "This message can't be recalled."))
+        #expect(say(503, "connector_unavailable") == String(localized: "The connector is off, signed out or offline. Turn it on or sign in, then try again."))
+        #expect(say(503, "no_database") == String(localized: "This hub runs without a database, so it can't recall messages."))
+        #expect(say(504, "recall_unknown") == String(localized: "It isn't known whether the message was removed. Try again to check."))
+        #expect(say(502, "recall_refused", "the comment is locked").hasSuffix("the comment is locked"))
+        #expect(say(409, "something_new", "what the hub said") == "what the hub said")
+        #expect(SentText.recallProblem(URLError(.notConnectedToInternet)) == "连不上 hub")
+    }
+
+    @Test func recallPostsTheConfirmationReplacesTheRowAndReadsTheFirstPageAgain() async throws {
+        let hub = FakeHub()
+        let recalled = Flag()
+        hub.on("GET", Self.path) { _ in
+            let first = recalled.on ? #""recalled_at":"2026-11-05T13:00:00Z""# : #""can_recall":true"#
+            return Data(#"{"items":[{"id":2,\#(first)},{"id":1}],"next":null}"#.utf8)
+        }
+        hub.on("POST", "\(Self.path)/2/recall") { _ in
+            recalled.on = true
+            return Data(#"{"item":{"id":2,"recalled_at":"2026-11-05T13:00:00Z"}}"#.utf8)
+        }
+        let page = model(hub)
+        await page.load()
+        #expect(page.items?.first?.canRecall == true)
+        await page.recall(2)
+        let post = try #require(hub.sent("POST", "\(Self.path)/2/recall").first)
+        #expect(post.body.flatMap { try? JSON.decoder.decode([String: Bool].self, from: $0) } == ["confirm": true])
+        #expect(post.timeout >= 60)
+        #expect(page.items?.first?.recalledAt != nil && page.items?.first?.canRecall == false)
+        #expect(page.recalling == nil && page.recallError == nil)
+        #expect(hub.sent("GET", Self.path).count == 2)
+    }
+
+    @Test func aRefusedRecallSaysWhyForThatRowAndStillReadsTheListAgain() async {
+        let hub = FakeHub()
+        hub.on("GET", Self.path, json: #"{"items":[{"id":2,"can_recall":true}],"next":null}"#)
+        hub.on("POST", "\(Self.path)/2/recall") { _ in throw APIError(status: 409, message: "too old", fields: ["code": "too_old"]) }
+        let page = model(hub)
+        await page.load()
+        await page.recall(2)
+        #expect(page.recallError == SentRecallError(id: 2, text: String(localized: "This message is too old to recall now.")))
+        #expect(page.recalling == nil && hub.sent("GET", Self.path).count == 2)
+    }
+
+    /// A read of the first page on its way when the recall starts would bring the row back as it was: dropped.
+    @Test func aReadOnItsWayWhenARecallStartsIsDropped() async {
+        let hub = FakeHub()
+        let recalled = Flag()
+        hub.on("GET", Self.path) { _ in
+            Data((recalled.on ? #"{"items":[{"id":2,"recalled_at":"2026-11-05T13:00:00Z"}]}"# : #"{"items":[{"id":2,"can_recall":true}]}"#).utf8)
+        }
+        hub.on("POST", "\(Self.path)/2/recall") { _ in
+            recalled.on = true
+            return Data(#"{"item":{"id":2,"recalled_at":"2026-11-05T13:00:00Z"}}"#.utf8)
+        }
+        let held = Held(hub)
+        held.hold(2)
+        let page = SentModel(deps: .init(api: { held.client }))
+        await page.load() // request 1
+        let stale = Task { await page.load() } // request 2: the row before the recall, held
+        await held.gate.waitReached(2)
+        await page.recall(2) // requests 3 and 4
+        #expect(page.items?.first?.recalledAt != nil)
+        await held.gate.open(2)
+        await stale.value
+        #expect(page.items?.first?.recalledAt != nil)
+    }
+
     // MARK: reads that come back late
 
     /// Requests the test can hold: the n-th request (1 is the first) is answered at once as the hub would then (a failure

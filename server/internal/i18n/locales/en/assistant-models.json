@@ -43,7 +43,7 @@
   "provider_legacy_judge": "Hub judge API",
   "provider_legacy_kb": "Hub knowledge API",
   "provider_claude_default": "Claude Code default",
-  "source_hub_config": "Manager config",
+  "source_hub_config": "Assistant config",
   "source_assistant_default": "Assistant default",
   "source_default": "Default",
   "source_extension_default": "Extension default",

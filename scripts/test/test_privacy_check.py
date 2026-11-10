@@ -1449,9 +1449,56 @@ class GitBatchTests(unittest.TestCase):
         names = [name for name in self.payloads if "\n" not in name]
         with patch.object(pc, "ROOT", str(self.repo)), patch.object(pc.subprocess, "run", wraps=subprocess.run) as run:
             self.assertEqual(pc.git_file_data(names, "HEAD:"), {name: self.payloads[name] for name in names})
-        self.assertEqual(run.call_count, 1)
+        # Git before 2.36 refuses -z first and is asked again one per line (#3224): still not one process per file
+        takes_z = subprocess.run(["git", "cat-file", "--batch", "-z"], cwd=self.repo, input=b"", capture_output=True).returncode != 129
+        self.assertEqual(run.call_count, 1 if takes_z else 2)
         self.assertIn("--batch", run.call_args.args[0])
         self.assertEqual(run.call_args.kwargs["timeout"], 120)
+
+    def old_git_path(self):
+        """A PATH whose git refuses `cat-file -z` as Git before 2.36 does (exit 129) and is the real Git otherwise."""
+        real = shutil.which("git")
+        stand_in = self.root / "old-git"
+        stand_in.mkdir()
+        script = stand_in / "git"
+        script.write_text("#!/bin/sh\ncat=\nfor a in \"$@\"; do\n  [ \"$a\" = cat-file ] && cat=1\n"
+                          "  if [ -n \"$cat\" ] && [ \"$a\" = -z ]; then echo \"error: unknown switch \\`z'\" >&2; exit 129; fi\n"
+                          f"done\nexec '{real}' \"$@\"\n")
+        script.chmod(0o755)
+        return str(stand_in) + os.pathsep + os.environ.get("PATH", "")
+
+    def test_git_without_cat_file_z_reads_the_same_objects(self):
+        # #3224: Git 2.30 (Debian 11) has no -z for cat-file; the requests go one per line instead
+        names = [name for name in self.payloads if "\n" not in name]
+        with patch.dict(os.environ, {"PATH": self.old_git_path()}), patch.object(pc, "ROOT", str(self.repo)), \
+                patch.object(pc.subprocess, "run", wraps=subprocess.run) as run:
+            for prefix in (":", "HEAD:"):
+                with self.subTest(prefix=prefix):
+                    self.assertEqual(pc.git_file_data(list(self.payloads) + ["missing.txt"], prefix), self.payloads)
+        batches = [c.args[0] for c in run.call_args_list if "cat-file" in c.args[0]]
+        self.assertEqual(batches, [["git", "-C", str(self.repo), "cat-file", "--batch", "-z"],
+                                   ["git", "-C", str(self.repo), "cat-file", "--batch"]] * 2)
+        self.assertEqual(run.call_args_list[1].kwargs["input"], b"".join(b":" + n.encode() + b"\n" for n in names + ["missing.txt"]))
+
+    def test_commit_and_merge_scans_complete_with_git_without_cat_file_z(self):
+        # the pre-commit hook's --staged scan and merge-pr.sh's --range scan both read the objects in one batch
+        env = dict(self.env, PATH=self.old_git_path())
+        (self.repo / "next.md").write_text("next\n")
+        self.git("add", "next.md")
+        for args in (("--staged",), ("--range", "HEAD~1..HEAD")):
+            if args[0] == "--range":
+                self.git("commit", "-q", "--no-verify", "-m", "next")
+            with self.subTest(args=args):
+                result = self.run_command(sys.executable, str(self.repo / "scripts/privacy_check.py"), *args, env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("privacy_check: clean", result.stdout + result.stderr)
+
+    def test_other_batch_failures_are_not_retried(self):
+        failed = subprocess.CalledProcessError(128, ["git"], stderr=b"fatal: not a git repository")
+        with patch.object(pc.subprocess, "run", side_effect=failed) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                pc.git_file_data(["one.txt"], "HEAD:")
+        self.assertEqual(run.call_count, 1)
 
     def test_truncated_or_invalid_batch_output_is_rejected(self):
         for output in (b"", b"invalid\n", b"oid blob 5\nabc\n", b"oid blob 0\nx", b"oid blob 0\n\nextra"):

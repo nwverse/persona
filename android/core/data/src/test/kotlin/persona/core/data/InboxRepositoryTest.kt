@@ -727,6 +727,46 @@ class InboxRepositoryTest {
         }
     }
 
+    /**
+     * An item paged back into Done (the done history, #2576) is in no list: Move back, alone or with others, goes to its own
+     * manager by the hub's id, not to the default manager by the app's id (#2974); the default's own goes to the default.
+     */
+    @Test fun aPagedBackItemMovesBackThroughItsOwnManager() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-managers-history-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            fun item(id: String, done: Boolean = true) = buildJsonObject {
+                put("id", id); put("source", "mail"); put("kind", "mail"); put("title", id); put("version", "v$id")
+                if (done) { put("done_at", "2026-11-04T08:00:00Z"); put("done_by", "user") }
+            }
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply {
+                items = JsonArray(emptyList())
+                // each manager's page is its own, unstamped
+                onDoneHistory = { manager -> buildJsonObject { put("items", JsonArray(listOf(item(if (manager == "m-3") "h" else "g")))) } }
+                onSetDone = { id, done -> buildJsonObject { put("item", item(id, done)) } }
+                onBulk = { asked, done -> buildJsonObject { put("changed", JsonArray(asked.map { item(it.id, done) })) } }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val theirs = repository.doneHistory("m-3", null).records.single()
+            val mine = repository.doneHistory(null, null).records.single()
+            assertEquals(InboxItemKey.of("h", "m-3") to "m-3", theirs.item.id to theirs.manager)
+
+            repository.setDone(theirs.item.id, false)
+            repository.setDone(mine.item.id, false)
+            assertEquals(listOf("h" to "m-3", "g" to ""), transport.doneCalls)
+
+            repository.bulk(listOf(InboxDoneTarget(theirs.item.id, "vh"), InboxDoneTarget(mine.item.id, "vg")), InboxBulkAction.Reopen)
+            assertEquals(setOf(listOf("h") to "m-3", listOf("g") to ""), transport.bulkManagers.toSet())
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
     /** One manager failing leaves the others' done: its own items go back and are the result's `failed`. */
     @Test fun bulkKeepsWhatTheOtherManagersDid() = runBlocking {
         val directory = Files.createTempDirectory("inbox-managers-bulk-partial-test").toFile()
@@ -1395,6 +1435,8 @@ class InboxRepositoryTest {
         override suspend fun reply(itemId: String?, feedId: String?, text: String, clientId: String) = onReply(clientId)
         var onDoneDays: suspend (String?, String) -> JsonObject = { _, _ -> throw UnsupportedOperationException() }
         override suspend fun doneDays(manager: String?, tz: String) = onDoneDays(manager, tz)
+        var onDoneHistory: suspend (String?) -> JsonObject = { throw UnsupportedOperationException() }
+        override suspend fun doneHistory(manager: String?, before: String?, beforeId: String?, limit: Int) = onDoneHistory(manager)
         val inboxCalls = java.util.concurrent.atomic.AtomicInteger()
         var onInbox: suspend () -> Unit = {}
         override suspend fun inbox(): JsonObject { inboxCalls.incrementAndGet(); onInbox(); return buildJsonObject { put("items", items) } }

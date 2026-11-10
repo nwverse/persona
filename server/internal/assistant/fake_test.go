@@ -665,6 +665,9 @@ func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 func (noPlans) TaskPlan(context.Context, string) (*db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
 }
+func (noPlans) TaskPlans(context.Context, string) ([]db.TaskPlanRow, error) {
+	return nil, nil
+}
 func (noPlans) TaskPlansByID(context.Context, []string) ([]db.TaskPlanRow, error) {
 	return nil, errors.New("no task_plans here")
 }
