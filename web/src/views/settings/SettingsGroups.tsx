@@ -37,9 +37,10 @@ export function GroupTitle({ group, compact = false }: { group: NavGroup; compac
   );
 }
 
-/** The Switch beside the current assistant's group title; nothing for the other groups. */
+/** The Switch beside the current assistant's group title; nothing for the other groups. It takes no more height than
+ *  the title's line (its padding reaches out above and below), so a group title row aligned at the bottom centres both. */
 export function GroupAction({ group }: { group: NavGroup }) {
-  return group === "assistant" ? <AssistantSwitchButton route={SETTINGS_ROUTE} /> : null;
+  return group === "assistant" ? <span className="-my-0.5 flex shrink-0"><AssistantSwitchButton route={SETTINGS_ROUTE} /></span> : null;
 }
 
 /** The line under a group: whose settings the first one shows, and that the other two don't depend on it (said once,

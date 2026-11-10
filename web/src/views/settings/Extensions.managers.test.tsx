@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Another manager's extension page (docs/assistant/managers.md "Clients"): the connectors it contributes, its channel and its
 // upgrade are that manager's, not the default's of the same id; a link that names no manager is the current assistant's,
-// and Settings › Connectors lists the current assistant's copies only.
+// and Settings › Connectors and Extensions list the current assistant's copies only.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ vi.mock("../../lib/store", async (original) => {
 });
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
+import { t } from "../../i18n";
 import { chooseManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster } from "../../lib/managers";
 import { ChannelPage } from "./Channels";
@@ -33,6 +34,12 @@ const DETAIL = {
   contributes: { channel: ["wechat"], connectors: ["wechat"] },
   auto_upgrade: false, upgrade: { market: "official", id: "example-wechat", from: "1.0.0", to: "1.1.0", state: "off" },
 };
+// the merged list: each manager's built-in copy, and the default's install from a market (a source with no word for it)
+const LIST = [
+  { id: "example-wechat", name: "示例微信", kind: "process", status: "running", source: "builtin", enabled: true, manager: "assistant" },
+  { id: "example-gateway", name: "Example Gateway", kind: "quota", status: "running", source: "market", enabled: true, manager: "assistant" },
+  { id: "example-wechat", name: "示例微信", kind: "process", status: "running", source: "builtin", enabled: true, manager: "m-1" },
+];
 const CHANNEL = { id: "wechat", name: "微信", kind: "im", source: "plugin", installed: true, enabled: true, state: "ready" };
 
 let host: HTMLDivElement;
@@ -64,6 +71,7 @@ beforeEach(() => {
         { id: "wechat", name: "微信", status: "ok", account: "work@example.com", inbox: true, manager: "m-1" },
       ] });
     }
+    if (/\/(plugins|extensions)$/.test(url)) return reply({ extensions: LIST });
     if (url.includes("/connectors/wechat/settings")) return reply({ id: "wechat", name: "微信", status: "ok", inbox: false });
     if (url.endsWith("/channels")) return reply({ channels: header === "m-1" ? [CHANNEL] : [] });
     if (url.endsWith("/channels/wechat")) return reply({ ...CHANNEL, capabilities: {}, bind: "none", waiting: { answers: 0, asks: 0 } });
@@ -206,5 +214,24 @@ describe("Settings › Connectors' rows", () => {
     expect(host.textContent).not.toContain("助手");
     act(() => rows()[0].click());
     expect(onOpen).toHaveBeenLastCalledWith("wechat");
+  });
+});
+
+describe("Settings › Extensions' rows", () => {
+  const rows = () => [...host.querySelectorAll<HTMLElement>("[data-extension-row]")];
+  // what follows a row's name: its source's word, if it has one
+  const tags = (row: HTMLElement) => [...row.querySelector("span.truncate")!.parentElement!.children].slice(1).map((c) => c.textContent);
+
+  it("lists the current assistant's copies only, each source with its word and none with an empty tag", async () => {
+    setRoster(ROSTER);
+    act(() => root.render(<Extensions open={null} onOpen={() => {}} />));
+    await flush();
+    expect(rows().map((r) => `${r.dataset.extensionRow}@${r.dataset.manager}`).sort()).toEqual(["example-gateway@assistant", "example-wechat@assistant"]);
+    const byId = (id: string) => rows().find((r) => r.dataset.extensionRow === id)!;
+    expect(tags(byId("example-wechat"))).toEqual([t("lib-extensions.source_builtin")]);
+    expect(tags(byId("example-gateway"))).toEqual([]);
+    act(() => chooseManager("m-1"));
+    await flush();
+    expect(rows().map((r) => [r.dataset.extensionRow, r.dataset.manager])).toEqual([["example-wechat", "m-1"]]);
   });
 });

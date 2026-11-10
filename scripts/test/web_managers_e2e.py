@@ -118,7 +118,8 @@ def check(browser, base, width, theme, shots, single, outdated):
             page.keyboard.press("Escape")
             expect(page.get_by_role("dialog")).to_have_count(0)  # closing it goes back in history: let it land
             go(page, base + "/settings?tab=extensions")
-            main.locator("button").filter(has=page.locator("span.truncate")).first.click()
+            main.locator("[data-extension-row]").first.click()  # an extension's page
+            page.wait_for_url(re.compile(r"extension="))
             page.wait_for_timeout(1200)
             page.goto(base + "/health")
             page.wait_for_timeout(1000)

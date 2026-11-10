@@ -33,7 +33,7 @@ const LEGACY_TABS: Record<string, { tab: Tab; section: SettingsSection | null }>
 export const TAB_INFO: Record<Tab, { label: string; icon: IconName; hint: string }> = {
   general: { label: t("settings-nav.tab_general"), icon: "gear", hint: t("settings-nav.hint_general") },
   persona: { label: t("settings-nav.tab_profile"), icon: "spark", hint: t("settings-nav.hint_persona") },
-  avatar: { label: t("settings.avatar"), icon: "person", hint: t("settings-nav.hint_avatar") },
+  avatar: { label: t("settings.avatar"), icon: "smile", hint: t("settings-nav.hint_avatar") },
   knowledge: { label: t("settings-nav.tab_knowledge"), icon: "layers", hint: t("settings-nav.hint_knowledge") },
   notifications: { label: t("settings-nav.tab_notifications"), icon: "bell", hint: t("settings-nav.hint_notifications") },
   models: { label: t("settings-nav.tab_models"), icon: "layers", hint: t("settings-nav.hint_models") },

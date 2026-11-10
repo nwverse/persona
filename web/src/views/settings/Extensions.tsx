@@ -273,7 +273,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="truncate text-[13px] text-ink">{p.name}</span>
-                  {p.source && p.source !== "installed" && <Pill>{sourceText(p.source)}</Pill>}
+                  {p.source !== "installed" && sourceText(p.source) && <Pill>{sourceText(p.source)}</Pill>}
                 </div>
                 {note && (
                   <div className={cx("mt-0.5 truncate text-[11.5px]", p.error ? "text-red" : kept || needs ? "text-orange" : "text-ink-3")}>
