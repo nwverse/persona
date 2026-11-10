@@ -391,6 +391,13 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	}
 
 	switch {
+	case in.HookEventName == "SessionStart":
+		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
+		if brief := n.closeoutStart(ctx, req, in); brief != nil {
+			return brief, nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "Elicitation":
 		if !elicitationInteraction(in, &ix) {
 			return nil, nil

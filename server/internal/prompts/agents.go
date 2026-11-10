@@ -199,3 +199,18 @@ type AgentCloseoutRequired struct {
 func RenderAgentCloseoutRequired(c AgentCloseoutRequired) string {
 	return render("agents/closeout_required", c)
 }
+
+// AgentCloseoutBrief tells an agent the closeout's form before it works, so its turn does not cost a held stop
+// (agents/closeout_brief): after a task's prompt, or as a session's starting context.
+type AgentCloseoutBrief struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+	// AfterDelivery: the same prompt asks for the delivery line (assistant/task_delivery); the block goes after it.
+	AfterDelivery bool
+	// Session: it is a session's starting context, not part of a task's prompt: it says whose words these are.
+	Session bool
+}
+
+func RenderAgentCloseoutBrief(c AgentCloseoutBrief) string {
+	return render("agents/closeout_brief", c)
+}
