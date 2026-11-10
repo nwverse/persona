@@ -581,7 +581,12 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 "reviews":[{"at":"...","verdict":"accepted|rework|needs_user|cancelled","round":1,   // round only on rework; "by":"reviewer" on a rework the independent review started (#2173)
                             "checks":[{"criterion":"Light / dark screenshots posted in the PR","met":false,"evidence":"Only the light one"}],"note":"Add the dark screenshot"}],
                 // its agent's latest report to the supervisor (report_to_supervisor, #5112); absent until it reports, and after a hub restart until it reports again
-                "progress":{"kind":"progress|question|blocked|done","step":3,"steps":5,"text":"one line of what it said","at":"..."},   // step / steps absent = not said
+                "progress":{"kind":"progress|question|blocked|done","step":3,"steps":5,"text":"one line of what it said",   // step / steps absent = not said
+                            "line":"the report paraphrased in the user's language",   // #3181: one sentence of at most 30 characters (60 outside Chinese and Japanese), written by the triage's model shortly after the report; absent until then, and for good with no model or when it failed
+                            "detail":"the report as the agent wrote it (Markdown)",   // #3181: at most 2000 characters, ending in … when cut; absent when it equals text
+                            "at":"..."},
+                // clients show progress.line ?? text in the Progress row and progress.detail ?? text (Markdown) in the task's details;
+                // line and detail are for the apps only: no prompt, supervision message, briefing, card or push reads them
                 // the latest independent review of its change (#2173, docs/assistant/unified-entry.md "Independent review"); absent when none ran
                 "auto_review":{"id":"rv_…","state":"running|clean|blocking|failed|cancelled","round":0,"count":2,"blocking":1,
                                "findings":"the reviewer's report","error":"why it failed","session_id":"<reviewer>","worktree":"<its copy>",
@@ -2718,7 +2723,8 @@ approval and acceptance decisions are handled in **Pending**. Task details and t
   they were absent from a feed page.
 - Clients continue updating the same row from live to-dos and sessions, independently of new feed events. Actual
   `supervision.progress.{kind,step,steps,text,at}` or `Session.plan.{done,total,current}` supplies progress, never elapsed
-  time or a guessed percentage. Quiet scheduled-task runs use the existing schedule fields and provenance, not a new
+  time or a guessed percentage. The row words a report as `supervision.progress.line` when the hub sent one, else
+  `text` (#3181); the task's details show the report itself, `detail` when present, else `text`, with Markdown rendered. Quiet scheduled-task runs use the existing schedule fields and provenance, not a new
   model call; `Todo.quiet` is notification policy and is not proof that a user-dispatched task is a background turn.
 
 ```jsonc

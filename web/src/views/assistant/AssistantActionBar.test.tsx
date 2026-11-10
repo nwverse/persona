@@ -82,6 +82,11 @@ describe("Assistant task progress trays", () => {
     const row = host.querySelector("[data-task-slot]");
     act(() => putTodo({ ...todo, supervision: { ...todo.supervision!, progress: { kind: "blocked", step: 3, steps: 5, text: "Waiting for a decision" } } }));
     expect(host.querySelector("[data-task-slot]")).toBe(row);
+    expect(row?.textContent).toContain("Waiting for a decision");
+    // the hub's paraphrase in the user's language replaces the agent's words in the row (#3181)
+    act(() => putTodo({ ...todo, supervision: { ...todo.supervision!, progress: { kind: "blocked", step: 3, steps: 5, text: "Waiting for a decision", line: "Needs a call on the rollout" } } }));
+    expect(row?.textContent).toContain("Needs a call on the rollout");
+    expect(row?.textContent).not.toContain("Waiting for a decision");
     expect(host.querySelector('[role="progressbar"] .bg-orange')).not.toBeNull();
     act(() => putTodo({ ...todo, done_at: at, supervision: { ...todo.supervision!, state: "accepted" } }));
     // closed: it leaves the open rows and the entry's count, folded under "Closed 1"

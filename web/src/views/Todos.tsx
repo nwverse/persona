@@ -59,7 +59,7 @@ import { Empty, Segmented } from "./assistant/parts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
 import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } from "../lib/todo-calendar";
 import type { Route } from "../lib/router";
-import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
+import { LatestReport, ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
 import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
@@ -1166,6 +1166,7 @@ function TodoDetail({
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
       <ReviewChecklist todo={todo} />
+      <LatestReport todo={todo} />
 
       {/* Stage Bar (#2776): progress from plan to verified, from the hub's todo; nothing on hubs that don't send it. */}
       <TodoStageBar stage={todo.stage} prURL={todo.pr_url} className="mt-4" />

@@ -253,14 +253,27 @@ data class Supervision(
     val progress: TaskProgress? = null,
 )
 
+/**
+ * A supervised task's agent's latest report: [text] is its own words in one line, [line] the hub's one-sentence paraphrase
+ * in the user's language (#3181; "" until written, with no model, or from an older hub), [detail] the whole report as
+ * written, Markdown ("" when it is [text]).
+ */
 @Serializable
 data class TaskProgress(
     val kind: String = "",
     val step: Int = 0,
     val steps: Int = 0,
     val text: String = "",
+    val line: String = "",
+    val detail: String = "",
     @WireTime val at: String? = null,
-)
+) {
+    /** What the Progress row says: the paraphrase when there is one, else the agent's words. */
+    val rowText: String get() = line.takeIf(String::isNotBlank) ?: text
+
+    /** The report as the agent wrote it, for the task's details. */
+    val reportText: String get() = detail.takeIf(String::isNotBlank) ?: text
+}
 
 /**
  * Todo states in order of rank (umbrella.final.md / docs/assistant/todos.md "State calculation rules"):

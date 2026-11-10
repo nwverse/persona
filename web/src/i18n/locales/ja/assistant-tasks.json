@@ -144,6 +144,7 @@
   "report_done": "完了の報告：{text}",
   "report_step_of": "ステップ {step}/{steps} · {text}",
   "report_step": "ステップ {step} · {text}",
+  "report_latest": "最新の報告",
   "report_from": "「{title}」から Persona へ",
   "report_later": "次のブリーフィングまで待てます",
   "said_to_interrupting": "「{title}」を止めて指示",

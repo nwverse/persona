@@ -100,6 +100,9 @@ type fakeHub struct {
 	// were asked; the sessions whose pushes are off, by machine.
 	triage      string
 	triageAsked []modelCall
+	// The Progress row's paraphrase of a report (report_line.go): its answer (none: an error), and what was asked.
+	reportLine      string
+	reportLineAsked []modelCall
 	// The delegate's model (delegate.go): its answer ("": it fails), and what it was asked.
 	delegate      string
 	delegateAsked []modelCall
@@ -1042,6 +1045,9 @@ func (f *fakeHub) fakeModel(t *testing.T) {
 		case strings.Contains(in.System, "盯着用户电脑上的编程 Agent"): // the Agents triage (agents_triage.go)
 			f.triageAsked = append(f.triageAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
 			reply, fail = f.triage, f.triage == ""
+		case strings.Contains(in.System, "向 Persona 的一次汇报转述成一句话"): // the Progress row's line (report_line.go)
+			f.reportLineAsked = append(f.reportLineAsked, modelCall{in.System, user})
+			reply, fail = f.reportLine, f.reportLine == ""
 		case strings.Contains(in.System, "先替用户判断 Agent 的提问"): // the delegate (delegate.go)
 			f.delegateAsked = append(f.delegateAsked, modelCall{strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(in.System), jsonOnly)), user})
 			reply, fail = f.delegate, f.delegate == ""
