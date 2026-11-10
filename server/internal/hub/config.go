@@ -82,6 +82,10 @@ type MachineConfig struct {
 	// computer whose claude is logged in under a profile directory rather than ~/.claude (#1459); "~/" is the remote
 	// home. Unset, claude uses its default. Launchers (a ~/.zshrc alias, a managed one) keep their own.
 	ClaudeStartDir string `json:"claude_start_dir,omitempty"`
+	// InboxDir is where files sent to this machine to keep land (dest=inbox, phone to computer and computer to
+	// computer, docs/protocol/file-transfer.md): "~/" is the remote home, or an absolute folder in it. Unset,
+	// proto.DefaultInboxDir. The node refuses a folder the phone may not write to.
+	InboxDir string `json:"inbox_dir,omitempty"`
 }
 
 // NodePackagesConfig is where the manager fetches the node builds for the computers that the hub has none of its own

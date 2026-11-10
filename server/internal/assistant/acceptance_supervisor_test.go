@@ -1,0 +1,233 @@
+package assistant
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
+
+// deployedForReview has supervised todo's agent say its work is deployed until its "Please verify" card is out and the
+// task waits for review. The card goes to the owner as a big feature's does (ownerVerifiesAll), or as one from before
+// the assistant accepted deployed work itself (#3205).
+func deployedForReview(t *testing.T, s *Service, f *fakeHub, todo string) {
+	t.Helper()
+	s.ownerVerifiesAll = true
+	f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	waitFor(t, "the 请验收 card", func() bool { a := askOf(s, todo); return a != nil && a.MessageID != "" })
+	f.judge = `{"verdict":"done","reason":"已部署"}`
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	waitFor(t, "the review", func() bool { return todoNow(s, todo).Supervision.State == reviewPending })
+}
+
+// updatedCards keeps the cards the bot redraws.
+func updatedCards(f *fakeHub) func() []string {
+	var mu sync.Mutex
+	var cards []string
+	f.answerApp(AppFeishu, FeishuUpdateCard, func(p json.RawMessage) (any, error) {
+		var m struct {
+			Card string `json:"card"`
+		}
+		_ = json.Unmarshal(p, &m)
+		mu.Lock()
+		cards = append(cards, m.Card)
+		mu.Unlock()
+		return map[string]any{}, nil
+	})
+	return func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), cards...) }
+}
+
+func waitingForOwner(s *Service) int {
+	ctx := context.Background()
+	_, total := s.snapshotUnaccepted(ctx, s.location(ctx))
+	return total
+}
+
+// The supervisor's accepted, having checked the evidence, passes the deployed task's "Please verify": the task is
+// verified, the card says the supervisor passed it, and nothing waits for the owner's "Pass" (#3240).
+func TestSupervisorAcceptedPassesPleaseVerify(t *testing.T) {
+	s, f, todo, posts, _ := conclusionService(t, false)
+	updated := updatedCards(f)
+	deployedForReview(t, s, f, todo.ID)
+	res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "上线了",
+		"checks": []ReviewCheck{{Criterion: "PR 合并到 master", Met: true, Evidence: "https://github.com/o/r/pull/9 merged"}}})
+	if !strings.Contains(res, "marked verified by you") {
+		t.Fatalf("the review's answer: %s", res)
+	}
+	a := askOf(s, todo.ID)
+	if a == nil || a.AcceptedAt.IsZero() || !a.BySupervisor {
+		t.Fatalf("ask %+v", a)
+	}
+	if n := waitingForOwner(s); n != 0 {
+		t.Fatalf("%d waiting for the owner", n)
+	}
+	if got := todoNow(s, todo.ID); got.Stage != "verify" {
+		t.Fatalf("stage %q", got.Stage)
+	}
+	if n := countAcceptCards(posts()); n != 1 {
+		t.Fatalf("%d 请验收 cards", n)
+	}
+	if n := len(cardsWith(posts(), "结论：")); n != 0 {
+		t.Fatalf("%d conclusion cards", n)
+	}
+	if c := cardsWith(updated(), "督办已核对证据，标为已验证"); len(c) != 1 || strings.Contains(c[0], `"a":"accept"`) {
+		t.Fatalf("the card is not redrawn as passed by the supervisor: %q", updated())
+	}
+	// Reminded the next morning: nothing, it is passed.
+	s.accept.mu.Lock()
+	s.accept.asks[todo.ID].AskedAt = time.Now().Add(-30 * time.Hour)
+	s.accept.mu.Unlock()
+	n := len(posts())
+	ctx := context.Background()
+	now := time.Now().In(s.location(ctx))
+	s.remindAcceptance(time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, s.location(ctx)))
+	if got := posts()[n:]; len(got) != 0 {
+		t.Fatalf("reminded: %q", got)
+	}
+}
+
+// An ask left waiting by a hub from before #3240 (the supervisor accepted, the owner was still asked) is passed by the
+// sweep; so is one whose card went out after the review.
+func TestSupervisedBacklogIsPassedBySweep(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	deployedForReview(t, s, f, todo.ID)
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "上线了"})
+	s.accept.mu.Lock()
+	s.accept.asks[todo.ID].AcceptedAt, s.accept.asks[todo.ID].BySupervisor = time.Time{}, false // as the old hub left it
+	s.accept.mu.Unlock()
+	if n := waitingForOwner(s); n != 1 {
+		t.Fatalf("%d waiting before the sweep", n)
+	}
+	s.verifySupervisedAsks(context.Background())
+	if a := askOf(s, todo.ID); a == nil || a.AcceptedAt.IsZero() || !a.BySupervisor {
+		t.Fatalf("ask %+v", a)
+	}
+	if n := waitingForOwner(s); n != 0 {
+		t.Fatalf("%d waiting after the sweep", n)
+	}
+}
+
+// user_check: the supervisor accepted, but the owner is to look themselves: the "Please verify" keeps waiting for them;
+// with none up yet, one is asked.
+func TestSupervisorUserCheckStillAsksTheOwner(t *testing.T) {
+	t.Run("deployed", func(t *testing.T) {
+		s, f, todo, posts, _ := conclusionService(t, false)
+		deployedForReview(t, s, f, todo.ID)
+		res := reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "界面改好了", "user_check": true})
+		if !strings.Contains(res, "user_check") {
+			t.Fatalf("the review's answer: %s", res)
+		}
+		s.verifySupervisedAsks(context.Background())
+		if a := askOf(s, todo.ID); a == nil || !a.AcceptedAt.IsZero() || a.BySupervisor {
+			t.Fatalf("ask %+v", a)
+		}
+		if n := waitingForOwner(s); n != 1 {
+			t.Fatalf("%d waiting for the owner", n)
+		}
+		if n := countAcceptCards(posts()); n != 1 {
+			t.Fatalf("%d 请验收 cards", n)
+		}
+		mid := askOf(s, todo.ID).MessageID
+		if !s.acceptReply(context.Background(), "om_ok", "通过", false, mid) || askOf(s, todo.ID).AcceptedAt.IsZero() {
+			t.Fatal("the owner's Pass did not pass it")
+		}
+	})
+	t.Run("deployed, passed by the assistant", func(t *testing.T) {
+		s, f, todo, posts, _ := conclusionService(t, false)
+		f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
+		agentTurn(s, f, proto.StatusWorking, "", 0)
+		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		waitFor(t, "the assistant's acceptance", func() bool { a := askOf(s, todo.ID); return a != nil && !a.AcceptedAt.IsZero() })
+		if n := countAcceptCards(posts()); n != 0 {
+			t.Fatalf("%d 请验收 cards before the review", n)
+		}
+		f.judge = `{"verdict":"done","reason":"已部署"}`
+		agentTurn(s, f, proto.StatusWorking, "", 0)
+		agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+		waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+		f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
+		reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "界面改好了", "user_check": true})
+		waitFor(t, "the 请验收 card", func() bool { a := askOf(s, todo.ID); return a != nil && a.MessageID != "" })
+		if a := askOf(s, todo.ID); !a.AcceptedAt.IsZero() || a.ByAssistant || a.BySupervisor {
+			t.Fatalf("ask %+v", a)
+		}
+		if n := waitingForOwner(s); n != 1 {
+			t.Fatalf("%d waiting for the owner", n)
+		}
+	})
+	t.Run("not deployed", func(t *testing.T) {
+		s, f, todo, posts, _ := conclusionService(t, false)
+		waitsForReview(t, s, f, todo.ID, "改好了，截图贴在 PR 里")
+		f.judge = `{"changed":"登录页横屏不再崩溃","link":"","how":"iPad 横屏打开登录页"}`
+		reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "界面改好了", "user_check": true})
+		waitFor(t, "the 请验收 card", func() bool { a := askOf(s, todo.ID); return a != nil && a.MessageID != "" })
+		if n := countAcceptCards(posts()); n != 1 {
+			t.Fatalf("%d 请验收 cards", n)
+		}
+		if n := len(cardsWith(posts(), "结论：")); n != 0 {
+			t.Fatalf("%d conclusion cards besides it", n)
+		}
+		if n := waitingForOwner(s); n != 1 {
+			t.Fatalf("%d waiting for the owner", n)
+		}
+	})
+	t.Run("only with accepted", func(t *testing.T) {
+		s, f, todo, _, _ := conclusionService(t, false)
+		waitsForReview(t, s, f, todo.ID, "做了一半")
+		raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "补测试", "user_check": true})
+		if _, err := s.runTool(context.Background(), "server", "conv1", "task_review", raw); err == nil {
+			t.Fatal("user_check with rework was taken")
+		}
+	})
+}
+
+// A big feature (high priority) is the owner's to try (#3205): its "Please verify" waits for them after the supervisor
+// accepted too; its conclusion would not, but it has none (the card is that).
+func TestSupervisorAcceptedLeavesABigFeatureToTheOwner(t *testing.T) {
+	s, f, todo, _, _ := conclusionService(t, false)
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Priority = "high"
+	s.todos.mu.Unlock()
+	deployedForReview(t, s, f, todo.ID)
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "note": "上线了"})
+	s.verifySupervisedAsks(context.Background())
+	if a := askOf(s, todo.ID); a == nil || !a.AcceptedAt.IsZero() {
+		t.Fatalf("ask %+v", a)
+	}
+	if n := waitingForOwner(s); n != 1 {
+		t.Fatalf("%d waiting for the owner", n)
+	}
+}
+
+// A task with no supervisor keeps asking the owner: closed by the auto judge, its "Please verify" waits for their "Pass".
+func TestUnsupervisedTaskStillAsksTheOwner(t *testing.T) {
+	s, f, posts := acceptService(t) // its deployed work asks the owner (ownerVerifiesAll), as a big feature's does
+	todo := startedTask(t, s, f)
+	if todo.Supervision != nil && todo.Supervision.Supervisor != "" {
+		t.Fatalf("the task has a supervisor: %+v", todo.Supervision)
+	}
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	waitAcceptCard(t, s, todo.ID, posts)
+	ctx := context.Background()
+	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("auto done: %v %v", ok, err)
+	}
+	s.verifySupervisedAsks(ctx)
+	if a := askOf(s, todo.ID); a == nil || !a.AcceptedAt.IsZero() || a.BySupervisor {
+		t.Fatalf("ask %+v", a)
+	}
+	if n := waitingForOwner(s); n != 1 {
+		t.Fatalf("%d waiting for the owner", n)
+	}
+	if n := countAcceptCards(posts()); n != 1 {
+		t.Fatalf("%d 请验收 cards", n)
+	}
+}

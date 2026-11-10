@@ -5,6 +5,8 @@
   "tray_empty_pending": "対応待ちはありません",
   "tray_start": "開始待ち",
   "tray_closed_other": "終了 {count}",
+  "tray_shelved_other": "保留 {count}",
+  "tray_shelved_hint": "48 時間進展がなく、動いている Agent もありません。未完了には数えません。データは残っています。",
   "tray_empty_progress": "この会話で進行中のタスクはありません",
   "plan_waiting": "開始を待っています",
   "dispatch_hint": "{count}件を依頼 ·「進捗」で見る",

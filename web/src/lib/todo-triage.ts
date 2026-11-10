@@ -4,6 +4,7 @@
 
 import { acceptanceStands, latestReview, reviewState } from "./supervision";
 import { openAsk, todoDueBy, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { todoStageIndex } from "./todo-stage";
 
 /** Where a to-do shows, in the page's order. The first four are open sections; the last three start folded. */
 export type TriageSection = "waiting" | "working" | "just_done" | "pr" | "other" | "shelved" | "done";
@@ -69,12 +70,12 @@ export function lastActivity(todo: Todo, lookup?: SessionLookup, restoredAt = 0)
   return last;
 }
 
-/** The PR its work stopped at, still to merge: the hub says the delivery stopped at a PR, or it knows a PR and no
- *  delivery state past it. */
+/** The PR its work stopped at, still to merge: the hub says the delivery stopped at a PR, or it knows a PR and neither
+ *  a delivery state nor the stage is past it (a stage at merge or later is a merged PR, #3205). */
 export function openPR(todo: Todo): boolean {
   const d = todo.delivery?.state;
   if (d === "pr") return true;
-  return Boolean(todo.pr_url) && (!d || d === "none");
+  return Boolean(todo.pr_url) && (!d || d === "none") && todoStageIndex(todo.stage) < todoStageIndex("merge");
 }
 
 /** Whether a to-do may be shelved at all: it is a task (an agent was linked, or a conversation handed it out) with no
@@ -127,6 +128,17 @@ export function countsAsOpen(todo: Todo, t: Triage): boolean {
   if (t.rule === "failed_start") return t.section === "waiting";
   if (todo.done_at || t.section === "shelved" || t.section === "done") return false;
   return t.rule !== "accepted" && t.rule !== "deployed";
+}
+
+/** Where a to-do stands for every count of open work (#3331): the To-dos page's "Not done" and the conversation's
+ *  Progress entry read this one rule, so the two numbers agree. `open` counts, `shelved` folds (no activity for 48 h,
+ *  nothing running), `closed` is finished (done, accepted, deployed, an old failed start). */
+export type TodoBucket = "open" | "shelved" | "closed";
+
+export function todoBucket(todo: Todo, lookup: SessionLookup | undefined, now: number, restoredAt = 0): TodoBucket {
+  const t = triage(todo, lookup, now, restoredAt);
+  if (countsAsOpen(todo, t)) return "open";
+  return t.section === "shelved" ? "shelved" : "closed";
 }
 
 // ── Related to-dos ────────────────────────────────────────────
