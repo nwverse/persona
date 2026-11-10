@@ -2,13 +2,17 @@
 // The current assistant (docs/assistant/managers.md "Clients"): the pick is kept in this browser and survives a reload, a
 // manager that left the roster goes back to the default, the pages list only the current one's things, and each
 // assistant's count is its agents waiting plus its inbox items that need the user.
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { scoped, scopeOf } from "./current-assistant";
+import { scoped, scopeKey, scopeOf, useScope, type Scope } from "./current-assistant";
 import { managerBadges, waitingAgents } from "./manager-attention";
-import { CHOICE_KEY, chooseManager, chosenManager, currentHeaders, managerHeaderFor, resetManagerChoice, shownManager } from "./manager-choice";
+import { CHOICE_KEY, chooseManager, chosenManager, currentHeaders, managerHeaderFor, PICKED_NAME_KEY, pickedName, resetManagerChoice, shownManager } from "./manager-choice";
 import { avatarColor, avatarInitial, resetRoster, setRoster, switcherLine, type ManagerList } from "./managers";
-import { routeAfterSwitch } from "./persona-nav";
+import { reopensOnSwitch, routeAfterSwitch } from "./persona-nav";
 import type { Interaction, Session } from "./types";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => {
   resetRoster();
@@ -71,6 +75,23 @@ describe("the pick", () => {
     expect(localStorage.getItem(CHOICE_KEY)).toBeNull();
   });
 
+  it("keeps its name as the roster gives it, for the sidebar's head before the roster is read again", async () => {
+    setRoster(ROSTER);
+    chooseManager("m-1");
+    expect(localStorage.getItem(PICKED_NAME_KEY)).toBe("工作");
+    setRoster({ ...ROSTER, managers: ROSTER.managers.map((m) => (m.id === "m-1" ? { ...m, name: "公司" } : m)) });
+    expect(pickedName()).toBe("公司");
+    // a reload: the name is there before the roster
+    vi.resetModules();
+    const fresh = await import("./manager-choice");
+    expect(fresh.pickedName()).toBe("公司");
+    fresh.resetManagerChoice();
+    // the default picked: no pick, no name
+    chooseManager(null);
+    expect(localStorage.getItem(PICKED_NAME_KEY)).toBeNull();
+    expect(pickedName()).toBeNull();
+  });
+
   it("names the current assistant on its knowledge base and on what it makes, never the health space", () => {
     setRoster(ROSTER);
     expect(currentHeaders()).toBeUndefined();
@@ -98,6 +119,49 @@ describe("what the pages list", () => {
   });
 });
 
+describe("what the pages list before the roster is read", () => {
+  it("is the kept pick's only, not every assistant's until the roster comes", () => {
+    const items = [{ id: 1, manager: "assistant" }, { id: 2, manager: undefined }, { id: 3, manager: "m-1" }];
+    const kept = scopeOf(null, "m-1", "m-1");
+    expect(kept.several).toBe(true);
+    expect(scoped(items, kept).map((x) => x.id)).toEqual([3]);
+    // no pick: one assistant as far as anyone knows, everything listed
+    expect(scopeOf(null, "assistant", null).several).toBe(false);
+  });
+});
+
+describe("the scope's identity", () => {
+  it("stays across a roster read again with only a count changed, and moves with what the pages filter by", () => {
+    const key = scopeKey(ROSTER, "m-1");
+    const counted = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, inbox_needs_you: (m.inbox_needs_you ?? 0) + 1 })) };
+    expect(scopeKey(counted, "m-1")).toBe(key);
+    expect(scopeKey(ROSTER, "assistant")).not.toBe(key);
+    expect(scopeKey({ ...ROSTER, default: "m-1" }, "m-1")).not.toBe(key);
+    expect(scopeKey({ ...ROSTER, managers: ROSTER.managers.filter((m) => m.id !== "m-2") }, "m-1")).not.toBe(key);
+    expect(scopeKey({ ...ROSTER, managers: ROSTER.managers.map((m) => (m.id === "m-1" ? { ...m, online: false } : m)) }, "m-1")).not.toBe(key);
+  });
+
+  it("is the same object for every managers push that changes no more than a count", async () => {
+    setRoster(ROSTER);
+    chooseManager("m-1");
+    const seen: Scope[] = [];
+    function Probe() {
+      seen.push(useScope());
+      return null;
+    }
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    await act(async () => root.render(<Probe />));
+    for (let n = 1; n <= 3; n++) await act(async () => setRoster({ ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, inbox_needs_you: n })) }));
+    expect(seen.length).toBeGreaterThan(1);
+    expect(new Set(seen).size).toBe(1);
+    await act(async () => chooseManager(null));
+    expect(seen.at(-1)).not.toBe(seen[0]);
+    expect(seen.at(-1)!.id).toBe("assistant");
+    await act(async () => root.unmount());
+  });
+});
+
 describe("what waits at each assistant", () => {
   const sessions = [
     session("a", "assistant"),
@@ -112,6 +176,32 @@ describe("what waits at each assistant", () => {
     const cards = [card("x1", "m-1", "b"), card("x2", "m-1", "c"), card("x3", "m-1", "c"), card("x4", "assistant", "")];
     // m-1: b (needs you, and a card: once) and c (two cards: once); the default: a, d and a card without a session
     expect(waitingAgents(ROSTER, sessions, cards)).toEqual({ assistant: 3, "m-1": 2 });
+  });
+
+  it("leaves out a quiet task's cards and muted agents, and counts each card on no session", () => {
+    const mine = [
+      session("ok", "m-1", { state: "working" }),
+      session("q", "m-1", { state: "working", quiet: true }),
+      session("muted", "m-1"),
+      session("spaced", "m-1", { state: "working", space_name: "noisy" }),
+      session("allowed", "m-1", { state: "working", space_name: "noisy" }),
+    ];
+    const cards = [
+      card("c1", "m-1", "ok"),
+      card("c2", "m-1", "ok"), // the same session: once
+      card("c3", "m-1", "q"), // a quiet task's: none
+      card("c4", "m-1", "muted"), // muted session (and in Needs you): none
+      card("c5", "m-1", "spaced"), // its space muted: none
+      card("c6", "m-1", "allowed"), // its space muted but itself let through: counts
+      card("c7", "m-1", ""), // on no session: each counts
+      card("c8", "m-1", ""),
+      card("c9", "m-1", "unknown"), // a session not listed yet, not muted: counts
+    ];
+    const mutes = { sessions: ["mac/muted"], spaces: ["mac/noisy"], allowed: ["mac/allowed"] };
+    // ok, allowed, c7, c8, unknown
+    expect(waitingAgents(ROSTER, mine, cards, mutes)["m-1"]).toBe(5);
+    // no mutes: muted (needs you and a card) and spaced count too
+    expect(waitingAgents(ROSTER, mine, cards)["m-1"]).toBe(7);
   });
 
   it("adds the roster's inbox count, none where the hub gives none", () => {
@@ -155,5 +245,11 @@ describe("the page after a switch", () => {
     expect(routeAfterSwitch({ name: "kb", kind: "people", id: "p1" })).toEqual({ name: "kb", kind: "people" });
     expect(routeAfterSwitch({ name: "todos", id: "t1", view: "calendar", mode: "week" })).toEqual({ name: "todos", view: "calendar", mode: "week" });
     for (const name of ["settings", "machines", "routines", "home", "health", "agent-list"] as const) expect(routeAfterSwitch({ name })).toBeNull();
+  });
+
+  it("opens again where a page that stays reads the assistant's things itself", () => {
+    for (const route of [{ name: "history" }, { name: "profile" }, { name: "routines" }, { name: "kb", kind: "docs" }] as const) expect(reopensOnSwitch(route)).toBe(true);
+    // these follow the pick by themselves, or are no assistant's
+    for (const name of ["persona", "home", "inbox", "machines", "todos", "agent-list", "settings", "health", "messages", "terminal"] as const) expect(reopensOnSwitch({ name } as never)).toBe(false);
   });
 });

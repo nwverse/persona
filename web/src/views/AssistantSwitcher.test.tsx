@@ -26,9 +26,9 @@ vi.mock("../ui/atoms", async (original) => ({ ...(await original<typeof import("
 const navigate = vi.fn();
 vi.mock("../lib/router", async (original) => ({ ...(await original<typeof import("../lib/router")>()), navigate: (...args: unknown[]) => navigate(...args) }));
 
-import { chooseManager, resetManagerChoice, shownManager } from "../lib/manager-choice";
+import { chooseManager, pickedName, resetManagerChoice, shownManager } from "../lib/manager-choice";
 import { resetRoster, setRoster, type ManagerList } from "../lib/managers";
-import { getState, reset } from "../lib/store";
+import { connect, flushPushes, getState, reset } from "../lib/store";
 import type { Interaction, Session } from "../lib/types";
 import { loadPages } from "../lib/lazy-page";
 import { AssistantSwitcher } from "./AssistantSwitcher";
@@ -49,6 +49,22 @@ const ROSTER: ManagerList = {
     { id: "m-3", name: "测试", online: false, installing: soon(7.2) },
   ],
 };
+
+class FakeSocket {
+  static OPEN = 1;
+  static last: FakeSocket;
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: ((ev: { code: number }) => void) | null = null;
+  constructor() {
+    FakeSocket.last = this;
+  }
+  send() {}
+  close() {
+    this.readyState = 3;
+  }
+}
 
 let root: Root;
 let host: HTMLDivElement;
@@ -195,6 +211,53 @@ describe("the sidebar's assistant switcher", () => {
     await open();
     expect(rows().some((r) => r.textContent === "新建助手")).toBe(false);
     expect(rows().some((r) => r.textContent === "断开这个浏览器")).toBe(true);
+  });
+
+  it("fades an offline assistant's whole row, which can still be picked", async () => {
+    await render();
+    await open();
+    expect(row("家里").className).toContain("opacity-55");
+    expect(row("家里").querySelector("[data-assistant-avatar]")?.className).not.toContain("opacity");
+    expect(row("工作").className).not.toContain("opacity-55");
+    expect(row("测试").className).not.toContain("opacity-55"); // installing: its own line says so
+    await choose("家里");
+    expect(shownManager()).toBe("m-2");
+  });
+
+  it("counts again when the hub pushes `managers` (an inbox count moved)", async () => {
+    vi.stubGlobal("WebSocket", FakeSocket);
+    await render();
+    await open();
+    const badge = () => row("工作").querySelector("[data-menu-badge]")?.textContent;
+    expect(badge()).toBe("3");
+    act(() => connect());
+    act(() => {
+      FakeSocket.last.readyState = 1;
+      FakeSocket.last.onopen?.();
+    });
+    await flush();
+    hub.roster = { ...ROSTER, managers: ROSTER.managers.map((m) => (m.id === "m-1" ? { ...m, inbox_needs_you: 5 } : m)) };
+    const asked = hub.calls.filter((c) => c.path === "/managers").length;
+    act(() => FakeSocket.last.onmessage?.({ data: JSON.stringify({ type: "managers" }) }));
+    act(() => flushPushes());
+    await flush();
+    expect(hub.calls.filter((c) => c.path === "/managers").length).toBeGreaterThan(asked);
+    // one agent waiting and now five inbox items, in the list as it was left open
+    expect(badge()).toBe("6");
+    vi.unstubAllGlobals();
+  });
+
+  it("shows a kept pick by the name the roster last gave it until the roster is read again", async () => {
+    act(() => chooseManager("m-1"));
+    expect(pickedName()).toBe("工作");
+    resetRoster(); // a reload: the pick and its name are kept, the roster not read yet
+    await render();
+    expect(head().textContent).toContain("工作");
+    expect(head().textContent).not.toContain("Persona");
+    expect(head().getAttribute("data-assistant-switcher")).toBe("m-1");
+    act(() => setRoster(ROSTER));
+    await flush();
+    expect(head().textContent).toContain("在线 · MacBook");
   });
 
   it("says the hub is out of reach instead of the assistant's own status", async () => {

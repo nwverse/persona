@@ -3,8 +3,8 @@
 // link to another assistant's item still opens it; the pages filter what they list. With one assistant nothing is
 // filtered: an item without `manager`, or of a manager the roster doesn't know, is the default's (ownerIn).
 import { useMemo } from "react";
-import { useShownManager } from "./manager-choice";
-import { managerOf, multiManager, ownerIn, useRoster, type Manager, type ManagerList } from "./managers";
+import { useChosenManager, useShownManager } from "./manager-choice";
+import { installedManagers, managerOf, multiManager, ownerIn, useRoster, type Manager, type ManagerList } from "./managers";
 import { stateCounts, useAgentSessions, useCounts, useFullAgentSessions } from "./sessions";
 import { useStore } from "./store";
 import type { Session } from "./types";
@@ -20,16 +20,32 @@ export interface Scope {
   has: (manager: string | undefined) => boolean;
 }
 
-export function scopeOf(list: ManagerList | null, current: string): Scope {
+/** The scope for roster and the current assistant. `picked`: the pick this browser kept, which counts before the roster
+ *  is read (a reload): the pages list its things only, rather than every assistant's until the roster comes. */
+export function scopeOf(list: ManagerList | null, current: string, picked: string | null = null): Scope {
+  if (!list && picked) return { several: true, id: picked, manager: null, has: (m) => m === picked };
   if (!multiManager(list)) return { several: false, id: current, manager: null, has: () => true };
   return { several: true, id: current, manager: managerOf(list, current), has: (m) => ownerIn(list, m) === current };
 }
 
-/** The current assistant's scope; the same object until the roster or the pick changes. */
+/** What a scope depends on: whether there are several assistants, the current one, the installed ones and the default
+ *  (and the current one's name and state, which the inbox's dialogs show). A roster read again with only a count
+ *  changed (`inbox_needs_you`, every `managers` push) keeps the scope, so the filtered lists stay the same arrays. */
+export function scopeKey(list: ManagerList | null, current: string, picked: string | null = null): string {
+  if (!list) return picked ? `pick|${picked}` : `one|${current}`;
+  if (!multiManager(list)) return `one|${current}`;
+  const me = managerOf(list, current);
+  return JSON.stringify(["several", current, installedManagers(list).map((m) => m.id), list.default, me?.name, me?.online]);
+}
+
+/** The current assistant's scope; the same object while scopeKey stays. */
 export function useScope(): Scope {
   const roster = useRoster();
   const current = useShownManager();
-  return useMemo(() => scopeOf(roster, current), [roster, current]);
+  const picked = useChosenManager();
+  const key = scopeKey(roster, current, picked);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is what the scope depends on
+  return useMemo(() => scopeOf(roster, current, picked), [key]);
 }
 
 /** `items` of the current assistant (by each one's `manager`); the same array with one assistant. */

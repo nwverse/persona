@@ -5,7 +5,7 @@
 import { useRef, useState } from "react";
 import { t } from "../i18n";
 import { lastSyncedText, managerOrder, multiManager, useRoster, type Manager } from "../lib/managers";
-import { useShownManager } from "../lib/manager-choice";
+import { pickedName, useChosenManager, useShownManager } from "../lib/manager-choice";
 import { ago } from "../lib/format";
 import { api, enc, errorText } from "../lib/api";
 import { Button, cx, Menu, toast, useMenu } from "../ui/atoms";
@@ -21,6 +21,9 @@ function Dot({ online }: { online: boolean }) {
 export function useAssistantTitle(): string {
   const roster = useRoster();
   const shown = useShownManager();
+  const picked = useChosenManager();
+  // before the roster is read (a reload): a kept pick's name as the roster last gave it
+  if (!roster && picked) return pickedName() || MAIN_TITLE;
   return (multiManager(roster) && roster.managers.find((m) => m.id === shown)?.name) || MAIN_TITLE;
 }
 

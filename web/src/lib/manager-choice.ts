@@ -26,14 +26,29 @@ function storeChoice(id: string | null) {
   try {
     if (id) localStorage.setItem(CHOICE_KEY, id);
     else localStorage.removeItem(CHOICE_KEY);
+    // a name is the pick's: a new pick (or none) has none until the roster gives it
+    localStorage.removeItem(PICKED_NAME_KEY);
   } catch {
     // as above
+  }
+}
+
+/** Where this browser keeps the pick's name as the roster last gave it: the sidebar's head shows it before the roster
+ *  is read again (a reload), rather than the hub's own name for a moment. */
+export const PICKED_NAME_KEY = `persona.pickedAssistantName${BASE ? `:${BASE}` : ""}`;
+
+function storedName(): string | null {
+  try {
+    return localStorage.getItem(PICKED_NAME_KEY) || null;
+  } catch {
+    return null;
   }
 }
 
 // Only another manager than the default is kept: following the default is the absence of a pick, so a hub with one
 // manager stores and sends nothing. Before the roster is read the kept pick already names its manager on requests.
 let chosen: string | null = storedChoice();
+let chosenName: string | null = chosen ? storedName() : null;
 let rosterDefault = BUILTIN_MANAGER;
 // Whether rosterDefault is the roster's (read once, or the hub has none to read): until then it is a placeholder, and
 // what goes by the default (the pages without a switcher, an item's requests) waits for it or is evaluated again.
@@ -46,6 +61,23 @@ const emit = () => listeners.forEach((l) => l());
 /** The manager picked in the switcher; null: the default one. */
 export function chosenManager(): string | null {
   return chosen;
+}
+
+/** The picked manager's name as the roster last gave it (null: no pick, or not known yet). */
+export function pickedName(): string | null {
+  return chosen ? chosenName : null;
+}
+
+/** The roster names the picked manager name (lib/managers.ts): kept with the pick for the next reload. */
+export function notePickedName(name: string | null) {
+  if (!chosen || name === chosenName) return;
+  chosenName = name;
+  try {
+    if (name) localStorage.setItem(PICKED_NAME_KEY, name);
+    else localStorage.removeItem(PICKED_NAME_KEY);
+  } catch {
+    // as storeChoice
+  }
 }
 
 /** The roster's default manager: whose an item without `manager` is. */
@@ -63,6 +95,7 @@ export function chooseManager(id: string | null) {
   const next = id === null || id === rosterDefault ? null : id;
   if (next === chosen) return;
   chosen = next;
+  chosenName = null;
   storeChoice(chosen);
   emit();
 }
@@ -79,6 +112,7 @@ export function setRosterDefault(id: string) {
   rosterDefault = id;
   if (shown === id && chosen) {
     chosen = null;
+    chosenName = null;
     storeChoice(null);
   }
   emit();
@@ -296,9 +330,15 @@ export function useShownManager(): string {
   return useSyncExternalStore(onManagerChoice, shownManager, shownManager);
 }
 
+/** The picked manager (null: the default), re-rendering when it changes: what the assistant's requests name. */
+export function useChosenManager(): string | null {
+  return useSyncExternalStore(onManagerChoice, chosenManager, chosenManager);
+}
+
 /** Tests: back to the default, the hub's own assistant, not known yet. */
 export function resetManagerChoice() {
   chosen = null;
+  chosenName = null;
   storeChoice(null);
   itemManagers.clear();
   pins.clear();

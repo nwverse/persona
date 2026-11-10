@@ -7,7 +7,7 @@
 import { memo, useState } from "react";
 import { t } from "../i18n";
 import { BREATHING, connStatus, phaseTone, type ConnPhase } from "../lib/connection";
-import { chooseManager, useShownManager } from "../lib/manager-choice";
+import { chooseManager, pickedName, useChosenManager, useShownManager } from "../lib/manager-choice";
 import { useManagerBadges } from "../lib/manager-attention";
 import { loadRoster, managerError, managerOf, managerOrder, multiManager, renewCode, statusLine, switcherLine, useRoster, type InstallCode, type Manager } from "../lib/managers";
 import { refreshReadiness } from "../lib/readiness";
@@ -68,7 +68,10 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
   const [asking, setAsking] = useState(false);
   // the lines count minutes (an install code running out, "last synced"): once a minute while the list is open
   const now = useNow(30_000, Boolean(menu.anchor));
-  const me = managerOf(roster, current);
+  const known = managerOf(roster, current);
+  // before the roster is read (a reload), a kept pick shows the name the roster last gave it, not the hub's own row
+  const picked = useChosenManager();
+  const me: Pick<Manager, "id" | "name"> | null = known ?? (!roster && picked ? { id: picked, name: pickedName() ?? picked } : null);
   const linked = phase === "online";
   const othersWaiting = Object.entries(badges).some(([id, n]) => id !== current && n > 0);
 
@@ -103,7 +106,9 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
     label: m.name,
     tag: several && m.id === roster?.default ? t("settings-managers.default") : undefined,
     detail: switcherLine(m, now),
-    lead: <AssistantAvatar id={m.id} name={m.name} isDefault={m.id === roster?.default} size={28} status={statusLine(m, now).tone} ring="ring-surface" className={m.online || m.installing ? undefined : "opacity-60"} />,
+    lead: <AssistantAvatar id={m.id} name={m.name} isDefault={m.id === roster?.default} size={28} status={statusLine(m, now).tone} ring="ring-surface" />,
+    // an offline one: the whole row faded (avatar, name and line), still chosen like the others
+    dim: !m.online && !m.installing,
     ...(m.installing ? {} : { radio: true, checked: m.id === current, badge: m.id === current ? 0 : badges[m.id] ?? 0 }),
     onSelect: () => {
       if (m.installing) void showCode(m);
@@ -118,7 +123,10 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
           { key: "manage-assistants", label: t("sidebar.manage_assistants"), icon: "gear" as const, onSelect: () => navigate("/settings?tab=managers") },
         ]
       : []),
-    { key: "appearance", label: t("sidebar.appearance"), icon: "sun", divider: Boolean(roster), onSelect: () => {}, children: themes.map((x) => ({ key: x.k, label: x.label, icon: x.icon, radio: true, checked: theme === x.k, onSelect: () => setTheme(x.k) })) },
+    // the three looks as rows of their own under a small title, as the row's menu had them: a submenu would open over
+    // the rows under it on a narrow screen (a phone, a zoomed page) and hide Settings and Disconnect
+    { key: "appearance", label: t("sidebar.appearance"), heading: true, divider: Boolean(roster), onSelect: () => {} },
+    ...themes.map((x) => ({ key: x.k, label: x.label, icon: x.icon, checked: theme === x.k, onSelect: () => setTheme(x.k) })),
     // the other hubs in this browser's list (#1014); none, and the menu is as before
     ...otherHubs,
     { key: "settings", label: t("sidebar.nav_settings"), icon: "gear", divider: otherHubs.length > 0, onSelect: () => navigate({ name: "settings" }) },
@@ -126,7 +134,7 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
   ];
 
   const name = me?.name ?? "Persona";
-  const tone = me ? statusLine(me, now).tone : undefined;
+  const tone = known ? statusLine(known, now).tone : undefined;
   return (
     <>
       <button
@@ -143,8 +151,8 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
           <span className="block truncate text-[13px] leading-tight font-medium text-ink">{name}</span>
           <span className="flex items-center gap-1.5 truncate text-[11px] leading-tight text-ink-3">
             {/* the hub out of reach matters more than the assistant's own state: its line and dot take the place */}
-            {me && linked ? (
-              <span className="truncate">{switcherLine(me, now)}</span>
+            {known && linked ? (
+              <span className="truncate">{switcherLine(known, now)}</span>
             ) : (
               <>
                 <span aria-hidden data-conn-dot className={cx("size-1.5 shrink-0 rounded-full", phaseTone(phase).color)} style={phaseTone(phase).breathing ? BREATHING : undefined} />

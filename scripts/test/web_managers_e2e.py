@@ -15,7 +15,9 @@ Manage assistants…; the pick names the assistant's requests and survives a rel
 composer off; an installing one opens its install code), that the machines and inbox pages list only the current
 assistant's (no manager headings), another assistant's inbox item opened by its address (its requests name its manager,
 the Trail's too, and the current assistant stays), the Muted dialog, and Settings › Assistants' Notifications switch;
---outdated its Needs update badge; --single checks the switcher is there with one assistant, that nothing is filtered
+Once after the rounds: the count beside 工作 (its agents waiting plus the roster's inbox_needs_you) moving without a
+reload when the hub pushes `managers`, and every row of the list reachable and clickable at 200% zoom and at the largest
+text size. --outdated its Needs update badge; --single checks the switcher is there with one assistant, that nothing is filtered
 and that no request names a manager (no X-Persona-Manager header, no manager= in the address). Screenshots (390 and
 1200 wide, light and dark) contain only mock data.
 """
@@ -304,6 +306,113 @@ def check(browser, base, width, theme, shots, single, outdated):
         context.close()
 
 
+def check_counts(browser, base):
+    """The count beside 工作 is its agents waiting plus the roster's inbox_needs_you, and moves without a reload when the hub
+    pushes `managers`: one of its inbox items that need the user handled elsewhere (as another device would), then
+    brought back."""
+    context = browser.new_context(viewport={"width": 1200, "height": 900}, locale="zh-CN")
+    page = context.new_page()
+    page.set_default_timeout(15000)
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    auth = {"Authorization": "Bearer mock"}
+    try:
+        page.goto(base + "/?token=mock")
+        page.wait_for_function("localStorage.getItem('persona.token')")
+        head = page.locator("[data-assistant-switcher]")
+        expect(head).to_have_attribute("data-assistant-switcher", "assistant")
+
+        def needs_you():
+            roster = page.request.get(base + "/api/v1/managers", headers=auth).json()
+            return next(m for m in roster["managers"] if m["id"] == MANAGERS["工作"]).get("inbox_needs_you", 0)
+
+        before_needs = needs_you()
+        assert before_needs > 0, before_needs
+        head.click()
+        badge = page.get_by_role("menu").get_by_role("menuitemradio").filter(has_text="工作").locator("[data-menu-badge]")
+        expect(badge).to_be_visible()
+        before = int(badge.inner_text())
+        agents = before - before_needs
+        assert agents >= 0, (before, before_needs)
+
+        def done(item_id, on):
+            r = page.request.post(f"{base}/api/v1/inbox/{item_id}/done", headers={**auth, "X-Persona-Manager": MANAGERS["工作"]}, data={"done": on})
+            assert r.ok, r.status
+
+        # 工作's open items: the first whose handling moves its count
+        items = page.request.get(base + "/api/v1/inbox?sources=all", headers={**auth, "X-Persona-Manager": MANAGERS["工作"]}).json()["items"]
+        moved = None
+        for item in [x for x in items if x.get("manager") == MANAGERS["工作"] and not x.get("done_at")]:
+            done(item["id"], True)
+            if needs_you() != before_needs:
+                moved = item["id"]
+                break
+            done(item["id"], False)
+        assert moved, [x["id"] for x in items]
+        after = agents + needs_you()
+        # the list left open shows it once the push has been read: no reload, no reopening
+        expect(badge).to_have_text(str(after), timeout=8000)
+        done(moved, False)
+        expect(badge).to_have_text(str(before), timeout=8000)
+        assert not errors, errors
+    finally:
+        context.close()
+
+
+def check_reach(browser, base, shots):
+    """Every row of the list can be scrolled to and clicked at 200% zoom (a 1200 x 900 window is 600 x 450 CSS pixels)
+    and at the largest text size: New assistant, Manage assistants…, the three looks under Appearance, Settings and
+    Disconnect."""
+    for what, viewport, text_size in (("zoom200", {"width": 600, "height": 450}, None), ("large", {"width": 390, "height": 700}, "large")):
+        context = browser.new_context(viewport=viewport, device_scale_factor=2, locale="zh-CN", color_scheme="light")
+        if text_size:
+            context.add_init_script("localStorage.setItem('persona.text-size', " + repr(text_size) + ")")
+        page = context.new_page()
+        page.set_default_timeout(15000)
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto(base + "/?token=mock")
+            main = page.locator("main")
+            head = page.locator("[data-assistant-switcher]")
+
+            def open_list():
+                expect(main.get_by_role("button", name="侧边栏").first).to_be_visible()
+                page.wait_for_timeout(300)
+                if head.evaluate("(e) => Boolean(e.closest('[inert]'))"):
+                    main.get_by_role("button", name="侧边栏").first.click()
+                head.click()
+                return page.get_by_role("menu")
+
+            menu = open_list()
+            if shots:
+                page.wait_for_timeout(400)
+                page.screenshot(path=os.path.join(shots, f"managers-reach-{what}-top.png"))
+            for name in ("新建助手", "管理助手…", "跟随系统", "浅色", "深色", "设置", "断开这个浏览器"):
+                row = menu.get_by_role("menuitem", name=name, exact=True)
+                row.scroll_into_view_if_needed()
+                box = row.bounding_box()
+                assert box and box["y"] >= 0 and box["y"] + box["height"] <= viewport["height"] + 0.5, (what, name, box)
+                # actionable where it is: visible, still, and nothing over it takes the click
+                row.click(trial=True)
+            if shots:
+                page.wait_for_timeout(300)
+                page.screenshot(path=os.path.join(shots, f"managers-reach-{what}-end.png"))
+            # a row reached by scrolling does what it says (not Disconnect, which signs this browser out at once):
+            # Settings opens Settings
+            menu.get_by_role("menuitem", name="设置", exact=True).click()
+            expect(page).to_have_url(re.compile(r"/settings"))
+            # and Manage assistants… opens Settings › Assistants
+            menu = open_list()
+            row = menu.get_by_role("menuitem", name="管理助手…", exact=True)
+            row.scroll_into_view_if_needed()
+            row.click()
+            expect(page).to_have_url(re.compile(r"/settings\?tab=managers"))
+            assert not errors, errors
+        finally:
+            context.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
@@ -319,6 +428,9 @@ def main():
             for width in (390, 1200):
                 for theme in ("light", "dark"):
                     check(browser, a.base.rstrip("/"), width, theme, a.shots, a.single, a.outdated)
+            if not a.single:
+                check_counts(browser, a.base.rstrip("/"))
+                check_reach(browser, a.base.rstrip("/"), a.shots)
         finally:
             browser.close()
     print("web managers e2e: ok")

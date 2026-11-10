@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { api, ApiError, enc, errorText } from "./api";
 import { ago } from "./format";
-import { BUILTIN_MANAGER, chooseManager, chosenManager, setRosterDefault, settleRosterDefault } from "./manager-choice";
+import { BUILTIN_MANAGER, chooseManager, chosenManager, notePickedName, onManagerChoice, setRosterDefault, settleRosterDefault } from "./manager-choice";
 import { onHubEvent } from "./store";
 
 export interface Manager {
@@ -230,9 +230,17 @@ export function setRoster(next: ManagerList | null) {
     setRosterDefault(next.default);
     const chosen = chosenManager();
     if (chosen && !installedManagers(next).some((m) => m.id === chosen)) chooseManager(null);
+    notePickName();
   }
   rosterListeners.forEach((l) => l());
 }
+
+/** Keeps the pick's name as the roster gives it, for the sidebar's head before the roster is read after a reload. */
+function notePickName() {
+  const picked = chosenManager();
+  if (picked && roster) notePickedName(roster.managers.find((m) => m.id === picked)?.name ?? null);
+}
+onManagerChoice(notePickName);
 
 /** Reads the roster now and again on every hello and `managers` push. The app calls it once signed in, so the default
  *  is known before the pages that go by it ask anything (an inbox item opened from a link, the sidebar's badges). */

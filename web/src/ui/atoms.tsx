@@ -752,6 +752,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
         it.wrap || detail ? "min-h-8 py-1.5" : "h-8",
         it.danger ? "text-red" : "text-ink",
         asking && "bg-red-tint font-medium",
+        it.dim && "opacity-55",
       )}
     >
       {it.state && <StatusMark state={it.state} />}

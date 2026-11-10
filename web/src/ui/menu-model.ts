@@ -32,6 +32,8 @@ export interface MenuItem {
   tag?: string;
   /** How many things wait behind the row (an assistant's agents and inbox items), as a count at its end; 0: none. */
   badge?: number;
+  /** The whole row is drawn faded (an offline assistant) yet chosen like any other, unlike `disabled`. */
+  dim?: boolean;
   state?: AgentState;
   checked?: boolean;
   /** The row is one choice of a set and `checked` marks the chosen one (permission mode, effort, model): it is a

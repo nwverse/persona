@@ -72,3 +72,16 @@ export function routeAfterSwitch(route: Route): Route | null {
       return null;
   }
 }
+
+/**
+ * Whether the page at route opens again when another assistant becomes current, or a kept pick that left the roster
+ * goes back to the default: a page that stays (routeAfterSwitch null) and reads the assistant's things itself, once,
+ * through the routes that name the pick (lib/manager-choice.ts managerHeaderFor): All chats, the assistant's profile,
+ * Scheduled tasks and the knowledge base. Opened again, it reads the new one's and nothing it shows or sends is the
+ * last one's. The other pages that stay follow the pick by themselves: the assistant page and the lists filtered from
+ * the store (the Overview, Agents, computers, the Inbox, To-dos and their projects), and Settings' editors, which pick
+ * their own target; the rest are no assistant's (the health space, Messages, the terminals, an extension's page).
+ */
+export function reopensOnSwitch(route: Route): boolean {
+  return route.name === "history" || route.name === "profile" || route.name === "routines" || route.name === "kb";
+}
