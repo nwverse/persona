@@ -668,6 +668,18 @@ func TestIPhoneDoWaitsItsTurn(t *testing.T) {
 		return n
 	}
 	deskOf(h)
+	th := hubOf(h)
+	th.mu.Lock()
+	answer := th.answer
+	asked := make(chan struct{}, 1)
+	th.answer = func(ix proto.Interaction) proto.Resolution {
+		select {
+		case asked <- struct{}{}:
+		default:
+		}
+		return answer(ix)
+	}
+	th.mu.Unlock()
 	first, second := make(chan proto.ToolResult, 1), make(chan proto.ToolResult, 1)
 	go func() {
 		first <- h.callIPhoneTool(ctx, "conv-a", "iphone_do", json.RawMessage(`{"steps": [{"action": "tap", "target": {"label": "pay"}}]}`))
@@ -681,7 +693,14 @@ func TestIPhoneDoWaitsItsTurn(t *testing.T) {
 	go func() {
 		second <- h.callIPhoneTool(ctx, "conv-b", "iphone_do", json.RawMessage(`{"steps": [{"action": "tap", "target": {"n": 2}}]}`))
 	}()
-	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-asked: // the second do is in, waiting its turn
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second do never asked")
+	}
+	timer := time.NewTimer(300 * time.Millisecond)
+	defer timer.Stop()
+	<-timer.C
 	if n := calls(); n != 1 {
 		t.Fatalf("while the card waits only the first do reached the node: %d calls", n)
 	}
