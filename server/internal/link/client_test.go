@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -849,4 +851,204 @@ func TestLinkDroppedWhileOpeningAStreamLeavesTheNodeAlone(t *testing.T) {
 		}
 		return connected == 2 // linked again: the first link's stream was long called off
 	})
+}
+
+// Statuses from many callers at once reach Options.Status one by one in the order they were made, so the last one
+// handed over is the reporter's final status (#3226: persona-link kept an older one until the next change).
+func TestReporterHandsOverTheLastStatusLast(t *testing.T) {
+	var mu sync.Mutex
+	var got []int
+	r := &reporter{out: func(s Status) {
+		runtime.Gosched() // a status handed over after unlocking would be overtaken here
+		mu.Lock()
+		got = append(got, s.MeshHubs)
+		mu.Unlock()
+	}}
+	const callers, each = 8, 1000
+	made := 0 // counts the statuses made, under the reporter's lock
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Go(func() {
+			for range each {
+				r.set(func(s *Status) { made++; s.MeshHubs = made })
+			}
+		})
+	}
+	wg.Wait()
+	if len(got) != callers*each {
+		t.Fatalf("%d statuses handed over, %d made", len(got), callers*each)
+	}
+	for i, n := range got {
+		if n != i+1 {
+			t.Fatalf("status %d handed over as number %d", n, i+1)
+		}
+	}
+	if last := got[len(got)-1]; last != r.st.MeshHubs {
+		t.Fatalf("last handed over %d, the reporter has %d", last, r.st.MeshHubs)
+	}
+}
+
+// hubLink is one link a pairingHub took: with which credential and computer, and when the link ended.
+type hubLink struct {
+	auth, machine string
+	conn          *websocket.Conn
+	ended         chan struct{}
+}
+
+// pairingHub takes links with jd_x or jd_new from any computer and hands each to the test on links after sending it
+// greet's message (none when greet is nil); dialing, when set, runs before the n-th link is accepted.
+func pairingHub(t *testing.T, greet func(srv *httptest.Server) string, dialing func(n int)) (*httptest.Server, chan hubLink) {
+	links := make(chan hubLink, 8)
+	var n atomic.Int32
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if r.URL.Path != Path || (auth != "Bearer jd_x" && auth != "Bearer jd_new") {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		if dialing != nil {
+			dialing(int(n.Add(1)))
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		var hello Message
+		if _, b, err := c.Read(r.Context()); err != nil || json.Unmarshal(b, &hello) != nil {
+			return
+		}
+		if greet != nil {
+			sendJSON(t, c, greet(srv))
+		}
+		l := hubLink{auth, hello.Machine, c, make(chan struct{})}
+		links <- l
+		for {
+			if _, _, err := c.Read(context.Background()); err != nil {
+				close(l.ended)
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, links
+}
+
+func endpointsOf(srv *httptest.Server) string {
+	return `{"type":"endpoints","endpoints":[{"url":"` + srv.URL + `","kind":"lan"}],"hub_name":"home"}`
+}
+
+func nextLink(t *testing.T, links chan hubLink, within time.Duration) hubLink {
+	t.Helper()
+	select {
+	case l := <-links:
+		return l
+	case <-time.After(within):
+		t.Fatalf("no new link within %s", within)
+		return hubLink{}
+	}
+}
+
+func linkEnds(t *testing.T, l hubLink, within time.Duration) {
+	t.Helper()
+	select {
+	case <-l.ended:
+	case <-time.After(within):
+		t.Fatalf("the link with %q is still up after %s", l.auth, within)
+	}
+}
+
+// A link that finds another pairing in link.json while writing to it (the hub's endpoints, a rename's new name) moves
+// to it at once, also when link.json's modification time does not show the change to the pairing check.
+func TestLinkMovesToAPairingItFindsWhileWritingLinkJSON(t *testing.T) {
+	for _, tc := range []struct{ name, msg string }{
+		{"endpoints", `{"type":"endpoints","endpoints":[{"url":"https://192.0.2.7:18660","kind":"lan"}]}`},
+		{"renamed", `{"type":"renamed","id":"r1","machine_name":"desk"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, links := pairingHub(t, endpointsOf, nil)
+			path := filepath.Join(t.TempDir(), "link.json")
+			ch := runAgainst(t, srv, "jd_x", Options{Path: path})
+			first := nextLink(t, links, 10*time.Second)
+			waitFor(t, ch, func(s Status) bool { return s.State == "connected" && s.HubName == "home" })
+			// Let the pairing check look at link.json as the endpoints left it.
+			<-time.After(pairCheck + time.Second)
+			was := stampOf(path)
+			if err := Update(path, func(c *Config) error { c.Token = "jd_new"; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(path, was, was); err != nil { // the pairing check alone would not look again
+				t.Fatal(err)
+			}
+			sendJSON(t, first.conn, tc.msg)
+			if second := nextLink(t, links, pairCheck+3*time.Second); second.auth != "Bearer jd_new" {
+				t.Fatalf("second link with %q", second.auth)
+			}
+			linkEnds(t, first, 5*time.Second)
+		})
+	}
+}
+
+// A new pairing that keeps the token (another computer id, pin or trust) is followed as well.
+func TestLinkFollowsANewPairingWithTheSameToken(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Config)
+	}{
+		{"machine", func(c *Config) { c.Machine = "desk" }},
+		{"pin", func(c *Config) { c.FP = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }},
+		{"trust", func(c *Config) { c.Trust = TrustSystem }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, links := pairingHub(t, endpointsOf, nil)
+			path := filepath.Join(t.TempDir(), "link.json")
+			ch := runAgainst(t, srv, "jd_x", Options{Path: path})
+			first := nextLink(t, links, 10*time.Second)
+			waitFor(t, ch, func(s Status) bool { return s.State == "connected" && s.HubName == "home" })
+			if err := Update(path, func(c *Config) error { tc.change(c); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			linkEnds(t, first, pairCheck+3*time.Second)
+			if tc.name == "machine" {
+				if second := nextLink(t, links, 5*time.Second); second.machine != "desk" {
+					t.Fatalf("second link from %q", second.machine)
+				}
+			}
+		})
+	}
+}
+
+// A pairing written while the link was being dialed counts: the link's first look at link.json compares it.
+func TestLinkFollowsAPairingWrittenWhileItDialed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "link.json")
+	srv, links := pairingHub(t, nil, func(n int) {
+		if n == 1 {
+			if err := Update(path, func(c *Config) error { c.Token = "jd_new"; return nil }); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	_ = runAgainst(t, srv, "jd_x", Options{Path: path})
+	if first := nextLink(t, links, 10*time.Second); first.auth != "Bearer jd_x" {
+		t.Fatalf("first link with %q", first.auth)
+	}
+	if second := nextLink(t, links, pairCheck+3*time.Second); second.auth != "Bearer jd_new" {
+		t.Fatalf("second link with %q", second.auth)
+	}
+}
+
+// The link's own writes to link.json (the hub's addresses and names) are no reason to come back early: a link that
+// wrote them and was then replaced (4001) waits replaceWait, not just until the next look at link.json.
+func TestLinkThatWroteLinkJSONKeepsItsWait(t *testing.T) {
+	srv, links := pairingHub(t, endpointsOf, nil)
+	ch := runAgainst(t, srv, "jd_x", Options{})
+	first := nextLink(t, links, 10*time.Second)
+	waitFor(t, ch, func(s Status) bool { return s.State == "connected" && s.HubName == "home" })
+	_ = first.conn.Close(CloseReplaced, "replaced")
+	select {
+	case l := <-links:
+		t.Fatalf("came back (%q) before replaceWait", l.auth)
+	case <-time.After(pairCheck + 2*time.Second):
+	}
 }

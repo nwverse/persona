@@ -296,9 +296,11 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 				b = backoff{}
 			}
 			// The link writes link.json itself (the hub's addresses and names): from here only a new credential, written
-			// while the link was up, counts as a change since it was read.
+			// while the link was up, counts as a change since it was read. The stamp is taken before the read, so a
+			// pairing written in between still counts.
+			now := stampOf(o.Path)
 			if f, err := Read(o.Path); err != nil || f.Token == c.Token {
-				was = stampOf(o.Path)
+				was = now
 			}
 		}
 		if ctx.Err() != nil {
