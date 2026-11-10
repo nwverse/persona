@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -153,7 +154,7 @@ wait
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := Client{Bin: bin}.Capture(ctx, "%1", 0, false)
+	_, err := Client{Bin: bin}.Capture(ctx, "%1", "", 0, false)
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("Capture took %v, want it bounded by the context plus the wait delay", elapsed)
 	}
@@ -170,7 +171,7 @@ echo $! > "$DIR/holder"
 `)
 	killHolder(t, filepath.Join(filepath.Dir(bin), "holder"))
 	start := time.Now()
-	out, err := Client{Bin: bin}.Capture(context.Background(), "%1", 0, false)
+	out, err := Client{Bin: bin}.Capture(context.Background(), "%1", "", 0, false)
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("Capture took %v, want it bounded by the wait delay", elapsed)
 	}
@@ -199,10 +200,10 @@ echo "TMUX=$TMUX TMUX_PANE=$TMUX_PANE args=$*" >> ` + calls + `
 	}
 	ctx := context.Background()
 
-	if _, err := (Client{Bin: bin}).Capture(ctx, "%11", 0, false); err != nil {
+	if _, err := (Client{Bin: bin}).Capture(ctx, "%11", "", 0, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (Client{Bin: bin, Socket: "/s"}).Capture(ctx, "%11", 0, false); err != nil {
+	if _, err := (Client{Bin: bin, Socket: "/s"}).Capture(ctx, "%11", "", 0, false); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(calls)
@@ -218,5 +219,121 @@ echo "TMUX=$TMUX TMUX_PANE=$TMUX_PANE args=$*" >> ` + calls + `
 	}
 	if !strings.Contains(lines[1], "args=-S /s capture-pane -p -t %11") {
 		t.Errorf("named server call = %q, want -S /s", lines[1])
+	}
+}
+
+// captureTmux is a tmux that records each argv as one line of calls and, for capture-pane, prints what a pane with 100
+// rows of history and a 50-row screen gives: the history ("h1".."h100") only when -S asks for it, then the screen
+// ("s1".."s50"), each row ended in \n as tmux ends them.
+func captureTmux(t *testing.T) (Client, string) {
+	t.Helper()
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	bin := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+echo "$*" >> ` + calls + `
+case "$1" in
+capture-pane)
+	case " $* " in *" -S "*) i=1; while [ $i -le 100 ]; do echo "h$i"; i=$((i+1)); done ;; esac
+	i=1; while [ $i -le 50 ]; do echo "s$i"; i=$((i+1)); done ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return Client{Bin: bin}, calls
+}
+
+func lastCall(t *testing.T, calls string) string {
+	t.Helper()
+	b, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	return lines[len(lines)-1]
+}
+
+// rows is "<prefix><from>".."<prefix><to>", each ended in end.
+func rows(prefix string, from, to int, end string) string {
+	var b strings.Builder
+	for i := from; i <= to; i++ {
+		fmt.Fprintf(&b, "%s%d%s", prefix, i, end)
+	}
+	return b.String()
+}
+
+func TestCaptureHonorsSourceAndLines(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name, source string
+		lines        int
+		ansi         bool
+		argv, want   string
+	}{
+		// The screen only, never the scrollback, cut to its last rows (a dialog read: 40 rows).
+		{"visible", "visible", 40, false, "capture-pane -p -t %3", rows("s", 11, 50, "\n")},
+		{"default source is the screen", "", 40, false, "capture-pane -p -t %3", rows("s", 11, 50, "\n")},
+		{"visible whole", "visible", 0, false, "capture-pane -p -t %3", rows("s", 1, 50, "\n")},
+		// tmux gives 60 rows of history and the whole screen: at most 60 come back, the newest.
+		{"recent", "recent", 60, false, "capture-pane -p -t %3 -S -60", rows("h", 91, 100, "\n") + rows("s", 1, 50, "\n")},
+		{"recent-unwrapped joins wrapped lines", "recent-unwrapped", 30, false, "capture-pane -p -t %3 -S -30 -J", rows("s", 21, 50, "\n")},
+		// Colored rows end in \r\n, as the host contract says.
+		{"ansi", "visible", 5, true, "capture-pane -p -t %3 -e", rows("s", 46, 50, "\r\n")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			client, calls := captureTmux(t)
+			got, err := client.Capture(ctx, "%3", c.source, c.lines, c.ansi)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if argv := lastCall(t, calls); argv != c.argv {
+				t.Errorf("argv = %q, want %q", argv, c.argv)
+			}
+			if got != c.want {
+				t.Errorf("Capture = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// The phone pages "recent" until fewer rows come back than it asked for: past the start of the history it must.
+func TestCaptureRecentEndsAtTheHistorysStart(t *testing.T) {
+	client, _ := captureTmux(t)
+	got, err := client.Capture(context.Background(), "%3", "recent", 400, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(got, "\n"); n != 150 {
+		t.Fatalf("recent 400 = %d rows, want the 150 the pane has", n)
+	}
+}
+
+func TestCaptureRefusesAnUnknownSource(t *testing.T) {
+	client, calls := captureTmux(t)
+	if _, err := client.Capture(context.Background(), "%3", "scrollback", 10, false); err == nil {
+		t.Fatal("Capture with an unknown source succeeded")
+	}
+	if _, err := os.Stat(calls); !os.IsNotExist(err) {
+		t.Fatalf("tmux ran for an unknown source: %v", err)
+	}
+}
+
+// Blank rows at the bottom of a tall pane are not rows of the screen's content, and an empty pane reads as nothing.
+func TestLastRows(t *testing.T) {
+	for _, c := range []struct {
+		out  string
+		n    int
+		ansi bool
+		want string
+	}{
+		{"a\nb\n\n\n", 1, false, "b\n"},
+		{"a\nb\n\n\n", 5, true, "a\r\nb\r\n"},
+		{"\n\n", 3, false, ""},
+		{"", 0, true, ""},
+	} {
+		if got := lastRows(c.out, c.n, c.ansi); got != c.want {
+			t.Errorf("lastRows(%q, %d, %v) = %q, want %q", c.out, c.n, c.ansi, got, c.want)
+		}
 	}
 }

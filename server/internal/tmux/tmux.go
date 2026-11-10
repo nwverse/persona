@@ -85,21 +85,50 @@ func (c Client) Version(ctx context.Context) string {
 	return strings.TrimSpace(out)
 }
 
-// Capture is what the pane shows: its visible screen, or its last lines rows of history with lines > 0. ansi keeps
-// the colors tmux re-emits.
-func (c Client) Capture(ctx context.Context, pane string, lines int, ansi bool) (string, error) {
+// Capture is what the pane shows, read as host.ReadOpts says: source "visible" (or "") is the screen alone; "recent"
+// reaches lines rows back into the scrollback, and "recent-unwrapped" also joins the lines tmux wrapped. lines > 0
+// keeps at most the last lines rows (tmux itself returns the history it is asked for plus the whole screen); with
+// lines <= 0 every source is the screen. ansi keeps the colors tmux re-emits, and rows then end in \r\n.
+func (c Client) Capture(ctx context.Context, pane, source string, lines int, ansi bool) (string, error) {
 	args := []string{"capture-pane", "-p", "-t", pane}
 	if ansi {
 		args = append(args, "-e")
 	}
-	if lines > 0 {
-		args = append(args, "-S", fmt.Sprintf("-%d", lines))
+	switch source {
+	case "", "visible":
+	case "recent", "recent-unwrapped":
+		if lines > 0 {
+			args = append(args, "-S", fmt.Sprintf("-%d", lines))
+		}
+		if source == "recent-unwrapped" {
+			args = append(args, "-J")
+		}
+	default:
+		return "", fmt.Errorf("tmux: no screen source %q", source)
 	}
 	out, err := c.run(ctx, "", args...)
 	if err != nil {
 		return "", err
 	}
-	return out, nil
+	return lastRows(out, lines, ansi), nil
+}
+
+// lastRows cuts a capture to its last n rows (all of them with n <= 0), past the blank rows that end it, and ends each
+// row in \r\n for ansi or \n otherwise.
+func lastRows(out string, n int, ansi bool) string {
+	out = strings.TrimRight(out, "\n")
+	if out == "" {
+		return ""
+	}
+	rows := strings.Split(out, "\n")
+	if n > 0 && len(rows) > n {
+		rows = rows[len(rows)-n:]
+	}
+	end := "\n"
+	if ansi {
+		end = "\r\n"
+	}
+	return strings.Join(rows, end) + end
 }
 
 // tmuxKeys translates Persona's key names (host.Host.SendKeys) to tmux's.

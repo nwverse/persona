@@ -59,7 +59,7 @@ func (h *tmuxHost) Agent(context.Context, host.PaneRef) (*host.Agent, error) {
 
 func (h *tmuxHost) Read(ctx context.Context, pane host.PaneRef, o host.ReadOpts) (string, error) {
 	socket, id := splitTmuxPane(pane.ID)
-	text, err := h.client(socket).Capture(ctx, id, o.Lines, o.ANSI)
+	text, err := h.client(socket).Capture(ctx, id, o.Source, o.Lines, o.ANSI)
 	return text, tmuxErr(err)
 }
 
