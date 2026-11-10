@@ -28,6 +28,10 @@ pair)
     exit 1
   fi
   printf 'opaque' > "$out"
+  if [ -n "$FAKE_SIMULATOR" ]; then
+    echo '{"udid":"'"$udid"'","name":"Test Simulator","model":"iPhone99,1","product_version":"26.1","transport":"simulator"}'
+    exit 0
+  fi
   echo '{"udid":"'"$udid"'","name":"Test Phone","model":"iPhone99,1","product_version":"26.1"}'
   ;;
 match)
@@ -306,5 +310,37 @@ func TestSendLineAtTheDeadline(t *testing.T) {
 		if fail && err == nil {
 			t.Fatal("a failed write is a line that never left")
 		}
+	}
+}
+
+func TestSimulatorRecordOverBridgeProcess(t *testing.T) {
+	m, _ := bridgeManager(t)
+	browsed := false
+	m.browse = func(context.Context, time.Duration, func([]Service) bool) ([]Service, error) {
+		browsed = true
+		return nil, nil
+	}
+	t.Setenv("FAKE_SIMULATOR", "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rec, err := m.Pair(ctx, testUDID, nil)
+	if err != nil || !rec.Simulator() {
+		t.Fatalf("Pair = %+v, %v", rec, err)
+	}
+	// No address anywhere, and none needed.
+	if res, err := m.Call(ctx, testUDID, "tap", nil); err != nil || string(res) != `{"op":"tap"}` {
+		t.Fatalf("Call = %s, %v", res, err)
+	}
+	args, _ := os.ReadFile(os.Getenv("FAKE_SERVE_ARGS"))
+	path, _ := m.store.RecordPath(testUDID)
+	if want := "--udid " + testUDID + " --record " + path; strings.TrimSpace(string(args)) != want {
+		t.Fatalf("serve args %q, want %q (no --host for a Simulator device)", args, want)
+	}
+	if browsed {
+		t.Fatal("a Simulator device was looked for on the network")
+	}
+	d := m.Devices(ctx)
+	if len(d) != 1 || d[0].Transport != TransportSimulator || d[0].State != StateConnected || d[0].AddressSource != TransportSimulator {
+		t.Fatalf("Devices = %+v", d)
 	}
 }

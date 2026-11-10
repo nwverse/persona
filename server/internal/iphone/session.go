@@ -282,6 +282,13 @@ func (s *session) connect(rec Record) (*conn, Endpoint, error) {
 		s.mu.Unlock()
 		return startConn(link, st)
 	}
+	if rec.Simulator() { // driven by the bridge on this computer: nothing to find on the network
+		ep := Endpoint{Source: TransportSimulator}
+		if c := try(ep); c != nil {
+			return c, ep, nil
+		}
+		return nil, Endpoint{}, lastErr
+	}
 	if rec.Address != "" {
 		if ep, err := ParseAddress(rec.Address); err == nil {
 			if c := try(ep); c != nil {

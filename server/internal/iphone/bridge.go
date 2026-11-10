@@ -73,6 +73,7 @@ type PairInfo struct {
 	Model          string `json:"model,omitempty"` // the product type, e.g. iPhone16,2
 	ProductType    string `json:"product_type,omitempty"`
 	ProductVersion string `json:"product_version,omitempty"`
+	Transport      string `json:"transport,omitempty"` // "simulator" for a Simulator device
 }
 
 // maxOutput bounds what a one-shot command's stdout and stderr are kept to.
@@ -223,6 +224,9 @@ type Endpoint struct {
 }
 
 func (e Endpoint) String() string {
+	if e.Host == "" {
+		return e.Source // a Simulator device
+	}
 	if e.Port == 0 {
 		return e.Host
 	}
@@ -259,7 +263,10 @@ const readyTimeout = 45 * time.Second
 
 // Serve is the Dialer that runs `bridge serve`.
 func (b Bridge) Serve(ctx context.Context, rec Record, recordPath string, ep Endpoint) (Link, json.RawMessage, error) {
-	args := []string{"serve", "--udid", rec.UDID, "--record", recordPath, "--host", ep.Host}
+	args := []string{"serve", "--udid", rec.UDID, "--record", recordPath}
+	if ep.Host != "" { // a Simulator device has none: the bridge finds it from the record
+		args = append(args, "--host", ep.Host)
+	}
 	if ep.Port > 0 {
 		args = append(args, "--port", strconv.Itoa(ep.Port))
 	}

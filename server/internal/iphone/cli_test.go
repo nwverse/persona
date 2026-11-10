@@ -24,7 +24,7 @@ func TestCommand(t *testing.T) {
 		t.Fatalf("list: %d %q", code, out)
 	}
 	code, out, errOut := runCLI(t, m, "pair")
-	if code != 0 || !strings.Contains(out, "Paired Test Phone") {
+	if code != 0 || !strings.Contains(out, "Paired Test Phone") || !strings.Contains(out, "iphone address "+testUDID) {
 		t.Fatalf("pair: %d %q %q", code, out, errOut)
 	}
 	if code, out, _ := runCLI(t, m, "address", testUDID, "[2001:db8::5]:49152"); code != 0 || !strings.Contains(out, "Saved") {
@@ -61,6 +61,17 @@ func TestCommand(t *testing.T) {
 	}
 	if code, out, _ := runCLI(t, m, "-h"); code != 0 || !strings.Contains(out, "iphone pair") {
 		t.Fatalf("-h: %d %q", code, out)
+	}
+}
+
+func TestCommandSimulator(t *testing.T) {
+	m, _ := bridgeManager(t)
+	t.Setenv("FAKE_SIMULATOR", "1")
+	if code, out, _ := runCLI(t, m, "pair", testUDID); code != 0 || !strings.Contains(out, "Simulator device") {
+		t.Fatalf("pair: %d %q", code, out)
+	}
+	if code, out, _ := runCLI(t, m, "list"); code != 0 || !strings.Contains(out, "(simulator)") {
+		t.Fatalf("list: %d %q", code, out)
 	}
 }
 

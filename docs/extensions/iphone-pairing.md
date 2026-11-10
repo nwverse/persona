@@ -73,6 +73,15 @@ session (re)connects it tries, in order:
 `match` belongs to the bridge's USB pairing module (with `pair` and `usb-list`); until a bridge has it, Bonjour finds
 nothing and only the manual and last addresses work.
 
+### Simulator devices
+
+For end-to-end checks without a phone, the bridge can drive a Simulator device on the same computer with the same
+wire schema (pending in the bridge, #3451). `personad iphone pair <simulator udid>` pairs it without USB; the bridge
+marks it `"transport": "simulator"` on its success line and the node keeps that in `device.json`. For such a record
+the node looks for nothing on the network: no Bonjour, no manual or last address, and `serve` runs with only
+`--udid` and `--record` (the bridge takes the device from the record). Everything else is the same: one session,
+the health check, backoff and restarts, and never replaying input. `Devices` reports it with transport `simulator`.
+
 ## Sessions
 
 One session per phone, owned by the node process (`iphone.Default()`), not by a hub connection or a client:

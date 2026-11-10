@@ -155,7 +155,7 @@ type Device struct {
 	// State is the session's (State* constants); Since is when it got there.
 	State string    `json:"state"`
 	Since time.Time `json:"since,omitzero"`
-	// Transport is how the session reaches the phone: "network" (the only one: USB is for pairing).
+	// Transport is how the session reaches the device: "network" (a phone; USB is only for pairing) or "simulator".
 	Transport string `json:"transport,omitempty"`
 	// Locked is the phone's lock state from its last device_info; nil when unknown.
 	Locked *bool `json:"locked,omitempty"`
@@ -187,7 +187,7 @@ func (m *Manager) Devices(ctx context.Context) []Device {
 	out := make([]Device, 0, len(recs)+len(usb))
 	for _, r := range recs {
 		d := Device{UDID: r.UDID, Name: r.Name, ProductType: r.ProductType, OSVersion: r.OSVersion, Paired: true, State: StateIdle,
-			Transport: "network", ManualAddress: r.Address, PairedAt: r.PairedAt}
+			Transport: cmp.Or(r.Transport, TransportNetwork), ManualAddress: r.Address, PairedAt: r.PairedAt}
 		_, d.USB = usb[r.UDID]
 		delete(usb, r.UDID)
 		m.mu.Lock()
@@ -374,6 +374,9 @@ func (m *Manager) Pair(ctx context.Context, udid string, step func(string)) (Rec
 		return Record{}, err
 	}
 	rec := Record{UDID: udid, Name: info.Name, ProductType: info.ProductType, OSVersion: info.ProductVersion, PairedAt: m.now().UTC()}
+	if info.Transport == TransportSimulator {
+		rec.Transport = TransportSimulator
+	}
 	if prevErr == nil {
 		rec.Address = prev.Address
 	}

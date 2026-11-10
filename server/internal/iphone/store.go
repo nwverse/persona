@@ -22,6 +22,9 @@ type Record struct {
 	Name        string `json:"name,omitempty"`
 	ProductType string `json:"product_type,omitempty"` // the model identifier, e.g. iPhone16,2
 	OSVersion   string `json:"os_version,omitempty"`
+	// Transport is how sessions reach it: "" or TransportNetwork for a phone (RemotePairing over the network),
+	// TransportSimulator for a Simulator device the bridge drives on this computer (no address to find).
+	Transport string `json:"transport,omitempty"`
 	// Address is a manual "host" or "host:port" (a Tailscale address or name, where Bonjour doesn't reach); tried
 	// before Bonjour when set.
 	Address string `json:"address,omitempty"`
@@ -30,6 +33,15 @@ type Record struct {
 	LastPort int       `json:"last_port,omitempty"`
 	PairedAt time.Time `json:"paired_at"`
 }
+
+// Record.Transport values.
+const (
+	TransportNetwork   = "network"
+	TransportSimulator = "simulator"
+)
+
+// Simulator says whether r is a Simulator device rather than a phone.
+func (r Record) Simulator() bool { return r.Transport == TransportSimulator }
 
 const (
 	metaFile   = "device.json"
