@@ -97,6 +97,19 @@ func (r *claudeToolResult) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// denialKind is a line's toolDenialKind (user-rejected, permission-rule…). Anything but a string is read as no kind,
+// so a shape Claude Code may write later (an object with a reason) costs the status, not the whole line.
+type denialKind string
+
+func (k *denialKind) UnmarshalJSON(b []byte) error {
+	var s string
+	if unmarshalLine(b, &s) != nil {
+		s = ""
+	}
+	*k = denialKind(s)
+	return nil
+}
+
 // lineCount is the number of lines of a JSON string, counted in its encoded form (a newline is written \n there),
 // so the text itself is never decoded; anything but a string counts 0. A last line without a newline counts.
 type lineCount int
@@ -167,16 +180,16 @@ func oneToolResult(blocks []block) bool {
 
 // claudeOutcome is the outcome of a Claude tool_result: from its text and is_error, and, when the line holds no other
 // result, from the line's toolUseResult and toolDenialKind.
-func claudeOutcome(text string, isErr bool, r *claudeToolResult, denialKind string) *proto.ToolOutcome {
+func claudeOutcome(text string, isErr bool, r *claudeToolResult, denial string) *proto.ToolOutcome {
 	o := &proto.ToolOutcome{Status: proto.OutcomeOK}
 	lead := strings.TrimLeft(text, " \t\r\n")
 	hasPrefix := func(prefixes []string) bool {
 		return slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(lead, p) })
 	}
 	switch {
-	case denialKind == "interrupted" || denialKind == "cancelled": // Esc mid-call, or the turn aborted
+	case denial == "interrupted" || denial == "cancelled": // Esc mid-call, or the turn aborted
 		o.Status = proto.OutcomeInterrupted
-	case denialKind == "user-rejected" || denialKind == "permission-rule" || strings.HasPrefix(denialKind, "automode-"):
+	case denial == "user-rejected" || denial == "permission-rule" || strings.HasPrefix(denial, "automode-"):
 		o.Status = proto.OutcomeDenied
 	case r.Interrupted:
 		o.Status = proto.OutcomeInterrupted
@@ -211,7 +224,7 @@ func claudeOutcome(text string, isErr bool, r *claudeToolResult, denialKind stri
 		o.Persisted = &proto.OutcomePersisted{Path: r.PersistedOutputPath, Size: max(r.PersistedOutputSize, 0)}
 	case strings.HasPrefix(lead, "<persisted-output>"):
 		if m := claudePersistedRe.FindStringSubmatch(lead); m != nil { // a line with no record says where, not the size
-			o.Persisted = &proto.OutcomePersisted{Path: strings.TrimSpace(m[1])}
+			o.Persisted = &proto.OutcomePersisted{Path: strings.Clone(strings.TrimSpace(m[1]))} // not a slice of the output
 		}
 	}
 	if r.FilePath != "" && (r.StructuredPatch != nil || r.Type == "create") {
@@ -354,19 +367,25 @@ func cutUTF8(s string, n int) string {
 	return s[:end] + "…"
 }
 
-// outputTail is the end of a tool's output that a page cut (light keeps its first pageOutputLen bytes), "" when the
-// page carries it whole: its last outcomeTailLines lines, at most outcomeTailLen bytes, starting on a whole line (on a
-// character when the end is one long line) and never inside the page's head. Trailing blank lines are left out.
+// outputTail is the end of a tool's output that a page cut (light keeps its head, up to pageCut), "" when the page
+// carries it whole: its last outcomeTailLines lines, at most outcomeTailLen bytes. It picks up where the page's head
+// ends when that is within reach, so a short overflow loses no line; otherwise it starts on a whole line (on a
+// character when the end is one long line). Trailing blank lines are left out. It is a copy: a slice would keep the
+// whole output alive in every light item a node keeps.
 func outputTail(text string) string {
 	if len(text) <= pageOutputLen {
 		return ""
 	}
+	head := pageCut(text, pageOutputLen)
+	if text[head] == '\n' { // the newline the page's head stops before
+		head++
+	}
 	s := strings.TrimRight(text, " \t\r\n")
-	start := max(len(s)-outcomeTailLen, pageOutputLen)
+	start := max(len(s)-outcomeTailLen, head)
 	if start >= len(s) {
 		return ""
 	}
-	if s[start-1] != '\n' {
+	if start > head && s[start-1] != '\n' {
 		if nl := strings.IndexByte(s[start:], '\n'); nl >= 0 && start+nl+1 < len(s) {
 			start += nl + 1
 		} else {
@@ -384,7 +403,7 @@ func outputTail(text string) string {
 			}
 		}
 	}
-	return tail
+	return strings.Clone(tail)
 }
 
 // milliseconds is a recorded duration in whole milliseconds; ok is false when there is none or it is not a

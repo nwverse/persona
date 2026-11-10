@@ -1882,7 +1882,7 @@ pages, pushes and `/items/{iid}/full` like the rest of the item; folds carry no 
 | `status` | One of the statuses below; set on every result the node parses | See below |
 | `exit_code` | The command's exit code | Codex `exit_code` (0 included); a failed Claude Bash result's opening `Exit code N` |
 | `duration_ms` | How long the call ran, when recorded | Codex `duration` (`{secs, nanos}`); Claude WebFetch `durationMs`. Never derived from timestamps |
-| `tail` | The output's last lines, only when the page cut `text` (it keeps the first 4 KB) | At most 30 lines and 2 KB, from a whole line, never inside the page's head; not for a Read's file content |
+| `tail` | The output's last lines, only when the page cut `text` (it keeps the first 4 KB) | At most 30 lines and 2 KB, never repeating the page's text: it picks up where that stops when it fits (so a short overflow loses no line), else from a whole line; not for a Read's file content |
 | `persisted` | `{path, size?}`: Claude Code saved an output too big for the model to a file on the agent's machine; `text` has only its preview | `persistedOutputPath` / `persistedOutputSize`, or the path in the `<persisted-output>` preview |
 | `patch`, `patch_cut` | An Edit's or Write's change as unified diff hunks (`@@ -12,7 +12,8 @@`, the file's real line numbers) for `files[0]`, at most 8 KB of whole lines; `patch_cut` when lines were left out (each hunk header counts the lines kept) | Claude Code's `structuredPatch` |
 | `files` | `[{path, adds?, dels?, created?}]`: lines added and deleted over the whole change; `created` for a new file (its lines are the adds) | `structuredPatch`; Write `type: create` and its content's line count (the content itself is not copied) |
@@ -1903,7 +1903,8 @@ pages, pushes and `/items/{iid}/full` like the rest of the item; folds carry no 
 
 Decoding rules: `toolUseResult` is read through a narrow struct that takes any value (a failed call records a string, an
 MCP call its content blocks); a value or field of an unexpected type leaves that part unread and never drops the line.
-Its large fields (`originalFile`, `stdout`, a Read's `content`, a Write's `content`) are never copied. A line holding
+Its large fields (`originalFile`, `stdout`, a Read's `content`, a Write's `content`) are never copied. `toolDenialKind`
+takes any value too: anything but a string is no kind, and the status comes from the words. A line holding
 several `tool_result` blocks takes no record (Claude Code writes one result per line with its record). A tool writes its
 own result text, so statuses read from words (any line without `toolDenialKind`) are for display only. A client that
 starts drawing outcomes must bump its item cache version: items cached from older pages have none.

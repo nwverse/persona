@@ -128,6 +128,13 @@ func TestClaudeToolResultTolerant(t *testing.T) {
 	if o.Files != nil {
 		t.Fatalf("files from an agent's result: %+v", o.Files)
 	}
+	// toolDenialKind that is not a string is no kind: the result stays, its status from the words.
+	for _, kind := range []string{`{"x":1}`, `["user-rejected"]`, `5`, `null`, `true`} {
+		o := outcomeOf(t, resultLine(`"Exit code 3"`, true, `"toolDenialKind":`+kind))
+		if o.Status != proto.OutcomeFailed || o.ExitCode == nil || *o.ExitCode != 3 {
+			t.Errorf("denial kind %s: %+v", kind, o)
+		}
+	}
 }
 
 // A line holding several results has no record of which is which: none of them takes it.
@@ -302,9 +309,9 @@ func TestOutputTail(t *testing.T) {
 	if len(tail) > outcomeTailLen || !strings.HasPrefix(tail, "09") || strings.Count(tail, "\n") != 5 {
 		t.Fatalf("tail of long lines: %d bytes, %q…", len(tail), tail[:min(len(tail), 10)])
 	}
-	// Only just over the page: the tail starts after the page's head, never repeating it.
+	// Only just over the page: the tail starts where the page's head ends, neither repeating nor skipping a line.
 	text := strings.Repeat("head\n", pageOutputLen/5) + "after the head 1\nafter the head 2"
-	if tail = outputTail(text); tail != "after the head 1\nafter the head 2" && tail != "after the head 2" {
+	if tail = outputTail(text); tail != "after the head 1\nafter the head 2" {
 		t.Fatalf("tail %q", tail)
 	}
 	// One long line (minified JSON): the last bytes, from a character.
@@ -323,6 +330,33 @@ func TestOutputTailReachesPages(t *testing.T) {
 	page, cut := light(it, false)
 	if !cut || page.Outcome == nil || !strings.HasSuffix(page.Outcome.Tail, "error: the cause") || strings.Contains(page.Text, "the cause") {
 		t.Fatalf("cut %v, tail %q", cut, page.Outcome.Tail)
+	}
+}
+
+// An output a little over the page loses nothing: the page's head and the tail together are the whole output, wherever
+// the head ends (after a whole line, or mid-line when no line ends near the cut).
+func TestOutputTailContinuesThePage(t *testing.T) {
+	failing := "Exit code 1\n" + strings.Repeat("=== RUN   TestStore/case_with_a_long_name\n", 97) +
+		"    store_test.go:88: want 3 rows, got 2 (the cause)\n--- FAIL: TestStore (0.01s)\nFAIL\nFAIL\tpkg/store\t0.012s"
+	if at := strings.Index(failing, "store_test.go"); at > pageOutputLen || at+50 < pageOutputLen {
+		t.Fatalf("the cause's line starts at %d, not across the cut", at)
+	}
+	cases := map[string]string{
+		"a line across the cut":      failing,
+		"one line from before it":    strings.Repeat("a", 3000) + "\n" + strings.Repeat("b", 2000),
+		"characters across the cut":  strings.Repeat("汉", 1500) + "\nend",
+		"a newline right at the cut": strings.Repeat("x", pageOutputLen) + "\nafter",
+		"trailing blank lines":       strings.Repeat("line\n", 830) + "last\n\n\n",
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			page, cut := light(proto.Item{Kind: proto.KindToolResult, Role: "user", Text: text}, false)
+			head := page.Text[:max(strings.LastIndex(page.Text, "\n…"), 0)] // the page without its note
+			rest := strings.TrimRight(strings.TrimPrefix(text[len(head):], "\n"), " \t\r\n")
+			if tail := outputTail(text); !cut || !strings.HasPrefix(text, head) || tail != rest {
+				t.Fatalf("page ends %q, tail %q, want %q", head[max(len(head)-20, 0):], tail, rest)
+			}
+		})
 	}
 }
 

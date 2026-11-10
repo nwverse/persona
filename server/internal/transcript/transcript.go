@@ -81,7 +81,7 @@ type entry struct {
 	// itself): items take the output from the message, and only what outcomes read is decoded (claudeToolResult,
 	// outcome.go), never the output. toolDenialKind says why a call did not run (user-rejected, permission-rule…).
 	ToolUseResult  claudeToolResult `json:"toolUseResult"`
-	ToolDenialKind string           `json:"toolDenialKind"`
+	ToolDenialKind denialKind       `json:"toolDenialKind"`
 
 	// system/api_error: {message, formatted}, and which retry this is. An assistant line Claude Code wrote itself for a
 	// request that failed (isApiErrorMessage) carries the error's kind here as a string (rate_limit,
@@ -647,7 +647,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		// The line's record of a call (toolUseResult, toolDenialKind) is its result's when it holds only one.
 		record, denial := &noToolResult, ""
 		if oneToolResult(blocks) {
-			record, denial = &e.ToolUseResult, e.ToolDenialKind
+			record, denial = &e.ToolUseResult, string(e.ToolDenialKind)
 		}
 		for i, b := range blocks {
 			switch b.Type {

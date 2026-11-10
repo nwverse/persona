@@ -171,7 +171,14 @@ A view that fetches once per id cannot recover when the store puts the same id b
   went: a failed call records a string (`"Error: …"`), an MCP call its content blocks, the rest an object that holds the
   whole output again (`stdout`, a Read's `content`, an Edit's `originalFile`). Decode only the fields you read, through a
   type that takes any value (`claudeToolResult`): a plain struct field fails the whole line on the first string, and a
-  `json.RawMessage` copies megabytes per line (`TestToolUseResultNotCopied`).
+  `json.RawMessage` copies megabytes per line (`TestToolUseResultNotCopied`). The same goes for any new top-level
+  field such as `toolDenialKind`: a value of another type there fails the whole line, so read it through a type that
+  takes any value.
+- Strings an outcome takes from a result's text (the output's tail, a saved output's path) are copies
+  (`strings.Clone`): a slice keeps the whole output alive in every light item a node keeps, a megabyte per result
+  where the page holds 4 KB (`TestLightResultRetainsNoOutput`).
+- The tail starts where the page's text stops (`pageCut`), not at a fixed 4 KB: `light` ends the page at a newline
+  up to 512 bytes earlier, so a fixed start dropped the line across the cut, often the one that says what failed.
 - A denial is marked by the line's top-level `toolDenialKind` (`user-rejected`, `permission-rule` for rules, the
   permission mode and hooks, `automode-*`; `interrupted` / `cancelled` are aborts, not denials). Lines from older
   versions only have the words, and a hook's denial says whatever the hook printed.

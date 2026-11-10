@@ -47,13 +47,7 @@ func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
 		}
 	}
 	if len(it.Text) > limit {
-		end := limit
-		for end > 0 && (it.Text[end]&0xC0) == 0x80 {
-			end--
-		}
-		if nl := strings.LastIndexByte(it.Text[:end], '\n'); nl > end-512 { // end on a whole line when one is near
-			end = nl
-		}
+		end := pageCut(it.Text, limit)
 		it.FullSize = len(it.Text)
 		it.Text = it.Text[:end] + fmt.Sprintf(note, len(it.Text))
 		cut = true
@@ -63,6 +57,20 @@ func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
 		cut = true
 	}
 	return it, cut
+}
+
+// pageCut is where light cuts text longer than limit: s[:pageCut] is what the page keeps. It ends on a character, at
+// most limit bytes in, and on a whole line (before its newline) when one ends in the last 512 bytes of that. An
+// outcome's tail picks up from here (outputTail).
+func pageCut(s string, limit int) int {
+	end := limit
+	for end > 0 && (s[end]&0xC0) == 0x80 {
+		end--
+	}
+	if nl := strings.LastIndexByte(s[:end], '\n'); nl > end-512 { // end on a whole line when one is near
+		end = nl
+	}
+	return end
 }
 
 // clipJSON shortens very long string fields (e.g. Write content) inside tool inputs.
