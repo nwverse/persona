@@ -26,5 +26,7 @@
   "no_others": "None",
   "unset": "Not set",
   "key_hint": "Setting {key}",
-  "copy_key": "Copy setting name"
+  "copy_key": "Copy setting name",
+  "show_agent": "Show {agent}",
+  "hide_agent": "Hide {agent}"
 }

@@ -17,7 +17,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// conclusionService is newSupervisedService with the Lark bot on (task reports on, only_conclusions as given): the cards it
+// conclusionService is newSupervisedService with the Lark bot on (task reports on with the execution steps, the card as
+// before #3218, and only_conclusions as given): the cards it
 // posts and the notes it writes are kept.
 func conclusionService(t *testing.T, onlyConclusions bool) (s *Service, f *fakeHub, todo Todo, posts, notes func() []string) {
 	t.Helper()
@@ -35,7 +36,7 @@ func conclusionServiceOn(t *testing.T, st Store, onlyConclusions bool) (s *Servi
 	var cards, said []string
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: "https://hub.example.com",
-			Features: FeishuFeatures{Main: true, Cards: true, Reports: true, OnlyConclusions: onlyConclusions}}, nil
+			Features: FeishuFeatures{Main: true, Cards: true, Reports: true, ReportSteps: true, OnlyConclusions: onlyConclusions}}, nil
 	})
 	f.answerApp(AppFeishu, FeishuPost, func(p json.RawMessage) (any, error) {
 		var m struct {
