@@ -94,6 +94,7 @@
         <item quantity="other">还有 %1$d 件等你 · 下一件：%2$s · %3$s</item>
     </plurals>
     <string name="chat_next_waiting_open">打开下一件</string>
+    <string name="chat_next_waiting_agent">Agent</string>
     <string name="chat_answered_by_assistant">助手已代答</string>
     <string name="chat_answered_unanswered">（未回答）</string>
     <string name="chat_answered_approved">批准</string>

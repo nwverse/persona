@@ -97,6 +97,7 @@
         <item quantity="other">%1$d more need you · Next: %2$s · %3$s</item>
     </plurals>
     <string name="chat_next_waiting_open">Open the next one</string>
+    <string name="chat_next_waiting_agent">Agent</string>
     <string name="chat_answered_by_assistant">Answered by the assistant</string>
     <string name="chat_answered_unanswered">(No answer)</string>
     <string name="chat_answered_approved">Approved</string>

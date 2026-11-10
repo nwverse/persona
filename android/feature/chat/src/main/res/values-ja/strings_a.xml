@@ -94,6 +94,7 @@
         <item quantity="other">ほかに%1$d件が対応待ち · 次：%2$s · %3$s</item>
     </plurals>
     <string name="chat_next_waiting_open">次を開く</string>
+    <string name="chat_next_waiting_agent">エージェント</string>
     <string name="chat_answered_by_assistant">アシスタントが代わりに回答しました</string>
     <string name="chat_answered_unanswered">（未回答）</string>
     <string name="chat_answered_approved">承認</string>
