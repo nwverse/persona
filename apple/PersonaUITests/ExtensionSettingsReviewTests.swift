@@ -6,7 +6,7 @@ import XCTest
 /// operation right under Updates (the download's bar, Review held while it runs), a download that fails says why with
 /// Retry, the Update sheet opens once the package is checked, and Update installs it with the page still open.
 ///
-/// `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=stall MOCK_EXTENSION_OPS_STEP=2` →
+/// `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=stall MOCK_EXTENSION_OPS_STEP=3` →
 /// `TEST_RUNNER_PERSONA_EXTENSIONS_REVIEW_HUB=http://127.0.0.1:<port>`; an older hub for the page as it was:
 /// `MOCK_EXTENSIONS=1 MOCK_EXTENSION_PREVIEW_DELAY=8` → `TEST_RUNNER_PERSONA_EXTENSIONS_REVIEW_OLD_HUB`. Each look (light, then
 /// dark; `TEST_RUNNER_PERSONA_LOOKS` to choose) starts from `/mock/reset`. `TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps the screenshots.
@@ -16,14 +16,13 @@ final class ExtensionSettingsReviewTests: XCTestCase {
 
     @MainActor private func launch(_ hub: String, look: String) -> XCUIApplication {
         _ = try? Data(contentsOf: URL(string: hub + "/mock/reset")!)
-        XCUIDevice.shared.appearance = look == "dark" ? .dark : .light
         addUIInterruptionMonitor(withDescription: "notifications") { alert in
             for label in ["允许", "Allow"] where alert.buttons[label].exists { alert.buttons[label].tap(); return true }
             return false
         }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openExtension", "example-gateway"]
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openExtension", "example-gateway", "-ui.scheme", look]
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["允许", "Allow"] where springboard.buttons[label].waitForExistence(timeout: 3) { springboard.buttons[label].tap() }
@@ -61,7 +60,6 @@ final class ExtensionSettingsReviewTests: XCTestCase {
         guard let hub = env["PERSONA_EXTENSIONS_REVIEW_HUB"] else {
             throw XCTSkip("needs mock_hub.py with MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=stall (PERSONA_EXTENSIONS_REVIEW_HUB)")
         }
-        defer { XCUIDevice.shared.appearance = .light }
         for look in looks {
             let app = launch(hub, look: look)
             let review = reviewButton(in: app)
@@ -73,15 +71,20 @@ final class ExtensionSettingsReviewTests: XCTestCase {
             let download = app.descendants(matching: .any)["extension-operation-step-download"]
             scrollTo(download, in: app)
             XCTAssertTrue(waitFor(download, value: "running", timeout: 5), "\(look): the download is not going:\n\(app.debugDescription)")
-            XCTAssertTrue(app.buttons["extension-operation-cancel"].exists, "\(look): no Cancel while it downloads")
             shot(app, "downloading", look: look)
+            // Rows off the screen are not in the tree until scrolled to: Cancel sits under the eight steps.
+            let cancel = app.buttons["extension-operation-cancel"]
+            scrollTo(cancel, in: app)
+            XCTAssertTrue(cancel.exists, "\(look): no Cancel while it downloads:\n\(app.debugDescription)")
             for _ in 0..<4 where !review.isHittable { app.swipeDown() }
             XCTAssertFalse(review.isEnabled, "\(look): Review can start another while one downloads")
 
             // It stalls: the step, why, and Retry, instead of a spinner that never ends.
+            scrollTo(card, in: app)
+            XCTAssertTrue(waitFor(card, value: "failed", timeout: 30), "\(look): no failure:\n\(app.debugDescription)")
             let retry = app.buttons["extension-operation-retry"]
-            XCTAssertTrue(retry.waitForExistence(timeout: 30), "\(look): no failure:\n\(app.debugDescription)")
             scrollTo(retry, in: app)
+            XCTAssertTrue(retry.exists, "\(look): no Retry:\n\(app.debugDescription)")
             let error = app.descendants(matching: .any)["extension-operation-error"]
             XCTAssertTrue(error.exists && error.label.contains("停滞"), "\(look): no reason: \(error.label)")
             shot(app, "failed", look: look)
@@ -89,7 +92,7 @@ final class ExtensionSettingsReviewTests: XCTestCase {
             // Retry downloads it again; checked, the Update sheet opens by itself.
             retry.tap()
             let update = app.buttons["market-confirm"]
-            XCTAssertTrue(update.waitForExistence(timeout: 30), "\(look): no Update sheet once it was checked:\n\(app.debugDescription)")
+            XCTAssertTrue(update.waitForExistence(timeout: 45), "\(look): no Update sheet once it was checked:\n\(app.debugDescription)")
             XCTAssertTrue(app.staticTexts["新版本多要的"].exists, "\(look): what it asks for more is not shown")
             shot(app, "consent", look: look)
 
@@ -111,7 +114,6 @@ final class ExtensionSettingsReviewTests: XCTestCase {
         guard let hub = env["PERSONA_EXTENSIONS_REVIEW_OLD_HUB"] else {
             throw XCTSkip("needs mock_hub.py with MOCK_EXTENSIONS=1 MOCK_EXTENSION_PREVIEW_DELAY=8 (PERSONA_EXTENSIONS_REVIEW_OLD_HUB)")
         }
-        defer { XCUIDevice.shared.appearance = .light }
         for look in looks {
             let app = launch(hub, look: look)
             reviewButton(in: app).tap()
