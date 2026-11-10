@@ -572,8 +572,13 @@ func TestSendThatNeverLeavesIsNotUncertain(t *testing.T) {
 
 func TestCallRejectsBadIDs(t *testing.T) {
 	m, _ := testManager(t, Record{})
-	if _, err := m.Call(context.Background(), "../x", "tap", nil); Code(err) != "bad_request" || Sent(err) != "no" {
+	_, err := m.Call(context.Background(), "../x", "tap", nil)
+	if Code(err) != "bad_request" || Sent(err) != "no" {
 		t.Fatalf("got %v", err)
+	}
+	var coded interface{ ErrorCode() string }
+	if !errors.As(err, &coded) || coded.ErrorCode() != "bad_request" {
+		t.Fatalf("ErrorCode through an interface: %v", err)
 	}
 }
 

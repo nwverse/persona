@@ -22,6 +22,9 @@ func unsent(err error) error {
 	return &Error{Code: CodeUnreachable, Message: err.Error(), beforeSend: true}
 }
 
+// ErrorCode is e's code, for callers that read it through an interface rather than this type.
+func (e *Error) ErrorCode() string { return e.Code }
+
 func (e *Error) Error() string {
 	if e.Message == "" {
 		return e.Code
