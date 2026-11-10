@@ -31972,6 +31972,30 @@
       },
       "extractionState" : "manual"
     },
+    "Complete Directly" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Complete Directly" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "完了にする" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "直接完成" } }
+      }
+    },
+    "Complete directly: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Complete directly: %1$@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "完了にする：%1$@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "直接完成：%1$@" } }
+      }
+    },
+    "Couldn't complete the task: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't complete the task: %1$@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "タスクを完了にできませんでした：%1$@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "任务未能完成：%1$@" } }
+      }
+    },
     "Clear Sign-ins for All Sites?" : {
       "localizations" : {
         "en" : {

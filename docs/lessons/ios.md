@@ -2,6 +2,19 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Completing a task-review decision without another Agent turn (#3040)
+
+- A `task_review needs_user` conclusion is a to-do acceptance `ask`, not a runtime `Interaction`. Use the existing
+  `PATCH /api/v1/todos/{id}` with `done: true` to end it without delivering another message. `/accept` takes the
+  recommendation and resumes the Agent; interaction resolution answers a different object and must not be used.
+- Apple must decode the optional `ask` before the pending tray can show a stopped Agent's decision. Keep malformed or
+  absent asks compatible, retain the exact `asked_at` for recommendation acceptance, and ignore cached asks on completed
+  tasks. Completion and recommendation share one in-flight guard for each hub/task/round; a failed completion leaves
+  the card available and shows an error. Apply the successful todo response to the shared index before refreshing it.
+- A SwiftUI accessibility identifier on a wrapper can overwrite identifiers on all of its child buttons. The first
+  decision-tray UI run found the buttons by label but not by their action ids. Keep identifiers on the actions rather
+  than the padding wrapper, and verify the actual accessibility tree before changing waits or weakening assertions.
+
 ## Motion rules (#2943)
 
 The table and red lines are in `docs/apple/ios.md` ("Design language", Motion); this is why they read that way.
