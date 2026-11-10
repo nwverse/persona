@@ -28,6 +28,7 @@ import { ManagerHeading } from "../ManagerParts";
 import { ChannelLink } from "./Channels";
 import { QRLinkStep, QRStep, UnsupportedStep, useStepPolling } from "./LoginSteps";
 import { Group, Row, Switch } from "./SettingsParts";
+import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
 
 const DOT: Record<ConnectorTone, string> = { green: "bg-green", orange: "bg-orange", red: "bg-red", idle: "bg-line-strong" };
 const fieldClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -50,15 +51,19 @@ function Mark({ id, size }: { id: string; size: number }) {
 
 // ── the rows on Settings › Connectors ────────────────────
 
-export function ConnectorList({ onOpen }: { onOpen: (id: string) => void }) {
+export function ConnectorList({ onOpen, onLarkCli }: { onOpen: (id: string) => void; onLarkCli?: (connector: HubConnector | null) => void }) {
   const [all, setAll] = useState<HubConnector[] | null>(null);
   const [error, setError] = useState("");
   const lark = useLarkOn();
   useEffect(() => {
     listConnectors()
-      .then((l) => (setAll(l), setError("")))
+      .then((l) => {
+        setAll(l);
+        onLarkCli?.(l.find((c) => c.id === "larkcli") ?? null);
+        setError("");
+      })
       .catch((e) => setError(errorText(e)));
-  }, []);
+  }, [onLarkCli]);
   const list = useMemo(() => all && otherConnectors(all, lark), [all, lark]);
   // with several managers, each one's connectors under its name (each has its own built-ins, docs/assistant/managers.md
   // "Clients"), and a row opens that manager's copy; one: as before
@@ -180,6 +185,8 @@ export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string
         {err && <p className={cx("border-t border-line px-4 py-2.5 text-[12px] break-words select-text", rateLimited ? "text-ink-2" : "text-red")}>{err}</p>}
       </section>
       {onChannel && <ChannelLink id={id} manager={manager} onOpen={onChannel} />}
+      {/* source subscriptions (#2041) are the default manager's */}
+      {c && !manager && <SubscriptionsEntry pick={(l) => l.connector === id} scope={{ c: id }} />}
       {c && id !== "imessage" && !signsInHere(c) && !undescribed(c) && (
         <p className="-mt-4 mb-6 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("settings-hubconnector.hub_side_note")}</p>
       )}
@@ -515,7 +522,16 @@ function SignInSections({ c, reload }: { c: HubConnector; reload: () => Promise<
   );
 }
 
-function SignInSteps({ c, reload, footer }: { c: HubConnector; reload: () => Promise<void>; footer: string }) {
+export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent", bare }: {
+  c: HubConnector;
+  reload: () => Promise<void>;
+  footer?: string;
+  startLabel?: string;
+  /** The start button's tone: the default accent, or quiet where signing in is a secondary action. */
+  startTone?: "accent" | "quiet";
+  /** Draw only the step content so a caller can place it inside its own section. */
+  bare?: boolean;
+}) {
   const [prompt, setPrompt] = useState<ConnectorPrompt | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -557,29 +573,28 @@ function SignInSteps({ c, reload, footer }: { c: HubConnector; reload: () => Pro
   // until the user has entered / scanned it.
   useStepPolling(isPolledStep(prompt) ? prompt : null, (step) => send(step, {}, true), prompt?.kind === "qr" ? 3 : 5);
 
-  if (!prompt) {
-    return (
-      <Group title={t("settings-hubconnector.sign_in")} footer={footer}>
-        <div className="px-4 py-3">
-          <Button tone="accent" busy={busy} onClick={() => void send("", {})}>{t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
-        </div>
-      </Group>
-    );
-  }
   const cancel = () => (setPrompt(null), setValues({}));
+  const body = !prompt ? (
+    <div className="px-4 py-3">
+      <Button tone={startTone} busy={busy} onClick={() => void send("", {})}>{startLabel ?? t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
+    </div>
+  ) : (
+    <SignInStep
+      name={c.name}
+      prompt={prompt}
+      values={values}
+      busy={busy}
+      isChannel={isChannel}
+      onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
+      onSubmit={() => void send(prompt.step ?? "", values)}
+      onRestart={() => (cancel(), void send("", {}))}
+      onCancel={cancel}
+    />
+  );
+  if (bare) return body;
   return (
     <Group title={t("settings-hubconnector.sign_in")} footer={footer}>
-      <SignInStep
-        name={c.name}
-        prompt={prompt}
-        values={values}
-        busy={busy}
-        isChannel={isChannel}
-        onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
-        onSubmit={() => void send(prompt.step ?? "", values)}
-        onRestart={() => (cancel(), void send("", {}))}
-        onCancel={cancel}
-      />
+      {body}
     </Group>
   );
 }

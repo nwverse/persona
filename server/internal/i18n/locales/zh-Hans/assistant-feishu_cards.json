@@ -53,6 +53,7 @@
   "pick_machine_dir": "选好电脑、填上目录",
   "starting": "正在开…",
   "start_form_opening": "正在打开开工表单",
+  "start_form_failed": "没能打开开工表单：{error}",
   "card_expired": "这张卡片已经过期了",
   "card_withdrawn": "这张卡片已经撤回了",
   "already_handled": "已经处理过了",

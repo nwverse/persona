@@ -69,7 +69,7 @@ internal fun ApiErrorLine(line: ChatLine.ApiError) {
         action = if (retry != null) ({ JButton(stringResource(R.string.chat_api_error_retry), retry, kind = JButtonKind.Secondary, size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise) }) else null,
     ) {
         info.requestId?.let { id -> DetailField(stringResource(R.string.chat_api_error_request_id), id) { JIconButton(PhIcons.Copy, stringResource(R.string.chat_api_error_copy_request_id), { copy(id) }) } }
-        info.session?.let { session -> DetailField("Session", session) { JIconButton(PhIcons.Copy, stringResource(R.string.chat_api_error_copy_session), { copy(session) }) } }
+        info.session?.let { session -> DetailField(stringResource(R.string.chat_api_error_session), session) { JIconButton(PhIcons.Copy, stringResource(R.string.chat_api_error_copy_session), { copy(session) }) } }
         apiErrorTime(line.item.item.ts, resources)?.let { DetailField(stringResource(R.string.chat_api_error_time), it, mono = false) }
         SelectionContainer {
             Text(info.raw, style = PersonaTheme.type.code, color = palette.ink,

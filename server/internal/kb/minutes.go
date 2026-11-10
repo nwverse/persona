@@ -21,10 +21,10 @@ import (
 
 // Meeting minutes (docs/assistant/meeting-minutes.md): a complete recording that is a meeting (the phone said so, the
 // user asked, or it overlaps a calendar item of the knowledge base) gets minutes.json (Minutes, what detail.minutes
-// is) and minutes.md (the same as Markdown, what the searches and kb_get read) in its directory, so a delete or the
-// retention takes them with it. The transcript goes to the model as numbered lines; the model cites line numbers,
-// which become seconds here, and an item citing no line it read is dropped. Long transcripts are read in chunks whose
-// notes one more call merges.
+// is) and minutes.md (the same as Markdown, what the searches and kb_get read) in its directory, so a delete takes them
+// with it; the retention keeps them past the transcript, until minutes_days (recording_trim.go). The transcript goes to
+// the model as numbered lines; the model cites line numbers, which become seconds here, and an item citing no line it
+// read is dropped. Long transcripts are read in chunks whose notes one more call merges.
 
 // Minutes is minutes.json, and detail.minutes of GET /api/v1/kb/recordings/{id}.
 type Minutes struct {
@@ -104,11 +104,16 @@ func (r *Recording) isMeeting() bool {
 
 // planMinutes sets MinutesState from the rest: pending until minutes of the current revision are written, failed after
 // minutesTries unusable answers for it or minutesTimeoutTries tries that ran out of time; minutes of an older revision
-// keep showing meanwhile.
+// keep showing meanwhile. A meeting that completed with no text gets none ("", docs/assistant/meeting-minutes.md
+// "Attendance fields"): an attended one is uploaded before anything was said, and may end so.
 func (r *Recording) planMinutes() {
 	switch {
 	case !r.isMeeting():
 		r.MinutesState = "" // minutes made while it was one stay readable; nothing more is made
+	case r.Trimmed():
+		r.MinutesState = MinutesReady // the transcript is gone: the minutes kept are all there will be
+	case r.Complete && r.Chars == 0:
+		r.MinutesState = ""
 	case r.MinutesRev > 0 && r.MinutesRev >= r.Revision:
 		r.MinutesState = MinutesReady
 	case r.MinutesFailRev == r.Revision && (r.MinutesFails >= minutesTries || r.MinutesTimeouts >= minutesTimeoutTries):
@@ -166,7 +171,9 @@ func (s *Store) putMinutes(id string, m *Minutes) (bool, error) {
 }
 
 // AskMinutes has recording id's minutes made (again) at the next round, whatever its kind: ErrNotFound when there is
-// no such recording, ErrRecordingIncomplete before its transcript is complete.
+// no such recording, ErrTranscriptExpired once it was trimmed, ErrRecordingIncomplete before its transcript is
+// complete, and also for a complete one with no text (409 as well: there is nothing to make minutes of, and its
+// minutes_state stays absent).
 func (e *Engine) AskMinutes(rawID string) error {
 	if e.Store.ReadOnly() {
 		return ErrReadOnly
@@ -181,6 +188,9 @@ func (e *Engine) AskMinutes(rawID string) error {
 	r, ok := st.Recording(id)
 	if !ok {
 		return ErrNotFound
+	}
+	if r.Trimmed() {
+		return ErrTranscriptExpired
 	}
 	if !r.Complete || r.Chars == 0 {
 		return ErrRecordingIncomplete
@@ -250,7 +260,7 @@ func (e *Engine) WriteMinutes(ctx context.Context, max int) int {
 	}
 	var todo []*Recording
 	for _, r := range e.Store.Recordings() {
-		if r.Complete && r.Chars > 0 && r.MinutesState == MinutesPending && !r.minutesWaiting(now) {
+		if r.Complete && r.Chars > 0 && r.MinutesState == MinutesPending && !r.minutesWaiting(now) && !r.Trimmed() {
 			todo = append(todo, r)
 		}
 	}
@@ -310,7 +320,7 @@ func (e *Engine) minutesFailed(id string, rev int64) {
 func (e *Engine) matchRecordings(now time.Time) {
 	var due []string
 	for _, r := range e.Store.Recordings() {
-		if r.Complete && r.MatchedRev < r.Revision {
+		if r.Complete && r.MatchedRev < r.Revision && !r.Trimmed() {
 			due = append(due, r.ID)
 		}
 	}
@@ -322,7 +332,7 @@ func (e *Engine) matchRecordings(now time.Time) {
 	for _, id := range due {
 		st.recMu.Lock()
 		r, ok := st.Recording(id)
-		if ok && r.Complete && r.MatchedRev < r.Revision {
+		if ok && r.Complete && r.MatchedRev < r.Revision && !r.Trimmed() {
 			if old := r.Meeting; old != nil {
 				r.Items = removeStrings(r.Items, []string{old.Kind + "/" + old.ID})
 			}
@@ -450,7 +460,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	if err := json.Unmarshal(files["meta.json"], &r); err != nil {
 		return err
 	}
-	if !r.Complete || r.Chars == 0 || r.MinutesState != MinutesPending {
+	if !r.Complete || r.Chars == 0 || r.MinutesState != MinutesPending || r.Trimmed() {
 		return nil
 	}
 	var segs []RecordingSegment

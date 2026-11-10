@@ -299,6 +299,7 @@ export interface Contributes {
   voice?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
+  iphone?: NamedItem[];
   quota?: QuotaItem[];
   providers?: ProviderItem[];
   api?: APIItem[];
@@ -1341,8 +1342,8 @@ export const PLATFORMS = ["ios", "mac", "android", "web"] as const;
  * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
  * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
  */
-export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
-export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
+export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "music" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
+export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
 
 export interface View {
   title?: string;
@@ -3287,6 +3288,10 @@ export interface ConnectorStatus {
   error?: string;
   /** How to fix it, a step a sentence. */
   guide?: string[];
+  /** Optional HTTPS page the App may open for the fix; never a secret. */
+  guide_url?: string;
+  /** Permissions the connector can identify as absent. */
+  missing_scopes?: string[];
   last_sync?: string;
   last_event?: string;
 }
@@ -4103,6 +4108,10 @@ export interface ConnectorPrompt {
   /** Seconds between asks of a device_code or qr step. */
   interval?: number;
   qr?: ConnectorQRCode;
+  /** An absolute URL where this step's action is completed; empty means no link. */
+  link?: string;
+  /** The label for the optional link. */
+  link_text?: string;
   hint?: string;
   error?: string;
   done?: boolean;
@@ -4856,32 +4865,44 @@ export interface TodoDecisionEvent {
  * event.leader.changed: a leader conversation was made (a side conversation added to assistant.leaders), its title
  * changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
  * deleted) or it was made a leader again. id is the leader conversation's session id, the key a work-log record
- * keeps; title its title as the apps show it; project the knowledge-base project's slug, left out while it has none;
+ * keeps; title its title as the apps show it; name what the direction is called, to show it by (the name the owner or
+ * the secretary gave it, else its knowledge-base project's name, else the title without its "MMDD | kind | " prefix;
+ * always sent by a hub that has it, #3679); project the knowledge-base project's slug, left out while it has none;
  * ended true once it is no longer a leader, left out while it is.
  */
 export interface LeaderChangedEvent {
   id: string;
   title: string;
+  name?: string;
   project?: string;
   ended?: boolean;
 }
 
 /**
  * event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it), needs the owner's
- * decision (decision: its review says needs_user), or is stuck (stuck: in Waiting on you or stopped unfinished for 24
- * hours, told at most once per 24 hours). Written by the hub from the task's ledger, never by a model; progress is
- * never reported. id names the report (never sent twice; key on it to be safe), leader the leader conversation's id,
- * todo the task's to-do id (GET /api/v1/todos with todos.read reads it), text at most 300 characters in the owner's
- * language, link the task's PR or delivery link when it has one, at when what it reports happened.
+ * decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's Start), or is stuck
+ * (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours); those are written by
+ * the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary of its direction at
+ * the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck), needs_you (what the
+ * owner has to do) and links (evidence; link is the first), text the three put together, todo "". id names the report
+ * (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's to-do id (GET
+ * /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the waiting plan's
+ * id (only on a decision about a plan), text at most 300 characters in the owner's language, link the task's PR or
+ * delivery link when it has one, at when what it reports happened.
  */
 export interface LeaderReportEvent {
   id: string;
   leader: string;
   kind: string;
   todo: string;
+  plan?: string;
   text: string;
   link?: string;
   at: string;
+  reached?: string;
+  doing?: string;
+  needs_you?: string;
+  links?: string[];
 }
 
 /**

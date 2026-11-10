@@ -310,6 +310,44 @@ class ChatRepositoriesTest {
         assertEquals(2, queries.count { it == ItemsQuery() })
     }
 
+    // #3601: a read covers the rev moves heard when it was sent. Lines 4 and 5 lose their push and the rev moves; while
+    // the catch-up read for them is out, line 6 is written (its push lost too) and the rev moves again. The read comes
+    // back with 4 and 5 only, as the node read the file before line 6: the chat reads once more and gets it.
+    @Test fun aRevMoveWhileTheCatchUpReadIsOutReadsAgain() = runTest {
+        val connection = FakeConnection()
+        val transport = FakeChatTransport()
+        val held = CompletableDeferred<ItemsResponse>()
+        val queries = mutableListOf<ItemsQuery>()
+        transport.fetch = { query ->
+            queries += query
+            when (query.afterSeq) {
+                null -> ItemsResponse(listOf(item(1), item(2), item(3)), history = "h", toSeq = 3)
+                3 -> held.await()
+                5 -> ItemsResponse(listOf(item(6)), history = "h", fromSeq = 5, toSeq = 6)
+                else -> ItemsResponse(emptyList(), history = "h", fromSeq = query.afterSeq, toSeq = query.afterSeq)
+            }
+        }
+        val repository = HubChatRepository(transport, connection, FakeItemsCache(CachedChat(emptyList(), null, 0, null)),
+            FakeSessions(), backgroundScope)
+        var snapshot = ChatSnapshot()
+        backgroundScope.launch { repository.observe(key).collect { snapshot = it } }
+        runCurrent()
+        assertEquals(listOf(1, 2, 3), snapshot.items.map { it.seq })
+
+        connection.events.emit(RevsEvent(key.machineId, mapOf(key.sessionId to 5L)))
+        advanceTimeBy(1500)
+        runCurrent()
+        assertEquals(listOf(3), queries.mapNotNull { it.afterSeq })
+        connection.events.emit(RevsEvent(key.machineId, mapOf(key.sessionId to 6L))) // while the read is out
+        runCurrent()
+        held.complete(ItemsResponse(listOf(item(4), item(5)), history = "h", fromSeq = 3, toSeq = 5))
+        advanceTimeBy(5000)
+        runCurrent()
+        assertEquals(listOf(1, 2, 3, 4, 5, 6), snapshot.items.map { it.seq })
+        assertEquals(listOf(3, 5), queries.mapNotNull { it.afterSeq }.take(2))
+        assertTrue(snapshot.verified)
+    }
+
     @Test fun aBurstOfItemsEventsSavesOnceMoreWithTheLatestState() = runTest {
         val connection = FakeConnection()
         val transport = FakeChatTransport().apply { fetch = { ItemsResponse(listOf(item(1)), history = "h", toSeq = 1) } }

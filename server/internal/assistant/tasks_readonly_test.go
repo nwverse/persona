@@ -96,7 +96,7 @@ func TestReadonlyTaskWaitingPlanEdits(t *testing.T) {
 					setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main", "box" })
 					f.setSessions("box", proto.Session{SessionID: conversation, Space: SpaceHealth})
 				} else {
-					edit := readonlyTestTask("acceptEdits")
+					edit := readonlyTestTask("bypassPermissions")
 					edit.Title, edit.Prompt, edit.Readonly = "Fix login", "Fix the login flow and add tests.", false
 					tasks = append(tasks, edit)
 				}
@@ -124,7 +124,7 @@ func TestReadonlyTaskWaitingPlanEdits(t *testing.T) {
 					want := "plan"
 					// Dispatch order is independent of the plan's order; identify the task by its prompt.
 					if strings.Contains(start["prompt"].(string), "Fix the login flow and add tests.") {
-						want = "acceptEdits"
+						want = "bypassPermissions"
 					}
 					if start["permission_mode"] != want {
 						t.Fatalf("start = %v, want permission %q", start, want)
@@ -244,7 +244,7 @@ func TestReadonlyTaskPlanPersistsAcrossRestart(t *testing.T) {
 	t.Cleanup(database.Close)
 	s, _ := newTaskServiceOn(t, database)
 	read := readonlyTestTask("bypassPermissions")
-	edit := readonlyTestTask("acceptEdits")
+	edit := readonlyTestTask("bypassPermissions")
 	edit.Readonly = false
 	if _, err := s.toolTaskPlan(ctx, "readonly-chat", readonlyTaskArgs(t, read, edit)); err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestReadonlyTaskPlanPersistsAcrossRestart(t *testing.T) {
 	p := readonlyFeedPlan(t, s, "readonly-chat")
 	restarted, _ := newTaskServiceOn(t, database)
 	saved, err := restarted.loadPlan(ctx, p.ID)
-	if err != nil || saved.State != planOpen || saved.Tasks[0].Permission != "plan" || saved.Tasks[1].Permission != "acceptEdits" {
+	if err != nil || saved.State != planOpen || saved.Tasks[0].Permission != "plan" || saved.Tasks[1].Permission != "bypassPermissions" {
 		t.Fatalf("persisted plan = %+v, error = %v", saved, err)
 	}
 }

@@ -505,9 +505,9 @@ export function sections(items: InboxItem[], f: InboxFilter): InboxSections {
   return out;
 }
 
-/** The sidebar badge: unread open items, independent of their pending section. */
+/** The sidebar badge: unread open items in Needs you; reading never completes them. */
 export function badgeCount(items: InboxItem[]): number {
-  return items.filter((it) => !isDone(it) && !it.read).length;
+  return items.filter((it) => !isDone(it) && !it.read && statusOf(it) === "action").length;
 }
 
 /** The connectors with items in the list (GitHub…), one filter chip each, in the order they first come. */
@@ -554,7 +554,7 @@ export function interactionAsk(ix: Interaction): string {
     case "question":
       return ix.questions?.[0]?.question || ix.summary || "";
     case "permission":
-      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_name || "";
+      return ix.summary || str(input?.description) || str(input?.command) || ix.tool_title || ix.tool_name || "";
     case "screen":
       return ix.dialog?.question || ix.summary || "";
     case "elicitation":
@@ -655,7 +655,7 @@ export interface LarkMessage {
   is_read?: boolean;
   badge_count?: number;
   parts?: LarkPart[];
-  reply_to?: { id?: string; sender_name?: string; text?: string; recalled?: boolean; retained?: boolean };
+  reply_to?: { id?: string; sender_name?: string; text?: string; parts?: LarkPart[]; recalled?: boolean; retained?: boolean };
   sending?: boolean;
   failed?: boolean;
   client_id?: string;

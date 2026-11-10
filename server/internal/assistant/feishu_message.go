@@ -107,7 +107,7 @@ func (s *Service) feishuMessage(ev feishubot.MessageEvent, st FeishuStatus, acti
 		content.Text = rest
 	}
 	if !content.Forward && s.acceptReply(ctx, msg.MessageID, content.Text, len(content.Media) > 0, msg.ParentID, msg.RootID) {
-		return // about a "Please verify" card (acceptance.go)
+		return // about a "Please verify" card (acceptance_reply.go)
 	}
 	if !content.Forward && len(content.Media) == 0 && s.botAnswerQuestion(ctx, msg.MessageID, content.Text, action, msg.RootID, msg.ParentID) {
 		return // the answer to the card waiting in this topic (feishu_text_answer.go)
