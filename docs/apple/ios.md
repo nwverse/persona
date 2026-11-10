@@ -657,7 +657,10 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
 - Changing running sessions: the headless assistant sends stdin control requests (`set_permission_mode`, `apply_flag_settings {effortLevel}`), effective on the next request;
   herdr Agents are operated like a person: shift+tab cycles to the target (default → acceptEdits → plan → auto), and the `/effort` picker moves to the level,
   then presses `s` (session-only). **Do not send `/effort <level>`**: it also saves the level as this model's default for all future sessions (`modelSettings` in settings).
-- Effort changes wait until the turn ends and the terminal input is empty (otherwise `/effort` appends to someone else's unsent draft); herdr Agents can choose Allow everything only at creation, not in the cycle.
+- Effort changes wait until the turn ends and the terminal input is empty (otherwise `/effort` appends to someone else's unsent draft); herdr Agents can choose Allow everything only at creation, not in the cycle,
+  unless their claude was started with `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`, which puts it in the cycle:
+  the node reads the arguments of the claude its hooks run under, once per process (`claudeCanBypass`, kern.procargs2 / `/proc/<pid>/cmdline`, no exec), and lists the session with
+  `bypass_available` (#1379). The web then offers it, red and asked again; the app still lists it only while it is the current mode (`SessionModes.options`), to follow.
 - Assistant chats (Persona page, including the main chat) can choose Allow everything both at creation and while running (#2416); a red warning at the menu top explains consequences (`BypassWarning`). Persona does not start
   claude with `--dangerously-skip-permissions`, so a control request cannot switch to bypassPermissions: stop an idle process, then resume the next message with `--permission-mode bypassPermissions`;
   if answering or holding background tasks, replace the process on the first message after this turn.

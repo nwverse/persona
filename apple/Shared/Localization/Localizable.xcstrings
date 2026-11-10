@@ -185,6 +185,14 @@
         }
       }
     },
+    "Deleted from this device. Removal from Knowledge may still be pending.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Deleted from this device. Removal from Knowledge may still be pending." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "已从此设备删除。从知识库移除可能仍在等待同步。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "このデバイスから削除しました。ナレッジからの削除はまだ同期待ちの可能性があります。" } }
+      }
+    },
     "It carries on by itself when the call ends, or when you come back to Persona." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -611,6 +619,14 @@
         }
       }
     },
+    "Pending deletions have not been removed from Knowledge yet.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Pending deletions have not been removed from Knowledge yet." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "待删除内容尚未从知识库移除。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "削除待ちの内容は、まだナレッジから削除されていません。" } }
+      }
+    },
     "Record a Meeting" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -701,6 +717,30 @@
             "value" : "iPhone 录音中"
           }
         }
+      }
+    },
+    "Recording sync couldn't finish. Try again after checking the hub's diagnostics.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Recording sync couldn't finish. Try again after checking the hub's diagnostics." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "录音未能完成同步。请检查 hub 的诊断信息后重试。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "録音の同期を完了できませんでした。ハブの診断情報を確認してから再試行してください。" } }
+      }
+    },
+    "Recording sync isn't supported by this hub. Update the hub, then reopen the app to retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Recording sync isn't supported by this hub. Update the hub, then reopen the app to retry." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "此 hub 尚不支持录音同步。请更新 hub，再重新打开 App 重试。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "このハブは録音の同期に対応していません。ハブを更新してからアプリを開き直して再試行してください。" } }
+      }
+    },
+    "Recording sync needs access. Check this device's permissions and pairing, then reopen the app to retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Recording sync needs access. Check this device's permissions and pairing, then reopen the app to retry." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "录音同步需要访问权限。请检查此设备的权限和配对，再重新打开 App 重试。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "録音の同期にはアクセス権が必要です。このデバイスの権限とペアリングを確認し、アプリを開き直して再試行してください。" } }
       }
     },
     "Recording · %lld bookmarks" : {
@@ -899,6 +939,22 @@
         }
       }
     },
+    "The audio on this device will be deleted now. Its text in Knowledge is removed after sync succeeds; if Knowledge is off or read-only, that deletion stays pending.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The audio on this device will be deleted now. Its text in Knowledge is removed after sync succeeds; if Knowledge is off or read-only, that deletion stays pending." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "此设备上的音频将立即删除。知识库中的文本会在同步成功后移除；知识库关闭或只读时，删除会保持待同步状态。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "このデバイスの音声は今すぐ削除されます。ナレッジ内のテキストは同期成功後に削除されます。ナレッジが無効または読み取り専用の場合、削除は同期待ちのままになります。" } }
+      }
+    },
+    "The connection to this computer dropped. Reconnect it and check whether your last action went through before retrying.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The connection to this computer dropped. Reconnect it and check whether your last action went through before retrying." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "和这台电脑的连接断了。请重新连接，确认刚才的操作是否已生效，然后再试。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "このコンピューターとの接続が切れました。再接続して、直前の操作が反映されたか確認してから再試行してください。" } }
+      }
+    },
     "The hub is turning the transcript into key points, decisions, action items and open questions." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -920,6 +976,30 @@
             "value" : "hub 正在把转写整理成要点、决定、待办和未决问题。"
           }
         }
+      }
+    },
+    "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The knowledge base is read-only. Change the manager configuration before editing or syncing recordings." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "知识库为只读。请先修改管理者配置，再编辑或同步录音。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ナレッジは読み取り専用です。編集や録音の同期を行うには、マネージャーの設定を変更してください。" } }
+      }
+    },
+    "The knowledge base isn't ready yet. Try again shortly.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The knowledge base isn't ready yet. Try again shortly." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "知识库尚未就绪，请稍后重试。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "ナレッジはまだ準備ができていません。しばらくしてから再試行してください。" } }
+      }
+    },
+    "The manager is offline or restarting. Try again shortly.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The manager is offline or restarting. Try again shortly." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "管理者不在线或正在重启，请稍后重试。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "マネージャーはオフラインか再起動中です。しばらくしてから再試行してください。" } }
       }
     },
     "The minutes couldn't be written." : {
@@ -945,6 +1025,14 @@
         }
       }
     },
+    "The service couldn't complete this request. Try again later. (HTTP %lld)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "The service couldn't complete this request. Try again later. (HTTP %1$lld)" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "服务未能完成此次请求，请稍后重试。（HTTP %1$lld）" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "サービスがこの要求を完了できませんでした。しばらくしてから再試行してください。（HTTP %1$lld）" } }
+      }
+    },
     "This hub doesn't write meeting minutes yet. They come after it's updated." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -966,6 +1054,14 @@
             "value" : "这台 hub 还不会整理会议纪要，更新后就有了。"
           }
         }
+      }
+    },
+    "This manager has turned off the knowledge base. Enable it in the manager configuration to use it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "This manager has turned off the knowledge base. Enable it in the manager configuration to use it." } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "此管理者已关闭知识库。请在管理者配置中启用后使用。" } },
+        "ja": { "stringUnit": { "state": "translated", "value": "このマネージャーのナレッジは無効です。利用するにはマネージャーの設定で有効にしてください。" } }
       }
     },
     "Writing the minutes…" : {
@@ -33008,6 +33104,30 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Complete Directly" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Complete Directly" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "完了にする" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "直接完成" } }
+      }
+    },
+    "Complete directly: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Complete directly: %1$@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "完了にする：%1$@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "直接完成：%1$@" } }
+      }
+    },
+    "Couldn't complete the task: %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn't complete the task: %1$@" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "タスクを完了にできませんでした：%1$@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "任务未能完成：%1$@" } }
+      }
     },
     "Clear Sign-ins for All Sites?" : {
       "localizations" : {
