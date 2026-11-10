@@ -128,6 +128,14 @@ struct SettingsView: View {
                         }
                         .settingsListRow(SettingsPage.connectors)
                         .accessibilityIdentifier("settings.connectors")
+                        #if os(iOS)
+                        // What the knowledge base reads and keeps of what the connectors bring (#2217).
+                        NavigationLink(value: SettingsPage.knowledgeSelection) {
+                            SettingsRow(title: String(localized: "Knowledge Selection"), symbol: Theme.Icon.knowledge, tint: Theme.accent)
+                        }
+                        .settingsListRow(SettingsPage.knowledgeSelection)
+                        .accessibilityIdentifier("settings-knowledge-selection")
+                        #endif
                     }
                     .bareListRow()
                 }
@@ -416,6 +424,7 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
+        else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
         else if let a = d.string(forKey: "openAppearance"), a != "chat" { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
@@ -489,6 +498,8 @@ enum SettingsPage: Hashable {
     case triage
     /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents.
     case layout
+    /// Settings › Knowledge Selection (docs/assistant/knowledge.md "Selection"): what the knowledge base reads and keeps.
+    case knowledgeSelection
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -552,8 +563,10 @@ private struct SettingsDestinations: ViewModifier {
         case .language: LanguageSettingsPage()
         #if os(iOS)
         case .layout: LayoutSettingsPage()
+        case .knowledgeSelection: KnowledgeSelectionView()
         #else
         case .layout: EmptyView()
+        case .knowledgeSelection: EmptyView()
         #endif
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()
@@ -660,6 +673,7 @@ struct PhoneDataView: View {
     @State private var statuses: [PhoneDataSource: PhoneAuthStatus] = [:]
     @State private var enabled: [PhoneDataSource: Bool] = [:]
     @State private var asking: PhoneDataSource?
+    @StoredValue(ClipboardOffer.enabledKey) private var offerClipboard = false
 
     var body: some View {
         List {
@@ -684,6 +698,19 @@ struct PhoneDataView: View {
             } footer: {
                 Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
             }
+            #if os(iOS)
+            // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
+            Section {
+                Toggle(isOn: $offerClipboard) {
+                    Text("Offer to Send What You Copied") // a switch's title: wraps at large sizes
+                }
+                .accessibilityIdentifier("clipboard-offer")
+            } header: {
+                Text("Clipboard")
+            } footer: {
+                Text("When you come back to Persona after copying something, offers to send it to a computer that shares its clipboard. The clipboard is read only when you tap Send.")
+            }
+            #endif
         }
         .themedPage()
         .navigationTitle(ConnectorText.device)

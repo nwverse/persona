@@ -2,61 +2,11 @@
 
 Snapshot commit `738ba824c`, date 2026-11-10. All line numbers refer to that commit and will drift. Verify before relying on one.
 
-**Before you add or change UI or an interaction** on any client, read the principles below and the parts of this document your change touches, and run the "UI change self-check" at the end. The PR description names the rules it followed and gives a reason for every deviation (`CLAUDE.md`, "Design spec for UI changes").
+**Before you add or change UI or an interaction** on any client, read `docs/design/PRINCIPLES.md` and the parts of this document your change touches, and run the "UI change self-check" at the end. The PR description names the rules it followed and gives a reason for every deviation (`CLAUDE.md`, "Design spec for UI changes").
 
 ## Product design principles
 
-Five principles decide product questions before any visual rule applies. Each one comes with a check that a reviewer can run on a PR. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
-
-### Principle 1: Defaults first
-
-The common tasks work with no setup, and the default behavior is stable and can be explained in one sentence. Persona is built for everyday people, not only for developers.
-
-- A new install, with only a hub paired, can do the frequent tasks: chat with Persona, start an Agent, answer an Agent's question, approve a plan or tool.
-- A default never changes silently between versions. If one has to change, the release says so and the old behavior stays reachable.
-- Words a non-developer would not know (hub, node, runtime, launcher, MCP) stay off primary screens and out of error messages, or come with a plain explanation (section 5).
-
-Check: the feature works on a fresh install with untouched settings, and the PR can state its default behavior in one plain sentence.
-
-### Principle 2: Progressive disclosure
-
-Advanced features and options meant for expert choices start hidden or collapsed, and the user turns them on in settings. The primary screen shows only what most people need.
-
-- New advanced options default to off and live in Settings (or behind a "More" or advanced group), not on the main chat or Agents screens.
-- Detail opens on request: tool execution stays one summary line until opened (super rule 2, section 4.7), and new visual styles are opt-in choices next to the default Liquid Glass style.
-- Expert terms and raw values (model IDs, ports, paths) appear only inside the advanced area that needs them.
-
-Check: with the feature switched off, the primary screens look and behave exactly as before the PR.
-
-### Principle 3: User control
-
-Every setting that changes behavior can be seen, changed and undone by the user. Persona may change its own settings through an Agent, but it says what will change, asks before applying, and keeps a way back.
-
-- Each behavior-changing setting is visible in Settings with its current value. No hidden flags whose only switch is a chat command.
-- Reversible actions offer Undo (a toast with Undo, section 4.4). Irreversible ones ask first, with the destructive button styled destructive and Cancel available.
-- When Persona or an Agent changes a setting, it first states the effect in plain words (what changes, for which conversations or devices, starting when), waits for the user's confirmation, records the change, and offers a rollback. The model profile switch is the reference pattern: list with a rollback preview, switch, roll back (`docs/assistant/model-profiles.md`).
-
-Check: for each new setting, the PR names where the user sees it, how they change it back, and, if an Agent can change it, the confirmation step and the rollback path.
-
-### Principle 4: Consistency first
-
-Reuse the interaction patterns and components that already exist before inventing one. A new pattern needs a written reason.
-
-- Pages are built from the design-system components (section 3) and tokens (section 2). Never assemble a lookalike of an existing component in a page.
-- The same action looks and behaves the same on every screen and, as far as each platform allows, on iOS, Android and web (section 7).
-- A new component or interaction pattern goes into the design system with a short note in this document saying why the existing ones did not fit.
-
-Check: the PR lists the components and patterns it reused; anything new carries its reason and a matching update to this document.
-
-### Principle 5: Model and product are separate
-
-Speed, model choice, how Persona presents itself and which features are on are four separate settings. A change to one must not quietly change another.
-
-- Model choice and speed belong to model settings and model profiles (`docs/assistant/model-profiles.md`). Product features never hard-code a model or depend on one model's quirks.
-- The avatar, theme color and interface style are three independent choices (`docs/apple/persona.md`). The avatar does not switch models, and switching models does not change the avatar or the UI.
-- Feature switches decide what Persona can do, not which model does it. Turning a feature on does not change the model, and switching profiles does not turn features on or off.
-
-Check: the PR names which of the four dimensions it touches, and switching any other dimension leaves its behavior unchanged.
+The six product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
 ## 1. Purpose, scope and sources of truth
 
@@ -375,6 +325,7 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 - Forms use `.formButton` and `FormAction`.
 - Icon buttons use a 44 pt frame around a smaller visual (composer round button, viewer chrome).
 - Destructive actions use `role: .destructive`. Red is also used for risky-but-not-destructive actions (DS-24).
+- `SystemPasteButton` (`apple/Persona/DesignSystem/ClipboardButtons.swift`) wraps the system `PasteButton` for anything that sends what is on the phone's clipboard: a capsule in the accent with the system's own icon and word. Why not `.themedButton`: only the system Paste button reads the clipboard without iOS asking "Allow Paste?" first (the tap is the permission), and the system draws it, so it can be tinted and shaped but not restyled. Place it beside a themed button that does the same thing by reading the clipboard, with one line saying it sends without the prompt (the computer page's Clipboard section, #3064).
 - Web buttons are 32 px tall (hit area expanded on touch). Android: Large 48, Medium 40, Small 32 dp (DS-06).
 
 ### 3.8 Chips, badges, avatars, marks
@@ -611,8 +562,9 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] Defaults first: works on a fresh install with untouched settings, and the default behavior fits in one plain sentence (principle 1).
 - [ ] Progressive disclosure: advanced options are off by default and live in Settings or an advanced group, and the primary screens are unchanged when the feature is off (principle 2).
 - [ ] User control: every new behavior-changing setting is visible, changeable and reversible. If Persona or an Agent can change it, the PR names the explanation, the confirmation and the rollback (principle 3).
-- [ ] Consistency: lists the existing components and patterns reused. Anything new has its reason written down and an update to this document (principle 4).
+- [ ] Consistency: lists the existing components, patterns and count definitions reused; a number shown under an existing name uses the same rule. Anything new has its reason written down and an update to this document (principle 4).
 - [ ] Model and product separate: names which of speed, model, presentation or features it touches, and changes none of the others (principle 5).
+- [ ] Checkable: each item above marked done carries its evidence (screenshot, test name, command output) in the PR (principle 6).
 
 **Rules**
 

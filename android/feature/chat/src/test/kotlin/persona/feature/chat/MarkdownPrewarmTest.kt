@@ -1,6 +1,7 @@
 package persona.feature.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 import persona.core.contracts.Item
 import kotlin.random.Random
@@ -34,8 +35,10 @@ class MarkdownPrewarmTest {
             val prewarm = MarkdownPrewarm(limit)
             var next = 0
             var items = List(r.nextInt(0, 12)) { item(r, next++) }
+            var split: Pair<List<MarkdownText>, List<MarkdownText>>? = null
             repeat(80) { step ->
-                items = when (r.nextInt(10)) {
+                val change = r.nextInt(10)
+                items = when (change) {
                     // The last item streams on: mostly what happens.
                     0, 1, 2, 3 -> items.dropLast(1) + listOfNotNull(items.lastOrNull()?.let { it.copy(text = it.text.orEmpty() + texts.random(r)) })
                     4 -> items + item(r, next++)
@@ -48,7 +51,17 @@ class MarkdownPrewarmTest {
                     8 -> items.mapIndexed { i, it -> if (i == r.nextInt(items.size)) it.copy(text = "changed") else it }
                     else -> items.map { it.copy() }
                 }
-                assertEquals("seed $seed, step $step", splitAfresh(items, limit), prewarm.split(items))
+                val before = split
+                split = prewarm.split(items)
+                assertEquals("seed $seed, step $step", splitAfresh(items, limit), split)
+                // Only the streaming item is split again: every other reply's parts are the ones the last split made.
+                if (change < 4 && before != null && items.isNotEmpty()) {
+                    val streamed = "${items.last().id}/"
+                    fun others(parts: Pair<List<MarkdownText>, List<MarkdownText>>) = (parts.first + parts.second).filterNot { it.key.startsWith(streamed) }
+                    val (was, now) = others(before) to others(split)
+                    assertEquals("seed $seed, step $step", was.size, now.size)
+                    was.indices.forEach { assertSame("seed $seed, step $step", was[it], now[it]) }
+                }
             }
         }
     }

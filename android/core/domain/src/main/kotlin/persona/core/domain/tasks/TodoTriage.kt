@@ -151,6 +151,22 @@ fun Todo.countsAsOpen(t: Triage): Boolean {
     return t.rule != TriageRule.Accepted && t.rule != TriageRule.Deployed
 }
 
+/** Where a to-do stands for every count of open work (#3331): open counts, shelved folds, closed is finished. */
+enum class TodoBucket { Open, Shelved, Closed }
+
+/**
+ * The one rule the To-dos page's "Not done" and the assistant's Progress entry both count by (#3331), so the two numbers
+ * agree: [countsAsOpen] on [triage]; a to-do not open is shelved when its section is Shelved, else closed.
+ */
+fun Todo.bucket(lookup: (SessionKey) -> Session?, now: Long, restoredAt: Long = 0): TodoBucket {
+    val t = triage(lookup, now, restoredAt)
+    return when {
+        countsAsOpen(t) -> TodoBucket.Open
+        t.section == TriageSection.Shelved -> TodoBucket.Shelved
+        else -> TodoBucket.Closed
+    }
+}
+
 /** An accepted task its hub reopened with more work, with nothing of it running or asking: it reads Accepted, not Follow up. */
 fun Todo.acceptedAtRest(lookup: (SessionKey) -> Session?): Boolean =
     !isDone && acceptanceStands && triageStatus(lookup).let {

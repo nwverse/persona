@@ -28,6 +28,7 @@
   "accept_open": "去看看",
   "accept_reply_hint": "回复这条：「通过」标为已验证；写别的会记进待办的决策，交给原来的 Agent 改",
   "accepted": "已验收，标为已验证",
+  "accepted_by_supervisor": "督办已核对证据，标为已验证",
   "accept_gone": "这个任务已经不在了",
   "accept_question": "验收意见",
   "accept_to_agent": "用户验收时的意见（从飞书回的）：\n{feedback}\n\n照这个改，改完重新部署，最后的回复里写清改了什么、去哪看、怎么验。",

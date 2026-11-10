@@ -67,6 +67,8 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
 	case decideAsk(a):
 		return i18n.T(l, "assistant-reports.verdict_taken")
+	case a.BySupervisor:
+		return i18n.T(l, "assistant-reports.accepted_by_supervisor")
 	case a.Conclusion:
 		return i18n.T(l, "assistant-reports.verdict_acked")
 	}
@@ -160,6 +162,9 @@ type conclusionInput struct {
 	// Deadline and Reversible: a decision's deadline and whether it can be undone (#3127, decision_deadline.go).
 	Deadline   time.Time
 	Reversible bool
+	// Verified: the supervisor checked the evidence (supervisorVerified): a done or cannot conclusion tells the owner and
+	// is not left for them to acknowledge (#3240).
+	Verified bool
 }
 
 // askConclusion keeps supervised task t's conclusion as its ask and posts its card when the bot can; true when the card
@@ -194,6 +199,9 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 	}
 	if a.Reason == "" && in.Outcome == outcomeDone {
 		a.Reason = i18n.T(l, "assistant-reports.verdict_done_default")
+	}
+	if in.Verified && in.Outcome != outcomeDecide {
+		a.AcceptedAt, a.BySupervisor = a.AskedAt, true
 	}
 	if ag := lastAgent(t); ag.SessionID != "" {
 		a.MachineID, a.SessionID = ag.MachineID, ag.SessionID
