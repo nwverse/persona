@@ -417,6 +417,16 @@ keep each delivery separately inspectable, including its full text. Nonterminal 
 the existing progress presentation. Empty completion pointers update status without creating another report. The
 shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
 
+### 4.8 Sharing a conversation publicly
+
+Sharing an Agent session follows the user-control rules: everything that widens exposure (more messages, work
+details, future messages, a longer lifetime) goes through a preview and an explicit confirmation of possibly
+sensitive content, plus a transport-risk confirmation on an HTTP sharing origin; narrowing and revoking need no
+preview, and revoking is a destructive confirmation. Defaults are the narrowest: future messages and work details
+off, three days. The link is shown once with a copy action and is never listed again. The public viewer is a
+separate, read-only document with the same palette tokens, plain text only and work details collapsed (section 4.7).
+Web: `web/src/sharing/`, `web/public-share/`; Android: `AgentShareSheet`; server contract in #3604.
+
 ## 5. Content
 
 ### 5.1 Voice and tone

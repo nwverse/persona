@@ -1298,6 +1298,28 @@ The web app can be installed on a phone's home screen / a computer's desktop and
 - **Settings › General › This browser › Install as app** (`lib/pwa.ts`): when the browser offers an install prompt (Chrome, Edge) it is an "Install" button;
   on iPhone / iPad it points to "Add to Home Screen" in Safari's share menu, Safari on Mac to **File › Add to Dock**, other browsers on http explain that https is needed, and the rest point to the browser menu. Already in a standalone window, it shows "Installed".
 
+## Sharing an Agent session (#3605)
+
+The Agent chat's **⋯** menu has **Share…** (`src/sharing/`), a dialog over the server sharing contract (#3604):
+the complete message catalog (paged, all history) with **All messages / From a message / Choose messages**, then
+**Include future messages** and **Include work details** (both off by default) and a lifetime of 1, 3, 7 or 30 days
+(default 3). Creating needs a sanitized preview and an explicit sensitivity confirmation; on an HTTP sharing origin the
+server's transport warning is shown and needs a second confirmation. The link appears once with **Copy**; the dialog
+lists existing links without tokens, narrows them (work details off, future off, shorter lifetime) without a new
+preview, and revokes after a destructive confirmation. Create is never retried automatically, every request names its
+manager with `X-Persona-Manager`, and responses that arrive after the session or manager changed are dropped.
+Sessions on a computer reached through another hub of the group are not shareable from the web yet.
+
+The public viewer is a separate document and build: `public-share/` with `vite.public.config.ts`, emitted to
+`dist/public-share/index.html` and `dist/public-share/share-assets/` and served by the hub only on the configured
+sharing origin. A build plugin fails when the emitted graph reaches anything outside `public-share/`, its own
+catalogs and the shared palette, so it has no sign-in, store, API client, service worker, manifest or telemetry.
+It renders escaped plain text (no HTML, links, images or cards), keeps work details collapsed, fetches with
+`credentials:"omit"`, `cache:"no-store"` and rejected redirects, keeps one request in flight, polls every 15 seconds
+(live) or 30 seconds (static), pauses in hidden tabs and hides old content until it revalidates, and clears on a
+404 or at local expiry. It stores neither the link nor the content. The main app's service worker passes `/share`,
+`/share-assets` and `/public-share` through untouched, so an installed app never answers a share link with its shell.
+
 ## Subscription usage (bottom of the sidebar, #2432)
 
 At the very bottom of the sidebar (below the Agents list): one thin bar for each of the two fullest subscription accounts, turning the warning color at ≥ 80%. Clicking opens a popover with one row per window per account (length, % used, bar, reset countdown, pace hint),
