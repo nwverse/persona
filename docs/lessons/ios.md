@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A dispatch link must retain its target and its hand-off (#3711)
+
+A passing task-sheet test is not evidence that a dispatch link pushes an Agent on iPhone. Test the actual feed link,
+its exact Agent target, and Back to the same Assistant conversation; `AppModel.open` switches to Agents instead of
+pushing on that stack. Mac also needs an attached presenter for `detailTask`, not just an assignment. When replacing
+full task cards with compact dispatch links, stop filtering hand-offs as though the removed card still drew its
+instruction list, or Persona's messages silently disappear. Keep those messages as folded feed lines.
+
 ## Example-domain labels must be generic too (#3593)
 
 An `example.com` suffix does not make its hostname label anonymous: the label can still match a configured private machine value and block both app and web prebuild privacy scans. Use neutral fixture labels and change the expected route together, preserving trimming, encoding and forwarding assertions. Do not exempt a private value just because it appears in test data.

@@ -350,7 +350,7 @@ with its own tag and "Message the Agent" input label. Code: `server/internal/nod
   numbered choices such as "› 1." = Needs you (a "Terminal is asking you" card). Otherwise report `done`, and the hub determines Unread / Seen from whether it has been read. Read the screen at most every 2 seconds.
 - **Same file layout as Codex**, rooted at `~/.trae/cli`: `sessions/YYYY/MM/DD/rollout-*.jsonl` and `session_index.jsonl` (thread names for titles).
 - **Newer rollout format**: user messages and replies are in `history_mutation.display_completions[].item` (same item structure as `item_completed`),
-  while tool calls remain in `event_msg/item_completed`. The same item may appear in both places (deduplicate by id). A `history_mutation` line may span hundreds of KB to 1 MB
+  while tool calls remain in `event_msg/item_completed`. The same item may appear in both places within a turn (deduplicate by id within the turn). A `history_mutation` line may span hundreds of KB to 1 MB
   (full context after compaction); decode only `display_completions`. `task_started` / `task_complete` are recorded in `Meta.TurnOpen`.
   `TerminalInteraction` (polling / sending input to a running command) is not displayed.
 - **Messaging**: herdr's `agent prompt` recognizes only known Agents and returns not found for fork panes, so use `pane send-text` + Enter (`Node.prompt`).
@@ -426,3 +426,16 @@ Read codex-rs source tags `rust-v0.153.4` / `rust-v0.163.0`, plus binaries for b
 ### Orca hook ownership when starting Codex
 
 A new local Codex launched inside Orca must keep that terminal’s hook environment. A shared Codex app-server daemon can retain a previously launched terminal’s Orca identity, attributing a new conversation and first-work naming to the wrong worktree. The phone-start helper probes the executable in the new terminal and adds `--no-daemon` when supported. It preserves explicit remote connections, already isolated launchers and older CLIs without that flag. Other terminal engines keep their existing launch behavior.
+
+## Speed
+
+The web composer's effort menu includes a Speed submenu for Persona conversations running Codex and writable external app-server threads whose current model advertises
+`serviceTiers` through `model/list`. Standard sends `default`; Fast uses the advertised tier ID, currently `priority`.
+The submenu explains increased usage or cost before selection. It is independent of reasoning effort and takes effect
+on subsequent turns. Settings > Agents > Codex also exposes the native `service_tier` default for new sessions.
+
+An explicit choice uses `thread/settings/update` and waits for acknowledgment. Refusals, unsupported methods and lost
+connections return errors without retaining a next-turn speed override. `thread/resume` and `thread/settings/updated`
+provide the current speed. A native null means Standard. Missing speed stays unknown because `thread/read` does not
+currently report it. Refreshes preserve acknowledged state, and reconnects start with unknown state until native
+settings arrive. Terminal-only panes, subagents and models without advertised tiers have no speed control.

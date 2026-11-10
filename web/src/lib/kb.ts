@@ -587,6 +587,9 @@ export interface RecordingView {
   attendance?: "listener" | "participant";
   /** The session that attends; absent: the main chat. */
   attendingSession?: { machineId: string; sessionId: string };
+  /** When its transcript expired with `recording_days` and only the minutes were kept (`meta.trimmed_at`, #3780); absent
+   *  while it is whole. */
+  trimmedAt?: string;
 }
 
 /** Local wall-clock time shared by minutes and transcript; offsets when the start is unknown. */
@@ -631,6 +634,7 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   const role = str(meta?.attendance);
   const attending = meta?.attending_session as { machine_id?: unknown; session_id?: unknown } | null | undefined;
   const machineId = str(attending?.machine_id), sessionId = str(attending?.session_id);
+  const trimmed = str(meta?.trimmed_at);
   return {
     startedAt: Number.isFinite(t0) ? started : undefined,
     duration: Number.isFinite(secs) && secs > 0 ? durationLabel(secs) : undefined,
@@ -641,7 +645,16 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
     ...(role === "listener" || role === "participant" ? { attendance: role } : {}),
     // Both ids or none: anything else names no session, and the main chat attends.
     ...(machineId && sessionId ? { attendingSession: { machineId, sessionId } } : {}),
+    ...(trimmed && Number.isFinite(Date.parse(trimmed)) ? { trimmedAt: trimmed } : {}),
   };
+}
+
+/** The day a trimmed recording's minutes go (#3780): `days` (the assistant's `minutes_days` in effect) after it
+ *  started, as a date; undefined when either is unknown or days is 0 (forever). */
+export function minutesKeptUntil(startedAt: string | undefined, days: unknown): string | undefined {
+  const start = Date.parse(startedAt ?? "");
+  if (!Number.isFinite(start) || typeof days !== "number" || !Number.isInteger(days) || days <= 0) return undefined;
+  return yearMonthDay(new Date(start + days * 86_400_000));
 }
 
 /** 3733 → "1 h 2 min"; 200 → "3 min 20 s"; 42 → "42 s" (in Chinese). */

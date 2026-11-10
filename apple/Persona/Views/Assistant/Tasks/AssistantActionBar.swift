@@ -358,7 +358,7 @@ struct AssistantActionBar: View {
             feed: store.feed(conversation), restored: TodoRestores.load(), going: model.goingAgents,
             // the hub's fields, the inbox's word on the item, and Later
             messageWaits: { item in
-                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(id) else { return false }
+                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(item.id) else { return false }
                 return store.messageState(item, itemID: id) == .open
             })
         let asks = (key.map { model.interactions(for: $0) } ?? []).sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }

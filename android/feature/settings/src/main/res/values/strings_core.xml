@@ -266,7 +266,6 @@
     <string name="settings_not_paired">Not paired yet</string>
     <string name="settings_hub_computers_online">Computers online</string>
     <string name="settings_hub_address">Hub address</string>
-    <string name="settings_section_connection">Connection</string>
     <string name="settings_row_hubs">Hubs</string>
     <string name="settings_row_hubs_subtitle">Add, rename and disconnect hubs</string>
     <string name="settings_row_hub_update">Hub version</string>
@@ -275,7 +274,6 @@
     <string name="settings_row_pairing_subtitle">Scan a code, paste a link or enter it by hand</string>
     <string name="settings_row_devices_subtitle">Paired devices and access</string>
     <string name="settings_row_diag_subtitle">Connection paths, probe results and records</string>
-    <string name="settings_section_notifications">Notifications and background</string>
     <string name="settings_row_capsule_subtitle">See tasks and keep chatting from other apps</string>
     <string name="settings_row_notifications_subtitle">Needs you, done and system notification channels</string>
     <string name="settings_row_background">Keep running in background</string>
@@ -291,7 +289,6 @@
     <string name="settings_row_claude_subtitle">Common options on your computers, changed together</string>
     <string name="settings_row_codex">Codex settings</string>
     <string name="settings_row_codex_subtitle">Codex options on your computers, changed together</string>
-    <string name="settings_section_channels">Channels</string>
     <string name="settings_section_connectors">Connectors</string>
     <string name="settings_row_phone_subtitle">Contacts, calendar, photos, location and clipboard</string>
     <string name="settings_row_mail">Mail</string>
@@ -299,7 +296,6 @@
     <string name="settings_row_lark">Lark</string>
     <string name="settings_row_lark_subtitle">Lark gateway connection and account</string>
     <string name="settings_connectors_caption">The data sources Persona can read and act on: the assistant, AI twin and agents use them to check your calendar, read messages and send mail. Anything done on your behalf asks you first.</string>
-    <string name="settings_section_appearance">Appearance</string>
     <string name="settings_section_about">About</string>
     <string name="settings_row_about_subtitle">Current version and build</string>
     <string name="settings_update_check">Check for updates</string>
