@@ -656,6 +656,8 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "tool_input":{...}, "summary":"rm -rf build",                   // permission
  "screen":"visible terminal text",                                // screen (TUI dialogs hooks can't cover)
  "always_keys":["tool:Bash"],  // node → hub: what "Always Allow" on an assistant chat's permission card lets through; the hub records it and answers the same card itself (docs/assistant/assistant.md "Always allow in this session"); not used by clients
+ "always_honored":false,       // manager → clients: whether answering Always is kept; see "Always allow" below
+ "tool_title":"iPhone control", // manager → clients: its own tool's name for people, in the user's language; see "Always allow" below
  "agent":"codex", "reason":"…", "always_label":"本会话不再问这个命令"} // a card the node read from the Codex / compatible forks TUI ("Codex questions and approvals"); always_label is emitted in Chinese: "don't ask about this command again this session"
 
 // Resolution (by kind)
@@ -669,6 +671,34 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 {"cancel":true}                                                             // question with can_cancel:true: discard without an answer
 {"answers":{"…":"…"},"answered_by":"assistant"}                               // answered by the assistant (#1602): question only; App replies don't carry answered_by
 ```
+
+### Always allow
+
+A permission card offers **Always allow** only where the answer is kept (#3590). The manager says so in
+`always_honored`, a tri-state:
+
+- `true`: it is kept. The manager sets it on a node's card in an assistant chat whose `always_keys` it remembers
+  (a store, at most 32 keys, no `fields`), and on a card of its own that says in `always_label` what it keeps (the apps
+  a computer may use, LCU's own scopes).
+- `false`: nothing would keep it. The manager sets it on every other card it asks itself: the extensions' tools
+  (`computer_*`, `browser_run`, `iphone_do`, connector writes, `extension.ui`), `persona_settings`, its to-do, agent
+  and health confirmations; and on a node's card in an assistant chat it will not remember (keys but no store, more
+  than 32 keys, `fields`, or a health conversation's card, confirmed each time). Clients show only Allow and Deny, and
+  no scope line. An `always` answered on such a card anyway (an older client) is dropped: the card is allowed once.
+- absent: clients keep their own rule, as before: on iOS a card with a session, on the web and in Lark a card from
+  Claude (no `agent`, or `claude`) or one with an `always_label`. Agents sessions' cards never carry the field: their
+  agent keeps Always itself (Claude Code's session rule).
+
+The field is a tri-state rather than a plain "kept" flag because absence cannot mean "not kept": an Agents session's
+Claude card and a manager card look the same otherwise (a session, no `agent`, no `always_keys`), and an older
+manager sends neither. So a new client hides the choice only on an explicit `false`, and keeps Always on every card
+an older manager sends. An older client ignores the field and keeps offering Always on manager cards; answering it
+allows once, as before, and is no longer recorded as an Always. The value is the manager's: whatever a node sends in
+the field (or in `tool_title`) is dropped.
+
+`tool_title` is the tool's name for people in the user's language (`assistant-tool_titles` in the hub's catalog,
+"iPhone control" for `iphone_do`), set by the manager on its own tools' cards only. Clients title the card with it,
+and otherwise with `tool_name` as before; Agents sessions' cards never carry it.
 
 ### Subagent deliveries as tool results
 

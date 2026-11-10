@@ -439,6 +439,20 @@ func TestFeishuPermissionCardOffersAlwaysOnlyWhereItWorks(t *testing.T) {
 	if bs := cardButtons(t, s.interactionCard(ctx, bare)); len(bs) != 2 || bs[always] != nil {
 		t.Fatalf("a card without a conversation: %v", bs)
 	}
+
+	// The manager's word wins (#3590): its own card in a conversation, which nothing would keep, offers none; one it
+	// remembers offers it even for an agent that would not.
+	yes, no := true, false
+	own := claude
+	own.ID, own.ToolName, own.AlwaysHonored = "ix_p6", "iphone_do", &no
+	if bs := cardButtons(t, s.interactionCard(ctx, own)); len(bs) != 2 || bs[always] != nil {
+		t.Fatalf("the manager's own card offers 本会话总是允许: %v", bs)
+	}
+	kept := runtime
+	kept.ID, kept.AlwaysHonored = "ix_p7", &yes
+	if v, ok := cardButtons(t, s.interactionCard(ctx, kept))[always]; !ok || v["always"] != "1" {
+		t.Fatalf("a remembered card lost 本会话总是允许: %v", v)
+	}
 }
 
 // planCardMarkdown is the plan's Markdown block on its card (the card's first Markdown element).

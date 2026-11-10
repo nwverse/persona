@@ -4171,14 +4171,16 @@ if os.environ.get("MOCK_ASSISTANT_CARDS"):
     INTERACTIONS.append(
         {"id": "ix_assistant_send", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
          "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=14),
-         "tool_name": "mail_send", "tool_input": {"to": "me@example.com"}, "summary": "给 me@example.com 发一封邮件"})
+         "tool_name": "mail_send", "tool_input": {"to": "me@example.com"}, "summary": "给 me@example.com 发一封邮件",
+         "always_honored": False})  # the manager's own card: nothing keeps an Always (#3590)
 
 if os.environ.get("MOCK_IPHONE_ASK") == "1":  # an iphone_do step the node says needs approval (docs/extensions/iphone.md)
     INTERACTIONS.append(
         {"id": "ix_iphone_do", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
          "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=14),
          "tool_name": "iphone_do", "tool_input": {"steps": [{"action": "tap", "target": 7}]},
-         "summary": "在「我的 iPhone」上：在「钱包」里点「支付 ¥ 36.00」"})
+         "summary": "在「我的 iPhone」上：在「钱包」里点「支付 ¥ 36.00」",
+         "always_honored": False, "tool_title": "iPhone 操控"})  # the manager's own tool (#3590)
 
 # MOCK_SECRET_RUN=pending|ran|withheld|long: the password card (secret_run, #1137) in Persona's main conversation.
 # `pending`: the assistant asked to run two commands on the Mac Studio, its call waits and the card asks for the

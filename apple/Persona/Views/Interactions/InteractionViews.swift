@@ -43,6 +43,14 @@ extension Interaction {
         return kind.title
     }
 
+    /// Whether the card offers Always: as the manager says where it does (`alwaysHonored`, #3590: its own cards keep
+    /// nothing), else on a conversation's card, and on another agent's (Codex) only when it says what always allows.
+    var offersAlways: Bool {
+        if let alwaysHonored { return alwaysHonored }
+        if agentName != nil { return !(alwaysLabel ?? "").isEmpty }
+        return sessionID != ""
+    }
+
     /// The card's symbol: its kind's, a link for an MCP link.
     var symbol: String { kind == .elicitation && elicitation?.isURL == true ? Theme.Icon.link : kind.symbol }
 
@@ -711,7 +719,7 @@ struct PermissionForm: View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-                Text(interaction.toolName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
+                Text(interaction.toolDisplayName ?? String(localized: "Tool")).font(Theme.Font.secondaryStrong)
             }
             Text(interaction.permissionSubject ?? "")
                 .font(Theme.Font.code)
@@ -730,7 +738,7 @@ struct PermissionForm: View {
                 .themedButton(prominent: true)
             }
             .controlSize(.large)
-            if interaction.sessionID != "" {
+            if interaction.offersAlways {
                 Button("Always Allow in Session") {
                     Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
                 }
@@ -796,11 +804,15 @@ struct AgentPermissionForm: View {
                 .themedButton(prominent: true)
             }
             .controlSize(.large)
-            if let always = interaction.alwaysLabel, !always.isEmpty {
+            if interaction.offersAlways {
                 Button {
                     Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
                 } label: {
-                    Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                    if let always = interaction.alwaysLabel, !always.isEmpty {
+                        Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                    } else {
+                        Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
+                    }
                 }
                 #if os(macOS)
                 .buttonStyle(.link)
@@ -1445,22 +1457,28 @@ struct BUIPermissionForm: View {
     @Environment(AppModel.self) private var model
     var interaction: Interaction
 
-    private var choices: [ApprovalQuestion.Choice] {
+    private var choices: [ApprovalQuestion.Choice] { Self.choices(interaction) }
+
+    /// Allow (or Approve), Always only where the card offers it (`offersAlways`), Deny.
+    static func choices(_ interaction: Interaction) -> [ApprovalQuestion.Choice] {
         if interaction.agentName != nil {
             var c = [ApprovalQuestion.Choice(String(localized: "Approve [Interaction Views 905819]"))]
-            if let always = interaction.alwaysLabel, !always.isEmpty { c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: always)) }
+            if interaction.offersAlways {
+                let always = interaction.alwaysLabel.flatMap { $0.isEmpty ? nil : $0 }
+                c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: always))
+            }
             c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
             return c
         }
         var c = [ApprovalQuestion.Choice(String(localized: "Allow [Notification Actions ce7ef2]"))]
-        if interaction.sessionID != "" { c.append(ApprovalQuestion.Choice(String(localized: "Always Allow in Session"), detail: interaction.alwaysScopeDetail)) }
+        if interaction.offersAlways { c.append(ApprovalQuestion.Choice(String(localized: "Always Allow in Session"), detail: interaction.alwaysScopeDetail)) }
         c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
         return c
     }
 
     var body: some View {
         let choices = choices
-        let tool = interaction.toolName ?? String(localized: "this tool")
+        let tool = interaction.toolDisplayName ?? String(localized: "this tool")
         let ask = interaction.agentName == nil ? String(localized: "Allow \(tool)?") : String(localized: "Approve \(tool)?")
         ApprovalCard(questions: [ApprovalQuestion(ask, choices: choices,
                                                   customPlaceholder: String(localized: "Deny and explain why…"))],
