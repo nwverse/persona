@@ -71,6 +71,9 @@ type Settings struct {
 	// off by default it stays open with where it is held, and its agent is told so with its prompt (#3306,
 	// delivery.go). nil is off (the default).
 	DoneNeedsDelivery *bool `json:"done_needs_delivery,omitempty"`
+	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
+	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
+	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
 }
 
 // FormerMain is a main conversation that was replaced, and until when it was the main one.
@@ -329,6 +332,8 @@ type assistantView struct {
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
+	// IdleCloseHours is in effect (0: off).
+	IdleCloseHours int `json:"idle_close_hours"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -343,7 +348,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
-		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery}
+		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour)}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session

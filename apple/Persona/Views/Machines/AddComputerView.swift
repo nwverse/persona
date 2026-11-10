@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Machines › Add Computer (docs/assistant/onboarding.md 4.2「你的电脑 ↔ hub」, 5.3; docs/protocol/protocol.md「电脑的配对码」「电脑的信任」, #4196): a
+// Machines › Add Computer (docs/assistant/onboarding.md 4.2「你的电脑 ↔ hub」, 5.3; docs/protocol/protocol.md「Computer pairing codes」「电脑的信任」, #4196): a
 // signed-in device adds a computer with POST /api/v1/auth/pair-codes {"add"}, hands the pairing link to that computer's
 // Persona Link (a line for a Linux terminal, a link to share for a Mac, a line for Windows' PowerShell), counts the code
 // down (a new one with {"machine"} once it expires) and waits for the computer to come online. It then asks, on the
@@ -87,7 +87,7 @@ enum AddComputerText {
         return n.isEmpty || n.count > maxName ? nil : n
     }
 
-    /// Why the hub refused, by its code (docs/protocol/protocol.md「电脑的配对码」); the hub's own words for any other code.
+    /// Why the hub refused, by its code (docs/protocol/protocol.md「Computer pairing codes」); the hub's own words for any other code.
     static func failure(_ error: Error) -> AddComputerFailure {
         let e = error as? APIError
         let code = e?.code

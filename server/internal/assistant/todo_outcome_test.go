@@ -197,7 +197,7 @@ func TestReviewAcceptedRecordsOutcome(t *testing.T) {
 				if done := todoNow(s, todo.ID); done.DoneAt == nil || done.DoneBy != doneBy {
 					t.Fatalf("%s: not closed by the review: %+v", c.verdict, done)
 				}
-				s.waitTaskOutcomes() // an outcome being recorded (accepted, or wrongly for cancelled) is done by now
+				s.tasks.outcomeRuns.Wait() // an outcome being recorded (accepted, or wrongly for cancelled) is done by now
 				log := kbEng(t, s).Store.Log("天气-app", 10)
 				f.mu.Lock()
 				asked := len(f.outcomeAsked)

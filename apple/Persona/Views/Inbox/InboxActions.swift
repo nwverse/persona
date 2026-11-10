@@ -169,8 +169,7 @@ struct InboxDraftSheet: View {
             }
             if let key = a.sessionKey {
                 Button {
-                    model.assistantCurrent = model.inHub(key)
-                    model.selectedTab = .assistant
+                    model.openAssistantConversation(model.inHub(key), manager: item.manager)
                     dismiss()
                 } label: {
                     Label("See How the AI Twin Handled It", systemImage: Theme.Icon.list).font(Theme.Font.captionMedium).lineLimit(1)
@@ -273,8 +272,7 @@ struct InboxHandOffSheet: View {
 
     /// The latest Agents, and the one this source went to last time even when it is older than those.
     private var agents: [Session] {
-        let all = model.allSessions.filter { !$0.assistant }
-            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+        let all = InboxHandOffModel.agents(model.allSessions, limit: .max) { model.machine($0)?.online == true }
         var shown = Array(all.prefix(8))
         if case .agent(let key)? = lastTarget, !shown.contains(where: { $0.key == key }), let s = all.first(where: { $0.key == key }) {
             shown.insert(s, at: 0)
@@ -350,11 +348,12 @@ struct InboxHandOffSheet: View {
                 }
                 Section {
                     Toggle("Also Mark as Done", isOn: Binding(get: { handOff.markDone }, set: { handOff.setMarkDone($0) }))
+                        .disabled(handOff.sending)
                 }
                 if let error = handOff.error { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
             }
             .onAppear {
-                guard let r = memory.resolved(for: item, isListed: { model.session($0) != nil }) else { return }
+                guard let r = memory.resolved(for: item, isListed: { InboxHandOffModel.takes($0, model: model) }) else { return }
                 handOff.target = r.target
                 lastTarget = r.lastTime ? r.target : nil
                 lastGone = r.gone

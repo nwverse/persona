@@ -30,6 +30,7 @@
     <string name="agents_action_new_session">新建会话</string>
     <string name="agents_action_list_settings">列表设置</string>
     <string name="agents_search_placeholder">搜索空间、会话或最新消息</string>
+    <string name="agents_action_search">搜索</string>
     <string name="agents_requests_title">等你定</string>
     <plurals name="agents_requests_more">
         <item quantity="other">还有 %1$d 个</item>
@@ -283,6 +284,10 @@
     <string name="agents_new_use_directory">使用此目录</string>
     <string name="agents_new_retry_check">重试核对结果</string>
     <string name="agents_new_start">开始对话</string>
+    <string name="agents_new_recent">最近</string>
+    <string name="agents_new_recent_separator">" · "</string>
+    <string name="agents_new_recent_remove">从最近中移除</string>
+    <string name="agents_new_recent_clear">清除最近配置</string>
     <string name="agents_mode_follow">跟随启动器</string>
     <string name="agents_mode_default">手动确认</string>
     <string name="agents_mode_accept_edits">自动改文件</string>
@@ -418,6 +423,8 @@
     <string name="agents_todo_active_agents">正在做的 Agent</string>
     <string name="agents_todo_no_agents">暂无分配的 Agent</string>
     <string name="agents_todo_no_agents_hint">点击底部「交给 Agent」指派任务。</string>
+    <string name="agents_todo_no_agents_done_hint">要交给 Agent，先重新打开。</string>
+    <string name="agents_todo_hand_off_failed">没交出去：%1$s</string>
     <string name="agents_todo_session_short">会话 %1$s</string>
     <string name="agents_todo_not_listed">（不在当前活跃列表）</string>
     <string name="agents_todo_remove_agent">移出</string>
@@ -436,6 +443,7 @@
     <string name="agents_handoff_directory">工作目录</string>
     <string name="agents_handoff_mode_default">默认 (default)</string>
     <string name="agents_handoff_mode_bypass">允许一切 (bypassPermissions)</string>
+    <string name="agents_handoff_mode_named">%1$s (%2$s)</string>
     <string name="agents_handoff_pick_agent">选择已有 Agent</string>
     <string name="agents_handoff_no_agents">没有运行中的 Agent</string>
     <string name="agents_handoff_no_agents_hint">当前电脑没有可直接分配任务的活跃 Agent。</string>

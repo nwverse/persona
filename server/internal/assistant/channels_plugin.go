@@ -20,7 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The channels plugins contribute (the channel extension point, docs/extensions/channels.md "How extensions contribute channels"): the program
+// The channels plugins contribute (the channel extension point, docs/extensions/channels.md "Contributing a channel"): the program
 // talks to its chat app through the hub — the owner's messages come as channels.receive, what is sent goes as
 // channels.send — and everything else is here: commands, where a message goes, the turn (channels_runs.go), what is
 // asked answered in text, pushes and the sync mirror.
@@ -778,12 +778,3 @@ var (
 	contextBlockRe = lazyre.New(`(?s)<` + compat.ContextPattern() + `\b[^>]*>.*?</` + compat.ContextPattern() + `>`)
 	contextOpenRe  = lazyre.New(`<` + compat.ContextPattern() + `\b`)
 )
-
-func firstNonEmpty(s ...string) string {
-	for _, x := range s {
-		if strings.TrimSpace(x) != "" {
-			return x
-		}
-	}
-	return ""
-}

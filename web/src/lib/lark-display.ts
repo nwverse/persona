@@ -1,4 +1,4 @@
-// Feishu message display settings (display tweaks, docs/extensions/lark-migration.md "Message display tweaks", iOS LarkMessageDisplay.swift):
+// Feishu message display settings (display tweaks, docs/extensions/lark-migration.md "Message Tweaks display", iOS LarkMessageDisplay.swift):
 // the Lark gateway's per-account switches for showing a recalled message's retained content ("Keep recalled messages") and a message's earlier
 // versions ("Edit history"). They only decide what is shown: the hub sends retained content whatever they say, so anything
 // unknown (not read yet, a failed read, an account that changed) hides it. A write carries the account and the old value;

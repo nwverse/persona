@@ -78,7 +78,10 @@ internal fun ExtensionSettingsPage(
         })) }
         updates.error?.let { error -> item("updates-error") { JInlineStatus(error, tone = InlineTone.Failed) } }
         val upgrade = extension.upgrade ?: updates.candidate?.takeIf { it.upgradable }?.let {
-            ExtensionUpgrade(id = extension.id, market = it.market, from = extension.version.orEmpty(), to = it.version, state = "available")
+            // A version under a new ID is never installed automatically: it waits for the owner's confirmation.
+            val renamed = it.id != extension.id
+            ExtensionUpgrade(id = extension.id, market = it.market, from = extension.version.orEmpty(), to = it.version,
+                state = if (renamed) "needs_permission" else "available", renameTo = it.id.takeIf { renamed })
         }
         upgrade?.let { u ->
             item("updates-candidate") {
@@ -87,7 +90,7 @@ internal fun ExtensionSettingsPage(
                 JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
                     JRow(stringResource(R.string.settings_ext_new_version, u.to), subtitle = ExtensionText.upgradeDetail(res, u), subtitleLines = Int.MAX_VALUE,
                         value = action, enabled = !busy && !updates.checking && capabilities.check && onUpgrade != null,
-                        onClick = { onUpgrade?.invoke(u.market, extension.id) })
+                        onClick = { onUpgrade?.invoke(u.market, u.marketId) })
                 }
             }
         }

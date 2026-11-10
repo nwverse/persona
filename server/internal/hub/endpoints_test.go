@@ -165,7 +165,7 @@ func TestEndpointEventsRequireCapability(t *testing.T) {
 	capable := &client{out: make(chan []byte, 4), meta: clientMeta{features: map[string]bool{"endpoints": true}}}
 	legacy := &client{out: make(chan []byte, 4)}
 	other := &client{out: make(chan []byte, 4), meta: clientMeta{features: map[string]bool{"other": true}}}
-	h.clients[capable], h.clients[legacy], h.clients[other] = struct{}{}, struct{}{}, struct{}{}
+	addTestClient(h, capable, legacy, other)
 	now := time.Now().UTC()
 	if err := h.refreshEndpoints(now); err != nil {
 		t.Fatal(err)

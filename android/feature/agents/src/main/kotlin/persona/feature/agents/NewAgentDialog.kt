@@ -5,11 +5,15 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import android.content.res.Resources
 import androidx.compose.ui.unit.dp
@@ -25,12 +29,14 @@ internal fun NewAgentDialog(model: NewAgentViewModel, machines: List<Machine>, o
     var query by remember { mutableStateOf("") }
     // Outside the list: the model list stays open whatever the form below it scrolls away.
     var picking by remember { mutableStateOf(false) }
+    val list = rememberLazyListState()
+    val prompt = rememberPromptFocus(state, list)
     val close = { if (!state.starting) { if (state.browsing) model.closeBrowser() else onDismiss() } }
     JSheet(onDismiss = { if (!state.starting) onDismiss() }, title = stringResource(R.string.agents_action_new_session)) {
         BackHandler(onBack = close)
         Column(Modifier.fillMaxWidth().weight(1f).imePadding()) {
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true })
+            LazyColumn(Modifier.weight(1f), list, contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true }, prompt)
             }
             NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(top = 8.dp))
         }
@@ -51,20 +57,40 @@ internal fun NewAgentPage(
     val state by model.state.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var picking by remember(initialModelQuery) { mutableStateOf(initialModelQuery != null) }
+    val list = rememberLazyListState()
+    val prompt = rememberPromptFocus(state, list)
     val close = { if (!state.starting) { if (state.browsing) model.closeBrowser() else onBack() } }
     BackHandler(onBack = close)
-    JListPage(title = stringResource(R.string.agents_action_new_session), onBack = close, largeTitle = false, bottomBar = {
+    JListPage(title = stringResource(R.string.agents_action_new_session), onBack = close, largeTitle = false, state = list, bottomBar = {
         NewAgentFooter(state, model, machines, online, Modifier.fillMaxWidth().padding(horizontal = pagePadding, vertical = Tokens.Space.s))
     }) {
-        newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true })
+        newAgentItems(state, model, machines, query, { query = it }, close, onModels = { picking = true }, prompt)
     }
     if (picking) NewAgentModelSheet(state, model::pickModel, model::reloadModels, onDismiss = { picking = false },
         initialQuery = initialModelQuery.orEmpty())
 }
 
+/**
+ * The first message's focus: once a "Recent" card has filled the form ([NewAgentState.focusPrompt] went up), the list
+ * scrolls to the message, its last item, and the cursor goes there. Opening the form again does not take it there.
+ */
+@Composable
+private fun rememberPromptFocus(state: NewAgentState, list: LazyListState): FocusRequester {
+    val requester = remember { FocusRequester() }
+    var handled by remember { mutableIntStateOf(state.focusPrompt) }
+    LaunchedEffect(state.focusPrompt) {
+        if (state.focusPrompt == handled) return@LaunchedEffect
+        handled = state.focusPrompt
+        list.animateScrollToItem((list.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+        withFrameNanos { }
+        runCatching { requester.requestFocus() }
+    }
+    return requester
+}
+
 private fun LazyListScope.newAgentItems(
     state: NewAgentState, model: NewAgentViewModel, machines: List<Machine>, query: String, onQuery: (String) -> Unit, close: () -> Unit,
-    onModels: () -> Unit,
+    onModels: () -> Unit, prompt: FocusRequester,
 ) {
     val editable = !state.locked && !state.loading
     if (state.loading) item("loading") { JLinearProgress(null) }
@@ -92,6 +118,7 @@ private fun LazyListScope.newAgentItems(
         }
         return
     }
+    recentSetupItems(state, machines, model)
     val space = state.space
     // Existing spaces keep their machine and directory fixed.
     if (space != null) item("space") {
@@ -183,7 +210,7 @@ private fun LazyListScope.newAgentItems(
     item("prompt") {
         JTextField(state.prompt, model::prompt, enabled = !state.locked,
             label = stringResource(if (state.agentType == "codex") R.string.agents_new_first_message_codex else R.string.agents_new_first_message),
-            minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth())
+            minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth().focusRequester(prompt))
     }
 }
 
@@ -219,7 +246,7 @@ private fun startable(state: NewAgentState, machines: List<Machine>): Boolean =
         machines.any { it.id == state.machineId && it.online } && (state.agentType != "codex" || state.prompt.isNotBlank())
 
 internal fun String.agentLabel() = when (this) { "claude" -> "Claude Code"; "codex" -> "Codex"; "traex" -> "TRAEX"; else -> this }
-private val permissionModes = listOf("" to R.string.agents_mode_follow, "default" to R.string.agents_mode_default,
+internal val permissionModes = listOf("" to R.string.agents_mode_follow, "default" to R.string.agents_mode_default,
     "acceptEdits" to R.string.agents_mode_accept_edits, "plan" to R.string.agents_mode_plan, "auto" to R.string.agents_mode_auto,
     "bypassPermissions" to R.string.agents_mode_bypass)
 internal val effortLevels = listOf("" to R.string.agents_mode_follow, "low" to R.string.agents_effort_low, "medium" to R.string.agents_effort_medium,

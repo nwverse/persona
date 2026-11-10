@@ -183,6 +183,7 @@
     <string name="inbox_mute_tag_sender">Sender</string>
     <string name="inbox_mutes_title">Muted</string>
     <string name="inbox_mutes_failed">Couldn\'t read what is muted</string>
+    <string name="inbox_mutes_offline">Offline: its mutes show here once it is back.</string>
     <string name="inbox_mutes_empty_title">Nothing muted</string>
     <string name="inbox_mutes_empty_text">Long-press an item in the Inbox to mute its repository, conversation or sender.</string>
     <string name="inbox_unmute">Unmute</string>
@@ -214,6 +215,7 @@
     <string name="inbox_policy_failed">Couldn\'t save the rule: %1$s</string>
     <string name="inbox_rules_title">Rules</string>
     <string name="inbox_rules_failed">Couldn\'t load the rules: %1$s</string>
+    <string name="inbox_rules_offline">Offline: its rules show here once it is back.</string>
     <string name="inbox_rules_empty_title">No rules</string>
     <string name="inbox_rules_empty_text">Long-press an item in the Inbox and pick a rule for its conversation, sender or repository.</string>
     <string name="inbox_rules_remove_failed">Couldn\'t remove the rule: %1$s</string>

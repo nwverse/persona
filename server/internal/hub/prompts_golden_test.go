@@ -248,7 +248,7 @@ func TestGoldenChannelMessage(t *testing.T) {
 		Asks: true, Unsupported: []string{"一段没有转写的语音"}}))
 }
 
-// Closing a finished task (docs/assistant/todos.md "Auto-complete"): the judge's system prompt and its input, with and without hints.
+// Closing a finished task (docs/assistant/todos.md "Automatic completion"): the judge's system prompt and its input, with and without hints.
 func TestGoldenTaskDone(t *testing.T) {
 	golden(t, "task_done", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户"}))
 	golden(t, "task_done.delivery", prompts.RenderTaskDone(prompts.TaskDone{Owner: "示例用户", Delivery: true}))

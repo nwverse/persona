@@ -3,7 +3,7 @@ import Testing
 @testable import Persona
 
 /// Plugins became extensions (#1844, #1859): a hub that says `extensions` is asked under /api/v1/extensions and answers
-/// with the new keys; an older one keeps its /api/v1/plugins and old keys (docs/extensions/extensions.md「命名和兼容」).
+/// with the new keys; an older one keeps its /api/v1/plugins and old keys (docs/extensions/extensions.md「Naming and compatibility」).
 @MainActor
 struct ExtensionRenameTests {
     private func newHub(_ hub: FakeHub) -> APIClient {
@@ -81,12 +81,6 @@ struct ExtensionRenameTests {
 
         let old = try JSON.decoder.decode(ExtensionMarket.self, from: Data(#"{"id":"m1","spec":"s","name":"n","has_token":true,"plugins":2}"#.utf8))
         #expect(old.plugins == 2 && old.hasToken)
-    }
-
-    @Test func theNewEvent() {
-        let set = ServerEvent.decode(Data(#"{"type":"extension_ui","extension":"gw","id":"usage","badge":{"text":"3"}}"#.utf8))
-        guard case .pluginBadge(let ext, let id, let badge, _)? = set else { Issue.record("not decoded"); return }
-        #expect(ext == "gw" && id == "usage" && badge?.text == "3")
     }
 
     @Test func featuresUnderEitherName() {

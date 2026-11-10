@@ -210,25 +210,26 @@ class InboxDataOwner @Inject constructor(
         override suspend fun personaContext(itemId: String) = use { it.inbox.personaContext(itemId) }
         override suspend fun draftReply(itemId: String, instruction: String) = use { it.inbox.draftReply(itemId, instruction) }
         override suspend fun handOff(request: InboxHandOffRequest): persona.core.contracts.SessionKey? = use { it.inbox.handOff(request) }
-        override suspend fun momentsPost(postId: String) = use { it.inbox.momentsPost(postId) }
-        override suspend fun momentsComments(postId: String) = use { it.inbox.momentsComments(postId) }
+        override suspend fun momentsPost(postId: String, manager: String?) = use { it.inbox.momentsPost(postId, manager) }
+        override suspend fun momentsComments(postId: String, manager: String?) = use { it.inbox.momentsComments(postId, manager) }
         override suspend fun urlPreview(messageId: String, url: String) = use { it.inbox.urlPreview(messageId, url) }
         override suspend fun react(messageId: String, key: String, remove: Boolean) = use { it.inbox.react(messageId, key, remove) }
         override suspend fun cardAction(messageId: String, actionId: String) = use { it.inbox.cardAction(messageId, actionId) }
         override suspend fun userProfile(userId: String, feedId: String?) = use { it.inbox.userProfile(userId, feedId) }
         override suspend fun quickReactions() = use { it.inbox.quickReactions() }
         override suspend fun emojis() = use { it.inbox.emojis() }
-        override suspend fun inboxMutes() = use { it.inbox.inboxMutes() }
+        override suspend fun inboxMutes(manager: String?) = use { it.inbox.inboxMutes(manager) }
         override suspend fun mute(record: persona.feature.inbox.InboxRecord, option: persona.feature.inbox.InboxMuteOption) =
             use { it.inbox.mute(record, option) }
-        override suspend fun unmute(id: String) = use { it.inbox.unmute(id) }
-        override suspend fun inboxPolicies(record: persona.feature.inbox.InboxRecord?) = use { it.inbox.inboxPolicies(record) }
+        override suspend fun unmute(id: String, manager: String?) = use { it.inbox.unmute(id, manager) }
+        override suspend fun inboxPolicies(record: persona.feature.inbox.InboxRecord?, manager: String?) =
+            use { it.inbox.inboxPolicies(record, manager) }
         override suspend fun savePolicy(
             target: persona.feature.inbox.InboxPolicyTarget,
             tier: persona.feature.inbox.InboxPolicyTier,
             twin: persona.feature.inbox.InboxPolicyTwin,
         ) = use { it.inbox.savePolicy(target, tier, twin) }
-        override suspend fun removePolicy(id: String) = use { it.inbox.removePolicy(id) }
+        override suspend fun removePolicy(id: String, manager: String?) = use { it.inbox.removePolicy(id, manager) }
         override suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?) = use { it.inbox.larkChatPins(feedId, accountId, cursor) }
         override suspend fun larkPinTarget(feedId: String, messageId: String, accountId: String, topic: Boolean) = use { it.inbox.larkPinTarget(feedId, messageId, accountId, topic) }
         override suspend fun larkChangePin(feedId: String, messageId: String, pinId: String?, accountId: String?) =
