@@ -16,6 +16,19 @@ To-dos belong to the assistant (`todos.go`, `todo_decisions.go`, `todo_sessions.
   `POST /api/v1/sessions` and `POST /api/v1/sessions/{mid}/{sid}/messages` with `todo_id` first ask the assistant (`assistant.todo_handoff`): does the to-do exist, is it done (if handoff is disallowed, it supplies 404/409 and the message, echoed by hub), prepend decisions to the Agent's message and project context for new Agents, all in one call. After handoff, ask assistant to link it (`assistant.todo_link`; assistant determines both linked title and to-do title); workspace renames through hub notify assistant (`todos.space_renamed`). Protocol in `docs/protocol/protocol.md`, "Bus".
 - **When assistant is disconnected** (hub just started, assistant process restarting): to-do APIs return `503 assistant_offline`, "The assistant is temporarily unavailable. Try again later"; create/send with `todo_id` also return 503 (to-do existence unknown). Session-list to-do/quiet markers keep hub's last report (absent in the first second or two after hub starts before assistant reports). Hub emits no events during this period, so automatic linking, marker reconciliation and decision records wait for the next session list or answer after reconnection; workspaces renamed through hub are not migrated.
 
+## Permission of a planned task
+
+A writable task that `task_plan` leaves without a `permission` gets one on the hub before the plan is saved, so the
+plan card shows the mode the Agent runs in (#1897, #3026), in this order: the manager's default permission mode
+(Settings › Assistant, `default_permission_mode`), then `permissions.defaultMode` in Claude Code's settings on the
+computer the task lands on (Settings › Claude Code › Default permission mode, read with `claude.settings`), then
+`default` (Ask every step). The last two cover the common case: someone who set Claude Code to start in Auto gets
+Auto for the Agents the assistant starts, as for the ones started from the Agents page with no mode picked. A plan
+saved before this, or a task that reaches the start with no mode, is settled the same way on the computer it starts
+on. A computer that is offline, an older node, or a mode Persona does not know (such as `dontAsk`) gives `default`.
+The card names Auto (`auto` is one of `task_plan`'s modes, and Edit offers it on every client); a Codex launcher still
+takes only `plan` from it (`assistant/tasks_permission.go`).
+
 ## Read-only planned tasks
 
 `task_plan` treats `readonly: true` as a launch constraint. The assistant saves `permission: plan`, overriding an

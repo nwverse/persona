@@ -267,10 +267,15 @@ struct PlanTaskRow: View {
         }
     }
 
+    /// The modes a planned task can start with (web PLAN_PERMISSIONS, Android PlanPermissions); Auto too, which the hub
+    /// may settle an unset one to from Claude Code's default mode (#3026).
+    static let permissions = ["default", "acceptEdits", "plan", "auto", "bypassPermissions"]
+
     static func permissionLabel(_ mode: String) -> String {
         switch mode {
         case "acceptEdits": String(localized: "Can edit files")
         case "plan": String(localized: "Plan first")
+        case "auto": String(localized: "Auto [Plan Card Permission]", comment: "A planned task's permission mode: the agent judges the risk itself")
         case "bypassPermissions": String(localized: "Allow Everything")
         default: String(localized: "Ask every step")
         }
@@ -308,7 +313,7 @@ struct PlanEditSheet: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Picker("Permissions", selection: Binding(get: { tasks[i].permission ?? "default" }, set: { tasks[i].permission = $0 })) {
-                            ForEach(["default", "acceptEdits", "plan", "bypassPermissions"], id: \.self) { Text(PlanTaskRow.permissionLabel($0)).tag($0) }
+                            ForEach(PlanTaskRow.permissions, id: \.self) { Text(PlanTaskRow.permissionLabel($0)).tag($0) }
                         }
                         if Ultracode.planOffered {
                             PlanUltracodeRow(on: Binding(get: { tasks[i].ultracode == true }, set: { tasks[i].ultracode = $0 }),

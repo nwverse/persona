@@ -11,6 +11,11 @@ var (
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
+// ClaudeDefaultModeSetting is Claude Code's permissions.defaultMode, a key of Settings › Claude Code (node
+// claudeconfig.go): the mode a session started without --permission-mode runs in. The hub reads it for a planned
+// task with no mode of its own (assistant/tasks_permission.go).
+const ClaudeDefaultModeSetting = "permissions.defaultMode"
+
 // Session statuses mirror herdr agent states, plus offline for transcripts with no live agent.
 const (
 	StatusIdle    = "idle"

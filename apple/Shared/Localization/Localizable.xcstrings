@@ -22818,6 +22818,30 @@
       },
       "extractionState" : "manual"
     },
+    "Auto [Plan Card Permission]" : {
+      "comment" : "A planned task's permission mode: the agent judges the risk itself",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auto"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自動判断"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自动判断"
+          }
+        }
+      }
+    },
     "Auto Chats" : {
       "localizations" : {
         "en" : {
