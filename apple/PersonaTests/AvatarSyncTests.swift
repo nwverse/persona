@@ -20,6 +20,15 @@ struct AvatarSyncTests {
         try #require(s.offered.first { $0.id == id })
     }
 
+    /// Waits (3 s at most) until `done`: the other task got as far as the case needs, not just some time went by.
+    private func until(_ what: String, _ done: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        for _ in 0..<300 {
+            if done() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(done(), "timed out waiting: \(what)", sourceLocation: sourceLocation)
+    }
+
     // MARK: Reading
 
     @Test func showsTheHubsChoice() async throws {
@@ -160,7 +169,7 @@ struct AvatarSyncTests {
         let first = Task { await s.choose(frog, api: api) }
         try await gate.untilHeld()
         let second = Task { await s.choose(aurora, api: api) }
-        try await Task.sleep(for: .milliseconds(50))
+        try await until("the second shown") { s.current.id == "aurora" }
         #expect(s.current.id == "aurora")
         await s.follow("nwverse", effective: "nwverse", api: api)
         #expect(s.current.id == "aurora")
@@ -183,7 +192,7 @@ struct AvatarSyncTests {
         let first = Task { await s.choose(frog, api: api) }
         try await gate.untilHeld()
         let second = Task { await s.choose(aurora, api: api) }
-        try await Task.sleep(for: .milliseconds(50))
+        try await until("the second shown") { s.current.id == "aurora" }
         hub.refuse = URLError(.networkConnectionLost)
         hub.refuseOnly = "aurora"
         gate.open()
@@ -192,6 +201,163 @@ struct AvatarSyncTests {
         #expect(hub.chosen == "nwverse")
         #expect(s.current.id == "nwverse" && s.chosenID == "nwverse" && defaults.string(forKey: PersonaStore.chosenKey) == "nwverse")
         #expect(s.error != nil)
+    }
+
+    /// Three quick choices while the first is on its way: the first goes, then only the newest; the one between is
+    /// never sent.
+    @Test func onlyTheNewestWaitingChoiceIsSent() async throws {
+        let hub = try LookHub(ids: ["nwverse", "aurora", "u-abc12345"], chosen: "persona")
+        let (s, _, _) = store()
+        await s.refresh(hub.client)
+        for id in hub.ids { await s.download(try pick(s, id), hub.client) }
+        let frog = try pick(s, "nwverse"), aurora = try pick(s, "aurora"), mine = try pick(s, "u-abc12345")
+        let gate = Gate()
+        let api = gate.client(hub.fake) { $0.method == "PUT" && String(decoding: $0.body ?? Data(), as: UTF8.self).contains("nwverse") }
+        let first = Task { await s.choose(frog, api: api) }
+        try await gate.untilHeld()
+        let second = Task { await s.choose(aurora, api: api) }
+        try await until("the second shown") { s.current.id == "aurora" }
+        let third = Task { await s.choose(mine, api: api) }
+        try await until("the third shown") { s.current.id == "u-abc12345" }
+        gate.open()
+        await first.value
+        await second.value
+        await third.value
+        #expect(hub.puts.map { $0["id"]?.string } == ["nwverse", "u-abc12345"])
+        #expect(hub.chosen == "u-abc12345" && s.current.id == "u-abc12345" && s.error == nil)
+    }
+
+    /// The first tap's push, back while a later tap's package is still downloading, does not drop the later one: it
+    /// shows once its package is here and goes to the hub.
+    @Test func anEarlierChoicesPushDoesNotDropALaterOneStillDownloading() async throws {
+        let hub = try LookHub(ids: ["nwverse", "aurora"], chosen: "persona")
+        let (s, _, _) = store()
+        await s.refresh(hub.client)
+        let frog = try pick(s, "nwverse"), aurora = try pick(s, "aurora")
+        await s.download(frog, hub.client) // only Milk Frog on the phone
+        let answer = Gate(), files = Gate()
+        let taken = answer.client(hub.fake, answerFirst: true) {
+            $0.method == "PUT" && String(decoding: $0.body ?? Data(), as: UTF8.self).contains("nwverse")
+        }
+        let api = files.client(taken) { $0.path.hasPrefix("/api/v1/personas/aurora/") }
+        let first = Task { await s.choose(frog, api: api) }
+        try await answer.untilHeld() // the hub took it; its answer is on the way back
+        let second = Task { await s.choose(aurora, api: api) }
+        try await files.untilHeld()
+        await s.follow("nwverse", effective: "nwverse", api: api) // the first one's push
+        answer.open()
+        await first.value
+        files.open()
+        await second.value
+        #expect(hub.puts.map { $0["id"]?.string } == ["nwverse", "aurora"])
+        #expect(hub.chosen == "aurora" && s.current.id == "aurora" && s.chosenID == "aurora")
+    }
+
+    /// The hub refuses a tap while a later one's package is still downloading, and that download fails too (either
+    /// first): what the hub has comes back, not the refused one.
+    @Test func aRefusedChoiceGoesBackWhileALaterOneIsStillDownloading() async throws {
+        for refusedFirst in [true, false] {
+            let hub = try LookHub(ids: ["nwverse", "aurora"], chosen: "persona")
+            let (s, _, defaults) = store()
+            await s.refresh(hub.client)
+            let frog = try pick(s, "nwverse"), aurora = try pick(s, "aurora")
+            await s.download(frog, hub.client)
+            let put = Gate(), files = Gate()
+            let held = put.client(hub.fake) { $0.method == "PUT" }
+            let api = files.client(held) { $0.path.hasPrefix("/api/v1/personas/aurora/") }
+            let first = Task { await s.choose(frog, api: api) }
+            try await put.untilHeld()
+            let second = Task { await s.choose(aurora, api: api) }
+            try await files.untilHeld()
+            hub.refuse = URLError(.networkConnectionLost)
+            if refusedFirst {
+                put.open()
+                await first.value
+                files.open(failing: URLError(.networkConnectionLost))
+                await second.value
+            } else {
+                files.open(failing: URLError(.networkConnectionLost))
+                await second.value
+                put.open()
+                await first.value
+            }
+            #expect(hub.chosen == "persona")
+            #expect(s.current.isBuiltin && s.chosenID == "persona" && defaults.string(forKey: PersonaStore.chosenKey) == "persona",
+                    "refused first: \(refusedFirst)")
+            #expect(s.error != nil)
+        }
+    }
+
+    /// The answer to a choice the hub took, late behind the pushes that came after it (its own, then another device's):
+    /// what a later refused choice goes back to is the newest of them, not that answer.
+    @Test func aLateAnswerDoesNotOutdoAPushThatCameAfterIt() async throws {
+        let hub = try LookHub(ids: ["nwverse", "aurora", "u-abc12345"], chosen: "persona")
+        let (s, _, _) = store()
+        await s.refresh(hub.client)
+        for id in hub.ids { await s.download(try pick(s, id), hub.client) }
+        let frog = try pick(s, "nwverse"), mine = try pick(s, "u-abc12345")
+        let gate = Gate()
+        let api = gate.client(hub.fake, answerFirst: true) { $0.method == "PUT" }
+        let choosing = Task { await s.choose(frog, api: api) }
+        try await gate.untilHeld()
+        await s.follow("nwverse", effective: "nwverse", api: api) // its push
+        hub.chosen = "aurora" // then another device's
+        await s.follow("aurora", effective: "aurora", api: api)
+        #expect(s.current.id == "aurora")
+        gate.open()
+        await choosing.value
+        #expect(s.current.id == "aurora")
+        hub.refuse = URLError(.networkConnectionLost)
+        await s.choose(mine, api: hub.client)
+        #expect(s.current.id == "aurora" && s.chosenID == "aurora" && hub.chosen == "aurora")
+    }
+
+    /// Another device's choice the hub took before this one's PUT, pushed while that PUT's answer is on its way: the
+    /// answer is the newer, and what a later refused choice goes back to.
+    @Test func aLateAnswerOutdoesAPushFromBeforeIt() async throws {
+        let hub = try LookHub(ids: ["nwverse", "aurora", "u-abc12345"], chosen: "persona")
+        let (s, _, _) = store()
+        await s.refresh(hub.client)
+        for id in hub.ids { await s.download(try pick(s, id), hub.client) }
+        let frog = try pick(s, "nwverse"), mine = try pick(s, "u-abc12345")
+        let gate = Gate()
+        let api = gate.client(hub.fake, answerFirst: true) { $0.method == "PUT" }
+        let choosing = Task { await s.choose(frog, api: api) }
+        try await gate.untilHeld()
+        await s.follow("aurora", effective: "aurora", api: api) // taken just before this one's; its own push is still to come
+        gate.open()
+        await choosing.value
+        #expect(hub.chosen == "nwverse")
+        hub.refuse = URLError(.networkConnectionLost)
+        await s.choose(mine, api: hub.client)
+        #expect(s.current.id == "nwverse" && s.chosenID == "nwverse")
+    }
+
+    /// Two quick taps the hub refuses both, before the old local choice moved up: it stays this device's, and moves up
+    /// at the next read.
+    @Test func twoRefusedChoicesKeepTheOldLocalChoice() async throws {
+        let hub = try LookHub(ids: ["nwverse", "aurora", "u-abc12345"], chosen: nil)
+        let (s, _, defaults) = store()
+        defaults.set("nwverse", forKey: PersonaStore.chosenKey) // chosen by an older app
+        hub.refuse = URLError(.notConnectedToInternet)
+        await s.refresh(hub.client) // the if_unset does not get there
+        #expect(s.current.id == "nwverse" && !defaults.bool(forKey: PersonaStore.followsHubKey))
+        for id in ["aurora", "u-abc12345"] { await s.download(try pick(s, id), hub.client) }
+        let aurora = try pick(s, "aurora"), mine = try pick(s, "u-abc12345")
+        let gate = Gate()
+        let api = gate.client(hub.fake) { $0.method == "PUT" && String(decoding: $0.body ?? Data(), as: UTF8.self).contains("aurora") }
+        let first = Task { await s.choose(aurora, api: api) }
+        try await gate.untilHeld()
+        let second = Task { await s.choose(mine, api: api) }
+        try await until("the second shown") { s.current.id == "u-abc12345" }
+        gate.open()
+        await first.value
+        await second.value
+        #expect(s.current.id == "nwverse" && s.chosenID == "nwverse" && !defaults.bool(forKey: PersonaStore.followsHubKey))
+        hub.refuse = nil
+        await s.refresh(hub.client)
+        #expect(hub.chosen == "nwverse" && hub.puts.last?["id"]?.string == "nwverse" && hub.puts.last?["if_unset"]?.bool == true)
+        #expect(s.current.id == "nwverse")
     }
 
     /// A refused choice leaves the old local choice as it was: still this device's, still moved up once the hub takes it.
@@ -235,6 +401,37 @@ struct AvatarSyncTests {
         #expect(PersonaStore(root: root, defaults: defaults).current.id == "aurora")
     }
 
+    /// A launch while the next choice downloads shows the one on screen, also when the list read since no longer has
+    /// it (another hub's) or has a new rev of it.
+    @Test func aLaunchMidDownloadShowsTheOneOnScreenWhateverTheListSaysNow() async throws {
+        let home = try LookHub(url: "https://home.invalid", ids: ["nwverse"], chosen: "nwverse")
+        let work = try LookHub(url: "https://work.invalid", ids: ["aurora"], chosen: "aurora")
+        let (s, root, defaults) = store()
+        await s.refresh(home.client)
+        var gate = Gate()
+        let slowWork = gate.client(work.fake) { $0.path.hasPrefix("/api/v1/personas/aurora/") }
+        let switching = Task { await s.refresh(slowWork) }
+        try await gate.untilHeld()
+        #expect(PersonaStore(root: root, defaults: defaults).current.id == "nwverse")
+        gate.open()
+        await switching.value
+        #expect(s.current.id == "aurora" && PersonaStore(root: root, defaults: defaults).current.id == "aurora")
+
+        // A new rev of the one on screen.
+        await s.refresh(home.client)
+        #expect(s.current.id == "nwverse" && s.current.rev == "r1")
+        home.rev = "r2"
+        gate = Gate()
+        let slowHome = gate.client(home.fake) { $0.path.hasPrefix("/api/v1/personas/nwverse/") }
+        let reading = Task { await s.refresh(slowHome) }
+        try await gate.untilHeld()
+        let relaunched = PersonaStore(root: root, defaults: defaults)
+        #expect(relaunched.current.id == "nwverse" && relaunched.current.rev == "r1" && relaunched.isOnPhone(relaunched.current))
+        gate.open()
+        await reading.value
+        #expect(s.current.rev == "r2" && PersonaStore(root: root, defaults: defaults).current.rev == "r2")
+    }
+
     /// The same, for the `look` push.
     @Test func aPushedChoiceIsSavedOnceItsPackageIsHere() async throws {
         let hub = try LookHub(ids: ["nwverse", "aurora"], chosen: "nwverse")
@@ -261,8 +458,9 @@ struct AvatarSyncTests {
         let api = gate.client(hub.fake) { $0.path.hasSuffix("/dot/idle.png") }
         let first = Task { await s.follow("nwverse", effective: "nwverse", api: api) }
         try await gate.untilHeld()
+        let pushed = s.choices
         let second = Task { await s.follow("nwverse", effective: "nwverse", api: api) }
-        try await Task.sleep(for: .milliseconds(50))
+        try await until("the second push waits for the same download") { s.choices > pushed }
         #expect(s.current.isBuiltin)
         gate.open()
         await first.value
@@ -285,8 +483,9 @@ struct AvatarSyncTests {
         hub.ids = ["nwverse", "u-abc12345"] // made and chosen on another device
         hub.chosen = "u-abc12345"
         try hub.serveFiles()
+        let pushed = s.choices
         let following = Task { await s.follow("u-abc12345", effective: "u-abc12345", api: hub.client) }
-        try await Task.sleep(for: .milliseconds(50))
+        try await until("the push waits for the list under way") { s.choices > pushed }
         gate.open()
         await reading.value
         await following.value
@@ -363,6 +562,34 @@ struct AvatarSyncTests {
         #expect(s.current.isBuiltin && hub.puts.isEmpty)
     }
 
+    /// The upload's answer comes late, after the hub's push for it and another device's choice since: the newer one
+    /// stays, and the upload is done (the avatar is on this device).
+    @Test func anUploadAnsweredLateDoesNotPutBackWhatTheHubReplaced() async throws {
+        let hub = try LookHub(ids: ["nwverse"], chosen: "persona")
+        let (s, _, _) = store()
+        await s.refresh(hub.client)
+        await s.download(try pick(s, "nwverse"), hub.client)
+        hub.fake.on("POST", "/api/v1/looks/uploads") { [unowned hub] _ in
+            hub.ids = ["nwverse", "u-abc12345"]
+            hub.chosen = "u-abc12345"
+            try hub.serveFiles()
+            return Data(#"{"look":{"id":"u-abc12345","source":"hub","name":"奶蛙","app_icon":"persona","rev":"r1","bytes":10,"uploaded":true},"current":{"id":"u-abc12345","effective":"u-abc12345"}}"#.utf8)
+        }
+        let gate = Gate()
+        let slow = gate.client(hub.fake, answerFirst: true) { $0.method == "POST" }
+        let model = AvatarUploadModel(image: Self.image(), deps: .init(api: { slow }, store: { s }))
+        model.name = "豆豆"
+        let uploading = Task { await model.upload() }
+        try await gate.untilHeld() // made and chosen on the hub; the answer is on its way
+        await s.follow("u-abc12345", effective: "u-abc12345", api: hub.client) // its push
+        #expect(s.current.id == "u-abc12345")
+        hub.chosen = "nwverse" // another device's, after it
+        await s.follow("nwverse", effective: "nwverse", api: hub.client)
+        gate.open()
+        #expect(await uploading.value)
+        #expect(s.current.id == "nwverse" && s.chosenID == "nwverse" && hub.chosen == "nwverse" && hub.puts.isEmpty)
+    }
+
     // MARK: Several hubs
 
     /// The avatar is a hub-level setting (docs/protocol/multi-hub.md): the current hub's shows, a choice goes to it alone,
@@ -395,7 +622,7 @@ struct AvatarSyncTests {
         let before = Task { await s.refresh(slowHome) }
         try await gate.untilHeld()
         let now = Task { await s.refresh(work.client) }
-        try await Task.sleep(for: .milliseconds(50))
+        try await until("work's hub is the one read") { s.hub == work.fake.url }
         gate.open()
         await before.value
         await now.value
@@ -413,12 +640,54 @@ struct AvatarSyncTests {
         let before = Task { await s.refresh(slowHome) }
         try await gate.untilHeld()
         let now = Task { await s.refresh(work.client) }
-        try await Task.sleep(for: .milliseconds(50))
+        try await until("work's hub is the one read") { s.hub == work.fake.url }
         gate.open()
         await before.value
         await now.value
         #expect(home.chosen == "nwverse" && home.puts.count == 1)
         #expect(work.puts.isEmpty && work.chosen == nil && s.current.isBuiltin)
+    }
+
+    /// A push from the hub before, its package still coming when another group's hub became the current one: it never
+    /// shows, nor is saved for the next launch.
+    @Test func aPushFromTheHubBeforeDoesNotShowAfterTheSwitch() async throws {
+        let home = try LookHub(url: "https://home.invalid", ids: ["nwverse", "aurora"], chosen: "persona")
+        let work = try LookHub(url: "https://work.invalid", ids: ["nwverse", "aurora"], chosen: "aurora")
+        let (s, root, defaults) = store()
+        await s.refresh(home.client)
+        home.chosen = "nwverse" // on another device
+        let gate = Gate()
+        let slowHome = gate.client(home.fake) { $0.path.hasPrefix("/api/v1/personas/nwverse/") }
+        let following = Task { await s.follow("nwverse", effective: "nwverse", api: slowHome) }
+        try await gate.untilHeld()
+        await s.refresh(work.client)
+        #expect(s.current.id == "aurora")
+        gate.open()
+        await following.value
+        #expect(s.current.id == "aurora" && s.chosenID == "aurora")
+        #expect(PersonaStore(root: root, defaults: defaults).current.id == "aurora")
+    }
+
+    /// A choice made with the hub before, its package still coming when another group's hub became the current one:
+    /// it never shows, it is not sent, and the store still reads the new hub.
+    @Test func aChoiceForTheHubBeforeStillDownloadingIsDropped() async throws {
+        let home = try LookHub(url: "https://home.invalid", ids: ["nwverse", "aurora"], chosen: "persona")
+        let work = try LookHub(url: "https://work.invalid", ids: ["nwverse", "aurora"], chosen: "aurora")
+        let (s, _, _) = store()
+        await s.refresh(home.client)
+        let frog = try pick(s, "nwverse")
+        let gate = Gate()
+        let slowHome = gate.client(home.fake) { $0.path.hasPrefix("/api/v1/personas/nwverse/") }
+        let choosing = Task { await s.choose(frog, api: slowHome) }
+        try await gate.untilHeld()
+        await s.refresh(work.client)
+        gate.open()
+        await choosing.value
+        #expect(s.current.id == "aurora" && s.chosenID == "aurora" && home.puts.isEmpty && home.chosen == "persona")
+        // Work's is still the hub read: a choice it refuses goes back to work's own.
+        work.refuse = URLError(.networkConnectionLost)
+        await s.choose(.builtin, api: work.client)
+        #expect(s.current.id == "aurora" && s.chosenID == "aurora")
     }
 
     /// What a hub that is no longer the current one answers a choice made on it does not change the current hub's.
@@ -470,6 +739,32 @@ struct AvatarSyncTests {
         #expect(hub.fake.requests.isEmpty && s.current.isBuiltin)
     }
 
+    /// The `look` push as the app gets it (`AppModel.handle`): the current group's is followed, another group's is not
+    /// (its choice shows when that group is the current one).
+    @Test func onlyTheCurrentGroupsLookPushIsFollowed() async throws {
+        let hub = try LookHub(url: "https://home.invalid", ids: ["nwverse", "aurora"], chosen: "nwverse")
+        let (s, _, _) = store()
+        let folder = FileManager.default.temporaryDirectory.appending(path: "avatar-sync-model-\(UUID().uuidString)")
+        let model = AppModel(stateFolder: folder, personas: s)
+        model.linkHooksForTests = (transport: hub.client.transport!, socket: { SyncSocket() })
+        model.connectOnly(ServerConfig(url: hub.fake.url, token: "t"))
+        defer { for link in model.links { link.live.disconnect() } }
+        let api = try #require(model.api)
+        await s.refresh(api)
+        await s.download(try pick(s, "aurora"), api)
+        #expect(s.current.id == "nwverse")
+        var shown: [String] = []
+        s.onChange = { shown.append(s.current.id) } // and not the app icon
+        func push(_ id: String, from group: String) throws {
+            let ev = try #require(ServerEvent.decode(Data(#"{"type":"look","id":"\#(id)","effective":"\#(id)"}"#.utf8)))
+            model.handle(ev.stamped(group), group: group)
+        }
+        try push("aurora", from: "work") // another group's hub
+        try push("persona", from: "") // the current one's
+        try await until("the current group's push shown") { s.current.isBuiltin }
+        #expect(shown == ["persona"] && s.chosenID == "persona" && hub.puts.isEmpty)
+    }
+
     @Test func decodesTheLookPush() throws {
         let data = Data(#"{"type":"look","id":"aurora","effective":"persona"}"#.utf8)
         guard case .look(let id, let effective) = try #require(ServerEvent.decode(data)) else {
@@ -505,6 +800,8 @@ private final class LookHub {
     var refuseOnly: String?
     /// Runs once a list has been answered (another device choosing right then).
     var afterList: (() -> Void)?
+    /// Every package's rev (a new one: its files changed on the hub).
+    var rev = "r1"
 
     init(url: String = "https://fake.invalid", ids: [String] = ["nwverse"], chosen: String?) throws {
         fake = FakeHub(url: url)
@@ -545,7 +842,7 @@ private final class LookHub {
 
     private var listing: String {
         let looks = [#"{"id":"persona","source":"builtin","name":"团子","names":{"en":"Mochi"},"app_icon":"persona"}"#]
-            + ids.map { #"{"id":"\#($0)","source":"hub","name":"奶蛙","app_icon":"persona","rev":"r1","bytes":10,"manifest":\#(Self.manifest($0))}"# }
+            + ids.map { #"{"id":"\#($0)","source":"hub","name":"奶蛙","app_icon":"persona","rev":"\#(rev)","bytes":10,"manifest":\#(Self.manifest($0))}"# }
         return #"{"looks":[\#(looks.joined(separator: ","))],"current":\#(current)}"#
     }
 
@@ -565,28 +862,38 @@ private final class LookHub {
 private final class Gate {
     private var waiting: [CheckedContinuation<Void, Never>] = []
     private var opened = false
+    /// What the held requests fail with once let go (`open(failing:)`).
+    private var failure: (any Error)?
     private(set) var held = 0
 
     func client(_ hub: FakeHub, answerFirst: Bool = false, holding: @escaping @Sendable (LocalRequest) -> Bool) -> APIClient {
-        var c = hub.client
-        let answer = c.transport!
+        client(hub.client, answerFirst: answerFirst, holding: holding)
+    }
+
+    /// Over another client (another gate's): two kinds of request held apart.
+    func client(_ base: APIClient, answerFirst: Bool = false, holding: @escaping @Sendable (LocalRequest) -> Bool) -> APIClient {
+        var c = base
+        let answer = base.transport!
         c.transport = { [self] req in
             guard holding(req) else { return try await answer(req) }
-            if !answerFirst { await hold() }
+            if !answerFirst { try await hold() }
             let data = try await answer(req)
-            if answerFirst { await hold() }
+            if answerFirst { try await hold() }
             return data
         }
         return c
     }
 
-    private func hold() async {
+    private func hold() async throws {
         guard !opened else { return }
         held += 1
         await withCheckedContinuation { waiting.append($0) }
+        if let failure { throw failure }
     }
 
-    func open() {
+    /// Lets the held requests go on; `failing`: they fail with it instead (the network dropped).
+    func open(failing: (any Error)? = nil) {
+        failure = failing
         opened = true
         waiting.forEach { $0.resume() }
         waiting = []
