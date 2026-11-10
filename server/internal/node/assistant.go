@@ -407,6 +407,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			p.mu.Unlock()
 			return "", fmt.Errorf("send to codex: %w", err)
 		}
+		n.markAssistantRecoverySent(ctx, id)
 		commit()
 		n.notifySessions()
 		return id, nil
@@ -473,6 +474,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
+	n.markAssistantRecoverySent(ctx, id)
 	commit()
 	n.notifySessions()
 	return id, nil
@@ -762,6 +764,13 @@ func (n *Node) assistantSessions() []proto.Session {
 	procs := make([]*assistantProc, 0, len(n.procs))
 	for _, p := range n.procs {
 		procs = append(procs, p)
+	}
+	for id, r := range n.recoveries {
+		if _, running := n.procs[id]; !running && r.proc != nil {
+			// A model switch has already stopped the old process and not registered its replacement yet. Keep the turn
+			// working: an offline row here can fail and rerun a scheduled task while its fallback is still starting.
+			procs = append(procs, r.proc)
+		}
 	}
 	n.mu.Unlock()
 	var out []proto.Session

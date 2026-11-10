@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -112,6 +113,59 @@ done
 	}
 }
 
+func TestAssistantCodexStructuredRecoveryClasses(t *testing.T) {
+	send := assistantRecoverySend
+	t.Cleanup(func() { assistantRecoverySend = send })
+	for _, tc := range []struct {
+		name string
+		info any
+		want bool
+	}{
+		{"internal server error", "internalServerError", true},
+		{"server overloaded", "serverOverloaded", true},
+		{"rate limit", "rateLimitExceeded", true},
+		{"structured 429", map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 429}}, true},
+		{"structured 502", map[string]any{"responseTooManyFailedAttempts": map[string]any{"httpStatusCode": 502}}, true},
+		{"usage limit", "usageLimitExceeded", false},
+		{"stream lost without a status", map[string]any{"responseStreamDisconnected": map[string]any{"httpStatusCode": nil}}, false},
+		{"request timeout is not a 429 or 5xx", map[string]any{"httpConnectionFailed": map[string]any{"httpStatusCode": 408}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := codexTestNode(t)
+			p, c, _ := newFakeCodex(t, n, t.TempDir())
+			p.id, c.threadID = testThread, testThread
+			p.busy = true
+			n.procs[testThread] = p
+			called := make(chan struct{}, 1)
+			assistantRecoverySend = func(context.Context, *Node, *assistantProc, string, string, modelExecution) error {
+				called <- struct{}{}
+				return nil
+			}
+			params, err := json.Marshal(map[string]any{"threadId": testThread, "turn": map[string]any{
+				"id": "structured-error", "status": "failed",
+				"error": map[string]any{"message": "Internal server error", "codexErrorInfo": tc.info},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.notification("turn/completed", params)
+			if !tc.want {
+				select {
+				case <-called:
+					t.Fatal("a transient error outside #3204 entered model recovery")
+				case <-time.After(50 * time.Millisecond):
+				}
+				return
+			}
+			select {
+			case <-called:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the structured 5xx did not start a same-model recovery")
+			}
+		})
+	}
+}
+
 func TestModelRetryPromptGolden(t *testing.T) {
 	goldenNode(t, "model_retry", prompts.RenderModelRetry())
 }
@@ -183,6 +237,45 @@ func TestNextAssistantModelResolvesAnUnreportedDefault(t *testing.T) {
 	if got, ok := nextAssistantModel(codex, "", nil); !ok || got != "fallback-model" {
 		t.Fatalf("a native default model selected %q %v, want fallback-model", got, ok)
 	}
+	if got, ok := nextAssistantModel(list, "default", nil); !ok || got != "fallback-model" {
+		t.Fatalf("the literal default alias selected %q %v, want fallback-model", got, ok)
+	}
+}
+
+func TestAssistantFallbackDoesNotRepeatTheResolvedAlias(t *testing.T) {
+	n := assistantNode(t)
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "opus"}, replyModel: "resolved-opus", tasksObserved: true}
+	n.procs[id] = p
+	r := &assistantTurnRecovery{retried: map[string]bool{"opus": true}, used: map[string]bool{"opus": true}}
+	n.recoveries = map[string]*assistantTurnRecovery{id: r}
+
+	models := assistantRecoveryModels
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Models: []proto.AgentModel{
+			{ID: "opus", Resolved: "resolved-opus"},
+			{ID: "resolved-opus", Resolved: "resolved-opus"},
+			{ID: "sonnet", Resolved: "resolved-sonnet"},
+		}}, nil
+	}
+	send := assistantRecoverySend
+	selected := make(chan string, 1)
+	assistantRecoverySend = func(_ context.Context, _ *Node, _ *assistantProc, _, _ string, execution modelExecution) error {
+		selected <- execution.Model
+		return nil
+	}
+	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
+	if !n.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream") {
+		t.Fatal("the failed turn did not enter recovery")
+	}
+	select {
+	case got := <-selected:
+		if got != "sonnet" {
+			t.Fatalf("the alias and its resolved model were retried as different models: selected %q, want sonnet", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the resolved alias was not followed by a genuinely different model")
+	}
 }
 
 func TestAssistantFallbackEffortFollowsTheNextModel(t *testing.T) {
@@ -233,6 +326,48 @@ done
 	if p := f.proc(id); p == nil || p.model.Model != "fallback-model" || p.replyModel != "fallback-model" || p.busy {
 		t.Fatalf("the exhausted recovery did not retain the final model and error state: %+v", p)
 	}
+}
+
+func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
+	n := assistantNode(t)
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "primary-model"}, tasksObserved: true}
+	n.procs[id] = p
+	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true}}
+	n.recoveries = map[string]*assistantTurnRecovery{id: r}
+
+	models := assistantRecoveryModels
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model"}, {ID: "fallback-model"}}}, nil
+	}
+	send := assistantRecoverySend
+	gap, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	assistantRecoverySend = func(_ context.Context, n *Node, p *assistantProc, _, _ string, _ modelExecution) error {
+		n.mu.Lock()
+		delete(n.procs, p.id) // the old process is gone; the replacement has not finished starting
+		n.mu.Unlock()
+		close(gap)
+		<-release
+		close(returned)
+		return nil
+	}
+	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
+	if !n.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+		t.Fatal("the failed turn did not enter recovery")
+	}
+	select {
+	case <-gap:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery did not reach the process replacement gap")
+	}
+	sessions := n.assistantSessions()
+	if len(sessions) != 1 || sessions[0].SessionID != id || sessions[0].Status != proto.StatusWorking {
+		close(release)
+		<-returned
+		t.Fatalf("the recovery gap was published as a final non-working state: %+v", sessions)
+	}
+	close(release)
+	<-returned
 }
 
 func TestAssistantRecoveryCancelReleasesTheHeldTurn(t *testing.T) {
@@ -305,6 +440,109 @@ func TestAssistantFallbackNeverKillsUnknownOrRunningBackgroundTasks(t *testing.T
 				t.Fatal("the old process was stopped without a proven empty background inventory")
 			}
 		})
+	}
+}
+
+func TestCodexBackgroundInventoryRequiresAnExplicitDataList(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		result   map[string]any
+		observed bool
+	}{
+		{"missing data", map[string]any{}, false},
+		{"null data", map[string]any{"data": nil}, false},
+		{"explicitly empty", map[string]any{"data": []any{}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := codexTestNode(t)
+			p, c, f := newFakeCodex(t, n, t.TempDir())
+			p.id, c.threadID = testThread, testThread
+			f.results["thread/backgroundTerminals/list"] = tc.result
+			c.syncTasks()
+			p.mu.Lock()
+			observed, tasks := p.tasksObserved, len(p.tasks)
+			p.mu.Unlock()
+			if observed != tc.observed || tasks != 0 {
+				t.Fatalf("inventory observed=%v tasks=%d, want observed=%v and no tasks", observed, tasks, tc.observed)
+			}
+		})
+	}
+}
+
+func TestAssistantHandoverKeepsTheDeliveredRecoveryTurnWorking(t *testing.T) {
+	k := newAssistantKeeper()
+	a, b := assistantNode(t), assistantNode(t)
+	a.keeper, b.keeper = k, k
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := keptProc(t, a, id, "claude")
+	p.busy = true
+	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}, sent: true, running: true}
+	a.recoveries = map[string]*assistantTurnRecovery{id: r}
+	a.handOverAssistants()
+	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
+		t.Fatalf("the running recovery turn was not handed over: %+v", adopted)
+	}
+	p.mu.Lock()
+	busy := p.busy
+	p.mu.Unlock()
+	if !busy {
+		t.Fatal("handover marked a delivered, still-running model turn idle")
+	}
+}
+
+func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
+	k := newAssistantKeeper()
+	a, b := assistantNode(t), assistantNode(t)
+	a.keeper, b.keeper = k, k
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := keptProc(t, a, id, "claude")
+	p.launcher, p.model = "claude", modelExecution{Model: "primary-model"}
+	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{"primary-model": true}, running: true}
+	a.recoveries = map[string]*assistantTurnRecovery{id: r}
+
+	send := assistantRecoverySend
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var spawned atomic.Int32
+	assistantRecoverySend = func(_ context.Context, n *Node, p *assistantProc, _, _ string, _ modelExecution) error {
+		close(entered)
+		<-release // the connection hands over before this send enters assistantSend's session lock
+		defer n.typing.lock(p.id)()
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if n.recoveries[p.id] == r { // the identity check assistantSend performs under the same lock
+			n.procs[p.id] = &assistantProc{id: p.id, agent: "claude", launcher: "claude"}
+			spawned.Add(1)
+		}
+		return nil
+	}
+	t.Cleanup(func() { assistantRecoverySend = send })
+	go func() {
+		defer close(done)
+		a.runAssistantRecovery(p, r, "claude", p.cwd, p.model, "primary-model", true)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery did not reach the send")
+	}
+	a.handOverAssistants()
+	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
+		t.Fatalf("the live conversation was not handed over: %+v", adopted)
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the old recovery did not stop after handover")
+	}
+	if spawned.Load() != 0 {
+		t.Fatal("the ended connection's Node started a replacement process after the new Node took over")
+	}
+	a.mu.Lock()
+	left := len(a.procs)
+	a.mu.Unlock()
+	if left != 0 {
+		t.Fatal("the old Node retained a process after handover")
 	}
 }
 

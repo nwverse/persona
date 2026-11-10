@@ -169,9 +169,10 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		}
 		c.mu.Unlock()
 		var failure, failureKind string
+		modelServiceFailure := false
 		if ev.Turn.Status != "interrupted" {
 			if len(ev.Turn.Error) > 0 && string(ev.Turn.Error) != "null" {
-				failure, failureKind = transcript.CodexTurnError(ev.Turn.Error)
+				failure, failureKind, modelServiceFailure = transcript.CodexTurnErrorRecovery(ev.Turn.Error)
 			}
 			if failure == "" && (ev.Turn.Status == "failed" || (ev.Turn.Status != "completed" && ev.Turn.Status != "")) {
 				failure = transcript.CodexTurnFailed
@@ -180,7 +181,11 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		if failure != "" {
 			n.logger.Printf("assistant codex %s: turn %s: %s", short(p.id), ev.Turn.Status, failure)
 		}
-		recovering := n.recoverAssistantResult(p, failure != "", failure, failureKind)
+		failureKinds := []string{failureKind}
+		if modelServiceFailure {
+			failureKinds = append(failureKinds, assistantModelServiceFailure)
+		}
+		recovering := n.recoverAssistantResult(p, failure != "", failure, failureKinds...)
 		if !recovering {
 			n.clearAssistantRecovery(p)
 		}

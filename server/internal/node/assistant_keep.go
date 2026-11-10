@@ -179,6 +179,20 @@ func (n *Node) resumeAssistants(adopted []*assistantProc) {
 // starts: attach.go waits for it) and stops what cannot be kept.
 func (n *Node) handOverAssistants() {
 	n.mu.Lock()
+	n.recoveryClosed = true
+	recovering := make([]string, 0, len(n.recoveries))
+	for id := range n.recoveries {
+		recovering = append(recovering, id)
+	}
+	n.mu.Unlock()
+	for _, id := range recovering {
+		// Wait for an in-flight recovery send, then invalidate its recovery before the process changes owner. A blocked
+		// old send sees the missing identity under this same lock and cannot start another process after handover.
+		unlock := n.typing.lock(id)
+		n.cancelAssistantRecoveryForHandover(id)
+		unlock()
+	}
+	n.mu.Lock()
 	stop := n.keeper.keep(n.procs)
 	n.procs = map[string]*assistantProc{}
 	n.akeys = map[string]*assistantProc{}

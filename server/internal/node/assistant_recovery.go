@@ -17,6 +17,8 @@ import (
 type assistantTurnRecovery struct {
 	retried map[string]bool // one same-model continuation per model
 	used    map[string]bool // models this request has already tried, never selected again
+	proc    *assistantProc  // working-status placeholder while a model switch has no registered process
+	sent    bool            // the current recovery message reached the model; its turn is still running after handover
 	running bool
 	pending *assistantPendingFailure
 }
@@ -29,6 +31,10 @@ type assistantPendingFailure struct {
 }
 
 type assistantRecoveryContextKey struct{}
+
+// assistantModelServiceFailure is an internal second error-kind entry: Codex's structured error proved a 429/5xx even
+// when its human-readable message contains no status. It is not published as the session's TurnErrorKind.
+const assistantModelServiceFailure = "model-service"
 
 type assistantRecoveryCall struct {
 	recovery *assistantTurnRecovery
@@ -47,6 +53,20 @@ func withAssistantRecovery(ctx context.Context, recovery *assistantTurnRecovery,
 func assistantRecoveryOf(ctx context.Context) (*assistantTurnRecovery, bool) {
 	call, _ := ctx.Value(assistantRecoveryContextKey{}).(assistantRecoveryCall)
 	return call.recovery, call.restart
+}
+
+// markAssistantRecoverySent runs inside assistantSend's session lock after the model accepted the recovery message.
+// Keeper handover uses the same lock to distinguish this live turn from an attempt that has not started yet.
+func (n *Node) markAssistantRecoverySent(ctx context.Context, id string) {
+	recovery, _ := assistantRecoveryOf(ctx)
+	if recovery == nil {
+		return
+	}
+	n.mu.Lock()
+	if n.recoveries[id] == recovery {
+		recovery.sent = true
+	}
+	n.mu.Unlock()
 }
 
 var (
@@ -106,6 +126,22 @@ func (n *Node) cancelAssistantRecovery(id string) {
 	}
 }
 
+func (n *Node) cancelAssistantRecoveryForHandover(id string) {
+	n.mu.Lock()
+	r := n.recoveries[id]
+	delete(n.recoveries, id)
+	p := n.procs[id]
+	n.mu.Unlock()
+	// A delivered turn continues under the next Node's ownership. If its result was already pending, or no recovery
+	// message reached the model, there is no live turn to keep working and the cancelled attempt must release busy.
+	delivered := r != nil && r.sent && r.pending == nil
+	if r != nil && p != nil && !delivered {
+		p.mu.Lock()
+		p.busy = false
+		p.mu.Unlock()
+	}
+}
+
 // recoverAssistantResult reserves this model's same-model retry, or a move to the next model after that retry failed.
 // True means the caller must keep the turn working: publishing the error now would let a scheduled run fail (and rerun
 // the whole task) before recovery ends.
@@ -119,7 +155,7 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	if len(kinds) > 0 && kinds[0] == proto.TurnErrorUsageLimit {
 		return false // a subscription reset has its own continuation; an immediate retry cannot spend it back
 	}
-	if !assistantRecoverableError(failed, result) {
+	if !assistantRecoverableError(failed, result) && !(failed && slices.Contains(kinds, assistantModelServiceFailure)) {
 		return false
 	}
 	p.mu.Lock()
@@ -128,15 +164,16 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		return false
 	}
 	launcher, cwd, execution := p.launcher, p.cwd, p.model
+	replyModel := p.replyModel
 	key := execution.Model // the launcher's default stays one budget even when its concrete name arrives on a later attempt
 	current := key
 	if current == "" {
-		current = p.replyModel // used only to locate that default in the launcher's ordered list
+		current = replyModel // used only to locate that default in the launcher's ordered list
 	}
 	p.mu.Unlock()
 
 	n.mu.Lock()
-	if n.procs[p.id] != p || (expected != nil && n.recoveries[p.id] != expected) {
+	if n.recoveryClosed || n.procs[p.id] != p || (expected != nil && n.recoveries[p.id] != expected) {
 		n.mu.Unlock()
 		return false
 	}
@@ -151,6 +188,7 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		}
 		n.recoveries[p.id] = r
 	}
+	r.proc = p
 	if r.running {
 		r.pending = &assistantPendingFailure{text: result, kinds: kinds}
 		n.mu.Unlock()
@@ -165,6 +203,9 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	}
 	if current != "" {
 		r.used[current] = true
+	}
+	if replyModel != "" {
+		r.used[replyModel] = true // an alias and the concrete model it resolved to share one retry budget
 	}
 	r.running = true
 	n.mu.Unlock()
@@ -184,7 +225,7 @@ func nextAssistantModel(list proto.LauncherModels, current string, used map[stri
 		return "", false
 	}
 	at := -1
-	if current == "" {
+	if current == "" || current == "default" {
 		for _, m := range list.Models {
 			if m.Default || m.ID == "default" {
 				// A failed request may never emit message_start. Resolve the default to avoid selecting its own alias again.
@@ -247,6 +288,11 @@ func sendAssistantRecovery(ctx context.Context, n *Node, p *assistantProc, launc
 func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, launcher, cwd string, execution modelExecution, current string, same bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	n.mu.Lock()
+	if n.recoveries[p.id] == r {
+		r.sent = false
+	}
+	n.mu.Unlock()
 	if !same {
 		list, err := assistantRecoveryModels(ctx, n, launcher)
 		if err != nil {

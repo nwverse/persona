@@ -165,7 +165,9 @@ type Node struct {
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
-	recoveries map[string]*assistantTurnRecovery
+	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
+	recoveries     map[string]*assistantTurnRecovery
+	recoveryClosed bool
 
 	// runtimes: agent runtimes without a terminal, connected on runtime.sock (runtimes.go); runtimeSock overrides the
 	// socket path (tests).
