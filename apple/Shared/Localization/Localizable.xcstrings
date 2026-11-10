@@ -83725,6 +83725,121 @@
       },
       "extractionState" : "manual"
     },
+    "No Terminal Engine" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Terminal Engine"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルエンジンなし"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不用终端引擎"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Sessions of the desktop apps only" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessions of the desktop apps only"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デスクトップアプリのセッションのみ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只显示桌面 App 的会话"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Shows the desktop apps' sessions." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the desktop apps' sessions."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デスクトップアプリのセッションを表示します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示桌面 App 里的会话。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Shows the desktop apps' sessions. Starting or continuing a session from your phone is off. You can change this anytime in Settings › Machines." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shows the desktop apps' sessions. Starting or continuing a session from your phone is off. You can change this anytime in Settings › Machines."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "デスクトップアプリのセッションを表示します。スマートフォンからセッションを作成・再開することはできません。設定 › マシンでいつでも変更できます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示桌面 App 里的会话；不能从手机新建或继续会话。随时可在设置 › 机器里修改。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The machine is offline; your choice takes effect once it connects. The desktop apps' sessions are shown, and starting or continuing a session from your phone is off." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The machine is offline; your choice takes effect once it connects. The desktop apps' sessions are shown, and starting or continuing a session from your phone is off."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "マシンはオフラインです。選択は接続後に反映されます。デスクトップアプリのセッションを表示し、スマートフォンからセッションを作成・再開することはできません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "机器离线，选择会在连接后生效。显示桌面 App 里的会话，不能从手机新建或继续会话。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "Only sites and counts are listed, never cookie contents. Imported files are read on this machine, and only the sites you check go through the hub straight to the target machine. The hub keeps nothing, and the assistant can't see or import them." : {
       "localizations" : {
         "en" : {

@@ -18222,6 +18222,11 @@ MOCK_HELP.append("MOCK_RELAY_ACCOUNTS=<fixture.json>  （配合 MOCK_EXTENSIONS=
 # confirm it / remove it. MOCK_ADD_COMPUTER=seed also lists one pending computer that never connected and makes Mac Studio
 # a link computer that is offline (error_code link_offline). MOCK_ADD_COMPUTER_ERROR=<code> refuses every add with it
 # (tls_required, mesh_member, too_many_pending); MOCK_ADD_COMPUTER_NO_SITE=1: the reply has no install line (a local build).
+# {"add": {…, "manager": id}} adds it to that manager (404 no_manager, 409 installing) and the reply says `manager`;
+# one added to an offline manager is not listed in /machines (the hub lists what a manager reports) and never connects
+# (its Persona Link gets 503 assistant_offline). The same name again for a manager that is online lists it there.
+# MOCK_ADD_COMPUTER_NO_MANAGER=1 is a hub from before add.manager (the field ignored, no `manager` in the reply).
+# Not mocked: 503 assistant_offline (a reused computer in an offline manager's own list) and 503 owners_unknown.
 # MOCK_READINESS (below) turns it on too: a scenario with no computer or a pending one is added / confirmed here.
 ADD_COMPUTER = os.environ.get("MOCK_ADD_COMPUTER", "") or ("1" if os.environ.get("MOCK_READINESS") else "")
 ADD_COMPUTER_PENDING_TEXT = "等你在新版 App 或网页里确认这是你的电脑"
@@ -18242,6 +18247,18 @@ def _add_computer_listed(m):
     MACHINES.append(m)
     if MACHINES_KEEP is not None:
         MACHINES_KEEP.add(m["id"])
+
+
+# Computers added to an offline manager, by id: the hub has them, /machines does not list them yet.
+ADD_COMPUTER_UNLISTED = {}
+
+
+def _add_computer_all():
+    return MACHINES + list(ADD_COMPUTER_UNLISTED.values())
+
+
+def _manager_online(mid):
+    return next((x for x in MANAGERS["list"] if x["id"] == mid), {}).get("online", False)
 
 
 if ADD_COMPUTER:
@@ -18284,13 +18301,25 @@ if ADD_COMPUTER:
                 handler.send_json(reply, status)
                 return True
             added = False
+            # add.manager (docs/protocol/protocol.md "Computer pairing codes"): the computer is that manager's; a hub from
+            # before it (MOCK_ADD_COMPUTER_NO_MANAGER=1, or one with no roster) ignores it and says no manager in the reply.
+            owner = ""
+            if add and _stamps() and os.environ.get("MOCK_ADD_COMPUTER_NO_MANAGER") != "1":
+                owner = str(add.get("manager") or "").strip()
+                target = next((x for x in MANAGERS["list"] if x["id"] == owner), None)
+                if owner and target is None:
+                    handler.send_json({"error": "没有这个助手", "code": "no_manager"}, 404)
+                    return True
+                if target is not None and target.get("installing"):
+                    handler.send_json({"error": "这个助手还没装好，装好后再添加电脑", "code": "installing"}, 409)
+                    return True
             if add:
                 name = str(add.get("name") or "").strip()
                 if not name or len(name) > 40:
                     handler.send_json({"error": "名字不能为空，最多 40 个字", "code": "invalid_name"}, 400)
                     return True
-                m = next((x for x in MACHINES if x.get("name") == name and x.get("trust") == "pending" and not x.get("online")), None)
-                if m is None and sum(1 for x in MACHINES if x.get("trust") == "pending") >= 3:
+                m = next((x for x in _add_computer_all() if x.get("name") == name and x.get("trust") == "pending" and not x.get("online")), None)
+                if m is None and sum(1 for x in _add_computer_all() if x.get("trust") == "pending") >= 3:
                     # the hub's own limit (maxPendingComputers, server/internal/hub/machines_add.go)
                     handler.send_json({"error": "已经加了 3 台电脑还没处理完（有的可能还没连上来过）。删掉用不上的，再添加新的",
                                        "code": "too_many_pending"}, 429)
@@ -18298,15 +18327,24 @@ if ADD_COMPUTER:
                 if m is None:
                     base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or add.get("os") or "computer"
                     mid, n = base, 2
-                    while any(x["id"] == mid for x in MACHINES):
+                    while any(x["id"] == mid for x in _add_computer_all()):
                         mid, n = "%s-%d" % (base, n), n + 1
                     m = {"id": mid, "name": name, "kind": "link", "icon": add.get("icon") or "laptop", "online": False,
                          "trust": "pending", "error_code": "never_connected", "error": ADD_COMPUTER_PENDING_TEXT}
-                    _add_computer_listed(m)
                     added = True
+                if owner == "assistant":
+                    MANAGED_MACHINES.pop(m["id"], None)
+                elif owner:  # added to it, or the one used again moved to it
+                    MANAGED_MACHINES[m["id"]] = owner
+                if not any(x is m for x in MACHINES):  # listed once its manager is one that reports it (online)
+                    if _manager_online(machine_manager(m["id"])):
+                        ADD_COMPUTER_UNLISTED.pop(m["id"], None)
+                        _add_computer_listed(m)
+                    else:
+                        ADD_COMPUTER_UNLISTED[m["id"]] = m
                 os_name = add.get("os") or "mac"
             else:
-                m = next((x for x in MACHINES if x["id"] == again), None)
+                m = next((x for x in _add_computer_all() if x["id"] == again), None)
                 if m is None:
                     handler.send_json({"error": "没有这台电脑", "code": "not_found"}, 404)
                     return True
@@ -18322,17 +18360,19 @@ if ADD_COMPUTER:
                      "command": "persona-link pair '%s'" % pair}
             if added:
                 reply["added"] = True
+            if _stamps() and os.environ.get("MOCK_ADD_COMPUTER_NO_MANAGER") != "1":
+                reply["manager"] = machine_manager(m["id"])
             if not os.environ.get("MOCK_ADD_COMPUTER_NO_SITE"):
                 reply["install"] = {"linux": "curl -fsSL https://example.com/install.sh | sh -s -- --node --pair '%s'" % pair}
             _add_computer_push()
             join = float(os.environ.get("MOCK_ADD_COMPUTER_JOIN") or 8)
-            if join > 0:
+            if join > 0 and _manager_online(machine_manager(m["id"])):  # an offline manager's: 503 assistant_offline
                 threading.Timer(join, _add_computer_join, (m["id"], os_name)).start()
             handler.send_json(reply)
             return True
         parts = p.split("/")
         if len(parts) == 6 and p.startswith("/api/v1/machines/") and parts[5] in ("confirm", "reject"):
-            m = next((x for x in MACHINES if x["id"] == parts[4]), None)
+            m = next((x for x in _add_computer_all() if x["id"] == parts[4]), None)
             if m is None:
                 handler.send_json({"error": "没有这台电脑", "code": "not_found"}, 404)
                 return True
@@ -18343,7 +18383,7 @@ if ADD_COMPUTER:
             elif m.get("trust") != "pending":
                 handler.send_json({"error": "这台电脑已经确认过了", "code": "not_pending"}, 409)
                 return True
-            else:
+            elif ADD_COMPUTER_UNLISTED.pop(m["id"], None) is None:
                 MACHINES.remove(m)
             _add_computer_push()
             handler.send_json({"ok": True})
@@ -18359,7 +18399,8 @@ if ADD_COMPUTER:
 
 MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：features 有 machines_add / machine_trust，pair-codes 的 add 加一台待确认的电脑，"
                  "MOCK_ADD_COMPUTER_JOIN 秒后（默认 8，0 = 不来）它连上来等确认；seed 另列一台没连过的待确认电脑、Mac Studio 离线（link_offline）；"
-                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令")
+                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
+                 "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
