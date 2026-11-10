@@ -37,7 +37,7 @@ class ChatMarkdownStreamTest {
     @Test fun aStreamCutAnywhereGoesOnToTheWholeText() {
         for ((name, text) in corpus) {
             val whole = parseMarkdown(text)
-            for (end in 0..text.length) {
+            for (end in cuts(text)) {
                 val stream = ChatMarkdownStream { parseMarkdown(it) }
                 stream.start("s")
                 stream.parse("s", text.substring(0, end))
@@ -121,6 +121,11 @@ class ChatMarkdownStreamTest {
             if (expected.referenceLinkHandler.javaClass != actual.referenceLinkHandler.javaClass) fail(where)
         }
 
+        /** Where [aStreamCutAnywhereGoesOnToTheWholeText] cuts [text] (a whole parse at every cut of every text is O(n²)):
+         * at each line's end and its first six places, which hold the indent and the marker that decide its block
+         * (`10. `, a fence, `<!--`, `[r1]:`), and at every fifth character between. */
+        fun cuts(text: String) = (0..text.length).filter { it % 5 == 0 || it - text.lastIndexOf('\n', it - 1) <= 6 || text.getOrNull(it) == '\n' }
+
         /** The bench's reply (ChatMarkdownBench): headings, a paragraph with links and code, a list and a fence, again. */
         fun reply(size: Int) = buildString {
             while (length < size) append("## Section\n\nSome **bold** words, `code`, a [link](https://example.com/x) and more text here.\n\n- item one\n- item two\n\n```kotlin\nval x = 1\nprintln(x)\n```\n\n")
@@ -179,6 +184,10 @@ class ChatMarkdownStreamTest {
             "receipt quote" to "> 见 [PR](https://github.com/o/r/pull/7) 和 <https://example.com>，~~旧的~~ *新的*\n```go\nx := 1\n```\n---\n| a | b |\n| - | - |\n| 1 | 2 |",
             "math" to "前\n```math\na^2 + b^2 = c^2\n```\n后\n\n面积是 ![\\pi r^2](persona-math:%5Cpi%20r%5E2)，周长。\n\n用 `\$x\$` 写公式\n```\n$$\nnot math\n$$\n```\n    \$y$ 缩进的代码",
             "reply" to reply(2_400),
+            // A list goes on after a blank line: "10" is a paragraph until its "." makes it the list's third item.
+            "list goes on" to "1. one\n2. two\n\n10. ten\n\nafter",
+            // Only a blank line settles a paragraph: "***" under it is a rule until a letter makes it emphasis in it.
+            "one line feed" to "Done.\n***Note*** this line goes on the paragraph.\n\nafter",
         ) + (1..4).map { "sample $it" to sample(it, 2_000 + 500 * it, definitions = false) } +
             (5..6).map { "sample $it" to sample(it, 2_000, definitions = true) }
     }
