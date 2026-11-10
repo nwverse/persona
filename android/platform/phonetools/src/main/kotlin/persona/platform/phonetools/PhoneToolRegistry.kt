@@ -41,6 +41,7 @@ class PhoneToolRegistry(
                 PhoneConfirmation.Unanswered -> PhoneToolText.unanswered()
                 PhoneConfirmation.NotShown -> PhoneToolText.notShown()
                 PhoneConfirmation.Withdrawn -> PhoneToolText.interrupted()
+                PhoneConfirmation.Dismissed -> PhoneToolText.dismissed()
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: PhoneToolFailure) {
@@ -85,6 +86,11 @@ internal object PhoneToolText {
         "手机上没人确认 / Nobody approved or declined this on the phone within " +  // i18n-ignore: tool result for the model
             "${PhoneConfirmations.TIMEOUT_MILLIS / 1000} seconds, so it was not saved and the confirmation was taken back. " +
             "This is not a refusal: tell the user, and call it again when they can approve it on the phone.", true)
+
+    /** The user swiped the confirmation notification away without answering (#3861): not a refusal, nothing saved. */
+    fun dismissed() = PhoneToolResult.text(
+        "手机上的确认通知被划掉了 / The confirmation notification was dismissed on the phone without an answer, so it " +  // i18n-ignore: tool result for the model
+            "was not saved. This is not a refusal: ask the user whether they still want it, and call it again if they do.", true)
 
     /** The confirmation could not be shown at all: Persona was in the background with its notifications off. */
     fun notShown() = PhoneToolResult.text(

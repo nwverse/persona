@@ -30,7 +30,35 @@ type fake struct {
 	updateErr error
 	ran       []string
 	deleted   []string
+	generate  bool
+	model     subscriptions.ModelInfo
+	// gen answers Generate; release (when set) holds it until closed.
+	gen       func(subscriptions.GenerateRequest) (subscriptions.Generated, error)
+	release   chan struct{}
+	genAsks   []subscriptions.GenerateRequest
+	deleteErr error
 }
+
+func (f *fake) Features() subscriptions.Features {
+	return subscriptions.Features{Deliver: true, Generate: f.generate}
+}
+
+func (f *fake) Generate(_ context.Context, in subscriptions.GenerateRequest, _ subscriptions.Actor) (subscriptions.Generated, error) {
+	f.genAsks = append(f.genAsks, in)
+	if f.release != nil {
+		<-f.release
+	}
+	return f.gen(in)
+}
+
+func (f *fake) ModelOf(_ context.Context, purpose string) subscriptions.ModelInfo {
+	if purpose == "inbox.triage" {
+		return subscriptions.ModelInfo{OK: true, Provider: "Example Cloud", Model: "small"}
+	}
+	return f.model
+}
+
+func (f *fake) RecipeModel(context.Context) subscriptions.ModelInfo { return f.model }
 
 func (f *fake) List(_ context.Context, fl subscriptions.Filter) ([]subscriptions.Subscription, subscriptions.Features, error) {
 	var out []subscriptions.Subscription
@@ -121,6 +149,9 @@ func (f *fake) RunNow(_ context.Context, id string, _ subscriptions.Actor) (subs
 }
 
 func (f *fake) Delete(_ context.Context, id string, _ bool, _ subscriptions.Actor) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, id)
 	delete(f.subs, id)
 	return nil
@@ -439,6 +470,17 @@ func TestConflict(t *testing.T) {
 	res := handle(t, f, env(i18n.En, true), state{P: pageFallback, ID: "sub_outlook"}, "fallback", map[string]string{"tier": "action"})
 	if res.View == nil || !strings.Contains(res.Toast, "changed elsewhere") {
 		t.Fatalf("conflict: %+v", res)
+	}
+}
+
+// Deleting the stored content while the assistant is away (#2039): the subscription is off, nothing is deleted yet,
+// and the toast says to try again.
+func TestDeleteWhileTheAssistantIsAway(t *testing.T) {
+	f := newFake()
+	f.deleteErr = &subscriptions.Error{Status: http.StatusServiceUnavailable, Code: "assistant_offline"}
+	res := handle(t, f, env(i18n.En, true), state{P: pageSource, ID: "sub_outlook"}, "delete", nil)
+	if res.Pop || res.View == nil || !strings.Contains(res.Toast, "assistant is away") {
+		t.Fatalf("a delete the assistant could not finish: %+v", res)
 	}
 }
 

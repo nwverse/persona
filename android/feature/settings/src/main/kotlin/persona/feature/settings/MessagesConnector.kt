@@ -26,6 +26,15 @@ import java.time.ZoneId
  * may read (with the numbered steps there and "Check again" when it may not), "Hand to Persona" and deleting what the hub kept
  * (only with it off), and "Conversations": every conversation, read straight from the Mac. Nothing is marked read, nothing is sent.
  */
+/** What deleting the hub's Messages data removed, each count in its language's plural form. */
+internal fun messagesDeletedText(res: android.content.res.Resources, d: ConnectorDataDeleted): String =
+    res.getString(
+        R.string.settings_src_messages_deleted,
+        res.getQuantityString(R.plurals.settings_src_messages_deleted_chats, d.chats ?: 0, d.chats ?: 0),
+        res.getQuantityString(R.plurals.settings_src_messages_deleted_people, d.people ?: 0, d.people ?: 0),
+        res.getQuantityString(R.plurals.settings_src_messages_deleted_inbox, d.inbox ?: 0, d.inbox ?: 0),
+    )
+
 @Composable
 internal fun MessagesConnectorPage(connectors: ConnectorsManagement?, onBack: () -> Unit) {
     var chats by remember { mutableStateOf(false) }
@@ -75,7 +84,7 @@ private fun MessagesStatusPage(connectors: ConnectorsManagement?, onBack: () -> 
             saving = true
             try {
                 val d = api.deleteMessagesData()
-                deleted = res.getString(R.string.settings_src_messages_deleted, d.chats ?: 0, d.people ?: 0, d.inbox ?: 0)
+                deleted = messagesDeletedText(res, d)
                 failure = null
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { failure = res.getString(R.string.settings_src_messages_delete_failed, e.message.orEmpty()) }

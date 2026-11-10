@@ -43,10 +43,10 @@ describe("收件箱事件：分区", () => {
     expect(ids(s.tiers.fyi)).toEqual([conclusion.id]);
     expect(ids(s.tiers.noise)).toEqual([noise.id]);
     expect(s.done).toHaveLength(2);
-    // Pending sections do not determine whether an item has been read.
-    expect(badgeCount(fixture.items)).toBe(fixture.items.filter((it) => !it.done_at && !it.read).length);
+    // The navigation badge follows unread Needs you items, not every open section.
+    expect(badgeCount(fixture.items)).toBe(s.tiers.action.filter((it) => !it.read).length);
     expect(badgeCount([urgent])).toBe(1);
-    expect(badgeCount([waiting, agentWorking])).toBe(2);
+    expect(badgeCount([waiting, agentWorking])).toBe(0);
   });
   it("falls back to the tier for an older hub (a working item stays under 需要你, empty tier = 需要你)", () => {
     const old = fixture.items.map(legacy);

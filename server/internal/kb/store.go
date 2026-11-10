@@ -198,6 +198,7 @@ type Store struct {
 
 	recMu             sync.Mutex                 // a recording's read-compare-write (recordings.go)
 	recFilesMu        sync.RWMutex               // acquire before metaMu for recording snapshots and recovery
+	liveMu            sync.Mutex                 // a live log's read-modify-write (live.go); after recMu, before recFilesMu
 	recordingWrite    func(string, []byte) error // per-store candidate fault injection
 	recordingReadWait func()                     // per-store read-entry observation for concurrency tests
 	recordingRemove   func(string) error         // per-store commit fault injection

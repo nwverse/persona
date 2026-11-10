@@ -147,4 +147,18 @@ class NotificationPolicyTest {
         dialog = ScreenDialog(options = listOf(DialogOption("input", "输入", kind = "type_something")) +
             List(4) { DialogOption("$it", "选项 $it") }),
     )
+
+    /** #3731: an "Awaiting reply" notification stayed after unpairing or turning lock-screen details off. */
+    @Test fun clearTakesDownEveryPostedKind() {
+        listOf("done", "reply", "assistant", "alert").forEach { kind ->
+            val event = NotifyEvent(kind, "machine", "session")
+            assertNotNull(kind, NotificationPolicy.channel(event))
+            assertTrue(kind, NotificationPolicy.cleared(NotificationPolicy.tag(event)))
+            assertTrue(kind, NotificationPolicy.cleared(NotificationPolicy.tag(event.copy(id = "progress-1"))))
+        }
+        NotificationPolicy.resultTags(SessionKey("machine", "session")).forEach { assertTrue(it, NotificationPolicy.cleared(it)) }
+        assertTrue(NotificationPolicy.cleared("interaction:request-1"))
+        assertTrue(NotificationPolicy.cleared("stopped"))
+        assertFalse(NotificationPolicy.cleared("ongoing"))
+    }
 }

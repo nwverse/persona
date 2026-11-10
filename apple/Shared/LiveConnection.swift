@@ -851,11 +851,12 @@ final class LiveConnection {
     /// notices and errors on it, and the user's language for what it produces later, match the app. The naming
     /// contract and MCP forms and links are advertised here (`helloFeatures`), with the platform and version this app's
     /// requests carry (`X-Persona-Client`): the hub lists those cards in a REST answer only to a client whose hello
-    /// matches it. Older hubs ignore unknown fields and keep their existing defaults.
+    /// matches it. The version ("1.4.0+52": the app's version and build) and `os` are also what the hub keeps of this
+    /// device for the assistant (`AppVersion`). Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
         let client = RequestClientMetadata.current
         send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
-              "platform": client.platform, "version": client.version])
+              "platform": client.platform, "version": client.version, "os": AppVersion.helloOS])
     }
 
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS

@@ -28,6 +28,13 @@ type Service interface {
 	Update(ctx context.Context, id string, p subscriptions.Patch, by subscriptions.Actor) (subscriptions.Subscription, error)
 	RunNow(ctx context.Context, id string, by subscriptions.Actor) (subscriptions.Subscription, error)
 	Delete(ctx context.Context, id string, withData bool, by subscriptions.Actor) error
+	// Features says which later stages are in (Generate: #2040).
+	Features() subscriptions.Features
+	// Generate drafts a recipe with the model (#2040): for a subscription, saved; for a source, only answered.
+	Generate(ctx context.Context, in subscriptions.GenerateRequest, by subscriptions.Actor) (subscriptions.Generated, error)
+	// ModelOf is what a model purpose runs on now ("kb", "inbox.triage"); RecipeModel the one drafting uses.
+	ModelOf(ctx context.Context, purpose string) subscriptions.ModelInfo
+	RecipeModel(ctx context.Context) subscriptions.ModelInfo
 }
 
 // Env is who asks and what the pages need from the rest of the manager.
@@ -45,9 +52,8 @@ type Env struct {
 	Native func(service string) string
 	// UIVersion is the UI version the app draws (6 when 0): an older app gets icons it knows.
 	UIVersion int
-	// TriageModel and KBModel name the providers of the Information filtering and Information processing models
-	// for the confirmations; "" when not set.
-	TriageModel, KBModel string
+	// Drafts are the model drafts the manager keeps (#2040); nil: drafting is not offered.
+	Drafts *Drafts
 }
 
 // Request is the page's state and, when something was pressed, the action and its values.
@@ -98,6 +104,8 @@ type state struct {
 	Ext string `json:"ext,omitempty"`
 	// I is where a tool's items are (a recipe's items_path), as the setup page's dry run found it.
 	I string `json:"i,omitempty"`
+	// G: the setup page starts from the model's draft for this source or subscription (#2040).
+	G bool `json:"g,omitempty"`
 }
 
 const (
@@ -131,7 +139,30 @@ type pages struct {
 	svc Service
 	env Env
 	st  state
+	// models are the purposes' models as asked once for this request.
+	models map[string]subscriptions.ModelInfo
 }
+
+// modelOf is what a purpose runs on, asked of the assistant at most once a request ("recipe": drafting's).
+func (p *pages) modelOf(purpose string) subscriptions.ModelInfo {
+	if m, ok := p.models[purpose]; ok {
+		return m
+	}
+	var m subscriptions.ModelInfo
+	if purpose == "recipe" {
+		m = p.svc.RecipeModel(p.ctx)
+	} else {
+		m = p.svc.ModelOf(p.ctx, purpose)
+	}
+	if p.models == nil {
+		p.models = map[string]subscriptions.ModelInfo{}
+	}
+	p.models[purpose] = m
+	return m
+}
+
+// canDraft: the manager keeps drafts and the model stage is in.
+func (p *pages) canDraft() bool { return p.env.Drafts != nil && p.svc.Features().Generate }
 
 func (p *pages) t(key string, args ...i18n.Args) string {
 	return i18n.T(p.env.Lang, "subscriptions-pages."+key, args...)

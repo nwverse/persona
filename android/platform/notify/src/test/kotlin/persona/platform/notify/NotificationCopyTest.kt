@@ -43,7 +43,7 @@ class NotificationCopyTest {
         assertEquals(listOf("Connected to hub", "Connecting…", "Updating…", "Waiting for network", "Local network permission needed",
             "The hub's certificate changed", "Pairing is no longer valid"), states.map { text(ongoingTitle(it)) })
         assertEquals(listOf("Deny", "Allow", "View", "Approve", "Send back"), buttons().map(::text))
-        assertEquals("Persona is asking you", text(R.string.notify_title_assistant_asks))
+        assertEquals("Persona has a question", text(R.string.notify_title_assistant_asks))
         assertEquals("Can't approve on this phone", actionResultCopy(NotificationActionResult.ReadOnly)?.first?.let(::text))
     }
 
@@ -51,7 +51,7 @@ class NotificationCopyTest {
     @Test fun japanese() {
         assertEquals("ハブに接続済み", text(ongoingTitle(ConnectionState.Online)))
         assertEquals(listOf("拒否", "許可", "表示", "承認", "差し戻し"), buttons().map(::text))
-        assertEquals("Personaが質問しています", text(R.string.notify_title_assistant_asks))
+        assertEquals("Personaから質問があります", text(R.string.notify_title_assistant_asks))
         assertEquals("「再開」をタップすると通知を再び受け取れます", text(R.string.notify_stopped_text))
     }
 

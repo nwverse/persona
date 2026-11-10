@@ -102,6 +102,18 @@ struct SettingsView: View {
                         }
                         .settingsListRow(SettingsPage.assistant)
                         .accessibilityIdentifier("settings-assistant")
+                        #if os(iOS)
+                        // Persona's part in recorded meetings (#2981): the hub's default role, Off until changed. Only from
+                        // a hub that offers attending.
+                        if MeetingAttendees.offered(model) {
+                            NavigationLink(value: SettingsPage.meetings) {
+                                SettingsRow(title: String(localized: "Meetings"), symbol: Theme.Icon.meeting, tint: Theme.ai,
+                                            value: MeetingAttendees.defaultRole(model).title, look: .oneLine)
+                            }
+                            .settingsListRow(SettingsPage.meetings)
+                            .accessibilityIdentifier("settings-meetings")
+                        }
+                        #endif
                         NavigationLink(value: SettingsPage.triage) {
                             SettingsRow(title: String(localized: "Session Triage"), symbol: Theme.Icon.triage, tint: Theme.ai)
                         }
@@ -289,6 +301,7 @@ struct SettingsView: View {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
                                 .foregroundStyle(Color.primary)
+                                .keyboardShortcut(.cancelAction) // Esc closes it too: a phone's full-screen cover has no swipe down
                                 .accessibilityIdentifier("settings-close")
                         }
                     }
@@ -428,6 +441,11 @@ struct SettingsView: View {
         else if d.bool(forKey: "openConnectorBot") { p.append(SettingsPage.feishuBot) }
         else if d.bool(forKey: "openConnectorDevice") { p.append(SettingsPage.phoneData) }
         else if d.bool(forKey: "openTranslationSettings") { p.append(SettingsPage.translation) }
+        else if d.bool(forKey: "openMeetingSettings") { // Settings › Meetings (#2981)
+            #if os(iOS)
+            p.append(SettingsPage.meetings)
+            #endif
+        }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
         else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
@@ -497,6 +515,8 @@ struct SettingsView: View {
 enum SettingsPage: Hashable {
     #if os(iOS)
     case health
+    /// Settings › Meetings (#2981): Persona's default role in a recorded meeting.
+    case meetings
     #endif
     case persona, themeColor, style, colorScheme, language, assistant, claude, codex, devices, phoneData, mail, feishu, feishuBot, notifications, storage, translation, modelConfiguration
     /// Settings › Session Triage (docs/assistant/agent-work.md「开关」).
@@ -595,6 +615,7 @@ private struct SettingsDestinations: ViewModifier {
         case .feishuBot: FeishuBotView()
         #if os(iOS)
         case .health: WorkoutReportSettingsView()
+        case .meetings: MeetingSettingsView()
         #endif
         case .notifications: NotificationSettingsView()
         case .storage: StorageView()
@@ -687,6 +708,9 @@ struct PhoneDataView: View {
     @State private var enabled: [PhoneDataSource: Bool] = [:]
     @State private var asking: PhoneDataSource?
     @StoredValue(ClipboardOffer.enabledKey) private var offerClipboard = false
+    #if os(iOS)
+    @State private var iphoneConsent = IPhoneConsentModel()
+    #endif
 
     var body: some View {
         List {
@@ -712,6 +736,9 @@ struct PhoneDataView: View {
                 Text("Claude can read the data you turn on through phone_* tools; writes such as new events or reminders ask you on the phone first. Turning one on requests system permission; if you denied it before, you'll go to Settings. The hub can reach the phone only while Persona is in the foreground (or just moved to the background). iOS doesn't expose Messages, Notes, or third-party app data.")
             }
             #if os(iOS)
+            // Being operated by the assistant through a paired Mac (docs/extensions/iphone.md): only while the hub's
+            // extension iphone is on.
+            IPhoneConsentSection(consent: iphoneConsent)
             // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
             Section {
                 Toggle(isOn: $offerClipboard) {
@@ -729,6 +756,9 @@ struct PhoneDataView: View {
         .navigationTitle(ConnectorText.device)
         .navigationBarTitleDisplayMode(.inline) // like the other connectors' pages
         .task { refresh() }
+        #if os(iOS)
+        .task(id: model.config) { await iphoneConsent.load() } // again once the app has its hub (pairing, switching)
+        #endif
         // Back from the system's Settings, where a permission may have been given or taken away.
         .onChange(of: phase) { _, p in if p == .active { refresh() } }
     }

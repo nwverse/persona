@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -68,6 +70,13 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "a whole number of days, 1–365"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
 			set: s.setRecordingDays},
+		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
+			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
+				"default) only records and makes minutes afterwards; listener follows the meeting in a session and answers questions " +
+				"on the phone's screen; participant also says the answers aloud. Applies to recordings started from now on",
+			Value: "off, listener or participant"},
+			get: func(ctx context.Context) (string, error) { return s.meetingAttendanceDefault(ctx), nil },
+			set: s.setMeetingAttendanceDefault},
 		{Setting: Setting{Key: "assistant.done_needs_delivery", Title: "上线并实测才算做完", Actions: getSet,
 			About: "off (the default): a task_plan task closes when its work is judged done; on: only once it is live and checked " +
 				"(or has nothing to ship): stopped at a PR, merged or off by default it stays open with where it is held, its agent is told " +
@@ -98,6 +107,17 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
 			set: s.setInterjectBackground},
+		{Setting: Setting{Key: "assistant.agent_tasks", Title: "Every Agent Persona starts is a supervised task", Actions: getSet,
+			About: "off (the default): only tasks the main conversation or a leader hands out are supervised; an agent started from an " +
+				"app or by agent_start from another conversation is on no task. on: every agent Persona starts gets a quiet to-do (no " +
+				"pushes or badges for it) supervised by the conversation that started it when that is the main conversation or a leader, " +
+				"else by the main conversation: an app's agent once a turn of it did work (edits, commands), a to-do the user made when " +
+				"an agent is linked to it, and report_to_supervisor from an agent on any open to-do reaches its supervisor. Agents " +
+				"started by hand in a terminal are left alone. Costs model calls (the done judge, supervision turns). Applies from the " +
+				"next start, turn end and report",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agentTasks(ctx)), nil },
+			set: s.setAgentTasks},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -169,6 +189,9 @@ func (s *Service) listSettings(ctx context.Context, own []ownSetting) (string, e
 	return b.String(), nil
 }
 
+// settingCardWait is how long a change's approval card waits for the user before it expires (and changes nothing).
+var settingCardWait = 15 * time.Minute
+
 // ownSettingAction reads one of the assistant's settings, or changes it once the user approves on the phone.
 func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage) (string, error) {
 	switch action {
@@ -194,14 +217,17 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	now := time.Now().UTC()
 	r, err := s.ask(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: change.card(l), ToolInput: shown, SessionTitle: "Persona",
-		CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute)})
+		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)})
 	if err != nil {
 		return "", err
 	}
-	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone: nothing changed.", nil
+	switch { // only the user's own answer counts: an expired card, or one answered for them, is no decline (#3722)
+	case r.UserAllowed():
+		return change.apply(ctx)
+	case r.UserDenied():
+		return "The user declined the change: nothing changed.", nil
 	}
-	return change.apply(ctx)
+	return prompts.RenderSettingUnanswered(), nil
 }
 
 func orNone(s string) string {
@@ -217,7 +243,8 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"assistant.interject_background": "title_interject_background", "model_profiles.tiers": "title_model_tiers"}
+	"assistant.interject_background": "title_interject_background", "assistant.agent_tasks": "title_agent_tasks", "model_profiles.tiers": "title_model_tiers",
+	"assistant.meeting_attendance_default": "title_meeting_attendance_default"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -318,6 +345,34 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 		}}, nil
 }
 
+// setMeetingAttendanceDefault changes the role meeting recordings pre-select; the card names the roles in the
+// user's language.
+func (s *Service) setMeetingAttendanceDefault(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var role string
+	if err := json.Unmarshal(v, &role); err != nil || !slices.Contains(meetingRoles, strings.TrimSpace(role)) {
+		return nil, errors.New("value must be off, listener or participant")
+	}
+	role = strings.TrimSpace(role)
+	before := s.meetingAttendanceDefault(ctx)
+	if role == before {
+		return &ownChange{summary: "assistant.meeting_attendance_default is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	name := func(l i18n.Lang, role string) string { return i18n.T(l, "assistant-settings_tool.meeting_role_"+role) }
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_meeting_attendance_default", i18n.Args{"before": name(l, before), "after": name(l, role)})
+	},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MeetingAttendanceDefault = &role; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			return fmt.Sprintf("assistant.meeting_attendance_default is %s for meeting recordings started from now on.", role), nil
+		}}, nil
+}
+
 func (s *Service) setDoneNeedsDelivery(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	return s.setBoolSetting(ctx, v, s.doneNeedsDelivery, "「上线并实测才算做完」没有变化", func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_done_needs_delivery", i18n.Args{"before": before, "after": after})
@@ -354,6 +409,13 @@ func (s *Service) setInterjectBackground(ctx context.Context, v json.RawMessage)
 		return i18n.T(l, "assistant-settings_tool.change_interject_background", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.InterjectBackground },
 		"assistant.interject_background is %v from the next message on.")
+}
+
+func (s *Service) setAgentTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.agentTasks, "assistant.agent_tasks is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_agent_tasks", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AgentTasks },
+		"assistant.agent_tasks is %v from the next start, turn end and report on (to-dos made before keep what they have).")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.
