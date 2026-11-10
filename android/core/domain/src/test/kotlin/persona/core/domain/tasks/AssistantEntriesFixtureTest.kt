@@ -42,7 +42,8 @@ class AssistantEntriesFixtureTest(private val name: String, private val fixture:
         // one entry each, and no agent of a listed task on its own
         val keys = got.needsYou.map { it.key } + got.running.map { it.key } + got.shelved.map { it.key }
         assertEquals(name, keys.size, keys.toSet().size)
-        val taskAgents = todos.flatMap { t -> t.agents.map { "agent:${it.machineId}/${it.sessionId}" } }.toSet()
+        val taskAgents = todos.filter { !it.isDone && "task:${it.id}" in keys }
+            .flatMap { t -> t.activeAgents.map { "agent:${it.machineId}/${it.sessionId}" } }.toSet()
         assertTrue(name, keys.none { it in taskAgents })
     }
 
