@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // Carried over from #1974 (by @tzh476): the idle pages preload when the browser is idle, the others as a link to them
-// is reached, and a failed load is asked again.
+// is reached, a failed load is asked again, and a chunk that comes in draws its page at once.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Suspense } from "react";
+import { Suspense, type ComponentType } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { lazyPage, preloadPages } from "./lazy-page";
 
@@ -67,8 +68,21 @@ describe("lazyPage", () => {
     expect(idle).not.toHaveBeenCalled();
   });
 
-  it("shows the fallback while the chunk is on its way", () => {
-    const Lazy = lazyPage(() => new Promise<() => null>(() => {}));
-    expect(renderToStaticMarkup(<Suspense fallback={<p>loading</p>}><Lazy /></Suspense>)).toBe("<p>loading</p>");
+  it("shows the fallback while the chunk is on its way, and the page as soon as it is in", async () => {
+    let arrive!: (p: ComponentType) => void;
+    const Lazy = lazyPage(() => new Promise<ComponentType>((r) => (arrive = r)));
+    const tree = <Suspense fallback={<p>loading</p>}><Lazy /></Suspense>;
+    expect(renderToStaticMarkup(tree)).toBe("<p>loading</p>");
+    const el = document.createElement("div");
+    const root = createRoot(el);
+    const turns = async (until: string) => {
+      for (let i = 0; i < 20 && el.innerHTML !== until; i++) await new Promise((r) => setTimeout(r, 0));
+      return el.innerHTML;
+    };
+    root.render(tree);
+    expect(await turns("<p>loading</p>")).toBe("<p>loading</p>");
+    arrive(() => <p>page</p>);
+    expect(await turns("<p>page</p>")).toBe("<p>page</p>"); // not 300 ms later, when React would reveal a retry
+    root.unmount();
   });
 });
