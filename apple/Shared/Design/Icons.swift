@@ -41,6 +41,8 @@ extension Theme {
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
         static let unchecked = "circle"
+        /// Some of a group picked (the inbox's Select, #2059).
+        static let partlyChecked = "minus.circle.fill"
         static let uncheckedBox = "square"
         static let todo = "checklist"
         /// Recent, or waiting to come back (reconnecting, last used).
@@ -174,6 +176,11 @@ extension Theme {
         static let translate = "translate"
         /// Settings › Appearance › Avatar.
         static let avatar = "person.crop.artframe"
+        /// Settings › Appearance › Avatar › New from Photo: make an avatar from an image of your own (#2405).
+        static let newAvatar = "photo.badge.plus"
+        /// Zoom in and out of a picture with a slider beside it (the avatar crop on the Mac).
+        static let zoomIn = "plus.magnifyingglass"
+        static let zoomOut = "minus.magnifyingglass"
         /// Settings › Appearance › Interface Style.
         static let style = "paintpalette"
         /// Settings › Appearance › Theme Color.
@@ -559,8 +566,14 @@ extension Theme {
         static let subagentWorking = "person.2.badge.gearshape"
         /// A conversation with an agent (an Agents chat, a session quoted as context, the chats in Storage).
         static let agentChat = "bubble.left.and.text.bubble.right"
-        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one).
+        /// A meeting (a scheduled task's meeting prep, the suggestion to prepare one, a meeting recording).
         static let meeting = "person.2.wave.2"
+        /// The calendar event a meeting recording is named after (docs/apple/recording.md).
+        static let calendarEvent = "calendar.day.timeline.left"
+        /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).
+        static let keyPoint = "text.bubble.fill"
+        static let decision = "signature"
+        static let openQuestion = "questionmark.circle.dashed"
         /// People in the knowledge base.
         static let people = "person.3"
         /// A tap on the screen, in tips and features.

@@ -46,6 +46,11 @@ Chat page:
   Background slices extend halfway into spacing (`WorkCardSlice.bridge = Theme.Space.l / 2`): the old hard-coded 7 for 14pt spacing left 2pt white seams after spacing changed to 16.
 - One `DiffView` (Claude Edit / MultiEdit / Write supplies old/new text; Codex unified diff), sharing Git row models (`DiffText.Line` / `parse`):
   header filename, directory, +N −N (opens file); only ± and row backgrounds are colored, code uses body color; long lines scroll horizontally with right fade; beyond 40 lines show beginning + Expand all.
+  Old/new text is compared in PersonaKit's `LineDiff` (#2915, a Myers line diff like the web's `compare.ts`): unchanged lines stay as plain context, two or more in a row that are over 3 lines
+  from any change fold into one "… N unchanged lines" row until Show All (which opens through `toggleInPlace`, the diff's top pinned), and a removed line paired with the added one after it (first with first) marks its changed words on
+  `Theme.Diff.addEmphasis` / `delEmphasis` (words as in the web's `code-review.ts`: ≤ 1,000 characters, ≤ 500 words, similar enough; Han and kana count one character per word).
+  Every +N −N (header, tool chip, changed files) is that diff's. Past its budget (1,000 lines between the common start and end, 100,000 characters a side) the middle is all removed, then all added.
+  A newline ending both texts (or a Write's content) ends the last line, as git counts; ending only one of an Edit's texts (pieces of a file), it is a line break put in or taken out and shows as an empty line added or removed.
   Whole-file Git diffs still use `MonoTextView` for large-diff performance, same models and colors. Tool failures put Error above output instead of covering its first line.
 - Image viewer: every full-image entry in the App (chat images, sent images, images viewed this turn, tool results, Files images, notebook outputs, Markdown web images and diagrams,
   Lark messages / cards / Moments / documents, Inbox connector messages, Lark attachments) uses one `ImageViewer` (`ImageViewer.swift`, `ViewerImage` data:
@@ -164,11 +169,11 @@ Chat page:
     Mac `NSClipView` clamps beyond-latest offsets on layout, so glide manually sets each frame and restores any displacement in the same layout (`ChatPin+Mac.swift`).
     Tapping thinking/tools/BeautifulUI tool-pill groups within open work keeps both title and tapped row still (no borrowing remaining title rise or replacing persistent hold with normal 1.5 s).
     Reduce Motion disables rise/glide and content fades (`Theme.Motion.reduced`, #1123).
-  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. Wake-ups divide it into segments ending with Agent text;
-    the answer is the latest segment's text, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783; it used to be the longest, and a short reply after a wake showed while streaming, then went into the drawer once its item landed: Summary → Build uploaded now ends on Build uploaded, Summary in the work row).
-    Everything before the answer (transitional text, wake itself counted as a tool) folds into one work row; after it a small "🔔 Background command finished · <description> ›" strip, not inline expansion,
-    opens bottom `WakeDrawer` showing only results: each task notice and Agent reply in order, intermediate tools/thinking/text folded into one final work row by default (requested 2026-10-31: expanding should not unfold N process segments). While still handling a wake, strip says Background task finished · Processing.
-    Tasks completing during work (not waking) remain a work step.
+  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. The latest Agent text after a
+    wake is the answer, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783). Before new
+    words arrive, the previous answer stays in place while the new work joins its execution summary instead of opening
+    a second segment (#2796). Everything before the answer, including wake notices and intermediate narration, stays
+    inspectable by opening that ordinary work row. Tasks completing during work (not waking) remain a work step.
     Pitfall: Claude Code's idle-session away recap closes the turn; a later wake must reopen and merge into it,
     keeping recap in place, or post-wake replies show directly (`ChatBlock.build` `lastRaw` / `reopenedAt`).
   - Away recaps resemble background tasks: small "↺ Away recap · 21 min ago ›" strip opens `RecapCard` / `RecapDrawer` with full text. Consecutive recaps with nothing between merge into "↺ Away recap · 3 times · 3 min ago ›", newest first in drawer (`ChatLines.foldRecaps`, requested 2026-10-31); mock `MOCK_RECAPS=1`.
@@ -355,7 +360,10 @@ Chat page:
     order ctrl+alt+shift+key, herdr encodes (ctrl+shift+a CSI u), unknown names reject entire chord (`invalid_key`); serial sends preserve press order.
     Live-status terminal icon opens full-screen version of same panel.
   - Git (`GitPane`): branch, upstream ↑↓ (an upstream deleted on the remote, `gone`, says so and has no Pull), staged count; changes (status letter, +/− lines, staged/partially staged), diff with old/new numbers and red/green, no wrap, horizontal scroll,
-    staged/unstaged switch when both; paged history, commit message and per-file diffs.
+    staged/unstaged switch when both; paged history, commit message and per-file diffs. A refresh the user asked for (pull to refresh, the Mac's
+    Refresh / ⌘R) that fails over a status already shown says so in a notice above it with Retry, and a failed Load Earlier Commits turns the button
+    into "Couldn't load. Try again." (#1889, `GitReadFailure`); only the automatic live refresh stays quiet. Screenshots: mock hub `MOCK_GIT_READ_FAIL=1`
+    with `-showGitReload YES`.
     Branch-card Pull N fetches latest upstream in one tap, retained as Pull when synced for active remote checks; disable repeat taps while running, refresh status/files/history and show result.
     Clean-worktree fast-forward only, no auto stash/merge/rebase; existing stashes unchanged; explain no upstream/detached HEAD/uncommitted changes/divergence. Other Git views stay read-only.
   - Files (`FilesPane`): descend from session cwd, breadcrumbs jump levels, directories first, size/modification/Git flags (dot for changes within directory),
@@ -649,7 +657,10 @@ The new shell's Model · Effort menu still sends `/model <id>` as a message.
 - Changing running sessions: the headless assistant sends stdin control requests (`set_permission_mode`, `apply_flag_settings {effortLevel}`), effective on the next request;
   herdr Agents are operated like a person: shift+tab cycles to the target (default → acceptEdits → plan → auto), and the `/effort` picker moves to the level,
   then presses `s` (session-only). **Do not send `/effort <level>`**: it also saves the level as this model's default for all future sessions (`modelSettings` in settings).
-- Effort changes wait until the turn ends and the terminal input is empty (otherwise `/effort` appends to someone else's unsent draft); herdr Agents can choose Allow everything only at creation, not in the cycle.
+- Effort changes wait until the turn ends and the terminal input is empty (otherwise `/effort` appends to someone else's unsent draft); herdr Agents can choose Allow everything only at creation, not in the cycle,
+  unless their claude was started with `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions` or `--permission-mode bypassPermissions`, which puts it in the cycle:
+  the node reads the arguments of the claude its hooks run under, once per process (`claudeCanBypass`, kern.procargs2 / `/proc/<pid>/cmdline`, no exec), and lists the session with
+  `bypass_available` (#1379). The web then offers it, red and asked again; the app still lists it only while it is the current mode (`SessionModes.options`), to follow.
 - Assistant chats (Persona page, including the main chat) can choose Allow everything both at creation and while running (#2416); a red warning at the menu top explains consequences (`BypassWarning`). Persona does not start
   claude with `--dangerously-skip-permissions`, so a control request cannot switch to bypassPermissions: stop an idle process, then resume the next message with `--permission-mode bypassPermissions`;
   if answering or holding background tasks, replace the process on the first message after this turn.
@@ -931,6 +942,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     Page sides `Theme.Space.page` 16, aligned search/filters/group titles/cards/capsules, not individual paddings.
   - `Theme.Size` (requested 2026-10-31): named text-adjacent icons/dots/avatars/tap targets/thumbnails/label widths, default original points,
     `.scaledFrame(width:height:)` / `.scaledFrame(minWidth:…)` follows text up to 1.6× accessibility (44pt buttons not a third of screen).
+    `.tapTargetFrame(alignment:)`: a hit area that grows like `scaledFrame` but never under `tapTarget` (44pt) at Small / smaller system sizes, for small controls hit wider than drawn (uploaded avatar's corner delete).
     Lines/dividers/progress ≤4pt stay unscaled `frame`; geometric sizes unchanged; watch keeps own sizes, not App text sizing.
   - Dynamic Type + Settings › Appearance › Interface Style › Text Size (Small/Standard/Large, `TextSize`, `ui.textSize`) offsets system one level via RootView `.dynamicTypeSize`,
     changing text styles, `@ScaledMetric`, MarkdownUI and BeautifulUI together, ratios intact.
@@ -957,9 +969,33 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     (circle logos fill, others `Theme.Brand.inCircle`). Boxes: Settings `icon`, detail header `wellM`, email account `wellXS`,
     source `wellS`, sign-in `iconXS`; new marks measure opaque bounds after `rsvg-convert` and crop viewBox whitespace.
   Lock Screen Live Activities capped at `.large` (~160pt height, clips beyond).
-- Motion (`Theme.Motion`: state `.snappy` 0.25, layout `.smooth` 0.3): continuous only Needs you dot breathing and system working spinner;
-  Reduce Motion (`accessibilityReduceMotion`) stops dot (and loading/preparing placeholders), working dot static outer ring.
-  No wobbling icons/spinning gears/pulsing avatars/spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
+- Motion (`Theme.Motion`): one meaning, one motion. A page picks the row for what is happening; a new meaning gets a token and a row
+  here first, never an inline `.easeInOut(duration:)` (`TokenRatchetTests` counts those). Details and why: `docs/lessons/ios.md`, "Motion rules (#2943)".
+
+  | What happens | Motion |
+  | --- | --- |
+  | A value or state changes in place (toggle, tone, selection, a menu or card opening) | `state` / `standard`: `.snappy` 0.25 |
+  | Things take new places (rows in, out or reordered) | `layout`: `.smooth` 0.3 |
+  | A block grows in place and the eye follows its rows | `expand`: `.smooth` 0.4 |
+  | Something opens in the chat, or closes | `.unfolding`: `reveal` easeOut 0.28, `conceal` easeIn 0.2 |
+  | A number changes | `.contentTransition(.numericText)` |
+  | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
+  | Moving with the keyboard | `keyboard` (the system's spring) |
+  | The composer and the 「+」 panel | their `composer…` / `hold…` / `attach…` tokens, measured from Telegram |
+
+  Red lines:
+  - Leaving is quicker than arriving (`conceal` < `reveal`, `holdLeave` < `holdAppear`, `attachContentOut` < `attachContentIn`), and a
+    panel, card or row leaving fades and moves but does not shrink. Only a glyph swapped inside one control shrinks (`composerSwapScale`);
+    `composerAccessory` fading in quicker than out is Telegram's measured exception.
+  - Under the finger nothing animates: a drag follows it frame for frame, and the animation starts at release with the finger's speed.
+  - Only a few things move on their own, each listed with its reason in `apple/PersonaTests/ContinuousMotionTests.swift`: the Needs you
+    dot's breath, the persona while it works, typing dots, loading skeletons, the voice orb in a call, the recording dot, the watch's frog.
+    A loop changes only transform, opacity or color, never a frame, padding or font (that relays out every frame); it stops off screen,
+    in the background and with the wrist down; the persona and the voice orb also hold still in Low Power Mode.
+  - Reduce Motion (`accessibilityReduceMotion`, `Theme.Motion.reduced` outside a view): loops show one still frame (the working dot its
+    static ring); changes land at once or cross-fade, without sliding or scaling. The registry test fails for a loop whose file, or its
+    caller, never reads it.
+  - No wobbling icons, spinning gears, pulsing avatars or spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
   doubling otherwise); neighboring glass keys/top Back/⋯ use `GlassEffectContainer`.
   - An extension's View drawn again (#37, as on the web and Android; `Views/Settings/ExtensionMotion.swift`): under the same key, a `metric`, `stat_grid`
     or row value whose numbers alone changed rolls (`.numericText`, counting down when the number fell); any other change of a value or a badge's words fades in,
@@ -1310,7 +1346,7 @@ When a device cannot reach the hub address, connect through an SSH server. For t
 - **Code**: the tunnel itself is in the shared package `apple/Packages/PersonaSSH` (swift-nio-ssh + Network.framework, shared by iOS and Mac, not linked into the watch);
   App-side `Persona/App/SSHTunnels.swift` (one tunnel per hub, `SSHKeys`, routing `AppModel.sshRoute`),
   `Shared/HubTransport.swift` (maps hub addresses to tunnel loopback addresses, `SSHRoute` configuration), `Persona/Views/Settings/SSHTunnelView.swift`.
-- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets and port-forwarding address construction pass through `HubTransport.resolve`;
+- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets, port-forwarding address construction and the Feishu video and voice player's stream URL (`LarkMedia.streamURL`) pass through `HubTransport.resolve`;
   `ServerConfig`, the pairing registry, `currentConfig` and all comparisons still use the hub's own address, so multi-hub grouping, routing and credential upgrades need no tunnel awareness.
   `HubRoute.healthProbe` uses `direct: true`, always probing the direct route.
 - **Routing**: with usable SSH settings in a group (host, user, confirmed fingerprint), `routePicker` always has a value: before every connection, `HubRoute.answering` probes direct routes (even a single address),
@@ -1518,8 +1554,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 
 - **Inbox items are their id and their manager** (`InboxItem.key`): the store, the bulk arithmetic (`InboxBulk`), the reply and status
   spinners, the Mac's selection, item windows and Quick Open use it. An answer about one item is put back with the manager asked
-  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. An item's
+  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. A request
+  about one item (details, Done, Mute, a reply, its suggestion, hand-off and Trail) names its manager unless that is the
+  roster's default (`AppModel.itemManager`, as the web's `itemHeaders`), and names its stamp until the roster is read (the
+  default may have moved); the Rules and Muted lists name their stamp. An item's
   rule sheet reads and saves its manager's rules and moves only that manager's items (`InboxPolicyTarget.manager`).
+- **An item's Lark chat is its manager's**: its emoji and quick reactions (`LarkMedia.catalog`, one per manager), its messaging
+  source (`MessagingSources.source(for:manager:)`: a named manager's list is read through it when its chat, a profile or a Moments
+  post opens, until one is found this launch; the default's stays the hub's), its drafts (`LarkDrafts.Key`, and the Lark user
+  its outbox draft opens under, `LarkOutboxAccounts`; the default's under the names they had) and the clients of what opens
+  inside it (thread, composer, profile, cards: `AppModel.larkAPI`, through the chat's group, `larkGroup`). A Moments post
+  pushed from an item sets its manager on its page. Tests `LarkChatManagerTests`, `LarkDraftsTests`, `LarkOutboxStoreTests`.
 - **Rules and Muted per manager**: both lists read every installed manager's at once, each one named
   (`ManagerRoster.readEach`), and show each one's under its name (`ManagerHeading`), the default first, a manager with none
   left out; one that can't be read says so in its place (offline: that they show once it is back). Each entry is stamped

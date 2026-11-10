@@ -130,7 +130,7 @@ internal fun LarkLinkHost(repository: InboxRepository, manager: String? = null, 
 @Composable
 fun LarkDocumentLink(url: String, modifier: Modifier = Modifier, picks: LarkLinkPicks? = null, refresh: Int = 0,
     manager: String? = null, webpageContent: @Composable () -> Unit) {
-    val repository = injectedInboxRepository()
+    val repository = LocalInboxRepository.current ?: injectedInboxRepository()
     val snapshot by repository.snapshot.collectAsStateWithLifecycle()
     LarkDocumentReader(url, snapshot.contentSource?.forManager(manager), repository, modifier, webpageContent, picks = picks, refresh = refresh)
 }
