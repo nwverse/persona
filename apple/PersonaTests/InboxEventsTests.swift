@@ -156,6 +156,25 @@ struct InboxEventsTests {
         #expect(InboxEventText.mark(all["lark:oc_demo9:900"]!) == nil) // done
     }
 
+    /// On the iPhone's shell a chain's conversation (the AI's handling, an Agent's) goes over the item with the item's
+    /// manager, and the Persona page and the tab stay as they were; elsewhere the handling one opens on the Persona page
+    /// (#3114).
+    @Test func aChainConversationIsPushedOverTheItemOnTheShell() {
+        let model = AppModel()
+        model.selectedTab = .chats
+        let before = model.assistantCurrent
+        let key = SessionKey(machineID: "box", sessionID: "h1")
+        var pushed: [InboxChatRoute] = []
+        InboxEventOpen.session(key, manager: true, owner: "m2", model: model) { pushed.append($0) }
+        InboxEventOpen.session(key, manager: false, owner: nil, model: model) { pushed.append($0) }
+        #expect(pushed == [InboxChatRoute(key: model.inHub(key), manager: "m2"), InboxChatRoute(key: model.inHub(key), manager: nil)])
+        #expect(model.assistantCurrent == before && model.openChat == nil)
+        #expect(model.selectedTab == .chats)
+        InboxEventOpen.session(key, manager: true, owner: nil, model: model)
+        #expect(model.assistantCurrent == model.inHub(key))
+        #expect(model.selectedTab == .assistant)
+    }
+
     @Test func aSuggestionsFirstLineAndButtons() throws {
         #expect(InboxEventText.firstLine("\n  第一行  \n第二行") == "第一行")
         let reply = InboxItem.Suggestion(version: 1, kind: "reply", text: "好")

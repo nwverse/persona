@@ -4,6 +4,7 @@ import { contextWrapped } from '../../runtime-sdk/lib/compat.js'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { createRuntime, interactionId, page, snippet, summaryOf } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
@@ -17,6 +18,7 @@ import {
   readTranscriptSteps,
   RUNTIME,
   stepsToItems,
+  transcriptStatus,
   toAgyId,
   toPersonaId,
   workspacePathOf,
@@ -32,6 +34,7 @@ export function createAgyRuntime(options = {}) {
   const maxSessions = options.maxSessions ?? 80
 
   const activeTurns = new Map() // personaId -> { streamingText, startedAt }
+  const completedTurns = new Set() // owned ACP turns that ended before a native transcript was available
   const sessionTitles = new Map() // agyId -> title
   const sessionCwds = new Map() // agyId -> cwd
   const sessionModels = new Map() // agyId -> modelId
@@ -243,6 +246,23 @@ export function createAgyRuntime(options = {}) {
     return `agy:${rawId}`
   }
 
+  function readConversationStates() {
+    const path = join(agyDir, 'conversation_summaries.db')
+    if (!existsSync(path)) return new Map()
+    let db
+    try {
+      db = new DatabaseSync(path, { readOnly: true })
+      db.exec('PRAGMA query_only = 1; PRAGMA busy_timeout = 50')
+      const rows = db.prepare('SELECT conversation_id, status, not_fully_idle, killed, step_count FROM conversation_summaries').all()
+      return new Map(rows.map((row) => [row.conversation_id, row]))
+    } catch {
+      // A missing or unavailable native summary cannot establish that a text reply ended the turn.
+      return new Map()
+    } finally {
+      db?.close()
+    }
+  }
+
   function syncTranscriptAppend(rawId) {
     const pid = toPersonaId(rawId)
     const bDir = brainDirOf(rawId)
@@ -264,6 +284,7 @@ export function createAgyRuntime(options = {}) {
 
   async function listSessions() {
     const { convs, cwdByConv } = readCacheMetadata()
+    const states = readConversationStates()
     const brainRoot = join(agyDir, 'brain')
     const seenIds = new Set(Object.keys(convs))
     if (existsSync(brainRoot)) {
@@ -300,7 +321,7 @@ export function createAgyRuntime(options = {}) {
       if (isAssistantDir(cwd)) assistants.add(pid)
 
       const running = activeTurns.has(pid)
-      candidates.push({ rawId, pid, summary, cwd, mtimeMs, running })
+      candidates.push({ rawId, pid, summary, cwd, mtimeMs, running, hasTranscript })
     }
 
     const chosen = rt.recent(candidates, {
@@ -311,10 +332,12 @@ export function createAgyRuntime(options = {}) {
       updatedAt: (c) => c.mtimeMs,
     })
 
-    return chosen.map(({ rawId, pid, summary, cwd, mtimeMs, running }) => {
+    return chosen.map(({ rawId, pid, summary, cwd, mtimeMs, running, hasTranscript }) => {
       const steps = readTranscriptSteps(brainDirOf(rawId), false)
       const parsed = stepsToItems(steps, { brainDir: brainDirOf(rawId), full: false })
       if (!lastPushedSeq.has(pid)) lastPushedSeq.set(pid, parsed.toSeq)
+      let status = running ? 'working' : transcriptStatus(steps, Date.now(), states.get(rawId))
+      if (!hasTranscript && completedTurns.has(pid) && !running) status = 'done'
       const title =
         sessionTitles.get(rawId) ||
         summary?.Title ||
@@ -324,7 +347,7 @@ export function createAgyRuntime(options = {}) {
         session_id: pid,
         title,
         cwd: cwd || home,
-        status: running ? 'working' : 'done',
+        status,
         updated_at: new Date(mtimeMs).toISOString(),
         rev: Math.max(1, parsed.toSeq),
         last_text: parsed.lastText || snippet(summary?.Preview || ''),
@@ -437,6 +460,7 @@ export function createAgyRuntime(options = {}) {
 
   async function send(params) {
     const pid = toPersonaId(params.session_id)
+    completedTurns.delete(pid)
     const rawId = toAgyId(pid)
     const cwd = sessionCwds.get(rawId) || home
     const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
@@ -490,6 +514,7 @@ export function createAgyRuntime(options = {}) {
         if (activeTurns.get(pid)?.token === turnToken) {
           clearInterval(pollTimer)
           activeTurns.delete(pid)
+          completedTurns.add(pid)
           rt.streamEnd(pid)
           syncTranscriptAppend(rawId)
           rt.sessionsChanged()

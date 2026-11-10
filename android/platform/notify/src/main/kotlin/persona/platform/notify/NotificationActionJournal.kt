@@ -14,8 +14,7 @@ class NotificationActionJournal @Inject constructor(@ApplicationContext context:
 
     @Synchronized
     internal fun claim(id: String): Boolean {
-        val digest = MessageDigest.getInstance("SHA-256").digest(id.toByteArray())
-            .joinToString("") { "%02x".format(it) }
+        val digest = digest(id)
         if (preferences.contains(digest)) return false
         // Commit before the HTTP write so process death cannot turn a second tap into a replay.
         check(preferences.edit().putString(digest, UUID.randomUUID().toString()).commit()) {
@@ -23,4 +22,14 @@ class NotificationActionJournal @Inject constructor(@ApplicationContext context:
         }
         return true
     }
+
+    /**
+     * Whether this phone already claimed [id], that is, sent its answer or was about to; only reads, never claims. A request
+     * gone from the hub that this phone claimed was most likely answered by this phone, not on the computer (#2483).
+     */
+    @Synchronized
+    internal fun claimed(id: String): Boolean = preferences.contains(digest(id))
+
+    private fun digest(id: String) = MessageDigest.getInstance("SHA-256").digest(id.toByteArray())
+        .joinToString("") { "%02x".format(it) }
 }

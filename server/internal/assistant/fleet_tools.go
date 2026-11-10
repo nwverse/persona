@@ -36,7 +36,8 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 	}
 	tools := append(phone.Tools, agents...)
 	if !assistant {
-		tools = append(tools, s.AgentTools()...) // report_to_supervisor, todo_decisions, todo_decision_add, todo_bind_thread (agentToolNames)
+		tools = append(tools, s.AgentTools()...)       // report_to_supervisor, todo_decisions, todo_decision_add, todo_bind_thread (agentToolNames)
+		tools = append(tools, s.dispatchTools(ctx)...) // dispatch_start, dispatch_read, when agents.dispatch is on (dispatch.go)
 	}
 	if assistant {
 		tools = append(tools, s.Tools(ctx)...)
@@ -104,6 +105,9 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	}
 	if !assistant && isAgentTool(name) {
 		return s.agentTool(ctx, machine, session, name, args)
+	}
+	if !assistant && isDispatchTool(name) {
+		return s.dispatchTool(ctx, machine, session, name, args)
 	}
 	if assistant && s.isOwnTool(ctx, name) {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})

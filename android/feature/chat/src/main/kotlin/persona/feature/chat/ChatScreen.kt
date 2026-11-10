@@ -197,14 +197,14 @@ private fun ChatPage(
     val inboxDrafts by trayDraftSource.collectAsStateWithLifecycle(emptyList())
     var traySchedules by remember(chrome.assistantManagement) { mutableStateOf(emptyList<persona.core.contracts.api.ScheduledTask>()) }
     LaunchedEffect(chrome.assistantManagement, connection, assistantTrays.expanded) {
-        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Progress) {
+        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Running) {
             try { traySchedules = chrome.assistantManagement?.tasks().orEmpty() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* A failed read retains the last confirmed schedule list. */ }
         }
     }
     LaunchedEffect(chrome.inboxTrays, chrome.inboxScope, assistantTrays.expanded) {
-        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.Pending) {
+        if (renderStyle == ChatRenderStyle.Assistant && assistantTrays.expanded == AssistantTray.NeedsYou) {
             try { chrome.inboxScope?.let { chrome.inboxTrays?.refresh(it) } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Live or cached drafts remain visible. */ }
@@ -307,6 +307,10 @@ private fun ChatPage(
         awaitNow = java.time.Instant.now()
     }
     val live = isLiveStatus(session?.status) || awaiting
+    // Waiting on you (the hub's state says needs you, or one of this session's requests is pending): the turn is still the
+    // live one (it folds and opens as while it runs), but nothing is at work, so its line reads "Waiting for you" with no
+    // clock, as the header does (web goes by the same state).
+    val waitingOnYou = turnWaitsOnYou(session, key, requests)
     // Which items the lines were last built from: until the first build finishes, the page is still loading, not empty.
     var projectedFrom by remember { mutableStateOf<List<Item>?>(null) }
     val projection by produceState(persona.core.domain.lines.ChatSnapshot(emptyList(), emptyList(), persona.core.domain.lines.TaskIndex()),
@@ -401,14 +405,7 @@ private fun ChatPage(
     // for this: a reply drawn as plain text and then as Markdown grows after the list was placed, and in the reversed
     // list that pushes the question off the top (the newest reply is the one that keeps its place).
     var markdownReadyFor by remember { mutableStateOf<List<Item>?>(null) }
-    LaunchedEffect(snapshot.items) {
-        // Replies render each text part under "<item id>/<part index>" (MessageContent), so prewarm those keys.
-        val items = snapshot.items
-        val (latest, earlier) = withContext(Dispatchers.Default) { markdownPrewarm(items) }
-        latest.forEach { markdownCache.parse(it.key, it.text) }
-        markdownReadyFor = items
-        earlier.forEach { markdownCache.parse(it.key, it.text) }
-    }
+    val markdownSplit = remember { MarkdownPrewarm() }
     DisposableEffect(loader) { onDispose { loader.shutdown() } }
     var folding by remember { mutableStateOf(emptySet<String>()) }
     var foldErrors by remember { mutableStateOf(emptyMap<String, String>()) }
@@ -594,6 +591,19 @@ private fun ChatPage(
                 ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
             })
     }
+    LaunchedEffect(snapshot.items) {
+        // Replies render each text part under "<item id>/<part index>" (MessageContent), so prewarm those keys, each with
+        // the source its row parses there (MarkdownText.source): the same key and source, so the row finds the parse.
+        val items = snapshot.items
+        val paths = rowActions.paths?.takeIf { rowActions.openPath != null }
+        val (latest, earlier) = withContext(Dispatchers.Default) {
+            markdownSplit.split(items).let { (latest, earlier) -> latest.map { it.key to it.source(paths) } to earlier.map { it.key to it.source(paths) } }
+        }
+        markdownCache.keep(latest.map { it.first } + earlier.map { it.first })
+        latest.forEach { (id, source) -> markdownCache.parse(id, source) }
+        markdownReadyFor = items
+        earlier.forEach { (id, source) -> markdownCache.parse(id, source) }
+    }
     // A task's detail or the dock's "All", open over the conversation; kept across the host being made again.
     val taskSheet = remember(key) { mutableStateOf<TaskSheet?>(null) }
     LaunchedEffect(tasks, taskKeys, taskTodos, taskSheet.value) {
@@ -616,7 +626,7 @@ private fun ChatPage(
             say = { text -> scope.launch { runCatching { sender.send(key, text, UUID.randomUUID().toString()) } } },
             sheet = taskSheet, machines = machines.filter { GroupKeys.namespaceOf(it.id) == namespace }.map { it.copy(id = GroupKeys.raw(it.id)) },
             pending = taskCards.filter { GroupKeys.namespaceOf(it.machineId) == namespace }.map { it.copy(machineId = GroupKeys.raw(it.machineId)) },
-            onOpenProgress = { assistantTrays.expanded = AssistantTray.Progress },
+            onOpenProgress = { assistantTrays.expanded = AssistantTray.Running },
             backgroundRecords = assistantPresentation.background, onOpenBackground = { backgroundOpen = true })
     }
     fun approveTray(captured: List<Pair<Interaction, Resolution>>) {
@@ -1011,7 +1021,7 @@ private fun ChatPage(
                                             contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
-                                        showSourceLabel = line.id in contentSourceLabels)
+                                        showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou)
                                         }
                                     }
                                 }

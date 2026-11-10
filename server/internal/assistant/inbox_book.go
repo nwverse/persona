@@ -21,6 +21,8 @@ type inboxBook struct {
 	loaded      atomic.Bool             // what the database keeps was read: until then nothing is taken or written
 	running     sync.Mutex              // one collection applied at a time
 	saving      sync.Mutex              // snapshots and writes in the same order
+	needsYouMu  sync.Mutex              // guards needsYou
+	needsYou    inboxTeller             // the "Needs you" count's teller (tellInboxNeedsYou)
 	mark        map[string]uint64       // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
 	filing      map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
 	epoch       string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
@@ -70,6 +72,8 @@ type inboxBook struct {
 	cfgAt time.Time
 
 	purgedAt time.Time // the last purge of the done items past inboxKeepHistory (purgeInboxHistory), under mu
+
+	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 }
 
 func (b *inboxBook) init() {
@@ -147,6 +151,7 @@ func (b *inboxBook) sourceName(source string) string {
 // hub. A delivery holding or waiting for the lock finds the item gone and stops (deliverNotes).
 func (b *inboxBook) drop(id string) {
 	delete(b.items, id)
+	delete(b.listMemo.kept, id)
 	delete(b.filing, id)
 	b.replies.Delete(id)
 	b.telling.Delete(id)
@@ -154,8 +159,10 @@ func (b *inboxBook) drop(id string) {
 }
 
 // touched stamps a new per-id parent/done mutation generation under b.mu: a rollback checks its stamp to tell its
-// own write apart from a concurrent same-valued one (two reopens, two unlinks), which value equality cannot.
+// own write apart from a concurrent same-valued one (two reopens, two unlinks), which value equality cannot. The item
+// changed, so GET /api/v1/inbox encodes it again (inbox_list_memo.go).
 func (b *inboxBook) touched(id string) uint64 {
+	delete(b.listMemo.kept, id)
 	if b.mark == nil {
 		b.mark = map[string]uint64{}
 	}
@@ -167,16 +174,25 @@ func (b *inboxBook) touched(id string) uint64 {
 
 // threadIndex is the items (and the running round's) by thread, for a collection that looks up one thread per
 // thing: openFor on each scanned the whole inbox, a week of chats for each of Feishu's few hundred unread ones.
-// key is the item's thread among the ones looked up, false for an item of another source. Under b.mu.
+// key is the item's thread among the ones looked up, false for an item of another source; in, when set, says whether
+// key(it) is thread, ok, without making the key (openFor asks it of each item filed under a thread). Under b.mu.
 type threadIndex struct {
 	key func(*InboxItem) (string, bool)
+	in  func(it *InboxItem, thread string) bool
 	by  map[string][]*InboxItem
 }
 
 func (b *inboxBook) threads(key func(*InboxItem) (string, bool)) *threadIndex {
 	x := &threadIndex{key: key, by: map[string][]*InboxItem{}}
-	b.each(x.note)
+	b.each(x.file)
 	return x
+}
+
+// file files an item threads meets: each comes once, so it is not looked for first, as note does.
+func (x *threadIndex) file(it *InboxItem) {
+	if k, ok := x.key(it); ok {
+		x.by[k] = append(x.by[k], it)
+	}
 }
 
 // note files it under its thread: an item added, or one whose thread may have changed. An entry under a thread it
@@ -192,7 +208,7 @@ func (x *threadIndex) note(it *InboxItem) {
 // same one every collection, so the older one does not become a copy of it (#3796).
 func (x *threadIndex) openFor(thread string) (open, done *InboxItem) {
 	for _, it := range x.by[thread] {
-		if k, ok := x.key(it); !ok || k != thread {
+		if !x.under(it, thread) {
 			continue
 		}
 		if it.open() {
@@ -204,6 +220,15 @@ func (x *threadIndex) openFor(thread string) (open, done *InboxItem) {
 		}
 	}
 	return open, done
+}
+
+// under says whether it is still filed under thread: its thread may have changed since it was.
+func (x *threadIndex) under(it *InboxItem, thread string) bool {
+	if x.in != nil {
+		return x.in(it, thread)
+	}
+	k, ok := x.key(it)
+	return ok && k == thread
 }
 
 // newerItem: a holds a later move than b (by its time, then its id, so a tie picks the same one every time).

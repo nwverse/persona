@@ -88,7 +88,9 @@ private struct SelectableInLift: ViewModifier {
 }
 
 #if os(iOS) || os(visionOS)
+#if os(iOS)
 /// A long press on the lifted message: where it landed, in the window, for its words to be selected there.
+/// iOS only: `UIGestureRecognizerRepresentable` is not available on visionOS.
 struct LiftPress: UIGestureRecognizerRepresentable {
     var enabled: Bool
     var action: (CGPoint) -> Void
@@ -107,6 +109,7 @@ struct LiftPress: UIGestureRecognizerRepresentable {
         if recognizer.state == .began { action(recognizer.location(in: nil)) }
     }
 }
+#endif
 
 private struct LiftTextView: UIViewRepresentable {
     var text: String

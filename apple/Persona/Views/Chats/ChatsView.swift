@@ -205,6 +205,8 @@ struct ChatsView: View {
     @Environment(AppModel.self) private var model
     /// The shell (docs/apple/ios.md「New shell」): its ☰ and Assistant | Agents switch take the navigation bar.
     @Environment(\.shell) private var shell
+    /// A phone's tabs (iPhone Duo open): the switch over the page column, as on Assistant (#2623).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     @State private var path = NavigationPath()
     /// Which space page sits at which depth of `path` (only this view pushes them), so a chat opened from a space
     /// page goes back to it instead of stacking another copy.
@@ -281,7 +283,7 @@ struct ChatsView: View {
         // Closing the search before a push from its results redraws the navigation with it, as when the list was
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
-        SplitNavigation(path: pushing, destinations: AgentsDestinations()) {
+        SplitNavigation(path: pushing, listKey: "agents.list", destinations: AgentsDestinations(), pageSwitch: pageTabSwitch) {
             AgentsList(path: $path, spaceAt: $spaceAt, query: $query, searching: $searching,
                        searchedBeforePush: $searchedBeforePush, showNew: $showNew, menuActions: menuActions, ownsTop: ownsTop,
                        showsPersonalEntry: showsPersonalEntry, beginSearch: beginSearch)
@@ -608,6 +610,12 @@ private struct AgentsList: View {
     private var compactTop: Bool { false }
     #endif
     @StoredValue("dev.machineFilter") private var machineFilter = ""
+    @StoredValue("dev.harnessFilter") private var harnessFilter = ""
+    @StoredValue("dev.projectFilter") private var projectFilter = ""
+    @StoredValue("dev.modelFilter") private var modelFilter = ""
+    @StoredValue("dev.pinnedOnly") private var pinnedOnly = false
+    @StoredValue("dev.searchScope") private var searchScope: AgentSearchScope = .all
+    @StoredValue("dev.searchAsCode") private var searchAsCode = false
     /// Several groups of hubs: the one the list shows ("" = all; `HubFilter`).
     @StoredValue(HubFilter.key) private var hubFilter = ""
     @StoredValue("dev.grouping") private var storedGrouping: DevGrouping = .standard // by repository first (#2108)
@@ -727,7 +735,9 @@ private struct AgentsList: View {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
         return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
-                     machine: machineFilter, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
+                     searchScope: searchScope, searchAsCode: searchAsCode,
+                     machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
+                     pinnedOnly: pinnedOnly, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
                      held: model.heldInList, preferences: preferences,
                      pagedGroups: Set(model.sessionLists.lists.filter { $0.value.paged }.keys),
                      listQuery: listQuery)

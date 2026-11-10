@@ -94,8 +94,11 @@ type InboxRelated struct {
 }
 
 // chainAdd appends an entry stamped with the next id, keeping the newest chainMax. An item from before chains (none
-// yet, but messages and a tier) gets its two synthesized entries first, so they don't vanish. Under b.mu.
+// yet, but messages and a tier) gets its two synthesized entries first, so they don't vanish. The item changed, so
+// GET /api/v1/inbox encodes it again (inbox_list_memo.go): many changes put an entry here and make a call before they
+// save, or never save (a reply kept open). Under b.mu.
 func (b *inboxBook) chainAdd(it *InboxItem, e InboxChainEntry) {
+	delete(b.listMemo.kept, it.ID)
 	if len(it.Chain) == 0 && e.Kind != ChainReceived {
 		it.Chain = synthesizedChain(b.userLang(), it)
 		it.ChainSeq = len(it.Chain)
@@ -303,8 +306,9 @@ func batchStart(it *InboxItem, prev inboxSeen, n int, fresh bool) string {
 }
 
 // contextLine is a message line of a chat's context as the Feishu plugin writes it: "[01-02 15:04] <name>(@-mentioned me): ...",
-// with the full-width parentheses and colon matched below.
-var contextLine = lazyre.New(`^\[[^\]]{1,20}\] ([^：]{1,60}?)(（@了我）)?：(.*)$`)
+// with the full-width parentheses and colon matched below. The line's trailing notes for the AI ("(id=…, 回复 …)") are
+// left out of the text.
+var contextLine = lazyre.New(`^\[[^\]]{1,20}\] ([^：]{1,60}?)(（@了我）)?：(.*?)(?: \(id=[^()]*\))?$`)
 
 // contextMessages are the newest n message lines of a chat's context; nil when its lines don't read as messages.
 func contextMessages(context string, n int) []InboxChainMessage {

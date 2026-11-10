@@ -3,7 +3,9 @@
 // a task, quick results, the dock above the composer, the tasks' questions, the route chip, and a task's detail in the
 // side panel.
 import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { taskCardSlots, taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
+import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
+import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
+import { useRestoredTodos } from "../../lib/todo-restore";
 import {
   answeredItems,
   cardFiled,
@@ -36,7 +38,7 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { runningWorkflows, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -47,7 +49,7 @@ import { plainMarkdown } from "../../lib/plain-markdown";
 import { Markdown } from "../../ui/Markdown";
 import { LiveCard } from "../../ui/AssistantCard";
 import type { AssistantView } from "../../lib/extension-wire";
-import { getState, hubHas, useStore, type State } from "../../lib/store";
+import { getState, hubHas, taskSessionLookup, useStore, type State } from "../../lib/store";
 import type { AgentState, Interaction, Machine, Session } from "../../lib/types";
 import { Button, Collapse, cx, Dialog, IconButton, Menu, toast, useNow } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -75,9 +77,12 @@ import { stateName } from "../../lib/state-labels";
 
 function useTaskLookup() {
   const sessions = useStore((s) => s.sessions);
+  const sessionSummaries = useStore((s) => s.sessionSummaries);
+  const taskRows = useStore((s) => s.taskRows);
   const interactions = useStore((s) => s.interactions);
   const answered = useStore((s) => s.answered);
-  return useMemo(() => answeredLookup(sessions, interactions, answered), [sessions, interactions, answered]);
+  return useMemo(() => answeredLookup(taskSessionLookup({ sessions, sessionSummaries, taskRows }), interactions, answered),
+    [sessions, sessionSummaries, taskRows, interactions, answered]);
 }
 
 // The cards in the conversation do not take the whole session list, the pending cards or the machines: their store
@@ -87,14 +92,14 @@ function useTaskLookup() {
 
 /** What a task is now, from the store: its status and its lead agent. */
 function taskNowIn(s: State, todo: Todo, plans: Record<string, TaskPlan>): { status: TodoStatus; lead?: Session } {
-  const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
+  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   return { status: statusOf(todo, lookup, plans), lead: mostUrgentAgent(todo, lookup)?.session };
 }
 
 /** A task's status (undefined without the task). */
 function useTaskStatus(todo: Todo | undefined): TodoStatus | undefined {
   const plans = useFeed((s) => s.plans);
-  return useStore((s) => (todo ? statusOf(todo, answeredLookup(s.sessions, s.interactions, s.answered), plans) : undefined));
+  return useStore((s) => (todo ? statusOf(todo, answeredLookup(taskSessionLookup(s), s.interactions, s.answered), plans) : undefined));
 }
 
 /** A task's status and lead agent (undefined without the task). */
@@ -108,7 +113,7 @@ function useTaskNow(todo: Todo | undefined): { status: TodoStatus; lead?: Sessio
 function useTaskUltracode(todo: Todo | undefined): boolean {
   const plans = useFeed((s) => s.plans);
   const planned = todo?.plan_id ? plans[todo.plan_id]?.tasks.find((p) => p.todo_id === todo.id) : undefined;
-  return useStore((s) => (todo ? todoUltracode(todo, answeredLookup(s.sessions, s.interactions, s.answered), planned) : false));
+  return useStore((s) => (todo ? todoUltracode(todo, answeredLookup(taskSessionLookup(s), s.interactions, s.answered), planned) : false));
 }
 
 /** A task's title on its card and its folded line, with the Agent list row's ultracode mark right after it while on
@@ -183,7 +188,7 @@ function useTaskMenu(todo: Todo | undefined, status: TodoStatus | undefined) {
 
 /** The task's state as an agent state, for its dot and tone. */
 function dotState(st: TodoStatus): AgentState {
-  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
+  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "waiting" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
 }
 
 const TONE: Record<string, string> = {
@@ -196,6 +201,7 @@ const TONE: Record<string, string> = {
 
 function TaskMark({ status, size = 9 }: { status: TodoStatus; size?: number }) {
   if (status === "usage_limit") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-orange" />;
+  if (status === "waiting") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-ink-2" />;
   if (status === "failed" || status === "interrupted") return <Icon name="info" size={size + 4} stroke={2.4} className="text-red" />;
   if (status === "done" || status === "unread")
     return <Icon name="check" size={size + 4} stroke={2.4} className={status === "done" ? "text-ink-3" : "text-green"} />;
@@ -454,8 +460,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
         : progress?.text || (startError ? t("assistant-tasks.start_failed", { error: startError }) : status === "not_started" ? t("assistant-tasks.starting_agent") : t("assistant-tasks.no_activity"));
   const stepFor = now === progress?.text ? progress.for : undefined;
   // Its subagents add to its own progress, below it, and never stand in for it.
-  const subagents = status === "working" || status === "needs_you" ? runningSubagents(lead) : [];
-  const workflow = status === "working" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
+  const subagents = status === "working" || status === "waiting" || status === "needs_you" ? runningSubagents(lead) : [];
+  const workflow = status === "working" || status === "waiting" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
   // what its agent last told Persona (report_to_supervisor): while the task is open
   const reported = status !== "done" && status !== "failed" ? progressLine(todo.supervision) : undefined;
   // its agent's own task list (#5302), unless a report to Persona came after it: the report says more
@@ -929,7 +935,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
  *  has no card) and "N more" past them. A card just answered here is not one it waits on (answeredLookup). */
 const TODAY_WAITING_MAX = 3;
 function todayWaitingLines(s: State, waiting: { id: string; title: string }[]): string[] {
-  const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
+  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   const askOf = (id: string) => {
     const todo = s.todos.find((x) => x.id === id);
     return todo ? taskAsk(taskInteraction(todo, s.interactions, mostUrgentAgent(todo, lookup)?.session)) : undefined;
@@ -1142,11 +1148,11 @@ export const DOCK_CAPSULE = "inline-flex h-8 shrink-0 items-center whitespace-no
 /** The dock: "All N" held at its left edge (it does not scroll), then a pill for each task going on (waiting first) and,
  * in the main conversation, each agent going on that no task stands for (#1113), scrolling on their own (iOS TaskDock). */
 // Failed, done and stopped tasks are not in the dock.
-const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, not_started: 1, unread: 2 };
+const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, waiting: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
 function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
-  const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
+  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   return s.todos
     .filter((t) => t.origin === conversation)
     .map((t) => ({ t, st: statusOf(t, lookup, plans) }))
@@ -1163,9 +1169,9 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
     });
 }
 
-type AssistantTray = "pending" | "progress" | "agents";
-/** Each tray entry's mark: Pending waits on you, Progress is work under way, Agents are the sessions themselves. */
-const TRAY_DOT: Record<AssistantTray, string> = { pending: "bg-attention", progress: "bg-accent", agents: "bg-green" };
+type AssistantTray = "needs" | "running";
+/** Each entry's mark: Needs you waits on the user, In progress is work under way. */
+const TRAY_DOT: Record<AssistantTray, string> = { needs: "bg-attention", running: "bg-accent" };
 const EMPTY_FEED: FeedItem[] = [];
 const EMPTY_CARDS: TaskCardMetadata[] = [];
 
@@ -1198,15 +1204,21 @@ function ProgressTaskRow({ card, conversation }: { card: TaskCardMetadata; conve
   const receipt = feed.find((it) => it.id === card.receipt_id);
   const pr = todo?.pr_url ?? (receipt && field(receipt, "pr"));
   const prNumber = pr ? /\/(\d+)\/?$/.exec(pr)?.[1] : undefined;
-  const statusLabel = accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
+  const toStart = !todo && !!card.plan_id && plans[card.plan_id]?.state === "open";
+  const statusLabel = accepted || (!todo && state === "accepted") ? t("assistant-tasks.review_accepted") : state === "cancelled" ? t("assistant-tasks.review_cancelled") : toStart ? t("assistant-tasks.plan_waiting") : TODO_STATUS_INFO[state as TodoStatus]?.label ?? t("assistant-tasks.no_activity");
+  // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
+  const mark: TodoStatus = accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
+  // what a waiting task waits for (#3274): its agent's own line for it
+  const waits = useStore((s) => (todo && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : waits ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
-    <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-pending", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
+    <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
+      <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold" title={title}>{title}</span><span className="shrink-0 text-xs text-ink-2">{statusLabel}</span></div>
+        <div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold" title={title}>{title}</span><span className={cx("shrink-0 text-xs", toStart || state === "needs_you" ? "text-attention" : "text-ink-2")}>{statusLabel}</span></div>
         <div className="truncate text-xs text-ink-2" title={detail}>{[detail, prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined].filter(Boolean).join(" · ")}</div>
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
@@ -1228,43 +1240,91 @@ function TaskProgressMeter({ value, total, blocked, title }: { value: number; to
   );
 }
 
-/** The conversation's three upward trays reuse its task details, decisions and Agent dock. */
+/** The task's line in Needs you when no card of its agent stands for it: what it waits for. */
+function waitsLabel(todo: Todo, status: TodoStatus): string {
+  if (todo.supervision?.state === "pending_review") return t("assistant-tasks.review_pending");
+  if (todo.supervision?.state === "needs_user") return t("assistant-tasks.review_needs_user");
+  return TODO_STATUS_INFO[status]?.label ?? t("assistant-tasks.review_needs_user");
+}
+
+/** One row of Needs you (lib/assistant-entries): a task or an Agent with the cards it asks, a plan to start, a task to
+ *  decide on or review, a message to send. */
+function NeedsYouRow({ item }: { item: NeedsYouItem }) {
+  if (item.kind === "plan") return <PlanCard plan={item.plan} />;
+  if (item.kind === "message") return <MessageCard item={item.item} />;
+  if (item.kind === "agent") {
+    const { session, asks } = item;
+    const open = () => openPanel({ kind: "agent", mid: session.machine_id, sid: session.session_id });
+    if (!asks.length) return <button type="button" data-needs-row={item.key} onClick={open} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span></button>;
+    return <div data-needs-row={item.key}><button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+  }
+  const { todo, asks, status } = item;
+  if (asks.length) return <div data-needs-row={item.key}><button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}</div>;
+  const ask = openAsk(todo);
+  if (ask) return <div data-needs-row={item.key}><AcceptRow stacked key={todo.id + ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(ask.asked_at)) / 1000), ...ask }} /></div>;
+  return <button type="button" data-needs-row={item.key} onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{waitsLabel(todo, status)}</span></button>;
+}
+
+/** An Agent that belongs to no task, working: one row of In progress that opens its chat. */
+function RunningAgentRow({ session }: { session: Session }) {
+  return (
+    <button type="button" data-running-agent={`${session.machine_id}/${session.session_id}`} onClick={() => openPanel({ kind: "agent", mid: session.machine_id, sid: session.session_id })} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover">
+      <span className="flex w-4 shrink-0 justify-center"><StatusMark state="working" /></span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("working")}</span></div>
+        {session.activity?.trim() && <div className="truncate text-xs text-ink-2">{session.activity.trim()}</div>}
+      </div>
+      <Icon name="chevronRight" className="shrink-0 text-ink-3" />
+    </button>
+  );
+}
+
+/** The conversation's two upward trays (#3387): Needs you, everything waiting on the user, and In progress, everything
+ *  running that does not; each thing in one of them only (lib/assistant-entries). Finished things are on the board. */
 export const AssistantActionBar = memo(function AssistantActionBar({ conversation, ownPending, ownCount = 0 }: { conversation: string; ownPending?: ReactNode; ownCount?: number }) {
   const [tray, setTray] = useState<AssistantTray | null>(null);
   const [board, setBoard] = useState(false);
-  const [filter, setFilter] = useState<AgentState | "all">("all");
+  const [showShelved, setShowShelved] = useState(false);
   const trayId = useId();
   const plans = useFeed((s) => s.plans);
   const feed = useFeed((s) => s.feeds[conversation] ?? EMPTY_FEED);
   const metadata = useFeed((s) => s.taskCards[conversation] ?? EMPTY_CARDS);
-  const todos = useStore((s) => s.todos);
-  const lookup = useTaskLookup();
-  const manual = useStoreRows<DockAgent>((s) => dockAgents(answeredSessions(Object.values(s.sessions).flat(), s.interactions, s.answered), s.todos, conversation, s.assistant?.main));
-  const mine = todos.filter((todo) => todo.origin === conversation);
-  const cards = taskCardSlots(conversation, metadata, feed, plans, todos);
-  const openPlans = Object.values(plans).filter((plan) => plan.conversation === conversation && plan.state === "open");
-  const review = mine.filter((todo) => todo.ask || (!todo.done_at && (todo.supervision?.state === "pending_review" || todo.supervision?.state === "needs_user")));
   const deferred = useFeed((s) => s.later);
-  const messages = feed.filter((it) => it.kind === "message" && !cardSent(it) && !cardFiled(it) && !(it.ref && deferred[it.ref]));
-  const agentsById = new Map<string, { session: Session; state: AgentState }>(manual.map((agent) => [`${agent.session.machine_id}/${agent.session.session_id}`, agent]));
-  for (const todo of mine) for (const ref of todo.agents ?? []) {
-    if (ref.released_at) continue;
-    const session = lookup(ref.machine_id, ref.session_id);
-    if (session) agentsById.set(`${ref.machine_id}/${ref.session_id}`, { session, state: stateOf(session) });
-  }
-  const agents = [...agentsById.values()];
-  const asks = useStoreRows((s) => questionsIn(s, conversation).asks);
-  const manualAsks = useStoreRows((s) => s.interactions.filter((ix) => manual.some(({ session }) => session.machine_id === ix.machine_id && session.session_id === ix.session_id)));
-  const pendingCount = ownCount + asks.length + manualAsks.length + openPlans.length + review.length + messages.length;
+  const todos = useStore((s) => s.todos);
+  const sessionsByMachine = useStore((s) => s.sessions);
+  const interactions = useStore((s) => s.interactions);
+  const answered = useStore((s) => s.answered);
+  const main = useStore((s) => s.assistant?.main);
+  const lookup = useTaskLookup();
+  const [restored] = useRestoredTodos();
+  // a minute's tick moves tasks across the 48 h shelving line while nothing else changes, as on the To-dos page
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const progress = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("progress"); };
-    const pending = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("pending"); };
-    window.addEventListener("persona:task-progress", progress);
-    window.addEventListener("persona:task-pending", pending);
-    return () => { window.removeEventListener("persona:task-progress", progress); window.removeEventListener("persona:task-pending", pending); };
+    const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const entries = useMemo(
+    () => assistantEntries({ conversation, main, todos, sessions: answeredSessions(Object.values(sessionsByMachine).flat(), interactions, answered), interactions, plans, feed, cards: metadata, deferred, lookup, restored, now: Date.now() }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tick: re-read the clock once a minute
+    [conversation, main, todos, sessionsByMachine, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick],
+  );
+  const asking = entries.needsYou.filter((item) => (item.kind === "task" || item.kind === "agent") && item.asks.length > 0);
+  const rest = entries.needsYou.filter((item) => !asking.includes(item));
+  const counts: Record<AssistantTray, number> = { needs: ownCount + entries.needsYou.length, running: entries.running.length };
+  useEffect(() => {
+    const running = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("running"); };
+    const needs = (event: Event) => { if ((event as CustomEvent).detail === conversation) setTray("needs"); };
+    window.addEventListener("persona:task-progress", running);
+    window.addEventListener("persona:task-pending", needs);
+    window.addEventListener("persona:task-start", needs);
+    return () => {
+      window.removeEventListener("persona:task-progress", running);
+      window.removeEventListener("persona:task-pending", needs);
+      window.removeEventListener("persona:task-start", needs);
+    };
   }, [conversation]);
-  const labels = { pending: t("assistant-tasks.tray_pending"), progress: t("assistant-tasks.tray_progress"), agents: t("assistant-tasks.tray_agents") };
-  const counts = { pending: pendingCount, progress: cards.length, agents: agents.length };
+  const labels: Record<AssistantTray, string> = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
+  const entryKeys: AssistantTray[] = ["needs", "running"];
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer
@@ -1272,19 +1332,22 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       {tray && (
         <section id={trayId} aria-label={labels[tray]} className="assistant-action-tray min-h-0 overflow-y-auto overscroll-contain rounded-card bg-surface shadow-card">
           <div className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3 py-2 text-sm"><h2 className="min-w-0 flex-1 truncate font-semibold">{labels[tray]}</h2><Button onClick={() => setBoard(true)}>{t("assistant-tasks.all")}</Button><IconButton icon="x" label={t("ui-atoms.close")} onClick={() => setTray(null)} /></div>
-          {tray === "progress" && <div className="divide-y divide-line">{cards.map((card) => <ProgressTaskRow key={card.id} card={card} conversation={conversation} />)}{!cards.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.board_empty_title")}</p>}</div>}
-          {tray === "pending" && <div className="flex flex-col gap-2 p-2">
-            {openPlans.map((plan) => <PlanCard key={plan.id} plan={plan} />)}
-            {asks.map(({ todo, ix }) => <div key={ix.id}><div className="px-1 text-sm font-semibold">{todo.title}</div><InteractionCard ix={ix} /></div>)}
-            {manualAsks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}
-            {ownPending}
-            {review.map((todo) => todo.ask ? <AcceptRow stacked key={todo.id + todo.ask.asked_at} row={{ id: todo.id, title: todo.title, waited_s: Math.max(0, (Date.now() - Date.parse(todo.ask.asked_at)) / 1000), ...todo.ask }} /> : <button key={todo.id} type="button" onClick={() => openTask(todo.id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><Icon name="hand" className="shrink-0 text-attention" /><span className="min-w-0 flex-1 truncate">{todo.title}</span><span className="shrink-0 text-xs text-ink-2">{todo.supervision?.state === "pending_review" ? t("assistant-tasks.review_pending") : t("assistant-tasks.review_needs_user")}</span></button>)}
-            {messages.map((item) => <MessageCard key={item.id} item={item} />)}
-            {!pendingCount && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}
+          {tray === "running" && <div className="divide-y divide-line">
+            {entries.running.map((item) => item.kind === "task" ? <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} /> : <RunningAgentRow key={item.key} session={item.session} />)}
+            {!entries.running.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_progress")}</p>}
+            {entries.shelved.length > 0 && (
+              <button type="button" data-progress-shelved aria-expanded={showShelved} onClick={() => setShowShelved((v) => !v)} title={t("assistant-tasks.tray_shelved_hint")} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-ink-2 hover:bg-hover">
+                <Icon name={showShelved ? "chevron" : "chevronRight"} size={12} className="shrink-0" />
+                <span className="whitespace-nowrap">{t("assistant-tasks.tray_shelved", { count: entries.shelved.length })}</span>
+              </button>
+            )}
+            {showShelved && entries.shelved.map((item) => item.kind === "task" && <ProgressTaskRow key={item.key} card={item.card} conversation={conversation} />)}
           </div>}
-          {tray === "agents" && <div className="flex flex-col gap-2 p-2">
-            <div className="scrollbar-none flex gap-1 overflow-x-auto">{(["all", "needs_you", "working", "unread"] as const).map((key) => <Button key={key} onClick={() => setFilter(key)} className={filter === key ? "bg-hover-2" : undefined}>{key === "all" ? t("assistant-tasks.all") : stateName(key)}</Button>)}</div>
-            <div className="divide-y divide-line">{agents.filter((agent) => filter === "all" || agent.state === filter).map(({ session, state }) => <button key={`${session.machine_id}/${session.session_id}`} type="button" onClick={() => openPanel({ kind: "agent", mid: session.machine_id, sid: session.session_id })} className="flex w-full min-w-0 items-center gap-2 px-2 py-2 text-left text-sm"><StatusMark state={state} /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName(state)}</span></button>)}</div>
+          {tray === "needs" && <div className="flex flex-col gap-2 p-2">
+            {asking.map((item) => <NeedsYouRow key={item.key} item={item} />)}
+            {ownPending}
+            {rest.map((item) => <NeedsYouRow key={item.key} item={item} />)}
+            {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}
           </div>}
         </section>
       )}
@@ -1292,10 +1355,10 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
           open tray is the selected capsule. The scroller pads by the focus ring's width and takes it back, as the
           dock's did, so a large font scrolls sideways instead of clipping the ring. */}
       <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
-        {(["pending", "progress", "agents"] as const).map((key) => {
+        {entryKeys.map((key) => {
           const open = tray === key;
-          // An empty Pending is drawn quiet (grey) but still opens "All caught up".
-          const quiet = key === "pending" && !pendingCount;
+          // An empty Needs you is drawn quiet (grey) but still opens "All caught up".
+          const quiet = key === "needs" && !counts.needs;
           return (
             <button
               key={key}
@@ -1303,7 +1366,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
               data-tray-entry={key}
               aria-expanded={open}
               aria-controls={open ? trayId : undefined}
-              onClick={() => setTray((old) => (old === key ? null : key))}
+              onClick={() => setTray(open ? null : key)}
               className={cx(DOCK_CAPSULE, "gap-2 font-medium", open ? "bg-ink text-surface" : quiet ? "bg-field text-ink-3 hover:bg-hover" : "bg-field text-ink hover:bg-hover")}
             >
               <span aria-hidden className={cx("size-2 shrink-0 rounded-full", quiet ? "bg-ink-3" : TRAY_DOT[key])} />

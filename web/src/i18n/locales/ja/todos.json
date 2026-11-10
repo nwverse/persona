@@ -20,6 +20,7 @@
   "stage_verify": "確認済み",
   "stage_pr": "PR",
   "stage_pr_n": "PR #{n}",
+  "stage_mr_n": "MR !{n}",
   "stage_pr_label": "{pr}（{host}）を新しいタブで開く",
   "delete_title": "ToDoを削除",
   "delete_confirm": "「{title}」を削除しますか？関連付けられたエージェントには影響しません。",
@@ -217,5 +218,19 @@
   "ask_ok": "OK",
   "ask_answer": "チャットで答える",
   "ask_answer_hint": "おすすめがないので、元の会話で答えてください。",
-  "ask_failed": "できませんでした：{error}"
+  "ask_failed": "できませんでした：{error}",
+  "summary_triage": "未完了{open} · 保留{shelved} · 完了{done}",
+  "grouping_label": "ToDoのグループ分け",
+  "grouping_status": "状態",
+  "grouping_folder": "フォルダ",
+  "section_just_done": "完了したばかり",
+  "section_pr": "マージ待ちのPR",
+  "section_other": "その他の未完了",
+  "section_shelved": "保留",
+  "section_done": "完了",
+  "shelved_hint": "48時間進展がなく、動いているエージェントもありません。未完了には数えません。データは削除されていません。",
+  "related": "関連 {count} 件",
+  "pr_idle": "最終更新 {age}",
+  "restore": "戻す",
+  "restored": "リストに戻しました"
 }

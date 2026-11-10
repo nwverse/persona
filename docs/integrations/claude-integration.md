@@ -152,6 +152,12 @@ Test results:
 ### Self-check: `personad node doctor`
 
 Hooks, MCP, and skill-plugin files are generated at node startup; damage gives no warning (hook cannot connect to node and falls back to TUI; see the deleted `node.sock` entry in `docs/lessons/server.md`).
+
+The generated `mcp.json` retains both built-in compatibility namespaces: ordinary Agent starts and resumes share this
+file, and generation precedes the hub handshake. Doctor checks and repairs that same configuration. The
+`persona_contracts_v1` optimization applies to per-process assistant configurations instead ("Headless assistant"
+below; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), "MCP namespace / tools").
+
 `personad node doctor [--json] [--fix]` performs read-only checks on this computer (`node/doctor.go`). One line per check (`正常｜名字：发现了什么；怎么办`—“OK | Name: finding; remedy”), same format as hub doctor; `正常` / `注意` / `有问题` (“OK” / “Attention” / “Problem”) correspond to JSON `ok` / `warn` / `fail`. Any fail yields a nonzero exit code (hub doctor has no `--json` and does not use exit status):
 
 | Check | Content | Status |
@@ -354,8 +360,12 @@ Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"
 
 - One process supports consecutive turns through stdin, one `{"type":"user","message":{…}}` per line, images as base64 image blocks.
 - `stream_event` `content_block_delta/text_delta` supplies word-by-word output → WS delta; result ends the turn. Structured messages still read from transcript.
+- **Bounded transient recovery** (#3204, `node/assistant_recovery.go`): a turn ending on an upstream safeguards refusal, 429 / throttling, or a 5xx stays working while node resumes the unchanged request once on the same model (`prompts/assistant/model_retry`, a `<persona-context>` block, not another user bubble). If that attempt also fails, node resumes on the next concrete entry in the launcher's own ordered `/model` list; each model gets one same-model retry. The `default` placeholder, models already tried, and a locked launcher's entries are not fallbacks. The named Agent presets in ModelProfile.Tiers are not this queue.
+  The same rule applies to headless Codex's `turn/completed`. A hub/request 400, authentication or model-route error, subscription usage limit (including Claude's textual quota errors), over-context refusal, or user interruption is never replayed. Model changes use the ordinary stop-and-resume path, require an explicitly observed empty background-task inventory, and never kill running or not-yet-known background work to make a switch; if no eligible model can continue, the original error becomes final. Only then can the manager's scheduled-run watcher record `failed`. The transcript and session retain the model that actually answered, including a fallback.
+  The session stays working throughout process replacement, including after the replacement is registered and before its message is delivered. A resident-node handover waits for the active recovery send, then carries the remaining budget and any queued failure to the new owner; late results follow that owner. A current process exiting without a result closes its recovery instead of leaving a permanent working placeholder.
 - Hooks trigger normally, but **AskUserQuestion is unavailable in -p mode** (No such tool available … nobody in this session can answer it; PreToolUse cannot run). Assistant uses MCP `ask_user` (`docs/assistant/assistant.md`).
 - Per-process inline MCP JSON (`--mcp-config '{…}'`), carrying `PERSONA_ASSISTANT=1` and PERSONA_SESSION_ID. Process env `ENABLE_TOOL_SEARCH=false` (few, frequently used tools, no ToolSearch); `--append-system-prompt` is hub's live snapshot.
+- New assistant and guest sessions register only the `persona` MCP namespace when the hub advertises `persona_contracts_v1`; old or unknown hubs and resumed sessions keep both compatibility namespaces. The allow list uses the same selection. Agent SDK assistants follow this policy too; historical tool-name readers continue accepting both names ([rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), "MCP namespace / tools").
 - Spare: Claude waits on stdin for first message, so can launch ahead; new chats use its session ID.
 - Launcher change kills process and resumes with new launcher. Idle 20-minute processes are reclaimed; next message resumes automatically.
 - Interrupt: no stdin interrupt in -p; terminate process, resume next message.
@@ -444,21 +454,20 @@ failure rather than a configuration error.
   unavailable-model chain, recommending a new conversation or `/model` in a Claude Code terminal. Readiness does not
   point at model settings or block creating a new conversation because of this session-only problem. Automatic work
   continuation and scheduled-run retries do not resend this failed turn.
-- No configuration is required. Recovery is the user's decision, and the same request may be refused again. This
-  change does not alter Claude Code's fallback policy or send a model-switch command automatically.
+- No configuration is required. Claude Code's own session-scoped fallback and the headless assistant's bounded recovery in [Headless assistant](#headless-assistant-chat-tab) are separate mechanisms. The latter handles a final safeguards / 429 / 5xx turn error without rewriting the request; it never replays this section's `model_fallback_unavailable` 404 and does not change Claude Code's own fallback policy.
 
 Client follow-up remains necessary for dedicated cards, an always-visible notice, an actual-model/Fell Back marker,
 explicit recovery buttons, and suppressing the old error cards' Retry/Continue or model-settings buttons. Clients may
 ignore the new structured fields today. Apple also needs a `ChatCache` version bump when adopting the changed item
 structure; this server change does not modify Swift. The broader no-fallback refusal policy below remains a proposal.
 
-## Safety blocks and automatic fallback (proposal, #2282, decision pending)
+## Safety blocks and automatic fallback (broader proposal; narrow headless recovery implemented in #3204)
 
-The user asked whether safety blocks and model downgrades are visible in the app. The limited server behavior above is implemented; the broader design in this section remains a proposal, **not implemented**. Items marked Decision Pending require the user's choice; implement the PR split below afterward.
+The user asked whether safety blocks and model downgrades are visible in the app. The limited server behavior above is implemented; the broader design in this section remains a proposal, **not implemented**. Items marked Decision Pending require the user's choice; implement the PR split below afterward. The bounded same-request recovery in #3204 is the one exception to this proposal's no-automatic-Continue baseline, not an implementation of its broader policy.
 
-**Principle**: report what happened honestly and let the user decide. Do not bypass or reduce safeguards: no rewriting user messages, automatic rephrasing retries, automatic Continue on blocked turns, or decisions by the task manager's judging model. Blocked turns use rules only, never model triage.
+**Principle**: report what happened honestly and never bypass or reduce safeguards: no rewriting user messages or automatic rephrasing retries, and no decisions by the task manager's judging model. The implemented recovery only resumes the unchanged request under the explicit bounds above. Every other blocked turn remains the user's decision, using rules only, never model triage.
 
-### Current behavior
+### Baseline before #3204
 
 Claude Code (2.1.318 tested, see issue) has two outcomes when safeguards block a message:
 
