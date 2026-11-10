@@ -151625,6 +151625,305 @@
         }
       }
     },
+    "Cloudflare Access rejected the service token" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access rejected the service token"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access がサービストークンを拒否しました"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access 拒绝了这个服务令牌"
+          }
+        }
+      }
+    },
+    "This hub is behind Cloudflare Access and needs a service token" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This hub is behind Cloudflare Access and needs a service token"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このハブは Cloudflare Access の背後にあり、サービストークンが必要です"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台 hub 在 Cloudflare Access 后面，需要服务令牌"
+          }
+        }
+      }
+    },
+    "Cloudflare Access" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access"
+          }
+        }
+      }
+    },
+    "Only for a hub published through Cloudflare Access: the service token's Client ID and Client Secret. Kept with this hub's pairing in the keychain." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only for a hub published through Cloudflare Access: the service token's Client ID and Client Secret. Kept with this hub's pairing in the keychain."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access 経由で公開しているハブの場合のみ、サービストークンの Client ID と Client Secret を入力します。このハブのペアリングと一緒にキーチェーンに保存されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅用于通过 Cloudflare Access 发布的 hub：填服务令牌的 Client ID 和 Client Secret，和这台 hub 的配对一起保存在钥匙串里。"
+          }
+        }
+      }
+    },
+    "Client ID" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Client ID"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Client ID"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Client ID"
+          }
+        }
+      }
+    },
+    "Client Secret" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Client Secret"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Client Secret"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Client Secret"
+          }
+        }
+      }
+    },
+    "Cloudflare Access · %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access · %1$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access・%1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access · %1$@"
+          }
+        }
+      }
+    },
+    "Set [Hubs View 7c1e4b]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Set"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已设置"
+          }
+        }
+      }
+    },
+    "Service Token" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Service Token"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サービストークン"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务令牌"
+          }
+        }
+      }
+    },
+    "For a hub published through Cloudflare Access: the app sends this service token with every request to %@, and only there. It's kept with this hub's pairing in the keychain." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "For a hub published through Cloudflare Access: the app sends this service token with every request to %1$@, and only there. It's kept with this hub's pairing in the keychain."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cloudflare Access 経由で公開しているハブ用です。アプリは %1$@ へのすべてのリクエストにこのサービストークンを付け、ほかには送りません。このハブのペアリングと一緒にキーチェーンに保存されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于通过 Cloudflare Access 发布的 hub：App 发往 %1$@ 的每个请求都带上这个服务令牌，不会发到别处。它和这台 hub 的配对一起保存在钥匙串里。"
+          }
+        }
+      }
+    },
+    "Remove Service Token" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove Service Token"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サービストークンを削除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除服务令牌"
+          }
+        }
+      }
+    },
+    "Remove Service Token?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove Service Token?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サービストークンを削除しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除服务令牌？"
+          }
+        }
+      }
+    },
+    "The app stops sending it; a hub behind Cloudflare Access can't be reached without it." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The app stops sending it; a hub behind Cloudflare Access can't be reached without it."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アプリはこれを送信しなくなります。Cloudflare Access の背後にあるハブには、これがないと接続できません。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "App 不再发送它；在 Cloudflare Access 后面的 hub 没有它就连不上。"
+          }
+        }
+      }
+    },
     "Connect Through %@" : {
       "localizations" : {
         "en" : {

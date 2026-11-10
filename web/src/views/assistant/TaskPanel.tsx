@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { isRemovable, openAsk, TODO_STATUS_INFO } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
+import { reportText } from "../../lib/supervision";
+import { LatestReport } from "./Supervision";
 import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { ChatView } from "../chat/ChatView";
@@ -59,8 +61,14 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           mid={chosen.machine_id}
           sid={chosen.session_id}
           panel={{ onClose, title: todo.title, sub: subtitle, items: taskItems, agents: switcher }}
-          // what the task's result waits on from the user (#2056), over its agent's chat
-          banner={openAsk(todo) ? <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" /> : undefined}
+          // what the task's result waits on from the user (#2056), and what its agent last reported, as it wrote it (#3181),
+          // over its agent's chat
+          banner={openAsk(todo) || reportText(todo.supervision) ? (
+            <>
+              {openAsk(todo) && <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" />}
+              <LatestReport todo={todo} banner />
+            </>
+          ) : undefined}
         />
       </div>
     );
