@@ -243,7 +243,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const jumpTo = (group: string, key: string) => {
     if (!isOpen(group, "done")) toggle(group, "done");
     putFold(`${group}|done|${key}`, true);
-    requestAnimationFrame(() => document.querySelector(`[data-group="${CSS.escape(`${group}|done|${key}`)}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    requestAnimationFrame(() => scrollListTo(document.querySelector(`[data-group="${CSS.escape(`${group}|done|${key}`)}"]`)));
   };
   const allChosen = shownOpen.length > 0 && shownOpen.every((it) => picked?.has(itemKey(it)));
   const pick = useCallback((it: InboxItem) => onPicked?.((p) => {
@@ -526,6 +526,18 @@ function Section({ k, title, count, open, onToggle, action, menu, children }: { 
       </Collapse>
     </section>
   );
+}
+
+/**
+ * Scrolls the list's own scroller (the nearest box that scrolls) so `el` is at its top. Not scrollIntoView: that scrolls
+ * every box above it too, the app shell included, which hides its overflow but still scrolls from code; Jump To then
+ * lifted the whole app and left a blank band under it (#2969).
+ */
+function scrollListTo(el: Element | null) {
+  let box = el?.parentElement;
+  while (box && !/auto|scroll/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+  if (!el || !box) return;
+  box.scrollTo?.({ top: box.scrollTop + el.getBoundingClientRect().top - box.getBoundingClientRect().top, behavior: "smooth" });
 }
 
 /** How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page. */

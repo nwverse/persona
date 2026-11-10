@@ -401,6 +401,15 @@ nonisolated struct InboxDonePage: Decodable, Sendable {
     var next: Cursor?
 }
 
+/// GET /api/v1/inbox/done/days' answer (#2967): the done items per calendar day in the zone asked for.
+nonisolated struct InboxDoneDays: Decodable, Sendable {
+    nonisolated struct Day: Decodable, Sendable {
+        var day: String
+        var count: Int
+    }
+    var days: [Day]
+}
+
 extension APIClient {
     private static func decodeInbox(_ data: Data) async throws -> InboxListing {
         try await Task.detached(priority: .userInitiated) {
@@ -420,14 +429,26 @@ extension APIClient {
     }
 
     /// A page of done items older than the list's (GET /api/v1/inbox/done, #2200), from `after` (nil: the newest).
-    func inboxDone(after cursor: InboxDonePage.Cursor?, limit: Int = 100, connectors: Bool = false) async throws -> InboxDonePage {
+    /// `before` without a cursor is a moment: the items done before it (a Done group's end, #2969).
+    func inboxDone(after cursor: InboxDonePage.Cursor?, before moment: Date? = nil, limit: Int = 100, connectors: Bool = false) async throws -> InboxDonePage {
         var query = ["limit": String(limit)]
         if connectors { query["sources"] = "all" }
         if let cursor {
             query["before"] = cursor.before
             query["before_id"] = cursor.beforeID
+        } else if let moment {
+            query["before"] = moment.formatted(.iso8601)
         }
         return try await JSON.decoder.decode(InboxDonePage.self, from: request("GET", "/api/v1/inbox/done", query: query))
+    }
+
+    /// The done items per calendar day in `zone` (GET /api/v1/inbox/done/days, #2967): "YYYY-MM-DD" → count. 404 on a
+    /// hub from before them.
+    func inboxDoneDays(zone: String, connectors: Bool = false) async throws -> [String: Int] {
+        var query = ["tz": zone]
+        if connectors { query["sources"] = "all" }
+        let page = try JSON.decoder.decode(InboxDoneDays.self, from: try await request("GET", "/api/v1/inbox/done/days", query: query))
+        return Dictionary(page.days.map { ($0.day, $0.count) }, uniquingKeysWith: +)
     }
 
     /// Collects Feishu and mail now, then lists.
