@@ -33,27 +33,129 @@ func cardsIn(t *testing.T, md string) []wire.PersonaCard {
 	return out
 }
 
-// A ring an older app cannot draw becomes the stacked_bar it has always drawn: the same parts, what the total leaves
-// a "remaining" rest, the text around it as it was.
-func TestRingBecomesAStackedBarForAClientWithoutRings(t *testing.T) {
-	got := ringCardsDowngraded(i18n.ZhHans, ringReply)
-	if !strings.HasPrefix(got, "今天吃了这些：\n\n```persona-card\n") || !strings.HasSuffix(got, "\n```\n\n继续加油。") {
+// viewsIn is every persona-view of md, parsed.
+func viewsIn(t *testing.T, md string) []wire.View {
+	t.Helper()
+	var out []wire.View
+	for _, b := range wire.AssistantViewBlocks(md) {
+		if b.Language != "persona-view" {
+			continue
+		}
+		var v wire.View
+		if err := json.Unmarshal(b.Raw, &v); err != nil {
+			t.Fatalf("a view that is not JSON: %v\n%s", err, b.Raw)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// mealsRing is the reported card (#3550): a day's goal of 1,950 kcal, 1,770 eaten over four meals.
+const mealsRing = "```persona-card\n" +
+	`{"type":"ring","title":"今天的热量分配","subtitle":"目标全天摄入","total":{"value":1950,"unit":"kcal"},"segments":[{"label":"早餐","value":420},{"label":"午餐","value":680},{"label":"晚餐","value":520},{"label":"加餐","value":150}]}` +
+	"\n```"
+
+// downgradedView is the one persona-view md's ring became, with its section's items by type.
+func downgradedView(t *testing.T, md string) (wire.Section, map[string][]wire.Component) {
+	t.Helper()
+	if len(cardsIn(t, md)) != 0 {
+		t.Fatalf("a persona-card is left:\n%s", md)
+	}
+	views := viewsIn(t, md)
+	if len(views) != 1 || len(views[0].Sections) != 1 {
+		t.Fatalf("want one persona-view of one section:\n%s", md)
+	}
+	if views[0].Fallback == "" {
+		t.Fatal("the view has no fallback text")
+	}
+	s := views[0].Sections[0]
+	by := map[string][]wire.Component{}
+	for _, c := range s.Items {
+		by[c.Type] = append(by[c.Type], c)
+	}
+	return s, by
+}
+
+// The reported card on an older app: "Eaten 1,770 / Goal 1,950" on top, the 180 left on its own in grey and not in the
+// bar, the title once (the bar is labelled what it shows, not the title again).
+func TestRingShowsEatenAgainstTheGoalOnAnOlderApp(t *testing.T) {
+	got := ringCardsDowngraded(i18n.ZhHans, "今天吃了这些：\n\n"+mealsRing+"\n\n继续加油。")
+	if !strings.HasPrefix(got, "今天吃了这些：\n\n```persona-view\n") || !strings.HasSuffix(got, "\n```\n\n继续加油。") {
 		t.Fatalf("the text around the card changed:\n%s", got)
 	}
-	cards := cardsIn(t, got)
-	if len(cards) != 1 {
-		t.Fatalf("cards = %d, want 1:\n%s", len(cards), got)
+	s, by := downgradedView(t, got)
+	if s.Title != "今天的热量分配" || strings.Count(got[:strings.Index(got, `"fallback"`)], "今天的热量分配") != 1 {
+		t.Fatalf("the title is not there exactly once:\n%s", got)
 	}
-	c := cards[0]
-	if c.Type != wire.PersonaCardKindStackedBar || c.Title != "今天的热量" || c.Note != "还能吃 800 kcal" || c.Total == nil || c.Total.Value != 2000 ||
-		len(c.Segments) != 2 || c.Rest == nil || c.Rest.Label != "剩余" || c.Rest.Value != 800 {
-		t.Fatalf("downgraded card = %+v", c)
+	if len(by["text"]) != 1 || by["text"][0].Text != "目标全天摄入" || by["text"][0].Style != wire.TextStyleSecondary {
+		t.Fatalf("subtitle = %+v", by["text"])
 	}
-	if c.View() == nil {
-		t.Fatal("the stacked_bar it became is one the apps cannot draw")
+	m := by["metric"]
+	if len(m) != 1 || m[0].Label != "进度" || m[0].Value != "已吃 1,770 / 目标 1,950 kcal" || m[0].Detail != "剩余 180 kcal" {
+		t.Fatalf("metric = %+v", m)
 	}
-	if en := cardsIn(t, ringCardsDowngraded(i18n.En, ringReply))[0]; en.Rest == nil || en.Rest.Label != "Remaining" {
-		t.Fatalf("English rest = %+v", en.Rest)
+	ch := by["chart"]
+	if len(ch) != 1 || !ch[0].Stacked || len(ch[0].Series) != 4 {
+		t.Fatalf("chart = %+v", ch)
+	}
+	sum := 0.0
+	for _, sr := range ch[0].Series {
+		if sr.Name == "剩余" || sr.Points[0].Label != "已吃" {
+			t.Fatalf("a bar part = %+v", sr)
+		}
+		sum += sr.Points[0].Value
+	}
+	if sum != 1770 {
+		t.Fatalf("the bar adds up to %v, want 1770", sum)
+	}
+	if len(by["row"]) != 4 || by["row"][3].Title != "加餐" || by["row"][3].Value != "150 kcal" {
+		t.Fatalf("rows = %+v", by["row"])
+	}
+	for _, r := range by["row"] {
+		if r.Title == "剩余" {
+			t.Fatal("remaining is a row among the meals")
+		}
+	}
+	en := ringCardsDowngraded(i18n.En, mealsRing)
+	if _, by := downgradedView(t, en); by["metric"][0].Value != "Eaten 1,770 / Goal 1,950 kcal" || by["metric"][0].Detail != "Remaining 180 kcal" {
+		t.Fatalf("English metric = %+v", by["metric"])
+	}
+	ja := ringCardsDowngraded(i18n.Ja, mealsRing)
+	if _, by := downgradedView(t, ja); by["metric"][0].Value != "摂取 1,770 / 目標 1,950 kcal" || by["metric"][0].Detail != "残り 180 kcal" {
+		t.Fatalf("Japanese metric = %+v", by["metric"])
+	}
+}
+
+// Past the goal the metric says by how much; without a goal it is the parts' sum alone; a unit that is not food says
+// "actual" instead of "eaten".
+func TestRingOverTheGoalAndWithoutOne(t *testing.T) {
+	over := strings.Replace(mealsRing, `"value":1950`, `"value":1500`, 1)
+	_, by := downgradedView(t, ringCardsDowngraded(i18n.ZhHans, over))
+	if m := by["metric"][0]; m.Value != "已吃 1,770 / 目标 1,500 kcal" || m.Detail != "超出 270 kcal" {
+		t.Fatalf("over the goal: %+v", m)
+	}
+	none := strings.Replace(mealsRing, `"total":{"value":1950,"unit":"kcal"}`, `"unit":"kcal"`, 1)
+	_, by = downgradedView(t, ringCardsDowngraded(i18n.ZhHans, none))
+	if m := by["metric"][0]; m.Label != "合计" || m.Value != "1,770 kcal" || m.Detail != "" {
+		t.Fatalf("without a goal: %+v", m)
+	}
+	exact := strings.Replace(mealsRing, `"value":1950`, `"value":1770`, 1)
+	if _, by = downgradedView(t, ringCardsDowngraded(i18n.ZhHans, exact)); by["metric"][0].Detail != "" {
+		t.Fatalf("on the goal: %+v", by["metric"][0])
+	}
+	steps := "```persona-card\n" + `{"type":"ring","title":"步数","total":{"value":10000,"unit":"步"},"segments":[{"label":"上午","value":3000},{"label":"下午","value":4500}]}` + "\n```"
+	if _, by = downgradedView(t, ringCardsDowngraded(i18n.ZhHans, steps)); by["metric"][0].Value != "实际 7,500 / 目标 10,000 步" || by["chart"][0].Series[0].Points[0].Label != "实际" {
+		t.Fatalf("steps: %+v", by)
+	}
+}
+
+// More parts than an older app draws series: the first three and "other" in the bar, every part a row.
+func TestRingWithManyPartsKeepsFourSeries(t *testing.T) {
+	md := "```persona-card\n" + `{"type":"ring","total":{"value":100,"unit":"g"},"segments":[{"label":"a","value":10},{"label":"b","value":10},{"label":"c","value":10},{"label":"d","value":10},{"label":"e","value":10}]}` + "\n```"
+	_, by := downgradedView(t, ringCardsDowngraded(i18n.ZhHans, md))
+	sr := by["chart"][0].Series
+	if len(sr) != 4 || sr[3].Name != "其他" || sr[3].Points[0].Value != 20 || sr[3].Tone != wire.ToneNeutral || len(by["row"]) != 5 {
+		t.Fatalf("series = %+v rows = %d", sr, len(by["row"]))
 	}
 }
 
@@ -61,13 +163,13 @@ func TestRingBecomesAStackedBarForAClientWithoutRings(t *testing.T) {
 func TestUndrawableRingBecomesWords(t *testing.T) {
 	md := "```persona-card\n" + `{"type":"ring","title":"热量","unit":"kcal","segments":[{"label":"早餐","value":480,"note":"燕麦"}],"note":"偏少"}` + "\n```"
 	got := ringCardsDowngraded(i18n.ZhHans, md)
-	want := "**热量**\n- 早餐: 480 kcal (燕麦)\n\n偏少"
+	want := "**热量**\n- 合计: 480 kcal\n- 早餐: 480 kcal (燕麦)\n\n偏少"
 	if got != want {
 		t.Fatalf("got\n%q\nwant\n%q", got, want)
 	}
 	neg := "```persona-card\n" + `{"type":"ring","title":"差额","total":{"value":100,"unit":"g"},"segments":[{"label":"a","value":-5},{"label":"b","value":20}]}` + "\n```\n"
 	got = ringCardsDowngraded(i18n.ZhHans, neg)
-	if strings.Contains(got, "{") || strings.Contains(got, "persona-card") || !strings.Contains(got, "- 合计: 100 g") || !strings.Contains(got, "- 剩余: 85 g") {
+	if strings.Contains(got, "{") || strings.Contains(got, "persona-") || !strings.Contains(got, "- 实际 15 / 目标 100 g") || !strings.Contains(got, "- 剩余 85 g") {
 		t.Fatalf("negative ring = %q", got)
 	}
 }
@@ -109,8 +211,8 @@ func TestCardCompatItemsTouchesOnlyAssistantTextAndKeepsTheNodesSlice(t *testing
 }
 
 // What each app gets pushed for the same reply: the iOS builds out before the ring (no feature) and an Android without
-// it get a stacked_bar; a new iOS build, Android and the web, which declare persona_card_ring, get the ring.
-func TestEachClientGetsTheRingOrAStackedBarPushed(t *testing.T) {
+// it get a persona-view; a new iOS build, Android and the web, which declare persona_card_ring, get the ring.
+func TestEachClientGetsTheRingOrAViewPushed(t *testing.T) {
 	type app struct {
 		name     string
 		platform string
@@ -144,16 +246,13 @@ func TestEachClientGetsTheRingOrAStackedBarPushed(t *testing.T) {
 		if err := json.Unmarshal(<-clients[a.name].out, &e); err != nil || len(e.Items) != 1 {
 			t.Fatalf("%s: %v %+v", a.name, err, e)
 		}
-		c := cardsIn(t, e.Items[0].Text)
-		if len(c) != 1 {
-			t.Fatalf("%s: cards %d", a.name, len(c))
+		if a.wantRing {
+			if c := cardsIn(t, e.Items[0].Text); len(c) != 1 || c[0].Type != wire.PersonaCardKindRing {
+				t.Fatalf("%s got %+v, want the ring", a.name, c)
+			}
+			continue
 		}
-		if a.wantRing && c[0].Type != wire.PersonaCardKindRing {
-			t.Fatalf("%s got %s, want the ring", a.name, c[0].Type)
-		}
-		if !a.wantRing && (c[0].Type != wire.PersonaCardKindStackedBar || c[0].View() == nil) {
-			t.Fatalf("%s got %s, want a drawable stacked_bar", a.name, c[0].Type)
-		}
+		downgradedView(t, e.Items[0].Text)
 	}
 }
 
