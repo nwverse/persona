@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -52,8 +53,9 @@ fun SettingsScreen(
     onBack: (() -> Unit)? = null,
     /** Opens a page by key (one AI use of "Model configuration"); without it such pages open inside this one. */
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)? = null,
+    onClose: (() -> Unit)? = null,
 ) {
-    SettingsContent(services.bound(), initialPage, onPhoneData, onDemo, onExitDemo, onOpen, onBack, onNavigate)
+    SettingsContent(services.bound(), initialPage, onPhoneData, onDemo, onExitDemo, onOpen, onBack, onNavigate, onClose)
 }
 
 @Composable
@@ -66,6 +68,7 @@ private fun SettingsContent(
     onOpen: ((SettingsPage) -> Unit)?,
     onBack: (() -> Unit)?,
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
+    onClose: (() -> Unit)?,
 ) {
     var page by rememberSaveable(initialPage) { mutableStateOf(settingsPageFromInitialPage(initialPage)?.toInitialPage() ?: initialPage) }
     var purposeManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
@@ -262,7 +265,7 @@ private fun SettingsContent(
             onDiagnostics = { open(SettingsPage.Diagnostics) }, diagnostics = services.diagnostics, onBack = back,
             footer = { onDemo?.let { Action(stringResource(R.string.settings_try_demo), onClick = it) }; deviceFeedback() },
             machines = services.machines.takeUnless { services.demo }, attempts = services.pairingAttempts,
-            mainReadiness = services.readiness.takeUnless { services.demo })
+            mainReadiness = services.readiness.takeUnless { services.demo }, skipWelcome = true)
         "capsule" -> CapsuleSettingsPage(services.capsule, back)
         "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back)
         "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex)
@@ -361,7 +364,9 @@ private fun SettingsContent(
             MessagesConnectorPage(connectorsService, onBack = back)
         } else if (page.startsWith("connector/")) {
             HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
-        } else JListPage(title = stringResource(R.string.settings_title)) {
+        } else JListPage(title = stringResource(R.string.settings_title), actions = {
+            onClose?.let { close -> JIconButton(PhIcons.X, stringResource(persona.core.designsystem.R.string.designsystem_close), close, raised = true) }
+        }) {
             if (services.demo) {
                 item { JNotice(stringResource(R.string.settings_demo_notice), title = stringResource(R.string.settings_demo_mode)) }
                 onExitDemo?.let { exit ->
@@ -373,14 +378,14 @@ private fun SettingsContent(
                 selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
                 onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
             item {
-                HubCard(name = "Persona hub", connected = paired && connection == ConnectionState.Online,
+                HubCard(name = stringResource(persona.core.designsystem.R.string.designsystem_brand_persona), connected = paired && connection == ConnectionState.Online,
                     statusText = if (paired) connection.label() else stringResource(R.string.settings_not_paired),
                     facts = if (paired) machines.count { it.online }.let { online ->
                         listOf(stringResource(R.string.settings_hub_computers_online) to pluralStringResource(R.plurals.settings_hub_computers_count, online, online),
                             stringResource(R.string.settings_hub_address) to (services.hubAddress ?: stringResource(R.string.settings_not_provided)))
                     } else emptyList(),
                     busy = connection in setOf(ConnectionState.Connecting, ConnectionState.Updating),
-                    modifier = Modifier.padding(top = Tokens.Space.m), onClick = { open(SettingsPage.Diagnostics) })
+                    modifier = Modifier.testTag("settings-hub-card").padding(top = Tokens.Space.m), onClick = { open(SettingsPage.Diagnostics) })
             }
             item { JSectionHeader(stringResource(R.string.settings_section_connection)) }
             // The hub list is the one row a single hub group adds to settings (docs/android/android.md"Multiple hubs").
@@ -485,8 +490,9 @@ private fun SettingsContent(
             item { deviceFeedback() }
         }
     }
-    // Register after child pages so routed back also takes precedence over the pairing wizard's local steps.
-    if (onBack != null) BackHandler(page != "settings", onBack = onBack)
+    // Registered after the child pages, so routed back leaves a page in one step. Not on the pairing page: it steps back
+    // through its own pages first and calls onBack itself when none is left (PairingScreen's `back`).
+    if (onBack != null) BackHandler(page != "settings" && page != "pair", onBack = onBack)
     // An AI use opened inside "Model configuration" (no navigation host) closes before the page does.
     BackHandler(page == "models" && purpose != null) { purpose = null }
     BackHandler(page == "plugins" && extension != null) { extension = null }

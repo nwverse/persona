@@ -78,6 +78,9 @@ type Service struct {
 
 	startingAssistants assistantStarts // machine_privacy.go
 
+	// running is Run's context: it ends when the service stops (runCtx).
+	running atomic.Pointer[context.Context]
+
 	titles     titleBook         // titles.go
 	prefs      settingsBook      // profile.go
 	main       mainBook          // start.go
@@ -135,6 +138,8 @@ type Service struct {
 
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// sessionsSeen, when set, sees every machine's list SessionsChanged is handed (tests).
+	sessionsSeen func(DeviceSessions)
 }
 
 var _ Handler = (*Service)(nil)
@@ -160,6 +165,7 @@ func New(o Options) *Service {
 	s.profileRoutes()
 	s.readinessRoutes()
 	s.startRoutes()
+	s.workoutRoutes()
 	s.scheduleRoutes()
 	s.placeRoutes()
 	s.taskRoutes()
@@ -206,6 +212,14 @@ func fullRole(r *http.Request) bool {
 // here already means the extension holds todos.write.
 func todoWriter(r *http.Request) bool {
 	return fullRole(r) || r.Header.Get(RoleHeader) == roleExtension
+}
+
+// runCtx ends when the service stops: Run's context; background before Run (tests).
+func (s *Service) runCtx() context.Context {
+	if p := s.running.Load(); p != nil {
+		return *p
+	}
+	return context.Background()
 }
 
 // owner is how the assistant calls the user: manager.json's assistant.owner, else the Chinese word for "user".
@@ -489,14 +503,20 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopTurnChanged)
 	go s.registerInlineTurn(context.WithoutCancel(ctx), r)
-	go s.taskTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+	s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 	// A review's reviewer answered (supervise_autoreview.go).
 	go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
 	go s.workTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)    // its triage (agents_work_turns.go)
 	go s.channelTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID) // a channel's answer, the sync mirror
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
-	go s.launcherLimitTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
+	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
 	s.titleAfterTurn(ctx, r.MachineID, r.SessionID)
+}
+
+// afterSettle runs settled for machine's session sid once its turn stayed still (settleDelay, read now), on a timer:
+// a goroutine asleep through the window would hold a stack per pending turn end (#2472). Each call is its own run.
+func (s *Service) afterSettle(ctx context.Context, settled func(context.Context, string, string), machine, sid string) {
+	time.AfterFunc(s.settleDelay(ctx), func() { settled(ctx, machine, sid) })
 }
 
 // InteractionResolved: the user dealt with a card of a task's agent: the conversation keeps a record of it, and the
@@ -522,6 +542,9 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 // SessionsChanged: messages from other conversations go to those no longer running; the todos follow the list
 // (todo_sessions.go).
 func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
+	if f := s.sessionsSeen; f != nil {
+		f(d)
+	}
 	s.toolLoopsChanged(d)
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)

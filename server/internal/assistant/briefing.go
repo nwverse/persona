@@ -286,16 +286,11 @@ func (s *Service) briefAsked(f *briefFacts, shown []string) {
 	s.saveAcceptLocked(ctx)
 }
 
-// acceptedFromBrief is the Accept button of a briefing card: it accepts task id when the round the button was made for
+// acceptTryFromBrief is the Accept button of a briefing card: it accepts task id when the round the button was made for
 // (askedAt, as the card wrote it) is the round that waits now. The card is not one of the ask's own messages, so
-// accepted cannot tell an old round's button from a current one by its message id.
-func (s *Service) acceptedFromBrief(ctx context.Context, id, askedAt string) bool {
-	ok, _ := s.acceptTryFromBrief(ctx, id, askedAt)
-	return ok
-}
-
-// acceptTryFromBrief is acceptedFromBrief with acceptTry's errors: a decision whose recommendation did not reach the agent,
-// or errAcceptStore (the asks cannot be read or the acceptance saved), which is not "another round".
+// acceptTry cannot tell an old round's button from a current one by its message id. The errors are acceptTry's: a
+// decision whose recommendation did not reach the agent, or errAcceptStore (the asks cannot be read or the acceptance
+// saved), which is not "another round".
 func (s *Service) acceptTryFromBrief(ctx context.Context, id, askedAt string) (bool, error) {
 	at, err := time.Parse(timeKeyLayout, askedAt)
 	if err != nil {

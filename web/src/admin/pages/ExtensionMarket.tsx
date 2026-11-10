@@ -1,4 +1,4 @@
-// Extensions › Extension markets (docs/operations/admin.md "Extensions", docs/extensions/extensions.md "Extension markets"): the markets this hub reads (add with an optional
+// Extensions › Extension markets (docs/operations/admin.md "Extensions", docs/extensions/extensions.md "Extension marketplace"): the markets this hub reads (add with an optional
 // write-only token, read again, change the token, remove) and their catalog (search, a market at a time). Installing
 // or upgrading from it previews first (POST extensions/-/catalog/preview) and goes through the page's own install /
 // upgrade with that preview's id and permissions digest: nothing installs before the user agreed to exactly that.

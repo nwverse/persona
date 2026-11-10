@@ -77,7 +77,7 @@ fun JIcon(
     val vector = when {
         selected -> icon.fill
         PersonaTheme.style == AppStyle.Board -> icon.bold
-        decorative && PersonaTheme.style == AppStyle.Glass -> icon.duotone
+        decorative && PersonaTheme.style == AppStyle.Glass -> icon.regular
         else -> icon.regular
     }
     Icon(vector, contentDescription, modifier.size(size), tint = tint)
@@ -484,6 +484,15 @@ fun JChip(
 fun JBadge(count: Int, modifier: Modifier = Modifier, text: String? = null) {
     val palette = PersonaTheme.palette
     val label = text ?: if (count > 99) "99+" else "$count"
+    if (LocalHomeDrawer.current && PersonaTheme.style == AppStyle.Glass) {
+        val fill = sidebarActionFill(palette)
+        Box(modifier.heightIn(min = HomeTokens.sidebarBadgeSize).widthIn(min = HomeTokens.sidebarBadgeSize)
+            .clip(CircleShape).background(fill).padding(horizontal = Tokens.Space.xs), contentAlignment = Alignment.Center) {
+            Text(label, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+                color = ExtensionThemeColors.on(fill), maxLines = 1)
+        }
+        return
+    }
     val shape = if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(4.dp) else CircleShape
     Box(
         modifier.heightIn(min = 18.dp).widthIn(min = 18.dp).clip(shape).background(palette.needsYou.dot)
@@ -546,17 +555,17 @@ fun JSpinner(modifier: Modifier = Modifier, color: Color = if (PersonaTheme.styl
 }
 
 @Composable
-fun JLinearProgress(progress: Float?, modifier: Modifier = Modifier, tone: Tone? = null) {
+fun JLinearProgress(progress: Float?, modifier: Modifier = Modifier, tone: Tone? = null, color: Color? = null) {
     val palette = PersonaTheme.palette
     // A toned bar (an extension's progress) takes the role colour; otherwise the style's ink or accent.
-    val color = tone?.takeIf { it != Tone.Neutral }?.let { palette.tone(it).dot }
+    val effectiveColor = color ?: tone?.takeIf { it != Tone.Neutral }?.let { palette.tone(it).dot }
         ?: if (PersonaTheme.style == AppStyle.Brief) palette.ink else palette.accent
     Box(modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(palette.surfaceStrong)) {
-        if (progress != null) Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().clip(CircleShape).background(color))
+        if (progress != null) Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().clip(CircleShape).background(effectiveColor))
         else {
             val shift by rememberInfiniteTransition(label = "bar").animateFloat(0f, 1f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "shift")
             BoxWithConstraints(Modifier.fillMaxSize()) {
-                Box(Modifier.offset(x = maxWidth * (shift * 1.3f - 0.3f)).width(maxWidth * 0.3f).fillMaxHeight().clip(CircleShape).background(color))
+                Box(Modifier.offset(x = maxWidth * (shift * 1.3f - 0.3f)).width(maxWidth * 0.3f).fillMaxHeight().clip(CircleShape).background(effectiveColor))
             }
         }
     }

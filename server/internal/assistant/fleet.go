@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What comes from the nodes is the manager's (docs/server/machines.md "Who handles the computers' events"). The hub did all of this until the
+// What comes from the nodes is the manager's (docs/server/machines.md "Who handles computer events"). The hub did all of this until the
 // manager connected the computers itself; it moved here as it was (fleet_*.go):
 //
 //   - the interactions (approval / question / plan / screen / Codex cards): made from the nodes' interaction.create
@@ -63,14 +63,14 @@ type fleetBook struct {
 	stopSig, pushedSig map[[2]string]string
 	turns              *turnTracker // "machine/session" -> the turn in progress, for the finished push
 	clients            assistantwire.Clients
-	prev               map[string][]proto.Session // each machine's list setSessions saw last
+	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
 
 	// sent: each machine's last session list told the hub (fleet.sessions), as JSON. sentMu is held while a list is
 	// decorated and told (publishList), so the lists reach the hub in the order they were made.
 	sentMu sync.Mutex
 	sent   map[string][]byte
-	// shown: the list last told the hub for each machine, decorated (the reminders of agents awaiting a reply read it
-	// instead of decorating every list each minute, agents_reply.go).
+	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
+	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
@@ -346,12 +346,8 @@ type stateMark struct {
 	at    time.Time
 }
 
-// markStates fills in StateSince: the time an agent's state last changed, kept until it changes again. It drops the
-// marks and hook flags of the machine's sessions no longer listed.
-func (s *Service) markStates(machine string, list []proto.Session, now time.Time) {
-	s.fillStateMarks(machine, list, now, true)
-}
-
+// fillStateMarks fills in StateSince: the time an agent's state last changed, kept until it changes again. A complete
+// list also drops the marks and hook flags of the machine's sessions no longer listed.
 func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.Time, complete bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()

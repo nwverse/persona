@@ -1,4 +1,11 @@
 {
+  "tray_pending": "要対応",
+  "tray_progress": "進捗",
+  "tray_agents": "Agents",
+  "tray_empty_pending": "対応待ちはありません",
+  "dispatch_hint": "{count}件を依頼 ·「進捗」で見る",
+  "progress_count": "{value}/{total}",
+  "progress_pr": "PR #{number}",
   "receipt_review_followup": "Persona がフォロー",
   "report_progress": "進捗更新 · {title}",
   "removed": "「{title}」を削除しました",

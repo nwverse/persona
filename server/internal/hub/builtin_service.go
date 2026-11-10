@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/managerconf"
 )
 
 // The built-in manager as a service of its own (docs/assistant/managers.md "The built-in manager as its own
@@ -110,7 +111,7 @@ func ManagerCode(ctx context.Context, out io.Writer) error {
 func writeManagerCode(out io.Writer, code string, until time.Time, listen string) error {
 	_, err := fmt.Fprintf(out, "%s\n\nGood until %s, once. On this machine (where the built-in manager's service runs), with "+
 		"the code in the environment, where other users of the machine cannot read it:\n"+
-		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), hubLocalURL(listen))
+		"  PERSONA_MANAGER_CODE=<the code> persona-manager join --builtin %s --install\n", code, until.UTC().Format("2006-01-02 15:04 MST"), managerconf.LocalHubURL(listen))
 	return err
 }
 

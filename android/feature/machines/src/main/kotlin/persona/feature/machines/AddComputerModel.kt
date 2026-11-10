@@ -132,7 +132,7 @@ internal const val PersonaLinkInstallDoc = "https://github.com/nwverse/persona/b
 /** How to install persona-link on a headless Linux when the hub has no install script (docs/operations/link.md). */
 internal const val LinkLinuxDoc = "https://github.com/nwverse/persona/blob/master/docs/operations/link.md#linuxheadless"
 
-/** A computer's code lasts ten minutes, like the app's (docs/protocol/protocol.md "Computer pairing code"). */
+/** A computer's code lasts ten minutes, like the app's (docs/protocol/protocol.md "Computer pairing codes"). */
 internal const val ComputerCodeLifeMs = 10 * 60_000L
 
 /**
@@ -142,7 +142,7 @@ internal const val ComputerCodeLifeMs = 10 * 60_000L
 internal fun localExpiry(expiresAt: Long, now: Long): Long =
     if (expiresAt <= now || expiresAt - now > ComputerCodeLifeMs) now + ComputerCodeLifeMs else expiresAt
 
-/** The hub caps a computer's name at 40 characters (docs/protocol/protocol.md "Computer pairing code"). */
+/** The hub caps a computer's name at 40 characters (docs/protocol/protocol.md "Computer pairing codes"). */
 internal const val ComputerNameMax = 40
 
 internal class AddComputerModel(

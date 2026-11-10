@@ -2,9 +2,10 @@ package node
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -53,11 +55,17 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
 
-	var out []proto.Session
-	seen := map[string]bool{}
+	// One slice for the whole list, sized from the last one, filtered where it is (#2826): grown from nil and copied again
+	// into the rows kept, with the runtimes' rows in a third, a list of 300 rows (1,520 bytes each) took about 4.8 MB.
+	size := int(n.listRows.Load())
+	out := make([]proto.Session, 0, size+4) // room for a few new sessions; more regrow it once
+	seen := make(map[string]bool, size)
 	livePanes := map[string]bool{} // the resting Claudes' panes, whose screens are read for a dialog
 	now := time.Now()
-	for id, a := range agents {
+	// In id order, not the map's: the list is sorted by UpdatedAt with a stable sort, and rows that tie on it (live panes
+	// with no transcript yet all have none) came out in a new order on every pass, each one a whole new list for the hub.
+	for _, id := range slices.Sorted(maps.Keys(agents)) {
+		a := agents[id]
 		if !onList[id] { // a pane on Claude's agents list stays idle: the transcript is its parked session's (claudebg.go)
 			a.AgentStatus = n.claudeStatus(id, a, now)
 		}
@@ -196,21 +204,33 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
-	for _, s := range n.runtimes.sessions() { // runtimes (runtimes.go): listed as they say
-		if !seen[s.SessionID] {
-			if n.runtimeAssistant(s.SessionID) { // the assistant keeps its mode (assistant_runtime.go)
-				if m := n.assistantModeOf(s.SessionID); m != "" {
-					s.PermissionMode = m
-				}
-			}
-			// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes.
-			if t := n.mergeRuntimeTranscript(&s); t != "" {
-				seen[t] = true
-			}
-			out = append(out, s)
-			seen[s.SessionID] = true
+	// Runtimes (runtimes.go): listed as they say, appended straight into the list and dropped there when already seen.
+	from := len(out)
+	out = n.runtimes.appendSessions(out)
+	peak := len(out)
+	j := from
+	for i := from; i < len(out); i++ {
+		s := &out[i]
+		if seen[s.SessionID] {
+			continue
 		}
+		if n.runtimeAssistant(s.SessionID) { // the assistant keeps its mode (assistant_runtime.go)
+			if m := n.assistantModeOf(s.SessionID); m != "" {
+				s.PermissionMode = m
+			}
+		}
+		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes.
+		if t := n.mergeRuntimeTranscript(s); t != "" {
+			seen[t] = true
+		}
+		seen[s.SessionID] = true
+		if j != i {
+			out[j] = *s
+		}
+		j++
 	}
+	clear(out[j:])
+	out = out[:j]
 	for _, s := range n.assistantSessions() {
 		if !seen[s.SessionID] {
 			out = append(out, s)
@@ -228,16 +248,19 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
-	offlineRows := n.offline(seen)
-	n.markInterrupted(offlineRows, seen) // the restart cut these off (#1917)
-	for _, s := range offlineRows {
-		n.decorate(&s)
-		out = append(out, s)
+	from = len(out)
+	out = n.appendOffline(out, seen)
+	n.markInterrupted(out[from:], seen) // the restart cut these off (#1917)
+	for i := from; i < len(out); i++ {
+		n.decorate(&out[i])
 	}
-	// Terminal-owned Codex parents were already seen before history was added.
+	n.listRows.Store(int32(max(peak, len(out))))
+	// Terminal-owned Codex parents were already seen before history was added: over the whole list, before any row goes.
 	resolveCodexHierarchy(out)
-	var keptSessions []proto.Session
-	for _, s := range out {
+	// The rows kept move down over the dropped ones, in order.
+	j = 0
+	for i := range out {
+		s := &out[i]
 		if !n.sessionScopeAllows(s.Cwd) {
 			continue
 		}
@@ -248,13 +271,51 @@ func (n *Node) sessionList(ctx context.Context, refreshAgents bool) []proto.Sess
 			s.ToolLoop = n.toolLoopOf(s.SessionID)
 		}
 		s.WorkspaceCwd = n.sessionWorkspaceCwd(s.Cwd)
-		fillGitPlace(&s)          // project, worktree and branch for the apps' tree (gitplace.go)
-		s.CanFork = n.forkable(s) // "Branch to New Chat" (fork.go)
-		keptSessions = append(keptSessions, s)
+		fillGitPlace(s)            // project, worktree and branch for the apps' tree (gitplace.go)
+		s.CanFork = n.forkable(*s) // "Branch to New Chat" (fork.go)
+		if j != i {
+			out[j] = *s
+		}
+		j++
 	}
-	out = keptSessions
-	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	clear(out[j:])
+	if j == 0 {
+		// No row kept is nil, as the list always was: sessions.changed and sessions.list say null, not [], and the manager
+		// takes [] from a sessions.list as a list emptied (devices.go), null as none given.
+		return nil
+	}
+	out = out[:j]
+	sortNewestFirst(out)
 	return out
+}
+
+// sortNewestFirst sorts list by UpdatedAt, newest first, rows that tie in the order they came (a stable sort): it sorts
+// the rows' positions, then moves each row once. A stable sort of the rows themselves moved each 1,520-byte row over
+// and over: 250 us of a 300-row list, against 50 us.
+func sortNewestFirst(list []proto.Session) {
+	order := make([]int32, len(list))
+	for i := range order {
+		order[i] = int32(i)
+	}
+	slices.SortStableFunc(order, func(a, b int32) int { return list[b].UpdatedAt.Compare(list[a].UpdatedAt) })
+	// Row i takes the row at order[i]: each cycle of the permutation is followed once, its first row held aside.
+	for i := range order {
+		if order[i] < 0 || int(order[i]) == i {
+			continue
+		}
+		held := list[i]
+		j := i
+		for {
+			k := int(order[j])
+			order[j] = -1 // in place
+			if k == i {
+				list[j] = held
+				break
+			}
+			list[j] = list[k]
+			j = k
+		}
+	}
 }
 
 func (n *Node) decorate(s *proto.Session) {
@@ -266,7 +327,9 @@ func (n *Node) decorate(s *proto.Session) {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
 		s.Compaction = st.Compaction
-		if s.Cwd == "" {
+		// A row without a pane is listed where its record says it started, when that is an assistant or health
+		// directory: not where a `cd` in its transcript left it (#2368). A pane's directory is its host's.
+		if s.Cwd == "" || s.PaneID == "" && identity.IsAssistantDir(st.Cwd) {
 			s.Cwd = st.Cwd
 		}
 	}
@@ -361,7 +424,8 @@ func (n *Node) pollAgents(ctx context.Context) {
 // publish pushes a rebuilt list to the hub: the whole list when anything it shows changed, else only the revs that
 // moved (a transcript grew: a few bytes instead of the list, so the app can pull those sessions). It returns the
 // revs that moved. Runtimes (runtimes.go) publish through it too when their list changes. Nothing goes while the hub
-// has yet to say whether botmux's sessions are listed (botmuxPending).
+// has yet to say whether botmux's sessions are listed (botmuxPending), nor a list the manager holds already, byte for
+// byte (sessions_sent.go).
 func (n *Node) publish(list []proto.Session) map[string]int64 {
 	if n.botmuxPending() {
 		return nil
@@ -379,9 +443,9 @@ func (n *Node) publish(list []proto.Session) map[string]int64 {
 		return revs
 	}
 	if changed {
-		_ = n.peer.Notify("sessions.changed", map[string]any{"sessions": list})
+		n.sendSessions(list)
 	} else if len(revs) > 0 {
-		_ = n.peer.Notify("sessions.revs", map[string]any{"revs": revs})
+		n.sendRevs(revs)
 	}
 	return revs
 }

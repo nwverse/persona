@@ -347,7 +347,7 @@ struct QuoteFlashMark: Equatable {
 }
 
 /// Plain text (a message you sent) with the paths that are there on the conversation's machine as underlined links
-/// (docs/apple/ios.md「文件查看器」); a tap opens the file viewer at the path's line (`PathLinkURL`, the chat's `openURL`). Until
+/// (docs/apple/ios.md「File viewer」); a tap opens the file viewer at the path's line (`PathLinkURL`, the chat's `openURL`). Until
 /// the machine answers, and outside a chat, the text as it is: the same words in the same place.
 struct PathText: View {
     @Environment(AppModel.self) private var model: AppModel?

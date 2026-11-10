@@ -168,6 +168,49 @@ struct InboxPolicyModelTests {
         #expect(inbox.items.map(\.tier) == ["fyi", "noise"] && inbox.items[0] == mine)
     }
 
+    @Test func aRuleFromAnotherManagersListIsSavedOnThatManager() async throws {
+        // The Rules list stamps each manager's rules with it: Edit saves on the one it came from.
+        let hub = FakeHub()
+        var named: [String?] = []
+        hub.on("PATCH", "/api/v1/inbox/policies/p2") { req in
+            named.append(req.headers["X-Persona-Manager"])
+            return Data(#"{"applied":0}"#.utf8)
+        }
+        var p2 = try #require(try Self.list().first { $0.id == "p2" })
+        p2.manager = "m-2"
+        let target = InboxPolicyTarget(policy: p2)
+        #expect(target.manager == "m-2" && target.id.hasPrefix("m-2:"))
+        let m = InboxPolicyModel(target: target, deps: deps(hub, Inbox([])))
+        m.tier = .fyi
+        #expect(await m.save())
+        #expect(named == ["m-2"])
+    }
+
+    @Test func removingARuleOpenedFromTheRulesListNamesItsManagerAfterItBecameTheDefault() async throws {
+        // The Rules list read p2 from m-2, which became the default before Remove in its sheet; the sheet of the default's
+        // item still names none.
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/inbox/policies", json: Self.policies)
+        var named: [String?] = []
+        hub.on("PATCH", "/api/v1/inbox/policies/p2") { req in
+            named.append(req.headers["X-Persona-Manager"])
+            return Data(#"{"applied":0}"#.utf8)
+        }
+        let roster = ManagerRoster(managers: [HubManager(id: "assistant", name: "助手", online: true),
+                                              HubManager(id: "m-2", name: "工作", online: true, isDefault: true)], defaultID: "m-2")
+        var withRoster = deps(hub, Inbox([]))
+        withRoster.roster = { roster }
+        var p2 = try #require(try Self.list().first { $0.id == "p2" })
+        p2.manager = "m-2"
+        #expect(await InboxPolicyModel(target: InboxPolicyTarget(policy: p2), deps: withRoster).save(remove: true))
+        var theirs = try Self.item("a")
+        theirs.manager = "m-2"
+        let fromItem = InboxPolicyModel(target: InboxPolicyTarget(item: theirs, option: try #require(theirs.mutes?.last)), deps: withRoster)
+        await fromItem.load()
+        #expect(await fromItem.save(remove: true))
+        #expect(named == ["m-2", nil])
+    }
+
     @Test func aFailedSavePutsTheItemsBack() async throws {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/inbox/policies", json: #"{"policies":[]}"#)

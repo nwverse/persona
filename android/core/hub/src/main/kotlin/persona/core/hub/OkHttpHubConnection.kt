@@ -284,7 +284,7 @@ class OkHttpHubConnection(
         return (all.filter { it.second } + all.filter { !it.second }).map { it.first }
     }
 
-    /** Candidates with their hub and center markings (docs/protocol/multi-hub.md "Route selection"), center first. */
+    /** Candidates with their hub and center markings (docs/protocol/multi-hub.md "Connections and routing"), center first. */
     fun routeCandidates(overrides: EndpointOverrides = _overrides.value): List<HubRoute.Candidate> =
         routes(overrides).map { (endpoint, owner) ->
             HubRoute.Candidate(endpoint, hub = owner.hubId, center = owner.center)

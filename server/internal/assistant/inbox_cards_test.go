@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 )
 
-// The message cards of the AI twin's drafts about a task (docs/assistant/unified-entry.md "Message cards linked to tasks"): the card is in the
+// The message cards of the AI twin's drafts about a task (docs/assistant/unified-entry.md "Message cards link to tasks"): the card is in the
 // task's conversation, and its "Send" is the inbox's reply, once per card.
 
 // cardHub has a task in conv1 and an inbox item about it (a GitHub-like review thread) whose agent is drafting.

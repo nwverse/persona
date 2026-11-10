@@ -3,7 +3,7 @@ import XCTest
 /// The Agents list with a lot of agents (scripts/mock/mock_hub.py with MOCK_AGENTS=1: ~120 agents, a space with 3 needing
 /// you, 35 finished-unread and 12 working): the quick filters, the compact rows, folding spaces, marking read.
 ///   TEST_RUNNER_PERSONA_AGENTS_HUB=http://127.0.0.1:<port>
-/// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there (docs/operations/testing.md「Agents 列表」).
+/// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there (docs/operations/testing.md「Agents list」).
 final class AgentsListTests: XCTestCase {
     private var hub = ""
     private var app: XCUIApplication!
@@ -244,7 +244,7 @@ final class AgentsListTests: XCTestCase {
         launch(fresh: false)
         reach(row(0, compact: true), "still compact after a relaunch")
         listMenu().tap()
-        see(app.buttons["卡片"], "卡片 in the menu").tap()
+        see(app.buttons["头像"], "头像 in the menu").tap() // the default style (#2530)
         reach(row(0), "card rows again")
         XCTAssertFalse(row(0, compact: true).exists)
     }

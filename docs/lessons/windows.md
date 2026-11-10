@@ -25,7 +25,7 @@ Read this before changing the Windows node (#1090), or developing or testing `pe
 
 ## Scheduled tasks (automatic startup)
 
-`persona-link install` registers scheduled tasks on Windows ([windows.md](../operations/windows.md), “Installation and automatic startup”). These findings were all tested on a physical Windows 11 machine on 2026-11-04:
+`persona-link install` registers scheduled tasks on Windows ([windows.md](../operations/windows.md), “Install and start at logon”). These findings were all tested on a physical Windows 11 machine on 2026-11-04:
 
 - **Standard users cannot register “Run whether user is logged on or not” tasks**: With S4U `LogonType` (no stored password), `Register-ScheduledTask` returns access denied (even for an unelevated administrator account).
   Only `InteractiveToken` works, running with the login session.

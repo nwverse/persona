@@ -95,14 +95,14 @@ final class InboxStore {
     }
 
     /// Mark All Seen / Clear All (a section), Mac's multi-select, and every Undo: one request for them all on the Done request
-    /// (docs/assistant/inbox.md「全部清理」), one per manager when they are several managers'. Shown at once; the hub files each
+    /// (docs/assistant/inbox.md「Clean up all」), one per manager when they are several managers'. Shown at once; the hub files each
     /// as the list showed it, so one that took new messages since stays open (it goes back here too), and a failure puts
     /// back what that request held. Filing ends with a toast and its Undo, which brings back what was filed.
     func setDone(_ list: [InboxItem], _ done: Bool, undoable: Bool = true) {
         guard let api = AppModel.shared.api else { return }
         run(list, done: done, action: .done) { targets in
             var sent = try await InboxBulk.byManager(Self.managers(targets)) { manager, mine in
-                try await self.fileDone(mine, done, api: api.manager(manager))
+                try await self.fileDone(mine, done, api: api.manager(AppModel.shared.itemManager(manager)))
             }
             if undoable, !sent.result.changed.isEmpty { sent.undo = .legacy(sent.result.changed) }
             return sent
@@ -110,7 +110,7 @@ final class InboxStore {
     }
 
     /// Clear All (the view's open items, its filters and search): filed as dismissed in the hub's bulk request
-    /// (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「全部清理」); on a hub without it the Done request instead (recorded as
+    /// (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「Clean up all」); on a hub without it the Done request instead (recorded as
     /// handled there). Same as above: shown at once, put back on a failure, a toast whose Undo sends the hub's `undo`.
     func clean(_ list: [InboxItem]) {
         guard let api = AppModel.shared.api else { return }
@@ -118,7 +118,7 @@ final class InboxStore {
         run(list, done: true, action: action) { targets in
             let groups = Self.managers(targets)
             if groups.count == 1, let g = groups.first {
-                let api = api.manager(g.key)
+                let api = api.manager(AppModel.shared.itemManager(g.key))
                 let (result, undo) = try await InboxBulk.perform(action, targets, manager: g.key,
                                                                  bulk: { try await api.bulkInbox($0.rawValue, $1) },
                                                                  legacy: { try await self.fileDone($0, true, api: api) })
@@ -127,7 +127,7 @@ final class InboxStore {
             // Several managers' items: each its own request. Each manager keeps its own `undo`, so Undo brings back what
             // moved with the Done request.
             var sent = try await InboxBulk.byManager(groups) { manager, mine in
-                let api = api.manager(manager)
+                let api = api.manager(AppModel.shared.itemManager(manager))
                 return try await InboxBulk.perform(action, mine, bulk: { try await api.bulkInbox($0.rawValue, $1) },
                                                    legacy: { try await self.fileDone($0, true, api: api) }).result
             }
@@ -184,7 +184,7 @@ final class InboxStore {
         case .legacy(let moved):
             setDone(moved, !done, undoable: false)
         case .bulk(let u, let manager):
-            guard let api = AppModel.shared.api?.manager(manager) else { return }
+            guard let api = AppModel.shared.api?.manager(AppModel.shared.itemManager(manager)) else { return }
             let keys = Set(u.ids.map { InboxItem.key(id: $0, manager: manager) })
             run(items.filter { keys.contains($0.key) }, done: false, action: .done) { _ in
                 InboxBulk.Sent(result: InboxBulk.result(try await api.undoInboxBulk(u)).stamped(manager))
@@ -236,7 +236,7 @@ final class InboxStore {
         if haptic { Haptics.tap() }
         Task {
             do {
-                try await AppModel.shared.api?.manager(item.manager).setInboxDone(item.id, done)
+                try await AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)).setInboxDone(item.id, done)
                 marks.settle(key, token: token, taken: true)
             } catch {
                 marks.settle(key, token: token, taken: false)
@@ -247,6 +247,19 @@ final class InboxStore {
                 }
                 AppModel.shared.show(error)
             }
+        }
+    }
+
+    /// Files an outbox-restored hand-off whose item may not be listed yet. The optimistic path is used when it is;
+    /// otherwise the same single-item request goes directly to its manager.
+    func setDone(id: String, manager: String?, done: Bool) {
+        if let item = items.first(where: { $0.key == InboxItem.key(id: id, manager: manager) }) {
+            setDone(item, done, haptic: false)
+            return
+        }
+        Task {
+            do { try await AppModel.shared.api?.manager(AppModel.shared.itemManager(manager)).setInboxDone(id, done) }
+            catch { AppModel.shared.show(error) }
         }
     }
 
@@ -267,7 +280,7 @@ final class InboxStore {
         Haptics.success()
         Task {
             do {
-                _ = try await AppModel.shared.api?.manager(item.manager).muteInbox(item.id, tag: option.tag)
+                _ = try await AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)).muteInbox(item.id, tag: option.tag)
                 for (key, token) in tokens { marks.settle(key, token: token, taken: true) }
                 AppModel.shared.toast = Toast(String(localized: "Muted “\(option.name)”. It won’t come to the Inbox anymore."), style: .success)
             } catch {
@@ -308,7 +321,7 @@ final class InboxStore {
     @discardableResult
     func send(_ item: InboxItem, text: String, changes: [InboxItem.DocChange] = [], card: String? = nil) async -> Bool {
         let key = item.key
-        guard let api = AppModel.shared.api?.manager(item.manager), !sending.contains(key) else { return false }
+        guard let api = AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)), !sending.contains(key) else { return false }
         sending.insert(key)
         defer { sending.remove(key) }
         let before = items.first { $0.key == key }
@@ -361,7 +374,7 @@ final class InboxStore {
     /// Moves a row's status in its document: shown at once, written by the hub, the item replaced by the hub's fresh
     /// read; a failure puts the old value back.
     func setDocStatus(_ item: InboxItem, row: InboxItem.DocRow, status: InboxItem.DocStatus, to value: String) {
-        guard value != status.value, let api = AppModel.shared.api?.manager(item.manager) else { return }
+        guard value != status.value, let api = AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)) else { return }
         let key = item.key + "|" + row.ref + "|" + status.field
         guard !moving.contains(key), let i = items.firstIndex(where: { $0.key == item.key }) else { return }
         let before = items[i]

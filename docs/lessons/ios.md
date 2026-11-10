@@ -2,6 +2,11 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## Pages that move sideways under iPhone Duo's side bars (#2752)
+
+- Under iPhone Duo's vertical bars (the outer display, the inner one on its side), a view that hosts a `UINavigationController` and moves sideways makes the controller run its deferred transition on every layout pass and lay its top view controller out twice (`transitionConductor:didStartDeferredTransition:context:` → `_layoutTopViewControllerLookForNested:`, then `_computeAndApplyScrollContentInsetDeltaForViewController:` → `_updateTopViewFramesToMatchScrollOffsetInViewController:…`). The shell's slide between Assistant and Agents spent 28 ms a frame (p95), 140 ms of hitches a second. An `offset`, a render-only `transformEffect` and a page under a mask all cost the same; only not moving helps (`ShellPageSlide` cross-fades there). An ordinary iPhone runs the same passes cheaply, so measure on the Duo simulator.
+- Measuring with the runtime CLI (`scripts/app/personactl.py launch`), install the build first (`xcrun simctl install`): the launcher runs whatever is installed, and a round of experiments once measured an older build.
+
 ## A relay push keeps the fallback's sound unless the service extension sets it (#1862)
 
 - The relay writes the outer `aps` itself, `"sound":"default"` included, so the "New message" fallback rings. The notification service extension starts from `request.content.mutableCopy()`, which keeps that sound: replacing the texts, category and interruption level from the sealed payload is not enough. `PushCrypto.apply` sets the sound from the sealed `aps` and clears it when there is none; a silent notification that rings through the relay but not with direct APNs points here.
@@ -257,7 +262,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   (~45 in a long Persona main chat, 2026-11-01). Chat bubbles, replies, work rows and composer all use `Equatable` + `.equatable()`, comparing only messages;
   permanently mounted but hidden content (closed sidebar) must not read changing `allSessions`; use its previous value while hidden.
   Streaming full text arrives every 80 ms: split and cache completed blocks (`StreamChunks`), redraw only the last. Measurement: `docs/operations/testing.md` ("Persona page (long main chat)").
-- Do not sort lists by last update or let pushes touch them while scrolling (2026-11-01, TestFlight 77, `docs/archive/apple/live-updates.md` ("Forced refresh while scrolling")).
+- Do not sort lists by last update or let pushes touch them while scrolling (2026-11-01, TestFlight 77, `docs/archive/apple/live-updates.md` ("Forced refreshes while scrolling")).
   Real hub pushes a machine's sessions every 2 seconds with new `updated_at`; state + last-update sorting reordered spaces on 36% of pushes and jumped the screen.
   - Sort by a time independent of each output: working sessions by work start (`Session.sortDate`, `SpaceGroup.sortDate`).
   - Hold pushes during touch, inertia, covered pages or another tab; land together 0.5 seconds after stopping, at most 5 seconds even with continuous scrolling;
@@ -366,6 +371,9 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Within one NavigationStack, pushing view-based `NavigationLink { destination }` then value-based `NavigationLink(value:)` inserts the new page **underneath**:
   taps look ineffective until Back (Settings › Machines › card, machine detail › session; Knowledge search entries also reveal a yellow warning on return, 2026-10-31). Use an entirely value-based chain (`MachineListRoute`,
   `MachineDetailRoute` + `navigationDestination(for:)`) or entirely view-based. `navigationDestination(isPresented:)` is view-based too.
+- Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
+  Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
+  (`splitPush`), or give each link its own row.
 - If `x` in `NavigationPath([x])` is `AnyHashable`, the recorded type is `AnyHashable` and a concrete `navigationDestination(for:)` cannot match,
   producing a yellow warning. Append concrete types (`SettingsView.openDebugPage`).
 - `NavigationSplitView` detail pages use destinations registered in the sidebar and are built in its environment. Put detail environment values
@@ -458,6 +466,7 @@ Use an invalidation revision as the task key and handle the flag after completio
 - `List` `.simultaneousGesture(TapGesture())` (blank-area dismiss) treats long-press release as a tap unless held >~2 seconds:
   newly opened message actions close on release. Suppress closing during that press and 0.3 seconds after release (`MessageMenu.pressChanged`).
 - `List` `Section` headers are not cells; `.contextMenu` rarely responds there. Give header actions visible buttons / `Menu`.
+- A `.contextMenu` on a view inside a `List` / `Form` row is the whole row's (2026-11-10, #2405): with several in one row (Settings › Avatar's grid of cards is one row), a long press anywhere lifts the whole row and runs one of them, whichever SwiftUI kept, intermittently. The uploaded avatar's Delete deleted another avatar, and a long press on Mochi offered New from Photo's Photos / Files. Give each card a control of its own: a visible button (the avatars' corner Delete), on iOS a `Menu` with a `primaryAction` (`.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)`), on the Mac `macBoundedContextMenu`. A UI test that long-presses the card it means passes whenever SwiftUI happens to keep that card's menu: long-press a neighbor too and assert no menu opens.
 - A `.contextMenu(menuItems:preview:)` preview is drawn in the context menu's own host, which the app's environment objects do not reach (2026-11-08, #1490): a preview showing a view with `@Environment(AppModel.self)` crashed the app on the long press, in SwiftUI's environment assertion with no app frame on the stack. Hand the preview what it reads (`.environment(model)`, the scopes it uses).
 - Put MarkdownUI `.markdownTextStyle` inside `.markdownTheme`, called first, or theme text styles overwrite it.
 - Link endings have one rule (`Links`): stop at whitespace or any non-ASCII (Chinese / fullwidth punctuation), strip trailing `.,;:!?` and unmatched `)` / `]`.
@@ -773,7 +782,7 @@ Queries always use `get(_:query:)`. Found only by mock logs (`MISSING GET …%3F
 - Processing one pairing link twice (scan + system-camera link, repeated scan callbacks) caused second `pair()` to write the exchanged temporary token back and fail exchange 401.
   Already-exchanged links retain device token (`DeviceCredentialTrade.keepsDevice`).
 - Handshake 401 (`URLSessionWebSocketTask.response` status) is not unreachable: `LiveConnection.rejected` shows Pairing expired and Pair again, slowing retries to 60 seconds (public auth failures trigger address blocking).
-- Reproduce with `MOCK_PAIR_TOKEN=jp_…` fake hub, `-openWelcome YES -openPairLink <link> -openPairLinkTimes 2`; alternate-address case in `docs/operations/testing.md` ("Temporary-code pairing").
+- Reproduce with `MOCK_PAIR_TOKEN=jp_…` fake hub, `-openWelcome YES -openPairLink <link> -openPairLinkTimes 2`; alternate-address case in `docs/operations/testing.md` ("Mock-data screenshots").
 
 ## Session cells are for display, not sending (2026-11-03, #624)
 
@@ -863,7 +872,7 @@ Do this **before** `rebuild` splits by last message; only `buildRows` is too lat
 `AVAssetExportSession` is not Sendable: `Task { for await s in session.states(updateInterval:) … }` fails Swift 6 with
 "passing closure as a 'sending' parameter risks causing data races". Obtain `let states = session.states(updateInterval: 0.25)` outside Task,
 then iterate only that sequence. Use picker `preferredItemEncoding: .current`, otherwise the system first transcodes HEVC (long 4K wait);
-app chooses transcoding by size (`VideoPrep`, docs/protocol/protocol.md "Sending video").
+app chooses transcoding by size (`VideoPrep`, docs/protocol/protocol.md "Sending videos").
 ## Telegram-style reply bubbles for quotes (2026-11-03, #986)
 
 - **Bubble width follows its widest piece**: a quote with `frame(maxWidth: .infinity)` inside normal `VStack` expands the bubble to full row width.
@@ -919,6 +928,19 @@ When a computer disconnects, hub marks sessions unknown, not offline; `AgentStat
   - Initially ignored, pre-appearance rows never redrew or attached gestures, failing 2–3/10.
   - Recognizer logs showed no touches in failures; observing the switch gave 10/10.
 
+## An edge gesture the list waits for needs a hold (2026-11-09, #2615)
+
+- **What happened**: the chat list's scroll pan waits for the right-edge navigator to fail (`shouldBeRequiredToFailBy`). The navigator began after 8 pt of vertical movement in the 16 pt band at the list's right edge, which is where a right thumb often lands for an ordinary scroll.
+  - The list stopped following the finger, and letting go jumped to the user message under the finger's last position.
+  - In the flipped list, a push up from low on the screen ends over an older message, so it looked like a jump back toward the top.
+- **Direction is not enough**: a recognizer that the list's scrolling waits for must begin on something a scroll never does. If it begins on vertical movement, it takes ordinary scrolls in the same direction.
+  - Begin only after a hold without movement (`Theme.Motion.edgeScrubHold`), and fail at once on any movement past the slop during the hold. The list then scrolls as anywhere else, and the pager and drawer still get sideways swipes.
+  - Cancel the hold's timer in `reset()`, and check that the recognizer is still `.possible` when the timer fires.
+- **A release commits only a choice**: opening on the tick under the finger is not a pick. `EdgeScrubState.moved` is set only when the finger goes past the slop to another tick than the one it opened on, and a release without it only closes the navigator.
+  - A tick change alone is not enough: a finger held still trembles by a point or two, and with many messages the ticks are `Theme.Size.edgeTickGapMin` (5 pt) apart, so a tremble over the line between two ticks would count as a pick.
+- **Tests**: UI tests that drive the navigator hold first (`press(forDuration: 0.5, thenDragTo:…)`). `testEdgeSwipeScrollsTheList` swipes quickly in the band and checks that nothing jumps and the list follows the finger.
+  - `thenHoldForDuration` after a fast synthesized drag does not stop the list from coasting once the finger lifts: the list was where the finger left it, then moved on by more than the drag itself. Measure a lower bound in the finger's direction, and tap to stop the coasting before reading frames.
+
 ## Context compaction as a divider (2026-11-04, #1064)
 
 Claude Code writes three things: `system/compact_boundary` (`compactMetadata.trigger` `manual` / `auto`; idle compaction also `auto`), a following `isCompactSummary` user line,
@@ -953,6 +975,18 @@ which calls `access(keyPath:)` before mutation, registering a body dependency; m
 For write-only records (trace / counts), mark storage `@ObservationIgnored`, manually `access` in computed reads and `withMutation` around writes,
 so calling bodies do not observe. `@State` initializer expressions must have no side effects; they run more than once.
 
+## A page drawn while `@Observable` tells its observers reads the old value (2026-11-09, #2189)
+
+New Chat in a long main conversation sometimes left the conversation on screen (TestFlight 213, about one tap in five in the
+simulator); #1749's "the current conversation changed but the page did not redraw" was the same. Observation tells observers in
+`willSet`, before the new value is stored. SwiftUI's `ObservationCenter.invalidate` can flush at that moment
+(`GraphHost.asyncTransaction` → `flushTransactions()`, seen when a button action's `withAnimation` change meets a pending update),
+so the page's body ran inside the setter, read the old conversation and watched it again; the store that followed told nobody.
+A page that chooses what to show from a model property set in actions: store the value first, then call `withMutation(keyPath:) {}`
+(`AppModel.assistantCurrent`), so a body drawn while observers are told reads the new value. Keep `@Observable`'s own rules: an
+equal value notifies no one, and what the property's `didSet` did runs whether or not it notified. Finding it: a DEBUG note in the
+body that comes between the action's note and the setter's, with the old value, and `Thread.callStackSymbols` from that body.
+
 ## Gray outside sidebar card corners: overlay after mask is not masked (2026-11-04, #1247)
 
 The pushed rounded page's dimming / tap-to-close `Color.black.opacity(0.06)` was an `.overlay` after `.mask { card }`.
@@ -963,7 +997,7 @@ Inspect magnified corner crops and compare outside-corner pixels with the same s
 ## QuickLook Office files (2026-11-04, #1300)
 
 - xlsx displays stored formula values only, never calculates. Missing cached values leave totals blank. Write calculated values when generating workbooks (`personad office`, `docs/assistant/office.md` ("Formula values")).
-- QuickLook ignores docx borders only in table styles, `startOverride` numbering, and page breaks (squares). See `docs/assistant/office.md` ("Verification").
+- QuickLook ignores docx borders only in table styles, `startOverride` numbering, and page breaks (squares). See `docs/assistant/office.md` ("How it was verified").
 
 ## Ask Persona shortcut unexpectedly quits: Release stripped reflection names (2026-11-04, #990)
 
@@ -981,7 +1015,7 @@ Inspect magnified corner crops and compare outside-corner pixels with the same s
 
 ## Hidden WKWebView snapshots: transparency, offsets, missing text (2026-11-04, #1295)
 
-Formulas / diagrams (`MarkdownRenderer`, `docs/apple/ios.md` ("Formulas and diagrams")) render in invisible WKWebView then `takeSnapshot`. Several traps all looked like empty images:
+Formulas / diagrams (`MarkdownRenderer`, `docs/apple/ios.md` ("Math and diagrams")) render in invisible WKWebView then `takeSnapshot`. Several traps all looked like empty images:
 - **View alpha enters snapshots**: `alpha = 0.01` made nearly transparent snapshots, invisible as template images. Use alpha 1, bottom window layer and offscreen frame. Web views outside any window cannot snapshot content.
 - **Window attachment adds safe-area content inset**: page shifted ~80 pt, leaving only formula top within `getBoundingClientRect` crop. Set `scrollView.contentInsetAdjustmentBehavior = .never`.
 - **`file://` cannot load bundled fonts**: CORS with opaque file origin blocked KaTeX woff 2; text invisible during font block (Mermaid system fonts worked). Inline fonts as data URLs in CSS (`font-src data:`). KaTeX relatively positions numerator / scripts outside their own boxes; crop the union of all descendant rectangles and avoid drawing against page top-left.
@@ -1361,7 +1395,7 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 
 - **`WorkStepView` compares only its item and `first`**: a value handed down from the chat (a workflow run's progress) never reaches a step that is already drawn, because the hub's pushes do not change the item. A card that changes on its own reads its data itself, by a key in the item: `WorkflowCallCard` reads `AppModel.workflow(_:call:)`, one observable cell per (session, Workflow call) set only when that run changes, so a push about another run or the rest of the session draws nothing.
 - **A decision `ChatLines` makes from outside the items belongs in `LinesKey`**: `foldsIntoRun` / `showsFolded` now depend on which runs the hub lists; the lines are memoized by the store's version, so without `workflowCalls` in the key a run that appeared (or went) left the call folded into the chips (or out of the fold) until something else changed.
-- **`fold_work` hides the step a card hangs on** (as on the web, `docs/lessons/web.md`): a chat opened while a run goes on has the launching turn as one fold item. Fetch the fold whose `[ts, until]` holds the run's `started_at` (`WorkflowRun.foldsHoldingCalls`). A fetch can fail (the hub redeployed, the phone offline, not connected yet: `AppModel.unfold` then returns without throwing), so judge by whether the fold left the items, and ask again after a wait that doubles from 5 s to a minute (`WorkflowCallCard.fetchFolds`, as the web's `useWorkflowFolds`). Marking it "asked" before the fetch and swallowing the error left the card buried for the whole visit.
+- **`fold_work` hides the step a card hangs on** (as on the web, `docs/lessons/web.md`): a chat opened while a run goes on has the launching turn as one fold item. Fetch the fold whose `[ts, until]` holds the run's `started_at` (`WorkflowRun.foldsHoldingCalls`). A fetch can fail (the hub redeployed, the phone offline, not connected yet: `AppModel.unfold` then returns without throwing), so judge by whether the fold left the items, and ask again after a wait that doubles from 5 s to a minute (`WorkflowCallCard.fetchFolds`). Marking it "asked" before the fetch and swallowing the error left the card buried for the whole visit.
 - **A second-by-second clock per row is not free on the Mac**: `Text(timerInterval:)` needs no body, but 60 of them (a run's listed agents, all running) kept the idle Mac chat at 7.8% CPU (Debug build, `ps` over 20 s) against 0.5% without. One clock for the run, the rows to the minute (`TimelineView(.periodic(by: 60))`, all rows on one shared anchor so they turn in one update, not 60 wake-ups a minute). Measured again over 90 s (30–120 s after launch, so at least one minute tick; process CPU time from `ps -o cputime`; Debug, Mac locked): a plain chat 0.25–0.30%, the run's card with 16 running rows 0.84%, with 61 running rows 0.82%. So many agents add nothing; what remains over a plain chat (about 6 ms a second, `sample`: SwiftUI layout in `NSHostingView.layout`) is the run's one second clock. FrameStats could not run: display links do not fire while the Mac is locked (`docs/apple/mac.md`). Measure an idle card with many live rows, against the same card with few, before giving each row its own clock.
 - **A UI test that drags the chat to bring a card into view**: a plain `press(forDuration:thenDragTo:)` flings the flipped list well past it. Drag slowly and hold at the end (`withVelocity: .slow, thenHoldForDuration:`), check the target's frame between drags, and assert it is hittable before tapping it; "a row is gone" alone is no proof that a block folded (the lazy list may simply have dropped the line).
 - **Every expander inside a chat row needs the pin, nested ones too**: the phase blocks inside the run's card first toggled with a plain `withAnimation`; in the upside-down list a phase opening 12 rows (or 「n more」 opening 43) pushed its head and everything above it up, under the top bar. Route each one through `toggleInPlace(pin, key, …)` with `.chatPinned(key)` on what was tapped (or the head above it, for 「n more」 / Show Fewer), as the card's own head does; outside the list (`chatPin` nil: the chat's header) it animates as before, so check Reduce Motion there yourself (`toggleInPlace` falls back to `withAnimation` unconditionally).

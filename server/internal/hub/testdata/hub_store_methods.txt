@@ -1,5 +1,5 @@
 # The methods of hub.Store. Kept by TestHubStoreStaysSmall (hub/architecture_guard_test.go): business tables are the
-# manager's, see docs/server/architecture.md「hub 只做沟通中心」. Edit by hand, one method a line.
+# manager's, see docs/server/architecture.md「The hub is only a communication center」. Edit by hand, one method a line.
 CreateLockTest
 LockTest
 DueLockTests
@@ -45,3 +45,13 @@ TouchDeviceToken
 CreatePairToken
 PairTokenByHash
 RedeemPairToken
+
+# Durable delivery receipts for confirmed phone writes; phone data stays on the phone.
+EnqueuePhoneWrite
+PhoneWrites
+QueuedPhoneWrites
+ClaimPhoneWrite
+FinishPhoneWrite
+CancelPhoneWrite
+RecoverPhoneWrites
+FindQueuedPhoneWrite

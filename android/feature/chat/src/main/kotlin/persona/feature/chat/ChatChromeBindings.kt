@@ -43,6 +43,9 @@ data class ChatChromeBindings(
     /** The assistant conversation's tasks (docs/assistant/unified-entry.md); null for an agent's chat. */
     val tasks: persona.core.domain.tasks.TasksStore? = null,
     val onOpenTodo: ((String) -> Unit)? = null,
+    val assistantManagement: persona.core.contracts.api.AssistantManagement? = null,
+    val inboxTrays: persona.core.contracts.api.AssistantInboxTrays? = null,
+    val inboxScope: String? = null,
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

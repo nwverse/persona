@@ -4,7 +4,7 @@ import XCTest
 /// machine's projects, New Chat's machine / directory / launcher), against scripts/mock/mock_hub.py started with
 /// MOCK_MACHINES=1 (an offline machine that reconnect brings back, a machine with 36 agents):
 ///   TEST_RUNNER_PERSONA_MACHINES_HUB=http://127.0.0.1:<port>
-/// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there (docs/operations/testing.md「机器页面」).
+/// TEST_RUNNER_PERSONA_SHOTS=<dir> also saves a screenshot of each step there (docs/operations/testing.md「Machine pages」).
 final class MachinePagesTests: XCTestCase {
     private let widget = "a1f3c2d4-0000-4000-8000-000000000001"
     private var hub = ""
@@ -380,7 +380,7 @@ final class MachinePagesTests: XCTestCase {
         XCTAssertNil(body["effort"], "a Codex start takes no effort")
     }
 
-    /// A Codex launcher (docs/integrations/codex.md「从手机新建」): marked Codex in the picker; picked, Claude's modes go, the first
+    /// A Codex launcher (docs/integrations/codex.md「Starting from the phone」): marked Codex in the picker; picked, Claude's modes go, the first
     /// message is required and goes with the start as typed (Codex makes its thread from it), and the chat that opens
     /// is that session.
     @MainActor func testNewCodexSessionStartsWithItsFirstMessage() throws {

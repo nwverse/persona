@@ -4,7 +4,7 @@ import SwiftUI
 import WatchConnectivity
 #endif
 
-// One credential per device (docs/protocol/protocol.md「鉴权」): the pairing token opens everything, so right after pairing the
+// One credential per device (docs/protocol/protocol.md「Authentication」): the pairing token opens everything, so right after pairing the
 // phone trades it for a token of its own and stops keeping it, and gets the watch an answer-only one. A lost device is
 // then revoked alone in Settings › Devices instead of re-pairing everything. Against an older hub (no /auth/tokens) the
 // pairing token stays, as before; the next launch tries again.

@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/screen"
 )
 
-// Permission mode and effort level of a Claude session, chosen from the app (docs/apple/ios.md "Effort and permission mode").
+// Permission mode and effort level of a Claude session, chosen from the app (docs/apple/ios.md "Effort and permission modes").
 //
 // Shown: the transcript records the mode on every prompt and the effort on every reply; a value set from the app
 // wins until the transcript shows a newer one (a TUI only writes the mode down with the next prompt). An assistant

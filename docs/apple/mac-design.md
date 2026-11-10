@@ -35,7 +35,7 @@ The native Mac app is frozen ([mac.md](mac.md)): these rules apply to bug fixes 
 
 - These rules apply only on Mac: in views under `apple/Mac/`, or in `#if os(macOS)` branches of shared views. The iOS appearance must not change by a single pixel.
 - Add missing values as tokens first (Mac-only tokens go in `apple/Mac/Design/MacTokens.swift`); no literals in pages (`TokenRatchetTests` allows only reductions).
-- Do not change structures whose performance has already been measured: section pages stay mounted (`MacPageStack`, #390), and the toolbar changes one frame later. Compare changes with `-showPerfRun sections` (`docs/apple/mac.md`, "Switching sections: persistent pages").
+- Do not change structures whose performance has already been measured: section pages stay mounted (`MacPageStack`, #390), and the toolbar changes one frame later. Compare changes with `-showPerfRun sections` (`docs/apple/mac.md`, "Section switching: persistent pages").
 
 ## Reference layouts
 

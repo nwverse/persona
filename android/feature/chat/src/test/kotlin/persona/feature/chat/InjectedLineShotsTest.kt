@@ -39,7 +39,7 @@ import persona.core.domain.lines.ChatRow
 import java.io.File
 
 /**
- * Persona's messages for the model (docs/protocol/protocol.md "Messages Persona injects") as centered lines, never their words: a
+ * Persona's messages for the model (docs/protocol/protocol.md "Messages injected by Persona") as centered lines, never their words: a
  * task's notice from an older hub (read off the text) and a scheduled run the hub marked, in every style, light and
  * dark. PNGs in the module's `build/injected-shots/`; these are native JVM component images, not device captures.
  */

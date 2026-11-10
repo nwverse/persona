@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
-import { extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type HubExtensionDetail } from "../../lib/extensions";
+import { extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type ExtensionUpgrade, type HubExtensionDetail } from "../../lib/extensions";
 import { getCatalog, marketOf, type CatalogItem } from "../../lib/extension-market";
 import { toolText } from "../../lib/extension-auth";
 import { t } from "../../i18n";
@@ -99,7 +99,8 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
       const catalog = await getCatalog(undefined, market, true, manager);
       const source = catalog.markets.find((m) => m.id === market);
       if (!source || source.error) throw new Error(t("settings-extensions.market_unavailable"));
-      const item = catalog.extensions.find((e) => e.market === market && e.id === d.id);
+      // A renamed extension is in its market under its new ID (#2511).
+      const item = catalog.extensions.find((e) => e.market === market && e.id === d.id) ?? catalog.extensions.find((e) => e.market === market && e.rename_from === d.id);
       if (!item) throw new Error(t("settings-extensions.market_extension_missing"));
       await onChecked();
       setCandidate(item);
@@ -110,7 +111,10 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
       setChecking(false);
     }
   };
-  const u = d.upgrade || (candidate?.upgradable ? { id: d.id, market, from: candidate.installed || d.version || "", to: candidate.version, state: "available" } : null);
+  // A version under a new ID is never installed automatically: it waits for the owner's confirmation.
+  const renamed = !!candidate && candidate.id !== d.id;
+  const u: ExtensionUpgrade | null = d.upgrade || (candidate?.upgradable ? { id: d.id, market, from: candidate.installed || d.version || "", to: candidate.version,
+    state: renamed ? "needs_permission" : "available", rename_to: renamed ? candidate.id : undefined } : null);
   const action = u ? upgradeAction(u) || (u.state === "available" ? t("lib-extensions.action_upgrade") : null) : null;
   const note = d.upgrade_note ? upgradeNote(d.upgrade_note) : null;
   const paused = d.auto_upgrade_paused;
@@ -124,7 +128,7 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
       {checkError && <SettingsHint alert>{checkError}</SettingsHint>}
       {u && (
         <Row label={t("settings-extensions.new_version", { version: u.to })} hint={upgradeDetail(u)} wrapHint>
-          {action && <Button tone="secondary" disabled={busy || checking || !canCheck} onClick={() => onUpgrade(u.market, u.id)}>{action}</Button>}
+          {action && <Button tone="secondary" disabled={busy || checking || !canCheck} onClick={() => onUpgrade(u.market, u.rename_to || u.id)}>{action}</Button>}
         </Row>
       )}
       <Row label={t("settings-extensions.auto_upgrade")}>

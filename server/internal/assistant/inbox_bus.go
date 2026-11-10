@@ -136,20 +136,3 @@ func (c *cardLocks) release(id string) {
 		delete(c.m, id)
 	}
 }
-
-// len is how many cards have a lock kept.
-func (c *cardLocks) len() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.m)
-}
-
-// waiting is how many hold or wait on card id's lock.
-func (c *cardLocks) waiting(id string) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if l := c.m[id]; l != nil {
-		return l.n
-	}
-	return 0
-}

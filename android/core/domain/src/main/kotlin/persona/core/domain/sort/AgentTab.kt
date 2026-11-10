@@ -36,7 +36,7 @@ fun <T> launcherOf(panes: List<T>, session: (T) -> Session): T? =
     if (panes.size > 1) panes.firstOrNull { session(it).paneIndex == 0 } else null
 
 /**
- * What a tab's row speaks for (docs/protocol/agent-states.md "Sort priority", as the web): needs you > working > unread > awaiting
+ * What a tab's row speaks for (docs/protocol/agent-states.md "Unified states", as the web): needs you > working > unread > awaiting
  * reply (#5096, not muted) > seen.
  */
 private fun tabUrgency(row: AgentSession, mutes: AgentPreferences): Int = when {

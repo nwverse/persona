@@ -61,6 +61,8 @@ import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } fr
 import type { Route } from "../lib/router";
 import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
+import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
+import { TaskCompletionCheck } from "./TaskCompletionCheck";
 import { useTodoField } from "./use-todo-field";
 import { todoUltracode } from "../lib/ultracode";
 import { UltraMark } from "./chat/Ultracode";
@@ -249,6 +251,16 @@ export function TodosView({
     }
   }, []);
 
+  // a to-do dragged to another time or day on the calendar (#2045): saved at once, said when it fails (it goes back)
+  const moveTodo = useCallback(async (id: string, patch: TodoPatch) => {
+    try {
+      await updateTodo(id, patch);
+      await refreshTodos();
+    } catch (e) {
+      toast(t("todos.calendar_move_failed", { error: errorText(e) }), "error");
+    }
+  }, []);
+
   const retryTodos = async () => {
     if (retrying) return;
     setRetrying(true);
@@ -344,6 +356,7 @@ export function TodosView({
                 setNewOpen(true);
               }}
               onShowList={() => showView("list")}
+              onMove={moveTodo}
             />
           </div>
           {selectedTodo && (
@@ -815,6 +828,9 @@ const TodoListItem = memo(function TodoListItem({
           {!todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />}
         </div>
 
+        {/* What it waits on from the user, with the one tap that answers it (#2056) */}
+        <TodoAskLine todo={todo} className="mt-1" />
+
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
 
@@ -1144,12 +1160,17 @@ function TodoDetail({
         </p>
       )}
 
+      {/* What it waits on from the user and how to answer it (#2056) */}
+      <TodoAskPanel todo={todo} />
+
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />
       <ReviewChecklist todo={todo} />
 
       {/* Stage Bar (#2776): progress from plan to verified, from the hub's todo; nothing on hubs that don't send it. */}
       <TodoStageBar stage={todo.stage} prURL={todo.pr_url} className="mt-4" />
+
+      {todo.origin && <TaskCompletionCheck todo={todo} />}
 
       {/* Notes / Description */}
       <div className="mt-4">
@@ -1217,7 +1238,7 @@ function TodoDetail({
 
         {activeAgents.length === 0 ? (
           <div className="rounded-control border border-dashed border-line p-6 text-center text-[13px] text-ink-3">
-            {t("todos.no_agents")}
+            {todo.done_at ? t("todos.no_agents_done") : t("todos.no_agents")}
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -1363,11 +1384,13 @@ function TodoDetail({
         )}
       </div>
 
-      {/* Bottom Action Bar */}
+      {/* Bottom Action Bar. A done to-do can't be handed over (the hub refuses, #1856): Reopen next to it comes first. */}
       <div className="mt-8 flex flex-wrap items-center gap-2.5 border-t border-line pt-4">
-        <Button tone="accent" icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px]">
-          {t("todos.hand_over")}
-        </Button>
+        {!todo.done_at && (
+          <Button tone="accent" icon="hand" onClick={onOpenHandover} className="h-8.5 px-3.5 text-[13px]">
+            {t("todos.hand_over")}
+          </Button>
+        )}
         <Button tone="secondary" icon="check" onClick={onToggleDone} className="h-8.5 px-3 text-[13px]">
           {todo.done_at ? t("todos.reopen") : t("todos.complete")}
         </Button>
@@ -1925,6 +1948,8 @@ export function HandoverDialog({
     setBusy(true);
     try {
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
+      // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
+      // has answered (#1856).
       launchAgent({
         machineId: mid,
         cwd: cwd.trim(),
@@ -1933,7 +1958,6 @@ export function HandoverDialog({
         attachments: [],
         todoId: todo.id,
       });
-      toast(t("todos.launched"), "ok");
       onClose();
     } catch (e) {
       toast(t("todos.launch_failed", { error: errorText(e) }), "error");

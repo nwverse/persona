@@ -70,11 +70,6 @@ var checkedKeys = []string{"type", "machine_id", "session_id", "conversation"}
 // the sender's own fields (a contact record's "Manager"), which the hub neither reads nor sets.
 var stampKeys = []string{ManagerQuery}
 
-// relayBroadcast is relayBroadcastFrom the assistant the hub starts.
-func (h *Hub) relayBroadcast(message json.RawMessage) error {
-	return h.relayBroadcastFrom(assistantwire.AssistantID, message)
-}
-
 // relayBroadcastFrom sends message, manager from's, to every app (see the top of the file for what is dropped).
 func (h *Hub) relayBroadcastFrom(from string, message json.RawMessage) error {
 	if err := exactJSON(message); err != nil {

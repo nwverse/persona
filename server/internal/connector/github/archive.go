@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// The knowledge base (docs/plans/plan-connectors.md "4 · Knowledge base"): the PRs and issues the user is involved in
+// The knowledge base (docs/plans/plan-connectors.md "Knowledge base"): the PRs and issues the user is involved in
 // (involves:@me — author, assignee, mentioned, commented, review requested), never whole repositories. One chat per
 // PR / issue, kind pr or issue: its description, then comments, reviews and inline review comments in time order.
 

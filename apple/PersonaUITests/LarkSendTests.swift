@@ -1,6 +1,6 @@
 import XCTest
 
-/// Sending in a Feishu chat does not wait for Feishu (docs/apple/ios.md「飞书消息渲染」): the message is on screen at once
+/// Sending in a Feishu chat does not wait for Feishu (docs/apple/ios.md「Lark message rendering」): the message is on screen at once
 /// with a spinner beside it, Feishu's own copy takes its place, and one that did not go out has a failed mark that offers
 /// Resend; replies (quoted in the chat, or in a thread sheet) go the same way. The marks are found by their identifiers
 /// (lark.outgoing.sending / .failed), not their wording. Against scripts/mock/mock_hub.py

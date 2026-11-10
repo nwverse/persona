@@ -3,7 +3,7 @@ import PersonaTunnelCore
 #endif
 import Foundation
 
-/// The in-app tunnel core (docs/operations/network.md「经 App 内隧道连 hub」): a C library with the PersonaTunnel interface, linked
+/// The in-app tunnel core (docs/operations/network.md「Connecting to hub through an in-app tunnel」): a C library with the PersonaTunnel interface, linked
 /// into device builds only when the build machine's config names one (`app.tunnel_core`, docs/operations/config.md). It runs the
 /// tunnel's own control panel on loopback (where the user signs in and picks a node), a userspace tunnel (no system
 /// VPN), and loopback port forwards through it; no proxy. One per process, started the first time it is needed and
