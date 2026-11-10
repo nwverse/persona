@@ -284,3 +284,27 @@ func TestACallTurnedDownAsAWholeSaysSo(t *testing.T) {
 		t.Fatal("a look")
 	}
 }
+
+func TestConfirmNamesTheStepsTargetsAsOnScreen(t *testing.T) {
+	h := newHarness(t, Options{}, payTree())
+	h.look()
+	// By number, by a label only one element has, by a label several have, and a point.
+	resp, _ := h.do(`{"steps":[{"action":"tap","target":{"n":2}},{"action":"tap","target":{"label":"pay"}},`+
+		`{"action":"tap","target":{"label":"o"}},{"action":"tap","target":{"x":10,"y":20}}]}`, withConfirm)
+	a := resp.Approval
+	if a == nil || len(a.Steps) != 4 {
+		t.Fatalf("%+v", resp)
+	}
+	if got := *a.Steps[0].Target; got != (ElementRef{N: 2, Role: "textField", Label: "Note"}) {
+		t.Errorf("by number: %+v", got)
+	}
+	if got := *a.Steps[1].Target; got != (ElementRef{N: 3, Role: "button", Label: "Pay"}) {
+		t.Errorf("by label: %+v", got)
+	}
+	if got := *a.Steps[2].Target; got != (ElementRef{Label: "o"}) {
+		t.Errorf("an ambiguous label stays as written: %+v", got)
+	}
+	if a.Steps[3].Target != nil || a.Steps[3].At == nil || *a.Steps[3].At != (Point{10, 20}) {
+		t.Errorf("a point: %+v", a.Steps[3])
+	}
+}

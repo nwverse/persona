@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"reflect"
 	"slices"
@@ -442,5 +443,48 @@ func TestIPhoneCoreAddsTheCallsSelfApps(t *testing.T) {
 	}
 	if s := doSteps(t, `{"session":"s1","op":"do","args":{"steps":[{"action":"launch","app":"com.example.persona-build"}]}}`); !refusedAsPersonas(s) {
 		t.Fatalf("the default name dropped: %+v", s)
+	}
+}
+
+// What a type step types goes into no log, no error and no result text of the node: only the action and its length.
+func TestIPhoneCoreNeverWritesTheTypedText(t *testing.T) {
+	const secret = "Hunter2-SECRET-text"
+	var logs strings.Builder
+	old := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(old) })
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		fail error
+		text string
+	}{
+		{"sent", nil, secret},
+		{"lost on the way", &rpc.Error{Code: "uncertain", Message: "keys was sent but its result never came back", Data: json.RawMessage(`{"sent":"unknown"}`)}, secret},
+		{"refused by the bridge", &rpc.Error{Code: "locked", Message: "locked"}, secret},
+		{"not typable", nil, secret + "é"},
+		{"too long", nil, strings.Repeat(secret, 200)},
+	} {
+		b := newBridgePhone()
+		if c.fail != nil {
+			b.fail = map[string]error{"keys": c.fail}
+		}
+		useCore(t, b)
+		if _, err := iphoneCall(ctx, json.RawMessage(`{"session":"s1","op":"look","args":{"screenshot":false}}`)); err != nil {
+			t.Fatal(err)
+		}
+		params, _ := json.Marshal(map[string]any{"session": "s1", "op": "do", "args": map[string]any{
+			"steps": []map[string]any{{"action": "type", "text": c.text, "target": map[string]any{"label": "Search"}}}}})
+		res, err := iphoneCall(ctx, params)
+		seen := logs.String()
+		if err != nil {
+			seen += err.Error()
+		}
+		if res != nil {
+			seen += res.Text + string(res.Output)
+		}
+		if strings.Contains(seen, "Hunter2") {
+			t.Errorf("%s: the typed text is out: %s", c.name, seen)
+		}
 	}
 }

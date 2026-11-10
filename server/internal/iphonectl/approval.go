@@ -374,16 +374,34 @@ func newApproval(i int, step Step, target *Numbered, screen *Screen, v Verdict) 
 	return a
 }
 
-func summary(st Step) StepSummary {
+// summary is st for an approval card. Its target is named as it is on scr, the screen the owner is asked on (nil when
+// its numbers no longer hold): its number, role and label, for an element the step names by number or by a label only
+// one element has; otherwise as the step wrote it.
+func summary(st Step, scr *Screen) StepSummary {
 	s := StepSummary{Action: st.Action, Key: st.Key, Button: st.Button, App: st.App}
 	if st.Action == ActType {
 		s.TextLen = utf8.RuneCountInString(st.Text)
 	}
-	if t := st.Target; t != nil {
-		if p, ok := t.point(); ok {
-			s.At = &p
-		} else {
-			s.Target = &ElementRef{N: t.N, Role: t.Role, Label: t.Label}
+	t := st.Target
+	if t == nil {
+		return s
+	}
+	if p, ok := t.point(); ok {
+		s.At = &p
+		return s
+	}
+	s.Target = &ElementRef{N: t.N, Role: t.Role, Label: t.Label}
+	if scr == nil {
+		return s
+	}
+	switch {
+	case t.byNumber():
+		if e, ok := scr.Find(t.N); ok {
+			s.Target = ref(&e)
+		}
+	case t.Label != "":
+		if found := scr.byLabel(t.Label, t.Role); len(found) == 1 {
+			s.Target = ref(&found[0])
 		}
 	}
 	return s

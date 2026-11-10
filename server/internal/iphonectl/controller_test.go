@@ -192,7 +192,8 @@ func TestTypingIntoAField(t *testing.T) {
 	// Text the keyboard input can't type is refused before anything, the focusing tap included.
 	taps := h.f.count("tap")
 	_, r = h.do(`{"steps":[{"action":"type","text":"héllo","target":{"label":"Title"}}]}`)
-	if st := r.Steps[0]; st.Delivery != DeliveryNotSent || !strings.Contains(st.Detail, `printable ASCII, tab and newline, and the text has "é"; nothing was typed`) ||
+	if st := r.Steps[0]; st.Delivery != DeliveryNotSent || !strings.Contains(st.Detail, `printable ASCII, tab and newline, and character 2 of the text is none of those; nothing was typed`) ||
+		strings.Contains(st.Detail, "é") ||
 		h.f.count("tap") != taps {
 		t.Fatalf("%+v", st)
 	}
