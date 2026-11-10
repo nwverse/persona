@@ -50,6 +50,7 @@ MCP tool descriptions and parameter explanations shown to models are also prompt
 | `inbox/tiers.md` | Criteria for the three tiers, shared by triage and event grouping | Same as above |
 | `inbox/group.md`, `group_input.md` | Event grouping: assign a batch of new messages from one chat to events, write titles, summaries, and tiers for affected events; input includes existing events in that chat and tools already called (`docs/assistant/inbox.md`, "Event grouping") | `assistant/inbox_group.go` |
 | `inbox/item.md` | Model-facing representation of one item (type line + content), shared by triage, drafting, judging, and AI twin | Same as above |
+| `inbox/kinds/subscription.md` | What each kind of a source subscription's Inbox items is (`sub_mail` … `sub_digest`, `sub_failing`), with the subscription's label; handed in with the round as the source's kinds, so it reaches `inbox/item.md` as its type line ([subscriptions.md](../extensions/subscriptions.md) "Destinations") | `subscriptions/deliver.go` |
 | `inbox/draft.md`, `draft_input.md` | Draft replies | Same as above |
 | `inbox/judge.md`, `judge_input.md` | Since phase 1, only its `task_id` is used: which of the user's ongoing tasks this item concerns | `assistant/inbox_handle.go` `linkTaskFor` |
 | `inbox/agent.md`, `agent_title.md`, `agent_ref.md` | Handling chat (AI twin) first message: bound event ID, source-specific explanation, summary / action chain / intervening messages when continuing, knowledge-base context | `assistant/inbox_agent.go` |
