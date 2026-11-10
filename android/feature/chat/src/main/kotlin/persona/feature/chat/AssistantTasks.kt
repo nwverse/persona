@@ -603,7 +603,7 @@ private fun ReceiptCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
                 else ReceiptSummary(it) }
             if (failed && todo != null) JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) }, kind = JButtonKind.Secondary,
                 size = JButtonSize.Small, icon = PhIcons.ArrowClockwise, loading = TasksStore.retryKey(todo.id) in busy)
-            if (!failed && todo != null) JButton(stringResource(R.string.chat_tasks_look), { openTask(host, todo) }, kind = JButtonKind.Secondary, size = JButtonSize.Small)
+            if (!failed && todo != null) TaskReceiptLook(todo, host)
         }
     }
 }
@@ -662,7 +662,7 @@ private fun InterruptedReceipt(item: FeedItem, host: AssistantTaskHost, todos: L
                 if (todo != null && cut?.canContinue != false) JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(todo, host.onError) },
                     kind = JButtonKind.Secondary, size = JButtonSize.Small, icon = PhIcons.ArrowClockwise,
                     loading = TasksStore.retryKey(todo.id) in busy)
-                if (todo != null) JButton(stringResource(R.string.chat_tasks_look), { openTask(host, todo) }, kind = JButtonKind.Secondary, size = JButtonSize.Small)
+                if (todo != null) TaskReceiptLook(todo, host)
             }
         }
     }

@@ -1,5 +1,9 @@
 # Lessons: Android
 
+## Receipt navigation inside task details (#3841)
+
+A receipt reused inside task details must not invoke the same task-sheet destination again: assigning the same Compose state produces no visible change. Resolve the task's existing lead binding and open its Agent page after dismissing the sheet. Keep missing-target feedback inside that sheet; generic operation feedback discards arbitrary exception messages and a snackbar behind a modal does not prove the explanation is visible. Exercise the receipt button independently of the footer and verify the real navigation stack in addition to callback tests.
+
 ## Late receipts must settle manual review (#3748)
 
 The review timeout does not invalidate the hub's later operation receipt. Include the manual-review state in the
