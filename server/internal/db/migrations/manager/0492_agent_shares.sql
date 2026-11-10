@@ -17,6 +17,8 @@ CREATE TABLE agent_shares (
  token_hash text NOT NULL UNIQUE CHECK(length(token_hash)=64),
  expires_at timestamptz NOT NULL,
  live boolean NOT NULL,
+ active boolean NOT NULL DEFAULT false,
+ header jsonb NOT NULL DEFAULT '{}'::jsonb CHECK(octet_length(header::text)<=32768),
  body jsonb NOT NULL CHECK(octet_length(body::text)<=33554432)
 );
 CREATE INDEX agent_shares_owner ON agent_shares(issuer,subject);

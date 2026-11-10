@@ -273,18 +273,11 @@ func (d *Devices) shareCreate(w http.ResponseWriter, r *http.Request) error {
 		if owner != v.Snapshot.Owner {
 			return shareFail("snapshot_changed")
 		}
-		all, err := t.Shares(owner.Issuer, owner.Subject)
+		retained, active, err := t.ShareCounts(owner.Issuer, owner.Subject, time.Now())
 		if err != nil {
 			return err
 		}
-		active := 0
-		for _, row := range all {
-			var s sealedShare
-			if json.Unmarshal(row.Body, &s) == nil && s.Meta.Status == "active" && s.Meta.Expires.After(time.Now()) {
-				active++
-			}
-		}
-		if active >= 20 || len(all) >= 1000 {
+		if active >= 20 || retained >= 1000 {
 			return shareFail("share_limit")
 		}
 		origin, handle := d.sharingOrigin()
@@ -346,7 +339,7 @@ func (d *Devices) shareList(w http.ResponseWriter, r *http.Request) error {
 	c := devicewire.CallerOf(r.Context())
 	items := []shareMetadata{}
 	err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
-		rows, err := t.Shares(c.Issuer, c.OwnerSubject)
+		rows, err := t.ShareHeaders(c.Issuer, c.OwnerSubject)
 		if err != nil {
 			return err
 		}
@@ -357,10 +350,25 @@ func (d *Devices) shareList(w http.ResponseWriter, r *http.Request) error {
 			if sid := r.URL.Query().Get("session_id"); sid != "" && row.Session != sid {
 				continue
 			}
-			_, s, err := d.manageShare(r.Context(), t, row.ID)
-			if err == nil {
-				items = append(items, s.Meta)
+			var s sealedShareHeader
+			if err := json.Unmarshal(row.Header, &s); err != nil {
+				return err
 			}
+			if s.Meta.ID != row.ID || !ownerMatches(c, s.Owner) {
+				continue
+			}
+			o, err := t.SessionShareOwner(s.Owner.Machine, s.Owner.SessionID)
+			if err != nil {
+				return err
+			}
+			if o == nil || *o != s.Owner {
+				continue
+			}
+			if s.Meta.Status == "active" && !s.Meta.Expires.After(time.Now()) {
+				s.Meta.Status = "expired"
+				s.Meta.Publication = "frozen"
+			}
+			items = append(items, s.Meta)
 		}
 		return nil
 	})

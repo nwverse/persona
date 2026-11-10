@@ -104,6 +104,12 @@ type sealedShare struct {
 	WindowSequence int64
 	Excluded       map[string]bool
 }
+type sealedShareHeader struct {
+	Meta      shareMetadata
+	Owner     db.SessionShareOwnership
+	Authority devicewire.ShareAuthority
+}
+
 type sharePolicy struct {
 	Operation       string                     `json:"operation"`
 	ShareID         string                     `json:"share_id,omitempty"`
@@ -426,7 +432,13 @@ func saveSealed(t *db.ShareTx, r db.ShareRow, s sealedShare) error {
 	if len(raw) > 16<<20 || len(s.Messages) > 10000 {
 		return shareFail("source_limit")
 	}
-	r.Body, r.Expires, r.Live = raw, s.Meta.Expires, s.Meta.Status == "active" && s.Meta.Future && s.Meta.Publication == "live"
+	header, err := json.Marshal(sealedShareHeader{Meta: s.Meta, Owner: s.Owner, Authority: s.Authority})
+	if err != nil {
+		return err
+	}
+	r.Body, r.Header, r.Expires = raw, header, s.Meta.Expires
+	r.Active = s.Meta.Status == "active"
+	r.Live = r.Active && s.Meta.Future && s.Meta.Publication == "live"
 	return t.SaveShare(r)
 }
 func targetPolicy(p sharePolicy, s *sealedShare) (sharePolicy, error) {

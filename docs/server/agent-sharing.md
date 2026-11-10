@@ -270,7 +270,11 @@ hiding before resume validation, local-expiry clearing, response fencing and
 Retry-After/backoff. No token or shared content is persisted in the browser.
 
 Budgets: 64 KiB write bodies; 1,000 explicit IDs; 20 active shares per subject per
-manager store; 1,000 retained shares per subject; complete source 16 MiB / 10,000
+manager store; 1,000 retained shares per subject. Quota counts use scalar indexed
+state, and lists read only prepared metadata headers (32 KiB maximum per header),
+never every retained publication body. The header, active flag and sealed body
+commit together; each listed header is checked against current session ownership.
+Complete source 16 MiB / 10,000
 logical messages; complete component 1 MiB; displayed text 32 KiB after sanitizing;
 public page 100 messages / 512 KiB; stored publication 16 MiB / 10,000 messages;
 256 transient handles per actor/kind and 64 MiB transient actor data. Anonymous

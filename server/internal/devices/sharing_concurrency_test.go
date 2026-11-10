@@ -33,7 +33,7 @@ func sharingConcurrencyFixture(t *testing.T) (*Devices, *db.DB, sealedShare, str
 		t.Fatal(err)
 	}
 	t.Cleanup(store.Close)
-	owner := db.SessionShareOwnership{Machine: "synthetic-concurrent-machine-" + t.Name(), SessionID: "synthetic-concurrent-session", Issuer: "synthetic-concurrent-issuer", Subject: "70000000-0000-4000-8000-000000000001", Incarnation: "synthetic-concurrent-incarnation", Generation: "synthetic-concurrent-generation"}
+	owner := db.SessionShareOwnership{Machine: "synthetic-concurrent-machine-" + t.Name(), SessionID: "synthetic-concurrent-session", Issuer: "synthetic-concurrent-issuer-" + t.Name(), Subject: "70000000-0000-4000-8000-000000000001", Incarnation: "synthetic-concurrent-incarnation", Generation: "synthetic-concurrent-generation"}
 	owner, err = store.AttributeSession(context.Background(), owner, "synthetic-admin", "Synthetic concurrency test", "synthetic-checkpoint")
 	if err != nil {
 		t.Fatal(err)

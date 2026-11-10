@@ -19,6 +19,11 @@
   fence and reject stale results with revision, content-version and frontier CAS.
   Check creation receipts before fresh RPCs, and do not recapture an unchanged live
   future setting when applying offline narrowing.
+- A per-publication body limit does not bound an owner list. Never collect all
+  retained sealed bodies to count quotas or render metadata: 1,000 individually
+  valid large rows can exceed process memory. Persist a bounded prepared header
+  and active scalar with the body, count scalars and list headers, and keep the
+  current ownership check on that path.
 - Numeric credentials are still credentials. Exempt only explicit count/flag keys
   from redaction; `password=123456` is not the same as `max_tokens=4096`. Preserve
   string quoting when sanitizing serialized arguments.

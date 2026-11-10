@@ -18,8 +18,8 @@ type ShareTx struct {
 type ShareRow struct {
 	ID, Issuer, Subject, Machine, Session, Hash string
 	Expires                                     time.Time
-	Live                                        bool
-	Body                                        json.RawMessage
+	Live, Active                                bool
+	Body, Header                                json.RawMessage
 }
 
 func (d *DB) ShareTransaction(ctx context.Context, fn func(*ShareTx) error) error {
@@ -68,11 +68,11 @@ func (t *ShareTx) PutObject(id, kind, actor string, expires time.Time, v any) er
 }
 func scanShare(row pgx.Row) (ShareRow, error) {
 	var r ShareRow
-	err := row.Scan(&r.ID, &r.Issuer, &r.Subject, &r.Machine, &r.Session, &r.Hash, &r.Expires, &r.Live, &r.Body)
+	err := row.Scan(&r.ID, &r.Issuer, &r.Subject, &r.Machine, &r.Session, &r.Hash, &r.Expires, &r.Live, &r.Body, &r.Active, &r.Header)
 	return r, err
 }
 
-const shareColumns = `id,issuer,subject::text,machine,session_id,token_hash,expires_at,live,body`
+const shareColumns = `id,issuer,subject::text,machine,session_id,token_hash,expires_at,live,body,active,header`
 
 func (t *ShareTx) Share(id string) (ShareRow, error) {
 	return scanShare(t.tx.QueryRow(t.ctx, `SELECT `+shareColumns+` FROM agent_shares WHERE id=$1 FOR UPDATE`, id))
@@ -81,19 +81,30 @@ func (t *ShareTx) ByHash(hash string) (ShareRow, error) {
 	return scanShare(t.tx.QueryRow(t.ctx, `SELECT `+shareColumns+` FROM agent_shares WHERE token_hash=$1 FOR UPDATE`, hash))
 }
 func (t *ShareTx) SaveShare(r ShareRow) error {
-	_, err := t.tx.Exec(t.ctx, `INSERT INTO agent_shares(id,issuer,subject,machine,session_id,token_hash,expires_at,live,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO UPDATE SET expires_at=EXCLUDED.expires_at,live=EXCLUDED.live,body=EXCLUDED.body`, r.ID, r.Issuer, r.Subject, r.Machine, r.Session, r.Hash, r.Expires, r.Live, r.Body)
+	if len(r.Header) == 0 {
+		r.Header = json.RawMessage(`{}`)
+	}
+	_, err := t.tx.Exec(t.ctx, `INSERT INTO agent_shares(id,issuer,subject,machine,session_id,token_hash,expires_at,live,body,active,header) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET expires_at=EXCLUDED.expires_at,live=EXCLUDED.live,body=EXCLUDED.body,active=EXCLUDED.active,header=EXCLUDED.header`, r.ID, r.Issuer, r.Subject, r.Machine, r.Session, r.Hash, r.Expires, r.Live, r.Body, r.Active, r.Header)
 	return err
 }
-func (t *ShareTx) Shares(issuer, subject string) ([]ShareRow, error) {
-	rows, err := t.tx.Query(t.ctx, `SELECT `+shareColumns+` FROM agent_shares WHERE issuer=$1 AND subject::text=$2 ORDER BY expires_at DESC LIMIT 1000`, issuer, subject)
+
+func (t *ShareTx) ShareCounts(issuer, subject string, now time.Time) (retained, active int, err error) {
+	err = t.tx.QueryRow(t.ctx, `SELECT count(*),count(*) FILTER (WHERE active AND expires_at>$3) FROM agent_shares WHERE issuer=$1 AND subject=$2::uuid`, issuer, subject, now).Scan(&retained, &active)
+	return
+}
+
+// ShareHeaders never fetches full publication bodies. The manager prepares the
+// bounded header and active flag in the same transaction as the sealed content.
+func (t *ShareTx) ShareHeaders(issuer, subject string) ([]ShareRow, error) {
+	rows, err := t.tx.Query(t.ctx, `SELECT id,issuer,subject::text,machine,session_id,token_hash,expires_at,live,active,header FROM agent_shares WHERE issuer=$1 AND subject=$2::uuid ORDER BY expires_at DESC LIMIT 1000`, issuer, subject)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []ShareRow
 	for rows.Next() {
-		r, err := scanShare(rows)
-		if err != nil {
+		var r ShareRow
+		if err := rows.Scan(&r.ID, &r.Issuer, &r.Subject, &r.Machine, &r.Session, &r.Hash, &r.Expires, &r.Live, &r.Active, &r.Header); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
