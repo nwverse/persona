@@ -5245,6 +5245,17 @@ def _history():
 INBOX_HISTORY = [] if os.environ.get("MOCK_INBOX_HISTORY") == "none" else _history()
 
 
+# MOCK_INBOX_HISTORY=busy also has the list's own done items of its last days, as a busy hub lists them (the list holds
+# the done items of 3 days): 2 within the hour (Done's "Just now"), 5 earlier today, 6 yesterday, 4 the day before.
+if os.environ.get("MOCK_INBOX_HISTORY") == "busy":
+    for (_day, _n, _h0) in ((0, 2, 0), (0, 5, 2), (1, 6, 1), (2, 4, 1)):
+        for _i in range(_n):
+            _x = dict(INBOX_HISTORY[_i % 4], id=f"recent:{_day}:{_h0}:{_i}")
+            _done = ago(days=_day, hours=_h0 + (_i % 6 if _h0 else 0), minutes=10 + _i)
+            _x.update(done_at=_done, updated_at=_done, started_at=_done)
+            INBOX.append(_x)
+
+
 def _instant(s):
     """An RFC 3339 time as an instant: the apps send their own forms ("…Z", "….000Z", "+08:00"), so never compare text."""
     return datetime.fromisoformat(s.replace("Z", "+00:00"))

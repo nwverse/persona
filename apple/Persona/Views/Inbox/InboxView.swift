@@ -199,7 +199,13 @@ struct InboxPage: View {
                             let done = doneAll(share.mine(itemProjection.sortedDoneItems, model.managerRoster), share: share)
                             // its newest group open (only Just Now and Today start open), then scrolled to its first row:
                             // Done's title and the group's stick above it
-                            if let g = InboxGroups.done(done, now: .now).first {
+                            if UserDefaults.standard.bool(forKey: "showInboxDoneFolded"),
+                               let last = InboxGroups.done(done, now: .now).filter({ groupOpen("done", $0.key, manager: first) }).last?.items.last {
+                                // `-showInboxDoneFolded YES`: the groups as they start (Just Now and Today open), the last
+                                // open row at the top so the folded ones with their counts follow it (#2969 screenshots)
+                                try? await Task.sleep(for: .milliseconds(300))
+                                scrollTarget = last.key
+                            } else if let g = InboxGroups.done(done, now: .now).first {
                                 setGroupOpen("done", g.key, manager: first, true)
                                 try? await Task.sleep(for: .milliseconds(300))
                                 scrollTarget = g.items.first?.key
@@ -365,15 +371,16 @@ struct InboxPage: View {
                 HStack(spacing: Theme.Space.sm) {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(open ? 90 : 0))
-                    Text(g.title).font(Theme.Font.secondaryStrong).foregroundStyle(.secondary)
-                    Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.secondary).foregroundStyle(.tertiary)
+                    // the section's title size, not its weight: a level under it ("Done · 2088"), not above it (#2969)
+                    Text(g.title).font(Theme.Font.caption).foregroundStyle(.secondary)
+                    Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.caption).foregroundStyle(.tertiary)
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            if n > 0 { Text("\(n) Picked").font(Theme.Font.secondary).foregroundStyle(Theme.accent).lineLimit(1) }
+            if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
         .padding(.vertical, Theme.Space.xxs)
