@@ -35,9 +35,8 @@ import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
 import persona.core.navigation.AppTab
+import persona.core.navigation.ModelPurposeRoute
 import persona.core.navigation.Navigator
-import persona.core.navigation.SettingsPage
-import persona.core.navigation.SettingsPageRoute
 import java.io.File
 
 /**
@@ -100,6 +99,10 @@ class AssistantReadinessShotsTest {
         override suspend fun deleteMemory(name: String) {}
     }
 
+    @Test fun connectModelOpensMainChatForTheShownManager() {
+        assertEquals(ModelPurposeRoute("assistant", "work"), ReadinessActionId.ConnectModel.destination(null, manager = "work"))
+    }
+
     @Test fun light() = shots("light", interact = true)
 
     @Config(sdk = [35], qualifiers = "zh-w400dp-h900dp-night-xhdpi")
@@ -149,7 +152,7 @@ class AssistantReadinessShotsTest {
         rule.waitForIdle()
         rule.onNodeWithText("先接上模型").performClick()
         rule.waitForIdle()
-        assertEquals(SettingsPageRoute(SettingsPage.Providers), opened.last())
+        assertEquals(ModelPurposeRoute("assistant", "assistant"), opened.last())
         assertTrue(hub.sent.isEmpty())
         // A local example question opens help here, never sent to the model.
         rule.onNodeWithText("你能帮我做什么？").performClick()

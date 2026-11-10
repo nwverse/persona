@@ -652,6 +652,38 @@ In another App, Share › Persona sends text, a web link or up to 4 images, with
 - Failure stays on the panel with a reason: unpaired, invalid pairing, no main chat yet, cannot reach the hub. No SSH tunnels; main chat only, other destinations later.
 - Release: the share extension has a new Bundle ID (`<bundle id>.share`), see `docs/operations/release.md`.
 
+## Clipboard with your computers (#3064)
+
+Send the phone's clipboard to a computer, or get a computer's clipboard onto the phone, through the hub and the computer's resident node
+(the hub's `GET` / `PUT /api/v1/machines/{mid}/clipboard`, `GET` / `PUT …/clipboard/settings`; `Machine.clipboard` says whether it can, whether it is on,
+and why not: `reason` in the reader's language, `reason_code` as a stable word that the app turns into its own sentence when `reason` is missing).
+The server side, its errors and limits are described with the hub's clipboard routes (#3064); a hub without the feature sends no `clipboard`, which the
+app treats as unsupported and off (no section, never offered).
+
+- **Where**: the computer's page, right after Files, when the hub reports `clipboard` for it (`ClipboardSection`, model `ClipboardModel`; iPhone only for now,
+  the Mac and visionOS apps later). The per-computer switch is off by default; a computer that can't (no graphical session) says why, an offline one says so.
+- **Send Clipboard** reads `UIPasteboard` (`PhonePasteboard`: an image first, else text, else a link; images as PNG, or JPEG when the PNG is over 8 MB). iOS asks
+  "Allow Paste?" for what another app copied. Beside it the system Paste button (`SystemPasteButton`, a design-system wrapper of `PasteButton`) hands the content over
+  without asking: the tap is the permission. **Get Clipboard** writes the phone's pasteboard (never prompts) and previews the text or the image under the buttons.
+  Results are toasts; a computer's hidden content (password managers' concealed types) comes back as `concealed` and is not copied.
+  Sizes are checked before sending, as the hub checks them (text up to 4 MiB, an image up to 7 MiB; an image whose PNG is bigger is tried as JPEG at falling
+  quality), so a too large clipboard is said at once. The hub's refusals each have a sentence (`ClipboardFailure`): `clipboard_disabled`, `read_only`,
+  `clipboard_unsupported`, `offline`, `too_large`, `clipboard_bad_image`, `clipboard_failed`; anything else shows the hub's own words. The switch's state
+  follows the pushed `machines` list; the page also reads `GET …/clipboard/settings` when it opens.
+- **Paste hint**: after the first paste the user allowed from Send Clipboard, a one-time notice says Settings › Persona › Paste from Other Apps can be set to Allow, with
+  Open Settings (`openSettingsURLString`) and Don't Show Again; the flag is `clipboard.pasteHintDismissed` (written once).
+- **Offer on return** (Settings › Phone Data › Clipboard, `clipboard.offerOnReturn`, off by default): coming back after the pasteboard changed elsewhere, a toast asks
+  "Send what you just copied to <computer>?" with Send (`ClipboardOffer`). Only `changeCount` and `hasStrings` / `hasImages` / `hasURLs` are looked at, which never
+  prompt; the content is read on Send. The change count seen when the app left lives in memory and `StateCache` (`clipboard-seen`, once per backgrounding), not
+  UserDefaults. The computer offered is the one last sent to (`clipboard.lastMachine`) if it still shares its clipboard, else the first online one that does.
+- **Shortcuts**: Send Clipboard to Computer and Get Computer's Clipboard (`docs/apple/intents.md`).
+- **Limits**: iOS can't read the clipboard in the background, so phone → computer is always a tap (no automatic sync); computer → phone needs the app (or a shortcut) too.
+- **Screenshots and tests**: `MOCK_CLIPBOARD=off|on|image python3 scripts/mock/mock_hub.py` (`MOCK_CLIPBOARD_FAIL=1`: every read and write fails as `clipboard_failed`); `-tab settings -openMachines YES -openMachineDetail macbook -openMachineClipboard YES`
+  (scrolled to the section), `-showClipboardFetch YES` (runs Get on opening), `-showClipboardHint YES`. `ClipboardSectionTests` (UI, `TEST_RUNNER_PERSONA_CLIPBOARD_HUB`)
+  runs Get → Send → hint and the offer; with `MOCK_CLIPBOARD=off` and `TEST_RUNNER_PERSONA_CLIPBOARD_STATE=off` it checks the default-off state
+  (the switch and its explanation only, no buttons; the offer setting off). A hub without `clipboard` on a machine hides the section and never offers it; unit tests `ClipboardModelTests`, `ClipboardOfferTests`, `ClipboardIntentsTests`. The simulator could not answer "Allow Paste?"
+  for what another app copied (its TCC store refused the answer, 2026-11-10), so the prompt itself is checked on a device.
+
 ## Effort and permission modes
 
 Two small labels above the chat input: permission mode (Manual approval / Auto-edit files / Plan only / Auto / Allow everything) and effort (Auto / Low … Max),

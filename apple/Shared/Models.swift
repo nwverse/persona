@@ -39,6 +39,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
     var browser: MachineBrowser? = nil
+    /// Sharing its clipboard with the phone (#3064); nil from hubs before it.
+    var clipboard: MachineClipboard? = nil
     /// Hub mesh (docs/archive/operations/plan-hub-mesh.md 2.6): the hub that owns the computer in its group, its name, the computer's own
     /// id across hubs, and how the hub reaches it. nil from hubs before the mesh.
     var hubID: String? = nil
@@ -61,7 +63,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, route, trust, manager
+        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, clipboard, route, trust, manager
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
@@ -109,6 +111,7 @@ extension Machine {
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
+        clipboard = try? c.decodeIfPresent(MachineClipboard.self, forKey: .clipboard)
         hubID = try? c.decodeIfPresent(String.self, forKey: .hubID)
         hubName = try? c.decodeIfPresent(String.self, forKey: .hubName)
         machineUID = try? c.decodeIfPresent(String.self, forKey: .machineUID)

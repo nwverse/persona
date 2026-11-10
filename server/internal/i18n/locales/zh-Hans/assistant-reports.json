@@ -75,5 +75,9 @@
   "live_held_pr": "还没上线：停在 PR",
   "live_held_merged": "还没上线：已合未部署",
   "live_held_off": "已部署但默认关着",
-  "goal_summary": "{title}：{tasks}"
+  "goal_summary": "{title}：{tasks}",
+  "deploy_gate_out": "等部署：线上 hub（{hub}）还没包含合并提交 {merge}",
+  "deploy_gate_unmerged": "PR 还没合并，谈不上部署",
+  "deploy_gate_unknown": "等确认部署：查不到线上 hub 有没有这次合并",
+  "deploy_gate_not_in": "等部署：线上 hub（{hub}）里还没有这个 PR 的合并"
 }

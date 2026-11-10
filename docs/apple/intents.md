@@ -22,6 +22,7 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | `OpenSessionIntent.swift` | `SessionEntity` + `SessionEntityQuery`, `OpenSessionIntent` |
 | `AskClaudeIntent.swift` / `PersonaStatusIntent.swift` / `ApproveFirstIntent.swift` | The three business intents |
 | `AskPersonaIntent.swift` / `PersonalAgentIntents.swift` / `AddTodoIntent.swift` | Ask Persona, personal Agents, new to-do (`docs/apple/siri.md`) |
+| `ClipboardIntents.swift` | Send Clipboard to Computer / Get Computer's Clipboard (#3064, `docs/apple/ios.md` "Clipboard with your computers"): optional computer (default: the one last sent to, else the first online one that shares its clipboard); Send takes optional Text instead of the clipboard, so a shortcut that starts with Get Clipboard never sees the paste prompt; Get writes the phone's clipboard and returns the text. Listed in Shortcuts, not as App Shortcut phrases; the network part is `ClipboardIntentFlow` (`ClipboardIntentsTests`) |
 | `IntentAnswerSnippet.swift` | The answer card for Ask Persona (question + full text) |
 | `PersonaShortcuts.swift` | `AppShortcutsProvider`, Chinese phrases and icons |
 
