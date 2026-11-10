@@ -13,6 +13,13 @@ import (
 func draftRows(t *testing.T, d *DB) (FeedRow, TodoDecisionRow) {
 	t.Helper()
 	ctx := context.Background()
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := d.pool.Exec(cleanup, `DELETE FROM assistant_feed WHERE id IN ('draft-card', 'repeated-card', 'new-progress-card')`); err != nil {
+			t.Error(err)
+		}
+	})
 	at := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
 	if _, err := d.pool.Exec(ctx, `INSERT INTO todos (id, title, origin) VALUES ('draft-task', 'Synthetic task', 'draft-conversation')`); err != nil {
 		t.Fatal(err)
@@ -121,6 +128,36 @@ func TestFeedDraftDecisionConcurrentCAS(t *testing.T) {
 	list, err := d.ListTodoDecisions(context.Background(), decision.TodoID, true)
 	if err != nil || len(list) != 1 {
 		t.Fatalf("duplicate audit: %+v %v", list, err)
+	}
+}
+
+func TestFeedDraftOlderDismissDoesNotChangeNewerCard(t *testing.T) {
+	d := open(t)
+	ctx := context.Background()
+	card, decision := draftRows(t, d)
+	newer := card
+	newer.ID, newer.At = "new-progress-card", decision.CreatedAt
+	newer.Body = json.RawMessage(`{"todo_id":"draft-task","draft":"Verification passed.","progress_version":"progress-2","message_version":"message-1"}`)
+	if ok, err := d.AppendDraftFeed(ctx, newer); err != nil || !ok {
+		t.Fatalf("new draft: %v %v", ok, err)
+	}
+	if ok, err := d.ApplyFeedDecision(ctx, card, dismissedBody(t, card, decision.ID, decision.CreatedAt), decision, decision.CreatedAt); err != nil || !ok {
+		t.Fatalf("older exact dismissal: %v %v", ok, err)
+	}
+	current, err := d.FeedItem(ctx, newer.ID)
+	if err != nil || current == nil {
+		t.Fatalf("newer card: %+v %v", current, err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(current.Body, &body)
+	if body["draft"] != "Verification passed." || body["dismissal_id"] != nil {
+		t.Fatalf("newer card changed: %s", current.Body)
+	}
+	older, _ := d.FeedItem(ctx, card.ID)
+	undo := decision
+	undo.ID, undo.SourceMessage, undo.SupersedesID, undo.CreatedAt = "stale-undo", "draft:draft-card:undo", decision.ID, decision.CreatedAt.Add(time.Minute)
+	if ok, err := d.ApplyFeedDecision(ctx, *older, card.Body, undo, undo.CreatedAt); err != nil || ok {
+		t.Fatalf("older Undo: %v %v", ok, err)
 	}
 }
 

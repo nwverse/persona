@@ -299,8 +299,12 @@ The draft comparison uses the unedited original card text, not textarea edits. T
 card ID binds the immutable draft version. A duplicate dismissal returns its
 existing receipt without writing another decision. **Undo** removes `dismissed_at`
 and `dismissal_id` and returns the same unsent card to pending. It writes a decision
-superseding the dismissal. An old Undo cannot replace a newer dismissal, a new draft,
-or new Agent progress. A changed draft, sent or filed item, or stale decision returns
+superseding the dismissal. An old Undo cannot replace a newer dismissal or restore
+an older card once a newer draft for the same Inbox ref exists in the conversation.
+Ordinary Agent output does not invalidate dismissal or toast Undo: an exact old
+card can still be declined without affecting any newer pending card. Dismissal
+preserves its original progress generation; only legacy cards establish a baseline.
+A changed draft, sent or filed item, or stale Undo decision returns
 `409 task_draft_stale`; missing or non-message cards return `404`; read-only roles
 return `403`. Sending a dismissed card from a stale client returns
 `409 task_draft_dismissed`, with `delivered: "none"`.

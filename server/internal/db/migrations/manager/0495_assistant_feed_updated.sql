@@ -4,5 +4,5 @@
 ALTER TABLE assistant_feed ADD COLUMN updated_at timestamptz;
 CREATE INDEX assistant_feed_updated ON assistant_feed (conversation, updated_at)
     WHERE kind = 'message' AND updated_at IS NOT NULL;
-CREATE INDEX assistant_feed_message_ref ON assistant_feed (ref, at, id)
-    WHERE kind = 'message';
+CREATE INDEX assistant_feed_dismissed_ref ON assistant_feed (ref)
+    WHERE kind = 'message' AND body ? 'dismissal_id';

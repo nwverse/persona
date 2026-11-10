@@ -106,9 +106,79 @@ func TestMessageDraftNewProgressFencesUndo(t *testing.T) {
 	if cardBody(t, cards(t, h, time.Time{})[0]).DismissalID == "" || len(rc.got) != 0 {
 		t.Fatal("stale Undo changed the old card or sent a reply")
 	}
-	// A pending old card cannot be dismissed in place of the newer draft either.
+	// The new pending draft can also be dismissed without affecting the old one.
 	if code, _ := draftAction(t, h, list[1], "dismiss", map[string]string{"draft": cardBody(t, list[1]).Draft}); code != 200 {
 		t.Fatalf("new draft dismiss: %d", code)
+	}
+}
+
+func setDraftProgress(h *inboxHub, rev int64, text string) {
+	h.f.mu.Lock()
+	defer h.f.mu.Unlock()
+	h.f.sessions["box"] = []proto.Session{{MachineID: "box", SessionID: "s1", Rev: rev, LastText: text}}
+}
+
+func TestMessageDraftDismissAfterAgentProgressWithoutNewCard(t *testing.T) {
+	h, rc, _ := cardHub(t)
+	setDraftProgress(h, 1, "Verification started.")
+	draft(t, h, "The first verification is in progress.")
+	card := cards(t, h, time.Time{})[0]
+	original := cardBody(t, card)
+	// The Agent continues normally, but the displayed draft has not changed.
+	setDraftProgress(h, 2, "Verification passed; checking the next target.")
+	code, out := draftAction(t, h, card, "dismiss", map[string]string{"draft": original.Draft})
+	if code != 200 {
+		t.Fatalf("unchanged card after Agent progress: %d %v", code, out)
+	}
+	ignored := cardBody(t, cards(t, h, time.Time{})[0])
+	if ignored.ProgressVersion != original.ProgressVersion || ignored.Draft != original.Draft {
+		t.Fatalf("dismissal changed the draft generation: %+v", ignored)
+	}
+	// Continued Agent activity must not invalidate a toast Undo when no new
+	// draft card was produced. Undo is local to this card and never sends.
+	setDraftProgress(h, 3, "The next target also passed.")
+	if code, out := draftAction(t, h, card, "undo-dismiss", map[string]string{"dismissal_id": out["dismissal_id"].(string)}); code != 200 {
+		t.Fatalf("Undo without a newer card: %d %v", code, out)
+	}
+	if len(rc.got) != 0 {
+		t.Fatal("dismiss or Undo sent a reply")
+	}
+	if code, _ := draftAction(t, h, card, "dismiss", map[string]string{"draft": original.Draft}); code != 200 {
+		t.Fatalf("dismiss again: %d", code)
+	}
+	// Ignoring the original generation must not suppress the Agent's genuinely
+	// new progress. Submission goes through the real inbox draft producer.
+	draft(t, h, "Both verification targets passed.")
+	list := cards(t, h, time.Time{})
+	if len(list) != 2 || cardBody(t, list[1]).DismissalID != "" {
+		t.Fatalf("new progress was suppressed: %+v", list)
+	}
+}
+
+func TestMessageDraftDismissOlderCardKeepsNewerPending(t *testing.T) {
+	h, rc, _ := cardHub(t)
+	setDraftProgress(h, 1, "Verification started.")
+	draft(t, h, "The first verification is in progress.")
+	old := cards(t, h, time.Time{})[0]
+	setDraftProgress(h, 2, "Verification passed.")
+	draft(t, h, "Verification passed. Ready for review.")
+	before := cards(t, h, time.Time{})
+	if len(before) != 2 {
+		t.Fatalf("drafts: %+v", before)
+	}
+	code, out := draftAction(t, h, old, "dismiss", map[string]string{"draft": cardBody(t, old).Draft})
+	if code != 200 {
+		t.Fatalf("dismiss exact older card: %d %v", code, out)
+	}
+	after := cards(t, h, time.Time{})
+	if len(after) != 2 || cardBody(t, after[0]).DismissalID == "" || string(after[1].Body) != string(before[1].Body) {
+		t.Fatalf("older dismissal affected the newer card: %+v", after)
+	}
+	if code, _ := draftAction(t, h, old, "undo-dismiss", map[string]string{"dismissal_id": out["dismissal_id"].(string)}); code != 409 {
+		t.Fatalf("Undo over a newer card: %d", code)
+	}
+	if len(rc.got) != 0 || onlyTodo(h.Service).DoneAt != nil {
+		t.Fatal("older dismissal sent or completed the task")
 	}
 }
 

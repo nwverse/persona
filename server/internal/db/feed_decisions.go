@@ -19,9 +19,9 @@ func lockFeedRef(ctx context.Context, tx pgx.Tx, kind, ref string) error {
 	return err
 }
 
-// ApplyFeedDecision compares and replaces one message body's exact stored version,
-// only while it is the latest card for its ref. Its decision audit commits with
-// the body; false means a stale version and makes no changes to either record.
+// ApplyFeedDecision compares and replaces one message body's exact stored version.
+// A superseding decision (Undo) additionally requires the latest card for its ref
+// in this conversation. Its audit commits with the body; false changes neither.
 func (d *DB) ApplyFeedDecision(ctx context.Context, before FeedRow, body json.RawMessage, decision TodoDecisionRow, at time.Time) (bool, error) {
 	changed := false
 	err := pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
@@ -39,8 +39,9 @@ func (d *DB) ApplyFeedDecision(ctx context.Context, before FeedRow, body json.Ra
 		tag, err := tx.Exec(ctx, `UPDATE assistant_feed f SET body = $3, updated_at = $4
 			WHERE f.id = $1 AND f.kind = 'message' AND f.body = $2::jsonb
 			AND f.body->>'todo_id' = $5
-			AND NOT EXISTS (SELECT 1 FROM assistant_feed n WHERE n.kind = f.kind AND n.ref = f.ref
-				AND (n.at, n.id) > (f.at, f.id))`, before.ID, []byte(before.Body), []byte(body), at, decision.TodoID)
+			AND ($6 = '' OR NOT EXISTS (SELECT 1 FROM assistant_feed n
+				WHERE n.conversation = f.conversation AND n.kind = f.kind AND n.ref = f.ref
+				AND (n.at, n.id) > (f.at, f.id)))`, before.ID, []byte(before.Body), []byte(body), at, decision.TodoID, decision.SupersedesID)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}

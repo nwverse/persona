@@ -138,15 +138,12 @@ func (s *Service) decideDraft(ctx context.Context, id string, draft *string, und
 		if !ok {
 			return FeedItem{}, db.ErrTodoNotFound
 		}
-		version := s.draftProgressVersion(ctx, todo)
-		if (b.ProgressVersion != "" || undoID != "") && version != b.ProgressVersion {
-			return FeedItem{}, errDraftStale
+		// The immutable card's generation, not current Agent activity, is what
+		// the user is declining. Only legacy cards need a baseline established.
+		if undoID == "" && b.ProgressVersion == "" {
+			body["progress_version"], _ = json.Marshal(s.draftProgressVersion(ctx, todo))
 		}
-		body["progress_version"], _ = json.Marshal(version)
-		if b.MessageVersion != "" && messageVersion != "" && b.MessageVersion != messageVersion {
-			return FeedItem{}, errDraftStale
-		}
-		if b.MessageVersion == "" && messageVersion != "" {
+		if undoID == "" && b.MessageVersion == "" && messageVersion != "" {
 			body["message_version"], _ = json.Marshal(messageVersion)
 		}
 		decision := db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: b.TodoID, Source: db.DecisionCard,
@@ -199,11 +196,12 @@ func (s *Service) applyDraftDecision(ctx context.Context, before FeedItem, body 
 		return ds.ApplyFeedDecision(ctx, db.FeedRow{ID: before.ID, Conversation: before.Conversation, At: before.At,
 			Kind: before.Kind, Ref: before.Ref, Body: before.Body}, body, decision, at)
 	}
-	// Store-less unit tests use the same compare-and-replace and newest-card rule.
+	// Store-less unit tests use the same compare-and-replace rule. Only Undo
+	// requires the latest card; dismissing an older card cannot change a new one.
 	s.tasks.mu.Lock()
 	defer s.tasks.mu.Unlock()
-	for _, list := range s.tasks.feed {
-		for _, it := range list {
+	if decision.SupersedesID != "" {
+		for _, it := range s.tasks.feed[before.Conversation] {
 			if it.Kind == feedMessage && it.Ref == before.Ref && (it.At.After(before.At) || it.At.Equal(before.At) && it.ID > before.ID) {
 				return false, nil
 			}
