@@ -376,7 +376,6 @@ struct ToolCallRow: View {
         VStack(alignment: .leading, spacing: 0) {
             Group { if AppStyle.current.usesBeautifulUI { chipHeader } else { header(base) } }
                 .chatPinned(pinKey)
-                .accessibilityIdentifier(headerID)
 
             if base == "TodoWrite", openPlan != nil {
                 // The plan in one line: how far along, as a thin bar; its whole list in the plan sheet (#5602).
@@ -451,6 +450,7 @@ struct ToolCallRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(headerID)
     }
 
     /// The row's head: BeautifulUI's tool row — kind icon (a chevron once open), the verb, the subject in a chip.
@@ -460,6 +460,7 @@ struct ToolCallRow: View {
             if call.isError { ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(Theme.danger).font(Theme.Font.label) }
         }
         .padding(Self.chipInsets(grouped: grouped))
+        .accessibilityIdentifier(headerID)
     }
 
     /// A call that went to the background says how its task went (Background · Done).
