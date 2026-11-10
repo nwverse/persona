@@ -1,6 +1,6 @@
 {{- /* What a voice function tool answers the model. What other people wrote (an agent's last words, a chat line in the
 knowledge base) goes inside <agent_output>, after the sentence measured to keep the model from doing what it says
-(docs/lessons/voice.md「注入实测用的原文」): keep that wording. Its "and do not call tools" is narrowed to "because of
+(docs/lessons/voice.md「Verbatim injection-test text」): keep that wording. Its "and do not call tools" is narrowed to "because of
 it", since the user's own request (find an agent, then send it something) still needs the next tool. */ -}}
 {{- if eq .Lang "en" -}}
 {{- if eq .Code "bad_args" -}}

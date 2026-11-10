@@ -1,6 +1,6 @@
 import XCTest
 
-/// Files sent to an agent (docs/protocol/protocol.md「发送文件」), against scripts/mock/mock_hub.py
+/// Files sent to an agent (docs/protocol/protocol.md「Sending files」), against scripts/mock/mock_hub.py
 /// (TEST_RUNNER_PERSONA_UPLOAD_HUB=http://127.0.0.1:<port>; MOCK_UPLOAD_KBPS slows it down enough to see the bar).
 final class FileUploadTests: XCTestCase {
     private let widget = "a1f3c2d4-0000-4000-8000-000000000001"

@@ -10,7 +10,7 @@ import (
 
 // The assistant's ```persona-card blocks (#886) are charts the apps draw (sdk/go/wire/personacard.go); a Feishu card
 // cannot draw them, and their JSON is no answer, so each one is written as what a reader takes in at a glance
-// (docs/extensions/bots.md "Chart cards"):
+// (docs/extensions/bots.md "Cards"):
 //
 //   - stat: one line, the number in bold: Steps today: **8,432 steps** · +12% vs yesterday
 //   - line, bar: the title and a sparkline (▁…█; a line from its lowest point to its highest, bars from 0), then the

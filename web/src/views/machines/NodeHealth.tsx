@@ -1,4 +1,4 @@
-// "What this computer can do" on a machine's page (docs/server/machines.md "Self-check", Moshi's Doctor tab): what `personad node doctor` finds on
+// "What this computer can do" on a machine's page (docs/server/machines.md "Doctor: what this computer can do", Moshi's Doctor tab): what `personad node doctor` finds on
 // the computer, first as features ("Approval cards on your phone", "Status and notifications", "Terminal and engine", …) with "Ready" / "Partly working" / "Problem" / "Off", then all
 // the individual checks behind "Show all checks". It checks when the page opens and on "Check again"; "Fix" (after one confirmation)
 // has the node write its own generated files again and re-check. A node too old for the self-check says so, with the

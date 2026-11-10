@@ -1,7 +1,7 @@
 import SwiftUI
 
 // An inbox item of one of the hub's connectors (GitHub…), drawn the same for every source from the item's
-// `connector` block (docs/plans/plan-connectors.md「六、App 侧」). No pages for browsing the source: the thread as the hub
+// `connector` block (docs/plans/plan-connectors.md「App side」). No pages for browsing the source: the thread as the hub
 // read it, and the page itself in the app's link sheet.
 
 /// A connector's item opened: a chat app's conversation as its own page (ConnectorThreadView, a connector with
@@ -138,7 +138,7 @@ struct InboxConnectorTextView: View {
 
     private func load() async {
         do {
-            context = try await model.api?.manager(item.manager).inboxItem(item.id).context ?? ""
+            context = try await model.api?.manager(model.itemManager(item.manager)).inboxItem(item.id).context ?? ""
             failure = nil
         } catch {
             if error.isCancellation { return }

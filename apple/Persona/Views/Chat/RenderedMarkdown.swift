@@ -6,7 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
-/// Formulas (KaTeX) and diagrams (Mermaid) drawn into pictures for Markdown (docs/apple/ios.md「公式和图」): one hidden web
+/// Formulas (KaTeX) and diagrams (Mermaid) drawn into pictures for Markdown (docs/apple/ios.md「Math and diagrams」): one hidden web
 /// view loads the bundled `render.html` (no network: its content security policy and a rule list block everything
 /// but the bundle), draws one thing at a time and snapshots it; pictures are kept in memory and on disk by what was
 /// drawn. Formulas are drawn black and shown as template images, so they take the text's color in both appearances;

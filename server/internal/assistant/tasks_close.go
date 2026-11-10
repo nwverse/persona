@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Closing the agents of finished tasks (docs/assistant/todos.md "Finished tasks close their agents"). Once a task opened from an assistant
+// Closing the agents of finished tasks (docs/assistant/todos.md "Close Agents for completed tasks"). Once a task opened from an assistant
 // conversation is done — by the user or by the assistant's judge (done.go) — its agents that have stayed still for a
 // while are retired: the node closes their pane and the agent process with it (node retire.go). The todo keeps the
 // agents (machine, session id, directory) and the node keeps how each was started (launcher, model, modes), so reading

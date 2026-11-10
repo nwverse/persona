@@ -1,6 +1,6 @@
 import Foundation
 
-/// The agents of one herdr tab as one group (#2320, docs/protocol/agent-states.md「一个 tab 里的几个 pane」): an agent splits its
+/// The agents of one herdr tab as one group (#2320, docs/protocol/agent-states.md「Several panes in one tab」): an agent splits its
 /// tab and starts more agents in the new panes to work on the same thing. They sit in the order of their panes, the
 /// starter (the top left pane, the others split from it) first. The same rules as the web's (`web/src/lib/herdr-tree.ts`),
 /// as plain functions so they are unit-tested (`TabPanesTests`) apart from the views.

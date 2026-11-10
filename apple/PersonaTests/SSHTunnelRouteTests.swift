@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The app's side of the SSH tunnel (docs/operations/network.md「经 SSH 隧道连 hub」): a routed hub keeps its own address and only
+/// The app's side of the SSH tunnel (docs/operations/network.md「Connecting to hub through SSH」): a routed hub keeps its own address and only
 /// the URLs put on the wire change; pairings saved before keep decoding; picking the way asks the hub's own addresses
 /// first. The tunnel itself is tested against a real sshd in apple/Packages/PersonaSSH.
 @Suite(.serialized)

@@ -61,6 +61,7 @@ import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } fr
 import type { Route } from "../lib/router";
 import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
+import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
 import { useTodoField } from "./use-todo-field";
 import { todoUltracode } from "../lib/ultracode";
@@ -250,6 +251,16 @@ export function TodosView({
     }
   }, []);
 
+  // a to-do dragged to another time or day on the calendar (#2045): saved at once, said when it fails (it goes back)
+  const moveTodo = useCallback(async (id: string, patch: TodoPatch) => {
+    try {
+      await updateTodo(id, patch);
+      await refreshTodos();
+    } catch (e) {
+      toast(t("todos.calendar_move_failed", { error: errorText(e) }), "error");
+    }
+  }, []);
+
   const retryTodos = async () => {
     if (retrying) return;
     setRetrying(true);
@@ -345,6 +356,7 @@ export function TodosView({
                 setNewOpen(true);
               }}
               onShowList={() => showView("list")}
+              onMove={moveTodo}
             />
           </div>
           {selectedTodo && (
@@ -816,6 +828,9 @@ const TodoListItem = memo(function TodoListItem({
           {!todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />}
         </div>
 
+        {/* What it waits on from the user, with the one tap that answers it (#2056) */}
+        <TodoAskLine todo={todo} className="mt-1" />
+
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
 
@@ -1144,6 +1159,9 @@ function TodoDetail({
           {todo.done_reason ? t("todos.auto_done_reason", { reason: todo.done_reason }) : t("todos.auto_done")}
         </p>
       )}
+
+      {/* What it waits on from the user and how to answer it (#2056) */}
+      <TodoAskPanel todo={todo} />
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />

@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/link"
 )
 
-// HTTP between hubs over their links (docs/server/mesh.md "Member forwarding"). Each stream a hub opens on a link is one HTTP/1.1
+// HTTP between hubs over their links (docs/server/mesh.md "Members forward Apps"). Each stream a hub opens on a link is one HTTP/1.1
 // connection to the other hub's peer server (no socket: it only takes streams from authenticated links). Two kinds
 // of request travel this way, both passed on hop by hop toward where they go (TTL 8):
 //   - an app's request a member got: everything under /api/ but what the member answers itself (its health, persona-link,

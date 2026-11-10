@@ -68,6 +68,7 @@ export interface AgentSourceStatus {
   enabled: boolean;
   error?: string;
   setup?: "missing" | "disabled" | "no_accounts" | string;
+  accounts?: unknown[];
 }
 
 const SETUP_HINTS: Record<string, string> = {
@@ -76,8 +77,8 @@ const SETUP_HINTS: Record<string, string> = {
   no_accounts: t("lib-agents.setup_no_accounts"),
 };
 
-/** What to do so the sources list agents, one line per source that is not set up. */
-export const setupHints = (sources: AgentSourceStatus[]) => sources.flatMap((x) => (x.setup && SETUP_HINTS[x.setup] ? [SETUP_HINTS[x.setup]] : []));
+/** What to do so the sources list agents, or why one can't: one line per source that is not set up or is failing. */
+export const setupHints = (sources: AgentSourceStatus[]) => sources.flatMap((x) => (x.setup && SETUP_HINTS[x.setup] ? [SETUP_HINTS[x.setup]] : x.error ? [x.error] : []));
 
 export function fetchSources() {
   return api<{ sources: AgentSourceStatus[] | null }>("/agents").then((r) => r.sources ?? []);
@@ -230,8 +231,8 @@ export function pendingOutgoing(out: Outgoing[], messages: AgentMessage[], slack
 
 // ── session list store, refreshed on the hub's {"type":"agents"} event ─
 
-type ListState = { sessions: AgentSession[]; loaded: boolean; error: string; hints: string[] };
-let list: ListState = { sessions: [], loaded: false, error: "", hints: [] };
+type ListState = { sessions: AgentSession[]; loaded: boolean; error: string; hints: string[]; sources: AgentSourceStatus[] | null };
+let list: ListState = { sessions: [], loaded: false, error: "", hints: [], sources: null };
 const listeners = new Set<() => void>();
 const emit = (p: Partial<ListState>) => {
   list = { ...list, ...p };
@@ -258,14 +259,6 @@ let queued: Promise<void> | null = null;
 // pull queued behind it) is dropped.
 let listGen = 0;
 export function refreshAgentSessions(): Promise<void> {
-  if (bounded) {
-    const gen = listGen;
-    return Promise.all([personalSessions.load(), fetchSources().catch(() => null)])
-      .then(([, sources]) => {
-        if (gen === listGen && sources) emit({ hints: setupHints(sources) });
-      })
-      .catch((e) => { if (gen === listGen) emit({ loaded: true, error: errorText(e) }); });
-  }
   if (inflight) {
     const gen = listGen;
     if (!queued) {
@@ -279,9 +272,10 @@ export function refreshAgentSessions(): Promise<void> {
     return queued;
   }
   const gen = listGen;
-  const pull: Promise<void> = Promise.all([fetchSessions(), fetchSources().catch(() => null)])
+  const read = bounded ? personalSessions.load().then(() => personalSessions.getSnapshot().rows) : fetchSessions();
+  const pull: Promise<void> = Promise.all([read, fetchSources().catch(() => null)])
     .then(([sessions, sources]) => {
-      if (gen === listGen) emit({ sessions, loaded: true, error: "", ...(sources ? { hints: setupHints(sources) } : {}) });
+      if (gen === listGen) emit({ sessions, loaded: true, error: "", ...(sources ? { sources, hints: setupHints(sources) } : {}) });
     })
     .catch((e) => {
       if (gen === listGen) emit({ loaded: true, error: errorText(e) });
@@ -296,7 +290,7 @@ export function refreshAgentSessions(): Promise<void> {
 // Called by the WebSocket handler: re-pull the list, and tell open sessions which ids moved (empty = all).
 export function agentsChanged(ids: string[]) {
   if (bounded) personalSessions.invalidate();
-  else void refreshAgentSessions();
+  void refreshAgentSessions();
   changedListeners.forEach((l) => l(ids));
 }
 
@@ -319,7 +313,7 @@ export function resetAgents() {
   // the next login's first pull starts right away instead of waiting behind the old one
   inflight = null;
   queued = null;
-  emit({ sessions: [], loaded: false, error: "", hints: [] });
+  emit({ sessions: [], loaded: false, error: "", hints: [], sources: null });
 }
 
 export function useAgentList(): ListState {

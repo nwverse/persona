@@ -1,6 +1,6 @@
 import Foundation
 
-/// Demo Mode (docs/apple/ios.md「体验模式」): a made-up hub inside the app, for someone without one (App Review, a friend
+/// Demo Mode (docs/apple/ios.md「Demo mode」): a made-up hub inside the app, for someone without one (App Review, a friend
 /// with the TestFlight link). It sits under the data layer, so no page knows: `APIClient.request` and `LiveConnection`
 /// hand the demo config's traffic to it, and it answers with the hub's JSON. The data is scripts/mock/mock_hub.py's, written
 /// to Resources/Demo.json by scripts/mock/make_demo_data.py, with times moved to now. Nothing leaves the phone: what would
@@ -125,10 +125,10 @@ final class DemoHub {
              "resets_at": .string(iso(now.addingTimeInterval(left)))]
         }
         let accounts: [JSONValue] = [
-            ["id": "claude-demo", "provider": "claude", "name": "Claude", "plan": "Max", "local": true,
+            ["id": "claude-demo", "provider": "claude", "name": "Claude", "plan": "Max", "local": true, "machines": ["MacBook"],
              "sampled_at": .string(iso(now.addingTimeInterval(-20))),
              "windows": .array([win("5h", 300, 72, 80 * 60), win("7d", 10080, 38, (2 * 24 + 6) * 3600)])],
-            ["id": "codex-demo", "provider": "codex", "name": "Codex Pro", "plan": "pro", "local": true,
+            ["id": "codex-demo", "provider": "codex", "name": "Codex Pro", "plan": "pro", "local": true, "machines": ["MacBook"],
              "sampled_at": .string(iso(now.addingTimeInterval(-240))),
              "windows": .array([win("5h", 300, 18, 3 * 3600), win("7d", 10080, 64, (3 * 24 + 2) * 3600)])],
         ]

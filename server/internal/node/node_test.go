@@ -301,6 +301,9 @@ func TestShellQuote(t *testing.T) {
 		"$HOME":                   "'$HOME'",
 		"a;b":                     "'a;b'",
 		"a-b_c.d/e":               "a-b_c.d/e",
+		// a backslash outside the quotes, which fish would read as an escape inside them (#2867)
+		`C:\x`:  `'C:'\\'x'`,
+		`a\';#`: `'a'\\''\'';#'`,
 	}
 	for in, want := range cases {
 		if got := shellQuote(in); got != want {

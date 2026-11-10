@@ -242,7 +242,7 @@ func ValidID(id string) bool { return idPattern.MatchString(id) && !uuidHead.Mat
 var Reserved = []string{App, Feishu, LarkAgent, "voice", "siri", "watch", "web"}
 
 // ClientMsgID is the client_msg_id a channel's message goes into a conversation with: the source mark the apps read
-// (docs/extensions/channels.md "Source marks"), and the hub's once-only guard for a message the chat app delivers again.
+// (docs/extensions/channels.md "Source markers"), and the hub's once-only guard for a message the chat app delivers again.
 func ClientMsgID(channel, messageID string) string { return channel + "-" + messageID }
 
 // FromClientMsgID is the channel a client_msg_id says its message came from, when it is one of known ("" when not).

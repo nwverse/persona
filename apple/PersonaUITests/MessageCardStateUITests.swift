@@ -1,6 +1,6 @@
 import XCTest
 
-/// A message card about a task (docs/assistant/unified-entry.md「信息和任务互相认得」) once its message was answered (#4797): handled
+/// A message card about a task (docs/assistant/unified-entry.md「Message cards link to tasks」) once its message was answered (#4797): handled
 /// elsewhere it has no Send and says the draft was not sent; sent from the card it says it was replied. Against
 /// scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASKS_AT=11 (the card at the bottom) and
 /// MOCK_TASKS_MESSAGE=filed / sent / unset (PERSONA_MOCK_HUB, PERSONA_MOCK_MESSAGE says which). With PERSONA_SHOTS set it

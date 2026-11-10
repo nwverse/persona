@@ -11,7 +11,7 @@
 
 - Run standalone release-worker tests on the oldest supported Python, including receipt verification and verified-artifact retries (#1077). Python 3.9 has no `hashlib.file_digest`; bounded reads into `hashlib.sha256` keep hashing portable without loading an APK into memory. Cover empty files and binary inputs spanning multiple chunks.
 
-Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`, "Lessons"; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
+Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
 - Fixed `time.Sleep` calls in `_test.go` files under `server/` and `sdk/go/` are ratcheted by `scripts/ci/sleep_ratchet.py` (baseline `scripts/ci/sleep_baseline.json`): a file's count may stay or fall, never rise, a new file starts at zero, and `// sleep-ok: <reason>` on the call's line is the only escape. Prefer `testing/synctest`, a polling helper or a channel.
 
@@ -197,7 +197,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   Add a `-tab` value with every new page. To reproduce "passes alone, fails after other tests", inspect `Library/Preferences/<bundle-id>.plist` in the app container first
   (`simctl spawn … defaults write` does not write into the app container).
 - "Push does not interrupt" must push while the finger is still down or momentum is active. Pushing after scrolling stops misses whole-screen jumps: `LiveUpdateTests` "middle row stays still" was always green,
-  while real-hub Agents lists jumped over 900 pt during scroll. Measure frame by frame with `PerfScroll` (`docs/operations/testing.md`, "Push during scrolling").
+  while real-hub Agents lists jumped over 900 pt during scroll. Measure frame by frame with `PerfScroll` (`docs/operations/testing.md`, "Pushes while scrolling").
 - Mock hubs must answer like real hubs, especially unready states: with Telegram disabled, real hub cannot list its capabilities (the program has never run; capabilities are self-reported),
   but mock always advertised `login`, leaving tests/screenshots green while the real page lacked a switch, said "Configure in hub.json", and could not enable it (2026-11-03, #622).
   Before writing a mock, inspect the real path's response in every state; start tests from what users first see (disabled).
@@ -226,6 +226,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   Use in-app constant-speed scrolling (`AutoScroller`, `-showFileAutoScroll`) and frame counting (`FrameMeter`), opened from an idle session (running sessions redraw each second behind it).
 - Alerts with input: typing raises the keyboard and moves the alert upward; immediately tapping Save misses (alert remains, nothing happens, looking like failed save; 2026-11-01 `AssistantTitlesTests` nearly prompted an app change).
   Pause after typing, tap, then confirm the alert disappeared. Input caret placement is unpredictable; before clearing, tap the field's right edge to place it at the end.
+- A form button can report `isHittable` while the software keyboard still consumes its tap (#2741): `ExtensionSettingsTests` tapped Save without any config PUT, then kept swiping for a refusal that had never been produced. Dismiss the keyboard with Return before Save, preserve the draft, and verify the mock received both the refused and the corrected PUTs rather than adding more swipes or weakening the field-error assertion.
 - Run privacy scans after actual build/deployment configuration is complete: missing configuration means incomplete checks, and `clean` is not a full pass. Rescan after adding configuration.
   Fixture machine identifiers can accidentally match configured values; use neutral placeholders, not exemptions.
 - `xcrun simctl push` does not run notification service extensions (2026-11-01, Xcode 27.1 / iOS 27.0). CoreSimulatorBridge adds pushes directly to Notification Center as local notifications,
@@ -603,6 +604,7 @@ Pin the visual style, not an alternate navigation tree. A shared launch helper t
   or first apply `.accessibilityElement(children: .contain)` to the container.
   Again in an extension's machine list (#2446): the field row's `plugin-field-…` replaced each Mac's `extension-machine-setup-<id>`; the row now leaves the identifier to the list's title and switches.
 - **A `lineLimit`-cut `Text` still reads in full to XCUITest**: its label is the whole string, so "the last line is not there" never proves folding (#1666, `NewChatLayoutTests`). Assert the fold's control (Expand) and look at the screenshot.
+- **A floating action bar can cover a control XCUITest still reports as hittable** (#2732): after typing in New Agent, the photo's remove button can sit inside the Start Chat bar's frame. Move it clear with the test's slow drag, assert the frames do not intersect before tapping, then wait for Start to become enabled. A tap that happened to work once is not proof of visibility; inspect the before / after screenshots.
 - **First taps just after sheet dismissal can be swallowed** (keyboard focus is still settling). Immediately tapping a list button after form Add does nothing, with no confirmation dialog.
   Wait for sheet-field `waitForNonExistence`, tap a harmless button (Refresh) first, then the target button.
 - Icon-sized `Menu` (20 pt) often does not expand under XCUITest. Put row actions in a row of `.borderless` text buttons, clearer on both phone and Mac.
@@ -733,7 +735,7 @@ In a UTF-8 locale, `/usr/bin/awk` on macOS (version 20200816) stops at the first
 
 ## Import guards read source files, not `go list` (2026-11-06, #5814)
 
-`go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use `-tags public`) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
+`go list -deps` resolves imports for the host's GOOS / GOARCH and no build tags, so a `server/internal` import in a `_darwin.go` file, a `//go:build public` file (release builds use the tags of `server/build-tags.txt`, `public` among them) or a `//go:build ignore` generator passed the plugin guard on Linux. A guard that must hold for every build parses each `.go` file's imports with `go/parser` (`parser.ImportsOnly`), whatever its constraints, and keeps `go list` as a second view of indirect dependencies, run for every GOOS / GOARCH pair the server ships and every set of build tags it is built with (with `CGO_ENABLED=0`, as the builds are made): an `_arm64.go` file is as invisible to an amd64 host as a `_darwin.go` file is to Linux, and a `// +build !public` line still counts.
 
 Walking files has pitfalls of its own. Reviews of `server/plugins/guard_test.go` found each of these: the first six let plugin or internal code into a binary unseen, the last two failed on code that is fine.
 

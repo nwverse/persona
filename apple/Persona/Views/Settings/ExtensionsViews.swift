@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Settings › Extensions: every plugin of the hub's (built in, from hub.json, installed on the hub's machine), its state, and
-/// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「安装」): with `personad plugin` on
+/// the way to its page. Extensions are installed on the hub's side only (docs/extensions/extensions.md「Install, upgrade, roll back, uninstall」): with `personad plugin` on
 /// its machine or in its admin UI (/admin); the footer says how.
 struct ExtensionsView: View {
     @State private var page = ExtensionsModel()
@@ -9,7 +9,7 @@ struct ExtensionsView: View {
 
     var body: some View {
         SettingsForm {
-            // Extension Market (docs/extensions/extensions.md「扩展市场」): only with a hub that has markets; first,
+            // Extension Market (docs/extensions/extensions.md「Extension marketplace」): only with a hub that has markets; first,
             // above the installed ones (#5017).
             if page.markets {
                 Section {
@@ -23,7 +23,7 @@ struct ExtensionsView: View {
                 }
             }
             #if os(macOS)
-            // The plugins' overview cards (docs/extensions/extensions.md「UI 插槽」): the Mac has no Overview, they lead the installed ones (their
+            // The plugins' overview cards (docs/extensions/extensions.md「UI slots」): the Mac has no Overview, they lead the installed ones (their
             // pages are in the sidebar). The iPhone has them on Settings itself.
             ExtensionCardsSection(link: $cardLink)
             #endif
@@ -350,7 +350,7 @@ struct ExtensionDetailView: View {
         }
     }
 
-    /// The pages it draws (docs/extensions/extensions.md「声明式 UI」), a row each.
+    /// The pages it draws (docs/extensions/extensions.md「Declarative UI」), a row each.
     @ViewBuilder private func pages(_ d: HubExtensionDetail) -> some View {
         // The extension's own sign-in page is for apps without the Sign In section.
         let ui = auth?.page.map { page in d.ui.filter { $0.id != page } } ?? d.ui

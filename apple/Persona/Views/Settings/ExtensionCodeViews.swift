@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The code-hosting components drawn with the design system (#2961, docs/extensions/extensions.md「UI 版本 4」). Each is drawn
+// The code-hosting components drawn with the design system (#2961, docs/extensions/extensions.md「UI version 4: code hosting」). Each is drawn
 // from plain values (ExtensionCodeModels.swift works them out); `ExtensionCodePage.swift` maps the wire's
 // components onto them and wires their actions to the page's model.
 
