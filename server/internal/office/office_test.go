@@ -195,7 +195,7 @@ func TestMarkdownEscapesAndReferences(t *testing.T) {
 	writePNG(t, dir, "q3_chart.png", 40, 30)
 	src := []byte("AT&amp;T &copy; 2026 &#x4E2D; 5 \\* 3 \\_name\\_ &lt;tag&gt;\n\n" +
 		"| a | b |\n| --- | --- |\n| x \\| y | `a\\*b` |\n\n" +
-		"[link \\[1\\]](https://e.com/a\\_b) and `one\ntwo`\n\n---\n\n![c](q3\\_chart.png)\n")
+		"[link \\[1\\]](https://example.com/a\\_b) and `one\ntwo`\n\n---\n\n![c](q3\\_chart.png)\n")
 	want := []string{"AT&T © 2026 中 5 * 3 _name_ <tag>", "x | y", `a\*b`, "link [1]", "one two"}
 
 	data, err := Docx(src, dir, "")
@@ -209,7 +209,7 @@ func TestMarkdownEscapesAndReferences(t *testing.T) {
 			t.Errorf("document has no w:t %q: %q", w, got)
 		}
 	}
-	if rels := p["word/_rels/document.xml.rels"]; !strings.Contains(rels, `Target="https://e.com/a_b" TargetMode="External"`) {
+	if rels := p["word/_rels/document.xml.rels"]; !strings.Contains(rels, `Target="https://example.com/a_b" TargetMode="External"`) {
 		t.Errorf("rels %s", rels)
 	}
 	if _, ok := p["word/media/image1.png"]; !ok {
@@ -227,7 +227,7 @@ func TestMarkdownEscapesAndReferences(t *testing.T) {
 			t.Errorf("slide has no a:t %q: %q", w, got)
 		}
 	}
-	if rels := p["ppt/slides/_rels/slide1.xml.rels"]; !strings.Contains(rels, `Target="https://e.com/a_b" TargetMode="External"`) {
+	if rels := p["ppt/slides/_rels/slide1.xml.rels"]; !strings.Contains(rels, `Target="https://example.com/a_b" TargetMode="External"`) {
 		t.Errorf("slide rels %s", rels)
 	}
 	if _, ok := p["ppt/media/image1.png"]; !ok {

@@ -78,11 +78,12 @@ func TestMainFailedWriteKeepsTheEarlierFile(t *testing.T) {
 }
 
 // -o names a file of its kind only (docs/assistant/office.md, "No approval every time"), and a link by that name to
-// some other file is replaced, not written through.
+// some other file is replaced, not written through: the new file is a new output, whatever the target's mode.
 func TestMainReplacesALinkAtTheOutput(t *testing.T) {
 	dir := t.TempDir()
+	setUmask(t, 0o022)
 	rc := filepath.Join(dir, ".zshrc")
-	if err := os.WriteFile(rc, []byte("export EDITOR=vi\n"), 0o644); err != nil {
+	if err := os.WriteFile(rc, []byte("export EDITOR=vi\n"), 0o400); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "notes.docx")
@@ -100,8 +101,11 @@ func TestMainReplacesALinkAtTheOutput(t *testing.T) {
 	if b, err := os.ReadFile(rc); err != nil || string(b) != "export EDITOR=vi\n" {
 		t.Errorf("wrote through the link: %s is %d bytes: %v", rc, len(b), err)
 	}
-	if st, err := os.Lstat(out); err != nil || !st.Mode().IsRegular() {
-		t.Errorf("%s is not a file of its own: %v %v", out, st, err)
+	if st, err := os.Lstat(out); err != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0o644 {
+		t.Errorf("%s is not a new file of its own: %v %v", out, modeOf(st), err)
+	}
+	if st, err := os.Stat(rc); err != nil || st.Mode().Perm() != 0o400 {
+		t.Errorf("the link's target changed: %v %v", modeOf(st), err)
 	}
 }
 
@@ -113,6 +117,7 @@ func TestMainKeepsTheOutputsPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "notes.docx")
+	setUmask(t, 0o022)
 	for _, want := range []os.FileMode{0o644, 0o600} {
 		if code := Main([]string{"docx", md}, io.Discard, io.Discard); code != 0 {
 			t.Fatalf("exit %d", code)
@@ -128,6 +133,86 @@ func TestMainKeepsTheOutputsPermissions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// A new output gets 0644 less the umask, as os.WriteFile gave it: a document made from private notes under umask 077
+// is the user's alone.
+func TestMainNewOutputFollowsTheUmask(t *testing.T) {
+	dir := t.TempDir()
+	md := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(md, []byte("# Plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		mask int
+		want os.FileMode
+	}{{0o077, 0o600}, {0o027, 0o640}, {0o022, 0o644}} {
+		setUmask(t, c.mask)
+		out := filepath.Join(dir, fmt.Sprintf("notes-%o.docx", c.mask))
+		var errOut bytes.Buffer
+		if code := Main([]string{"docx", md, "-o", out}, io.Discard, &errOut); code != 0 {
+			t.Fatalf("umask %o: exit %d: %s", c.mask, code, errOut.String())
+		}
+		if st, err := os.Stat(out); err != nil || st.Mode().Perm() != c.want {
+			t.Errorf("umask %o: mode %v, want %v (%v)", c.mask, modeOf(st), c.want, err)
+		}
+	}
+}
+
+// An earlier output the user made read-only stays as it is: the command fails, as writing into it did, and as cp
+// refuses to overwrite it.
+func TestMainLeavesAReadOnlyOutputAlone(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may write any file")
+	}
+	dir := t.TempDir()
+	md := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(md, []byte("# A\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := Main([]string{"docx", md}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	doc := filepath.Join(dir, "notes.docx")
+	v1, err := os.ReadFile(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(doc, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(md, []byte("# B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	if code := Main([]string{"docx", md}, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "permission denied") {
+		t.Errorf("exit %d: %s", code, errOut.String())
+	}
+	if after, err := os.ReadFile(doc); err != nil || !bytes.Equal(after, v1) {
+		t.Errorf("the read-only file changed (%d bytes, was %d): %v", len(after), len(v1), err)
+	}
+	if st, err := os.Stat(doc); err != nil || st.Mode().Perm() != 0o444 {
+		t.Errorf("mode %v, want 0444: %v", modeOf(st), err)
+	}
+	if names := dirNames(t, dir); !slices.Equal(names, []string{"notes.docx", "notes.md"}) {
+		t.Errorf("left behind: %q", names)
+	}
+}
+
+// setUmask sets the process's umask for the test and puts the old one back after it. The umask is the whole
+// process's, which is safe because no test here is parallel.
+func setUmask(t *testing.T, mask int) {
+	t.Helper()
+	old := syscall.Umask(mask)
+	t.Cleanup(func() { syscall.Umask(old) })
+}
+
+// modeOf is st's mode (with its type), or nil without st.
+func modeOf(st os.FileInfo) any {
+	if st == nil {
+		return nil
+	}
+	return st.Mode()
 }
 
 func dirNames(t *testing.T, dir string) []string {
