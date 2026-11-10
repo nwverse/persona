@@ -40,6 +40,12 @@ jobs:
           cache-dependency-path: scripts/ci/requirements.txt
       - name: Install script validation dependencies
         run: python3 -m pip install -r scripts/ci/requirements.txt
+      - name: Expose the Swift toolchain's plist converter
+        run: |
+          plutil -help >/dev/null
+          echo "$SWIFT_PATH" >> "$GITHUB_PATH"
+        env:
+          SWIFT_PATH: /usr/share/swift/usr/bin
       - name: Install workflow validator
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: Scripts and docs checks

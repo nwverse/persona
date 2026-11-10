@@ -245,7 +245,10 @@ func (b *workBook) init() {
 // approval is the user's "Do it once it's ready" on a risky wait's card: once the wait is over, the agent may take that step. It
 // holds while the agent keeps waiting (a wake, the agent's own check), so the same question is not asked again each
 // turn; anything the user does themselves, a turn that is no wait, or a riskier step ends it.
-type approval struct{ wait, then string }
+type approval struct {
+	wait, then string
+	task       string // the todo whose text authorized it (agents_work_authorized.go); "" the user's own yes
+}
 
 // covers: a may stand for w's next step as far as the words go — w waits, and its step is no riskier than the approved
 // one (each risky word in it was in the approved step). No link: an authorization is the user's to give each time.
