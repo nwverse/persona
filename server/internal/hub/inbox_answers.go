@@ -360,17 +360,29 @@ func (a *inboxAnswer) etag() string {
 	return a.tag
 }
 
-// topLevelValue is where the value of key is in the JSON object b, a merge's own bytes (valid JSON by construction):
-// b[from:to]. Not ok when b is no object or has no such member.
+// topLevelValue is where the value of key is in the JSON object b: b[from:to]. Not ok when b is no object, has no such
+// member, or ends before it is read that far. A merge's own bytes are valid JSON, but when no manager answered with an
+// object the default's answer goes on as it is (writeDecoded), whatever its bytes: a valid member always has more of
+// the object after it, so a key, ':' or value that reaches the end of b is no member.
 func topLevelValue(b []byte, key string) (from, to int, ok bool) {
 	i := jsonWS(b, 0)
 	if i >= len(b) || b[i] != '{' {
 		return 0, 0, false
 	}
 	for i = jsonWS(b, i+1); i < len(b) && b[i] == '"'; {
-		ke, _, _ := jsonString(b, i)
-		v := jsonWS(b, jsonWS(b, ke)+1) // after ':'
+		ke, _, _ := jsonString(b, i) // len(b) or more when the string does not end before b does
+		colon := jsonWS(b, ke)
+		if colon >= len(b) || b[colon] != ':' {
+			return 0, 0, false
+		}
+		v := jsonWS(b, colon+1)
+		if v >= len(b) {
+			return 0, 0, false
+		}
 		ve, _ := jsonValue(b, v)
+		if ve >= len(b) {
+			return 0, 0, false
+		}
 		if string(b[i+1:ke-1]) == key {
 			return v, ve, true
 		}

@@ -529,6 +529,14 @@ func TestMergedInboxValidator(t *testing.T) {
 	if rec := get(i18n.En, false, "*"); rec.Code != 503 || rec.Header().Get("ETag") != "" {
 		t.Fatalf("%d, ETag %q", rec.Code, rec.Header().Get("ETag"))
 	}
+
+	// A 2xx that is no object goes on as it is (writeDecoded), with a tag of its bytes, as it goes without one.
+	m.set(func(c *countingInbox) { c.status, c.body = 0, json.RawMessage(`{"as_of" }`) })
+	h.inboxAnswers.changedAll()
+	plain := getInbox(t.Context(), h, routes, "/api/v1/inbox?sources=all", i18n.En, false)
+	if rec := get(i18n.En, false, `W/"i1-"`); rec.Code != 200 || rec.Header().Get("ETag") == "" || !bytes.Equal(rec.Body.Bytes(), plain.Body.Bytes()) {
+		t.Fatalf("%d, ETag %q, %q; without If-None-Match %d %q", rec.Code, rec.Header().Get("ETag"), rec.Body, plain.Code, plain.Body)
+	}
 }
 
 // The tag leaves out the top-level as_of's value, wherever it is; If-None-Match compares weakly, in lists.
@@ -546,6 +554,12 @@ func TestInboxAnswerTag(t *testing.T) {
 	} {
 		if (tagOf(tc.a) == tagOf(tc.b)) != tc.same {
 			t.Errorf("%s and %s: tags %s and %s", tc.a, tc.b, tagOf(tc.a), tagOf(tc.b))
+		}
+	}
+	// A body cut short (the default's answer passed on as it is) has no as_of to leave out: it is hashed whole.
+	for _, body := range []string{`{"`, `{"as_of`, `{"as_of"`, `{"as_of" }`, `{"as_of":`, `{"as_of":"1`, `{"a":1,"`, `{"items":`, `{"a"`, `{"\`} {
+		if from, to, ok := topLevelValue([]byte(body), "as_of"); ok {
+			t.Errorf("%s: as_of at %d:%d", body, from, to)
 		}
 	}
 	for _, tc := range []struct {
