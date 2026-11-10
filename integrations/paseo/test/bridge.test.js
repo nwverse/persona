@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
 import { PaseoClient } from '../lib/paseo.js'
-import { agentSnapshot, entry, startFakePaseo } from './fake-paseo.js'
+import { agentSnapshot, entry, mcpServersError, startFakePaseo } from './fake-paseo.js'
 
 const SID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const SID2 = 'aaaaaaaa-0000-4000-8000-000000000002'
@@ -306,6 +306,48 @@ test("a new session gets Persona's agent tools, each server naming the session t
   const [first, second] = fake.requestsOf('agent.create.request').map((r) => r.config.mcpServers.persona.env.PERSONA_SESSION_ID)
   assert.notEqual(first, second, 'each agent has its own session id')
   assert.equal(JSON.parse(readFileSync(mcpConfig, 'utf8')).mcpServers.persona.env.PERSONA_SESSION_ID, undefined, 'the shared config is not changed')
+})
+
+test("the fake daemon takes config.mcpServers only in Paseo's stdio shape", () => {
+  const ok = { type: 'stdio', command: 'personad', args: ['mcp'], env: { A: 'b' } }
+  assert.equal(mcpServersError({ persona: ok }), null)
+  assert.equal(mcpServersError({ persona: { command: 'personad' } }), 'mcpServers.persona.type: expected stdio, http or sse')
+  assert.match(mcpServersError({ persona: { ...ok, command: 1 } }), /command/)
+  assert.match(mcpServersError({ persona: { ...ok, args: ['a', 2] } }), /args/)
+  assert.match(mcpServersError({ persona: { ...ok, env: { A: 1 } } }), /env/)
+})
+
+test("an Agent for a provider that takes no MCP servers is created again without them, once, and only for that error", async (t) => {
+  const dir = mkdtempSync('/tmp/ppaseo-mcp-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const mcpConfig = join(dir, 'mcp.json')
+  writeFileSync(mcpConfig, JSON.stringify(MCP_JSON))
+  const { fake, node, logs, rows } = await setup(t, { mcpConfig, noMcpProviders: ['grok'] })
+  const res = await call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' })
+  const [first, second, ...more] = fake.requestsOf('agent.create.request')
+  assert.equal(more.length, 0, 'one more request, not a loop')
+  assert.ok(first.config.mcpServers.persona.env.PERSONA_SESSION_ID)
+  assert.deepEqual(second.config, { provider: 'grok', cwd: '/tmp' }, 'the old configuration, no mcpServers')
+  assert.notEqual(second.agentId, first.agentId, 'a new agent id: the failed one has a record in Paseo')
+  assert.equal(second.labels['persona.session'], `paseo-${second.agentId}`)
+  assert.equal(res.session.session_id, `paseo-${second.agentId}`)
+  assert.ok(logs.some((l) => /provider grok takes no MCP servers; creating the agent again without the Persona tools/.test(l)), logs.join('\n'))
+  await until('listed', () => rows().some((r) => r.session_id === res.session.session_id))
+  assert.equal(fake.agents.has(first.agentId), false, 'the failed attempt left no agent')
+  assert.equal(fake.agents.has(second.agentId), true)
+  assert.deepEqual([...fake.agents.values()].filter((e) => e.agent.provider === 'grok' && e.agent.labels['persona.session']).map((e) => e.agent.id), [second.agentId], 'one new agent, not two')
+
+  // Any other failure is the answer, not a reason to try again.
+  const before = fake.requestsOf('agent.create.request').length
+  fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: 'Provider unavailable' } })
+  await assert.rejects(call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'my-claude' }), /Provider unavailable/)
+  assert.equal(fake.requestsOf('agent.create.request').length, before + 1)
+
+  // Without servers to give there is nothing to take away: the failure is final.
+  const none = await setup(t, { noMcpProviders: ['grok'], mcpConfig: join(dir, 'absent.json') })
+  none.fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: "Provider 'grok' does not support MCP servers" } })
+  await assert.rejects(call(none.node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /does not support MCP servers/)
+  assert.equal(none.fake.requestsOf('agent.create.request').length, 1)
 })
 
 test('a new session without a usable MCP config is created as before, and the log says why', async (t) => {
