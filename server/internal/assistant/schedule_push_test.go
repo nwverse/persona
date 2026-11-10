@@ -207,6 +207,20 @@ func TestScheduleOwnRefusesAModelOverrideIntoASourceConversation(t *testing.T) {
 	if got, _ := taskByID(h, "fu_own"); got.Enabled {
 		t.Fatalf("the refused call still rescheduled the task: %+v", got)
 	}
+	// A task with its own conversation: an invalid launcher is refused before the reschedule is saved.
+	setTasks(h, Task{ID: "fu_own2", Title: "自己的", Prompt: "看看", Repeat: repeatOnce, At: time.Now().Add(-time.Minute), Enabled: false,
+		MachineID: "server"})
+	sc = h.loadSchedule(ctx)
+	sc.mu.Lock()
+	sc.runs = append(sc.runs, ScheduleRun{RefID: "fu_own2", SessionID: "run-2", Status: runOK})
+	sc.mu.Unlock()
+	raw, _ = json.Marshal(map[string]any{"prompt": "看看", "title": "自己的", "at": "30m", "launcher": "no-such-launcher"})
+	if _, err := h.runTool(ctx, "server", "run-2", "schedule_followup", raw); err == nil {
+		t.Fatal("an invalid launcher was accepted")
+	}
+	if got, _ := taskByID(h, "fu_own2"); got.Enabled {
+		t.Fatalf("the refused call still rescheduled the task: %+v", got)
+	}
 }
 
 // A task that pushes only what its runs send runs in its own conversation (#2396): set from the app, a follow-up

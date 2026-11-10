@@ -651,7 +651,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
 	// rescheduling its own task (including a one-off this call turns into an interval).
-	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push, a.Until, needsOwn); ok || err != nil {
+	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push, a.Until, a.Launcher, a.Model, a.Effort); ok || err != nil {
 		if err == nil && id != "" {
 			err = s.setTaskModel(ctx, id, a.Launcher, a.Model, a.Effort)
 		}
@@ -712,7 +712,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792). ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string, untilRaw json.RawMessage, needsOwn bool) (string, string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string, untilRaw json.RawMessage, launcher, model, effort *string) (string, string, bool, error) {
 	if sessionID == "" {
 		return "", "", false, nil
 	}
@@ -746,12 +746,25 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		sc.mu.Unlock()
 		return "", "", false, nil
 	}
+	id, sourceSession := sc.tasks[i].ID, sc.tasks[i].SessionID
+	if hasTaskModel(launcher, model, effort) {
+		// A model configuration is checked before the schedule changes (the model configuration reads the task list,
+		// so the schedule lock is not held here).
+		sc.mu.Unlock()
+		if sourceSession != "" { // its runs keep that conversation's launcher
+			return "", id, true, errTaskModelNeedsOwnConversation
+		}
+		if err := s.validateTaskModel(ctx, id, launcher, model, effort); err != nil {
+			return "", id, true, err
+		}
+		sc.mu.Lock()
+		if i = sc.indexLocked(id); i < 0 {
+			sc.mu.Unlock()
+			return "", "", false, nil
+		}
+	}
 	tasks := slices.Clone(sc.tasks)
 	t := &tasks[i]
-	if needsOwn && t.SessionID != "" { // its runs keep that conversation's launcher
-		sc.mu.Unlock()
-		return "", t.ID, true, errTaskModelNeedsOwnConversation
-	}
 	if title = strings.TrimSpace(title); title != "" {
 		t.Title = title
 	}
