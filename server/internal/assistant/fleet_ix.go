@@ -244,7 +244,12 @@ func (s *Service) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 		s.finished(old)
 	}
 	if again {
-		s.show(ix)
+		// A card the history has as pending and this manager does not hold was left by a manager that restarted: its
+		// node may claim it before the hub's handshake restores the others (restoreInteractions), so it finds its route
+		// here too (restoreRoute). One no task supervises any more is only shown again, as before.
+		if !s.restoreRoute(ctx, ix) {
+			s.show(ix)
+		}
 	} else {
 		s.record(ix)
 		s.announce(ix)
@@ -881,7 +886,7 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 
 // restoreInteractions takes back, as the manager starts, the resumable cards the last one left pending: their hooks
 // reconnect through the next node and claim them again (waitInteraction), without a second push; the others it left
-// are over (cancelled in the history).
+// are over (cancelled in the history). A card that was on its way up to the user finds its route again (restoreRoute).
 func (s *Service) restoreInteractions(ctx context.Context) {
 	st, ok := s.store().(interface {
 		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, error)
@@ -897,13 +902,51 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 		s.logf("expire stale interactions: %v", err)
 		return
 	}
+	var back []proto.Interaction
 	s.fleet.mu.Lock()
 	m := s.ixMapLocked()
 	for _, ix := range resumable {
 		if m[ix.ID] == nil {
 			m[ix.ID] = &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
 			s.orphanLocked(m[ix.ID])
+			back = append(back, ix)
 		}
 	}
 	s.fleet.mu.Unlock()
+	for _, ix := range back {
+		s.restoreRoute(ctx, ix)
+	}
+}
+
+// restoreRoute puts card ix, restored after a restart, back on its way to the supervisor of the task it belongs to:
+// the route lived on the pending card only, and the apps got the card back without it. The ladder is derived now, as
+// routeAsk does for a new card, so a card whose task is done or already waits for the user stays the user's. The
+// supervisor hears of it as any card held with it (signalAsk). Whether the user was told of the card before the
+// restart is not kept: a question that may have rung then only goes back on the apps when its time is up, while an
+// approval rings (ringAsks). True when it was routed.
+func (s *Service) restoreRoute(ctx context.Context, ix proto.Interaction) bool {
+	if !routable(ix) {
+		return false
+	}
+	ladder, todo, home, ok := s.askLadder(ctx, ix.MachineID, ix.SessionID)
+	if !ok {
+		return false
+	}
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
+		s.fleet.mu.Unlock()
+		return false
+	}
+	now := time.Now()
+	// A question may have rung the user before the restart: its timeout only puts it back on the apps. An approval is
+	// not quiet: only the user can answer it, so its timeout rings (ringAsks) instead of leaving the agent blocked
+	// with nobody told.
+	p.route = &askRoute{todo: todo, machine: home, ladder: ladder, since: now, held: now, maybeTold: ix.Kind == proto.IxQuestion}
+	p.ix.Delegating = true
+	shown := p.ix
+	s.fleet.mu.Unlock()
+	s.show(shown)
+	s.signalAsk(todo, ladder[0], ix, 0)
+	return true
 }

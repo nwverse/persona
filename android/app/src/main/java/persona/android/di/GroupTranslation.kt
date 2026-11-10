@@ -97,6 +97,16 @@ internal fun ChatAppBindings.inGroup(names: GroupNames): ChatAppBindings {
         mainSender = mainSender.inGroup(names, coroutineScope),
         draftVersions = { key -> source.draftVersions(names.raw(key)) },
         ports = ports?.inGroup(names),
+        agentShares = agentShares?.let { provider -> AgentSharesProvider { session, manager ->
+            if (GroupKeys.namespaceOf(session.machineId) != names.namespace) throw AgentShareFailure("session_conflict")
+            val api = provider.forSession(names.raw(session), manager)
+            object : AgentShares by api {
+                override suspend fun create(request: ShareCreateRequest): ShareCreated {
+                    if (request.machine != session.machineId || request.sessionId != session.sessionId) throw AgentShareFailure("session_conflict")
+                    return api.create(request.copy(machine = names.rawMachine(request.machine)))
+                }
+            }
+        } },
     )
 }
 

@@ -1,0 +1,10 @@
+App: example
+Source: Notices
+
+Read-only tools of this source:
+
+- list_notices: List notices
+  input_schema: {"type":"object","properties":{"since":{"type":"string"},"limit":{"type":"integer","maximum":50}},"required":["since"]}
+
+- balance: The balance, as text
+  input_schema: {"type":"object"}

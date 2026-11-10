@@ -74,6 +74,7 @@
     <string name="inbox_kind_cc">CC</string>
     <string name="inbox_compose_mail">メールを作成</string>
     <string name="inbox_filter">絞り込み</string>
+    <string name="inbox_filter_on">絞り込み（オン）</string>
     <string name="inbox_bay_needs_you">要対応</string>
     <string name="inbox_bay_all">すべて</string>
     <string name="inbox_search_hint">件名・送信者・本文を検索</string>
@@ -267,4 +268,6 @@
     <string name="inbox_event_view_source">原文を見る</string>
     <string name="inbox_done_by_manager">アシスタントが処理済み</string>
     <string name="inbox_event_related">関連</string>
+    <!-- Source subscriptions (#2041): with the Inbox's other settings -->
+    <string name="inbox_subscriptions">購読</string>
 </resources>

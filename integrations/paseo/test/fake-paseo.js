@@ -19,6 +19,31 @@ export function agentSnapshot(fields = {}) {
 }
 
 /**
+ * What Paseo 0.13.2's AgentSessionConfigSchema (messages.ts McpServerConfigSchema) takes in config.mcpServers: a record of
+ * servers, each stdio (command, args, env), http or sse, discriminated by `type` — which stdio servers must carry.
+ * Returns what is wrong, or null.
+ */
+export function mcpServersError(servers) {
+  if (servers === undefined) return null
+  const isStrings = (a) => Array.isArray(a) && a.every((x) => typeof x === 'string')
+  const isRecord = (o) => o && typeof o === 'object' && !Array.isArray(o) && Object.values(o).every((x) => typeof x === 'string')
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return 'mcpServers: not a record'
+  for (const [name, s] of Object.entries(servers)) {
+    const at = `mcpServers.${name}`
+    if (s?.type === 'stdio') {
+      if (typeof s.command !== 'string') return `${at}.command: not a string`
+      if (s.args !== undefined && !isStrings(s.args)) return `${at}.args: not a list of strings`
+      if (s.env !== undefined && !isRecord(s.env)) return `${at}.env: not a record of strings`
+    } else if (s?.type === 'http' || s?.type === 'sse') {
+      if (typeof s.url !== 'string') return `${at}.url: not a string`
+    } else {
+      return `${at}.type: expected stdio, http or sse`
+    }
+  }
+  return null
+}
+
+/**
  * @param {import('node:test').TestContext} t
  * @param {{ version?: string, providers?: object, entries?: object[], agents?: {agent: object, project?: object}[] }} [o]
  */
@@ -35,6 +60,8 @@ export async function startFakePaseo(t, o = {}) {
     subs: new Map(), // subscriptionId → { conn, kind, events?, agentIds? }
     handlers: {}, // a test's own answers: type → (msg) => payload | undefined
     refuse: undefined, // close code for the next hellos
+    refuseDelay: 0, // ms before an MCP refusal is answered (a creation slow to fail)
+    noMcp: new Set(o.noMcpProviders ?? []), // providers that take no MCP servers (Paseo's requireExternalMcpSupport)
   }
   let n = 0
   const http = createServer()
@@ -140,6 +167,14 @@ export async function startFakePaseo(t, o = {}) {
         return
       }
       case 'agent.create.request': {
+        const bad = mcpServersError(msg.config.mcpServers)
+        if (bad) return reply(c, 'agent.create.response', { requestId: id, agent: null, error: `Invalid agent config: ${bad}` })
+        if (Object.keys(msg.config.mcpServers ?? {}).length && f.noMcp.has(msg.config.provider)) {
+          const refuse = () => reply(c, 'agent.create.response', { requestId: id, agent: null, error: `Provider '${msg.config.provider}' does not support MCP servers` })
+          if (f.refuseDelay) setTimeout(refuse, f.refuseDelay).unref()
+          else refuse()
+          return
+        }
         const agent = agentSnapshot({ id: msg.agentId ?? randomUUID(), provider: msg.config.provider, cwd: msg.config.cwd, labels: msg.labels ?? {},
           model: msg.config.model ?? null, currentModeId: msg.config.modeId ?? null, thinkingOptionId: msg.config.thinkingOptionId ?? null,
           status: msg.initialPrompt ? 'running' : 'idle', workspaceId: msg.workspaceId ?? 'wks_new' })

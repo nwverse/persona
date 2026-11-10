@@ -24,10 +24,13 @@ type SubscriptionSeenRow struct {
 	UID, ContentHash string
 }
 
-// SubscriptionItemRow is an item a run holds for the destinations.
+// SubscriptionItemRow is an item a run holds for the destinations. Seq and CreatedAt are the stored row's (read
+// back by SubscriptionItems; a run's commit sets them itself).
 type SubscriptionItemRow struct {
-	UID  string
-	Data []byte
+	Seq       int64
+	UID       string
+	Data      []byte
+	CreatedAt time.Time
 }
 
 // Retention of subscription_seen, a subscription's.
@@ -182,23 +185,47 @@ func (d *DB) CommitSubscriptionRun(ctx context.Context, id string, merge func(da
 	return tx.Commit(ctx)
 }
 
-// SubscriptionItems are the items held for subscription id after seq, oldest first, at most limit (#2039 reads them).
-func (d *DB) SubscriptionItems(ctx context.Context, id string, after int64, limit int) ([]int64, []SubscriptionItemRow, error) {
-	rows, err := d.pool.Query(ctx, `SELECT seq, uid, data FROM subscription_items WHERE subscription_id = $1 AND seq > $2
-		ORDER BY seq LIMIT $3`, id, after, limit)
+// SubscriptionItemsQuery picks a subscription's held items: those stored at or after Since, after seq After, at most
+// Limit of them (none: all; oldest first, or the newest Limit when Newest), always returned in seq order.
+type SubscriptionItemsQuery struct {
+	After  int64
+	Since  time.Time
+	Limit  int
+	Newest bool
+}
+
+// SubscriptionItems are the items held for subscription id that q picks, in seq order (#2039: the Inbox reads the
+// newest of its window, the knowledge base pages on from its cursor).
+func (d *DB) SubscriptionItems(ctx context.Context, id string, q SubscriptionItemsQuery) ([]SubscriptionItemRow, error) {
+	order := "ASC"
+	if q.Newest {
+		order = "DESC"
+	}
+	var limit *int // none: every one
+	if q.Limit > 0 {
+		limit = &q.Limit
+	}
+	rows, err := d.pool.Query(ctx, `SELECT seq, uid, data, created_at FROM (
+		SELECT seq, uid, data, created_at FROM subscription_items WHERE subscription_id = $1 AND seq > $2 AND created_at >= $3
+		ORDER BY seq `+order+` LIMIT $4::bigint) AS picked ORDER BY seq`, id, q.After, q.Since, limit)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer rows.Close()
-	var seqs []int64
 	var out []SubscriptionItemRow
 	for rows.Next() {
-		var seq int64
 		var r SubscriptionItemRow
-		if err := rows.Scan(&seq, &r.UID, &r.Data); err != nil {
-			return nil, nil, err
+		if err := rows.Scan(&r.Seq, &r.UID, &r.Data, &r.CreatedAt); err != nil {
+			return nil, err
 		}
-		seqs, out = append(seqs, seq), append(out, r)
+		out = append(out, r)
 	}
-	return seqs, out, rows.Err()
+	return out, rows.Err()
+}
+
+// PruneSubscriptionItems removes subscription id's held items stored before before: the destinations are past them.
+// Their dedup keys stay in subscription_seen, so pulling them again keeps nothing.
+func (d *DB) PruneSubscriptionItems(ctx context.Context, id string, before time.Time) error {
+	_, err := d.pool.Exec(ctx, `DELETE FROM subscription_items WHERE subscription_id = $1 AND created_at < $2`, id, before)
+	return err
 }
