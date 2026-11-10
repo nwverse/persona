@@ -7,7 +7,7 @@ nonisolated enum Keychain {
 
     /// Whether it was written (callers that must not lose what they replace read it back: HubStore).
     /// `thisDeviceOnly`: never leaves this device (not restored onto another one from a backup, not synced): the SSH
-    /// tunnel's private key (docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// tunnel's private key (docs/operations/network.md「Connecting to hub through SSH」).
     @discardableResult
     static func save(_ data: Data, account: String, thisDeviceOnly: Bool = false) -> Bool {
         #if os(macOS) && DEBUG

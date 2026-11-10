@@ -23,12 +23,12 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var doneBy: String?
     var lark: Lark?
     var mail: Mail?
-    /// A Feishu document's @me / comment: the rows about the user with their status columns (docs/assistant/inbox.md「云文档」).
+    /// A Feishu document's @me / comment: the rows about the user with their status columns (docs/assistant/inbox.md「Docs: mentions in sheets, bases, and documents」).
     var doc: Doc?
     /// New foreign mail translated by the hub as it came in, by target language (subject and preview here; the body
     /// comes with the mail).
     var translations: [String: Translated]?
-    /// A Moments post where someone commented on, replied to or @ed the user (docs/assistant/inbox.md「公司圈」).
+    /// A Moments post where someone commented on, replied to or @ed the user (docs/assistant/inbox.md「Moments」).
     var moment: Moment?
     /// Only in GET /api/v1/inbox/{id}: the conversation as text.
     var context: String?
@@ -41,7 +41,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     /// What it holds now, as the hub listed it: a bulk Done sends it back so an item that took new messages since
     /// is left open (older hubs leave it out).
     var version: String?
-    /// What it grew out of (docs/assistant/inbox.md「thread line」, #2128): another item, a todo or an agent session; older hubs leave it out.
+    /// What it grew out of (docs/assistant/inbox.md「Relationships: parents and children」, #2128): another item, a todo or an agent session; older hubs leave it out.
     var parent: InboxParent?
     /// The manager it belongs to, as the hub stamps a merged list (docs/protocol/protocol.md "Per-manager routing"); nil
     /// from a hub before managers. What is done to it goes to that manager (`APIClient.manager(_:)`).
@@ -468,7 +468,7 @@ extension APIClient {
                        as: InboxBulkResult.self)
     }
 
-    /// Clear All (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「全部清理」): `action` is `dismiss` (the hub takes `done` too),
+    /// Clear All (`POST /api/v1/inbox/bulk`, docs/assistant/inbox.md「Clean up all」): `action` is `dismiss` (the hub takes `done` too),
     /// each item with the version it was listed at (the hub leaves one that took new messages since: `skipped`, changed).
     func bulkInbox(_ action: String, _ items: [InboxItem]) async throws -> InboxBulkReply {
         try await post("/api/v1/inbox/bulk",

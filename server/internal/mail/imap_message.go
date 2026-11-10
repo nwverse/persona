@@ -104,10 +104,16 @@ func parseMessage(raw []byte, msg *MailMessage) {
 	}
 	// Headers first, so threading info survives a body parse failure.
 	if h, err := readMailHeader(raw); err == nil {
-		if ids, err := h.MsgIDList("In-Reply-To"); err == nil && len(ids) > 0 {
+		// The envelope's Message-ID comes from the same strict parser, so it is empty for an id without '@'.
+		if msg.MessageID == "" {
+			if ids := msgIDs(h, "Message-Id"); len(ids) > 0 {
+				msg.MessageID = ids[0]
+			}
+		}
+		if ids := msgIDs(h, "In-Reply-To"); len(ids) > 0 {
 			msg.InReplyTo = ids[len(ids)-1]
 		}
-		if ids, err := h.MsgIDList("References"); err == nil && len(ids) > 0 {
+		if ids := msgIDs(h, "References"); len(ids) > 0 {
 			msg.References = ids
 		}
 		if len(msg.To) == 0 {

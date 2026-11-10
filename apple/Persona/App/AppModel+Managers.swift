@@ -120,6 +120,11 @@ extension AppModel {
     /// otherwise.
     func pushedBy(_ manager: String?) -> String? { ManagerRoster.pushed(by: manager, defaultID: managerRoster?.defaultID) }
 
+    /// The manager a request about an inbox item stamped `manager` names (its details, Done, Mute, a reply): none for the
+    /// default's (docs/assistant/managers.md "Grouping"). Until a roster is read, its stamp: the default may have moved,
+    /// and naming the default is harmless. The Rules and Muted lists name their stamp too.
+    func itemManager(_ manager: String?) -> String? { managerRoster.map { $0.naming(manager) } ?? manager }
+
     /// The manager of `machine` while a hub with several managers has that manager offline: the computer comes back
     /// with it, and Reconnect, which goes through it, can't work meanwhile. nil otherwise.
     func offlineManager(of machine: Machine?, group: String) -> HubManager? {
@@ -132,6 +137,14 @@ extension AppModel {
     func offlineManager(of session: Session?) -> HubManager? {
         guard let session else { return nil }
         return managerRosters[session.group]?.offlineManager(of: session.manager)
+    }
+
+    /// The manager the links opened among things stamped `manager` (a chat's session, an inbox item) are read through
+    /// (`ManagerRoster.reading`), in group `group` (nil: the hub-level one). The native readers read through the hub-level
+    /// group's hub, so another group's name none.
+    func linkManager(_ manager: String?, group: String? = nil) -> String? {
+        guard group == nil || group == (hub?.group ?? "") else { return nil }
+        return ManagerRoster.reading(manager, roster: managerRoster)
     }
 }
 
@@ -148,5 +161,14 @@ extension ManagerRoster {
         guard isMulti else { return nil }
         let id = owner(manager)
         return installed.first { $0.id == id && !$0.online }
+    }
+
+    /// The manager a link opened among things stamped `manager` is read through (docs/assistant/managers.md "Clients"): as
+    /// `named`, nil for the default's and for one `roster` hasn't installed; before a roster is read, any but the hub's own
+    /// assistant.
+    static func reading(_ manager: String?, roster: ManagerRoster?) -> String? {
+        if let roster { return roster.named(manager) }
+        guard let manager, !manager.isEmpty, manager != assistant else { return nil }
+        return manager
     }
 }

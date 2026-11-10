@@ -51,6 +51,8 @@ class OnboardingSettingsShotsTest {
             model = "claude-sonnet", signupUrl = "https://console.anthropic.example/keys"),
         ProviderPreset("builtin/deepseek", ProviderPreset.BUILTIN, "DeepSeek", description = "国内直接开通，按量付费", baseUrl = "https://api.deepseek.example/anthropic",
             model = "deepseek-chat", auth = "bearer", signupUrl = "https://platform.deepseek.example/keys"),
+        ProviderPreset("builtin/grok", ProviderPreset.BUILTIN, "Grok", description = "xAI 的 Responses API", kind = "api", api = "responses",
+            baseUrl = "https://api.x.example/v1", model = "grok-example", signupUrl = "https://console.x.example/keys"),
         ProviderPreset("builtin/zhipu", ProviderPreset.BUILTIN, "Zhipu GLM", description = "国内直接开通", baseUrl = "https://open.zhipu.example/anthropic",
             model = "glm-4.6", displayName = "智谱 GLM"),
         ProviderPreset("example-gateway/team", "example-gateway", "示例网关 · 团队", baseUrl = "https://gateway.example.com", model = "example-pro"),
@@ -61,8 +63,10 @@ class OnboardingSettingsShotsTest {
         override suspend fun presets() = presets
         override suspend fun add(provider: NewProvider) {}
         override suspend fun create(provider: NewProvider) =
-            ProviderAdded("deepseek", "DeepSeek", assigned = listOf("assistant"), kept = listOf(KeptPurpose("agent.new", "customized")))
-        override suspend fun test(probe: ProviderProbe) = ProviderTest(ok = true, ms = 412, model = "deepseek-chat")
+            if (provider.preset == "builtin/grok") ProviderAdded("grok", "Grok")
+            else ProviderAdded("deepseek", "DeepSeek", assigned = listOf("assistant"), kept = listOf(KeptPurpose("agent.new", "customized")))
+        override suspend fun test(probe: ProviderProbe) =
+            ProviderTest(ok = true, ms = 412, model = if (probe.preset == "builtin/grok") "grok-example" else "deepseek-chat")
         override suspend fun discover(probe: ProviderProbe) = ProviderDiscovery(listOf(PresetModel("gw-large"), PresetModel("gw-small")))
     }
 
@@ -138,6 +142,24 @@ class OnboardingSettingsShotsTest {
             rule.waitForIdle()
             rule.onNodeWithText("DeepSeek 接好了").assertExists()
             capture("provider-done")
+
+            page = Page.Wizard; run++
+            rule.waitForIdle()
+            rule.onNodeWithText("Grok").performClick()
+            rule.waitForIdle()
+            rule.onAllNodes(hasSetTextAction()).onFirst().performTextInput("sk-example-0123456789")
+            rule.mainClock.advanceTimeBy(1_000)
+            rule.waitForIdle()
+            rule.onNodeWithText("主对话和新开的 Agent 都用它").assertDoesNotExist()
+            rule.onNodeWithText("主对话和 Agent 不能用它", substring = true).assertExists()
+            capture("provider-direct-key")
+            rule.onNodeWithText("保存").performClick()
+            rule.waitForIdle()
+            rule.onNodeWithText("Grok 接好了").assertExists()
+            rule.onNodeWithText("主对话和 Agent 不能用它", substring = true).assertExists()
+            rule.onNodeWithText("要让主对话或 Agent 用它", substring = true).assertDoesNotExist()
+            rule.onNodeWithText("Claude Code", substring = true).assertDoesNotExist()
+            capture("provider-direct-done")
 
             page = Page.Gateway; run++
             rule.waitForIdle()

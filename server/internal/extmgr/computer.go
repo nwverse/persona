@@ -612,11 +612,3 @@ func jsString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
-
-// convID is the start of a conversation's id: the Cua Driver session label of its calls, and how the log names it.
-func convID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
-}

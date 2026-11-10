@@ -220,6 +220,11 @@ type Notification struct {
 	LongMS int64 `json:"long_ms,omitempty"`
 	// Todo is a NotifyDecide push's to-do and the round of its decision.
 	Todo *NotifyTodo `json:"todo,omitempty"`
+	// LinkCovered: a NotifyInput push's card is what the manager's Persona Link summary shows for its agent and rings
+	// for (the card that stands for it, notifying, among the listed items), so a Persona Link desktop of the manager's
+	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
+	// out: the phone is pushed.
+	LinkCovered bool `json:"link_covered,omitempty"`
 }
 
 // NotifyTodo is the to-do a NotifyDecide push asks about: its id, when the decision now waiting was asked (what
@@ -333,7 +338,7 @@ type SessionView struct {
 	Title    string   `json:"title,omitempty"`
 	Archived bool     `json:"archived,omitempty"`
 	Queued   []string `json:"queued,omitempty"` // messages from other conversations waiting for its turn to end
-	// Origin is who opened the conversation (docs/protocol/protocol.md "Where assistant chats come from": user, channel, inbox, task, spawned,
+	// Origin is who opened the conversation (docs/protocol/protocol.md "Origin of assistant chats": user, channel, inbox, task, spawned,
 	// lark_agent, extension) and OriginRef what of (the inbox item, the task, the conversation, the channel, the
 	// extension); both "" while it is not known.
 	Origin    string `json:"origin,omitempty"`

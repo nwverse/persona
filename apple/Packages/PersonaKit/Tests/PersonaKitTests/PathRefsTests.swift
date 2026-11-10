@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import PersonaKit
 
-/// Paths in messages linked where they are there (docs/apple/ios.md「文件查看器」): the same cases as the web's
+/// Paths in messages linked where they are there (docs/apple/ios.md「File viewer」): the same cases as the web's
 /// web/src/lib/path-refs.test.ts and web/src/ui/PathLinks.test.tsx.
 struct PathRefsTests {
     private func paths(_ t: String) -> [String] {

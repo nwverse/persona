@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 #endif
 
-/// A JSON document as a flat list of nodes in document order (docs/apple/ios.md「文件查看器」): each node knows its depth,
+/// A JSON document as a flat list of nodes in document order (docs/apple/ios.md「File viewer」): each node knows its depth,
 /// its key and where its subtree ends, so showing it folded or open only walks what is on screen. Parsed from the
 /// bytes in one pass, keys kept in their order (JSONSerialization loses it), off the main thread.
 nonisolated struct JSONOutline: Sendable {

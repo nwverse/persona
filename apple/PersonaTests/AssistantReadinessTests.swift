@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The main conversation's readiness (docs/assistant/onboarding.md 4.4, 5.1, 5.2; docs/protocol/protocol.md「主对话就绪度」) against FakeHub:
+/// The main conversation's readiness (docs/assistant/onboarding.md 4.4, 5.1, 5.2; docs/protocol/protocol.md「Main chat readiness」) against FakeHub:
 /// decoding, the step a card shows, what holds the send button, warm's answer, dismiss, coded refusals as cards.
 @MainActor
 struct AssistantReadinessTests {

@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/netproxy"
 )
 
-// Plugin markets (docs/extensions/extensions.md "Extension markets"): the hub keeps the markets the user registered and their
+// Plugin markets (docs/extensions/extensions.md "Extension marketplace"): the hub keeps the markets the user registered and their
 // indexes, lists their plugins as one catalog, and installs one from a market. A device with full rights may do all of
 // this; other sources (a directory, a file, a URL, an upload) stay with the hub's machine and the admin UI.
 
@@ -250,7 +250,7 @@ func (h *Manager) market(rec extension.MarketRecord) (*extension.Market, error) 
 }
 
 // marketRead reads a market's index now and keeps it (or why it could not). An index its signature refuses is not
-// taken: the last good one stays, and the market says why (docs/extensions/extensions.md "Signatures"). A catalog
+// taken: the last good one stays, and the market says why (docs/extensions/extensions.md "Signing"). A catalog
 // that could not be read at all (extension.ErrCatalogUnavailable: 404, 401, a timeout) changes no signature state:
 // an official market keeps installing from its last verified index.
 func (h *Manager) marketRead(ctx context.Context, id string) (MarketView, error) {

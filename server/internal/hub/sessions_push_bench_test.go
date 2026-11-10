@@ -12,7 +12,7 @@ import (
 )
 
 // BenchmarkBroadcastSessions is one session of a 150-session machine changing, pushed to two older apps and three
-// delta apps (docs/server/server.md "What gets pushed to apps"): each change encodes the whole list again.
+// delta apps (docs/server/server.md "Traffic pushed to the app"): each change encodes the whole list again.
 func BenchmarkBroadcastSessions(b *testing.B) { benchmarkBroadcastSessions(b, 2) }
 
 // BenchmarkBroadcastSessionsDeltaOnly is the same with five delta apps and no older one: no whole-list message.
@@ -32,7 +32,7 @@ func benchmarkBroadcastSessions(b *testing.B, older int) {
 		if i >= older {
 			c.delta, c.have = true, map[string]map[string][]byte{}
 		}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 	n := 0
 	for b.Loop() {
@@ -70,7 +70,7 @@ func oneChangedHop(tb testing.TB, h *Hub) (send func(n int)) {
 		if i >= 2 {
 			c.delta, c.have = true, map[string]map[string][]byte{}
 		}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 	// Two versions of each session, differing in its text.
 	rows := make([][2][]byte, 150)

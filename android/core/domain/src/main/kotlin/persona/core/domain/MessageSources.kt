@@ -47,8 +47,10 @@ internal fun sourceMetadata(raw: String): SourceMetadata {
         if (sourceKind.containsMatchIn(block.groupValues[1])) {
             val meta = runCatching { JsonCodec.parseToJsonElement(block.groupValues[2].trim()) as? JsonObject }.getOrNull()
                 ?: return SourceMetadata(true)
-            val author = (meta["author"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-            val kind = (meta["kind"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            val authorField = meta["author"]
+            val author = (authorField as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            if (authorField != null && author == null) return SourceMetadata(true)
+            val kind = (meta["kind"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
             if (author == "user" || kind.isNullOrBlank()) return SourceMetadata(true)
             return SourceMetadata(true, runCatching { JsonCodec.decodeFromJsonElement(MessageSource.serializer(), meta) }.getOrNull())
         }

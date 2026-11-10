@@ -116,6 +116,27 @@ struct ExtensionSettingsLifecycleTests {
         #expect(page.draft["value"] == .string("editing") && page.numberText["count"] == "not-a-number")
     }
 
+    /// A rename (#2511): the market lists the new version under its new ID. Check for updates finds it, the row says the
+    /// ID changes (never "auto-update off"), and the preview of the new ID upgrades the installed extension.
+    @Test func aRenamedExtensionIsCheckedPreviewedAndUpgraded() async throws {
+        let hub = FakeHub()
+        configure(hub)
+        hub.on("GET", "/api/v1/plugins/-/upgrades", json: #"{"auto":true,"upgrades":[]}"#)
+        hub.on("GET", "/api/v1/plugins/-/catalog", json: #"{"markets":[{"id":"m1","name":"Market","spec":"https://market.example.com","has_token":false}],"plugins":[{"id":"p-next","market":"m1","name":"P","version":"2","installed":"1","upgradable":true,"replaces":"p","rename_from":"p"}]}"#)
+        hub.on("POST", "/api/v1/plugins/-/catalog/preview", json: #"{"preview_id":"pv","manifest":{"id":"p-next","version":"2"},"permissions":[],"permissions_digest":"digest","upgrade":true,"from":"1","market":"m1","rename_from":"p","warnings":["ID p becomes p-next"]}"#)
+        let lifecycle = ExtensionSettingsLifecycle(id: "p", deps: .init(api: { hub.client }))
+        await lifecycle.loadMetadata(detail: try decode())
+        #expect(await lifecycle.checkForUpdates())
+        let candidate = try #require(lifecycle.candidate)
+        #expect(lifecycle.error == nil && candidate.renameTo == "p-next" && candidate.state == "needs_permission")
+        #expect(ExtensionText.upgradeAction(candidate) != nil)
+        #expect(ExtensionText.upgradeDetail(candidate).contains("p-next"), "the row says the ID changes, not that permissions changed")
+        await lifecycle.prepareUpgrade()
+        #expect(lifecycle.error == nil && lifecycle.preview?.renameFrom == "p")
+        #expect(await lifecycle.confirmUpgrade())
+        #expect(hub.sent("POST", "/api/v1/plugins/p/-/upgrade").count == 1, "the installed extension is upgraded under its own ID")
+    }
+
     @Test func busyPreventsReentrantRequests() async throws {
         let hub = FakeHub()
         configure(hub)

@@ -316,7 +316,7 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   leaving the gate closed and preventing every result, rejection, and `say` from being sent (script: protocol 1, typed question followed by 8 seconds of amplitude-400 frames; the result never sent). Subtract sustained noise based on the recent noise floor,
   and cap the user-speech hold from queue time, then send anyway (`noiseFloor`, `answerHoldMost` / `sayHoldMost` in `gate.go`; `docs/assistant/voice.md` 4.5, rule 3). Real-device values still need testing.
 - `draft` and `clearable` in a 409 `input_draft` may differ: with an IDE selection marker, `draft` is the whole line (`[⧉ Selected 3 lines from foo.go] fix it`), while `clearable` is only `fix it`.
-  The node compares `clear_draft` to `clearable` exactly; returning `draft` clears nothing and produces another 409. Always resend with `clearable` (`docs/protocol/protocol.md`, "`clear_draft`").
+  The node compares `clear_draft` to `clearable` exactly; returning `draft` clears nothing and produces another 409. Always resend with `clearable` (`docs/protocol/protocol.md`, "Sending messages").
 - `response.incomplete` counts as an interruption and sends `clear` only if that same response **has not yet `completed`**; ignore `incomplete` arriving for an already completed response.
   Identify the response by `delegation_id` in `response.event` (each response's own `responses` delegation). #3503 does this in protocol 2; since #4719, protocol 1 does the same.
 - After an energy-rule interruption, do not wait for "1.5 s of upstream silence" before allowing audio: the first chunk of the model's reply to an interruption arrives 1.2–1.3 s after the user finishes ("Timeline" above). With a short interruption (0.64 s), less than 1.5 s has passed since cutting off playback,
@@ -471,3 +471,6 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   Providers with `ssh` still dial through that machine.
 - **Checking it**: `server/internal/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
   TLS server, for both `GET /models` and the session dial.
+
+- **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
+  After HTTP Hijack, detach already-buffered bytes from the returned reader before applying probe deadlines: that reader still uses `net/http`'s connection reader, which cancels the request on a read timeout even after hijacking. Probe the raw connection and preserve the detached bytes instead; otherwise a banner or an idle client closes the entire tunnel. Real CONNECT banner tests catch this even when direct connection-helper tests pass.

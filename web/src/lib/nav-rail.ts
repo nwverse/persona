@@ -139,19 +139,6 @@ export function planNavRailTicks(count: number, height: number, focus = count - 
   return { start, pitch: Math.min(NAV_RAIL_TICK_PITCH, height / shown), hidden: count - shown, count: shown };
 }
 
-/** The input owning the viewport. Missing anchors are unknown, not evidence that an input has been read past. */
-export function pickActiveTick(count: number, thresholdTop: number, topAt: (i: number) => number | null): number | null {
-  let first: number | null = null;
-  let found: number | null = null;
-  for (let i = 0; i < count; i++) {
-    const top = topAt(i);
-    if (top === null) continue;
-    first ??= i;
-    if (top <= thresholdTop) found = i;
-  }
-  return found ?? first;
-}
-
 /** Cached monotone offsets make normal scrolling logarithmic, without per-message DOM reads. */
 export function activeNavRailOffset(offsets: { index: number; top: number }[], top: number): number | null {
   if (!offsets.length) return null;

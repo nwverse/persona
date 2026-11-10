@@ -15,7 +15,7 @@ struct MacLarkMessagesPage: View {
     }
 }
 
-/// With more than one Feishu account signed in, chips over the list pick whose chats it shows (docs/extensions/feishu.md「多账号」).
+/// With more than one Feishu account signed in, chips over the list pick whose chats it shows (docs/extensions/feishu.md「Multiple accounts」).
 private struct MacLarkAccountsPage: View {
     @State private var choice: LarkAccountChoice
 
@@ -174,7 +174,7 @@ private struct MacLarkMessagesContent: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        // One empty state for the page, over the list (docs/apple/mac-design.md「空状态」); the chat column stays empty.
+        // One empty state for the page, over the list (docs/apple/mac-design.md「Components」); the chat column stays empty.
         .overlay { if store.conversations.isEmpty { empty } }
         .accessibilityIdentifier("feishu-conversations")
         .modifier(MacBelowTitleRow()) // under Messages in the title row (#1243)
@@ -250,7 +250,7 @@ private struct MacLarkMessagesContent: View {
     }
 }
 
-/// The open chat, or a quiet line while none is (docs/apple/mac-design.md「空状态」). Its name in the column's part of the
+/// The open chat, or a quiet line while none is (docs/apple/mac-design.md「Components」). Its name in the column's part of the
 /// title row; people and other chats it opens push in the column's own stack (‹ in the title row), Feishu documents
 /// and web links read in the panel at the trailing edge, as in Inbox (`MacInboxItemDetail`).
 private struct MacLarkChatColumn: View {
@@ -278,7 +278,7 @@ private struct MacLarkChatColumn: View {
         .id(conversation?.id)
         .environment(\.macSectionStack, true)
         .environment(\.feishuOpen) { route in
-            if case .doc(let url, _) = route, let u = URL(string: url) { link = LinkTarget(url: u) } else { path.append(route) }
+            if case .doc(let url, _, let manager) = route, let u = URL(string: url) { link = LinkTarget(url: u, manager: manager) } else { path.append(route) }
         }
         .macOpensLinksInPanel($link)
         .macLinkPanel($link, wide: true)

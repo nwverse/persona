@@ -72,7 +72,8 @@ internal class PaneSplitStore(context: Context) {
  * scaffold's [PaneExpansionState] (its first pane's width), so a drag re-lays out the panes without recomposing them.
  */
 @Stable
-internal class PaneSplitter(private val tab: AppTab, private val store: PaneSplitStore?, private val collapsible: Boolean) {
+internal class PaneSplitter(private val tab: AppTab, private val store: PaneSplitStore?, collapsible: Boolean) {
+    var collapseEnabled by mutableStateOf(collapsible)
     /** The panes' area, in dp, and the vertical folds across it (dp from its left edge). */
     var width by mutableFloatStateOf(0f)
     var hinges by mutableStateOf(emptyList<PaneHinge>())
@@ -96,8 +97,8 @@ internal class PaneSplitter(private val tab: AppTab, private val store: PaneSpli
     private val ticks = DragTicks()
 
     val split: PaneSplit get() = paneSplit(width, hinges, share)
-    val canCollapse: Boolean get() = collapsible && detailOpen
-    private val shownCollapsed: Boolean get() = collapsed && detailOpen
+    val canCollapse: Boolean get() = collapseEnabled && detailOpen
+    private val shownCollapsed: Boolean get() = collapsed && canCollapse
 
     val look: PaneDividerState get() = when {
         moving && canCollapse && closesList(at) -> PaneDividerState.Closing
@@ -228,6 +229,7 @@ internal fun rememberShellListDetail(
         splitter.density = density
         splitter.width = width.value
         splitter.hinges = hinges
+        splitter.collapseEnabled = collapsible
         splitter.detailOpen = detailOpen
         splitter.rest(state)
     }

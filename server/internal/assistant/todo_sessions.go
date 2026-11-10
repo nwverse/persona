@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The todos and the machines' session lists (sessions.changed, docs/assistant/todos.md "Attaching whole groups and automatically", "Following spawned agents", "herdr marks and reconciling"):
+// The todos and the machines' session lists (sessions.changed, docs/assistant/todos.md "Whole-project linking and automatic linking", "Following spawned agents", "herdr marks and reconciling"):
 // an online agent in a workspace linked to a todo, or spawned by an agent of one, joins it; the herdr panes of the
 // agents that work for open todos carry the persona_todo marks (the node keeps them, todo.sync_session_tokens); the
 // links keep the agents' titles and start errors for when they are gone from the lists. And what the hub shows of the

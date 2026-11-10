@@ -36,6 +36,15 @@ object InboxModule {
     @Provides @Singleton fun inboxDetails(owner: InboxDataOwner): persona.feature.inbox.InboxRepository = owner.inbox
     @Provides @Singleton fun assistant(owner: InboxDataOwner): AssistantRepository = owner.assistant
     @Provides @Singleton fun conversations(owner: InboxDataOwner): AssistantConversations = owner.assistant
+    @Provides @Singleton fun inboxTrays(owner: InboxDataOwner): AssistantInboxTrays = owner.trays
+}
+
+/** Runs [block] in this scope; the item manager the calling page named ([ManagerPins], [RequestManager]) goes with it. */
+internal suspend fun <T> CoroutineScope.awaitAsCaller(block: suspend CoroutineScope.() -> T): T {
+    val caller = currentCoroutineContext()
+    val managers = (caller[ManagerPins] ?: kotlin.coroutines.EmptyCoroutineContext) +
+        (caller[RequestManager] ?: kotlin.coroutines.EmptyCoroutineContext)
+    return async(managers, block = block).await()
 }
 
 /** Replace all repositories and file owners together when the pairing generation changes. */
@@ -138,10 +147,33 @@ class InboxDataOwner @Inject constructor(
             if (active !== data) throw CancellationException("Pairing changed")
             repositories?.takeIf { it.data === data }
         }.filterNotNull().first()
-        return data.coroutineScope.async {
+        return data.coroutineScope.awaitAsCaller {
             check(runtime.scopedData.value === data) { AppText.get(R.string.app_error_switched) }
             block(repositories)
-        }.await()
+        }
+    }
+
+    val trays = object : AssistantInboxTrays {
+        override fun drafts(scope: String): Flow<List<AssistantInboxDraft>> = current.flatMapLatest { owner ->
+            if (owner == null || owner.data.scope.path != scope || runtime.scopedData.value !== owner.data) flowOf(emptyList())
+            else owner.inbox.snapshot.map { snapshot ->
+                snapshot.records.mapNotNull { record ->
+                    record.event.suggestion?.takeIf { it.kind == "reply" && !it.handback && it.text.isNotBlank() && !record.item.isDone }
+                        ?.let { AssistantInboxDraft(record.item.id, record.item.title, it, record.manager) }
+                }
+            }
+        }
+        override suspend fun send(scope: String, draft: AssistantInboxDraft, clientId: String): Boolean = use { owner ->
+            if (owner.data.scope.path != scope) throw CancellationException("Pairing changed")
+            val record = owner.inbox.snapshot.value.records.firstOrNull { it.item.id == draft.itemId && it.manager == draft.manager }
+            if (record?.event?.suggestion != draft.suggestion) return@use false
+            owner.inbox.actOnSuggestion(SuggestionRequest(draft.itemId, draft.suggestion.version, SuggestionAction.Confirm,
+                text = draft.suggestion.text, clientId = clientId)) == SuggestionOutcome.Done
+        }
+        override suspend fun refresh(scope: String) = use { owner ->
+            if (owner.data.scope.path != scope) throw CancellationException("Pairing changed")
+            owner.inbox.refresh()
+        }
     }
 
     val inbox = object : persona.feature.inbox.InboxRepository {
@@ -195,8 +227,8 @@ class InboxDataOwner @Inject constructor(
         override suspend fun personaContext(itemId: String) = use { it.inbox.personaContext(itemId) }
         override suspend fun draftReply(itemId: String, instruction: String) = use { it.inbox.draftReply(itemId, instruction) }
         override suspend fun handOff(request: InboxHandOffRequest): persona.core.contracts.SessionKey? = use { it.inbox.handOff(request) }
-        override suspend fun momentsPost(postId: String) = use { it.inbox.momentsPost(postId) }
-        override suspend fun momentsComments(postId: String) = use { it.inbox.momentsComments(postId) }
+        override suspend fun momentsPost(postId: String, manager: String?) = use { it.inbox.momentsPost(postId, manager) }
+        override suspend fun momentsComments(postId: String, manager: String?) = use { it.inbox.momentsComments(postId, manager) }
         override suspend fun urlPreview(messageId: String, url: String) = use { it.inbox.urlPreview(messageId, url) }
         override suspend fun react(messageId: String, key: String, remove: Boolean) = use { it.inbox.react(messageId, key, remove) }
         override suspend fun cardAction(messageId: String, actionId: String) = use { it.inbox.cardAction(messageId, actionId) }

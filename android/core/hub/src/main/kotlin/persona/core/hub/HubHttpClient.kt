@@ -100,12 +100,17 @@ const val ManagerQuery = "manager"
 
 /**
  * [this] naming the manager the calling coroutine's request is for (persona.core.contracts.api.RequestManager, an inbox
- * item's): on the request itself, so it holds wherever the request goes later; "" (the default's) is taken off again by
- * the client, together with any stamp a list noted for the path. Unchanged outside one, or when it names one already.
+ * item's; else the calling page's ManagerPins for its path): on the request itself, so it holds wherever the request goes
+ * later; "" (the default's) is taken off again by the client, together with any stamp a list noted for the path.
+ * Unchanged outside both, or when it names one already.
  */
 internal suspend fun HttpUrl.withRequestManager(): HttpUrl {
-    val named = kotlinx.coroutines.currentCoroutineContext()[persona.core.contracts.api.RequestManager]?.id
-    return if (named == null || queryParameter(ManagerQuery) != null) this else newBuilder().addQueryParameter(ManagerQuery, named).build()
+    if (queryParameter(ManagerQuery) != null) return this
+    val context = kotlinx.coroutines.currentCoroutineContext()
+    val named = context[persona.core.contracts.api.RequestManager]?.id
+        ?: apiSegments(this)?.let { context[persona.core.contracts.api.ManagerPins]?.manager(it) }
+        ?: return this
+    return newBuilder().addQueryParameter(ManagerQuery, named).build()
 }
 
 /**
@@ -131,8 +136,8 @@ private fun apiSegments(url: HttpUrl): List<String>? {
 
 /**
  * The `X-Persona-Manager` a request to [url] carries, if any (docs/protocol/protocol.md「Per-manager routing」): the assistant
- * page's pick on its routes; else a pin or a list's stamp (an inbox item, an extension's page, a conversation the page
- * listed) of [hubId]'s hub.
+ * page's pick on its routes; else a list's stamp (an inbox item, an extension, a conversation the page listed) of
+ * [hubId]'s hub. A page's pins name theirs on the URL where the request is made (withRequestManager).
  */
 internal fun managerHeaderFor(url: HttpUrl, hubId: String?): String? {
     val choice = persona.core.contracts.api.AssistantManagerChoice

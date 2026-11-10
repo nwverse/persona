@@ -20,11 +20,28 @@ struct TodoSpaceTag: View {
         }
     }
 
-    private var linkedTodo: TodoItem? {
+    private var linkedTodo: TodoItem? { Self.linkedTodo(group, model: model) }
+
+    /// The to-do the space is linked to, on the hub that keeps the to-dos.
+    @MainActor static func linkedTodo(_ group: SpaceGroup, model: AppModel) -> TodoItem? {
         let store = TodoStore.shared
-        let appModel: AppModel = model
-        guard let space = group.todoSpace, store.spacesSupported, TodosLogic.isOnTodosHub(sessionGroup: group.group, hubGroup: appModel.hub?.group) else { return nil }
+        guard let space = group.todoSpace, store.spacesSupported, TodosLogic.isOnTodosHub(sessionGroup: group.group, hubGroup: model.hub?.group) else { return nil }
         return TodosLogic.findTodoForSpace(store.todos, machineID: group.machineID, space: space)
+    }
+}
+
+/// The space's to-do as an item of a menu (By Repository's repository on iOS, #2531: its long-press menu, where the
+/// tag was beside its header).
+struct TodoSpaceMenuItem: View {
+    @Environment(AppModel.self) private var model
+    let group: SpaceGroup
+    var open: (String) -> Void
+
+    var body: some View {
+        if let todo = TodoSpaceTag.linkedTodo(group, model: model) {
+            Button { open(todo.id) } label: { Label("To-do: \(todo.title)", systemImage: Theme.Icon.todo) }
+                .accessibilityIdentifier("todo.space." + group.id)
+        }
     }
 }
 

@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The extensions' agent filters (docs/extensions/extensions.md "Agent filters", #2428): the ones that hold go to every node with
+// The extensions' agent filters (docs/extensions/extensions.md "Agent filtering", #2428): the ones that hold go to every node with
 // node.configure agent_filters, in the hub's part of a new connection (devices.connected, machineConnected) and again
 // whenever they change (an extension turned on
 // or off, its settings saved, installed, upgraded, removed); the node leaves matching sessions out of its list.

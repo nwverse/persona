@@ -22,6 +22,12 @@ let calls: number;
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
 const retry = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === t("sidebar.retry"));
 const open = async () => {
+  // A cold failure now hides this optional entry; retry UI belongs to previously loaded conversations.
+  const next = sessions;
+  sessions = async () => response({ sessions: [example] });
+  await act(async () => { await refreshAgentSessions(); });
+  sessions = next;
+  calls = 0;
   await act(async () => { await refreshAgentSessions(); });
   await act(async () => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
   await flush();
@@ -36,7 +42,7 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", async (url: string) => {
     const path = new URL(url, "https://example.invalid").pathname;
     if (path === "/api/v1/agents/sessions") { calls++; return sessions(); }
-    if (path === "/api/v1/agents") return response({ sources: [] });
+    if (path === "/api/v1/agents") return response({ sources: [{ source: "example", enabled: true }] });
     return response({});
   });
   history.replaceState(null, "", "/");

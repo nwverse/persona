@@ -73,7 +73,12 @@ struct PersonaApp: App {
                 // The home screen icon in step with the Avatar and Light & Dark (a scheme from a launch argument, a switch the system
                 // cut short, the old App Icon setting); nothing happens when it already is, so no alert.
                 model.followAppIcon()
-                if old != new { Task { await model.refresh() } }
+                Task {
+                    if old != new { await model.refresh() }
+                    #if os(iOS)
+                    await WorkoutReports.shared.refresh(model: model)
+                    #endif
+                }
             } else if new == .background {
                 // A suspended app's socket looks alive to the hub until it times out, and phone_* calls sent to it hang.
                 // Closed, the hub knows the phone is away and wakes it with a silent push instead; and nothing opens it
@@ -100,7 +105,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         #endif
         #if DEBUG
         // Simulator automation: `simctl launch … -pairURL persona://pair?...`; `-pairURL2`, `-pairURL3` pair more hubs
-        // (several groups, docs/protocol/multi-hub.md「截图」).
+        // (several groups, docs/protocol/multi-hub.md「Tests」).
         if let s = UserDefaults.standard.string(forKey: "pairURL"), let cfg = ServerConfig(pairURL: s) {
             let more = ["pairURL2", "pairURL3"].compactMap { UserDefaults.standard.string(forKey: $0).flatMap(ServerConfig.init(pairURL:)) }
             AppModel.shared.adopt([cfg] + more)
@@ -353,7 +358,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     done()
                     return
                 }
-                // The group the push came from (docs/protocol/multi-hub.md「推送」): its hub settles the button, its session opens.
+                // The group the push came from (docs/protocol/multi-hub.md「Push and notifications」): its hub settles the button, its session opens.
                 let key = ref.flatMap(Self.sessionKey)
                 if let key, let reply = NotificationActions.replyText(action: action, text: text) {
                     // Reply on a finished turn: sent in the background, like a button (#3449).

@@ -35,7 +35,7 @@ So Persona's Discord = **server channels your own bot can see** + **messages you
   (disgo was tried first: its Gateway client races between heartbeat and close under `go test -race`, its message search retries for minutes while Discord indexes, `after=0` is silently dropped, and it logs bodies.)
 - Uses only HTTPS (and WSS from D3), so it **can run in the sandbox**: `permissions.network` lists Discord's hosts, and outbound traffic goes through the hub's egress proxy (which tunnels WebSockets too).
 - Being HTTP only, D1 and D2 can later become a TypeScript source extension (`docs/archive/extensions/source-extension-migration-2026-11-07.md`) as soon as those run in production; only D3 waits for controlled outbound WebSocket support (#1166) there.
-- Doesn't run on a node: programs on a node can't call hub methods (`docs/extensions/extensions.md` ("Programs that run on a computer")), so they can't be connectors.
+- Doesn't run on a node: programs on a node can't call hub methods (`docs/extensions/extensions.md` ("Programs running on computers")), so they can't be connectors.
 
 What the manifest looks like when all steps are done (D1 has `status`, `tools`, `archive`, `login` and only `discord.com`; D3 adds the Gateway's hosts):
 
