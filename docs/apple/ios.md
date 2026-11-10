@@ -273,7 +273,7 @@ Chat page:
     prefixes existing input with `/loop ` (existing text becomes task, cursor after command to enter interval), never sends directly (other + shortcuts still send on tap). A `/loop` draft shows shared `LoopDraftNote`
     explaining "Repeat every 10 minutes: Check CI" / "Repeat at Claude's chosen pace: …", gray usage when task absent;
     PersonaKit `LoopCommand` matches `web/src/lib/loop-command.ts`. Screenshot `-showLoopDraft "/loop 10m Check CI"`.
-  - Model: Claude Code `/model` aliases (Default / Opus / Sonnet / Haiku), selection sends `/model <alias>`; absent for Codex, internal Codex fork and headless assistant.
+  - Model: the session's launcher list, the rows New Agent offers for it (Default, the agent's models with their versions, the IDs typed before; `RunningModelLists`, #3754), each with what it is on a second line; the fixed `/model` aliases (Default / Opus / Sonnet / Haiku) only until the list is read or when it can't be. Selection sends `/model <id>`; absent for Codex, internal Codex fork and headless assistant.
     Assistant home uses launcher list (former model label moved here).
   - Dictation: `Dictation` (`SFSpeechRecognizer` Chinese + `AVAudioEngine`), live recognized text appended to draft; tap again or send stops.
   - Permission/effort above input (`SessionModeBar` / `NewSessionModePicker`) remain, not merged into toolbar; rationale PLAN PromptBar v2.
@@ -711,7 +711,7 @@ like Claude Code's terminal bottom bar; tap to change (`SessionModeBar`, wording
 also offer selection (unset means "Follow launcher"). Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
 show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")). When the row carries `capabilities.modes`, that Boolean decides instead: `false` hides the controls for Claude outside Persona's terminals, and `true` enables them for a compatible runtime such as Orca or agy. An older hub that omits the field keeps the agent-based behavior (`Session.canChangeModes`; `docs/protocol/protocol.md` "Codex sources and capabilities").
 For Claude Code sessions in herdr, the effort menu also has a Model section (#3119, matching web #2434; `SessionModes.switchesModel`):
-Default / Opus / Sonnet / Haiku; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
+the launcher's list as above (#3754; the fixed Default / Opus / Sonnet / Haiku until it is read), ticked by the running model's exact ID or the alias that stands for it, so a version is never shown as its family; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
 While working, waiting for your answer or not running, this section is disabled and its title explains why; the title notes that the model also becomes the default for new sessions (Claude Code behavior).
 The new shell's Model · Effort menu still sends `/model <id>` as a message.
 
