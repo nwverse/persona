@@ -26,13 +26,20 @@ const (
 	// An unreadable document is probed again after this long: its owner may share it again, or the user may sign in
 	// again with the missing permission. A new login (another account or other granted scopes) probes it at once.
 	documentUnreadableRetry = 10 * time.Minute
-	maxCommentPages         = 10
-	maxReplyPages           = 10
-	maxWikiSpaces           = 20
-	maxWikiSpacePages       = 10
-	maxWikiNodes            = 500
-	maxWatchedDocuments     = 200
-	maxDocumentURLLength    = 4096
+	// owned_all_comments covers the user's own documents without listing them: the ones edited or opened in the last
+	// ownedWindow, at most maxOwnedDocuments, re-listed every ownedRefresh, each read every ownedPollEvery.
+	ownedWindow          = 30 * 24 * time.Hour
+	maxOwnedDocuments    = 50
+	maxOwnedPages        = 5
+	ownedRefresh         = 30 * time.Minute
+	ownedPollEvery       = 10 * time.Minute
+	maxCommentPages      = 10
+	maxReplyPages        = 10
+	maxWikiSpaces        = 20
+	maxWikiSpacePages    = 10
+	maxWikiNodes         = 500
+	maxWatchedDocuments  = 200
+	maxDocumentURLLength = 4096
 )
 
 // DocumentOptions are the connector's watched-document choices. An empty
@@ -179,6 +186,10 @@ type watchedDocument struct {
 	// OwnedAllComments is on.
 	Token string
 	Owner string
+	// Auto marks one of the user's own documents found by owned_all_comments (not in the watch list); NextPoll is
+	// when it is read next.
+	Auto     bool
+	NextPoll time.Time
 	// RetryAt is when an unreadable document is probed again.
 	RetryAt time.Time
 }
@@ -190,6 +201,9 @@ type documentInbox struct {
 	things    map[string]connector.InboxThing
 	warnings  map[string]string
 	rateUntil time.Time
+	// owned are the user's own documents owned_all_comments covers, listed at ownedAt.
+	owned   map[string]watchedDocument
+	ownedAt time.Time
 	// login identifies the lark-cli login the unreadable marks were made under; a different login clears them.
 	login string
 	// missingScopes is set when lark-cli says the login itself lacks a scope for comments. That is the connector's
@@ -358,6 +372,7 @@ func (c *Connector) pollDocumentsRound(ctx context.Context) bool {
 	granted := append([]string(nil), auth.GrantedScopes...)
 	sort.Strings(granted)
 	c.docs.setLogin(auth.OpenID + "\x00" + strings.Join(granted, " "))
+	c.refreshOwned(ctx, auth.OpenID)
 	resolved := c.resolveWatched(ctx)
 	c.syncWatched(resolved)
 	if len(resolved) == 0 {
@@ -372,7 +387,11 @@ func (c *Connector) pollDocumentsRound(ctx context.Context) bool {
 	for _, link := range links {
 		c.docs.mu.Lock()
 		doc := c.docs.docs[link]
-		skip := doc == nil || c.docs.skipUnreadable(doc, c.currentTime())
+		now := c.currentTime()
+		skip := doc == nil || c.docs.skipUnreadable(doc, now) || doc.Auto && now.Before(doc.NextPoll)
+		if !skip && doc.Auto {
+			doc.NextPoll = now.Add(ownedPollEvery)
+		}
 		c.docs.mu.Unlock()
 		if skip {
 			continue
@@ -433,9 +452,15 @@ func (c *Connector) syncWatched(resolved map[string]watchedDocument) {
 			old = &watchedDocument{URL: link, Seen: map[string]string{}, Things: map[string]connector.InboxThing{}}
 			c.docs.docs[link] = old
 		}
-		old.Canonical, old.Title, old.Type = metadata.Canonical, metadata.Title, metadata.Type
+		if metadata.Auto && old.NextPoll.IsZero() {
+			old.NextPoll = metadata.NextPoll // first read, spread by refreshOwned; later ones the round sets
+		}
+		old.Canonical, old.Title, old.Type, old.Auto = metadata.Canonical, metadata.Title, metadata.Type, metadata.Auto
 		if metadata.Token != "" {
 			old.Token = metadata.Token
+		}
+		if metadata.Owner != "" {
+			old.Owner = metadata.Owner
 		}
 		if old.Seen == nil {
 			old.Seen = map[string]string{}
@@ -532,6 +557,13 @@ func (c *Connector) resolveWatched(ctx context.Context) map[string]watchedDocume
 			}
 		}
 	}
+	c.docs.mu.Lock()
+	for link, doc := range c.docs.owned {
+		if _, ok := out[link]; !ok {
+			out[link] = doc // a document in the watch list stays a watched one
+		}
+	}
+	c.docs.mu.Unlock()
 	if len(out) > maxWatchedDocuments {
 		keys := make([]string, 0, len(out))
 		for link := range out {
@@ -809,12 +841,17 @@ func (c *Connector) documentThing(doc *watchedDocument, comment adapter.Comment,
 		contextText += "\nAuthor: " + event.UserID
 	}
 	last := event.ID + "@" + eventRevision(event)
-	return connector.InboxThing{
+	thing := connector.InboxThing{
 		Thread: thread, Kind: "doc", Label: i18n.T(lang, "hub-connectors.doc_comment_label"), Title: documentFirstNonEmpty(doc.Title, doc.URL), Sender: event.UserID,
 		Preview: preview, Context: contextText, At: at, Last: last, URL: commentURL,
-		Tier: connector.TierAction, Why: i18n.T(lang, "hub-connectors.doc_comment_rule"),
 		Extra: &connector.ThingExtra{Count: 1, Doc: docBlock},
 	}
+	if event.Mention {
+		// A comment that mentions the user asks for them; replies and comments on documents they own are left to the
+		// Inbox's triage, like lark-cli's chat items.
+		thing.Tier, thing.Why = connector.TierAction, i18n.T(lang, "hub-connectors.doc_comment_rule")
+	}
+	return thing
 }
 
 func eventRevision(event commentEvent) string {
@@ -1094,5 +1131,49 @@ func (c *Connector) lookUpOwner(ctx context.Context, doc *watchedDocument) {
 	}
 	c.docs.mu.Lock()
 	doc.Owner = owner
+	c.docs.mu.Unlock()
+}
+
+// refreshOwned lists the user's own documents for owned_all_comments: edited or opened within ownedWindow, newest
+// edit first, at most maxOwnedDocuments, every ownedRefresh. Their reads are spread over ownedPollEvery. A failed
+// listing keeps the previous list; turning the option off drops it.
+func (c *Connector) refreshOwned(ctx context.Context, me string) {
+	now := c.currentTime()
+	c.docs.mu.Lock()
+	on := c.docs.options.OwnedAllComments
+	due := now.Sub(c.docs.ownedAt) >= ownedRefresh
+	if !on {
+		c.docs.owned, c.docs.ownedAt = nil, time.Time{}
+	}
+	c.docs.mu.Unlock()
+	if !on || !due {
+		return
+	}
+	owned := map[string]watchedDocument{}
+	token := ""
+	for page := 0; page < maxOwnedPages && len(owned) < maxOwnedDocuments; page++ {
+		docs, next, err := c.runner.OwnedDocuments(ctx, token)
+		if err != nil {
+			if adapter.KindOf(err) == adapter.KindRateLimited {
+				c.docs.setRateLimit(now.Add(documentRateBackoff))
+			}
+			return
+		}
+		for _, d := range docs {
+			recent := d.Updated.After(now.Add(-ownedWindow)) || d.Opened.After(now.Add(-ownedWindow))
+			if !recent || d.Owner != "" && d.Owner != me || len(owned) >= maxOwnedDocuments {
+				continue
+			}
+			// Spread the first reads over the poll interval instead of reading every document in one round.
+			first := now.Add(time.Duration(len(owned)%5) * (ownedPollEvery / 5))
+			owned[d.URL] = watchedDocument{URL: d.URL, Title: documentFirstNonEmpty(d.Title, d.URL), Type: normalizeDocumentType(d.Type), Token: d.Token, Owner: me, Auto: true, NextPoll: first}
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+	c.docs.mu.Lock()
+	c.docs.owned, c.docs.ownedAt = owned, now
 	c.docs.mu.Unlock()
 }

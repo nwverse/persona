@@ -122,10 +122,13 @@ Rate limits pause the document poller. A permission or not-found result marks th
 The title, quoted passage (or “Whole document”), latest matching comment text, and a link with the comment id are kept in
 one Inbox item per thread (`kind: "doc"`). A comment that mentions the user by open_id is included, as is a later reply
 when the user has written in that thread; resolved threads are skipped. The connector never replies or changes a comment.
-With `owned_all_comments` (off by default; "All comments on documents I own" in Settings), every new comment and reply from
-someone else on a watched document the user owns comes in too, mention or not. The owner is read once per document with
-`drive metas batch_query` (open_id) and compared with the lark-cli login; a failed read leaves the owner unknown until the
-next round, and only the mention and participation rules apply meanwhile.
+With `owned_all_comments` (off by default; "All comments on documents I own" in Settings), the user's own documents need
+no watch list: every 30 minutes the connector lists the documents the user owns (`drive +search --mine --sort edit_time`),
+keeps those edited or opened in the last 30 days, at most 50, and reads each one's comments every 10 minutes (the first
+reads spread over that interval). On those, and on watched documents the user owns (owner read once with `drive metas
+batch_query`), every new comment and reply from someone else comes in, mention or not. A comment that mentions the user
+is Needs you; the rest are left to the Inbox's triage. A document untouched for longer than the window is not read, so a
+new comment on it is missed until someone edits or opens it.
 
 The existing document block is used for the detail page (`doc.url`, `doc.link`, `doc.type`, `doc.notice_id`), while the
 quoted passage and comment text are in the item's context. An unreadable watched document appears as a warning in the

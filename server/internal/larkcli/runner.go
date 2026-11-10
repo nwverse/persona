@@ -516,6 +516,70 @@ func (r *Runner) SearchMessages(ctx context.Context, query string, opts SearchOp
 // InspectDocument resolves a document or wiki link to the title and the
 // underlying Drive metadata. It is deliberately read-only and always runs as
 // the lark-cli user identity.
+// OwnedDocument is one document the signed-in user owns, from `drive +search --mine`.
+type OwnedDocument struct {
+	URL     string
+	Token   string
+	Type    string
+	Title   string
+	Owner   string
+	Updated time.Time
+	Opened  time.Time
+}
+
+// OwnedDocuments lists documents the user owns, most recently edited first, one page of at most 20 (`drive +search
+// --mine --sort edit_time`). next is the token for the following page, empty at the end.
+func (r *Runner) OwnedDocuments(ctx context.Context, pageToken string) (docs []OwnedDocument, next string, err error) {
+	args := []string{"drive", "+search", "--mine", "--sort", "edit_time", "--page-size", "20"}
+	if pageToken != "" {
+		args = append(args, "--page-token", pageToken)
+	}
+	out, err := r.execute(ctx, args, outputJSON)
+	if err != nil {
+		return nil, "", err
+	}
+	var raw struct {
+		HasMore   bool   `json:"has_more"`
+		PageToken string `json:"page_token"`
+		Results   []struct {
+			Title string `json:"title_highlighted"`
+			Meta  struct {
+				URL      string `json:"url"`
+				Token    string `json:"token"`
+				DocTypes string `json:"doc_types"`
+				Owner    string `json:"owner_id"`
+				Updated  int64  `json:"update_time"`
+				Opened   int64  `json:"last_open_time"`
+			} `json:"result_meta"`
+		} `json:"results"`
+	}
+	if err := decodeData(out, &raw); err != nil {
+		return nil, "", cliError(KindOther, errors.New("invalid document search JSON"))
+	}
+	for _, res := range raw.Results {
+		if res.Meta.URL == "" {
+			continue
+		}
+		d := OwnedDocument{URL: res.Meta.URL, Token: res.Meta.Token, Type: strings.ToLower(res.Meta.DocTypes), Title: stripHighlight(res.Title), Owner: res.Meta.Owner}
+		if res.Meta.Updated > 0 {
+			d.Updated = time.Unix(res.Meta.Updated, 0).UTC()
+		}
+		if res.Meta.Opened > 0 {
+			d.Opened = time.Unix(res.Meta.Opened, 0).UTC()
+		}
+		docs = append(docs, d)
+	}
+	if raw.HasMore {
+		next = raw.PageToken
+	}
+	return docs, next, nil
+}
+
+// stripHighlight drops the search's <em> marks from a title.
+func stripHighlight(s string) string {
+	return strings.TrimSpace(strings.NewReplacer("<em>", "", "</em>", "", "<b>", "", "</b>", "").Replace(s))
+}
+
 // DocumentOwner returns the open_id of a document's owner (`drive metas batch_query`). token and docType are the
 // underlying document's, as InspectDocument returns them (a wiki link is unwrapped there).
 func (r *Runner) DocumentOwner(ctx context.Context, token, docType string) (string, error) {

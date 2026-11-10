@@ -143,6 +143,15 @@ JSON
         cat "$base/document_inspect.json"
         exit 0
         ;;
+      +search)
+        # The user's own documents only when LARKCLI_FAKE_OWNED is set; none otherwise.
+        if [ -n "${LARKCLI_FAKE_OWNED:-}" ]; then
+          cat "$base/owned_search.json"
+        else
+          printf '%s\n' '{"ok":true,"data":{"has_more":false,"results":[]}}'
+        fi
+        exit 0
+        ;;
       metas)
         # The owner is LARKCLI_FAKE_OWNER, someone else by default.
         printf '{"ok":true,"data":{"metas":[{"doc_token":"doc_example","doc_type":"docx","owner_id":"%s"}]}}\n' "${LARKCLI_FAKE_OWNER:-ou_example_other}"

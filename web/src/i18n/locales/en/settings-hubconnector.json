@@ -70,6 +70,6 @@
   "lark_docs_spaces": "Wiki spaces",
   "lark_docs_space_placeholder": "Paste a Wiki space link (every document in it)",
   "lark_docs_owned": "All comments on documents I own",
-  "lark_docs_owned_sub": "On watched documents you own, every new comment and reply from others comes in, without mentioning you.",
+  "lark_docs_owned_sub": "Documents you own that were edited or opened in the last 30 days (up to 50): every new comment and reply from others comes in, without mentioning you and without adding them above.",
   "lark_docs_remove": "Stop watching {link}"
 }

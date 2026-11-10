@@ -269,3 +269,47 @@ func TestOwnedAllCommentsRoundTripsThroughOptions(t *testing.T) {
 		t.Fatalf("options = %s", c.Options())
 	}
 }
+
+func TestOwnedAllCommentsCoversRecentOwnDocumentsWithoutAWatchList(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "fake.log")
+	t.Setenv("LARKCLI_FAKE_LOG", logPath)
+	t.Setenv("LARKCLI_FAKE_OWNED", "1")
+	c := docTestConnector(t, "comments_owned")
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	if err := c.SetOptions(json.RawMessage(`{"documents":[],"owned_all_comments":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !c.pollDocuments(context.Background()) {
+		t.Fatal("a comment on my recently edited document did not come in")
+	}
+	things, _ := c.Collect(context.Background())
+	if len(things) != 1 || things[0].Title != "Example launch plan" || things[0].Tier != "" {
+		t.Fatalf("things = %+v (want the owned document's comment, left to triage)", things)
+	}
+	count := func(what string) int {
+		log, _ := os.ReadFile(logPath)
+		return strings.Count(string(log), what)
+	}
+	if got := count("doc_old"); got != 0 {
+		t.Fatalf("a document untouched for months was read %d times", got)
+	}
+	// The next round, two minutes on: no new listing and no second read of the same document yet.
+	now = now.Add(2 * time.Minute)
+	c.pollDocuments(context.Background())
+	if got := count("+search"); got != 1 {
+		t.Fatalf("owned documents listed %d times within the refresh interval", got)
+	}
+	if got := count("+list-comments"); got != 1 {
+		t.Fatalf("the owned document was read %d times within its poll interval", got)
+	}
+	// Turned off: the owned documents go.
+	if err := c.SetOptions(json.RawMessage(`{"documents":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(ownedPollEvery)
+	c.pollDocuments(context.Background())
+	if got := count("+list-comments"); got != 1 {
+		t.Fatalf("an owned document was read after the option was turned off")
+	}
+}

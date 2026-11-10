@@ -70,6 +70,6 @@
   "lark_docs_spaces": "知识库空间",
   "lark_docs_space_placeholder": "粘贴知识库空间链接（整个空间的文档）",
   "lark_docs_owned": "我拥有的文档收全部评论",
-  "lark_docs_owned_sub": "关注的文档中，你是所有者的那些，别人的新评论和回复都进收件箱，不必 @你。",
+  "lark_docs_owned_sub": "你是所有者、最近 30 天编辑或打开过的文档（最多 50 篇），别人的新评论和回复都进收件箱，不必 @你，也不用加到上面的列表。",
   "lark_docs_remove": "不再关注 {link}"
 }
