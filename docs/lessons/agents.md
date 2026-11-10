@@ -383,6 +383,10 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 - A walk of a Go map before a stable sort leaks the map's random order into the result wherever the sort key ties. Live panes with no transcript yet all have a zero `UpdatedAt`, the list key is order-sensitive, and every reshuffle sent the whole list to the hub (67 times a minute with eight such agents). Walk the map in sorted key order when the result is compared or published.
 - On a node's first list, `scanBackground` reads each listed transcript whole and tested each line against 28 markers one by one; that was over half of a reconnect's CPU on a real corpus. One Aho-Corasick pass (`bgmatch.go`) is about four times faster on real lines. It is built on the first scan, never at package init ("Package-level work" above). A new marker still goes into `bgMarkers` or transcript's marker slices; the matcher is built from them.
 
+## A resident node's reconnect read every transcript again (2026-11-10, #2864)
+
+- `personad node --attach` makes a new `Node` for each hub connection. The assistant keeper, the spool and the runtime socket already belonged to the resident process, but the background-task scans (`bgScans`) did not, so every reconnect read each listed transcript whole again: on a real corpus of about 270 MB that was half of the reconnect's CPU and over half a gigabyte read, and the first list after it had no background or plan state for the big transcripts until those reads were done. `Attach` now carries the scans to the next connection's `Node` (`carry.go`): adopted before `Serve`, handed over after it returns, never shared by two Nodes. Something kept across connections must be checked on its first use, not trusted: a transcript can be deleted, replaced (another inode at the same path) or rewritten in place while no connection runs. A carried scan goes on only if the path is still the same file (`os.SameFile`), not shorter than what it read, and its first bytes hash the same; anything else starts it over. A new connection has no quick metas yet, so pruning has to look at scans without one too.
+
 ## MessageDisplay holds the terminal; measuring it in an isolated claude (2026-11-07, #1309, 2.1.319)
 
 - Registering any `MessageDisplay` hook changes how the TUI shows replies: batch by batch instead of token by token, each batch only once its hooks are done, `"async": true` or not (the debug log says "Detected async hook but forceSyncExecution is true"). A slow hook delays every line on the user's own terminal by its run time, and a hook that prints `hookSpecificOutput.displayContent` replaces the lines on screen. Persona's hook therefore passes the lines to the node and exits at once, printing nothing (`docs/integrations/claude-integration.md` "Live replies (MessageDisplay)"). A Python logging hook cost 90–260 ms per batch just to start. What `personad hook` itself costs, and why it was slow to start, is the section above. Those are the program's own times (exec to exit): a shell-form hook (`command` a command line) runs as `/bin/sh -c`, which on a Mac adds another 6–8 ms to every batch, so a hook on the display path is in exec form (`{"command": "<program>", "args": [...]}`, started directly; in Claude Code 2.1.150 and every build with MessageDisplay, not in 2.1.110). Measure a hook the way Claude Code runs it, shell included, before calling it fast. Without a shell there is nowhere to put `PERSONA_HOME=<dir>` in front, and a command hook has no `env` field (2.1.319's schema: `command`, `args`, `shell`, `timeout`, `async`, …), so the live replies hook gets the node's directory as an argument (`personad hook --persona-home <dir>`).
@@ -620,10 +624,12 @@ Closing is not durable merely because the card vanished: persist the interaction
 
 ## Text an agent is sent can press keys in its terminal
 
-- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename,
-  a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed later, in a prompt. Control
-  characters in that text are keys to the terminal, and the program in it acts on them as on the user's own, which can
-  change what the agent may do.
+- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename's
+  title (`/rename`, a prompt), a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed
+  later, in a prompt. Control characters in that text are keys to the terminal, and the program in it acts on them as
+  on the user's own, which can change what the agent may do. A rename's tab name is not typed: it goes to the host as
+  the tab's label (herdr, Orca, Herdr App), which the node does not make inert; herdr's renderer drops control
+  characters when it draws one.
 - So the hub refuses terminal control characters (Unicode `Cc` but newline, carriage return and tab) from callers whose
   grant is narrower than the user's, extension tokens, on the routes that type a caller's text into a terminal or keep
   it for a prompt (`server/internal/hub/terminal_controls.go`). Check kept text as it comes in, while the caller is
