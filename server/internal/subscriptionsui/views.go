@@ -609,8 +609,11 @@ func (p *pages) draftItems(v *wire.View, key string, setup state, regenerate boo
 		if regenerate {
 			note.Title = p.t("draft.regenerated")
 		}
-		note.Subtitle, note.Icon, note.IconColor = job.result.Note, "check", "green"
+		note.Icon, note.IconColor = "check", "green"
 		items := []wire.Component{note}
+		if job.result.Note != "" { // the model's own words on what it chose: whole, not cut to a subtitle's line
+			items = append(items, text("g.note", job.result.Note, "secondary"))
+		}
 		if !regenerate {
 			review := row("g.review", p.t("draft.review"))
 			st := setup

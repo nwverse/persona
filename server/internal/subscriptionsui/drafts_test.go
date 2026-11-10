@@ -85,7 +85,7 @@ func TestDraftASource(t *testing.T) {
 		t.Fatalf("asked: %+v", f.genAsks)
 	}
 	v := draw(t, f, e, st)
-	if r := item(v, "g.done"); r == nil || r.Subtitle != "Lists the work calendar's changed events." {
+	if r := item(v, "g.note"); item(v, "g.done") == nil || r == nil || r.Text != "Lists the work calendar's changed events." {
 		t.Errorf("done, with the model's note: %+v", r)
 	}
 	review := item(v, "g.review")
