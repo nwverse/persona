@@ -51,6 +51,7 @@ case "${1:-}" in
         esac
         ;;
       inbox_p2p:+messages-search) cat "$base/inbox_p2p.json" ;;
+      inbox_bot_loop:+messages-search) cat "$base/inbox_bot_loop.json" ;;
       inbox_pages:+messages-search)
         case " $* " in
           *" --sender "*) cat "$base/inbox_seed.json" ;;
@@ -63,6 +64,9 @@ case "${1:-}" in
         ;;
       inbox_p2p:+chat-messages-list|inbox_p2p:+threads-messages-list)
         cat "$base/inbox_p2p_context.json"
+        ;;
+      inbox_bot_loop:+chat-messages-list|inbox_bot_loop:+threads-messages-list)
+        cat "$base/inbox_empty_context.json"
         ;;
       inbox:+messages-send|inbox:+messages-reply|inbox_pages:+messages-send|inbox_pages:+messages-reply)
         cat "$base/send_result.json"

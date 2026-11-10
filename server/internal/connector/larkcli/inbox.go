@@ -171,6 +171,13 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 				newest = t
 			}
 			if message.MessageID != "" {
+				if isBoundAppMessage(message, auth.AppID) {
+					// The app bound to lark-cli is Persona's own bot in the
+					// recommended setup. Consume its messages so they cannot form a
+					// feedback loop, while still advancing the cursor and seen ledger.
+					c.markSeen(message.MessageID)
+					continue
+				}
 				found = append(found, message)
 			}
 			c.noteTopic(message, auth.OpenID)
@@ -467,6 +474,24 @@ func (c *Connector) dedupMessages(messages []adapter.Message) []adapter.Message 
 	return out
 }
 
+func (c *Connector) markSeen(messageID string) {
+	if messageID == "" {
+		return
+	}
+	c.inboxMu.Lock()
+	defer c.inboxMu.Unlock()
+	if c.inboxSeen == nil {
+		c.inboxSeen = map[string]struct{}{}
+	}
+	c.inboxSeen[messageID] = struct{}{}
+	for len(c.inboxSeen) > inboxSeenLimit {
+		for id := range c.inboxSeen {
+			delete(c.inboxSeen, id)
+			break
+		}
+	}
+}
+
 func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTopics map[string]struct{}) []*inboxGroup {
 	if len(messages) == 0 {
 		return nil
@@ -552,13 +577,19 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	if group.threadID != "" {
 		thread += ":thread:" + group.threadID
 	}
-	kind := "message"
+	kind := "group"
 	lang := i18n.From(ctx).Or(i18n.Default)
 	label := i18n.T(lang, "hub-connectors.larkcli_message")
 	tier := connector.TierFYI
-	if latest.ChatType == "p2p" {
+	switch {
+	case latest.ChatType == "p2p" && p2pIsBot(group, contextMessages, me):
+		kind = "bot"
 		label, tier = i18n.T(lang, "hub-connectors.larkcli_direct_message"), connector.TierAction
-	} else if group.mentioned {
+	case latest.ChatType == "p2p":
+		kind = "dm"
+		label, tier = i18n.T(lang, "hub-connectors.larkcli_direct_message"), connector.TierAction
+	case group.mentioned:
+		kind = "mention"
 		label, tier = i18n.T(lang, "hub-connectors.larkcli_mention"), connector.TierAction
 	}
 	title := firstNonEmpty(group.chatName, group.chatID)
@@ -567,6 +598,10 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		// other sender is the conversation's name; use any sender name only as
 		// a fallback, and keep the opaque chat id as the final fallback.
 		title = p2pTitle(group, contextMessages, me)
+	}
+	tags := []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: title}}
+	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
+		tags = append(tags, senderTag)
 	}
 	thing := connector.InboxThing{
 		Thread:   thread,
@@ -582,7 +617,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		CanReply: latest.MessageID != "",
 		Tier:     tier,
 		Why:      i18n.T(lang, "assistant-inbox.by_rules"),
-		Tags:     []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: title}},
+		Tags:     tags,
 	}
 	if thing.At.IsZero() {
 		thing.At = time.Now().UTC()
@@ -606,12 +641,119 @@ func p2pTitle(group *inboxGroup, contextMessages []adapter.Message, me string) s
 			return name
 		}
 	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		partner := chatPartner(messages[i].ChatPartner)
+		if partner.Name != "" {
+			return partner.Name
+		}
+	}
+	if group.chatName != "" {
+		return group.chatName
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		partner := chatPartner(messages[i].ChatPartner)
+		if value := firstNonEmpty(partner.OpenID, partner.AppID, partner.ID); value != "" {
+			return value
+		}
+	}
 	for _, message := range messages {
 		if name := strings.TrimSpace(message.Sender.Name); name != "" {
 			return name
 		}
 	}
 	return group.chatID
+}
+
+type partnerInfo struct {
+	ID         string
+	IDType     string
+	OpenID     string
+	AppID      string
+	SenderType string
+	Name       string
+}
+
+// chatPartner normalizes the small partner object emitted by different
+// lark-cli releases. Keeping Message.ChatPartner raw lets older contracts pass
+// through unchanged while still making direct-chat titles useful when the
+// search batch contains only messages from the user.
+func chatPartner(raw json.RawMessage) partnerInfo {
+	if len(raw) == 0 || string(raw) == "null" {
+		return partnerInfo{}
+	}
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		return partnerInfo{}
+	}
+	get := func(keys ...string) string {
+		for _, key := range keys {
+			if s, ok := value[key].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+		return ""
+	}
+	return partnerInfo{
+		ID:         get("id"),
+		IDType:     get("id_type", "idType"),
+		OpenID:     get("open_id", "openId"),
+		AppID:      get("app_id", "appId"),
+		SenderType: get("sender_type", "senderType"),
+		Name:       get("name", "display_name", "displayName", "user_name", "userName", "app_name", "appName"),
+	}
+}
+
+func senderIsBot(sender adapter.Sender) bool {
+	return strings.EqualFold(strings.TrimSpace(sender.SenderType), "app") ||
+		strings.EqualFold(strings.TrimSpace(sender.IDType), "app_id")
+}
+
+func partnerIsBot(partner partnerInfo) bool {
+	return strings.EqualFold(strings.TrimSpace(partner.SenderType), "app") ||
+		strings.EqualFold(strings.TrimSpace(partner.IDType), "app_id") || partner.AppID != ""
+}
+
+func p2pIsBot(group *inboxGroup, contextMessages []adapter.Message, me string) bool {
+	if group == nil {
+		return false
+	}
+	messages := append(append([]adapter.Message(nil), group.messages...), contextMessages...)
+	for _, message := range messages {
+		if message.Sender.ID != me && senderIsBot(message.Sender) {
+			return true
+		}
+		if partnerIsBot(chatPartner(message.ChatPartner)) {
+			return true
+		}
+	}
+	return false
+}
+
+func latestSenderTag(messages []adapter.Message, me string) (connector.Tag, bool) {
+	messages = mergeMessages(nil, messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.Sender.ID == me || (message.Sender.ID == "" && message.Sender.AppID == "" && message.Sender.OpenBotID == "") {
+			continue
+		}
+		value := firstNonEmpty(message.Sender.ID, message.Sender.AppID)
+		if senderIsBot(message.Sender) {
+			value = firstNonEmpty(message.Sender.AppID, value, message.Sender.OpenBotID)
+		}
+		if value == "" {
+			continue
+		}
+		return connector.Tag{Key: connector.TagSender, Value: value, Name: firstNonEmpty(message.Sender.Name, value)}, true
+	}
+	return connector.Tag{}, false
+}
+
+func isBoundAppMessage(message adapter.Message, appID string) bool {
+	appID = strings.TrimSpace(appID)
+	if appID == "" || strings.TrimSpace(message.Sender.ID) != appID {
+		return false
+	}
+	return senderIsBot(message.Sender)
 }
 
 func (c *Connector) inboxStateForTests() persistedInboxState {

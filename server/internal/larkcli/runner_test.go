@@ -28,7 +28,7 @@ func TestRunnerSuccessJSONAndProfile(t *testing.T) {
 	ctx := context.Background()
 
 	auth, err := r.AuthStatus(ctx)
-	if err != nil || !auth.LoggedIn || auth.UserName != "Example User" || auth.OpenID != "ou_example_user" {
+	if err != nil || !auth.LoggedIn || auth.AppID != "cli_example" || auth.UserName != "Example User" || auth.OpenID != "ou_example_user" {
 		t.Fatalf("auth = %+v, err = %v", auth, err)
 	}
 	if got := auth.GrantedScopes; len(got) < 2 || got[0] != "im:chat:read" || got[1] != "im:message:readonly" {

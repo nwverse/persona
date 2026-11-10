@@ -95,7 +95,7 @@ func (c *Connector) ID() string   { return ID }
 func (c *Connector) Name() string { return Name }
 
 func (c *Connector) Manifest() connector.Manifest {
-	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapEvents, connector.CapInbox, connector.CapOptions}, Kinds: []string{"message"}}
+	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapEvents, connector.CapInbox, connector.CapOptions}, Kinds: []string{"dm", "bot", "mention", "group"}}
 }
 
 func (c *Connector) Tools() []proto.Tool {
