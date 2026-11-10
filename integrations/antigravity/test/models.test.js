@@ -42,7 +42,7 @@ async function fixture(t, options = {}) {
   const { session } = await n.peer.call('session.start', { cwd: home })
   const sessionId = session.session_id
   const row = () => n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === sessionId)
-  return { n, catalog, settings, sessionId, row, session, calls: () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) }
+  return { n, home, catalog, settings, sessionId, row, session, calls }
 }
 
 test('catalog discovery and refresh use native CLI data and current settings', async (t) => {
