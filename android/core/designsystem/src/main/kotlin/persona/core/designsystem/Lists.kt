@@ -363,7 +363,11 @@ fun JCard(
     }
 }
 
-/** A notice inside a page (connection lost, permission needed). [status] picks the tone. */
+/**
+ * A notice inside a page (connection lost, permission needed). [status] picks the tone. [inlineAction] puts the action
+ * at the end of the text's line as a text button (a one-line notice over a list: "1 more waiting on you · Show all",
+ * #3740) instead of a button under the text.
+ */
 @Composable
 fun JNotice(
     text: String,
@@ -373,23 +377,32 @@ fun JNotice(
     icon: PhIcon = PhIcons.Info,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    inlineAction: Boolean = false,
 ) {
     val palette = PersonaTheme.palette
     val tone = palette.status(status)
-    JCard(modifier, status = status, padding = 16.dp) {
-        Row(verticalAlignment = Alignment.Top) {
-            JIcon(icon, null, size = 20.dp, tint = if (PersonaTheme.style == AppStyle.Brief) palette.ink else tone.dot, modifier = Modifier.padding(top = 2.dp))
+    val action = if (actionLabel != null && onAction != null) actionLabel to onAction else null
+    JCard(modifier, status = status, padding = if (inlineAction) NoticeTokens.inlinePadding else 16.dp) {
+        Row(verticalAlignment = if (inlineAction) Alignment.CenterVertically else Alignment.Top) {
+            JIcon(icon, null, size = 20.dp, tint = if (PersonaTheme.style == AppStyle.Brief) palette.ink else tone.dot,
+                modifier = if (inlineAction) Modifier else Modifier.padding(top = 2.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 title?.let { Text(it, style = PersonaTheme.type.headline, color = palette.ink) }
                 Text(text, style = PersonaTheme.type.callout, color = palette.ink2)
-                if (actionLabel != null && onAction != null) {
+                if (action != null && !inlineAction) {
                     Spacer(Modifier.height(10.dp))
-                    JButton(actionLabel, onAction, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
+                    JButton(action.first, action.second, kind = JButtonKind.Secondary, size = JButtonSize.Medium)
                 }
             }
+            if (action != null && inlineAction) JTextButton(action.first, action.second)
         }
     }
+}
+
+/** A [JNotice] whose action sits on its line ([JNotice] `inlineAction`): less padding above and below, the text button's own height filling it. */
+object NoticeTokens {
+    val inlinePadding = 12.dp
 }
 
 @Composable

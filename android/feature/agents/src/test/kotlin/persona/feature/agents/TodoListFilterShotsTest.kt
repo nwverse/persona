@@ -49,7 +49,7 @@ import java.util.TimeZone
  * no "N open · N shelved · N done" line, each section's count beside its title; the filter button beside List | Calendar
  * and its menu (Show with counts, Sort by); This week, Today, This month and No due date, each with its "×" chip and,
  * since one to-do waiting on the user has no due date, "1 more waiting on you" over the list; the rows of each section by
- * due date and by priority; an empty filter. Every style, light and dark.
+ * due date and by priority; an empty filter (todos-filter-empty-*, not the parity test's todos-empty-*). Every style, light and dark.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -162,12 +162,12 @@ class TodoListFilterShotsTest {
                 rule.onNodeWithTag("todos-filter-clear").assertDoesNotExist()
                 save(scene, style, dark)
             }
-            "empty" -> {
+            "filter-empty" -> {
                 // nothing due today, nothing overdue: an empty filter, and Show all goes back
                 open(todos.filter { it.id in setOf("t3", "t8", "t9", "t10") }, style, dark)
                 pick("今天")
                 assertTrue(has("今天没有到期的待办") && has("换个筛选看看。"))
-                save("empty", style, dark)
+                save("filter-empty", style, dark)
                 rule.onNodeWithText("看全部").performClick()
                 rule.waitForIdle()
                 assertTrue(has("修小组件横屏崩溃"))
@@ -224,12 +224,12 @@ class TodoListFilterShotsTest {
     @Test fun priorityBriefDark() = shot("priority", AppStyle.Brief, true)
     @Test fun priorityBoard() = shot("priority", AppStyle.Board, false)
     @Test fun priorityBoardDark() = shot("priority", AppStyle.Board, true)
-    @Test fun emptyGlass() = shot("empty", AppStyle.Glass, false)
-    @Test fun emptyGlassDark() = shot("empty", AppStyle.Glass, true)
-    @Test fun emptyBrief() = shot("empty", AppStyle.Brief, false)
-    @Test fun emptyBriefDark() = shot("empty", AppStyle.Brief, true)
-    @Test fun emptyBoard() = shot("empty", AppStyle.Board, false)
-    @Test fun emptyBoardDark() = shot("empty", AppStyle.Board, true)
+    @Test fun emptyGlass() = shot("filter-empty", AppStyle.Glass, false)
+    @Test fun emptyGlassDark() = shot("filter-empty", AppStyle.Glass, true)
+    @Test fun emptyBrief() = shot("filter-empty", AppStyle.Brief, false)
+    @Test fun emptyBriefDark() = shot("filter-empty", AppStyle.Brief, true)
+    @Test fun emptyBoard() = shot("filter-empty", AppStyle.Board, false)
+    @Test fun emptyBoardDark() = shot("filter-empty", AppStyle.Board, true)
 
     // Which to-dos each filter shows, the whole list in sight (a phone's screen draws only its first rows).
     @Config(qualifiers = "zh-w400dp-h2400dp-xhdpi")

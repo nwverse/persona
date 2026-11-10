@@ -335,6 +335,7 @@ fun TodosScreen(
                         icon = PhIcons.WarningCircle,
                         actionLabel = stringResource(R.string.agents_todos_filter_show_all),
                         onAction = { setFilter(TodoListFilter.All) },
+                        inlineAction = true,
                     )
                 }
             }
