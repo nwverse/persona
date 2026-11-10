@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## Ancestor package metadata can break Vite config loading (#3301)
+
+When Vite/esbuild reports invalid `package.json` content outside the checkout, inspect the exact reported ancestor: the web package can be valid while package-scope resolution reads a broken parent file. A successful Go build does not prove that the bundled web build or deployment succeeded. Do not change application code or overwrite another worker's shared file just to silence this error.
+
+If the original configuration loads again later, verify a fresh normal build and the serving artifacts before declaring recovery. Retain the earlier failure, and distinguish stale-source refusals from compilation errors. Never bypass freshness checks or reset the failure budget to force publication.
+
 ## A clipping fold left a tall card's buttons out of sight (2026-11-10, #3112)
 
 - **A sticky footer sticks in its nearest clipping ancestor, not the box that scrolls**: #2026 made a waiting card `shrink-0` with an `overflow-clip` root and a `sticky -bottom-1` footer, which works where the cards sit straight in the dock. On a phone and in a side panel (an agent's or task's chat over the main one, `compactDock`) PendingCards puts the open cards in a `Collapse`, whose clip box was `overflow-hidden`: a scroll container of its own, so the footer stuck inside it and stayed at the card's natural bottom, below `data-chat-cards`. A Feishu permission card with a long `python3 -c …` command showed half of its "Always allow covers…" line and no Allow / Deny. Open folds are `unclipped` now. Look for every `overflow-hidden` between a sticky element and the scroller you mean.
