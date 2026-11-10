@@ -52,7 +52,7 @@ import persona.core.designsystem.text
 // A recording's meeting minutes on its page (#2738, docs/assistant/meeting-minutes.md): the layout of iOS
 // RecordingMinutesSections (above the transcript; when and where, who was there; key points, decisions, action items and
 // open questions, each with the time it was said, a tap scrolling to that line), the writes of the web's
-// RecordingMinutes (Make minutes / Regenerate, Add to to-dos per action and Add all, Copy).
+// RecordingMinutes (Make minutes / Regenerate, Add to to-dos per action and Add all); Copy and Share as on iOS.
 
 /** Where a recording's minutes stand on its page. */
 internal enum class MinutesPhase {
@@ -131,6 +131,7 @@ internal class MinutesActions(
     val add: (List<String>) -> Unit,
     val copy: (String) -> Unit,
     val jump: (Double) -> Unit,
+    val share: (String) -> Unit = {},
     val dismiss: () -> Unit = {},
 )
 
@@ -138,15 +139,9 @@ internal class MinutesActions(
 internal fun LazyListScope.recordingMinutes(view: MinutesView, actions: MinutesActions, clock: @Composable (Double) -> String?) {
     item("minutes-header", contentType = "section") {
         JSectionHeader(stringResource(R.string.knowledge_minutes), action = {
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically) {
-                view.minutes?.markdown?.takeIf { it.isNotBlank() }?.let { markdown ->
-                    JButton(stringResource(R.string.knowledge_minutes_copy), { actions.copy(markdown) }, kind = JButtonKind.Quiet,
-                        size = JButtonSize.Small, icon = PhIcons.Copy, modifier = Modifier.testTag("minutes-copy"))
-                }
-                if (view.canMake) JButton(stringResource(if (view.minutes != null || view.phase == MinutesPhase.Failed) R.string.knowledge_minutes_regenerate
-                    else R.string.knowledge_minutes_make), actions.make, kind = JButtonKind.Secondary, size = JButtonSize.Small,
-                    enabled = !actions.busy, modifier = Modifier.testTag("minutes-make"))
-            }
+            if (view.canMake) JButton(stringResource(if (view.minutes != null || view.phase == MinutesPhase.Failed) R.string.knowledge_minutes_regenerate
+                else R.string.knowledge_minutes_make), actions.make, kind = JButtonKind.Secondary, size = JButtonSize.Small,
+                enabled = !actions.busy, modifier = Modifier.testTag("minutes-make"))
         })
     }
     actions.message?.let { message -> item("minutes-message", contentType = "notice") {
@@ -183,6 +178,15 @@ internal fun LazyListScope.recordingMinutes(view: MinutesView, actions: MinutesA
                 if (minutes.attendees.isNotEmpty()) About(PhIcons.User, minutes.attendees.joinToString(" · "))
                 if (minutes.partial) Text(stringResource(R.string.knowledge_minutes_partial), style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText)
                 if (minutes.isEmpty) Text(stringResource(R.string.knowledge_minutes_empty), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
+                // Copy and Share, as on iOS: the minutes as Markdown, with their clock times.
+                minutes.markdown.takeIf { it.isNotBlank() }?.let { markdown ->
+                    Row(Modifier.padding(top = Tokens.Space.xs), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                        JButton(stringResource(R.string.knowledge_minutes_copy), { actions.copy(markdown) }, kind = JButtonKind.Secondary,
+                            size = JButtonSize.Small, icon = PhIcons.Copy, modifier = Modifier.testTag("minutes-copy"))
+                        JButton(stringResource(R.string.knowledge_minutes_share), { actions.share(markdown) }, kind = JButtonKind.Secondary,
+                            size = JButtonSize.Small, icon = PhIcons.ShareNetwork, modifier = Modifier.testTag("minutes-share"))
+                    }
+                }
             }
         }
     }

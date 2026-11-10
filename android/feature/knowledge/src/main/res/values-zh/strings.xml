@@ -119,6 +119,7 @@
     <string name="knowledge_minutes">会议纪要</string>
     <string name="knowledge_minutes_copy">拷贝</string>
     <string name="knowledge_minutes_copied">纪要已拷贝</string>
+    <string name="knowledge_minutes_share">分享</string>
     <string name="knowledge_minutes_regenerate">重新生成</string>
     <string name="knowledge_minutes_make">生成纪要</string>
     <string name="knowledge_minutes_writing">正在整理纪要…</string>

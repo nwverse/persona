@@ -24,6 +24,9 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -80,9 +83,10 @@ class KnowledgeMinutesShotsTest {
         }
         rule.waitForIdle()
         val line = "The widgets are ready, so Monday works for the release."
+        // The first key point's time (Sam said it 1:35 in), brought on screen; its line is still far below.
+        rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("minutes-time"))
         rule.onNodeWithText(line).assertIsNotDisplayed()
-        // The first key point's time: Sam said it 1:35 in.
-        rule.onAllNodesWithTag("minutes-time")[0].performClick()
+        rule.onAllNodesWithTag("minutes-time")[0].assertIsDisplayed().performClick()
         rule.waitForIdle()
         rule.onNodeWithText(line).assertIsDisplayed()
     }

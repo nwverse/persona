@@ -5,6 +5,7 @@ import persona.core.domain.sort.workLine
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListScope
@@ -388,6 +389,11 @@ internal fun KnowledgeDetailScreen(
                             },
                             jump = { at -> segmentAt(lines, at)?.let { index -> scrolls.launch { listState.scrollToKey(segmentKey(index)) } } },
                             dismiss = model::dismissMinutesMessage,
+                            share = { markdown ->
+                                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, markdown)
+                                    .putExtra(Intent.EXTRA_SUBJECT, entry?.name.orEmpty())
+                                runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                            },
                         )) { at -> minutesClock(recorded, at) }
                     } }
                     // A recording's `recent` is its transcript as text: the transcript below shows it line by line.
