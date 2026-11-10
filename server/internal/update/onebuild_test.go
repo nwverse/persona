@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// There is one personad: no file builds differently for the published binaries (-tags public is only the privacy
-// scan's marker), so every hub can update to the release, ours included (docs/operations/hub-update.md "Taking the skill out of the binary").
+// There is one personad: no file of persona's builds differently for the published binaries (the public tag of
+// server/build-tags.txt is only the privacy scan's marker; its ts_omit_ tags only leave tailscale.com features out),
+// so every hub can update to the release, ours included (docs/operations/hub-update.md "Taking the skill out of the binary").
 func TestOneBuild(t *testing.T) {
 	root := filepath.Join("..", "..") // server/
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {

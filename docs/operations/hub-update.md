@@ -202,7 +202,7 @@ releases retain their separate publishing workflow.
     deletes broken links, and automatically moves skills an older version installed into the assistant directory (`TestSyncMovesTheOldCopy`); the gate command only appears when a skill that carries it exists (`TestGatedCommandOnlyWithTheSkill`);
     without it, the assistant's CLAUDE.md only covers MCP's `lark_*` (golden `assistant_claude_md.bare`); the hub asks node via `skills.list`;
     `GET /api/v1/skills` is the read-only list for the App. The copy of the Lark gateway skill was moved under the repo's `skills/` at the time (#1571 deleted that copy and its sync script; the skill is now provided by the Lark extension).
-  - One binary: there are no longer files that differ by `public` (`TestOneBuild`); publish.sh keeps `-tags public` only as a marker for the privacy scan (the scan uses it to recognize dependency constants it can skip).
+  - One binary: there are no longer files that differ by `public` (`TestOneBuild`); publish.sh keeps `public` only as a marker for the privacy scan (the scan uses it to recognize dependency constants it can skip); it is the first tag of `server/build-tags.txt`, whose `ts_omit_` tags leave out the tailscale.com features persona never uses (`docs/operations/release.md`).
   - Channel and build number: `main.channel`, `main.build`, `main.updateURL`; publish.sh and deploy.sh stamp `release`, Docker stamps `docker`;
     `personad version -v` shows the channel and build number; `/api/v1/health` and `hello` carry `channel`, `build`, `protocol`, `min_app_build`.
   - Version manifest: `internal/update` (manifest, `CheckNext`, no downgrade `TestNoDowngrade`), `personad release manifest|check-next`;
