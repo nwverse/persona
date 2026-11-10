@@ -38,6 +38,8 @@ struct AssistantView: View {
     @State private var columns = SplitColumns.shown
     /// iPhone Duo's bars down the side: the top bar is the side rail, and the page's top is free.
     @Environment(\.shellRailEdge) private var railEdge
+    /// A phone's tabs (iPhone Duo open): the column's own button folds it, at its top (#2623).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     /// The manager switcher's height as drawn (several managers).
     @State private var switcherHeight: CGFloat = 0
     #if DEBUG
@@ -127,7 +129,8 @@ struct AssistantView: View {
                                 openTodos: places ? { show(.todos) } : { drawer.close(); showTodos = true },
                                 onMachines: places ? { show(.machines) } : nil,
                                 onOpenExtension: places ? { show(.extensionPage($0)) } : { r in drawer.close(); openedExtension = r },
-                                openHealth: places ? { show(.health) } : { drawer.close(); showHealth = true })
+                                openHealth: places ? { show(.health) } : { drawer.close(); showHealth = true },
+                                collapse: column && pageTabSwitch ? { toggleSidebar() } : nil)
     }
 
     /// Chat History: the drawer on a phone, the sidebar column beside the conversation on a wide display.
@@ -216,6 +219,7 @@ struct AssistantView: View {
             .overlay(alignment: .top) {
                 AssistantTopBar(key: pending == nil ? current : nil,
                                 sidebarIsColumn: widthClass == .regular,
+                                sidebarShown: columns != .detailOnly,
                                 openSidebar: toggleSidebar,
                                 newConversation: newConversation,
                                 openKnowledge: { showKnowledge = true },

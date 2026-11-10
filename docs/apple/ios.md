@@ -550,8 +550,8 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
   - Split chat pages do not hide the tab bar (single-column pages do, to fill the screen).
   - Settings entry points all use values (`SettingsPage`); view-based `NavigationLink { page }` pushes the left column's own stack and opens in the narrow column.
-- **Persona**: in regular width, the sidebar is `NavigationSplitView`'s left column (no Settings gear; the tab bar is always beside it), with the top-left button showing / hiding it;
-  compact still uses a drawer.
+- **Persona**: in regular width, the sidebar is `NavigationSplitView`'s left column (the shell's places and Settings at its foot), with the top-left button showing / hiding it; on iPhone Duo open the
+  column's own button at its top hides it and the top-left one only brings it back (#2623, below); compact still uses a drawer.
 - **Readable width**: chats and the Persona home page are at most 760pt wide (`ChatView.readableWidth`), centered when wider; the top bar still spans the full width.
 - **No screen dimensions**: the screens have different sizes and ratios; never use `UIScreen.main`. The long-press message action bar stays within the chat area (`MessageMenu.area`
   coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`); image scaling uses the view's `traitCollection.displayScale`.
@@ -578,6 +578,15 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   (`AssistantTopBar.room`, Agents' list `room`, Messages' top inset), so the content starts at the top. Menus (tapping the chosen segment), the badge and the drawer work as before; horizontal bars
   (ordinary iPhone, inner portrait) are unchanged. The rail measures the column as the page's width with the side's safe area less its width without: a `GeometryReader` that
   ignores the safe area reports no inset of its own on that edge.
+- **The inner screen's tabs** (#2623, 2026-11-10, the user, after ChatGPT's open layout): on a phone at regular width (iPhone Duo open, either way up; the iPhone app is upright only) `RootTabs`
+  hides the system tab bar, which iOS drew down the side with the switch at its foot, and the pages draw `ShellSwitch` at their top (`pageTabSwitch`): Assistant in its floating bar in the face's place
+  (tapping the chosen Assistant opens the face's menu, as in the shell; the link's state and a copy's confirmation show under it), Agents and Messages as a row over the page column
+  (`PageTabSwitchRow`; Agents' list options stay on the list's ⋯). Assistant's sidebar column has the button that folds it at its top trailing corner, where Search was (`collapse`); the page's
+  Chat History button only shows while it is folded, to bring it back. Search moves to the foot's row beside Persona's name and where it runs, and opens its field at the top. The main conversation's
+  long press holds the face's long-press items: whose Persona (several hubs), Knowledge, Details, Copy Directory, Copy Info (`MainChatPlaceItems`); the switch's Assistant, tapped while chosen, keeps the
+  whole menu, as in the shell. Persona's badge rides on the switch's Assistant; the link's state shows beside the switch, a copy's confirmation as a toast. Pushed pages of Persona's column
+  have no switch: Back goes to it (Agents' and Messages' rows stay over their pushed chats). `hidesTabBarWhenShown` puts back only what it found, so Back from a chat does not bring the bar down the side again.
+  The iPad keeps its tab bar along the top. `DuoOpenChromeTests` (taps and long presses only).
 - **Switching pages under side bars** (2026-11-09, TestFlight: switching between Assistant and Agents stuttered on the outer screen): with bars on the side the two pages
   cross-fade in place instead of sliding (`ShellPageSlide`); a drag between them fades with the finger. A page that moved sideways under iPhone Duo's vertical bars, however
   it was moved (an offset, a render-only `transformEffect`, under a mask), made both pages' navigation controllers run a deferred transition and lay the page out twice on
