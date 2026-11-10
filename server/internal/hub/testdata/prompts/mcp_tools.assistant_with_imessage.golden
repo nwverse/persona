@@ -1839,7 +1839,7 @@
   },
   {
     "name": "todo_list",
-    "description": "List the user's Persona to-dos (the To-dos page in the app, not Feishu tasks): open ones by default, earliest due first (those without a due date last), each with its id, title, state, priority, project, due date, reminder and the agents on it, and the first line of its notes. Times are in the user's time zone. Filter by state, by due date (due_before / due_after: a day or a moment), overdue ones only, with or without agents, by knowledge-base project, or a word in the title or notes. Use it before changing a to-do, to find its id; ask with todo_get for one in full.",
+    "description": "List the user's Persona to-dos (the To-dos page in the app, not Feishu tasks): open ones by default, earliest due first (those without a due date last), each with its id, title, state, priority, project, due date, reminder and the agents on it, and the first line of its notes. Times are in the user's time zone. Filter by state, by due date (due_before / due_after: a day or a moment), overdue ones only, with or without agents, by knowledge-base project, by kind (concerns only), or a word in the title or notes. Use it before changing a to-do, to find its id; ask with todo_get for one in full.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1876,6 +1876,14 @@
           "type": "string",
           "description": "only the to-dos in this knowledge-base project (its slug or name)"
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "concern"
+          ],
+          "description": "only concerns (things the user raised in the main conversation that wait for you to report their outcome), or only the other to-dos; both when left out"
+        },
         "limit": {
           "type": "integer",
           "description": "at most this many (default 50, at most 200)"
@@ -1901,7 +1909,7 @@
   },
   {
     "name": "todo_create",
-    "description": "Add a to-do to the user's Persona to-dos, when the user asks you to note something to do or to remind them of it (or agrees to your suggestion): it shows on the To-dos page of the app, sorted by its due date, and with remind set the phone is pushed about it at that time. It is the user's own to-do, with no agent on it: work for an agent is task_plan. Done at once, nothing to confirm. An open to-do with the same title and due date is not made twice: you get that one back. Write the title as the thing to do (short, the user's language); put links, amounts and details in notes. Read due dates and times in the user's time zone; when only the day is known, give the day. When it clearly belongs to one of the user's areas of work, give project: the To-dos page groups to-dos by it.",
+    "description": "Add a to-do to the user's Persona to-dos, when the user asks you to note something to do or to remind them of it (or agrees to your suggestion): it shows on the To-dos page of the app, sorted by its due date, and with remind set the phone is pushed about it at that time. It is the user's own to-do, with no agent on it: work for an agent is task_plan. Done at once, nothing to confirm. An open to-do with the same title and due date is not made twice: you get that one back. Write the title as the thing to do (short, the user's language); put links, amounts and details in notes. Read due dates and times in the user's time zone; when only the day is known, give the day. When it clearly belongs to one of the user's areas of work, give project: the To-dos page groups to-dos by it. With kind concern it records a concern of the user's instead: open until you report its outcome with concern_report.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1932,6 +1940,14 @@
             "low"
           ],
           "description": "normal when left out"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "concern"
+          ],
+          "description": "concern (main conversation only): something the user raised and wants an answer to, recorded so it is followed until you report its outcome to them with concern_report; nothing else closes it. todo (the default): one of the user's own to-dos"
         },
         "project": {
           "type": "string",
@@ -1986,7 +2002,7 @@
   },
   {
     "name": "todo_complete",
-    "description": "Mark one of the user's Persona to-dos done, when the user says it is done (or asks you to close it). The user's own to-do is closed at once. A task's, or one agents work on, is confirmed on the phone first, because closing it also closes its agents once they are idle; if the user declines, nothing changes.",
+    "description": "Mark one of the user's Persona to-dos done, when the user says it is done (or asks you to close it). The user's own to-do is closed at once. A task's, or one agents work on, is confirmed on the phone first, because closing it also closes its agents once they are idle; if the user declines, nothing changes. A concern is not closed with this: report its outcome with concern_report.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2028,6 +2044,27 @@
         "id": {
           "type": "string",
           "description": "the to-do's id (todo_…), as todo_list gives it"
+        }
+      }
+    }
+  },
+  {
+    "name": "concern_report",
+    "description": "Report the outcome of one of the user's concerns (a to-do of kind concern, see todo_list kind concern) and close it: main conversation only. Call it in the same reply in which you tell the user the outcome, with report the words you told them, faithfully; it is kept on the concern as a decision of source reported (shown in the app, sent to extensions). It is the only way a concern closes: nothing closes one on its own, and todo_complete refuses it. Report only an outcome the user has actually been told; if the concern is not settled yet, leave it open. A concern the user reopens needs another report.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "report"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "the concern's id (todo_…), as todo_list gives it"
+        },
+        "report": {
+          "type": "string",
+          "description": "what you told the user of its outcome, as you said it in this reply (at most 4000 characters)"
         }
       }
     }

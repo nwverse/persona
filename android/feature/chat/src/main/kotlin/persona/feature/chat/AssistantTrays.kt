@@ -28,6 +28,7 @@ import persona.core.domain.answer.*
 import persona.core.domain.tasks.NeedsYouEntry
 import persona.core.domain.tasks.RunningEntry
 import persona.core.domain.tasks.TaskState
+import persona.core.domain.tasks.notDoneReason
 import persona.core.domain.tasks.assistantEntries
 import kotlinx.coroutines.delay
 import persona.core.domain.sort.canApprove
@@ -55,7 +56,10 @@ internal fun trayApproval(request: Interaction, session: Session?): Resolution? 
 
 internal data class TrayProgress(val id: String, val title: String, val todo: Todo? = null,
     val plan: TaskPlan? = null, val done: Boolean = false, val blocked: Boolean = false, val cancelled: Boolean = false,
-    val text: String? = null, val completed: Int? = null, val total: Int? = null, val at: String? = null, val pr: String? = null)
+    val text: String? = null, val completed: Int? = null, val total: Int? = null, val at: String? = null, val pr: String? = null,
+    /** Why the stopped task is not done, from the hub's completion check (#3180): its row reads "Stopped, not done yet · …"
+     *  in place of [text]; "" with no reason, null when there is nothing to say. */
+    val stopped: String? = null)
 
 /** Prefer an explicit supervisor report, then the agent's counted plan; do not estimate progress from status. */
 internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: AssistantTaskHost,
@@ -80,15 +84,17 @@ internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: Assist
         val done = todo.ask == null && todo.isDone && !cancelled && state != TaskState.Failed
         val completedText = todo.supervision?.reviews?.lastOrNull()?.note?.takeIf(String::isNotBlank)
             ?: todo.doneReason?.takeIf(String::isNotBlank) ?: lead?.lastText?.takeIf(String::isNotBlank)
+        // stopped and not done: the hub's check says why; an owner's ask or an agent waiting for the user says more
+        val stopped = todo.notDoneReason.takeUnless { done || cancelled || todo.ask != null || state == TaskState.Working || state == TaskState.NeedsYou }
         TrayProgress(bound[todo.id] ?: "todo:${todo.id}", todo.title, todo = todo,
             done = done, cancelled = cancelled,
             blocked = !cancelled && (todo.ask != null || state in setOf(TaskState.NeedsYou, TaskState.Interrupted, TaskState.Failed) || todo.supervision?.state == "needs_user"),
-            text = if (done || cancelled) completedText else todo.ask?.verdict ?: report?.takeIf { reportIsCurrent }?.text?.takeIf(String::isNotBlank) ?: plan?.current?.takeIf(String::isNotBlank)
+            text = if (done || cancelled) completedText else todo.ask?.verdict ?: report?.takeIf { reportIsCurrent }?.rowText?.takeIf(String::isNotBlank) ?: plan?.current?.takeIf(String::isNotBlank)
                 ?: todo.startError?.takeIf(String::isNotBlank) ?: lead?.attentionReason?.takeIf(String::isNotBlank)
                 ?: lead?.activity?.takeIf(String::isNotBlank) ?: lead?.lastText?.takeIf(String::isNotBlank),
             completed = countedReport?.step ?: countedPlan?.done, total = countedReport?.steps ?: countedPlan?.total,
             at = report?.at?.takeIf { reportIsCurrent } ?: plan?.at ?: todo.updatedAt,
-            pr = todo.prUrl?.takeIf(String::isNotBlank))
+            pr = todo.prUrl?.takeIf(String::isNotBlank), stopped = stopped)
     }
     val pending = plans.filter { it.conversation == host.conversation && it.state == "open" }.flatMap { plan ->
         plan.tasks.mapIndexedNotNull { index, task ->
@@ -122,6 +128,7 @@ internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: Assist
             done = completed && !cancelled, cancelled = cancelled,
             blocked = !cancelled && (row.blocked || (card.todo == null && card.identity.state in setOf("needs_user", "needs_you", "blocked", "failed", "interrupted"))),
             text = if (completed || cancelled) latestSummary ?: (if (row.done || row.cancelled) row.text else acceptedText) else row.text ?: latestSummary,
+            stopped = row.stopped.takeUnless { completed || cancelled },
             pr = row.pr ?: pr,
             at = listOfNotNull(card.identity.updatedAt, row.at).maxByOrNull { parseTime(it) ?: java.time.Instant.MIN })
     }
@@ -354,7 +361,8 @@ private fun TrayProgressRow(row: TrayProgress, onClick: () -> Unit) {
     }) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(row.title, style = PersonaTheme.type.bodyStrong, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            row.text?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            val text = row.stopped?.let { if (it.isEmpty()) stringResource(R.string.chat_tray_stopped) else stringResource(R.string.chat_tray_stopped_reason, it) } ?: row.text
+            text?.let { Text(it, style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             row.pr?.let { reference ->
                 val number = trayPullRequestNumber(reference)
                 Text(if (number == null) reference else stringResource(R.string.chat_tray_pr_number, number),

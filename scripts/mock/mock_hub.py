@@ -3204,6 +3204,13 @@ if MOCK_TASKS:
             _task_todo("todo_task_long2", "Workflow 支持：hub / 网页 / 安卓 / Apple 端都能看到后台状态", "", "macbook", WIDGET,
                        "/Users/me/code/weather", 18, "plan_mock_2"),
         ]
+    # MOCK_TASK_CHECK=1 (#3180, docs/assistant/todos.md "Automatic completion"): the blog move's agent stopped and the
+    # hub's completion check found it waiting, so its Progress row says why it is not done.
+    if os.environ.get("MOCK_TASK_CHECK") == "1":
+        for _t in TODOS_INIT:
+            if _t["id"] == "todo_task_blog":
+                _t["check"] = {"verdict": "waiting", "reason": "等 Vercel 部署跑完", "at": ago(minutes=11),  # i18n-ignore
+                               "work_since": ago(minutes=40)}
     TODOS = copy.deepcopy(TODOS_INIT)
     # MOCK_TASK_DECISION=1: a stopped task whose owner can finish without another Agent turn.
     if os.environ.get("MOCK_TASK_DECISION") == "1":
@@ -3331,11 +3338,23 @@ if MOCK_TASKS:
     # on its card, the tests task's question and Persona cutting in on it in the feed; reviews (#3124): the widget fix
     # sent back once, the release notes accepted and closed by the review.
     if os.environ.get("MOCK_TASKS_REPORTS") == "1":
+        # The widget agent reports in English, in Markdown; the hub's paraphrase in the user's language is the row's line, the
+        # whole report the details' (#3181). text is the report in one line of at most 200 characters, as the hub keeps it.
+        _WIDGET_REPORT = ("Reproduced the **landscape crash** on the simulator.\n\n"
+                          "- Cause: the widget timeline reads a `nil` size after rotation\n"
+                          "- Fix: fall back to the widget family's default size\n\n"
+                          "Next: add a snapshot test for landscape, then open the PR.")
+
+        def _report_text(report):
+            one = " ".join(report.split())
+            return one if len(one) <= 200 else one[:199] + "…"
+
         for _t in TODOS_INIT + TODOS:  # TODOS is the copy made above (reset copies TODOS_INIT again)
             if _t["id"] == "todo_task_widget":
                 _t["supervision"] = {"supervisor": ASK1, "done_when": ["PR 合并到 master", "横屏截图贴进 PR"], "state": "", "round": 0,
                                      "reviews": [], "updated_at": ago(minutes=40),
-                                     "progress": {"kind": "progress", "step": 3, "steps": 5, "text": "在横屏模拟器上复现崩溃", "at": ago(minutes=2)}}
+                                     "progress": {"kind": "progress", "step": 3, "steps": 5, "text": _report_text(_WIDGET_REPORT),
+                                                  "line": "已在模拟器复现横屏崩溃，正在修", "detail": _WIDGET_REPORT, "at": ago(minutes=2)}}
             if _t["id"] == "todo_task_tests":
                 _t["supervision"] = {"supervisor": ASK1, "done_when": ["覆盖率到 80%"], "state": "", "round": 0, "reviews": [],
                                      "updated_at": ago(minutes=40),

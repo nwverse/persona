@@ -245,6 +245,69 @@ class AssistantTraysShotsTest {
         rule.onNodeWithTag("assistant-tray-bar").assertDoesNotExist()
     }
 
+    /** A task whose agent stopped while the hub's completion check found it waiting (#3180): its Progress row says why it is
+     *  not done, in every style, light and dark. */
+    @Test fun aStoppedTaskSaysWhyItIsNotDoneInEveryStyle() {
+        val fixture = Fixture()
+        val stopped = Session("computer-a", "stopped", title = "Ship the settings page", state = "idle", status = "done",
+            lastText = "Pushed the branch and opened the PR")
+        fixture.sessionRows.value = fixture.sessionRows.value + stopped
+        fixture.returnedTodos = todoRows + Todo("task-d", stopped.title, origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)),
+            prUrl = "https://github.com/example/project/pull/57",
+            check = TodoCheck("waiting", "Waiting for CI to finish", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z"))
+        fixture.tasks.reloadTodos()
+        fixture.requests.value = emptyList(); fixture.drafts.value = emptyList()
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            CompositionLocalProvider(LocalConfiguration provides configuration) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
+                            chrome = ChatChromeBindings(tasks = fixture.tasks, assistantManagement = fixture.management, inboxTrays = fixture.inbox,
+                                inboxScope = "fixture", onOpenSession = { fixture.opened += it }),
+                            renderStyle = ChatRenderStyle.Assistant, embedded = true, showTopBar = false)
+                    }
+                }
+            }
+        }
+        settle()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+        rule.onNodeWithText("Ship the settings page").performScrollTo()
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d; settle()
+            rule.onNodeWithTag("assistant-tray-running").assertIsDisplayed()
+            rule.onNodeWithText("Stopped, not done yet · Waiting for CI to finish").assertIsDisplayed()
+            rule.onNodeWithText("Pushed the branch and opened the PR").assertDoesNotExist()
+            shot("progress-stopped-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
+    }
+
+    /** The check's line only while the task is stopped and open, and not for a done or unsure check (#3180). */
+    @Test fun aStoppedTasksCheckLineFollowsItsState() {
+        val fixture = Fixture()
+        val stopped = Session("computer-a", "stopped", title = "Ship", state = "idle", status = "done", lastText = "Opened the PR")
+        val check = TodoCheck("waiting", "Waiting for CI", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z")
+        val todo = Todo("task-d", "Ship", origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)), check = check)
+        fun row(t: Todo, s: Session = stopped) = trayProgress(listOf(t), emptyList(),
+            AssistantTaskHost(fixture.tasks, "main", listOf(s), { it }, {}, {}, {})).single()
+        assertEquals("Waiting for CI", row(todo).stopped)
+        assertEquals("", row(todo.copy(check = check.copy(reason = null))).stopped)
+        assertNull(row(todo.copy(check = check.copy(verdict = "done"))).stopped)
+        assertNull(row(todo.copy(check = check.copy(verdict = "unsure"))).stopped)
+        assertNull(row(todo.copy(check = null)).stopped)
+        assertNull(row(todo, stopped.copy(state = "working", status = "working")).stopped)
+        assertNull(row(todo, stopped.copy(state = "needs_you", status = "blocked")).stopped)
+        assertNull(row(todo.copy(doneAt = "2026-11-01T11:00:00Z")).stopped)
+        assertNull(row(todo.copy(ask = TodoAsk("decide", "Pick one", askedAt = "2026-11-01T10:30:00Z"))).stopped)
+    }
+
     /** The #2920 entry this change replaced, kept here only as the "before" in the height comparison. */
     @Composable
     private fun ReplacedTallEntry(label: String, count: Int, tone: AssistantTrayTone) {

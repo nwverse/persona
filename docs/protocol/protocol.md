@@ -598,7 +598,12 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 "reviews":[{"at":"...","verdict":"accepted|rework|needs_user|cancelled","round":1,   // round only on rework; "by":"reviewer" on a rework the independent review started (#2173)
                             "checks":[{"criterion":"Light / dark screenshots posted in the PR","met":false,"evidence":"Only the light one"}],"note":"Add the dark screenshot"}],
                 // its agent's latest report to the supervisor (report_to_supervisor, #5112); absent until it reports, and after a hub restart until it reports again
-                "progress":{"kind":"progress|question|blocked|done","step":3,"steps":5,"text":"one line of what it said","at":"..."},   // step / steps absent = not said
+                "progress":{"kind":"progress|question|blocked|done","step":3,"steps":5,"text":"one line of what it said",   // step / steps absent = not said
+                            "line":"the report paraphrased in the user's language",   // #3181: one sentence of at most 30 characters (60 outside Chinese and Japanese), written by the triage's model shortly after the report; absent until then, and for good with no model or when it failed
+                            "detail":"the report as the agent wrote it (Markdown)",   // #3181: at most 2000 characters, ending in … when cut; absent when it equals text
+                            "at":"..."},
+                // clients show progress.line ?? text in the Progress row and progress.detail ?? text (Markdown) in the task's details;
+                // line and detail are for the apps only: no prompt, supervision message, briefing, card or push reads them
                 // the latest independent review of its change (#2173, docs/assistant/unified-entry.md "Independent review"); absent when none ran
                 "auto_review":{"id":"rv_…","state":"running|clean|blocking|failed|cancelled","round":0,"count":2,"blocking":1,
                                "findings":"the reviewer's report","error":"why it failed","session_id":"<reviewer>","worktree":"<its copy>",
@@ -1063,7 +1068,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/launchers/{name}/quota?machine=&refresh=1` | Quota: `{machine, checked_at, quota}`, or `{machine, checked_at, error, unsupported}` when it can't be checked (still 200); that computer offline 503, no such launcher 502; cached for one minute, `refresh=1` re-reads ([launchers.md](../integrations/launchers.md) "Quota") |
 | GET | `/api/v1/launchers/health?state=&machine=` | Launcher health-check records `{"records":[{machine, launcher, agent?, state, kind?, error?, model?, millis?, checked_at, source, fails?, repairs?, repair?, blocked_reason?, resets_at?}]}`, filterable by state and computer ([launcher-health.md](../server/launcher-health.md) "Endpoints for the board") |
 | POST | `/api/v1/launchers/health/check?machine=&launcher=` | Check now: with no parameters checks all online computers, returns this run's `{"records":[…]}`, waits up to 10 minutes |
-| GET | `/api/v1/todos` | All to-dos (newest first): `{"todos":[Todo]}`, each with `spaces` and `agents` (dismissed filtered out; current ones first by `linked_at` descending, then past participants by `released_at` descending); a to-do waiting for the owner also has `ask: {"outcome"?, "verdict", "recommend"?, "asked_at"}`, the same as its `brief` item's `accept[]` row, gone once nothing waits ([todos.md](../assistant/todos.md) "Waiting for the owner", #2056) |
+| GET | `/api/v1/todos` | All to-dos (newest first): `{"todos":[Todo]}`, each with `spaces` and `agents` (dismissed filtered out; current ones first by `linked_at` descending, then past participants by `released_at` descending); a to-do waiting for the owner also has `ask: {"outcome"?, "verdict", "recommend"?, "asked_at"}`, the same as its `brief` item's `accept[]` row, gone once nothing waits ([todos.md](../assistant/todos.md) "Waiting for the owner", #2056); a task the hub judged also has `check: {"verdict", "reason", "at", "work_since"}`, its latest automatic completion check, gone once the to-do is reopened or one of its Agents starts a new turn ([todos.md](../assistant/todos.md) "Automatic completion", #3180) |
 | POST | `/api/v1/todos` | Create a to-do `{"title","notes"?}` → 200 `{"todo":Todo}`; `title` can't be empty (400); read-only device 403 |
 | PATCH | `/api/v1/todos/{id}` | Edit a to-do `{"title"?,"notes"?,"done"?}` → 200 `{"todo":Todo}`; `done: true` marks it done, `false` reopens it; missing 404; read-only device 403 |
 | DELETE | `/api/v1/todos/{id}` | Delete the to-do and its links (the Agents themselves are untouched) → 200 `{"ok":true}`; missing 404; read-only device 403 |
@@ -2814,8 +2819,13 @@ of plan/task/receipt/review/report cards. Plans awaiting Start and acceptance de
   they were absent from a feed page.
 - Clients continue updating the same row from live to-dos and sessions, independently of new feed events. Actual
   `supervision.progress.{kind,step,steps,text,at}` or `Session.plan.{done,total,current}` supplies progress, never elapsed
-  time or a guessed percentage. Quiet scheduled-task runs use the existing schedule fields and provenance, not a new
+  time or a guessed percentage. The row words a report as `supervision.progress.line` when the hub sent one, else
+  `text` (#3181); the task's details show the report itself, `detail` when present, else `text`, with Markdown rendered. Quiet scheduled-task runs use the existing schedule fields and provenance, not a new
   model call; `Todo.quiet` is notification policy and is not proof that a user-dispatched task is a background turn.
+- **Why a stopped task is still open (#3180).** While the task is neither working nor done, and its to-do's `check` is
+  current (not older than `reopened_at`) with a `verdict` other than `done` or `unsure`, Android and web write the row's
+  text as "Stopped, not done yet · <reason>" (the first part alone when `reason` is empty); an Agent's open question still
+  comes first. `task_cards` does not change; clients that don't know `check` draw the row as before.
 
 ```jsonc
 // TaskPlan
