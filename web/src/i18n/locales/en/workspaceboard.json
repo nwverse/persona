@@ -84,5 +84,11 @@
   "auto_empty_working": "No agents working here.",
   "auto_empty_review": "Nothing waiting for review.",
   "auto_empty_idle": "No idle workspaces.",
-  "auto_open_session": "Open session"
+  "auto_open_session": "Open session",
+  "auto_promo": "Cards move only by hand here. Switch to Auto to flow them by live agent state →",
+  "auto_hint": "Lanes follow your agents live: Needs you → Working → To review → Idle. Archive is how you clear a reviewed card. Your manual columns are untouched.",
+  "auto_lane_planned": "Planned",
+  "auto_empty_planned": "Nothing planned.",
+  "work_todo": "To-do",
+  "work_open_todo": "Open to-do"
 }

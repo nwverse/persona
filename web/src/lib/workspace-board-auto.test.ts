@@ -72,3 +72,44 @@ describe("autoActivity", () => {
     expect(autoActivity([session({ updated_at: "2026-11-09T02:00:00Z" })])).toBeGreaterThan(0);
   });
 });
+
+describe("all work in one panel", () => {
+  const bound = [card("ws", { machine_id: "m", cwd: "/code/app" })];
+
+  it("brings in sessions no workspace card claims, but not the main chat", async () => {
+    const { unboundSessions, sessionItem } = await import("./workspace-board-auto");
+    const inside = session({ session_id: "in", cwd: "/code/app", state: "working" });
+    const outside = session({ session_id: "out", cwd: "/code/other", state: "needs_you" });
+    const main = session({ session_id: "main", cwd: "/code/other", assistant: true });
+    expect(unboundSessions([inside, outside, main], bound).map((s) => s.session_id)).toEqual(["out"]);
+    expect(sessionItem(outside).lane).toBe("needs_you");
+    expect(sessionItem(inside).lane).toBe("working");
+    expect(sessionItem(session({ state: "idle" })).lane).toBe("review");
+    expect(sessionItem(session({ status: "offline" })).lane).toBe("idle");
+  });
+
+  it("maps to-dos onto the lanes through todoStatus", async () => {
+    const { todoItem } = await import("./workspace-board-auto");
+    const base = { id: "t1", title: "Write the report", created_at: "2026-11-09T00:00:00Z", updated_at: "2026-11-09T01:00:00Z" };
+    expect(todoItem(base).lane).toBe("planned"); // no agent attached
+    expect(todoItem({ ...base, done_at: "2026-11-09T02:00:00Z" }).lane).toBe("review");
+    expect(todoItem({ ...base, start_error: "no launcher" }).lane).toBe("needs_you");
+    expect(todoItem({ ...base, agents: [{ machine_id: "m", session_id: "s1", linked_at: "x" }] }, () => session({ state: "working" })).lane).toBe("working");
+    expect(todoItem({ ...base, agents: [{ machine_id: "m", session_id: "s1", linked_at: "x" }] }, () => session({ state: "needs_you" })).lane).toBe("needs_you");
+  });
+
+  it("groups every kind of work and keeps the planned lane", async () => {
+    const { workspaceItem, sessionItem, todoItem, workLanes } = await import("./workspace-board-auto");
+    const items = [
+      workspaceItem(card("ws"), [session({ state: "idle" })]),
+      sessionItem(session({ session_id: "out", state: "needs_you" })),
+      todoItem({ id: "t", title: "todo", created_at: "", updated_at: "" }),
+    ];
+    const lanes = workLanes(items);
+    expect(lanes.map((l) => l.lane)).toEqual(["needs_you", "working", "review", "planned", "idle"]);
+    expect(lanes.find((l) => l.lane === "needs_you")?.items[0]?.kind).toBe("session");
+    expect(lanes.find((l) => l.lane === "review")?.items[0]?.kind).toBe("workspace");
+    expect(lanes.find((l) => l.lane === "planned")?.items[0]?.kind).toBe("todo");
+    expect(lanes.flatMap((l) => l.items)).toHaveLength(3);
+  });
+});

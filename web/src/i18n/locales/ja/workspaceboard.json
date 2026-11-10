@@ -84,5 +84,11 @@
   "auto_empty_working": "実行中のエージェントはありません。",
   "auto_empty_review": "レビュー待ちはありません。",
   "auto_empty_idle": "待機中のワークスペースはありません。",
-  "auto_open_session": "セッションを開く"
+  "auto_open_session": "セッションを開く",
+  "auto_promo": "ここではカードは手動移動のみです。自動モードに切り替えると、エージェントの状態で自動的に流れます →",
+  "auto_hint": "エージェントの状態に合わせて自動でレーンが変わります。アーカイブでレビュー完了。手動列はそのままです。",
+  "auto_lane_planned": "予定",
+  "auto_empty_planned": "予定はありません。",
+  "work_todo": "To-do",
+  "work_open_todo": "To-doを開く"
 }
