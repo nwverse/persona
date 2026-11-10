@@ -346,7 +346,7 @@ struct PlanEditSheet: View {
 
 // MARK: - Task card
 
-/// A task in the conversation, updated in place: its mark, title, time, where it runs, what its agent says now.
+/// A task's full card: its mark, title, time, where it runs, what its agent says now.
 struct TaskCard: View {
     var todoID: String
     var conversation: String
@@ -510,7 +510,7 @@ struct TaskNowLine: View {
     }
 }
 
-/// A task of another day, folded: one line; a tap opens its detail.
+/// A task of another day, folded: one line; a tap opens its detail (its Agent's chat, as the card does).
 struct TaskLine: View {
     var todoID: String
     @State private var removing: TodoItem?
@@ -554,12 +554,12 @@ struct FeedLine: View {
 
     var body: some View {
         switch item.kind {
-        case .plan:
-            if let id = item.ref, let plan = store.plans[id] ?? item.plan { PlanCard(plan: plan) }
-        case .task:
-            if let id = item.ref {
-                // A task card of another day folds into a line: its mark, title and where it got to.
-                if Calendar.current.isDateInToday(item.at) { TaskCard(todoID: id, conversation: item.conversation) } else { TaskLine(todoID: id) }
+        case .plan, .task:
+            if let tasks = DispatchedTasks.entries(for: item, plans: store.plans,
+                                                  titleOf: { store.todos[$0]?.title }, fallback: String(localized: "Tasks")) {
+                DispatchedTaskLinks(tasks: tasks)
+            } else if let id = item.ref, let plan = store.plans[id] ?? item.plan {
+                PlanCard(plan: plan)
             }
         case .today:
             if let body = item.today { TodayCard(item: item, body: body) }

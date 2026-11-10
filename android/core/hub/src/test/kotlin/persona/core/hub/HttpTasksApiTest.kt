@@ -261,6 +261,24 @@ class HttpTasksApiTest {
         }
     }
 
+    // #2045: a moved to-do sends only the field it is due by; the hub clears the other.
+    @Test fun movingADueDateSendsOnlyTheMomentOrTheDay() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"t1","title":"Book the flight","due_at":"2026-11-19T10:00:00Z"}}"""))
+            server.enqueue(MockResponse().setBody("""{"todo":{"id":"t1","title":"Book the flight","due_date":"2026-11-19"}}"""))
+            val at = api(server).setTodoDue("t1", persona.core.contracts.TodoDue.At(java.time.Instant.parse("2026-11-19T10:00:00Z")))
+            val atReq = server.takeRequest()
+            assertEquals("PATCH", atReq.method)
+            assertEquals("/api/v1/todos/t1", atReq.path)
+            assertEquals("""{"due_at":"2026-11-19T10:00:00Z"}""", atReq.body.readUtf8())
+            assertEquals("2026-11-19T10:00:00Z", at.dueAt)
+            val day = api(server).setTodoDue("t1", persona.core.contracts.TodoDue.Day(java.time.LocalDate.parse("2026-11-19")))
+            assertEquals("""{"due_date":"2026-11-19"}""", server.takeRequest().body.readUtf8())
+            assertEquals("2026-11-19", day.dueDate)
+            assertNull(day.dueAt)
+        }
+    }
+
     @Test fun directCompletionOnlyPatchesDoneAndDecodesTheUserCompletionReceipt() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo/one","title":"Review the sample release","done_at":"2026-11-04T10:00:00Z"}}"""))

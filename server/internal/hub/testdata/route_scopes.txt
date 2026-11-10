@@ -20,10 +20,14 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    /api/v1/extensions/{id}/-/machines/{mid}/
 -                    /api/v1/imessage
 -                    /api/v1/imessage/
+-                    /api/v1/iphone
+-                    /api/v1/iphone/
 -                    /api/v1/machines/{mid}/browser
 -                    /api/v1/machines/{mid}/browser/
 -                    /api/v1/machines/{mid}/computer
 -                    /api/v1/machines/{mid}/computer/
+-                    /api/v1/machines/{mid}/iphone
+-                    /api/v1/machines/{mid}/iphone/
 -                    /api/v1/mail/
 -                    /api/v1/messaging
 -                    /api/v1/messaging/
@@ -173,6 +177,7 @@ inbox.read           GET /api/v1/inbox/tree/{kind}/{id...}
 inbox.read           GET /api/v1/inbox/{id}
 agents.read          GET /api/v1/interactions
 agents.read          GET /api/v1/interactions/history
+-                    GET /api/v1/iphone
 kb.read              GET /api/v1/kb-search
 kb.read              GET /api/v1/kb/chats/{id}/context
 kb.read              GET /api/v1/kb/chats/{id}/days/{day}
@@ -223,6 +228,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/git/status
 -                    GET /api/v1/machines/{mid}/health/reports
 -                    GET /api/v1/machines/{mid}/herdr
+-                    GET /api/v1/machines/{mid}/iphone
 -                    GET /api/v1/machines/{mid}/launchers
 -                    GET /api/v1/machines/{mid}/launchers/{name}/models
 -                    GET /api/v1/machines/{mid}/omp-settings
@@ -423,6 +429,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/machines/{mid}/git/stash
 -                    POST /api/v1/machines/{mid}/git/switch
 -                    POST /api/v1/machines/{mid}/herdr/start
+-                    POST /api/v1/machines/{mid}/iphone/{action}
 -                    POST /api/v1/machines/{mid}/node-update/{action}
 -                    POST /api/v1/machines/{mid}/panes
 -                    POST /api/v1/machines/{mid}/panes/agent
@@ -531,6 +538,7 @@ todos.write          POST /api/v1/todos/{id}/decisions
 inbox.write          PUT /api/v1/inbox/folders
 inbox.write          PUT /api/v1/inbox/{id}/folder
 inbox.write          PUT /api/v1/inbox/{id}/parent
+-                    PUT /api/v1/iphone/consent
 -                    PUT /api/v1/kb/selection
 kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/launchers/{name}
@@ -549,6 +557,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/engine
 -                    PUT /api/v1/machines/{mid}/file-transfer/settings
 -                    PUT /api/v1/machines/{mid}/herdr
+-                    PUT /api/v1/machines/{mid}/iphone
 -                    PUT /api/v1/machines/{mid}/omp-settings
 -                    PUT /api/v1/model-config/purposes/{id}
 -                    PUT /api/v1/model-profiles/{id}

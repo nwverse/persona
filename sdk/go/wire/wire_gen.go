@@ -255,6 +255,7 @@ type Contributes struct {
 	Voice           []NamedItem          `json:"voice,omitempty"`
 	Computer        []NamedItem          `json:"computer,omitempty"`
 	Browser         []NamedItem          `json:"browser,omitempty"`
+	Iphone          []NamedItem          `json:"iphone,omitempty"`
 	Quota           []QuotaItem          `json:"quota,omitempty"`
 	Providers       []ProviderItem       `json:"providers,omitempty"`
 	API             []APIItem            `json:"api,omitempty"`
@@ -285,7 +286,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -317,7 +318,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "computer", "browser", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging":
+		case "connectors", "voice", "computer", "browser", "iphone", "quota", "providers", "api", "assistant", "mcp_servers", "ui", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -3207,9 +3208,13 @@ type ConnectorStatus struct {
 	// One sentence for people when state is not ok; never a secret.
 	Error string `json:"error,omitempty"`
 	// How to fix it, a step a sentence.
-	Guide     []string  `json:"guide,omitempty"`
-	LastSync  time.Time `json:"last_sync,omitzero"`
-	LastEvent time.Time `json:"last_event,omitzero"`
+	Guide []string `json:"guide,omitempty"`
+	// Optional HTTPS page the App may open for the fix; never a secret.
+	GuideURL string `json:"guide_url,omitempty"`
+	// Permissions the connector can identify as absent.
+	MissingScopes []string  `json:"missing_scopes,omitempty"`
+	LastSync      time.Time `json:"last_sync,omitzero"`
+	LastEvent     time.Time `json:"last_event,omitzero"`
 }
 
 // ConnectorTool: A read tool (tools.list) or a write (actions.list): its name starts with <connector id>_.

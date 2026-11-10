@@ -42,6 +42,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
     var browser: MachineBrowser? = nil
+    /// The iPhones paired with it the assistant may operate; nil while the hub's extension iphone is off or it can't reach iPhones.
+    var iphone: MachineIPhone? = nil
     /// Sharing its clipboard with the phone (#3064); nil from hubs before it.
     var clipboard: MachineClipboard? = nil
     /// Hub mesh (docs/archive/operations/plan-hub-mesh.md 2.6): the hub that owns the computer in its group, its name, the computer's own
@@ -66,7 +68,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, clipboard, route, trust, manager
+        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, iphone, clipboard, route, trust, manager
         case engineHosts = "engine_hosts"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
@@ -116,6 +118,7 @@ extension Machine {
         engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
+        iphone = try? c.decodeIfPresent(MachineIPhone.self, forKey: .iphone)
         clipboard = try? c.decodeIfPresent(MachineClipboard.self, forKey: .clipboard)
         hubID = try? c.decodeIfPresent(String.self, forKey: .hubID)
         hubName = try? c.decodeIfPresent(String.self, forKey: .hubName)
@@ -1913,6 +1916,16 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var alwaysLabel: String?
     /// The persisted scope granted by this card; absent on older hubs and terminal-only sessions.
     var alwaysKeys: [String]?
+    /// Whether answering Always is kept, as the manager says (#3590): false on its own cards, which keep nothing, so
+    /// they offer only Allow and Deny; absent (an older hub, an Agents session's card) the card's own rule (`offersAlways`).
+    var alwaysHonored: Bool?
+    /// The manager's own tool by its name for people ("iPhone control" for iphone_do); absent on other cards.
+    var toolTitle: String?
+    /// The tool the card asks about: the manager's name for its own tools, else as it is called.
+    var toolDisplayName: String? {
+        if let toolTitle, !toolTitle.isEmpty { return toolTitle }
+        return toolName
+    }
     /// What the hub calls an agent this app does not know (a runtime's own name, "DSH"; docs/integrations/runtimes.md).
     var agentLabelHint: String?
     /// The group of paired hubs it came from (docs/protocol/multi-hub.md); nil for the default group. The app's own.
@@ -1961,7 +1974,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
         case id, kind, questions, plan, summary, screen, cwd, dialog, secret, fields, agent, reason, delegating, delegate, manager
         case machineID = "machine_id", sessionID = "session_id", sessionTitle = "session_title", taskTitle = "task_title",
              createdAt = "created_at", expiresAt = "expires_at", toolName = "tool_name", toolUseID = "tool_use_id",
-             toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
+             toolInput = "tool_input", alwaysLabel = "always_label", alwaysKeys = "always_keys", alwaysHonored = "always_honored",
+             toolTitle = "tool_title", agentLabelHint = "agent_label", hubGroup = "app_hub_group",
              mutedFlag = "muted", elicitation, mcpServerName = "mcp_server_name", mcpConfigSource = "mcp_config_source",
              agentID = "agent_id", agentType = "agent_type"
     }

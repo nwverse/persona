@@ -453,6 +453,8 @@ extension Theme {
         static let pluginMoney = "creditcard"
         static let pluginStar = "star"
         static let phone = "iphone"
+        /// The assistant operating an iPhone through a Mac (the extension iphone): its section, its tools.
+        static let phoneControl = "iphone.radiowaves.left.and.right"
         static let watch = "applewatch"
         static let handoff = "iphone.and.arrow.forward"
         /// The default web browser (open a link outside the app).

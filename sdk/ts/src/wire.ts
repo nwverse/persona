@@ -299,6 +299,7 @@ export interface Contributes {
   voice?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
+  iphone?: NamedItem[];
   quota?: QuotaItem[];
   providers?: ProviderItem[];
   api?: APIItem[];
@@ -3287,6 +3288,10 @@ export interface ConnectorStatus {
   error?: string;
   /** How to fix it, a step a sentence. */
   guide?: string[];
+  /** Optional HTTPS page the App may open for the fix; never a secret. */
+  guide_url?: string;
+  /** Permissions the connector can identify as absent. */
+  missing_scopes?: string[];
   last_sync?: string;
   last_event?: string;
 }

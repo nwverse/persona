@@ -199,6 +199,21 @@ data class Todo(
     /** Open, and its due moment has passed. */
     fun isOverdue(now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): Boolean =
         !isDone && (dueBy(zone)?.isBefore(now) ?: false)
+
+    /** Its due date as a write sets it: its moment, else its day; null without either. */
+    val due: TodoDue? get() = parseTime(dueAt)?.let { TodoDue.At(it) } ?: dueDay?.let { TodoDue.Day(it) }
+
+    /** The to-do due at [due] instead, as the hub keeps it: a moment or a day, one replacing the other (#2045). */
+    fun withDue(due: TodoDue): Todo = when (due) {
+        is TodoDue.At -> copy(dueAt = due.at.toString(), dueDate = null)
+        is TodoDue.Day -> copy(dueAt = null, dueDate = due.day.toString())
+    }
+}
+
+/** A to-do's due date as `PATCH /api/v1/todos/{id}` sets it: a moment (`due_at`) or a day in the user's time zone (`due_date`). */
+sealed interface TodoDue {
+    data class At(val at: Instant) : TodoDue
+    data class Day(val day: LocalDate) : TodoDue
 }
 
 @Serializable

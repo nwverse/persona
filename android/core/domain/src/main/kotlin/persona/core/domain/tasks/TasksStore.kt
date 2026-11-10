@@ -28,6 +28,7 @@ import persona.core.contracts.PlanTask
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.TaskPlanEvent
 import persona.core.contracts.Todo
+import persona.core.contracts.TodoDue
 import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoSpace
 import persona.core.contracts.TodosEvent
@@ -194,6 +195,24 @@ class TasksStore(
             updated
         } catch (t: Throwable) {
             _todos.value = before
+            throw t
+        }
+    }
+
+    /**
+     * Moves a to-do's due date (#2045, the calendar): drawn there at once, then the hub's answer; a failed save puts
+     * back only this to-do, unless something else has changed it since, and throws.
+     */
+    suspend fun setTodoDue(id: String, due: TodoDue): Todo {
+        val before = _todos.value.firstOrNull { it.id == id } ?: error("no to-do $id")
+        val moved = before.withDue(due)
+        _todos.update { list -> list.map { if (it.id == id) moved else it } }
+        return try {
+            val updated = api.setTodoDue(id, due)
+            _todos.update { list -> list.map { if (it.id == updated.id) updated else it } }
+            updated
+        } catch (t: Throwable) {
+            _todos.update { list -> list.map { if (it.id == id && it == moved) before else it } }
             throw t
         }
     }

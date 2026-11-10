@@ -15,6 +15,12 @@ that UI. Pass existing task helpers into the editor instead of importing the who
 chunk. Static-render tests exercise the extracted editor directly; mounted tray tests wait for the lazy card and still
 exercise its actions. Leave Send/Dismiss admission, owner capture and revision fences in the synchronous feed layer.
 
+## Retention mode changes must not save an intermediate window (#3780, #3862)
+
+Switching from forever to finite retention only exposes a local draft: saving a default such as 365 days first can
+irreversibly delete older minutes before the user commits a longer window. Submit only the number committed on Enter
+or blur. Regress the absence of a PUT on mode change, cancellation, and restoring the saved mode after a refusal.
+
 ## Same-state list updates can change background progress (#3588)
 
 The task tray often has only list summaries, whereas the chat header has complete Session detail. A comparison of
