@@ -65,7 +65,7 @@ final class MessageCardStateUITests: XCTestCase {
         try shot(app, message.isEmpty ? "open" : message)
     }
 
-    private func fixture(_ action: String, method: String = "POST") async throws -> [String: Any] {
+    @MainActor private func fixture(_ action: String, method: String = "POST") async throws -> [String: Any] {
         var request = URLRequest(url: URL(string: hub + "/mock/draft/" + action)!)
         request.httpMethod = method
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -90,6 +90,16 @@ final class MessageCardStateUITests: XCTestCase {
         return app
     }
 
+    @MainActor private func reveal(_ element: XCUIElement, in tray: XCUIElement) {
+        for _ in 0..<4 where !element.isHittable {
+            #if os(macOS)
+            tray.scroll(byDeltaX: 0, deltaY: -250)
+            #else
+            tray.swipeUp()
+            #endif
+        }
+    }
+
     @MainActor func testDismissRemovesOnlyTheDraftUndoRestoresAndReloadKeepsItDismissed() async throws {
         _ = try await fixture("reset")
         let app = launchDraft()
@@ -99,8 +109,8 @@ final class MessageCardStateUITests: XCTestCase {
         let tray = app.otherElements["action-tray.needs-you"].firstMatch
         XCTAssertTrue(tray.waitForExistence(timeout: 5), app.debugDescription)
         let dismiss = tray.buttons["messageCard.dismiss"].firstMatch
-        if !dismiss.isHittable { tray.swipeUp() }
         XCTAssertTrue(dismiss.waitForExistence(timeout: 10), app.debugDescription)
+        reveal(dismiss, in: tray)
         XCTAssertTrue(dismiss.isHittable, app.debugDescription)
         try shot(app, "needs-you-open")
         let countBefore = needs.label
@@ -112,14 +122,15 @@ final class MessageCardStateUITests: XCTestCase {
         undo.tap()
         XCTAssertTrue(dismiss.waitForExistence(timeout: 10), "Undo did not restore the card")
         let edit = tray.buttons["messageCard.edit"].firstMatch
+        reveal(edit, in: tray)
         edit.tap()
-        let field = tray.textFields.firstMatch
+        let field = tray.textFields.firstMatch.exists ? tray.textFields.firstMatch : tray.textViews.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), app.debugDescription)
-        field.clickOrTap()
+        field.tap()
         field.typeText("Local edit that must not be sent")
-        #if os(iOS)
-        app.swipeDown()
-        #endif
+        reveal(edit, in: tray)
+        edit.tap()
+        reveal(dismiss, in: tray)
         dismiss.tap()
         XCTAssertTrue(dismiss.waitForNonExistence(timeout: 10))
         app.terminate()
@@ -162,8 +173,4 @@ final class MessageCardStateUITests: XCTestCase {
         let evidence = try await fixture("evidence", method: "GET")
         XCTAssertEqual((evidence["sent"] as? [Any])?.count, 0)
     }
-}
-
-private extension XCUIElement {
-    func clickOrTap() { tap() }
 }

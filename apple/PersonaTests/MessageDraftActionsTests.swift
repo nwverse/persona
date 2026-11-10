@@ -48,6 +48,26 @@ struct MessageDraftActionsTests {
         #expect(hub.requests.count == 2)
     }
 
+    @Test func theLoadedCardOwnerIsPinnedForDismissAndTheToastUndo() async throws {
+        let hub = FakeHub()
+        let original = card()
+        var toasts: [Toast] = []
+        let store = TasksStore(toast: { toasts.append($0) })
+        let snapshot = String(decoding: try JSON.encoder.encode(APIClient.FeedResponseFixture(items: [original])), as: UTF8.self)
+        hub.on("GET", "/api/v1/assistant/conversations/c1/feed", json: snapshot)
+        hub.on("GET", "/api/v1/assistant/conversations/c2/feed", json: #"{"items":[]}"#)
+        hub.on("POST", "/api/v1/assistant/feed/feed_1/dismiss") { _ in try response(card(dismissed: true), receipt: true) }
+        hub.on("POST", "/api/v1/assistant/feed/feed_1/undo-dismiss") { _ in try response(original) }
+        await store.load("c1", refreshTodos: false, api: hub.client.manager("owner"))?.value
+        #expect(await store.dismissMessage(original))
+        await store.load("c2", refreshTodos: false, api: hub.client.manager("other"))?.value
+        let action = try #require(toasts.last?.action)
+        action.run()
+        for _ in 0..<1000 where hub.sent("POST", "/api/v1/assistant/feed/feed_1/undo-dismiss").isEmpty { await Task.yield() }
+        #expect(hub.sent("POST", "/api/v1/assistant/feed/feed_1/dismiss").first?.headers[APIClient.managerHeader] == "owner")
+        #expect(hub.sent("POST", "/api/v1/assistant/feed/feed_1/undo-dismiss").first?.headers[APIClient.managerHeader] == "owner")
+    }
+
     @Test func dismissedCardStaysDismissedWithAnOpenInboxAndNewProgressStillWaits() {
         let dismissed = card(dismissed: true)
         let item = InboxItem(id: "lark:item_1", source: "lark", kind: "dm", account: "example", accountName: "Example",
