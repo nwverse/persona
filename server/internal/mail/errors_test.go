@@ -41,7 +41,7 @@ func (w mailLanguageWriter) Lang() i18n.Lang { return w.language }
 
 func TestHTTPUnknownAccountLocalized(t *testing.T) {
 	s := &Service{}
-	const english = `The mail account "none" isn't connected to this manager any more.`
+	const english = `The mail account "none" isn't connected to this assistant any more.`
 	for _, c := range []struct {
 		lang         i18n.Lang
 		method, path string
