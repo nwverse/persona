@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -72,9 +72,9 @@ func (n *Node) noteAssistantRecoveryProcess(ctx context.Context, p *assistantPro
 }
 
 var (
-	assistantServerError = regexp.MustCompile(`\b5[0-9][0-9]\b`)
-	assistantRateLimit   = regexp.MustCompile(`\b429\b`)
-	assistantClientError = regexp.MustCompile(`\b4(?:0[0-9]|1[0-9]|2[0-8]|[3-9][0-9])\b`) // every 4xx but 429
+	assistantServerError = lazyre.New(`\b5[0-9][0-9]\b`)
+	assistantRateLimit   = lazyre.New(`\b429\b`)
+	assistantClientError = lazyre.New(`\b4(?:0[0-9]|1[0-9]|2[0-8]|[3-9][0-9])\b`) // every 4xx but 429
 )
 
 // assistantRecoverableError is deliberately narrower than the Agents' transient-continuation rule. Only the failure

@@ -335,6 +335,8 @@
     <string name="designsystem_core_endpoint_protocol">响应格式不对</string>
     <string name="designsystem_core_endpoint_rejected">hub 拒绝了请求</string>
     <string name="designsystem_core_endpoint_rate_limited">请求太频繁，稍后再试</string>
+    <string name="designsystem_core_endpoint_access_required">这个 hub 在 Cloudflare Access 后面，需要服务令牌</string>
+    <string name="designsystem_core_endpoint_access_rejected">Cloudflare Access 拒绝了服务令牌</string>
     <string name="designsystem_core_endpoint_failed">连接失败</string>
     <string name="designsystem_core_address_empty">请输入地址</string>
     <string name="designsystem_core_address_spaces">地址里不能有空格</string>
