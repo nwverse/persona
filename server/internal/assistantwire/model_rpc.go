@@ -15,6 +15,10 @@ const (
 	// MethodModelsExtensionComplete is how the manager hands the assistant an extension's model.complete:
 	// ExtensionComplete → ModelCompleteResult. Not on the extensions' allowlist.
 	MethodModelsExtensionComplete = "models.extension_complete"
+	// MethodModelsPurposeComplete is how the manager makes a model call of its own on one of the built-in purposes
+	// it may use (PurposeSubscriptionRecipe): PurposeComplete → ModelCompleteResult, with model.complete's checks and
+	// errors. Not on the extensions' allowlist.
+	MethodModelsPurposeComplete = "models.purpose_complete"
 	// PluginsModels: {} → {extensions: [ModelExtension]}, the extensions switched on that are granted the models
 	// scope: each has a purpose extension.<id> in Settings › Models.
 	PluginsModels = "plugins.models"
@@ -40,6 +44,16 @@ const (
 	// CodeModelTimeout: the call ran past its timeout_seconds.
 	CodeModelTimeout = "timeout"
 )
+
+// PurposeSubscriptionRecipe drafts a source subscription's recipe (#2040, docs/extensions/subscriptions.md "Drafting
+// with a model"): an API purpose under Information processing (kb), following it until the user picks another.
+const PurposeSubscriptionRecipe = "subscription.recipe"
+
+// PurposeComplete is a model call the manager makes itself, on a built-in purpose.
+type PurposeComplete struct {
+	Purpose string              `json:"purpose"`
+	Params  ModelCompleteParams `json:"params"`
+}
 
 // ExtensionPurposePrefix and an extension's id is its model purpose.
 const ExtensionPurposePrefix = "extension."
