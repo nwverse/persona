@@ -121,7 +121,7 @@ func (n *Node) screenBefore(ctx context.Context, id string, anchor []string, lin
 		// only when they show the plain page's text; otherwise the plain page is still right.
 		if colored, err := n.readPaneANSI(ctx, a.PaneID, "recent", herdrScrollbackLines); err == nil {
 			rows := strings.Split(strings.TrimRight(strings.ReplaceAll(colored, "\r\n", "\n"), "\n"), "\n")
-			if len(rows) == len(all) && showsRows(rows[start:at], page) {
+			if len(rows) == len(all) && sameRows(page, rows[start:at]) {
 				page = rows[start:at]
 			}
 		}
@@ -132,20 +132,6 @@ func (n *Node) screenBefore(ctx context.Context, id string, anchor []string, lin
 		// The start of what herdr keeps: older output was dropped (long panes) or never existed (short ones).
 		"at_limit": start == 0 && len(all) >= herdrScrollbackLines-20,
 	}, nil
-}
-
-// showsRows reports whether the colored rows show the plain ones, row for row (trailing spaces aside: a colored
-// background keeps them).
-func showsRows(colored, plain []string) bool {
-	if len(colored) != len(plain) {
-		return false
-	}
-	for i, row := range colored {
-		if strings.TrimRight(screen.Plain(row), " ") != strings.TrimRight(plain[i], " ") {
-			return false
-		}
-	}
-	return true
 }
 
 // nearestBlock is the match of block whose start is closest to want, -1 when it does not appear.
