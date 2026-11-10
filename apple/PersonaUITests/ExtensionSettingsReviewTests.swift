@@ -14,7 +14,7 @@ final class ExtensionSettingsReviewTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
     private var looks: [String] { (env["PERSONA_LOOKS"] ?? "light dark").split(separator: " ").map(String.init) }
 
-    @MainActor private func launch(_ hub: String, look: String, extra: [String] = []) -> XCUIApplication {
+    @MainActor private func launch(_ hub: String, look: String, extra: [String] = [], page: Bool = true) -> XCUIApplication {
         _ = try? Data(contentsOf: URL(string: hub + "/mock/reset")!)
         addUIInterruptionMonitor(withDescription: "notifications") { alert in
             for label in ["允许", "Allow"] where alert.buttons[label].exists { alert.buttons[label].tap(); return true }
@@ -22,7 +22,7 @@ final class ExtensionSettingsReviewTests: XCTestCase {
         }
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         let app = XCUIApplication()
-        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-openExtension", "example-gateway", "-ui.scheme", look] + extra
+        app.launchArguments = ["-pairURL", pair, "-tab", "settings", "-ui.scheme", look] + (page ? ["-openExtension", "example-gateway"] : []) + extra
         app.launchPinned()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         for label in ["允许", "Allow"] where springboard.buttons[label].waitForExistence(timeout: 3) { springboard.buttons[label].tap() }
@@ -108,28 +108,44 @@ final class ExtensionSettingsReviewTests: XCTestCase {
         }
     }
 
-    /// The card at the largest text size: the download going, then why it stopped and Retry, in reach (the flow itself
-    /// is checked above; this one is for the look).
+    /// The card at the largest text size, on this page (Review) and on the market page (Install), light and dark: the
+    /// download going, then why it stopped and Retry, with the title, its line and the steps wrapped, not cut (#4058).
     @MainActor func testTheCardAtTheLargestText() throws {
         guard let hub = env["PERSONA_EXTENSIONS_REVIEW_HUB"] else {
             throw XCTSkip("needs mock_hub.py with MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=stall (PERSONA_EXTENSIONS_REVIEW_HUB)")
         }
-        let app = launch(hub, look: "light", extra: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
-        XCTAssertTrue(app.switches["plugin-enabled"].firstMatch.waitForExistence(timeout: 15), "no extension page:\n\(app.debugDescription)")
-        let review = app.buttons["plugin-upgrade"].firstMatch
-        scrollTo(review, in: app, swipes: 30)
-        XCTAssertTrue(review.isHittable, "no Review button:\n\(app.debugDescription)")
-        review.tap()
-        let card = app.descendants(matching: .any)["extension-operation"]
-        scrollTo(card, in: app)
-        XCTAssertTrue(card.exists, "no operation on the page:\n\(app.debugDescription)")
-        shot(app, "downloading-large", look: "light")
-        XCTAssertTrue(waitFor(card, value: "failed", timeout: 30), "no failure:\n\(app.debugDescription)")
-        let retry = app.buttons["extension-operation-retry"]
-        scrollTo(retry, in: app)
-        XCTAssertTrue(retry.isHittable, "Retry out of reach:\n\(app.debugDescription)")
-        shot(app, "failed-large", look: "light")
-        app.terminate()
+        let large = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        for look in looks {
+            for page in ["settings", "market"] {
+                let app: XCUIApplication
+                if page == "settings" {
+                    app = launch(hub, look: look, extra: large)
+                    XCTAssertTrue(app.switches["plugin-enabled"].firstMatch.waitForExistence(timeout: 15), "\(look): no extension page:\n\(app.debugDescription)")
+                    let review = app.buttons["plugin-upgrade"].firstMatch
+                    scrollTo(review, in: app, swipes: 30)
+                    XCTAssertTrue(review.isHittable, "\(look): no Review button:\n\(app.debugDescription)")
+                    review.tap()
+                } else {
+                    // The market page of an extension not installed yet: Install runs the same operation.
+                    app = launch(hub, look: look, extra: large + ["-openMarketExtension", "3f2a9c1d0b/example-calendar"], page: false)
+                    let install = app.buttons["market-install"]
+                    XCTAssertTrue(install.waitForExistence(timeout: 15), "\(look): no Install:\n\(app.debugDescription)")
+                    scrollTo(install, in: app, swipes: 30)
+                    install.tap()
+                }
+                let card = app.descendants(matching: .any)["extension-operation"]
+                XCTAssertTrue(card.waitForExistence(timeout: 10), "\(look) \(page): no operation:\n\(app.debugDescription)")
+                scrollTo(card, in: app)
+                let prefix = page == "settings" ? "" : "market-"
+                shot(app, prefix + "downloading-large", look: look)
+                XCTAssertTrue(waitFor(card, value: "failed", timeout: 30), "\(look) \(page): no failure:\n\(app.debugDescription)")
+                let retry = app.buttons["extension-operation-retry"]
+                scrollTo(retry, in: app)
+                XCTAssertTrue(retry.isHittable, "\(look) \(page): Retry out of reach:\n\(app.debugDescription)")
+                shot(app, prefix + "failed-large", look: look)
+                app.terminate()
+            }
+        }
     }
 
     /// A hub without operations answers the preview when it has the package: the page waits with a spinner as before
