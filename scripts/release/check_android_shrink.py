@@ -7,10 +7,11 @@ R8 keeps only what code references. Android also reaches classes by name: manife
 initializers, WorkManager workers (rebuilt from their class name with a (Context, WorkerParameters) constructor), Room
 databases (whose generated <name>_Impl is loaded by name), JavaScript bridge methods and the getters the tasks store
 looks up on a hub failure. Error reports and breadcrumbs print simple class names, which come from InnerClass
-annotations, and the class names themselves, which class merging would replace: every persona class a keep rule
-listed in R8's seeds.txt must still be in the dex or be listed as removed in usage.txt. This reads the merged manifest
-with aapt2 and every classes*.dex directly, and exits 1 with one line per problem when anything is missing, so a
-release stops before signing.
+annotations, and the class names themselves, which class merging would replace: every class a keep rule listed in
+R8's seeds.txt must still be in the dex or be listed as removed in usage.txt, and every Throwable in the dex must be
+listed there (proguard-rules.pro keeps all their names). This reads the merged manifest with aapt2 and every
+classes*.dex directly, and exits 1 with one line per problem when anything is missing, so a release stops before
+signing.
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ WORKER_INIT = ("<init>", "(Landroid/content/Context;Landroidx/work/WorkerParamet
 NAV_KEY = "androidx.navigation3.runtime.NavKey"
 INNER_CLASS = "dalvik.annotation.InnerClass"
 ROOM_DATABASE = "androidx.room.RoomDatabase"
+PLATFORM = ("android.", "java.", "javax.")
 REQUIRED_MEMBERS = {
     # Reached only from JavaScript (MarkdownRenderer.page: addJavascriptInterface(Bridge, "PersonaRender")).
     "persona.core.designsystem.MarkdownRenderer$Bridge": {("done", "(ILjava/lang/String;)V"),
@@ -207,15 +209,22 @@ def removed_classes(usage):
 
 
 def merged_seeds(classes, seeds, usage):
-    """Problems with the persona classes a keep rule listed in seeds.txt. One that is neither in the dex nor removed was
-    merged into another class, so a report would name that class instead (proguard-rules.pro keeps persona Throwables'
-    names and lists them all as seeds for this check). No persona Throwable among the seeds means that listing is gone."""
-    listed = sorted(n for n in seed_classes(seeds) if n.startswith("persona."))
+    """Problems with the classes a keep rule listed in seeds.txt. One that is neither in the dex nor removed was merged
+    into another class, so a report would name that class instead. proguard-rules.pro keeps every Throwable's name, the
+    libraries' too, which lists them all as seeds for this check; a Throwable in the dex that is not a seed means that
+    rule is gone or narrower, and the merged ones it no longer lists would pass unseen."""
+    listed = seed_classes(seeds)
     removed = removed_classes(usage)
     found = [f"{name}: merged into another class, so reports name that class (keep its name in proguard-rules.pro)"
-             for name in listed if name not in classes and name not in removed]
-    if not any(name in classes and is_throwable(classes, name) for name in listed):
-        found.append("seeds.txt lists no persona Throwable: proguard-rules.pro lost the rule that lists them")
+             for name in sorted(listed) if name not in classes and name not in removed]
+    # R8 adds stubs of platform exceptions newer than minSdk (android.app.ServiceStartNotAllowedException): no program
+    # class, so no keep rule lists them.
+    unlisted = sorted(n for n in classes if n not in listed and not n.startswith(PLATFORM)
+                      and is_throwable(classes, n))
+    if unlisted:
+        examples = ", ".join(unlisted[:3]) + (", ..." if len(unlisted) > 3 else "")
+        found.append(f"Throwables in the dex missing from seeds.txt ({len(unlisted)}: {examples}): "
+                     "proguard-rules.pro lost the rule that keeps every Throwable's name")
     return found
 
 

@@ -9,14 +9,19 @@ Changing only default-open flags leaves Agent running-step previews visible. Rem
 When D8 or R8 desugars a Kotlin lambda, it may rename the implementation method to `$r8$lambda$<hash>`, whatever the
 obfuscation flags say, and an optimizing R8 also inlines, merges and outlines methods. Frames from the release then need
 `mapping.txt`, which the release worker keeps gzipped with each build (`mapping-<unsigned sha256>.txt.gz`). Class names
-need more than the flag once R8 optimizes: class merging folded five thrown exceptions (`CoreTextException`,
-`ChannelRejected`, ...) into other classes, and seven nested exceptions lost the InnerClass annotation that gives
-them their simple names, so `javaClass.simpleName` in error reports would have changed for both. R8 keeps that
-annotation only when it keeps the names of both the nested class and its outer class: `-keepnames` on persona Throwables
-and on those outer classes keeps them, and either rule alone did not. The shrink check cannot see a merged class in the dex, so it reads R8's `seeds.txt` (every persona
-Throwable is listed as one) and fails on a listed class that is neither in the dex nor in `usage.txt`. State what R8
-keeps from the built dex, `seeds.txt` and `usage.txt`, not from the flags' names. And pin the switches themselves: the
-shrink check passes an unshrunk APK by design and hosted CI builds no release, so
+need more than the flag once R8 optimizes: class merging folded thrown exceptions into other classes, five of persona's
+(`CoreTextException`, `ChannelRejected`, ...) and 25 of the libraries' (a lateinit crash came out as
+`coil3.network.HttpException`, a closed channel as jsoup's `SelectorParseException`), and seven nested exceptions lost
+the InnerClass annotation that gives them their simple names, so the type and `javaClass.simpleName` in error reports
+and in messages that fall back to the simple name would have changed. A rule for `persona.**` is not enough: those print
+whatever was thrown, so `-keepnames class * extends java.lang.Throwable` keeps every Throwable's name. R8 keeps the
+annotation only when it keeps the names of both the nested class and its outer class: the rules also keep persona's
+outer classes, and either rule alone did not; library exceptions nested in a class that is no Throwable (jsoup's
+`Selector$SelectorParseException`) still report as `Outer$Inner`. The shrink check cannot see a merged class in the
+dex, so it reads R8's `seeds.txt` (the rule lists every Throwable as one): it fails on a listed class that is neither in
+the dex nor in `usage.txt`, and on a Throwable in the dex that `seeds.txt` leaves out, which means the rule narrowed.
+State what R8 keeps from the built dex, `seeds.txt` and `usage.txt`, not from the flags' names. And pin the switches
+themselves: the shrink check passes an unshrunk APK by design and hosted CI builds no release, so
 `scripts/release/test_check_android_shrink.py` asserts `isMinifyEnabled = true` and the rules that keep names.
 
 ## Inbox writes must not wait behind full-list reads (#2545)

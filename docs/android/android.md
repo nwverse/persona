@@ -320,16 +320,22 @@ merges and outlines code; with `-dontobfuscate` the classes and members that are
 shrinking stays off (below), and debug builds are not shrunk.
 
 - **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it was 32,358,397
-  bytes. At 0357a0117 the shrunk APK is 33,205,885 bytes, 3 dex files, 33,620 classes and 179,163 method references;
-  optimized it is 19,459,663 bytes (-41%), one dex file, 13,412 classes and 59,890 method references, and an update
+  bytes. At 02202d070 the shrunk APK is 33,222,269 bytes, 3 dex files, 33,625 classes and 179,195 method references;
+  optimized it is 19,476,047 bytes (-41%), one dex file, 13,451 classes and 59,922 method references, and an update
   download, which the hub sends gzipped ([protocol.md](../protocol/protocol.md) "Android packages"), is about 10.3 MB
   instead of 33.2 MB. Most of the removed code is library code. The build's
-  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member.
+  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member. Optimizing costs build time:
+  `:app:minifyReleaseWithR8 --rerun` took a median 130.7 s instead of 85.7 s (five alternating runs on a shared
+  machine, paired difference +43.8 s).
 - **Error reports** ("Error reports" above): exception types and breadcrumbs keep their source names. Class merging folded
-  `CoreTextException` and four of its subclasses into other classes, and R8 keeps the InnerClass annotation that gives
-  a nested exception its simple name only when it keeps the names of both the exception and its outer class (seven
-  nested exceptions lost theirs). `-keepnames` on persona Throwables and on those five outer classes keeps both; all
-  45 route classes keep their names without a rule. Frames are another matter: an
+  exceptions into other classes, `CoreTextException` and four of its subclasses and 25 library ones (a lateinit crash
+  came out as `coil3.network.HttpException`), so `-keepnames class * extends java.lang.Throwable` keeps every
+  Throwable's name, the libraries' too: reports, and messages that fall back to the simple name, print whatever was
+  thrown. R8 keeps the InnerClass annotation that gives a nested exception its simple name only when it keeps the names
+  of both the exception and its outer class (seven persona nested exceptions lost theirs), so the rules also keep those
+  five outer classes' names. Library exceptions nested in a class that is no Throwable (11, such as
+  `FrameworkSQLiteOpenHelper$OpenHelper$CallbackException`) report their simple name as `Outer$Inner`. All 45 route
+  classes keep their names without a rule. Frames are another matter: an
   inlined method runs inside its caller, a merged class's code under the class it went into, and outlined or desugared
   code under R8's names (`$r8$lambda$<hash>`, `$$ExternalSyntheticApiModelOutline`, source file `R8$$SyntheticClass`),
   so a frame's class, method and line can differ from the source. `retrace` from the SDK command-line tools maps them
@@ -341,9 +347,9 @@ shrinking stays off (below), and debug builds are not shrunk.
   failed call. `scripts/release/check_android_shrink.py` checks a release APK for manifest components and App Startup
   initializers with their no-argument constructors, workers' `(Context, WorkerParameters)` constructors, Room's
   generated `_Impl` classes, the Markdown bridge's `done` / `fail`, those getters, the InnerClass annotations that give
-  persona exceptions and routes their simple names, an empty `missing_rules.txt`, and every persona Throwable that
-  R8's `seeds.txt` lists (the `-keepnames` rule matches them all) either in the dex or removed in `usage.txt`, never
-  merged. The release worker runs it before signing ([release.md](../operations/release.md) "Android publisher
+  persona exceptions and routes their simple names, an empty `missing_rules.txt`, every class R8's `seeds.txt` lists
+  either in the dex or removed in `usage.txt`, never merged, and every Throwable in the dex among those seeds (the
+  `-keepnames` rule matches them all). The release worker runs it before signing ([release.md](../operations/release.md) "Android publisher
   repository migration and status retries"):
 
   ```bash
@@ -360,7 +366,7 @@ shrinking stays off (below), and debug builds are not shrunk.
   unused, and the check reads only the APK.
 - **Compose trace markers**: optimized R8 already removes them (no `traceEventStart` call or trace string is left in the
   dex, against 1,528 trace strings in the shrunk APK), so `includeTraceMarkers = false` in the Compose compiler options
-  saves nothing (the APK stayed 19,459,663 bytes) and is not set.
+  saves nothing (the APK size did not change) and is not set.
 - **Resource shrinking**: `isShrinkResources = true` takes 67,422 bytes off the optimized APK but removes 98 of
   persona's own resources from the table (strings and plurals that no code left after R8 references, such as
   `chat_composer_placeholder` and `notify_stopped_title`), so it stays off.

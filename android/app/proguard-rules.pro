@@ -11,11 +11,13 @@
 # from these attributes; without them a nested exception or route would report as Outer$Inner.
 -keepattributes InnerClasses,EnclosingMethod
 
-# Class merging folds an exception class into another (CoreTextException, ChannelRejected, ChannelReadOnly,
-# ChannelsUnsupported and ModelPurposeNotFound in one build), and a report would then name the class it went into.
-# Names only: R8 still removes the ones nothing throws. check_android_shrink.py fails on a persona Throwable that is
-# neither in the dex nor listed as removed in usage.txt.
--keepnames class persona.** extends java.lang.Throwable
+# Class merging folds an exception class into another, and a report would then name the class it went into: persona's
+# own (CoreTextException, ChannelRejected, ModelPurposeNotFound, ...) and 25 library ones in one build, such as
+# kotlin.UninitializedPropertyAccessException thrown as coil3.network.HttpException. Every Throwable, not only
+# persona.*: error reports and some messages print the type of whatever was thrown. Names only: R8 still removes the
+# ones nothing throws. check_android_shrink.py fails when a Throwable in the dex is missing from seeds.txt (this rule
+# was lost or narrowed) and when a seed is neither in the dex nor listed as removed in usage.txt (it was merged).
+-keepnames class * extends java.lang.Throwable
 
 # An optimizing R8 keeps a nested class's InnerClass annotation only when it keeps the names of both the nested class
 # (the rule above) and its outer class, so these nested exceptions would lose their simple names (Failure, WindowGap,

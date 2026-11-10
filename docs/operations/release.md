@@ -483,9 +483,10 @@ The release APK is shrunk and optimized by R8 without obfuscation (docs/android/
 removes `app/build/outputs/apk/release` and `mapping/release` before the build, so nothing an earlier build left is checked or
 signed. After `:app:assembleRelease` and before the APK is copied for signing, it runs `scripts/release/check_android_shrink.py`
 on it and on R8's output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app
-reaches only by name and that R8 removed, and any persona exception R8 merged into another class, fails the build, so nothing
-is signed or published. It then keeps R8's `mapping.txt` gzipped as `runs/<source>/mapping-<unsigned sha256>.txt.gz` (about
-12 MB), which `retrace` needs for frames from optimized code. Before the first shrunk or optimized release, install it on a phone and
+reaches only by name and that R8 removed, and any exception, the app's or a library's, that R8 merged into another class,
+fails the build, so nothing is signed or published. It then keeps R8's `mapping.txt` gzipped as
+`runs/<source>/mapping-<unsigned sha256>.txt.gz` (about 12 MB), which `retrace` needs for frames from optimized code. Before
+the first shrunk or optimized release, install it on a phone and
 open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings
 tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`
 and the test line that pins it, docs/android/android.md "Release shrinking").
