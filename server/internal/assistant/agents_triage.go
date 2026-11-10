@@ -58,9 +58,9 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 	if hasCloseout {
 		s.checkCloseout(ctx, &co, coArtifacts)
 		if closeoutDisproved(co) {
-			// It says merged or deployed and it is not: nobody can call this turn finished. Unsure, with the closeout
-			// and what was found kept for whoever looks.
-			return &proto.WorkState{Closeout: &co, Artifacts: workArtifacts(coArtifacts), By: "rule"}, false, nil
+			// It says merged or deployed and it is not: nobody can call this turn finished. No phase, with the closeout
+			// and what was found kept for whoever looks, and a line naming the claim (unfinished).
+			return unfinished(&proto.WorkState{Closeout: &co, Artifacts: workArtifacts(coArtifacts), By: "rule"}, s.lang(ctx)), false, nil
 		}
 	}
 	if hasCloseout && co.Status == proto.CloseoutDone {
@@ -101,7 +101,7 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 	})
 	w = triageWork(out, byShort, time.Now(), s.lang(ctx))
 	if hasCloseout {
-		w = withCloseout(w, co, coArtifacts)
+		w = unfinished(withCloseout(w, co, coArtifacts), s.lang(ctx))
 	}
 	return w, same, nil
 }

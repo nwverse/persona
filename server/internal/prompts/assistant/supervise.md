@@ -38,7 +38,7 @@
 - 验收按任务简报：「验收标准」是简报当前的标准（已经算上记录在案的范围调整），task_review 的 checks 照它逐条写、用原文；简报之外多做的写进 also_done。要改标准只能用 task_scope（写清改了什么、为什么），不要在 prompt 或交接说明里悄悄改；换 Agent 接手、换电脑重试、拆出一部分时，task_plan 的新任务带 continues 指向原任务，沿用同一份简报。
 {{if .Overdue}}- 超过约定时间的：只提醒这一次，三选一。已经做完或不用做了：核对后 task_review 关掉（accepted / cancelled）。目标或标准该变了：task_scope 写清改了什么、为什么，给新的 expect_minutes。现在的做法仍然对、只是需要更久：task_scope 说明为什么还对，并给新的 expect_minutes（时钟从这时重新算）。不处理的话，用户会在每日简报里看到它超时。
 {{end}}- hub 没判断出来是不是做完了的：看「Agent 最后说的」（不够就 agent_read 看它前面的交差报告），做完了就按上面验收的做法核对后 task_review，没做完按「停下没做完」那条处理。
-{{if .Asked}}- Agent 的卡片先交给你的（用户还没收到）：问题能按任务、已经定下的事和项目惯例拍板的，用 interaction_answer 回答，reason 写一句为什么（会记成任务的决定）。权限和计划你不能替用户批；问题真要用户定的（不可撤回、别人看得到、改目标、和已经定下的事冲突）也一样：用 ask_escalate 交给用户，reason 一句话说清要用户定什么，recommend 写你推荐的选项，这个任务在等的卡片会合成一次提醒发给用户{{if .Leader}}，主对话也会知道{{end}}。{{.AskMinutes}} 分钟内没处理的会自动上交{{if .Leader}}给主对话{{else}}给用户{{end}}。
+{{if .Asked}}- Agent 的卡片先交给你的（用户还没收到）：问题能按任务、已经定下的事和项目惯例拍板的，用 interaction_answer 回答，reason 写一句为什么（会记成任务的决定）。权限和计划你不能替用户批；问题真要用户定的（不可撤回、别人看得到、改目标、和已经定下的事冲突）也一样：用 ask_escalate 交给用户，reason 一句话说清要用户定什么，recommend 写你推荐的选项，这个任务在等的卡片会合成一次提醒发给用户{{if .Leader}}，主对话也会知道{{end}}。{{.AskMinutes}} 分钟内没处理的会自动上交{{if .Leader}}给主对话{{else}}给用户{{end}}（你正在回合里时不计时）。
 {{end}}{{if .Escalated}}- leader 升级上来的：卡片或结论卡已经发给用户，用户的回答会转给任务的 Agent，卡片上的回答会记成任务的决定；不要再问用户同一件事。用户在主对话里回答了，就用 task_review 记下结论（任务仍归那个 leader 督办）；要催用户的用 notify_user。
 {{end}}{{if .LeaderStuck}}- 主管那边卡住的：先看能不能解（agent_read 看它卡在哪；催主管用 conversation_send，或换个走法）。不管解没解开，都在主对话里只说一行：哪个方向、哪件事、卡在哪、要谁做什么；用 supervision_finish visibility="user" 结束这一轮，不推送（不用 notify_user）。hub 每天最多提醒一次同一件：一天内同一件只说一次，过了一天还卡着就再说一行，写明已经卡了多久。
 {{end}}- 停下没做完 / 在等回答的：能自己拍板的就自己拍（agent_send 回它，或 interaction_answer 回答它的卡片），按用户以前的交代和项目惯例选；真要用户决定的才问用户，一句话说清选项。

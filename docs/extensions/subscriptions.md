@@ -1,6 +1,6 @@
 # Source subscriptions
 
-Source subscriptions let the manager pull new information from a connector's read-only tools into the Inbox or knowledge base. The design is tracked in #2036. The optional catalog protocol (#2037), the manager's storage, validation, scheduler, runner and API (#2038) and delivery to the Inbox and the knowledge base (#2039) are implemented; model drafting (#2040) and client pages (#2041) are follow-up stages. A catalog alone does not turn on polling or store source content.
+Source subscriptions let the manager pull new information from a connector's read-only tools into the Inbox or knowledge base. The design is tracked in #2036. The optional catalog protocol (#2037), the manager's storage, validation, scheduler, runner and API (#2038), delivery to the Inbox and the knowledge base (#2039) and drafting a recipe with a model (#2040) are implemented; client pages (#2041) are a follow-up stage. A catalog alone does not turn on polling or store source content.
 
 ## Source catalog
 
@@ -77,6 +77,19 @@ A dry run calls the tool once and runs five checks in this order: `read_only`, `
 
 A dry run returns up to three items and the first item's leaf paths with examples, for the pages' pickers. These values exist only in that answer. The subscription keeps the result's shape (`json` or `text`, top-level keys, which of them are lists, list length), never a value. Saving a recipe runs the same checks, and a recipe that fails is not saved.
 
+### Drafting with a model
+
+A source whose extension ships no recipe, or a subscription that needs a new one, can have a model draft it (`Service.Generate`, `server/internal/subscriptions/generate.go`). It runs on the model purpose `subscription.recipe`, which belongs to Information processing (`kb`) and follows its model (`docs/assistant/model-config.md`). The manager holds no model keys: it asks the assistant with `models.purpose_complete`, which takes only the manager's built-in purposes and is not callable by extensions. Each call uses `model.complete`'s `json_schema` check and its one retry that states the mismatch, and has at most 60 seconds; a whole drafting has at most 4 minutes.
+
+1. **Pick**: the source's subscribable tools (name, title and description cut to 300 characters, compact `input_schema` cut to 1500 bytes, at most 40 tools), no result. The model answers `{tool, args}`; `tool` is one of those offered.
+2. **Sample**: the arguments, with `{{since}}` / `{{since_date}}` filled in, are held to the tool's `input_schema`, then the tool is called once. The answer is cut for the model: at most 3 entries a list and 120 characters a string, and further (fewer entries, shorter strings, fewer keys, less depth) until it is at most 8 KB. A text answer sends its first 120 characters.
+3. **Map**: the model answers `mode`, `items_path`, `fields`, `kind`, `group_by` and `note`: one or two sentences for the user in the request's language (else the user's).
+4. **Check**: the draft goes through the dry run's full check (another call of the tool).
+
+A pick that does not fit or a draft that fails a check is asked for once more, with the check's code and sentence; one more try in all. A failure of the connector itself (`not_connected`, `rate_limited`) is not retried. The sample is in the model call only: never stored, logged or answered. Logs say which call failed and how many calls a draft took.
+
+The prompts are `server/internal/prompts/subscriptions/` (`pick`, `pick_input`, `map`, `map_input`, `retry`), pinned by `server/internal/subscriptions/testdata/prompts/`.
+
 ### Storage
 
 Manager migration `0482_subscriptions.sql`:
@@ -107,12 +120,13 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 
 | Route | Answer |
 | --- | --- |
-| `GET /api/v1/subscriptions?connector=&extension=` | `{subscriptions, features: {deliver, generate}}`; `deliver` is true (#2039), `generate` turns true with #2040 |
+| `GET /api/v1/subscriptions?connector=&extension=` | `{subscriptions, features: {deliver, generate}}`; both are true: `deliver` (#2039) and `generate` (#2040) |
 | `GET /api/v1/subscriptions/summary` | `{connectors: [{connector, extension, subscribable?, on, failing}]}` from cached catalogs only (never a live call); `subscribable` is absent until the catalog was read |
 | `GET /api/v1/subscriptions/catalog?connector=` | the connector's sources and tools read now, each tool with its `input_schema` and `subscribable` or `refused` with a code, the source's own recipes and its subscriptions; `direct` says whether the connector's own Inbox / archive feeds are on. Without `connector`: `{catalogs: [...]}`, every connector's catalog from earlier reads only (never a call; a connector not read yet is left out and read in the background) |
 | `GET /api/v1/subscriptions/{id}` | `{subscription, runs}`: the newest 20 runs first, `{at, ms, trigger, new, count, error}` |
 | `POST /api/v1/subscriptions/-/dry-run` | `{id}` or `{connector, source}`, with `recipe?` → the dry run; nothing is written |
-| `POST /api/v1/subscriptions` | `{connector, source, recipe?, label?}` → 201 and the subscription, both destinations off; without a recipe, the source's first own one (422 `needs_recipe` when it has none) |
+| `POST /api/v1/subscriptions` | `{connector, source, recipe?, recipe_origin?, label?}` → 201 and the subscription, both destinations off; without a recipe, the source's first own one (422 `needs_recipe` when it has none: draft one). `recipe_origin: "model"` with a recipe records a draft taken as it was; otherwise a given recipe is the user's |
+| `POST /api/v1/subscriptions/{id}/generate` | Drafts a recipe with the model. A subscription's `id`, with `{revision?}`: the draft that passes is saved (`recipe_origin: "model"`, `recipe_at` now), its run state starts over (`needs_recipe` clears), and its switches, label, rules and interval stay (a new mode takes that mode's default interval) → `{recipe, note, dry_run, subscription}`; 409 `conflict` when it is at another revision, before or after drafting. `-` with `{connector, source}`: a source not subscribed yet → `{recipe, note, dry_run}`, nothing written. A draft that still fails is 422 with the check's code, `dry_run` and `recipe` (the draft as far as it got, for the manual editor). 503 `no_model` when no model is set up for it, 502 `model_failed` when a call failed (503 with `retry_after` while the model's connection is held) |
 | `PUT /api/v1/subscriptions/{id}` | `{revision, label?, recipe?, to_inbox?, to_kb?, interval_seconds?, daily_at?, triage_rules?, fallback_tier?}`; 409 `conflict` at another revision, 422 `interval_too_short` |
 | `POST /api/v1/subscriptions/{id}/run` | 202: runs as soon as the connector's limits allow, also while it is off |
 | `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items. With `data=1` it first switches both destinations off and has the Inbox and the knowledge base remove what they took ("Destinations"); 503 `assistant_offline` while the assistant is away, the subscription left off for another delete |
@@ -167,4 +181,4 @@ is 403 `read_only_device`.
 
 ## Follow-up behavior
 
-Both destination switches start off. Enabling a destination requires a full-access device and confirmation of what is pulled, how often, where it is stored, and which model triages it (the pages, #2041). Model recipe drafting (#2040) separately requires consent before a trimmed sample is sent to the Information processing model; the sample is never stored. Destination storage, deletion, status pages and scheduling are not enabled by the catalog capability itself.
+Both destination switches start off. Enabling a destination requires a full-access device and confirmation of what is pulled, how often, where it is stored, and which model triages it (the pages, #2041). Model recipe drafting separately requires consent before a trimmed sample is sent to the Information processing model; the pages will ask for it (their drafting entry comes with #2041's follow-up; the API does not), naming the connection the purpose `subscription.recipe` runs on: `Service.RecipeModel` (`{ok, provider, model}`, from the assistant's `models.usable`; `ok` false means drafting would answer `no_model`). `Service.ModelOf` answers the same for `kb` and `inbox.triage`, which the destinations' consent names. The sample is never stored. Destination storage, deletion, status pages and scheduling are not enabled by the catalog capability itself.
