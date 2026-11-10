@@ -8,9 +8,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { createRuntime, interactionId, page, snippet, summaryOf } from '../../runtime-sdk/index.js'
 import { isAssistantDir } from '../../runtime-sdk/lib/identity.js'
 import { AgyAcpClient } from './acp.js'
+import { discoverModels, mapModels } from './models.js'
 import {
   agyModeToPersona,
-  defaultModelsList,
   LABEL,
   mapToolInput,
   mapToolName,
@@ -52,15 +52,60 @@ export function createAgyRuntime(options = {}) {
     onPermissionRequest: async (params) => handlePermissionRequest(params),
   })
 
-  const models = defaultModelsList()
-  const launchers = [
-    {
-      name: 'agy',
-      model: 'Gemini 4 Argon (High)',
-      agent: RUNTIME,
-      models,
-    },
-  ]
+  let catalog = []
+  let catalogAt = 0
+  let catalogFlight
+  let catalogTimer
+  const catalogAbort = new AbortController()
+  let stopped = false
+  const launchers = [{ name: 'agy', agent: RUNTIME, models: [] }]
+
+  function publishModels(entries = catalog) {
+    catalog = mapModels(entries, readAgySettings().model)
+    const selected = catalog.find((model) => model.default)
+    rt.launchersChanged([{ name: 'agy', agent: RUNTIME, model: selected?.name || readAgySettings().model || '', models: catalog }])
+  }
+
+  async function models(params = {}) {
+    if (!params.refresh && catalog.length && Date.now() - catalogAt < 300_000) {
+      publishModels()
+      return { agent: RUNTIME, models: catalog }
+    }
+    if (!catalogFlight) {
+      catalogFlight = discoverModels(acp.bin, { signal: catalogAbort.signal }).then((entries) => {
+        if (!stopped) {
+          catalogAt = Date.now()
+          publishModels(entries)
+        }
+        return { agent: RUNTIME, models: catalog }
+      }).finally(() => { catalogFlight = undefined })
+    }
+    return catalogFlight
+  }
+
+  function sessionConfiguration(rawId, result) {
+    if (!result) return
+    if (result.models?.availableModels) publishModels(result.models.availableModels)
+    if (result.models?.currentModelId) sessionModels.set(rawId, result.models.currentModelId)
+    if (result.modes?.currentModeId) {
+      const cur = sessionModes.get(rawId) || {}
+      const initialBypass = !cur.mode && configuredMode() === 'bypassPermissions'
+      sessionModes.set(rawId, { ...cur, mode: initialBypass ? 'bypassPermissions' : agyModeToPersona(result.modes.currentModeId) })
+    }
+    const config = result.configOptions
+    if (Array.isArray(config)) {
+      const model = config.find((option) => option.category === 'model' || option.id === 'model')?.currentValue
+      const effort = config.find((option) => option.id === 'thought_level')?.currentValue
+      const mode = config.find((option) => option.id === 'mode')?.currentValue
+      const cur = sessionModes.get(rawId) || {}
+      sessionModes.set(rawId, { ...cur, ...(effort ? { effort } : {}), ...(mode && !(cur.mode === 'bypassPermissions' && ['accept-edits', 'default'].includes(mode)) ? { mode: agyModeToPersona(mode) } : {}) })
+      if (model) {
+        const variant = catalog.find((entry) => entry.id === `${model}-${effort}`) || catalog.find((entry) => entry.id === model)
+        if (variant) sessionModels.set(rawId, variant.id)
+      }
+    }
+    rt.sessionsChanged()
+  }
 
   const rt = createRuntime(
     {
@@ -74,14 +119,15 @@ export function createAgyRuntime(options = {}) {
       rename,
       close,
       modes,
+      models,
     },
     {
       runtime: RUNTIME,
       name: LABEL,
       agent: RUNTIME,
-      version: '1.5.1',
+      version: '0.1.0',
       launcher: 'agy',
-      launcherModel: 'Gemini 4 Argon (High)',
+      modelSwitch: true,
       launchers,
       assistant: true,
       socketPath: options.socketPath,
@@ -95,6 +141,9 @@ export function createAgyRuntime(options = {}) {
     if (!rawId || !upd) return
     const pid = toPersonaId(rawId)
     switch (upd.sessionUpdate) {
+      case 'config_option_update':
+        sessionConfiguration(rawId, upd)
+        break
       case 'session_info_update':
         if (typeof upd.title === 'string' && upd.title.trim()) {
           sessionTitles.set(rawId, upd.title.trim())
@@ -105,7 +154,7 @@ export function createAgyRuntime(options = {}) {
         if (typeof upd.currentModeId === 'string') {
           const cur = sessionModes.get(rawId) || {}
           const mapped = agyModeToPersona(upd.currentModeId)
-          if ((cur.mode === 'bypassPermissions' || cur.mode === 'auto') && mapped === 'acceptEdits') {
+          if (cur.mode === 'bypassPermissions' && ['acceptEdits', 'default'].includes(mapped)) {
             break
           }
           sessionModes.set(rawId, { ...cur, mode: mapped })
@@ -145,6 +194,10 @@ export function createAgyRuntime(options = {}) {
   function effectiveModeOf(rawId) {
     const cur = sessionModes.get(rawId)
     if (cur?.mode) return cur.mode
+    return configuredMode()
+  }
+
+  function configuredMode() {
     const cfg = readAgySettings()
     if (cfg.toolPermission === 'always-proceed' || cfg.agentMode === 'bypassPermissions') {
       return 'bypassPermissions'
@@ -157,7 +210,7 @@ export function createAgyRuntime(options = {}) {
 
   function shouldBypassPermission(rawId) {
     const mode = effectiveModeOf(rawId)
-    return mode === 'bypassPermissions' || mode === 'auto'
+    return mode === 'bypassPermissions'
   }
 
   async function handlePermissionRequest(params) {
@@ -368,7 +421,8 @@ export function createAgyRuntime(options = {}) {
         updated_at: new Date(mtimeMs).toISOString(),
         rev: Math.max(1, parsed.toSeq),
         last_text: parsed.lastText || snippet(summary?.Preview || ''),
-        model: sessionModels.get(rawId) || 'Gemini 4 Argon (High)',
+        model: sessionModels.get(rawId),
+        launcher: 'agy',
         agent_label: LABEL,
       }
       if (cwd) {
@@ -413,20 +467,35 @@ export function createAgyRuntime(options = {}) {
   }
 
   async function applySessionOptions(rawId, { model, permission_mode, effort }) {
-    if (model) {
-      sessionModels.set(rawId, model)
-      await acp.setModel(rawId, model).catch(() => {})
+    try {
+      if (model) {
+        await acp.setModel(rawId, model)
+        sessionModels.set(rawId, model)
+        const selected = catalog.find((entry) => entry.id === model)
+        if (selected?.default_effort) {
+          const cur = sessionModes.get(rawId) || {}
+          sessionModes.set(rawId, { ...cur, effort: selected.default_effort })
+        }
+      }
+      if (permission_mode) {
+        await acp.setMode(rawId, personaModeToAgy(permission_mode))
+        const cur = sessionModes.get(rawId) || {}
+        sessionModes.set(rawId, { ...cur, mode: permission_mode })
+      }
+      if (effort) {
+        const res = await acp.setConfigOption(rawId, 'thought_level', effort)
+        const cur = sessionModes.get(rawId) || {}
+        sessionModes.set(rawId, { ...cur, effort })
+        sessionConfiguration(rawId, res)
+      }
+    } finally {
+      // A multi-field change may partially succeed. Publish each acknowledged field even when a later one fails.
+      rt.sessionsChanged()
     }
-    if (permission_mode) {
-      const cur = sessionModes.get(rawId) || {}
-      sessionModes.set(rawId, { ...cur, mode: permission_mode })
-      await acp.setMode(rawId, personaModeToAgy(permission_mode)).catch(() => {})
-    }
-    if (effort && ['low', 'medium', 'high'].includes(effort)) {
-      const cur = sessionModes.get(rawId) || {}
-      sessionModes.set(rawId, { ...cur, effort })
-      await acp.setConfigOption(rawId, 'thought_level', effort).catch(() => {})
-    }
+  }
+
+  async function loadSession(rawId, cwd, servers) {
+    sessionConfiguration(rawId, await acp.ensureSessionLoaded(rawId, cwd, servers))
   }
 
   async function start(params) {
@@ -434,16 +503,24 @@ export function createAgyRuntime(options = {}) {
     const isAsst = Boolean(params.assistant) || isAssistantDir(cwd)
     const res = await acp.newSession({ cwd, mcpServers: [] })
     const rawId = res.sessionId
+    sessionConfiguration(rawId, res)
     const pid = toPersonaId(rawId)
     sessionCwds.set(rawId, cwd)
     if (isAsst) assistants.add(pid)
 
-    await acp.ensureSessionLoaded(rawId, cwd, mcpServersFor(pid, isAsst))
-    await applySessionOptions(rawId, {
-      model: params.model,
-      permission_mode: params.permission_mode,
-      effort: params.effort,
-    })
+    try {
+      await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
+      await applySessionOptions(rawId, {
+        model: params.model,
+        permission_mode: params.permission_mode || configuredMode(),
+        effort: params.effort,
+      })
+    } catch (err) {
+      archived.add(rawId)
+      await acp.closeSession(rawId)
+      rt.sessionsChanged()
+      throw err
+    }
 
     const session = {
       session_id: pid,
@@ -452,7 +529,8 @@ export function createAgyRuntime(options = {}) {
       status: params.prompt ? 'working' : 'done',
       updated_at: new Date().toISOString(),
       rev: 1,
-      model: sessionModels.get(rawId) || 'Gemini 4 Argon (High)',
+      model: sessionModels.get(rawId),
+      launcher: 'agy',
       agent_label: LABEL,
       space_id: cwd,
       space_name: basename(cwd),
@@ -484,7 +562,7 @@ export function createAgyRuntime(options = {}) {
     const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
     if (isAsst) assistants.add(pid)
 
-    await acp.ensureSessionLoaded(rawId, cwd, mcpServersFor(pid, isAsst))
+    await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
     await applySessionOptions(rawId, {
       model: params.model,
       permission_mode: params.mode,
@@ -569,9 +647,14 @@ export function createAgyRuntime(options = {}) {
 
   async function modes(params) {
     const rawId = toAgyId(params.session_id)
+    if (archived.has(rawId)) throw new Error('Antigravity session is closed')
+    if (params.model && (activeTurns.has(toPersonaId(rawId)) || nativeWorking(readConversationStates().get(rawId)))) {
+      throw new Error('Antigravity session is busy')
+    }
     const cwd = sessionCwds.get(rawId) || home
-    await acp.ensureSessionLoaded(rawId, cwd, mcpServersFor(toPersonaId(rawId), assistants.has(toPersonaId(rawId))))
+    await loadSession(rawId, cwd, mcpServersFor(toPersonaId(rawId), assistants.has(toPersonaId(rawId))))
     await applySessionOptions(rawId, {
+      model: params.model,
       permission_mode: params.permission_mode,
       effort: params.effort,
     })
@@ -580,11 +663,16 @@ export function createAgyRuntime(options = {}) {
 
   return {
     start: () => {
-      void acp.ensureStarted().catch((err) => log(`agy warm start error: ${err.message}`))
+      void models().catch((err) => log(`agy model discovery error: ${err.message}`))
+      catalogTimer = setInterval(() => { void models({ refresh: true }).catch((err) => log(`agy model discovery error: ${err.message}`)) }, 300_000)
+      catalogTimer.unref?.()
       return rt.start()
     },
     /** Resolves once agy is gone. */
     stop: () => {
+      stopped = true
+      clearInterval(catalogTimer)
+      catalogAbort.abort()
       rt.stop()
       // A turn's transcript poll would otherwise keep running; acp.stop() fails the prompts themselves.
       for (const turn of activeTurns.values()) clearInterval(turn.pollTimer)
