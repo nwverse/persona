@@ -44,6 +44,8 @@ class InboxConversationsTest {
         runCurrent()
         fun count() = inboxUnreadCount(repository.snapshot.value.records, controller.state.value)
         assertEquals(1, count())
+        val watching = backgroundScope.launch { controller.observe(controller.state.value.rows.single().key).collect {} }
+        runCurrent()
         assertTrue(controller.readConversation(controller.state.value.rows.single().key))
         runCurrent()
         assertEquals(0, count())
@@ -65,6 +67,7 @@ class InboxConversationsTest {
         assertEquals(0, inboxUnreadCount(restarted.snapshot.value.records, fresh.state.value))
         assertEquals(InboxConversationSection.ReadPending, fresh.state.value.rows.single().section)
         assertTrue(restarted.done.isEmpty())
+        watching.cancel()
         opened.cancel()
         runCurrent()
     }

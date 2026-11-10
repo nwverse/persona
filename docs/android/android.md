@@ -414,6 +414,11 @@ An inbox with a hub connection refreshes on inbox invalidations and reconnect, p
 include the shell and capsule, so their count does not start a second full-list poller. Transports without a hub event stream
 retain the legacy polling fallback.
 
+Unopened inbox conversations no longer prefetch message bodies by default. A first open can therefore wait for its normal
+network read. Window snapshots larger than 512 KiB are skipped before reading or decoding; their files are preserved, but
+they cannot provide offline first paint. The latest page and older-history cursors remain available online. Rolling back
+this change restores the previous prefetch and cache-restore policies without a cache migration or data deletion.
+
 Inbox/assistant JSON requests stream into the decoder on `Dispatchers.IO`, without first retaining a complete byte array and string. A process-wide permit covers request through decoding, so simultaneous repositories and pairing scopes cannot accumulate buffered responses while waiting to parse. Waiting callers are cancellable; decoding checks both coroutine cancellation and the current pairing before reading chunks and before returning a result.
 
 The decoder rejects responses exceeding 4 MiB of decompressed JSON, 100,000 structural delimiters outside strings, or 128 nesting levels with `response_too_large`. The structural budget also bounds compact JSON that expands into many small objects. These are safety limits, not truncation or pagination: over-limit results are not partially applied, and existing repository data remains. Large endpoints still need server pagination to return additional data. Existing media and APK streaming behavior, authentication, TLS and pairing data are unchanged. A device crash stack identifies an allocation failure, not necessarily the largest retained object; large-response/concurrency regression tests do not replace device validation of the reported crash.
