@@ -4,7 +4,8 @@
 // done at once (#2059).
 import { useEffect, useState } from "react";
 import { useInbox, refreshInbox, type InboxItem } from "../../lib/inbox";
-import { sameManager } from "../../lib/manager-choice";
+import { useScope } from "../../lib/current-assistant";
+import { ItemManager, otherManager, sameManager } from "../../lib/manager-choice";
 import { newDraft, useMailAccounts } from "../../lib/mail";
 import { navigate } from "../../lib/router";
 import { t } from "../../i18n";
@@ -27,7 +28,10 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
   const item = useInbox((s) => routedItem(s.items, id, manager));
   const loaded = useInbox((s) => s.loaded);
   const loading = useInbox((s) => s.loading);
-  const accounts = useMailAccounts();
+  // a new mail is the current assistant's (docs/assistant/managers.md "Clients"): its own mail accounts, sent through it
+  const scope = useScope();
+  const composer = scope.several ? otherManager(scope.id) : undefined;
+  const accounts = useMailAccounts({ manager: composer });
   const [composing, setComposing] = useState(false);
   // Selecting (#2059): the picked items' keys (itemKey); null: not selecting. Esc leaves it.
   const [picked, setPicked] = useState<Set<string> | null>(null);
@@ -68,7 +72,11 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
       </div>
       <PolicyDialogHost />
       <FolderDialogHost />
-      {composing && <ComposeDialog draftKey="new" initial={newDraft(accounts[0]?.id ?? "")} accounts={accounts} onClose={() => setComposing(false)} />}
+      {composing && (
+        <ItemManager.Provider value={composer}>
+          <ComposeDialog draftKey="new" initial={newDraft(accounts[0]?.id ?? "")} accounts={accounts} onClose={() => setComposing(false)} />
+        </ItemManager.Provider>
+      )}
     </div>
   );
 }
