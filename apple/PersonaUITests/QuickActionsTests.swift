@@ -4,9 +4,11 @@ import XCTest
 /// the last two opened, before New Chat and Inbox), and Agents no longer is.
 final class QuickActionsTests: XCTestCase {
     private var app: XCUIApplication!
-    /// A demo Agent's chat (Persona/Resources/Demo.json) and its title.
+    /// A demo Agent's chat (Persona/Resources/Demo.json), its title (the menu's) and its first message (the open chat's;
+    /// its header names the folder, not the title).
     private static let review = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
     private static let reviewTitle = "检查 PR #42 的改动"
+    private static let reviewMessage = "看一下 PR #42"
 
     override func setUp() {
         continueAfterFailure = false
@@ -42,9 +44,9 @@ final class QuickActionsTests: XCTestCase {
 
     @MainActor func testEachItemOpensItsPage() {
         launch(opening: Self.review)
-        XCTAssertTrue(app.staticTexts[Self.reviewTitle].firstMatch.waitForExistence(timeout: 20), "the chat did not open")
+        XCTAssertTrue(app.staticTexts[Self.reviewMessage].firstMatch.waitForExistence(timeout: 20), "the chat did not open")
         pick(Self.reviewTitle, absent: "Agents")
-        XCTAssertTrue(app.staticTexts[Self.reviewTitle].firstMatch.waitForExistence(timeout: 10), "the recent chat did not open")
+        XCTAssertTrue(app.staticTexts[Self.reviewMessage].firstMatch.waitForExistence(timeout: 10), "the recent chat did not open")
         pick("收件箱")
         XCTAssertTrue(app.navigationBars["收件箱"].firstMatch.waitForExistence(timeout: 5), "the inbox did not open")
         pick("新对话")
