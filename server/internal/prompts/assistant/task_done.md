@@ -23,7 +23,7 @@ verdict 五选一：
 
 reason：不超过 20 个字，说结果或卡在哪（如「已合并 PR 并发了 TestFlight」「还差两处没改」「等 App 审核」）。
 
-{{if .Delivery}}再判断交付到了哪一步（delivery 五选一）：
+{{if or .Delivery .Checks}}再判断交付到了哪一步（delivery 五选一）：
 - live：已经上线（部署、发布，或合入后自动上线），并且回复里有在真实环境实测的读数。
 - pr：停在 PR（开了、Draft、等 review、等 CI）。
 - merged：合入了，但没部署 / 发布，或部署了没有实测的读数。
@@ -35,4 +35,11 @@ delivery 是 pr / merged / off 时：
 - unblock：谁来解。user：要用户点头或动手（合并、部署、启用、对外发消息）；agent：Agent 自己能接着做（重跑 CI、自己有权限却没部署）；other：CI、别人或外部环境。
 delivery 是 live / none 时 gate、unblock 留空。delivery 不影响 verdict：verdict 照上面判，交付没到位的 hub 自己会留着这件事。
 
-回复 JSON：{"verdict":"done","reason":"…","delivery":"pr","gate":"…","unblock":"user"}{{else}}回复 JSON：{"verdict":"done","reason":"…"}{{end}}
+{{if .Checks}}再逐条核对输入里「当前任务的验收标准」，按原来的顺序每条写一项 checks：
+- criterion：照抄这一条。
+- checkable：这一条能不能凭客观证据核对：命令和它的输出、CI 结果、PR / 页面 / 文档的链接、线上接口的返回、截图。要靠主观判断的（「体验好」「写得清楚」），或者要用户自己确认的，写 false。
+- met：回复里有这一轮新鲜、和这一条直接相关的证据，证明它做到了。只说「已完成」「测过了」而没给命令输出、链接或读数的，写 false。
+- evidence：证明它做到的证据，照回复摘要（命令和输出、链接、读数），不超过 120 个字；没有就写缺什么。
+拿不准就写 false：每条都核对通过、又已上线的任务会被直接关掉，不再有人逐条验收。
+
+{{end}}回复 JSON：{"verdict":"done","reason":"…","delivery":"pr","gate":"…","unblock":"user"{{if .Checks}},"checks":[{"criterion":"…","checkable":true,"met":true,"evidence":"…"}]{{end}}}{{else}}回复 JSON：{"verdict":"done","reason":"…"}{{end}}

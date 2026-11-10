@@ -73,6 +73,9 @@ type taskDoneCheck struct {
 	Signals    taskDoneSignals `json:"signals"`
 	// Delivery: how far the work went out, when the delivery is judged (done_needs_delivery).
 	Delivery *TodoDelivery `json:"delivery,omitempty"`
+	// AutoCheck: the judge's own check of a supervised task's done_when, when asked (taskDoneInput.Checks,
+	// supervise_sample.go).
+	AutoCheck *taskAutoCheck `json:"auto_check,omitempty"`
 }
 
 // autoDoneSkip says why the hub would not judge t now: "" when it would. work is when one of its agents last started
@@ -237,6 +240,8 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 	in := taskDoneInput{Owner: s.owner(ctx), Delivery: s.doneNeedsDelivery(ctx), Title: t.Title, Notes: t.Notes, Replies: replies}
 	if t.Supervision != nil {
 		in.Criteria = t.Supervision.DoneWhen
+		// Spot-checking on: the judge checks each criterion too, so a task that passes can close without task_review.
+		in.Checks = len(in.Criteria) > 0 && s.reviewSamplePercent(ctx) < 100
 	}
 	return judgeTaskDoneWith(ctx, s.purposeModel("inbox.judge"), in)
 }
@@ -256,6 +261,7 @@ type taskDoneInput struct {
 	Notes    string                  // what it was handed out with (clipped here)
 	Criteria []string                // a supervised task's done_when
 	Replies  []prompts.TaskDoneReply // its agents' last replies
+	Checks   bool                    // also check each criterion and the delivery (supervise_sample.go)
 }
 
 // taskDoneWithoutModel is the verdict given before any model is asked: a reply from a side conversation with no
@@ -284,15 +290,16 @@ func taskDoneWithoutModel(replies []prompts.TaskDoneReply, sideTurnBlocked bool)
 // It reads nothing else, so a behaviour check can run it on written-out cases.
 func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (taskDoneCheck, error) {
 	c := taskDoneCheck{Replies: len(in.Replies), Signals: doneSignals(in.Replies)}
-	system := prompts.RenderTaskDone(prompts.TaskDone{Owner: in.Owner, Delivery: in.Delivery})
+	system := prompts.RenderTaskDone(prompts.TaskDone{Owner: in.Owner, Delivery: in.Delivery, Checks: in.Checks})
 	input := prompts.RenderTaskDoneInput(prompts.TaskDoneInput{Title: in.Title, Prompt: clipMiddle(strings.TrimSpace(in.Notes), 1500),
 		Criteria: in.Criteria, Replies: in.Replies, MergedPR: c.Signals.MergedPR, Build: c.Signals.Build})
 	var out struct {
-		Verdict  string `json:"verdict"`
-		Reason   string `json:"reason"`
-		Delivery string `json:"delivery"`
-		Gate     string `json:"gate"`
-		Unblock  string `json:"unblock"`
+		Verdict  string          `json:"verdict"`
+		Reason   string          `json:"reason"`
+		Delivery string          `json:"delivery"`
+		Gate     string          `json:"gate"`
+		Unblock  string          `json:"unblock"`
+		Checks   []autoCheckItem `json:"checks"`
 	}
 	if err := m.JSON(ctx, system, input, &out); err != nil {
 		return c, err
@@ -305,6 +312,10 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 	}
 	c.Reason = clip(oneLine(out.Reason), 40)
 	c.WouldClose = c.Verdict == verdictDone
+	if in.Checks {
+		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
+		c.AutoCheck = autoCheckOf(in.Criteria, out.Checks, d.State)
+	}
 	if in.Delivery {
 		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
 		d.At = time.Now()

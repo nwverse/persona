@@ -559,6 +559,9 @@ type TaskDone struct {
 	// Delivery: also say how far the work was delivered (assistant.done_needs_delivery, docs/assistant/todos.md "Delivery"): only
 	// live or nothing to ship closes the task.
 	Delivery bool
+	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
+	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
+	Checks bool
 }
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
