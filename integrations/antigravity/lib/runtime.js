@@ -172,7 +172,7 @@ export function createAgyRuntime(options = {}) {
     const rejectOpt = opts.find((o) => o.kind === 'reject_once') || opts.find((o) => o.kind === 'reject_always')
 
     // A request that crossed the interrupt on the wire: ACP wants every pending one answered 'cancelled'.
-    if (cancelling.has(rawId)) return { outcome: { outcome: 'cancelled' } }
+    if (cancelling.has(rawId) || archived.has(rawId)) return { outcome: { outcome: 'cancelled' } }
     if (shouldBypassPermission(rawId) && allowAlwaysOpt) {
       return { outcome: { outcome: 'selected', optionId: allowAlwaysOpt.optionId } }
     }
@@ -462,6 +462,7 @@ export function createAgyRuntime(options = {}) {
     const pid = toPersonaId(params.session_id)
     completedTurns.delete(pid)
     const rawId = toAgyId(pid)
+    if (archived.has(rawId)) throw new Error('Antigravity session is closed')
     const cwd = sessionCwds.get(rawId) || home
     const isAsst = Boolean(params.assistant) || assistants.has(pid) || isAssistantDir(cwd)
     if (isAsst) assistants.add(pid)
@@ -505,7 +506,9 @@ export function createAgyRuntime(options = {}) {
     const prevPromise = prevTurn?.promise || Promise.resolve()
     const promise = prevPromise
       .catch(() => {})
-      .then(() => acp.prompt(rawId, blocks))
+      .then(() => {
+        if (!archived.has(rawId)) return acp.prompt(rawId, blocks)
+      })
       .catch((err) => log(`agy prompt error (${pid}): ${err.message}`))
       .finally(() => {
         // The turn is over: a card still waiting has nothing to answer for any more.
@@ -542,6 +545,7 @@ export function createAgyRuntime(options = {}) {
   async function close(params) {
     const rawId = toAgyId(params.session_id)
     archived.add(rawId)
+    await interrupt(params)
     await acp.closeSession(rawId)
     rt.sessionsChanged()
   }

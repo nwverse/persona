@@ -148740,13 +148740,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldd"
+            "value" : "%lld天"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldd"
+            "value" : "%lld日"
           }
         }
       }
@@ -148763,13 +148763,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldh"
+            "value" : "%lld小时"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldh"
+            "value" : "%lld時間"
           }
         }
       }
@@ -148786,13 +148786,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldm"
+            "value" : "%lld分钟"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lldm"
+            "value" : "%lld分"
           }
         }
       }
@@ -148809,13 +148809,13 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "now"
+            "value" : "刚刚"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "now"
+            "value" : "今"
           }
         }
       }
