@@ -314,9 +314,20 @@ func TestDispatchedTaskIsSupervisedByTheMainConversation(t *testing.T) {
 	if !strings.Contains(feedKinds(s, "conv1"), "task") {
 		t.Fatalf("no task card in the main conversation: %s", feedKinds(s, "conv1"))
 	}
+	t.Logf("to-do %s %q, supervisor %s, agent %s/%s\nnotes:\n%s", todo.ID, todo.Title, todo.Supervision.Supervisor,
+		todo.Agents[0].MachineID, todo.Agents[0].SessionID, todo.Notes)
+	// The To-dos page lists it (GET /api/v1/todos) with the notes naming who handed it out.
+	page, ok := listedTodos(t, s)[todo.ID]
+	if !ok || !strings.Contains(fmt.Sprint(page["notes"]), "dispatch_start") {
+		t.Fatalf("GET /api/v1/todos: %v", page)
+	}
+	t.Logf("GET /api/v1/todos: id=%v title=%q agents=%v", page["id"], page["title"], page["agents"])
 	var listed bool
 	for _, st := range s.snapshotTasks(ctx, "") {
-		listed = listed || st.ID == todo.ID
+		if st.ID == todo.ID {
+			listed = true
+			t.Logf("snapshot: %+v", st)
+		}
 	}
 	if !listed {
 		t.Fatal("the snapshot does not list the dispatched task")
@@ -329,6 +340,7 @@ func TestDispatchedTaskIsSupervisedByTheMainConversation(t *testing.T) {
 	if n := f.notices()[0]; !strings.Contains(n, "📋 督办") || !strings.Contains(n, "TestA、TestB") {
 		t.Fatalf("message:\n%s", n)
 	}
+	t.Logf("supervision message to the main conversation:\n%s", f.notices()[0])
 	waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "失败已列出"})
 	if res, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil || !strings.Contains(res, "accepted and closed") {
