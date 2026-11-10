@@ -173,3 +173,5 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   every text of the turn from the first, minus a passing line of at most two sentences right before a tool call
   (`transcript.AnswerParts`), for the push body and the Lark answer alike. The chat pages still fold all but the last
   text (super rule 2); changing them needs the administrator's approval.
+
+- A source the manager hands to the Inbox itself, rather than a registered connector, must be named in every round's `names`, the Feishu-chats rounds included (#2039). The Inbox keeps a source's held-back count and read error only while rounds name it (`recordHeld`, `recordReads`), and a chats-only round, which follows every Lark event, would otherwise drop a source subscription's "waiting for triage" count within seconds. Name such sources cheaply in those rounds (no items read) and hand in their things only in rounds that read the connectors (`extmgr` `readSubscriptions`).
