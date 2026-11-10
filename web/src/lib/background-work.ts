@@ -24,7 +24,7 @@ export function backgroundWork(session: Session | undefined): BackgroundWork | u
   // reliably: retain a generic active-work line rather than invent an independent job count.
   const tasks = session.background_tasks_count ?? (summary ? 0
     : background.filter((b) => b.kind !== "workflow" && b.kind !== "agent").length);
-  return tasks || subagents || workflows || session.background_working || (summary && (session.background_count ?? 0) > 0)
+  return tasks || subagents || workflows || session.background_working || (summary && session.background_tasks_count === undefined && (session.background_count ?? 0) > 0)
     ? { tasks, subagents, workflows, workflow } : undefined;
 }
 

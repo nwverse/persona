@@ -8,7 +8,7 @@ const flow = { task_id: "wf", status: "running", running: true, phase: "Review",
 
 describe("background work projections", () => {
   it("summary zeros override stale detail arrays instead of resurrecting completed work", () => {
-    expect(backgroundWork({ ...session, waiting: false, background_tasks_count: 0,
+    expect(backgroundWork({ ...session, waiting: false, background_tasks_count: 0, background_count: 7,
       workflows: [flow], subagents: [{ id: "sub", session_id: "worker@sub", running: true }], background: [{ id: "shell", kind: "shell" }] })).toBeUndefined();
   });
 
