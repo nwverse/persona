@@ -155,10 +155,12 @@ describe("double Esc recalls the last message", () => {
     mount({ loadingDraft: true, onSend: send });
     act(() => sendDraft("recall", { type: "replace", text: "Restored prompt" }));
     expect(host.querySelector("textarea")!.readOnly).toBe(true);
+    expect(host.querySelector("[inert]")).not.toBeNull();
     expect(host.querySelector("textarea")!.value).toBe("Restored prompt");
     key("Enter");
     expect(send).not.toHaveBeenCalled();
     mount({ loadingDraft: false, onSend: send });
+    expect(host.querySelector("[inert]")).toBeNull();
     await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
     expect(send).toHaveBeenCalledWith({ text: "Restored prompt", images: [] });
   });

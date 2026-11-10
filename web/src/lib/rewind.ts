@@ -9,6 +9,7 @@ import { stateOf } from "./format";
 import type { Item, Session } from "./types";
 import { stateName } from "./state-labels";
 import { injectedOf } from "./injected";
+import { sourceOf } from "./message-source";
 
 export type RewindRestore = "conversation" | "code_and_conversation";
 
@@ -61,7 +62,7 @@ export function lastEditablePrompt(items: Item[]): Prompt | null {
   const last = promptsOf(items).at(-1);
   if (!last?.raw.trim()) return null;
   const blocks = items.filter((it) => entryOf(it) === entryOf(last));
-  if (blocks.some((it) => it.kind === "image" || it.full_size || it.from || injectedOf(it) || (it.source && it.source.kind !== "conversation"))) return null;
+  if (blocks.some((it) => it.kind === "image" || it.full_size || it.from || injectedOf(it) || sourceOf(it, null))) return null;
   return last;
 }
 

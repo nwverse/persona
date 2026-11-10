@@ -66,12 +66,23 @@ describe("the last editable prompt", () => {
     { from: "Other conversation" },
     { injected: { kind: "followup", line: "Scheduled input" } },
     { source: { kind: "supervision" } },
+    { source: { kind: "conversation", conversation_id: "other-chat" } },
   ])("does not rewind an earlier input when the last entry cannot be restored: %j", (extra) => {
     expect(lastEditablePrompt([user("a#0", "Earlier"), user("b#0", "Last", extra)])).toBeNull();
   });
 
   it("refuses a text entry with a binary image", () => {
     expect(lastEditablePrompt([user("a#0", "Look at this"), { id: "a#1", seq: 1, role: "user", kind: "image" }])).toBeNull();
+  });
+
+  it("refuses inbound provenance carried only in durable or legacy context tags", () => {
+    const durable = '<persona-context kind="message-source">{"kind":"conversation","conversation_id":"other-chat"}</persona-context>\nIncoming prompt';
+    const legacy = '<persona-context kind="context" title="来自对话「Other chat」">\n这条消息不是用户本人发的，是 Persona 的另一段对话（other-chat）用 conversation_send 发来的，第 1 跳（最多 3 跳）。\n按里面说的做。要把结果告诉那段对话就用 conversation_send 发回 other-chat；只是确认收到就不要回，免得两段对话来回发。\n</persona-context>\nIncoming prompt'; // i18n-ignore: canonical hub relay data
+    expect(lastEditablePrompt([user("a#0", durable)])).toBeNull();
+    expect(lastEditablePrompt([user("b#0", legacy)])).toBeNull();
+    expect(lastEditablePrompt([user("c#0", legacy, { client_msg_id: "sent-here" })])?.raw).toBe(legacy);
+    const quoted = '<persona-context kind="message-source">{"author":"user"}</persona-context>\n' + legacy;
+    expect(lastEditablePrompt([user("d#0", quoted)])?.raw).toBe(quoted);
   });
 });
 

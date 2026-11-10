@@ -601,6 +601,7 @@ export const Composer = memo(function Composer({
     <div
       ref={box}
       className="relative"
+      inert={loadingDraft || undefined}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files") || dragHasEntry(e.dataTransfer)) {
           e.preventDefault();
@@ -714,6 +715,11 @@ export const Composer = memo(function Composer({
           onKeyDown={(e) => {
             const previousEscape = lastEscape.current;
             lastEscape.current = null;
+            if (loadingDraft) {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
             if (e.nativeEvent.isComposing || e.keyCode === 229) {
               // the IME's own Escape (cancelling a candidate) must not reach ChatView's interrupt on the window
               if (e.key === "Escape") e.stopPropagation();
