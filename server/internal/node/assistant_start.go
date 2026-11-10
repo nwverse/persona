@@ -300,9 +300,11 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		releaseGates()
 		gateEnv, releaseGates = nil, func() {} // no commands to gate: it has no Bash
 	}
+	cleanupMCP := func() {}
 	started := false
 	defer func() {
 		if !started {
+			cleanupMCP()
 			releaseGates()
 		}
 	}()
@@ -333,6 +335,10 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		shell, err := interactiveShell()
 		if err != nil {
 			return nil, err
+		}
+		args, cleanupMCP, err = assistantCLIMCPFlags(args)
+		if err != nil {
+			return nil, fmt.Errorf("prepare assistant MCP config: %w", err)
 		}
 		cmd = n.assistantCLICommand(shell, launcher, cwd, args, env)
 	}
@@ -380,6 +386,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	go n.readAssistant(p, stdout)
 	go func() {
 		_ = cmd.Wait()
+		cleanupMCP()
 		releaseGates()
 		liveAssistants.Delete(p)
 		close(p.exited)

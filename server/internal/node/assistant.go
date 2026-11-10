@@ -221,8 +221,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			if p == nil {
 				return "", errAssistantRecoveryTasks
 			}
+			// A successful explicit empty list is the only proof that a restart kills no background work.
 			if p.agent == "codex" && p.cx != nil {
-				p.cx.syncTasks() // a successful explicit empty list is the only proof that a restart kills no background work
+				p.cx.syncTasks()
+			} else if p.agent == "claude" {
+				p.syncClaudeTasks(ctx)
 			}
 			p.mu.Lock()
 			safe := p.tasksObserved && len(p.tasks) == 0
@@ -230,11 +233,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			if !safe {
 				return "", errAssistantRecoveryTasks
 			}
-			n.stopAssistantProcess(id)
+			// The old process stops below, once the new start is checked: one refused here keeps the conversation (#3495).
 		}
 	} else {
 		n.cancelAssistantRecovery(id)
 	}
+	restartForRecovery := recovery != nil && restart
 	if err := validModes(mode, effort); err != nil {
 		return "", err
 	}
@@ -307,6 +311,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if launcher == "" {
 		launcher = "claude"
 	}
+	if err := n.ensureManaged(ctx, launcher); err != nil { // the conversation's own provider (managed.go)
+		return "", err
+	}
 	if execution.Model != "" {
 		if _, err := n.launcherModelCheck(ctx, launcher, execution.Model); err != nil {
 			return "", err
@@ -367,7 +374,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		p.mu.Unlock()
-		if active && p.alive() {
+		if active && p.alive() && !restartForRecovery { // a recovery's busy is its own hold on the failed turn
 			// Answering, or running background tasks a new process would kill: the message goes to this process on
 			// what it runs, and the switch waits for the first message after it is idle. Refusing it left the user
 			// unable to send while the conversation kept starting tasks (#1554).
@@ -492,6 +499,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if p, err = n.spawnAssistant(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, execution); err != nil {
 			return "", err
 		}
+		n.noteAssistantRecoveryProcess(ctx, p) // the replacement is the process the recovery follows now (#3495)
 	}
 	commit()
 	n.notifySessions()
@@ -675,7 +683,11 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.emitDelta(p.id, text)
 			}
 		case "result":
-			recovering := n.recoverAssistantResult(p, ev.IsError, ev.Result)
+			var kinds []string
+			if ev.IsError {
+				kinds = n.claudeResultKinds(p.id)
+			}
+			recovering := n.recoverAssistantResult(p, ev.IsError, ev.Result, kinds...)
 			if !recovering {
 				n.clearAssistantRecovery(p)
 			}

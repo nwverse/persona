@@ -82,6 +82,7 @@ func (m *Meta) trackBackground(toolUseID, name string, raw json.RawMessage, ts t
 		}
 		m.pend(toolUseID, proto.BackgroundTask{Kind: "shell", Command: in.Command, Description: in.Description, StartedAt: ts})
 	case "Agent", "Task":
+		m.rememberAgentCall(toolUseID, in.Description)
 		// Whether it went to the background shows in the result ("Async agent launched").
 		m.pend(toolUseID, proto.BackgroundTask{Kind: "agent", Description: in.Description, StartedAt: ts})
 	case "Monitor":
@@ -141,7 +142,8 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 				l.Ticks = m.Loop.Ticks
 			}
 			l.Ticks++
-			m.Loop = &l
+			loop := l
+			m.Loop = &loop
 		}
 		return
 	}
@@ -271,6 +273,9 @@ func outputFile(result string) string {
 }
 
 func (m *Meta) taskFinished(notification string, ts time.Time) {
+	if n, _ := taskNote(notification); n.Kind == "agent" && !agentTerminal(n.Status) {
+		return
+	}
 	if id := firstTag(notification, "task-id"); id != "" {
 		m.removeBackground(id)
 		m.workflowEnded(id, firstTag(notification, "status"), ts)
@@ -293,7 +298,7 @@ func (m *Meta) removeBackground(id string) {
 // started a new turn (ones absorbed mid-turn come as queued_command attachments instead).
 func markWake(items []proto.Item) {
 	for i := range items {
-		if items[i].Kind == proto.KindNotice {
+		if items[i].Kind == proto.KindNotice || items[i].Kind == proto.KindToolResult && items[i].Task != nil {
 			items[i].Wake = true
 		}
 	}

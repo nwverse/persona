@@ -339,7 +339,7 @@ The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home 
 
 ### 3.9 Empty states
 
-`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`.
+`EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; `docs/assistant/managers.md` "Clients").
 
 ### 3.10 Loading and error states
 
@@ -389,6 +389,8 @@ Severity ladder to adopt:
 3. Needs extra choices (keep or remove the worktree): a content-height sheet.
 4. `.alert` for short prompts and text entry.
 
+The web Agent close action uses `capabilities.close`, with terminal-only closing retained for older nodes. A runtime that can close a conversation uses the existing close confirmation even when it has no terminal controls. The confirmation checks the current row before sending, so an already offline session simply dismisses it.
+
 Today there are seven mechanisms and the same action can use different ones (DS-24). Archive in the sidebar, to-do swipe delete and mail-account delete have no confirmation and no Undo. Only the Mac discards edits with a prompt.
 
 ### 4.5 Push, notifications and reminders
@@ -408,6 +410,12 @@ Links open inside the app in a card that fills the screen. Dragged down to 0.6 i
 ### 4.7 Tool execution collapsed (super rule 2)
 
 Tool execution is one summary line, never opens by itself, shows the latest text segment while running and the result when done, and expands by hand. iOS complies: `isOpen` ignores `live` (`apple/Persona/Views/Chat/ChatLines.swift:293`) and tool rows use `autoExpand: false`. The "latest segment only" half was not confirmed from code reading and needs a screenshot test.
+
+Subagent launch receipts, interim reports and final results belong under their launching tool, not in independent
+parent-chat message bubbles (#3378). Reuse the existing work summary and manually opened tool/report disclosures;
+keep each delivery separately inspectable, including its full text. Nonterminal `running` / `waiting` reports retain
+the existing progress presentation. Empty completion pointers update status without creating another report. The
+shared wire contract is in `docs/protocol/protocol.md` ("Subagent deliveries as tool results").
 
 ## 5. Content
 
