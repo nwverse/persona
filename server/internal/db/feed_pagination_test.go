@@ -8,7 +8,14 @@ import (
 )
 
 func TestFeedPageUpdatedCardsDoNotStarveProgress(t *testing.T) {
-	d := open(t)
+	// DELETE removes the fixture rows but retains index pages that can change a
+	// later planner assertion after statistics refresh. Keep this bulk fixture
+	// in its own migrated clone, including its table/index/catalog state.
+	d, err := Open(context.Background(), migratedDatabase(t, AllSets), AllSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Close)
 	ctx := context.Background()
 	conversation := fmt.Sprintf("feed-page-%d", time.Now().UnixNano())
 	t.Cleanup(func() {
@@ -23,7 +30,7 @@ func TestFeedPageUpdatedCardsDoNotStarveProgress(t *testing.T) {
 	updated := since.Add(time.Minute)
 	// All 500 already-dismissed cards retain the same old at. Their newly
 	// persisted updated_at makes them eligible for the incremental request.
-	_, err := d.pool.Exec(ctx, `INSERT INTO assistant_feed (id,conversation,at,kind,ref,body,updated_at)
+	_, err = d.pool.Exec(ctx, `INSERT INTO assistant_feed (id,conversation,at,kind,ref,body,updated_at)
 		SELECT $1 || '-' || lpad(n::text,3,'0'),$1,$2,'message','synthetic-item-' || n,
 			jsonb_build_object('draft','Old progress','dismissed_at',$3::timestamptz,'dismissal_id','synthetic-decision'),$3
 		FROM generate_series(0,499) n`, conversation, oldAt, updated)
