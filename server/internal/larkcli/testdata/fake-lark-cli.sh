@@ -31,6 +31,8 @@ case "${1:-}" in
       needs_refresh) cat "$base/auth_needs_refresh.json" ;;
       ready) cat "$base/auth_ready.json" ;;
       expiring) cat "$base/auth_expiring.json" ;;
+      rolling) cat "$base/auth_rolling.json" ;;
+      refresh_expiring) cat "$base/auth_refresh_expiring.json" ;;
       *) cat "$base/auth_status.json" ;;
     esac
     exit 0
@@ -49,6 +51,7 @@ case "${1:-}" in
           *) cat "$base/inbox_search.json" ;;
         esac
         ;;
+      inbox_p2p:+messages-search) cat "$base/inbox_p2p.json" ;;
       inbox_pages:+messages-search)
         case " $* " in
           *" --sender "*) cat "$base/inbox_seed.json" ;;
@@ -58,6 +61,9 @@ case "${1:-}" in
         ;;
       inbox:+chat-messages-list|inbox:+threads-messages-list|inbox_pages:+chat-messages-list|inbox_pages:+threads-messages-list)
         cat "$base/inbox_context.json"
+        ;;
+      inbox_p2p:+chat-messages-list|inbox_p2p:+threads-messages-list)
+        cat "$base/inbox_p2p_context.json"
         ;;
       inbox:+messages-send|inbox:+messages-reply|inbox_pages:+messages-send|inbox_pages:+messages-reply)
         cat "$base/send_result.json"

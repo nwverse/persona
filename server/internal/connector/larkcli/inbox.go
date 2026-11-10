@@ -587,11 +587,18 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	} else if group.mentioned {
 		label, tier = i18n.T(lang, "hub-connectors.larkcli_mention"), connector.TierAction
 	}
+	title := firstNonEmpty(group.chatName, group.chatID)
+	if latest.ChatType == "p2p" {
+		// Direct chats have no stable display name in some search results. The
+		// other sender is the conversation's name; use any sender name only as
+		// a fallback, and keep the opaque chat id as the final fallback.
+		title = p2pTitle(group, contextMessages, me)
+	}
 	thing := connector.InboxThing{
 		Thread:   thread,
 		Kind:     kind,
 		Label:    label,
-		Title:    firstNonEmpty(group.chatName, group.chatID),
+		Title:    title,
 		Sender:   latest.Sender.Name,
 		Preview:  firstLine(text),
 		Context:  contextText(contextMessages),
@@ -601,7 +608,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		CanReply: latest.MessageID != "",
 		Tier:     tier,
 		Why:      i18n.T(lang, "assistant-inbox.by_rules"),
-		Tags:     []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: firstNonEmpty(group.chatName, latest.ChatID)}},
+		Tags:     []connector.Tag{{Key: connector.TagChat, Value: latest.ChatID, Name: title}},
 	}
 	if thing.At.IsZero() {
 		thing.At = time.Now().UTC()
@@ -610,6 +617,27 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		thing.Done = connector.DoneReplied
 	}
 	return thing
+}
+
+func p2pTitle(group *inboxGroup, contextMessages []adapter.Message, me string) string {
+	if group == nil {
+		return ""
+	}
+	messages := append(append([]adapter.Message(nil), group.messages...), contextMessages...)
+	for _, message := range messages {
+		if message.Sender.ID == me {
+			continue
+		}
+		if name := strings.TrimSpace(message.Sender.Name); name != "" {
+			return name
+		}
+	}
+	for _, message := range messages {
+		if name := strings.TrimSpace(message.Sender.Name); name != "" {
+			return name
+		}
+	}
+	return group.chatID
 }
 
 func (c *Connector) inboxStateForTests() persistedInboxState {
@@ -656,7 +684,7 @@ func messageKey(message adapter.Message) string {
 func messageMentions(message adapter.Message, me string) bool {
 	for _, mention := range message.Mentions {
 		id, key, name := strings.ToLower(strings.TrimSpace(mention.ID)), strings.ToLower(strings.TrimSpace(mention.Key)), strings.ToLower(strings.TrimSpace(mention.Name))
-		if me != "" && mention.ID == me || id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") {
+		if me != "" && mention.ID == me || id == "all" || id == "@all" || strings.Contains(id, "@_all") || strings.Contains(key, "@all") || strings.Contains(name, "@all") || strings.Contains(name, "everyone") || strings.Contains(name, "所有人") { // i18n-ignore: match Feishu's localized @all mention name
 			return true
 		}
 	}

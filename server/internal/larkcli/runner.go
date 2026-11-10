@@ -57,6 +57,16 @@ func NewRunner(bin, profile string, timeout time.Duration) *Runner {
 	return New(Config{Bin: bin, Profile: profile, Timeout: timeout})
 }
 
+// Profile returns the configured lark-cli profile name. It contains no
+// credentials and is used only to make user-facing commands point at the same
+// profile as the runner.
+func (r *Runner) Profile() string {
+	if r == nil {
+		return ""
+	}
+	return r.cfg.Profile
+}
+
 // Run executes a read-only user command and returns its JSON stdout. It is the
 // generic escape hatch for adapter additions; typed methods below own the L2
 // command shapes.
