@@ -317,7 +317,11 @@ func (s *Service) readTriageSwitches(ctx context.Context) (TriageSwitches, error
 		saved = def
 	}
 	s.work.mu.Lock()
-	s.work.switches = &saved
+	// A settings PUT or another initial read may have finished while the store was answering.
+	if s.work.switches == nil {
+		s.work.switches = &saved
+	}
+	saved = *s.work.switches
 	s.work.mu.Unlock()
 	return saved, nil
 }

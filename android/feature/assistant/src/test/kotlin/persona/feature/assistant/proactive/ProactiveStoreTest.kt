@@ -180,6 +180,33 @@ class ProactiveStoreTest {
         assertEquals(listOf("没保存上：连不上 hub"), messages)
     }
 
+    @Test fun aFailureAfterThePageIsGoneGoesToTheAppsFeedback() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val unheard = mutableListOf<String>()
+        val store = ProactiveStore(hub, this, say, unheard = { unheard += it })
+        val page = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { store.messages.collect {} }
+        store.refresh()
+        hub.failWrite = IOException("no route")
+        // The switch is flipped and the page is left before the write fails.
+        store.toggle("morning", false)
+        page.cancel()
+        advanceUntilIdle()
+        assertEquals(listOf("没保存上：连不上 hub"), unheard)
+    }
+
+    @Test fun aPageThatIsListeningSaysItItself() = runTest {
+        val hub = FakeHub(listOf(morning))
+        val unheard = mutableListOf<String>()
+        val store = ProactiveStore(hub, this, say, unheard = { unheard += it })
+        val messages = messagesOf(store)
+        store.refresh()
+        hub.failWrite = IOException("no route")
+        store.toggle("morning", false)
+        advanceUntilIdle()
+        assertEquals(listOf("没保存上：连不上 hub"), messages)
+        assertTrue(unheard.isEmpty())
+    }
+
     @Test fun aLostAnswerIsNotAFailureWhenTheHubHasTheChange() = runTest {
         val hub = FakeHub(listOf(morning))
         val store = ProactiveStore(hub, this, say)
