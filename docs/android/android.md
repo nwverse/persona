@@ -28,7 +28,11 @@ The follow-up branding / input compatibility work for #277 landed in batches: #7
 The home has only **Assistant** and **Agents**, selected at the top, on phones, tablets and foldables (#2589).
 The avatar opens one shared left-side history drawer from either page; it pushes the full-size page aside rather than
 rising from the bottom. Settings opens from its bottom gear in a sheet, never a home tab. Root Close returns to the
-originating page; child Back pops only the settings sheet's secondary stack. Inbox, To-dos, Computers and extension `nav_page` destinations open under
+originating page; child Back pops only the settings sheet's secondary stack.
+An open foldable or a tablet lays this out as an open iPhone Duo or an iPad (#2951): in a regular window, at least 600dp
+wide and 480dp tall, the sidebar is a column beside the Assistant page that the avatar hides and shows, and the Settings sheet
+shows its list beside the page it opens. Phones, folded or not and either way up, keep the drawer and one
+column. Details and the threshold's reasoning: `docs/android/android-design.md` section 3.1. Inbox, To-dos, Computers and extension `nav_page` destinations open under
 Assistant, following the iPhone sidebar mapping. Scheduled tasks and the knowledge base keep their existing Assistant
 entry points. Extension management remains in Settings and is distinct from extension-provided pages.
 
@@ -50,7 +54,12 @@ The latter is not a home-layout toggle and is not a reason to remove Android's I
 
 The existing **Assistant / Agents** home tabs do not change. Above the Assistant composer, the old All/task/Agent chip
 strip becomes three single-line actions, ordered **Pending**, **Progress**, **Agents**. Tapping opens a bounded, scrollable
-tray upward and flips its arrow; opening another closes the first. The bar is absent on the Agents page.
+tray upward and selects its entry; opening another closes the first. The bar is absent on the Agents page.
+
+The entries are the same short filter chips as the old All / task chips (#2956): `AssistantTrayEntry` draws a `JChip`, so
+height (36 dp), the style's chip radius, 12 dp side padding, `labelSmall` text, the `micro` count and the selected fill
+all come from `JChipTokens` and `JChip` rather than a second copy. They sit content-width at the leading edge and scroll
+sideways when a large font no longer fits them. The open tray is the chip's selected state; there is no arrow.
 
 - **Pending:** orange dot/count; one row per decision, with Approve or Review and an Approve all header. Bulk approval
   takes only explicitly approvable permissions/plans, respects the session's approval capability and never chooses an
@@ -1029,7 +1038,7 @@ Imported when merging main line 2026-11-02: pitfalls from the old single-module 
 
 ## App shell and direct page entry
 
-The composition root uses `PersonaTheme` from `:core:designsystem`, style from `AppStyleStore` (Settings › Interface style). Four fixed bottom tabs: Persona / Agents / Inbox / Settings, identical order and text in all styles, styled independently (Glass floating dock, Brief/Board bottom bar). Dock belongs to each tab's first page; pushed pages (chat, documents, nested settings) cover it. Visited tabs retain composition and do not rebuild on return (`docs/android/android-design.md` section 3). Tablet/foldable layout follows window width: expanded has left navigation and two-pane list/detail; tabletop puts chat above and composer below (section 3.1). Each tab retains its back stack. Agents badge counts ordinary-Agent pending interactions, filtered by hub session/space mute and exception rules; Persona badge counts assistant interactions, each request counted separately even in one session. Inbox badge counts unhandled Needs-you items and unmuted requests. Current tab, Agents machine filter and each tab's open chat are stored in pairing directory and restored on normal cold start; sign-out, revoke and re-pair delete together, and retired writers cannot recreate position files. Legacy global shell preferences/checklist records are cleared on unpairing.
+The composition root uses `PersonaTheme` from `:core:designsystem`, style from `AppStyleStore` (Settings › Interface style). Four fixed bottom tabs: Persona / Agents / Inbox / Settings, identical order and text in all styles, styled independently (Glass floating dock, Brief/Board bottom bar). Dock belongs to each tab's first page; pushed pages (chat, documents, nested settings) cover it. Visited tabs retain composition and do not rebuild on return (`docs/android/android-design.md` section 3). Tablet/foldable layout follows the window: a regular window (at least 600dp wide and 480dp tall) has the sidebar column beside the Assistant page and two-pane list/detail for Agents, Inbox and Settings; tabletop puts chat above and composer below (`docs/android/android-design.md` section 3.1). Each tab retains its back stack. Agents badge counts ordinary-Agent pending interactions, filtered by hub session/space mute and exception rules; Persona badge counts assistant interactions, each request counted separately even in one session. Inbox badge counts unhandled Needs-you items and unmuted requests. Current tab, Agents machine filter and each tab's open chat are stored in pairing directory and restored on normal cold start; sign-out, revoke and re-pair delete together, and retired writers cannot recreate position files. Legacy global shell preferences/checklist records are cleared on unpairing.
 
 Connection state occupies each page's title (Agents, Inbox, Persona, chat); shell no longer adds a separate banner, avoiding duplication and top whitespace. Lightweight refresh failures show no extra notice; user-action failures go through one outlet, with a shared 4-second dedupe window for offline notices. This is notice-policy configuration, not measured performance. Unclear results retain in-chat checking.
 
@@ -1476,6 +1485,7 @@ Specification [extensions.md](../extensions/extensions.md) ("Turning contributio
 
 - **Contribution toggles**: detail contributions listed individually, disableable via `setContribution` `PUT …/-/contributions/{point}/{id}`, update from detail response; unsaved settings retained, failure preserves state/reason. can_disable false status-only; via connector says controlled in connector settings; manager.json read-only. Legacy absent field uses contributes/Provides list.
 - **Dependencies/bundles**: preview depends/bundle/unresolved, manifest extension_pack. `BundlePreview` confirmation lists dependency status/members/every extension installed-upgraded/permissions/additions/warnings. Disabled/unknown dependencies or missing members block confirmation; flattened bundle evaluates member dependencies as group. Confirm returns all `{preview_id, permissions_digest}` in original order, never installs only main silently. Legacy previews unchanged.
+- **Installed dependencies and pack members** (#1315): the manager-bound extension detail retains `depends` and `extension_pack`. Its settings page lists each dependency's name/id, required version and readiness (including the installed version when too old), then each pack member's id, version constraint and market. These sections are read-only and absent when an older hub supplies neither field. Unknown installed dependency states ask to refresh details, without changing installation-preview guidance.
 - **Not-ready dependency** (#2469): state not_ready explicitly Dependency not ready, complete dependency setup then preview again including same-bundle dependencies. Only ok Satisfied; unknown conservative/blocking, legacy fields unchanged.
 - **Declaration assembly**: Root `ExtensionDeclarationsHost` supplies prompts/themes/triage templates by current hub identity (`ExtensionDeclarationsModel`), resumed-only fetch, immediate on return then 30 sec; reload after local install/upgrade/uninstall/disable/contribution change. New API 404 means unsupported/empty; other errors retain data, never treat outage as disabled. No demo.
 - **Quick prompts**: GET …/-/prompts → `LocalExtensionPrompts`, composer slash/+ lists, single-line title, identity extension/id. Choosing replaces text, cursor end/focus, preserves attachments, no send/command callback. Built-in behavior unchanged, shared main/Agent composer.
@@ -1629,6 +1639,9 @@ Ported 2026-11-02 from old App/iOS `ShellNeedsYou`. feature/assistant NeedsYou.k
 Requested 2026-11-01 draggable center/larger right/not device-specific; old Fold.kt/Panes.kt removed #632, ported new shell 2026-11-02.
 
 - material3-adaptive1.3.0 Navigation3 `rememberListDetailSceneStrategy` paneExpansionState/paneExpansionDragHandle per tab (`rememberShellListDetail`, PaneDividers.kt). Built-in paneExpansionDraggable always snaps nearest anchor, cannot snap only within28 dp hinge, so custom draggable sets `PaneExpansionState.setFirstPaneWidth` per frame, relayout only no page recomposition.
+- When (#2951, `RegularWindow.kt`, `RegularWindowTest`): every regular window (≥ 600dp wide and ≥ 480dp tall, an open foldable or a tablet either way up; the open iPhone Duo splits at about 669pt wide), and a phone on its side at least 760dp wide, as before. An open foldable upright (about 700dp) used to be one pane.
+- Sidebar column (#2951): beside the Assistant page in a regular window, `sidebarSplit` (PaneSplit.kt): the default list width capped at 380dp (the phone drawer's widest); with a separating fold the column ends at the fold and the page starts past it; flat folds do not move it. Not draggable, no saved width; the avatar hides and shows it.
+- Settings sheet (#2951): its own list-detail scene with the same splitter, two panes only in a regular window, no saved share (`PaneSplitter(tab = null)`).
 - Pure PaneSplit.kt/PaneSplitTest old values: left min 280 dp,right320; default 38% clamped320–420, preserve400right if possible (771 inner320/451,1280 tablet420/860). Tracks finger, haptic crossing flat hinge, release≤28 dp snaps else exact. Per-tab ratio SharedPreferences persona-panes split.tab, local/style-like, resize ratio then minimum clamp.
 - Collapse left Agents only with right content chat/space: drag64 dp past left min then release, right full, accent handle at left, drag/tap restores; closing right auto-restores. Inbox/Settings never collapse.
 - Separating hinge book/dual-screen fixed split, no handle; let library excludedBounds work by clear() expansion width (otherwise overrides). Flat restores prior drag. Edge-too-near hinge ignored.

@@ -116,7 +116,7 @@ type Service struct {
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
 	kb         kbState           // kb.go
-	inbox      inboxBook         // inbox.go
+	inbox      inboxBook         // inbox_book.go
 	board      boardBook         // workspace_board.go: the workspace board
 	viewEvents viewNotifications // views.go: only coalesced notifications; contents are stored first
 	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
@@ -257,6 +257,16 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 				p["message_source"] = source
 				p["text"] = prompts.MessageSourceText(text, source)
 			}
+		}
+	}
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
+		// The node reads a missing is_main as false, and is_main is part of what a process runs: a relay into the main
+		// conversation (deliverRelay) without it started that conversation, or restarted it when idle, on the ordinary
+		// compaction limits (#3028). Only this manager knows which conversation is main; what a sender set stands.
+		if _, set := p["is_main"]; !set {
+			id, _ := p["session_id"].(string)
+			cfg := s.settings(ctx)
+			p["is_main"] = id != "" && cfg.Main == id && cfg.MachineID == device
 		}
 	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
