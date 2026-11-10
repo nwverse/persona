@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -110,7 +110,7 @@ type catalogEntry struct {
 
 func New(o Options) *Service {
 	if o.Location == nil {
-		o.Location = func() *time.Location { return time.Local }
+		o.Location = func() *time.Location { return time.UTC } // the manager passes the user's (userLocation)
 	}
 	if o.Audit == nil {
 		o.Audit = func(context.Context, string, string, Actor, map[string]any) {}
@@ -646,7 +646,7 @@ func (s *Service) Create(ctx context.Context, in CreateRequest, by Actor) (Subsc
 	return shown(sub), nil
 }
 
-var dailyRE = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
+var dailyRE = lazyre.New(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
 // Update changes a subscription made at p.Revision.
 func (s *Service) Update(ctx context.Context, id string, p Patch, by Actor) (Subscription, error) {

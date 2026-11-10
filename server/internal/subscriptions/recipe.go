@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/jsonsubset"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Limits on what is kept of an item.
@@ -35,8 +35,8 @@ type step struct {
 }
 
 var (
-	pathRE = regexp.MustCompile(`^\$(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[[0-9]+\])*$`)
-	keyRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`) // a key a path can name
+	pathRE = lazyre.New(`^\$(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[[0-9]+\])*$`)
+	keyRE  = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`) // a key a path can name
 )
 
 func parsePath(p string) ([]step, error) {
@@ -119,7 +119,7 @@ func clip(s string, n int) string {
 }
 
 // The template variables a recipe's string arguments may use (#2037), nothing else.
-var varRE = regexp.MustCompile(`\{\{\s*([A-Za-z_]+)\s*\}\}`)
+var varRE = lazyre.New(`\{\{\s*([A-Za-z_]+)\s*\}\}`)
 
 // vars are the values of the template variables for a run that pulls what came after since.
 func vars(since time.Time, loc *time.Location) map[string]string {
