@@ -198,7 +198,7 @@ A channel with `pushes` off and `sync` on still receives main-chat mirrors.
   Clients recognize the channel by prefix: if the prefix (before the first `-`) matches a channel id from `GET /api/v1/channels`, that's its source; the chat page draws "From WeChat" below the message.
   The App sends UUIDs, whose first segment is 8 hexadecimal characters, so channel ids must not be 8 hex characters (rejected at registration). Messages the voice extension hands to main chat use `voice-<random id>`.
 - **Per chat**: sessions have `channels` (channels that have sent messages into this chat, most recent first, `proto.Session.Channels`; recorded by the assistant and reported in its snapshot, drawn by the manager's fleet), shown as small channel icons in the chat list;
-  headless chats started by `/agent` use `lark_agent`. Old Apps don't recognize this field and display as before.
+  only channel messages fill it: a chat an extension opens (Lark `/agent` among them) has none (its `origin` says where it came from, `docs/protocol/protocol.md` "Origin of assistant chats"). Old Apps don't recognize this field and display as before.
 - Each turn's run records its channel; `GET /api/v1/channels/{id}` includes "how many answers and questions are pending".
 
 ### Queuing, deduplication, concurrency

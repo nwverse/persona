@@ -76,6 +76,7 @@
     <string name="inbox_kind_group">Group</string>
     <string name="inbox_kind_at_all">\@all</string>
     <string name="inbox_kind_cc">Cc</string>
+    <string name="inbox_kind_agent">Agent</string>
     <string name="inbox_compose_mail">New mail</string>
     <string name="inbox_filter">Filter</string>
     <string name="inbox_filter_on">Filter (on)</string>

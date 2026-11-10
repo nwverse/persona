@@ -176,5 +176,21 @@
   "auto_review_show": "レポートを表示",
   "auto_review_hide": "レポートを隠す",
   "preset": "プリセット {tier}",
-  "plan_edit_model_placeholder_tier": "空欄ならプリセット {tier} のモデル"
+  "plan_edit_model_placeholder_tier": "空欄ならプリセット {tier} のモデル",
+  "interrupt_resolution_pending": "未対応",
+  "interrupt_resolution_cancelled": "キャンセル済み",
+  "interrupt_resolution_rerouted": "再依頼済み",
+  "interrupt_resolution_resumed": "再開済み",
+  "interrupt_resolution_accepted": "承認済み",
+  "interrupt_resolution_done": "完了",
+  "interrupt_handled": "「{title}」は中断されました · {result}",
+  "interrupt_cause_model_error": "モデルサービスのエラー",
+  "interrupt_cause_rate_limited": "モデルサービスのレート制限",
+  "interrupt_cause_auth": "ログインまたはキーの拒否",
+  "interrupt_cause_model_route": "不明なモデル",
+  "interrupt_cause_no_output": "出力のないターン",
+  "interrupt_batch_title_other": "{cause}：{count} 件のタスクが中断",
+  "interrupt_batch_title_on_other": "{machine} で{cause}：{count} 件のタスクが中断",
+  "interrupt_batch_counts": "→ 対応済み {resolved} / 未対応 {pending}",
+  "interrupt_batch_all": "→ すべて対応済み"
 }

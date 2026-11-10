@@ -324,6 +324,9 @@ func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref stri
 		}
 	}
 	s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": conversation, "item": it})
+	if kind == feedReceipt {
+		s.interruptsSoon() // a task went on after being cut off (interruptions.go)
+	}
 	return it, nil
 }
 
@@ -332,6 +335,17 @@ const feedPage = 500
 // feedItems is a conversation's items after since, oldest first (with the message cards sent after since: the client
 // has them, not that they went out), without the plans they name: for readers that look only at the items.
 func (s *Service) feedItems(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
+	items, err := s.rawFeed(ctx, conversation, since)
+	if err != nil {
+		return nil, err
+	}
+	s.settleCards(ctx, items)
+	s.fileCards(ctx, items)
+	return s.resolveInterruptions(ctx, conversation, items), nil
+}
+
+// rawFeed is feedItems as stored, with nothing worked out on reading.
+func (s *Service) rawFeed(ctx context.Context, conversation string, since time.Time) ([]FeedItem, error) {
 	var items []FeedItem
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
@@ -351,8 +365,6 @@ func (s *Service) feedItems(ctx context.Context, conversation string, since time
 			items = append(items, FeedItem{ID: r.ID, Conversation: r.Conversation, At: r.At, Kind: r.Kind, Ref: r.Ref, Body: r.Body})
 		}
 	}
-	s.settleCards(ctx, items)
-	s.fileCards(ctx, items)
 	return items, nil
 }
 

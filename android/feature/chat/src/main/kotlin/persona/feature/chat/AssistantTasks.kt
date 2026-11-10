@@ -77,6 +77,9 @@ import persona.core.domain.tasks.AssistantExtra
 import persona.core.domain.tasks.AssistantLines
 import persona.core.domain.tasks.QuickResult
 import persona.core.domain.tasks.Interruption
+import persona.core.domain.tasks.InterruptBatch
+import persona.core.domain.tasks.InterruptLook
+import persona.core.domain.tasks.InterruptResolution
 import persona.core.domain.tasks.TaskNow
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.receiptState
@@ -569,6 +572,12 @@ private fun TaskLine(todo: Todo, host: AssistantTaskHost) {
 
 @Composable
 private fun ReceiptCard(item: FeedItem, host: AssistantTaskHost, todos: List<Todo>) {
+    when (val look = InterruptLook.of(item)) { // what the hub worked out of an interrupted receipt (#3834)
+        InterruptLook.Hidden -> return
+        is InterruptLook.Batch -> return InterruptBatchCard(look.batch, host, todos)
+        is InterruptLook.Resolved -> return InterruptHandledLine(item, look.resolution, host, todos)
+        InterruptLook.Pending, null -> Unit
+    }
     val outcome = receiptState(item)
     if (outcome == "interrupted") return InterruptedReceipt(item, host, todos)
     val failed = outcome == "failed"
@@ -603,7 +612,7 @@ private fun ReceiptCard(item: FeedItem, host: AssistantTaskHost, todos: List<Tod
                 else ReceiptSummary(it) }
             if (failed && todo != null) JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) }, kind = JButtonKind.Secondary,
                 size = JButtonSize.Small, icon = PhIcons.ArrowClockwise, loading = TasksStore.retryKey(todo.id) in busy)
-            if (!failed && todo != null) JButton(stringResource(R.string.chat_tasks_look), { openTask(host, todo) }, kind = JButtonKind.Secondary, size = JButtonSize.Small)
+            if (!failed && todo != null) TaskReceiptLook(todo, host)
         }
     }
 }
@@ -662,7 +671,79 @@ private fun InterruptedReceipt(item: FeedItem, host: AssistantTaskHost, todos: L
                 if (todo != null && cut?.canContinue != false) JButton(stringResource(R.string.chat_tasks_continue), { host.tasks.retryTask(todo, host.onError) },
                     kind = JButtonKind.Secondary, size = JButtonSize.Small, icon = PhIcons.ArrowClockwise,
                     loading = TasksStore.retryKey(todo.id) in busy)
-                if (todo != null) JButton(stringResource(R.string.chat_tasks_look), { openTask(host, todo) }, kind = JButtonKind.Secondary, size = JButtonSize.Small)
+                if (todo != null) TaskReceiptLook(todo, host)
+            }
+        }
+    }
+}
+
+@Composable
+private fun resolutionLabel(r: InterruptResolution): String = stringResource(when (r) {
+    InterruptResolution.Pending -> R.string.chat_tasks_interrupt_pending
+    InterruptResolution.Cancelled -> R.string.chat_tasks_interrupt_cancelled
+    InterruptResolution.Rerouted -> R.string.chat_tasks_interrupt_rerouted
+    InterruptResolution.Resumed -> R.string.chat_tasks_interrupt_resumed
+    InterruptResolution.Accepted -> R.string.chat_tasks_interrupt_accepted
+    InterruptResolution.Done -> R.string.chat_tasks_interrupt_done
+})
+
+/** What cut a batch off (the hub's `cause`); one this build doesn't know reads as a model service error. */
+@Composable
+private fun causeLabel(cause: String): String = stringResource(when (cause) {
+    "rate_limited" -> R.string.chat_tasks_interrupt_cause_rate_limited
+    "auth" -> R.string.chat_tasks_interrupt_cause_auth
+    "model_route" -> R.string.chat_tasks_interrupt_cause_model_route
+    "no_output" -> R.string.chat_tasks_interrupt_cause_no_output
+    else -> R.string.chat_tasks_interrupt_cause_model_error
+})
+
+/** An interrupted task that was dealt with since (#3834): a grey line with its result; it opens the task. */
+@Composable
+private fun InterruptHandledLine(item: FeedItem, resolution: InterruptResolution, host: AssistantTaskHost, todos: List<Todo>) {
+    val todo = todos.firstOrNull { it.id == item.ref }
+    val title = receiptTitle(item, todo) ?: stringResource(R.string.chat_tasks_default_title)
+    Row(Modifier.clip(PersonaTheme.shapes.controlShape).let { if (todo != null) it.clickable { openTask(host, todo) } else it }
+        .padding(vertical = Tokens.Space.xs),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+        JIcon(PhIcons.Info, decorative = true, size = Tokens.Space.m, tint = PersonaTheme.palette.ink2)
+        Text(stringResource(R.string.chat_tasks_interrupt_handled, title, resolutionLabel(resolution)), style = PersonaTheme.type.caption,
+            color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Several tasks one outage cut off (#3834): one card, its cause and how many are handled and still pending; it opens
+ *  to each task and its result. Red only while one is pending. */
+@Composable
+private fun InterruptBatchCard(batch: InterruptBatch, host: AssistantTaskHost, todos: List<Todo>) {
+    var open by rememberSaveable(batch.tasks.firstOrNull()?.receipt) { mutableStateOf(false) }
+    val palette = PersonaTheme.palette
+    val pending = batch.pending > 0
+    val cause = causeLabel(batch.cause)
+    val title = batch.machine?.let { stringResource(R.string.chat_tasks_interrupt_batch_on, cause, it, batch.total) }
+        ?: stringResource(R.string.chat_tasks_interrupt_batch, cause, batch.total)
+    val counts = if (pending) stringResource(R.string.chat_tasks_interrupt_counts, batch.resolved, batch.pending)
+        else stringResource(R.string.chat_tasks_interrupt_all_handled)
+    Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.cardShape).background(if (pending) palette.statusSurface else palette.sunken)) {
+        Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(Tokens.Space.l), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+            JIcon(PhIcons.WarningCircle, decorative = true, tint = if (pending) palette.danger.dot else palette.ink3)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                Text(title, style = PersonaTheme.type.headline, color = if (pending) palette.ink else palette.ink2)
+                Text(counts, style = PersonaTheme.type.callout, color = palette.ink2)
+            }
+            JIcon(if (open) PhIcons.CaretDown else PhIcons.CaretRight, decorative = true, size = Tokens.Space.m, tint = palette.ink3)
+        }
+        if (open) Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.l, end = Tokens.Space.l, bottom = Tokens.Space.m),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            batch.tasks.forEach { task ->
+                val todo = todos.firstOrNull { it.id == task.todoId }
+                Row(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).let { if (todo != null) it.clickable { openTask(host, todo) } else it }
+                    .padding(vertical = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                    Text(todo?.title ?: task.title, Modifier.weight(1f), style = PersonaTheme.type.callout, color = palette.ink, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    Text(resolutionLabel(task.resolution), style = PersonaTheme.type.callout, maxLines = 1,
+                        color = if (task.resolution == InterruptResolution.Pending) palette.danger.text else palette.ink2)
+                }
             }
         }
     }

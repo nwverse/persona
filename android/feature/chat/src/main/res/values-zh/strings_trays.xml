@@ -2,7 +2,9 @@
 <resources>
     <string name="chat_tray_entry_needs_you">要你处理</string>
     <string name="chat_tray_entry_running">进行中</string>
-    <string name="chat_tray_items">%1$d 件</string>
+    <plurals name="chat_tray_items">
+        <item quantity="other">%1$d 件</item>
+    </plurals>
     <string name="chat_tray_approve_all">都批</string>
     <string name="chat_tray_approve">批</string>
     <string name="chat_tray_review">去看</string>
@@ -28,7 +30,9 @@
     <string name="chat_tray_collapsed">已收起</string>
     <string name="chat_tray_blocked">卡住了</string>
     <string name="chat_tray_planned">待开始</string>
-    <string name="chat_tray_steps">%1$d / %2$d 步</string>
+    <plurals name="chat_tray_steps">
+        <item quantity="other">%1$d / %2$d 步</item>
+    </plurals>
     <string name="chat_tray_draft_changed">草稿已更新，请查看最新版本再发送。</string>
     <string name="chat_tray_caught_up">都处理完了</string>
     <string name="chat_tray_accept">接受</string>

@@ -83,8 +83,15 @@ existing `background`, `subagents` and `workflows` arrays. Missing fields on old
 rather than fabricate phase or progress. Newer summary revisions win over cached chat detail, including same-state
 phase/count updates and completion; a row projection is not installed as an open chat's complete state.
 
-Apple clients can decode the two additive summary fields using their existing Workflow DTO, apply the same spinner
-and subtitle rules, and replay the extended shared fixtures. No new endpoint, task storage or model call is required.
+Apple (iPhone, iPad, Mac; #3591) decodes `background_tasks_count` and `workflow_progress` with the existing
+`WorkflowRun` model and applies the same spinner and subtitle rules (`AssistantTrayActivity` in `apple/Shared/Tasks.swift`).
+A summary row's counts, including omitted zeros, win over retained chat arrays; a later complete response clears the
+summary hints. `phase_count` gives the phase position without `phases`. An older hub's complete response that only sets
+`background_working` shows Working with a generic line. Task rows read only their linked sessions; manual-Agent rows
+carry a value-only activity snapshot in `DockAgent`, so the composer does not observe every session.
+`AssistantEntriesFixtureTests` replays `expected.activity` from the shared fixtures. The opt-in mock
+`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASK_TRAY_ACTIVITY=1|summary` (`summary`: compact fields only) supplies four
+rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task storage or model call is required.
 
 ### Progress tray: one task, one row (#2878)
 
@@ -185,6 +192,29 @@ to the live text. iOS is left to #2879. Screenshots: `web/e2e/assistant-task-tra
   Web says it only once (#4145): when the chat contains the full task card (today's task), only that card shows the cause and Retry / Remove; the plan card no longer repeats red text below it.
   The failure receipt collapses to one red line, "‘xx’ failed to start; see the task card above" (tap to open the task). Without a full card (earlier-day tasks shown only as a line), keep the cause and Retry as before.
   API: `POST /api/v1/todos/{id}/retry` under "To-dos" in `docs/protocol/protocol.md`.
+
+### Interrupted receipts after the fact (#3834)
+
+A turn the model service cut off gets an `interrupted` receipt (#1516). The hub, not the apps, says what became of it and
+keeps one outage from filling the chat:
+
+- **Resolution**: on every feed read the hub works out `resolution` for each interrupted receipt from its to-do: `cancelled`
+  (the to-do was cancelled, or removed), `rerouted` (cancelled and dispatched again as a new task with the same title from the
+  same chat, or another agent linked to it after the interruption), `accepted` (closed by review), `done` (closed otherwise),
+  `resumed` (one of its agents started a turn after the interruption, or a later receipt of the same task exists), else
+  `pending`. When a to-do changes or one of its agents starts a turn, the hub sends the receipts whose body changed again as
+  `assistant_feed` (same id), so a card turns grey without a reload. The hub follows a chat's interrupted receipts for 48 hours.
+- **Batch**: an interrupted receipt with the same `cause` (`model_error`, `rate_limited`, `auth`, `model_route`, `no_output`,
+  from the error text) as one written in the same chat less than 10 minutes earlier joins that one's batch: it names the first
+  receipt in `group`. The first receipt carries `batch` (`total`, `pending`, `resolved`, `machine` when all ran on one
+  computer, and `tasks` with each task's resolution), recomputed on every read; a page read with `since` after the first
+  receipt still brings it along.
+- **Drawing** (all three clients, `interruptLook`): a receipt that names another in `group` is not drawn; a batch is one card,
+  "<computer> <cause>, N tasks interrupted → handled a / pending b", opening to each task with its result, each opening the
+  task; a handled single receipt is a grey line "“<title>” was interrupted · <result>" that opens the task; a pending one is
+  the red card as before. Only a batch with something pending, or a pending receipt, uses the danger color. In the main chat,
+  where receipts are otherwise left out (#3700), these interruption records are drawn; the pending task keeps its row in
+  **Needs you**, which stays where it is answered. A receipt from a hub before #3834 has no `resolution` and is drawn as ever.
 
 ### Routing
 
@@ -347,12 +377,23 @@ Code: `server/internal/assistant/ask_route.go`.
   later card cannot quietly go the other way.
 - **Nothing hangs**: a card not handled within 5 minutes (`askHoldFor`) goes up a rung: from a leader to the main chat
   (its entry marked as raised), from the main chat to the user (all of the task's cards reaching the user then ring
-  as one, without supervisor context).
-- **Limits**: the route lives on the pending card. A held card shown again without it (after a manager restart, or a
-  Codex card listed again once its node reconnected) is on the apps without a push; the supervisor still hears of it
-  through the task's `needs_you` signal, and `ask_escalate` takes it. A card the assistant is deciding on for the user
-  (agents.delegate) is not escalated: that decision tells the user itself. `ask_escalate` refuses without leaders. Cards raised after an escalation go to the supervisor again rather than joining the
-  escalated push.
+  as one, without supervisor context). The 5 minutes do not count while the conversation holding the card is on a
+  turn: a supervisor working through a long round is not neglecting it, and its time starts when the turn ends. A
+  conversation still on a turn an hour (`askBusyMax`) after the card came is counted as stuck instead, and the card
+  climbs all the same, so no card waits on a conversation for ever.
+- **Limits**: the route lives on the pending card, not in the store. After a manager restart the card is back on the
+  apps without a push (as every card is); its route is made again from the task's supervisor, so the supervisor can
+  still answer it or escalate it. Whether the user was told of the card before the restart is not kept either, so a
+  restored approval (a permission or a plan) whose time is up is handed to the user and rings once, as any: no
+  conversation may answer it, so silence would leave the agent blocked with nobody told. A restored question whose
+  time is up only goes back on the apps (it may have rung before), and its supervisor can still answer it. An approval
+  stays the user's: its timeout neither approves it nor becomes a decision. The supervisor may answer a question the
+  user was already asked, and an explicit `ask_escalate` rings — that is the supervisor saying the user must decide
+  now. A Codex card listed again once its node reconnected is on the apps
+  without a push too; the supervisor still hears of it through the task's `needs_you` signal, and `ask_escalate` takes
+  it. A card the assistant is deciding on for the user (agents.delegate) is not escalated: that decision tells the
+  user itself. `ask_escalate` refuses without leaders. Cards raised after an escalation go to the supervisor again
+  rather than joining the escalated push.
 
 **Directions and reports up (#3484, #3485).** Each leader has a record, `assistant.directions` (`directions.go`): the kb
 project it is filed under, who filed it, since when, and when it ended (it left `assistant.leaders`; nothing is

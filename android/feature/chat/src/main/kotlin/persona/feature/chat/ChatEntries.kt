@@ -57,6 +57,7 @@ data class ChatAppBindings(
     val ports: persona.core.contracts.api.PortOpener? = null,
     /** Tasks from the assistant's conversations (docs/assistant/unified-entry.md); null where the hub group has none. */
     val tasks: persona.core.domain.tasks.TasksStore? = null,
+    val agentShares: AgentSharesProvider? = null,
 )
 
 interface ChatWiringSource {
@@ -162,6 +163,10 @@ fun ChatDestination(
     }
     val style = renderStyle ?: if (route.kind == persona.core.navigation.ConversationKind.Assistant ||
         metadata.any { it.key == session && it.assistant }) ChatRenderStyle.Assistant else ChatRenderStyle.Agent
+    val sharingManager = metadata.firstOrNull { it.key == session }?.manager?.takeIf { it.isNotBlank() }
+    val sharing = remember(wiring?.agentShares, sharingManager, session) {
+        wiring?.agentShares?.let { provider -> sharingManager?.let { owner -> { provider.forSession(session, owner) } } }
+    }?.takeIf { style == ChatRenderStyle.Agent }
     val editor = rememberChatDraftEditor(if (historyReadOnly) null else wiring, session)
     val handToPersona = rememberHandToPersona(wiring?.mainSender?.takeIf { style != ChatRenderStyle.Assistant }, navigator)
     val composer by (editor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
@@ -177,6 +182,7 @@ fun ChatDestination(
             files = wiring?.files, ports = wiring?.ports, onHandToPersona = handToPersona,
             tasks = wiring?.tasks?.takeIf { style == ChatRenderStyle.Assistant && !historyReadOnly },
             assistantManagement = assistantManagement,
+            agentShares = sharing,
             inboxTrays = services.inboxTrays(), inboxScope = wiring?.scope?.path),
         renderStyle = style,
         embedded = embedded, showTopBar = showTopBar,
