@@ -45,9 +45,6 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 		if status == kb.RecordingStored && u.Complete {
 			s.kbWake() // its summary and minutes now, not at the next round
 		}
-		if status == kb.RecordingStored {
-			s.meetingKick(id) // its role, session or end may have changed (meeting_live.go)
-		}
 		// The role in effect, always (an older manager leaves it out, so the phone stops attending), and what was
 		// wrong with the upload's attendance fields, which never fail it.
 		out := map[string]any{"id": id, "revision": u.Revision, "status": status, "attendance": put.Attendance}

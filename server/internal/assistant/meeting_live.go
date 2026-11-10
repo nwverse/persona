@@ -53,7 +53,7 @@ func (s *Service) meetingRoutes() {
 			return
 		}
 		id := r.PathValue("id")
-		before, _, ok := meetingRecording(w, e, id)
+		_, _, ok := meetingRecording(w, e, id) // 410 and 404 before the body is read as live lines
 		if !ok {
 			return
 		}
@@ -80,9 +80,6 @@ func (s *Service) meetingRoutes() {
 		case err != nil:
 			writeMeetingError(w, err)
 			return
-		}
-		if from+len(segs) > len(before.Segments) { // something new was stored (a replay stores nothing)
-			s.meetingKick(rec.ID)
 		}
 		apierr.WriteJSON(w, s.liveView(r.Context(), l, rec, nil))
 	})
