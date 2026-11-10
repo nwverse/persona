@@ -129,11 +129,13 @@ struct MachineDetailView: View {
                 .padding(Theme.Space.l)
             }
             #if DEBUG
-            // `-openMachineClipboard YES`: the page opens scrolled to Clipboard (screenshots).
+            // `-openMachineClipboard YES`: the page opens scrolled to Clipboard's top (`bottom`: its end, for the largest
+            // text sizes; screenshots).
             .task(id: machine?.clipboard != nil) {
-                guard machine?.clipboard != nil, UserDefaults.standard.bool(forKey: "openMachineClipboard") else { return }
+                let at = UserDefaults.standard.string(forKey: "openMachineClipboard")
+                guard machine?.clipboard != nil, at == "YES" || at == "bottom" else { return }
                 try? await Task.sleep(for: .milliseconds(300))
-                scroller.scrollTo(Self.clipboardAnchor, anchor: .top)
+                scroller.scrollTo(Self.clipboardAnchor, anchor: at == "bottom" ? .bottom : .top)
             }
             #endif
         }
