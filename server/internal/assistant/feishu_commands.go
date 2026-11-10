@@ -278,16 +278,40 @@ type stopOutcome struct {
 	message string
 }
 
+// turnOver says whether the conversation's last turn ended (its result unseen or already seen) and nothing is being
+// opened: no turn to stop. An interrupt there would only press Escape into an idle agent's terminal (the node's
+// session.interrupt sends that key, node/node.go) and the owner would be told a turn was stopped that had already
+// finished. A state that cannot be told is not over: the owner asked to stop, so it is tried.
+func turnOver(s proto.Session) bool {
+	return !s.Starting && (s.State == proto.StateUnread || s.State == proto.StateIdle)
+}
+
+// turnPending says whether this chat sent a message into the conversation that has not been seen working, or seen to
+// end a turn, since: the conversation may still be read as quiet (channel.Run.Seen), so its state cannot say the turn
+// is over. A /stop right after the message is exactly the case it is sent for.
+func (s *Service) turnPending(machine, session string) bool {
+	if session == "" {
+		return false
+	}
+	for _, r := range s.channelRuns(channel.Feishu) {
+		if r.MachineID == machine && r.SessionID == session && !r.Seen {
+			return true
+		}
+	}
+	return false
+}
+
 // stopConversation interrupts t's current turn. The /stop command and the progress card's Stop button share it: both
 // may only act on a target this chat may use (the Agents feature gates agent threads even before the normal message
-// gate), and both say so when there is nothing to stop.
+// gate), and both say so when there is nothing to stop: no conversation, one not started yet, or one whose last turn
+// is over.
 func (s *Service) stopConversation(ctx context.Context, f FeishuFeatures, t botTarget) stopOutcome {
 	l := s.botLang(ctx)
 	if err := botAllowed(l, f, t); err != nil {
 		return stopOutcome{kind: "error", message: err.Error()}
 	}
 	rt, err := s.resolveBotTarget(ctx, t)
-	if err != nil || rt.isNew {
+	if err != nil || rt.isNew || (turnOver(rt.session) && !s.turnPending(rt.machine, rt.session.SessionID)) {
 		return stopOutcome{kind: "info", message: i18n.T(l, "assistant-feishu_cards.nothing_running")}
 	}
 	if err := s.call(ctx, rt.machine, "session.interrupt", map[string]any{"session_id": rt.session.SessionID}, nil); err != nil {

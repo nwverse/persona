@@ -83,8 +83,15 @@ existing `background`, `subagents` and `workflows` arrays. Missing fields on old
 rather than fabricate phase or progress. Newer summary revisions win over cached chat detail, including same-state
 phase/count updates and completion; a row projection is not installed as an open chat's complete state.
 
-Apple clients can decode the two additive summary fields using their existing Workflow DTO, apply the same spinner
-and subtitle rules, and replay the extended shared fixtures. No new endpoint, task storage or model call is required.
+Apple (iPhone, iPad, Mac; #3591) decodes `background_tasks_count` and `workflow_progress` with the existing
+`WorkflowRun` model and applies the same spinner and subtitle rules (`AssistantTrayActivity` in `apple/Shared/Tasks.swift`).
+A summary row's counts, including omitted zeros, win over retained chat arrays; a later complete response clears the
+summary hints. `phase_count` gives the phase position without `phases`. An older hub's complete response that only sets
+`background_working` shows Working with a generic line. Task rows read only their linked sessions; manual-Agent rows
+carry a value-only activity snapshot in `DockAgent`, so the composer does not observe every session.
+`AssistantEntriesFixtureTests` replays `expected.activity` from the shared fixtures. The opt-in mock
+`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASK_TRAY_ACTIVITY=1|summary` (`summary`: compact fields only) supplies four
+rows for `AssistantTrayActivityUITests` on iPhone and Mac. No new endpoint, task storage or model call is required.
 
 ### Progress tray: one task, one row (#2878)
 
