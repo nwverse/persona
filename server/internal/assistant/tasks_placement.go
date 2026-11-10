@@ -179,6 +179,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if t.Ultracode != nil && *t.Ultracode {
 		params["ultracode"] = true
 	}
+	if t.inPane != "" { // a retry in the tab an earlier try did not start in (start_remedy.go)
+		params["in_pane"] = t.inPane
+	}
 	var res struct {
 		Session proto.Session `json:"session"`
 	}
