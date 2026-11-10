@@ -174,6 +174,7 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	}
 	told := &b.told
 	var out []assistantwire.LeaderReportEvent
+	var stuckSigs []superviseSignal // the main conversation's one line for each (sigLeaderStuck)
 	for _, t := range tasks {
 		lead := t.Supervision.Supervisor
 		if r := triageLatestReview(t.Supervision); r != nil && !r.At.Before(told.Since) && now.Sub(r.At) < leaderReportsKeep {
@@ -203,7 +204,10 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 		if last, ok := told.Stuck[t.ID]; stuck && (!ok || now.Sub(last) >= leaderStuckAfter) {
 			told.Stuck[t.ID] = now
 			key := "stuck|" + t.ID + "|" + now.UTC().Format(time.RFC3339Nano)
-			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section), now))
+			text := leaderReportText(l, assistantwire.LeaderStuck, t, "", tr.Section)
+			out = append(out, leaderReport(key, lead, assistantwire.LeaderStuck, t, text, now))
+			stuckSigs = append(stuckSigs, superviseSignal{Todo: t.ID, Kind: sigLeaderStuck, Key: key,
+				Detail: clip(s.leaderName(ctx, lead)+" · "+oneLine(text), 200)})
 		}
 	}
 	for _, lp := range plans {
@@ -243,6 +247,13 @@ func (s *Service) leaderReportsSync(ctx context.Context, now time.Time, stuckToo
 	}
 	for _, r := range out {
 		s.todoQueue(todoNotice{assistantwire.EventLeaderReport, r})
+	}
+	if len(stuckSigs) > 0 {
+		go func() { // not under the book's lock
+			for _, g := range stuckSigs {
+				s.signal(g)
+			}
+		}()
 	}
 }
 

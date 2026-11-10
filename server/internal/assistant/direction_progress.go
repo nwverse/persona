@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // A direction's name and its leader's own progress (#3679; docs/assistant/unified-entry.md "Names and progress").
@@ -198,4 +200,55 @@ func (s *Service) directionOf(id string) *direction {
 	}
 	cp := *b.m[id]
 	return &cp
+}
+
+// leaderName is what leader id's direction is called now (directionName), "" when it is no conversation the hub knows.
+func (s *Service) leaderName(ctx context.Context, id string) string {
+	titles, _ := s.conversationTitles()
+	d := s.directionOf(id)
+	if d == nil {
+		return directionName(nil, titles[id].title, "")
+	}
+	pn, ok := s.projectNames(ctx)
+	return nameOf(d, titles[id].title, pn, ok)
+}
+
+// briefLeaders are the current leaders as the briefings list them, one line each (#3609): the direction's name, its
+// open tasks, how many wait for the owner (a review that needs the owner's decision, a plan waiting for Start counts
+// with the plans) and how many were reported stuck in the last day, and its leader's latest summary of the day.
+func (s *Service) briefLeaders(ctx context.Context, now time.Time) []prompts.BriefLeader {
+	cfg := s.settings(ctx)
+	var out []prompts.BriefLeader
+	stuck := map[string]time.Time{}
+	b := &s.lreports
+	b.mu.Lock()
+	if s.leaderReportsLocked(ctx) {
+		maps.Copy(stuck, b.told.Stuck)
+	}
+	b.mu.Unlock()
+	todos := s.todosOf(ctx, "*")
+	for _, id := range cfg.Leaders {
+		if id == "" || id == cfg.Main {
+			continue
+		}
+		bl := prompts.BriefLeader{Name: clip(oneLine(s.leaderName(ctx, id)), 40)}
+		for _, t := range todos {
+			if t.DoneAt != nil || t.Supervision == nil || t.Supervision.Supervisor != id {
+				continue
+			}
+			bl.Open++
+			if t.Supervision.state(t) == reviewNeedsUser {
+				bl.Waiting++
+			}
+			if at, ok := stuck[t.ID]; ok && now.Sub(at) < 24*time.Hour {
+				bl.Stuck++
+			}
+		}
+		if d := s.directionOf(id); d != nil && d.Progress != nil && now.Sub(d.Progress.At) < 24*time.Hour {
+			p := d.Progress
+			bl.Reached, bl.Doing, bl.NeedsYou = clip(p.Reached, 120), clip(p.Doing, 120), clip(p.NeedsYou, 120)
+		}
+		out = append(out, bl)
+	}
+	return out
 }
