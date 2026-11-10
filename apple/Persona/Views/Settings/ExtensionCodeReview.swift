@@ -168,3 +168,115 @@ nonisolated enum CodeReview {
         StateCache.save(Self.name, order)
     }
 }
+
+// MARK: Hidden lines (UI version 5's `context`)
+
+nonisolated extension CodeReview {
+    /// The lines hidden before hunk `at` (`at` = the hunks' count: after the last one), by their numbers on the new
+    /// side: `from` to `to` (nil: to the file's end, not known yet). An old line's number is the new one's plus `delta`.
+    struct Gap: Equatable, Hashable, Sendable {
+        var at: Int
+        var from: Int
+        var to: Int?
+        var delta: Int
+    }
+
+    /// The lines shown of a gap: `top` from its start down (under the hunk before), `bottom` from its end up.
+    /// `Int.max`: all of it, its end not known yet.
+    struct Shown: Equatable, Sendable {
+        var top = 0
+        var bottom = 0
+    }
+
+    enum Reveal: Sendable { case up, down, all }
+
+    /// A gap's lines are shown at most this many at a time.
+    static let step = 20
+
+    /// Every gap of a diff: before each hunk, and after the last (to `total`, the file's lines, when known). None for
+    /// a file that is gone.
+    static func gaps(_ hunks: [ExtensionHunk], total: Int?) -> [Gap] {
+        var out: [Gap] = []
+        var from = 1, delta = 0
+        for (i, h) in hunks.enumerated() {
+            if h.newStart == 0 { return [] }
+            out.append(Gap(at: i, from: from, to: h.newStart - 1, delta: h.oldStart - h.newStart))
+            let news = h.lines.filter { !$0.hasPrefix("-") && !$0.hasPrefix("\\") }.count
+            let olds = h.lines.filter { !$0.hasPrefix("+") && !$0.hasPrefix("\\") }.count
+            from = h.newStart + news
+            delta = h.oldStart + olds - from
+        }
+        out.append(Gap(at: hunks.count, from: from, to: total, delta: delta))
+        return out
+    }
+
+    /// How many lines a gap hides (`Int.max` when its end is not known yet).
+    static func size(_ g: Gap) -> Int {
+        g.to.map { max(0, $0 - g.from + 1) } ?? Int.max
+    }
+
+    /// Showing more of a gap: down (under the hunk before it), up (over the hunk after it), or all. What is shown then,
+    /// and which lines that needs (new numbers; `to` nil: to the end).
+    static func reveal(_ g: Gap, shown: Shown, _ way: Reveal) -> (shown: Shown, need: (from: Int, to: Int?)) {
+        let size = size(g)
+        if way == .all { return (Shown(top: size, bottom: 0), (g.from, g.to)) }
+        if way == .down || g.to == nil {
+            let top = min(size - shown.bottom, shown.top + step)
+            return (Shown(top: top, bottom: shown.bottom), (g.from + shown.top, g.from + top - 1))
+        }
+        let to = g.to ?? g.from
+        let bottom = min(size - shown.top, shown.bottom + step)
+        return (Shown(top: shown.top, bottom: bottom), (to - bottom + 1, to - shown.bottom))
+    }
+
+    /// Lines of the new side of a file, as they came (any part of it), and how many it has once known.
+    struct LineCache: Equatable, Sendable {
+        private var lines: [Int: String] = [:]
+        private(set) var total: Int?
+
+        mutating func put(start: Int, _ new: [String], total: Int?) {
+            for (i, l) in new.enumerated() { lines[start + i] = l }
+            if let total { self.total = total } else if new.isEmpty, self.total == nil { self.total = start - 1 } // past the end
+        }
+
+        /// Line `n` (1: the first), when it came.
+        func line(_ n: Int) -> String? { lines[n] }
+
+        /// Every line from…to came (`to` nil: to the end, when known).
+        func has(_ from: Int, _ to: Int?) -> Bool {
+            guard let end = to ?? total else { return false }
+            return from > end || (from...end).allSatisfy { lines[$0] != nil }
+        }
+    }
+
+    /// The rows a gap shows, unchanged lines from the cache: those at its top, those at its bottom, and how many are
+    /// still hidden (`Int.max`: to the end of a file whose length is not known yet).
+    static func rows(_ g: Gap, shown: Shown, cache: LineCache?) -> (top: [CodeDiffLine], bottom: [CodeDiffLine], hidden: Int) {
+        let to = g.to ?? cache?.total
+        let size = to.map { max(0, $0 - g.from + 1) } ?? Int.max
+        func row(_ n: Int) -> CodeDiffLine? {
+            cache?.line(n).map { CodeDiffLine(kind: .context, text: $0, old: n + g.delta, new: n) }
+        }
+        var top: [CodeDiffLine] = []
+        var n = g.from
+        while top.count < min(shown.top, size), let r = row(n) { top.append(r); n += 1 }
+        var bottom: [CodeDiffLine] = []
+        if let to, shown.bottom > 0 {
+            for k in max(g.from + top.count, to - shown.bottom + 1)...max(to, g.from + top.count) where k <= to {
+                if let r = row(k) { bottom.append(r) }
+            }
+        }
+        let hidden = size == Int.max ? Int.max : max(0, size - top.count - bottom.count)
+        return (top, bottom, hidden)
+    }
+
+    // MARK: Line links (`code.line_url`)
+
+    /// A code's line link: `{start}` and `{end}` filled in; https only.
+    static func lineLink(_ template: String?, start: Int, end: Int? = nil) -> URL? {
+        guard let template, !template.isEmpty else { return nil }
+        let s = template.replacingOccurrences(of: "{start}", with: String(start)).replacingOccurrences(of: "{end}", with: String(end ?? start))
+        guard let url = URL(string: s), url.scheme?.lowercased() == "https", url.host?.isEmpty == false else { return nil }
+        return url
+    }
+}
