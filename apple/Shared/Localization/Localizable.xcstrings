@@ -527,6 +527,28 @@
         }
       }
     },
+    "No plans waiting for you to start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No plans waiting for you to start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始を待っているプランはありません"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有等你开始的计划"
+          }
+        }
+      }
+    },
     "Nothing to note: no points, decisions or action items came up." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1062,6 +1084,28 @@
         "en": { "stringUnit": { "state": "translated", "value": "This manager has turned off the knowledge base. Enable it in the manager configuration to use it." } },
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "此管理者已关闭知识库。请在管理者配置中启用后使用。" } },
         "ja": { "stringUnit": { "state": "translated", "value": "このマネージャーのナレッジは無効です。利用するにはマネージャーの設定で有効にしてください。" } }
+      }
+    },
+    "To Start" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "To Start"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始待ち"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "待开始"
+          }
+        }
       }
     },
     "Writing the minutes…" : {

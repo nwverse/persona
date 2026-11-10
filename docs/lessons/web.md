@@ -759,3 +759,11 @@ A write under an op id can be repeated only unchanged: the hub replays the answe
 constant inside `TaskDock`, so nothing pointed the new code at it. Shared look lives in one exported class
 (`DOCK_CAPSULE`) used by every chip that should match; tests assert the classes are shared and the e2e measures the rendered
 height against 2 rem in a real browser.
+
+## A progress count must follow "not closed", not "an agent is running" (#3162)
+
+The old dock's pills and iOS's Progress count kept a task only while its agent was working, waiting or unseen. A
+supervised task spends most of its life stopped between rounds (`follow_up`: the agent's turn ended and was seen, the task
+is not done), so the owner saw one task out of four and asked what the others were doing. The #2920 Progress tray went the
+other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
+`start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.

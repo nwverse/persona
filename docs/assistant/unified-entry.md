@@ -312,7 +312,7 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
+| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879); Progress counts every open task, To Start shows the plans waiting for Start (#3162) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
