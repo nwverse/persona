@@ -618,7 +618,8 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   long press holds the face's long-press items: whose Persona (several hubs), Knowledge, Details, Copy Directory, Copy Info (`MainChatPlaceItems`); the switch's Assistant, tapped while chosen, keeps the
   whole menu, as in the shell. Persona's badge rides on the switch's Assistant; the link's state shows beside the switch, a copy's confirmation as a toast. Pushed pages of Persona's column
   have no switch: Back goes to it (Agents' and Messages' rows stay over their pushed chats). `hidesTabBarWhenShown` puts back only what it found, so Back from a chat does not bring the bar down the side again.
-  The iPad keeps its tab bar along the top. `DuoOpenChromeTests` (taps and long presses only).
+  Settings covers the window there, one column across with its × at the top right, as ChatGPT shows its account page, not a sheet over half of it (#3701, `PadRoutes`' full-screen cover).
+  The iPad keeps its tab bar along the top and Settings as a sheet. `DuoOpenChromeTests` (taps and long presses only).
 - **Switching pages under side bars** (2026-11-09, TestFlight: switching between Assistant and Agents stuttered on the outer screen): with bars on the side the two pages
   cross-fade in place instead of sliding (`ShellPageSlide`); a drag between them fades with the finger. A page that moved sideways under iPhone Duo's vertical bars, however
   it was moved (an offset, a render-only `transformEffect`, under a mask), made both pages' navigation controllers run a deferred transition and lay the page out twice on
@@ -639,7 +640,7 @@ One App for iPhone and iPad (`TARGETED_DEVICE_FAMILY` 1,2). Previously only 1, g
 - iPad supports all four orientations (required by split screen and Stage Manager); iPhone remains portrait only.
 - The sidebar matches the iPhone new shell's drawer (requested 2026-11-05): Persona (main chat) first, then a separator, Inbox, To-dos, Scheduled tasks, Knowledge, Machines, then chat history (#2004 / #5110);
   bottom "New chat" pill + Settings, then the avatar, online status and machines row. Top tabs are only Persona, Agents (and optional Messages); Inbox and Settings are no longer tabs:
-  Inbox, To-dos and Machines push into Persona's right column (`ShellDestinations`); Settings is a sheet (top-right ×). Routing still writes `AppModel.selectedTab`;
+  Inbox, To-dos and Machines push into Persona's right column (`ShellDestinations`); Settings is a sheet (top-right ×; on the open iPhone Duo it covers the window, #3701). Routing still writes `AppModel.selectedTab`;
   `PadRouter` (`RootView.swift`) maps `.mail` to "push Inbox on Persona" and `.settings` to "open Settings sheet". Mac and Vision keep their shared root tabs.
   `IPadSidebarTests` guards this (portrait and landscape: ordering, bottom buttons, no Inbox / Settings tabs, Inbox opens on the right, Settings sheet can close).
 - Welcome content is limited to `Theme.Size.readable` (560), not stretched across large screens.
