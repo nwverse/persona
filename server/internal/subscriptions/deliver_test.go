@@ -483,3 +483,30 @@ func TestHeldItemsAreKeptOnlyWhileTheirDestinationsNeedThem(t *testing.T) {
 		t.Fatal("pruning took the dedup keys")
 	}
 }
+
+// The destinations' marks are kept in the database's document, and a run's commit keeps the catch-up mark only for
+// the Inbox switch-on it saw.
+func TestTheDestinationsMarksAreKept(t *testing.T) {
+	from, mark, kbOn := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC), time.Date(2026, 11, 10, 9, 5, 0, 0, time.UTC), time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
+	sub := Subscription{ID: "sub_a", ToInbox: true, InboxFrom: &from, InboxCatchup: &mark, KBFrom: &kbOn}
+	raw, err := encode(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := decode(raw)
+	if err != nil || !sameTime(back.InboxFrom, &from) || !sameTime(back.InboxCatchup, &mark) || !sameTime(back.KBFrom, &kbOn) {
+		t.Fatalf("decoded: %+v %v", back, err)
+	}
+	// The Inbox was turned off and on again while a run went: its mark belongs to the earlier switch-on.
+	again := from.Add(time.Hour)
+	cur := Subscription{ID: "sub_a", ToInbox: true, InboxFrom: &again}
+	applyRun(&cur, sub, true)
+	if cur.InboxCatchup != nil {
+		t.Fatalf("a run kept the mark of another switch-on: %v", cur.InboxCatchup)
+	}
+	cur.InboxFrom = &from
+	applyRun(&cur, sub, false)
+	if !sameTime(cur.InboxCatchup, &mark) {
+		t.Fatal("a run's mark for the switch-on it saw was not kept")
+	}
+}
