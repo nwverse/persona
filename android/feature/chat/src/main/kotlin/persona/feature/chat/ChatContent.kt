@@ -80,7 +80,9 @@ internal fun chatMarkdown(text: String) = ChatLinks.markdown(MathMarkdown.rewrit
  *
  * One parse per id and text: a caller that asks while a parse of the same id and text is under way (the page's prewarm
  * and the row it warms, say) waits for that one. The parse runs in the cache's own [scope], so a caller that leaves (a
- * row scrolled away, a prewarm restarted) does not cancel it for the others or lose its work.
+ * row scrolled away, a prewarm restarted) does not cancel it for the others or lose its work. Nor does the last caller
+ * to leave: the cache keeps no count of who waits, so a parse runs to the end and is kept even when nobody waits for it
+ * any more. That costs little, since a streaming reply parses only its tail.
  *
  * A streaming reply parses from its last settled block on ([ChatMarkdownStream]); once it ends, its final text is parsed
  * whole and kept under the same id.
@@ -147,7 +149,10 @@ internal class ChatMarkdownCache(
         val markdown = chatMarkdown(parse.text)
         val (result, whole) = if (parse.whole) parseWhole(markdown) to true else streams.parse(parse.id, markdown)
         synchronized(this) {
-            entries[parse.id] = Entry(parse.text, result, whole)
+            // A delta's tail parse that ends after the stream's whole parse of the same text keeps the whole one, which
+            // the next caller would otherwise parse again.
+            val entry = entries[parse.id]
+            if (whole || entry == null || !entry.whole || entry.text != parse.text) entries[parse.id] = Entry(parse.text, result, whole)
             trim()
         }
         return result
