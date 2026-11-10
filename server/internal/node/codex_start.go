@@ -152,10 +152,12 @@ func (n *Node) startCodex(ctx context.Context, launch host.Launcher, cwd, launch
 		delete(n.codexStarting, pane)
 		n.mu.Unlock()
 	}()
-	shells := paneShells(ctx)
+	shells := paneShells(ctx, created)
 	cmd := n.agentCommand(shellQuote(n.bin)+" codex-start "+shellQuote(file), shellQuote, shells...) // agentenv.go
 	began := time.Now()
-	time.Sleep(300 * time.Millisecond)                                           // the fresh shell loads ~/.zshrc; typed input is buffered either way
+	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
+		return nil, n.startTabFailed(ctx, launch, created, ws, "", err)
+	}
 	done, err := n.runAgentCommand(ctx, launch, created, ws, "", cmd, shells...) // typedstart.go
 	if err != nil {
 		return nil, err

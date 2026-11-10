@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
-// A scheduled task's "Push when done" (#2396, docs/assistant/assistant.md "Push when done"): each run is a turn in a conversation, and the
+// A scheduled task's "Push when done" (#2396, docs/assistant/assistant.md "Push after running"): each run is a turn in a conversation, and the
 // hub pushes every finished turn (hub/machine.go notifyFinished). Right for a morning briefing, wrong for a task that watches
 // something ("push me when there is new mail"): every run pushed "task name · no new mail". A task's push is then
 //
@@ -19,7 +19,7 @@ import (
 //
 // Such a task always runs in its own conversation (ownConversationIfQuiet: a follow-up would run in the conversation it
 // came from, often the main one), and that conversation's finished turns are not pushed when they end normally: the
-// hub's finished push (hub quietTaskConversation, by the task list the snapshot reports) and the channels' mirror
+// hub's finished push (quietTaskFinish in fleet_push.go, by the tasks of the last snapshot) and the channels' mirror
 // (quietTaskTurn) leave them out. Errors, cut-offs and a stuck turn are told as ever, and so is what the run sends with
 // notify_user. A turn the user starts in that conversation is not pushed either: the price of judging by the
 // conversation, not by the turn — which, across queued messages, background turns and compactions, the node can not

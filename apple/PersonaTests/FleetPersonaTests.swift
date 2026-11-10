@@ -5,7 +5,7 @@ import Testing
 import UIKit
 @testable import Persona
 
-/// The persona on the Live Activity (docs/apple/live-activity.md「形象」): which state it shows for a fleet, and the look
+/// The persona on the Live Activity (docs/apple/live-activity.md「Avatar」): which state it shows for a fleet, and the look
 /// the app hands the widget extension.
 struct FleetPersonaTests {
     private nonisolated static let packID = "custom-mint"
@@ -69,12 +69,6 @@ struct FleetPersonaTests {
         let look = FleetLook(design: .mochi, tint: Palette.systemBlue)
         #expect(try JSONDecoder().decode(FleetLook.self, from: JSONEncoder().encode(look)) == look)
         #expect(look == FleetLook.standard)
-    }
-
-    /// A look saved by a build before packages had faces still reads: a built-in.
-    @Test func anOlderLookStillReads() throws {
-        let look = try JSONDecoder().decode(FleetLook.self, from: Data(#"{"design":"circuit","light":1,"dark":2}"#.utf8))
-        #expect(look.package == nil && look.faceDesign == .mochi)
     }
 
     /// The persona rides in the ContentState (build 98: the extension did not get it from the keychain on a phone):

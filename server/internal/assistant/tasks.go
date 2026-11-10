@@ -65,6 +65,9 @@ type PlanTask struct {
 	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
+	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
+	// when the plan is made; "" for none.
+	Project string `json:"project,omitempty"`
 	// Attachments: pictures and files the user gave the assistant for this task, by their paths on AttachFrom, the
 	// assistant's computer (#2437, attachments.go); Mentioned: those of them the prompt names by path without listing
 	// them. Checked when the plan is made; copied to the task's computer when it starts. AttachFrom and Mentioned are
@@ -79,6 +82,9 @@ type PlanTask struct {
 	Error     string            `json:"error,omitempty"`
 	ErrorCode string            `json:"error_code,omitempty"`
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
+	// defaulted: Launcher was filled in from a default by an earlier try of this start (startTaskAgent), not named by
+	// whoever planned the task, so a retry may still swap it for one its computer has (launcher_fit.go).
+	defaulted bool
 }
 
 // Readonly is a launch constraint, including for older saved plans and card edits.
@@ -161,7 +167,7 @@ type tasksState struct {
 	// reusing: the todos a started plan took over (PlanTask.ReuseTodo) whose agent is not linked yet, so that a second
 	// plan cannot take the same todo in that gap (takeTodoForTask).
 	reusing map[string]bool
-	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome, waitTaskOutcomes).
+	// outcomeRuns are the outcome recordings still going (goRecordTaskOutcome; the tests wait on them).
 	outcomeRuns sync.WaitGroup
 	// todayLocks: a conversation's id -> the lock ensureToday holds from looking for the day's "Today" card to
 	// appending it, so that concurrent opens of a chat make one card, not one each.
@@ -547,7 +553,11 @@ func (s *Service) taskRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "views": views, "view_actions": actions, "view_blocks": blocks})
+		cards, cardErr := s.taskCards(r.Context(), items, plans)
+		if cardErr != nil {
+			s.logf("feed: task card projection: %v", cardErr)
+		}
+		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

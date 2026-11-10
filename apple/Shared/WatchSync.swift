@@ -3,7 +3,7 @@ import Foundation
 import WatchConnectivity
 #endif
 
-/// Each group's credential the watch uses, and the groups' names (docs/protocol/multi-hub.md「手表」).
+/// Each group's credential the watch uses, and the groups' names (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」).
 nonisolated struct WatchConfigs: Codable, Sendable, Equatable {
     var configs: [String: ServerConfig]
     var names: [String: String] = [:]
@@ -14,6 +14,12 @@ nonisolated struct WatchConfigs: Codable, Sendable, Equatable {
     var deviceIDs: [String: String]? = nil
     /// Authenticated phone hello capabilities by group; missing is unknown, an empty array is known unsupported.
     var features: [String: [String]]? = nil
+}
+
+nonisolated extension Interaction {
+    /// Whether the phone passes it to the watch: not an MCP form or link, which the watch can't fill in, and which a
+    /// watch build from before the kind would fail to decode, losing the whole summary with it.
+    var showsOnWatch: Bool { kind != .elicitation }
 }
 
 /// What the watch needs to render without its own WebSocket: live sessions and pending interactions.
@@ -68,7 +74,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
         WCSession.default.activate()
     }
 
-    /// Every group's credential for the watch (docs/protocol/multi-hub.md「手表」), what the groups are called and which have none
+    /// Every group's credential for the watch (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」), what the groups are called and which have none
     /// yet; `config` (the first group's) stays for a watch app from before several hubs. Sent with no credentials too
     /// (#1185): a watch still holding one the phone no longer gives it drops it.
     func push(_ all: WatchConfigs) {

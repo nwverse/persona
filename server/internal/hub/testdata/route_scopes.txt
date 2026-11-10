@@ -151,6 +151,7 @@ assistant.ask        GET /api/v1/assistant/reporters
 -                    GET /api/v1/imessage/chats
 -                    GET /api/v1/imessage/chats/{id}/messages
 inbox.read           GET /api/v1/inbox
+inbox.read           GET /api/v1/inbox/done
 inbox.read           GET /api/v1/inbox/folders
 inbox.read           GET /api/v1/inbox/mutes
 inbox.read           GET /api/v1/inbox/policies
@@ -225,6 +226,7 @@ machines.read        GET /api/v1/machines/{mid}/stat
 -                    GET /api/v1/ops/{id}
 -                    GET /api/v1/personas
 -                    GET /api/v1/personas/{id}/{file...}
+-                    GET /api/v1/phone/write-queue
 -                    GET /api/v1/pins
 -                    GET /api/v1/recordings
 agents.read          GET /api/v1/sessions
@@ -299,6 +301,7 @@ assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/feishu/notices/action
 -                    POST /api/v1/assistant/feishu/workbench
 -                    POST /api/v1/assistant/followups/{id}/run
+-                    POST /api/v1/assistant/health/workouts
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
 -                    POST /api/v1/assistant/places
@@ -412,6 +415,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/model-profiles/{id}/apply
 notify               POST /api/v1/notify
 -                    POST /api/v1/phone/runtime-cli
+-                    POST /api/v1/phone/write-queue/{id}/cancel
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach

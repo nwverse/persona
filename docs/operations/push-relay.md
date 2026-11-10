@@ -47,7 +47,7 @@ The relay builds the APNs `aps` itself. The hub can only provide ciphertext and 
 
 - "New message" is the fallback: it's shown when the extension fails to decrypt, times out, the device hasn't been unlocked since boot (private key unreadable), or the ciphertext has expired. **It never falls back to plaintext.**
 - The fallback always rings. Once the extension opens the push, the sealed `aps` decides the sound as well: one without `sound` (`personad notify --silent`, `"silent": true`, a push hushed by quiet hours) arrives quiet, the same as with direct APNs (`PushCrypto.apply`).
-- The hub SHA-256 hashes `collapse_id` before giving it to the relay (the original value is the interaction id).
+- The hub SHA-256 hashes `collapse_id` before giving it to the relay (for a card the original value is `card:` and a hash of the manager and the id, or the interaction id for a built-in assistant's card whose id fits APNs' 64 bytes).
 
 ### Live Activities are plaintext
 
@@ -108,6 +108,7 @@ lost alerts and Live Activity updates. Live Activity pushes carry `aps.timestamp
 - Notification Service Extension `PersonaNotify`: if `e` is present, decrypt it and swap in the title / subtitle / body / category (the notification's buttons) / thread / interruption level / userInfo;
   without `e` (direct pushes never carry `mutable-content`, so the extension isn't invoked) the notification is shown as-is.
 - Silent pushes (`background`) are decrypted in the App process; `persona_wake` wakes the connection as before, and `resolved_interaction_ids` removes the notifications of cards that are over (#4349, only to apps that registered with `features: ["withdraw"]`).
+- MCP forms and links (`INTERACTION_ELICITATION`, no buttons) are pushed only to apps that registered with `features: ["elicitation"]`, sealed like any other alert. Their alert carries neither the link to open nor a form's values ([protocol.md](../protocol/protocol.md) "MCP elicitation", #2433).
 
 ## Which way a device is pushed (#5998)
 

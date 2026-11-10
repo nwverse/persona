@@ -27,6 +27,7 @@
     <string name="settings_onb_retest">Test again</string>
     <string name="settings_onb_done_title">%1$s is connected</string>
     <string name="settings_onb_done_pick_later">To use it for the main conversation or Agents, pick it under Models.</string>
+    <string name="settings_onb_direct_note">The main chat and Agents can\'t run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models.</string>
     <string name="settings_onb_done_no_claude">The key is saved. Claude Code still needs to be installed on %1$s before the main conversation can use it.</string>
     <string name="settings_onb_done_no_claude_any">The key is saved. Claude Code still needs to be installed on the computer before the main conversation can use it.</string>
     <string name="settings_onb_done_no_claude_kept">The key is saved. Claude Code still needs to be installed on %1$s before anything can run on it.</string>

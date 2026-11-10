@@ -1,5 +1,5 @@
 import { CONTEXT_RE, FILE_RE, PERSONA_SERVERS, canonicalTool } from "./compatibility";
-// Items → what the chat shows (docs/apple/ios.md "Display logic"): every user message opens a segment; the segment shows
+// Items → what the chat shows (docs/apple/ios.md "Information architecture"): every user message opens a segment; the segment shows
 // the message, one work row folding the tools / thoughts / notices / intermediate replies, and the agent's last
 // words before the next message as the answer.
 
@@ -336,6 +336,15 @@ export function exchangeSteps(s: Segment): Step[] {
   return at < 0 ? [...s.steps, step] : [...s.steps.slice(0, at), step, ...s.steps.slice(at)];
 }
 
+/** Presentation identity for an exchange without input: a fold and its real nonzero block share the source sequence. */
+export function segmentIdentity(s: Segment): string {
+  if (s.user) return s.id;
+  const first = s.steps[0];
+  let seq = first ? (first.kind === "tool" ? first.use.seq : first.item.seq) : undefined;
+  if (s.answer && (seq === undefined || s.answer.seq < seq)) seq = s.answer.seq;
+  return seq !== undefined && Number.isFinite(seq) ? `exchange-${seq}` : s.id;
+}
+
 // The first line worth showing for a tool call: the command, the file, the pattern…
 export function toolChip(use: Item): string {
   const inp = (use.tool_input ?? {}) as Record<string, unknown>;
@@ -428,7 +437,7 @@ export function isPersonaTool(name?: string): boolean {
 
 /** Persona's tools with a verb of their own, by their bare name (iOS PersonaToolNames + ToolPresentation.verb). */
 const PERSONA_VERB_KEY: Record<string, string> = {
-  // Agents on the user's computers (docs/assistant/assistant.md "Agents and Lark tools")
+  // Agents on the user's computers (docs/assistant/assistant.md "Current structure", Agents)
   agent_read: "persona_agent_read",
   agent_send: "persona_agent_send",
   send_to_agent: "persona_agent_send",
@@ -504,8 +513,6 @@ export interface Turn {
   trailing: Item[];
   /** Background tasks that woke the agent during this exchange (their notices). */
   wakes: Item[];
-  /** Everything from the first wake on, for the "Background task done" drawer. */
-  afterWake: Item[];
   /** Messages and steps in arrival order (how the exchange is drawn). */
   ordered: Item[];
 }
@@ -524,20 +531,11 @@ function isAnswerText(i: Item): boolean {
 const isWake = (i: Item) => i.kind === "notice" && i.wake === true;
 
 function newTurn(id: string): Turn {
-  return { id, users: [], process: [], trailing: [], wakes: [], afterWake: [], ordered: [] };
+  return { id, users: [], process: [], trailing: [], wakes: [], ordered: [] };
 }
 
 function cloneTurn(t: Turn): Turn {
-  return { ...t, users: [...t.users], process: [...t.process], trailing: [...t.trailing], wakes: [...t.wakes], afterWake: [...t.afterWake], ordered: [...t.ordered] };
-}
-
-/** Background tasks split an exchange into runs (before the first wake, after each one), each ending in the agent's
- *  words. The answer is the latest words, like any exchange's (#3783: the longest run's used to be, and everything
- *  after it went behind the chip, so a long-running agent's newest words were out of sight for hours); the drawer
- *  holds the runs since the first wake. */
-function collectWakeRuns(t: Turn) {
-  const first = t.ordered.findIndex(isWake);
-  if (first >= 0) t.afterWake = t.ordered.slice(first).filter((x) => !isUserInput(x));
+  return { ...t, users: [...t.users], process: [...t.process], trailing: [...t.trailing], wakes: [...t.wakes], ordered: [...t.ordered] };
 }
 
 /** Only Persona's visibility tools, not similarly named tools on unrelated MCP servers. */
@@ -589,7 +587,9 @@ export function buildBlocks(items: Item[]): Block[] {
     if (!cur) return;
     const t: Turn = cur;
     last.raw = cloneTurn(t);
-    if (t.wakes.length) collectWakeRuns(t);
+    // Background tasks split an exchange into runs (before the first wake, after each one), each ending in the agent's
+    // words. The answer is the latest words, like any exchange's (#3783: the longest run's used to be, so a
+    // long-running agent's newest words were out of sight for hours).
     t.answer = [...t.process].reverse().find(isAnswerText);
     if (last.reopenedAt !== null) {
       blocks.splice(last.reopenedAt, 0, { kind: "turn", turn: t }); // back in its place, the recap still after it
@@ -693,23 +693,6 @@ export interface ChatLinesOptions {
   live?: boolean;
 }
 
-/** The work of these items as one segment without a message: every step, the agent's words included (no answer). */
-export function workSegment(id: string, items: Item[]): Segment {
-  const segs = segments(items.filter((i) => !isUserInput(i)));
-  const out: Segment = { id, steps: [], tools: 0, thoughts: 0, replies: 0, folds: [] };
-  for (const s of segs) {
-    out.steps.push(...s.steps);
-    if (s.answer) out.steps.push({ kind: "text", id: s.answer.id, item: s.answer });
-    out.tools += s.tools;
-    out.thoughts += s.thoughts;
-    out.folds.push(...s.folds);
-    out.start ??= s.start;
-    out.end = s.end ?? out.end;
-  }
-  out.replies = out.steps.filter((x) => x.kind === "text").length;
-  return out;
-}
-
 function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>): ChatLine[] {
   const out: ChatLine[] = [];
   let ordered = t.ordered;
@@ -724,8 +707,8 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
   segs.forEach((seg, k) => {
     if (k === 0 && !seg.user && wokeAt) seg.start = wokeAt;
     const last = k === segs.length - 1;
-    // woken by background tasks: the chip with the runs since the first wake sits above the newest words (#3783)
-    out.push({ kind: "segment", id: seg.id, seg, live: live && last, ...(last && t.wakes.length ? { wakes: t } : {}) });
+    // woken by background tasks: the last segment carries the exchange and its wakes (#3783)
+    out.push({ kind: "segment", id: segmentIdentity(seg), seg, live: live && last, ...(last && t.wakes.length ? { wakes: t } : {}) });
   });
   for (const n of t.trailing) out.push({ kind: "notice", id: n.id, item: n });
   return out;
@@ -734,8 +717,10 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
 /** The chat as lines (iOS ChatLines.lines): exchanges, their wakes and notices, recaps, API errors as cards. */
 export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[] {
   const blocks = buildBlocks(foldCompactions(items));
-  const last = blocks[blocks.length - 1];
-  const liveId = opts.live && last?.kind === "turn" ? last.turn.id : undefined;
+  const source = items.at(-1);
+  // A wake can reopen a turn before a recap. Select the owner of the latest source item, not the last drawn block.
+  const active = opts.live && source ? blocks.find((b) => b.kind === "turn" && (b.turn.ordered.some((i) => i.id === source.id) || b.turn.trailing.some((i) => i.id === source.id))) : undefined;
+  const liveId = active && active.kind === "turn" ? active.turn.id : undefined;
   const out: ChatLine[] = [];
   // A result can land after another segment or user input; associate it with its original call, not its position.
   const results = new Map(items.filter((i) => i.kind === "tool_result" && i.tool_use_id).map((i) => [i.tool_use_id!, i]));
@@ -847,35 +832,6 @@ export function openRecap(lines: ChatLine[], pending?: Item): OpenRecap | undefi
   const last = lines[lines.length - 1];
   if (!pending || last?.kind !== "recaps" || last.items[last.items.length - 1]?.id !== pending.id) return undefined;
   return { line: last.id, earlier: last.items.slice(0, -1), newest: pending };
-}
-
-/** The drawer behind the wakes chip: each wake (its task reports, then what the agent answered to them), newest wake
- *  first, but the exchange's answer, which the chat shows below the chip; the steps in between fold into one work row
- *  at the end. */
-export function wakeDrawer(t: Turn): { groups: { id: string; notices: Item[]; answer?: Item }[]; process: Item[] } {
-  const groups: { id: string; notices: Item[]; answer?: Item }[] = [];
-  const process: Item[] = [];
-  let chunk: Item[] = [];
-  const flush = () => {
-    let answer = -1;
-    for (let i = chunk.length - 1; i >= 0; i--) if (isAnswerText(chunk[i])) { answer = i; break; }
-    const notices: Item[] = [];
-    chunk.forEach((r, i) => {
-      if (i === answer) return;
-      if (r.kind === "notice" && (r.task || r.wake)) notices.push(r);
-      else process.push(r);
-    });
-    if (notices.length || answer >= 0) groups.push({ id: (notices[0] ?? chunk[answer]).id, notices, answer: answer >= 0 ? chunk[answer] : undefined });
-    chunk = [];
-  };
-  for (const r of t.afterWake) {
-    if (isWake(r)) flush(); // each wake starts its own answer
-    chunk.push(r);
-  }
-  flush();
-  // the exchange's answer (the newest words) is in the chat below the chip, not again in here
-  for (const g of groups) if (g.answer && g.answer.id === t.answer?.id) g.answer = undefined;
-  return { groups: groups.filter((g) => g.notices.length || g.answer).reverse(), process };
 }
 
 /** Sent by another Persona conversation (conversation_new / conversation_send), not typed by you. */

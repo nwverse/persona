@@ -1,4 +1,4 @@
-// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects the computers"): it connects each one —
+// Package devices is the manager's side of the user's computers (docs/server/machines.md "Who connects to computers"): it connects each one —
 // the hub machine's own node as a child process, ssh, tailcat, a Persona Link that dialed the hub (relayed to the
 // manager as it is), a connector of kind service, a member hub's computer through that hub — keeps it connected, and
 // holds what is known of it: online, node.info, its sessions and their revs, warm start across restarts, the engine,
@@ -79,7 +79,7 @@ type Options struct {
 	// machine: its own ways).
 	DialNode func(machine string) func(context.Context) (net.Conn, error)
 	// Event takes a node's event (and a session list the manager passes on again) before the hub would: what is the
-	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles the computers' events"); false:
+	// manager's of it (the interactions, the sessions' states, the pushes: docs/server/machines.md "Who handles computer events"); false:
 	// the hub does not get it. nil: every event goes to the hub.
 	Event func(machine, event string, params json.RawMessage) (forward bool)
 	// Detached: a machine's node connection ended (not for another one taking over): what waited on it ends.
@@ -142,13 +142,24 @@ type Devices struct {
 	reportMu  sync.Mutex
 	reportDue chan struct{}
 	lastSent  string // the last devices.state sent (stateKey), to send only changes
+	// desktopsRep is the desktops reporter (presence.go); ring is closed at the next delivery or confirmation, for
+	// LinkRang.
+	desktopsRep desktopsReporter
+	ringMu      sync.Mutex
+	ring        chan struct{}
 
 	packages nodePackages // the node builds for the machines' platforms (packages.go)
 
 	metrics metricsBook // the machines' monitoring (metrics.go)
 	usage   usageBook   // their token usage (metrics.go)
-	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop).
+	// usageWrites: the usage notifications to store, in order (usage.go's usageLoop); usageWait: how long it takes the
+	// ones that come after one to store them together (usageGather as New found it).
 	usageWrites chan usageWrite
+	usageWait   time.Duration
+	// metricWrites: the samples to store (metrics.go's writeMetrics); metricsWait: how long it waits for a tick's other
+	// samples (metricsGather as New found it).
+	metricWrites chan db.MachineSample
+	metricsWait  time.Duration
 
 	usageWin usageWindowsHub // subscription rate-limit windows across machines (usagewindows.go, #2432)
 	usageGW  usageGateways   // the account-pool gateways that add accounts to it (usagegateways.go, #2595)
@@ -164,7 +175,8 @@ func New(o Options) *Devices {
 		o.Logf = func(string, ...any) {}
 	}
 	d := &Devices{opts: o, logf: o.Logf, gotCh: make(chan struct{}), ready: make(chan struct{}), byID: map[string]*Machine{}, ownWait: ownListWait,
-		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
+		reportDue: make(chan struct{}, 1), usageWrites: make(chan usageWrite, 1024), usageWait: usageGather,
+		metricWrites: make(chan db.MachineSample, metricsQueue), metricsWait: metricsGather, reqPrefix: strconv.FormatInt(time.Now().UnixNano(), 36)}
 	// The account-pool gateways' usage windows (usagegateways.go, #2595): manager.json's usage section as it is now.
 	var usage UsageConfig
 	if o.ConfigFile != "" {
@@ -199,6 +211,13 @@ func (d *Devices) Run(ctx context.Context) error {
 	go d.probeServices(mctx)
 	go d.measureLoop(mctx)
 	go d.metricsLoop(mctx)
+	if st := d.metricsStore(); st != nil {
+		d.workers.Add(1) // waited for below: what came before the machines stopped is stored
+		go func() {
+			defer d.workers.Done()
+			d.writeMetrics(mctx, st)
+		}()
+	}
 	go d.usageLoop(mctx)
 	go d.usageGW.run(ctx) // the account-pool gateways (usagegateways.go)
 	// The hub's hand-over, or after ownListWait the manager's own list (ownlist.go) until it comes.
@@ -466,6 +485,7 @@ func (d *Devices) report(all bool) {
 	default:
 		return // the machines are not made yet; the first report follows when they are (startMachines)
 	}
+	defer d.requestDesktops(all) // a change of computers or of who may count goes with it, after it (presence.go)
 	d.reportMu.Lock()
 	defer d.reportMu.Unlock()
 	st := d.states()

@@ -5,7 +5,7 @@
 // "Use as context" attaches it to this chat's next message. Sharing as a card is the phone's. A reply's bar ends in a ⋯
 // whose menu has "Branch to new chat" (#2137: a new conversation with what was said up to this reply) when the session can.
 // Beside your own bubbles, the two context actions live in ⋯ to keep the hover bar compact.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { clock } from "../../lib/format";
 import { sendDraft, type QuotedTask } from "../../lib/drafts";
@@ -77,10 +77,12 @@ export function moreActions(itemId: string | undefined, fork: ((itemId: string) 
   return [{ key: "fork", label: t("chat-messageactions.fork"), icon: "fork", onSelect: () => fork(itemId) }];
 }
 
+type Rewind = NonNullable<ChatActions["rewind"]>;
+
 /** "Rewind to here" (#2436) on a message of yours: "Conversation only" / "Code and conversation", the second asking again (it puts files back too). Off
  *  with the reason as its hint while the session cannot ("Claude only", "Working"…). Each choice waits for the node inside the
  *  menu (it drives Claude's own /rewind, up to a minute) and shows the failure there. */
-export function rewindActions(messageId: string | undefined, text: string, rewind: ChatActions["rewind"]): Action[] {
+export function rewindActions(messageId: string | undefined, text: string, rewind: { block: string; run: Rewind["run"] } | undefined): Action[] {
   if (!messageId || !rewind || !text.trim()) return [];
   const go = (restore: RewindRestore) => () => rewind.run(messageId, text, restore);
   return [
@@ -97,6 +99,16 @@ export function rewindActions(messageId: string | undefined, text: string, rewin
       ],
     },
   ];
+}
+
+const NO_STORE = () => () => {};
+
+/** `live`'s value while `open` (a menu that shows it), `closed` otherwise: a closed menu does not render again when it
+ *  changes (why "Rewind to here" is off changes each time the session starts or stops working). */
+function useWhileOpen(live: Rewind["block"] | undefined, open: boolean, closed: string): string {
+  const on = open ? live : undefined;
+  const get = on ? on.get : () => closed;
+  return useSyncExternalStore(on ? on.subscribe : NO_STORE, get, get);
 }
 
 /** Wraps a message: right-click / long press opens its menu. The hover bar goes under it (with the time), or beside it
@@ -131,11 +143,13 @@ export function MessageActions({
   const touch = useMedia(NO_HOVER);
   const actions = useActions(text, Boolean(isUser), ts, task, () => setSelecting(true));
   const chat = useChatActions();
-  const extras = [...moreActions(itemId, chat?.fork), ...(isUser ? rewindActions(messageId, text, chat?.rewind) : [])];
-  const contextActions = side ? actions.filter((a) => a.key === "handToPersona" || a.key === "context") : [];
-  const more: MenuItem[] = [...contextActions, ...extras].map((a, i) => ({ ...a, divider: i === contextActions.length && i > 0 }));
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const rewind = isUser ? chat?.rewind : undefined;
+  const rewindBlock = useWhileOpen(rewind?.block, Boolean(anchor || moreAnchor), "");
+  const extras = [...moreActions(itemId, chat?.fork), ...rewindActions(messageId, text, rewind && { block: rewindBlock, run: rewind.run })];
+  const contextActions = side ? actions.filter((a) => a.key === "handToPersona" || a.key === "context") : [];
+  const more: MenuItem[] = [...contextActions, ...extras].map((a, i) => ({ ...a, divider: i === contextActions.length && i > 0 }));
   const anchorRef = useRef<HTMLElement | null>(null);
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const opened = useRef(0);

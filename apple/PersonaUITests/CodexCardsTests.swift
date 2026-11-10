@@ -1,6 +1,6 @@
 import XCTest
 
-/// Codex's approval and question cards (docs/integrations/codex.md「提问和审批」) in its chat: the approval says Codex asks, with its
+/// Codex's approval and question cards (docs/integrations/codex.md「Questions and approvals」) in its chat: the approval says Codex asks, with its
 /// reason, the command, Deny / Approve, Always Approve naming what it allows, and Deny and Explain… opening a field; a refused answer (a
 /// draft in the computer's input box) keeps the card and says why; the question card answers both questions. Against
 /// scripts/mock/mock_hub.py with MOCK_CODEX=1 (TEST_RUNNER_PERSONA_CODEX_HUB=http://127.0.0.1:<port>);

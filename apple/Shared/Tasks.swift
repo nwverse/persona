@@ -2,7 +2,7 @@ import Foundation
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, #930): a plan the assistant handed the user,
 // the todos it opened (one per task), and the items the hub inserted into the conversation (its feed). The hub's
-// shapes are in docs/protocol/protocol.md「任务和对话动态」.
+// shapes are in docs/protocol/protocol.md「Tasks and the chat feed」.
 
 /// One task of a plan, as the assistant proposed it (and the user may have edited it).
 nonisolated struct PlanTask: Codable, Hashable, Sendable {
@@ -110,6 +110,10 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     /// `receipt`: the task's title, done / failed, the agent's last words, its PR and machine.
     var title: String? { string("title") }
     var failed: Bool { string("state") == "failed" }
+    /// A turn the model service cut off (#1516): not done, whatever its to-do says.
+    var turnInterrupted: Bool { string("state") == "interrupted" }
+    /// An interrupted receipt's raw error (the API error that cut the turn off); older hubs put it in `summary`.
+    var receiptError: String? { string("error") }
     var summary: String? { string("summary") }
     var pr: String? { string("pr") }
     var machine: String? { string("machine") }
@@ -217,7 +221,7 @@ nonisolated struct AnsweredItem: Hashable, Sendable {
     var answer: String
 }
 
-/// The Today card's content (docs/protocol/protocol.md「任务和对话动态」, kind `today`), built by the hub.
+/// The Today card's content (docs/protocol/protocol.md「Tasks and the chat feed」, kind `today`), built by the hub.
 nonisolated struct TodayBody: Codable, Hashable, Sendable {
     nonisolated struct TaskRef: Codable, Hashable, Sendable { var id: String; var title: String }
     nonisolated struct Meeting: Codable, Hashable, Sendable { var start: Date; var end: Date; var title: String }
@@ -297,7 +301,7 @@ nonisolated struct TodoItem: Codable, Hashable, Identifiable, Sendable {
     /// The task's agent did not start, and why: the hub ended the todo there (it is done, #1077).
     var startError: String?
     /// "auto" when the hub marked the task done because its work was judged finished, with why (#1092,
-    /// docs/assistant/todos.md「自动完成」); nil when the user did.
+    /// docs/assistant/todos.md「Automatic completion」); nil when the user did.
     var doneBy: String?
     var doneReason: String?
     var agents: [Agent]
@@ -508,7 +512,7 @@ nonisolated struct DockAgent: Hashable, Identifiable, Sendable {
     }
 }
 
-/// Where a task is, from its todo and its agents' states (docs/assistant/todos.md「状态计算规则」, the hub's taskState).
+/// Where a task is, from its todo and its agents' states (docs/assistant/todos.md「State calculation rules」, the hub's taskState).
 nonisolated enum TaskState: String, Sendable, CaseIterable {
     case needsYou, working, unread, followup, notStarted, done, failed
 
@@ -552,7 +556,7 @@ nonisolated enum TaskState: String, Sendable, CaseIterable {
     var isRemovable: Bool { self != .working && self != .needsYou }
 }
 
-/// What a task's card says its agent is on now (docs/assistant/unified-entry.md「任务卡片的进度」): its latest words, or — while it
+/// What a task's card says its agent is on now (docs/assistant/unified-entry.md「Task cards」): its latest words, or — while it
 /// only runs tools (reads code, runs tests, waits for CI) and its words stay put for minutes — the step it is on and
 /// since when. New words win again as soon as they come (the hub drops the step then).
 nonisolated enum TaskNow: Equatable, Sendable {

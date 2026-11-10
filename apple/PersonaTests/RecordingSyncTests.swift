@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// The hub's recording sync (docs/protocol/protocol.md「录音同步」) as far as the phone needs it: stores the latest revision,
+/// The hub's recording sync (docs/protocol/protocol.md「Recording sync」) as far as the phone needs it: stores the latest revision,
 /// remembers deletes (a later PUT gets 410), can be down (503).
 private final class FakeRecordingHub: @unchecked Sendable {
     private let lock = NSLock()

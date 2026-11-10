@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// Installs, upgrades and removals in steps (docs/protocol/protocol.md「扩展的安装、升级、卸载进度」, #3307): what the hub
+/// Installs, upgrades and removals in steps (docs/protocol/protocol.md「Extension install, upgrade and uninstall progress」, #3307): what the hub
 /// pushes decodes (unknown states and steps kept), a hub with `extension_operations` previews in the background, waits
 /// for consent and goes on with the same operation, an older hub's request becomes a local operation with no steps, an
 /// older push does not undo a newer one, a preview turned down is canceled, and Retry goes back to the hub when it can

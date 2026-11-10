@@ -4,7 +4,7 @@ import SwiftUI
 // a single file's lines, the phone's directory pages.
 
 /// The blocks in a lazy stack (or a plain one for the few rows over a split). A tree's tap and a diff's controls go
-/// to the page's model with the values the protocol names (docs/extensions/extensions.md「UI 版本 4」).
+/// to the page's model with the values the protocol names (docs/extensions/extensions.md「UI version 4: code hosting」).
 struct CodeBlockStack: View {
     @Environment(\.extensionDisplayedRevision) private var displayed
     var blocks: [CodePageBlock]

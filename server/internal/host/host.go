@@ -202,7 +202,7 @@ type FocusState struct {
 }
 
 // Focuser moves and reports the focus a host shares among its clients (herdr: pane.focus, and the focus events with
-// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus sync").
+// the snapshot's focused_* ids). The web's full herdr view follows it and moves it (docs/integrations/terminal.md "Focus synchronization").
 type Focuser interface {
 	// Focused is what the host shows now; Pane is empty when the host does not say.
 	Focused(ctx context.Context) (FocusState, error)
@@ -428,6 +428,8 @@ type Created struct {
 	SpaceID string // set by CreateSpace
 	SlotID  string
 	Pane    PaneRef
+	// Shell is the shell actually opened by the host, when reported by its launch API.
+	Shell string
 	// Path and Branch: the checkout CreateWorktree made, when the host chose them rather than taking the asked ones
 	// (Orca puts it under its own workspace directory); empty when they are the asked ones.
 	Path, Branch string

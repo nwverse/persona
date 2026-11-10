@@ -37,6 +37,13 @@ describe("answerCard", () => {
     expect(ended).toEqual([["p1", { ix, resolution: { allow: false, message: "用户拒绝了" }, already: false, handedBack: false }]]);
   });
 
+  it("leaves a handed-back receipt for a fresh hand back, as for an answer", async () => {
+    apiOp.mockResolvedValue({ ok: true });
+    expect(await answerCard(ix, { dismiss: true })).toEqual({ ok: true, already: false });
+    expect(apiOp).toHaveBeenCalledWith("/interactions/p1/resolve", { method: "POST", json: { dismiss: true } });
+    expect(ended).toEqual([["p1", { ix, resolution: { dismiss: true }, already: false, handedBack: true }]]);
+  });
+
   it("别处已经答过：按 hub 说的答案记下，already", async () => {
     apiOp.mockResolvedValue({ already: true, resolution: { allow: true } });
     expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: true });
@@ -57,6 +64,20 @@ describe("answerCard", () => {
     expect(await answerCard(ix, allowBody())).toEqual({ ok: false, error: expect.stringMatching(/^没送到：.+（HTTP 500: boom）$/) });
     expect(ended).toEqual([]);
   });
+});
+
+it("keeps one answer per card on its way: the same one shares it, another is refused unsent, both free once it ends", async () => {
+  let finish!: (e: Error) => void;
+  apiOp.mockReturnValueOnce(new Promise((_, no) => { finish = no; }));
+  const first = answerCard(ix, allowBody());
+  expect(answerCard(ix, allowBody())).toBe(first);
+  expect(await answerCard(ix, denyBody())).toEqual({ ok: false, error: "这张卡已有一个答案在发送中" });
+  expect(apiOp).toHaveBeenCalledOnce();
+  finish(new TypeError("Failed to fetch"));
+  expect(await first).toEqual({ ok: false, error: expect.stringMatching(/^没送到：/) });
+  apiOp.mockResolvedValueOnce({});
+  expect(await answerCard(ix, denyBody())).toEqual({ ok: true, already: false });
+  expect(apiOp).toHaveBeenCalledTimes(2);
 });
 
 it("sends secret text unchanged and stores only a redacted receipt", async () => {

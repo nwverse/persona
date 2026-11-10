@@ -88,7 +88,9 @@ class RealInboxRepository(
     }
     private val windowsLock = Any()
 
-    private class Window(val transport: InboxAssistantTransport, val feedId: String, val around: Long?) {
+    /** [manager]: the one the chat is read as (the opening page's pin), on its reads, pictures and threads; null: the default. */
+    private class Window(val transport: InboxAssistantTransport, val feedId: String, val around: Long?, val manager: String? = null) {
+        val source = LarkContentSource(transport, manager)
         val state = MutableStateFlow(LarkConversation(loading = true))
         val lock = Mutex()
         var older: String? = null
@@ -298,8 +300,10 @@ class RealInboxRepository(
         }
     }
 
-    override suspend fun inboxMutes(): List<persona.feature.inbox.InboxMute> =
-        persona.feature.inbox.inboxMutes(requireTransport().inboxMutes())
+    override suspend fun inboxMutes(manager: String?): List<persona.feature.inbox.InboxMute> {
+        val transport = requireTransport()
+        return persona.feature.inbox.inboxMutes(asStamped(manager) { transport.inboxMutes() })
+    }
 
     // "Mute this repository / chat / sender": the items it covers are done at once (the hub files them too), back if it fails.
     override suspend fun mute(record: InboxRecord, option: persona.feature.inbox.InboxMuteOption) {
@@ -319,11 +323,15 @@ class RealInboxRepository(
         quietly { refresh() }
     }
 
-    override suspend fun unmute(id: String) = requireTransport().unmuteInbox(id)
-
-    override suspend fun inboxPolicies(record: InboxRecord?): List<persona.feature.inbox.InboxPolicy> {
+    override suspend fun unmute(id: String, manager: String?) {
         val transport = requireTransport()
-        return persona.feature.inbox.inboxPolicies(asItem(record) { transport.inboxPolicies() })
+        asStamped(manager) { transport.unmuteInbox(id) }
+    }
+
+    override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<persona.feature.inbox.InboxPolicy> {
+        val transport = requireTransport()
+        val read = suspend { transport.inboxPolicies() }
+        return persona.feature.inbox.inboxPolicies(if (record != null) asItem(record, read) else asStamped(manager, read))
     }
 
     // A rule's tier reaches the open, triaged items it covers at once (the hub moves them too), back if it fails.
@@ -337,19 +345,22 @@ class RealInboxRepository(
         val id = target.policy?.id
         require(id != null || record != null) { "A new rule needs its item" }
         val default = AssistantManagerChoice.current.value.defaultId
-        fun ownerOf(r: InboxRecord?) = r?.manager?.takeIf { it.isNotBlank() && it != default } ?: ""
-        val owner = ownerOf(record)
+        fun ownerOf(manager: String?) = manager?.takeIf { it.isNotBlank() && it != default } ?: ""
+        val owner = ownerOf(target.manager)
         val moved = refreshLock.withLock {
             val before = current.value.records
-            val after = persona.feature.inbox.applyPolicyTier(before, target.source, target.option, tier) { ownerOf(it) == owner }
+            val after = persona.feature.inbox.applyPolicyTier(before, target.source, target.option, tier) { ownerOf(it.manager) == owner }
             current.update { it.copy(records = after) }
             before.zip(after).filter { (old, new) -> old !== new }
         }
+        val removing = tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None
+        val send = suspend {
+            if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
+            else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
+        }
         val result = try {
-            asItem(record) {
-                if (id != null) transport.updateInboxPolicy(id, tier.wire, twin.wire)
-                else transport.setInboxPolicy(checkNotNull(record).hubItemId, target.option.tag, tier.wire, twin.wire)
-            }
+            // Opened from "Rules" (no item): removing names the manager the list read it from, even when that is the default now.
+            if (record == null && removing) asStamped(target.manager, send) else asManager(target.manager, send)
         } catch (e: Exception) {
             // Back only the ones still as this left them: a refresh meanwhile has the hub's.
             if (owns(transport)) refreshLock.withLock {
@@ -359,11 +370,14 @@ class RealInboxRepository(
             throw e
         }
         quietly { refresh() }
-        if (tier == persona.feature.inbox.InboxPolicyTier.None && twin == persona.feature.inbox.InboxPolicyTwin.None) return null
+        if (removing) return null
         return result.obj("policy")?.let { persona.feature.inbox.inboxPolicy(it) }
     }
 
-    override suspend fun removePolicy(id: String) = requireTransport().removeInboxPolicy(id)
+    override suspend fun removePolicy(id: String, manager: String?) {
+        val transport = requireTransport()
+        asStamped(manager) { transport.removeInboxPolicy(id) }
+    }
 
     override suspend fun setDone(items: List<InboxDoneTarget>, done: Boolean): InboxBulkResult =
         bulk(items, if (done) InboxBulkAction.Done else InboxBulkAction.Reopen)
@@ -391,6 +405,29 @@ class RealInboxRepository(
                 throw e
             }
         }
+    }
+
+    /**
+     * One page of a manager's done history (#2200, #2576), its items as the list's records (the app's ids, the manager
+     * stamped). Kept out of the snapshot: the inbox page merges it under Done. An old hub (404) has none.
+     */
+    override suspend fun doneHistory(manager: String?, cursor: persona.feature.inbox.InboxDoneCursor?): persona.feature.inbox.InboxDonePage {
+        val transport = requireTransport()
+        val body = try {
+            transport.doneHistory(manager?.takeIf { it.isNotBlank() }, cursor?.before, cursor?.beforeId)
+        } catch (e: UnsupportedOperationException) {
+            return persona.feature.inbox.InboxDonePage()
+        } catch (e: Exception) {
+            if ((e as? persona.core.contracts.api.HubCodedFailure)?.status == 404) return persona.feature.inbox.InboxDonePage()
+            throw e
+        }
+        if (!owns(transport)) throw CancellationException("Pairing changed")
+        val data = body.array("items").mapNotNull { it as? JsonObject }.map { item ->
+            // the page is one manager's: an item it didn't stamp is still that manager's
+            if (manager.isNullOrBlank() || item["manager"] != null) item else JsonObject(item + ("manager" to JsonPrimitive(manager)))
+        }
+        val next = body.obj("next")?.let { n -> n.string("before").takeIf { it.isNotBlank() }?.let { persona.feature.inbox.InboxDoneCursor(it, n.string("before_id").ifBlank { null }) } }
+        return persona.feature.inbox.InboxDonePage(listed(data, transport), next)
     }
 
     /** What the managers answered to a bulk action, in the app's ids, and the items it changed as the hub has them now. */
@@ -567,17 +604,20 @@ class RealInboxRepository(
         if (!online()) throw IOException("sends once connected")
         try {
             val mailTarget = request.mailTarget
-            // the item replied to; a chat's send, the one record of that chat (two managers' copies of one chat: the
-            // page's pin decides)
+            // the item replied to; a chat's send, the one record of that chat. Two managers' copies of one chat, or a
+            // thread: the sending page's pins name its copy; without them (the outbox's retry), the manager it is open as here.
             val replied = when (actualTarget) {
                 is ReplyTarget.Inbox -> recordOf(actualTarget.itemId)
                 is ReplyTarget.Lark -> current.value.records.filter { it.feedId == actualTarget.feedId }.singleOrNull()
             }
+            val paged = (actualTarget as? ReplyTarget.Lark)?.let { currentCoroutineContext()[ManagerPins]?.manager(sendPath(it.feedId)) } != null
+            val opened = (actualTarget as? ReplyTarget.Lark)?.takeIf { replied == null && !paged }?.let { openedManager(it.feedId) }
+            suspend fun <T> named(block: suspend () -> T): T = if (opened != null) asManager(opened, block) else asItem(replied, block)
             val response = if (actualTarget is ReplyTarget.Lark && actualTarget.feedId.startsWith("thread:"))
-                checkNotNull(sendThread)(actualTarget.feedId.removePrefix("thread:"), request)
+                named { checkNotNull(sendThread)(actualTarget.feedId.removePrefix("thread:"), request) }
             else if (mailTarget != null && actualTarget is ReplyTarget.Inbox)
                 asItem(replied) { transport.replyMail(InboxItemKey.hubId(actualTarget.itemId), request.text, request.clientId, mailTarget) }
-            else asItem(replied) { transport.reply((actualTarget as? ReplyTarget.Inbox)?.itemId?.let(InboxItemKey::hubId),
+            else named { transport.reply((actualTarget as? ReplyTarget.Inbox)?.itemId?.let(InboxItemKey::hubId),
                 (actualTarget as? ReplyTarget.Lark)?.feedId, request.text, request.clientId) }
             val result = response.obj("message") ?: response
             if (response.string("state") in setOf("pending", "unknown") || result.string("state") in setOf("pending", "unknown")) {
@@ -628,10 +668,10 @@ class RealInboxRepository(
         }
     }
 
-    suspend fun acceptLarkWindow(feedId: String, raw: List<JsonObject>) {
+    suspend fun acceptLarkWindow(feedId: String, raw: List<JsonObject>, manager: String? = null) {
         val transport = requireTransport()
         val window = synchronized(windowsLock) {
-            windows[feedId] ?: Window(transport, feedId, null).also { windows[feedId] = it }
+            windows[feedId]?.takeIf { it.manager == manager } ?: Window(transport, feedId, null, manager).also { windows[feedId] = it }
         }
         window.raw = raw
         window.state.value = window.state.value.copy(messages = raw.map { message(it, window) })
@@ -642,9 +682,11 @@ class RealInboxRepository(
         connection.current.flatMapLatest { transport ->
             if (transport == null) flowOf(LarkConversation(error = DataText.of(Key.PairHubFirst)))
             else {
+                // The default's pin is no manager, so its page shares the unpinned pages' window.
+                val manager = currentCoroutineContext()[ManagerPins]?.manager(listOf("lark", "conversations", feedId))?.takeIf { it.isNotEmpty() }
                 val window = synchronized(windowsLock) {
-                    windows[feedId]?.takeIf { it.transport === transport && it.around == startPosition }
-                        ?: Window(transport, feedId, startPosition).also { trimWindows(7); windows[feedId] = it }
+                    windows[feedId]?.takeIf { it.transport === transport && it.around == startPosition && it.manager == manager }
+                        ?: Window(transport, feedId, startPosition, manager).also { trimWindows(7); windows[feedId] = it }
                 }
                 channelFlow {
                     synchronized(windowsLock) { window.users++ }
@@ -680,7 +722,7 @@ class RealInboxRepository(
         idle.take((idle.size - limit).coerceAtLeast(0)).forEach { windows.remove(it.key) }
     }
 
-    private fun windowKey(window: Window) = "${window.transport.scope}:lark:${window.feedId}:${window.around}"
+    private fun windowKey(window: Window) = "${window.source.scope}:lark:${window.feedId}:${window.around}"
     private suspend fun restoreWindow(window: Window) = window.lock.withLock {
         if (window.restored) return@withLock
         snapshots.restore<JsonObject>(windowKey(window))?.let { data ->
@@ -809,7 +851,7 @@ class RealInboxRepository(
     private suspend fun reconcileReplyEchoes(transport: InboxAssistantTransport, feed: String?) {
         if (feed == null) return
         val window = synchronized(windowsLock) { windows[feed] } ?: Window(transport, feed, null)
-        var page = transport.messages(feed)
+        var page = asManager(window.manager) { transport.messages(feed) }
         val seen = mutableSetOf<String>()
         var before: String? = null
         repeat(100) {
@@ -818,7 +860,7 @@ class RealInboxRepository(
             if (!complete(page)) throw IncompleteWindow()
             if (!page.flag("has_older") || journal.read(transport.scope).outbox.none { it.feedId == feed && it.state != "sent" }) return
             before = checkedCursor(page, true, before, seen)
-            page = transport.messages(feed, before = before)
+            page = asManager(window.manager) { transport.messages(feed, before = before) }
         }
         throw IncompleteWindow()
     }
@@ -830,6 +872,18 @@ class RealInboxRepository(
         window.lock.withLock { if (owns(window.transport) && online()) replaceLatest(window) }
     }
     private fun window(feedId: String) = synchronized(windowsLock) { requireNotNull(windows[feedId]) }
+
+    /** Where a send to [target] (a feed, or `thread:` and its root message) goes, under /api/v1. */
+    private fun sendPath(target: String): List<String> =
+        if (target.startsWith("thread:")) listOf("lark", "messages", target.removePrefix("thread:"), "replies")
+        else listOf("lark", "conversations", target, "messages")
+
+    /** The manager the chat [target] (a feed, or `thread:` and its root message) is open as here; null: none named. */
+    private fun openedManager(target: String): String? = synchronized(windowsLock) {
+        val root = target.removePrefix("thread:").takeIf { target.startsWith("thread:") }
+        if (root == null) windows[target]?.manager
+        else windows.values.firstOrNull { window -> window.raw.any { it.optional("id") == root } }?.manager
+    }
 
     private class WindowGap : Exception()
     private class ReplyUnconfirmed : IOException()
@@ -847,7 +901,7 @@ class RealInboxRepository(
     }
 
     private suspend fun fetch(window: Window, around: Long? = null, before: String? = null, after: String? = null): JsonObject {
-        val page = window.transport.messages(window.feedId, around, before, after)
+        val page = asManager(window.manager) { window.transport.messages(window.feedId, around, before, after) }
         if (!owns(window.transport)) throw CancellationException("Pairing changed")
         // Positions are sparse. Only authoritative pages and their cursor chain establish coverage.
         if (!complete(page)) {
@@ -963,7 +1017,7 @@ class RealInboxRepository(
             if (!owns(window.transport)) return
             val id = local.serverId!!
             quietly {
-                val copy = window.transport.larkMessage(id).obj("message")
+                val copy = asManager(window.manager) { window.transport.larkMessage(id) }.obj("message")
                 if (copy != null && copy.string("id") == id && delivered(copy)) publishLocal(journal.update(window.transport.scope) {
                     if (it.outbox.any { reply -> reply.request.clientId == local.request.clientId && reply.state == "sent" })
                         it.confirm(local.request.clientId, id, seen = true) else it
@@ -1089,12 +1143,22 @@ class RealInboxRepository(
      * default's names none, and so overrides what a list noted for an id another manager has too. With no record known
      * nothing is named: what the page pinned (its chat's manager) still decides.
      */
-    private suspend fun <T> asItem(record: InboxRecord?, block: suspend () -> T): T {
-        if (record == null) return block()
+    private suspend fun <T> asItem(record: InboxRecord?, block: suspend () -> T): T = asManager(record?.let { it.manager.orEmpty() }, block)
+
+    /** Runs requests naming [manager] where they are made, as [asItem] does: the default (or "") names none; null names nothing. */
+    private suspend fun <T> asManager(manager: String?, block: suspend () -> T): T {
+        if (manager == null) return block()
         val default = AssistantManagerChoice.current.value.defaultId
-        val manager = record.manager?.takeIf { it.isNotBlank() && it != default } ?: ""
-        return withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
+        return withContext(persona.core.contracts.api.RequestManager(manager.takeIf { it.isNotBlank() && it != default } ?: "")) { block() }
     }
+
+    /**
+     * Runs a list's read from each manager, or a change to what it read stamped [manager] (several managers), naming it even
+     * when it is the default: the default may change between the read and the change. Unstamped (one manager): as [asManager].
+     */
+    private suspend fun <T> asStamped(manager: String?, block: suspend () -> T): T =
+        if (manager.isNullOrBlank()) asManager(manager, block)
+        else withContext(persona.core.contracts.api.RequestManager(manager)) { block() }
 
     /**
      * One item as the hub has it. An answer about one item comes from its manager alone, unstamped (only the merged
@@ -1157,15 +1221,15 @@ class RealInboxRepository(
         return fresh.copy(item = fresh.item.copy(id = previous.item.id), manager = fresh.manager ?: previous.manager)
     }
 
-    override suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost {
+    override suspend fun momentsPost(postId: String, manager: String?): persona.core.contracts.LarkMomentsPost {
         val transport = requireTransport()
-        val json = transport.momentsPost(postId)
+        val json = asManager(manager) { transport.momentsPost(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsPost.serializer(), json)
     }
 
-    override suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> {
+    override suspend fun momentsComments(postId: String, manager: String?): List<persona.core.contracts.LarkMomentsComment> {
         val transport = requireTransport()
-        val json = transport.momentsComments(postId)
+        val json = asManager(manager) { transport.momentsComments(postId) }
         return persona.core.contracts.JsonCodec.decodeFromJsonElement(persona.core.contracts.LarkMomentsCommentsResponse.serializer(), json).comments
     }
 
@@ -1178,8 +1242,10 @@ class RealInboxRepository(
     }
     private fun avatar(ref: String?, transport: InboxAssistantTransport) =
         larkAvatar(ref, transport.scope) { sized -> images.get("${transport.scope}:$sized") { transport.avatar(sized) } }
+    private fun avatar(ref: String?, source: LarkContentSource) =
+        larkAvatar(ref, source.scope) { sized -> images.get("${source.scope}:$sized") { source.avatar(sized) } }
     private fun message(data: JsonObject, window: Window): LarkMessage {
-        val source = LarkContentSource(window.transport)
+        val source = window.source
         val id = data.string("id")
         val external = "https://applink.feishu.cn/client/chat/open?chatId=${java.net.URLEncoder.encode(window.feedId, "UTF-8")}&messageId=${java.net.URLEncoder.encode(id, "UTF-8")}"
         val parts = if (data.flag("recalled")) listOf(LarkPart.Text(DataText.of(Key.LarkRecalled))) else data.array("parts").map { element ->
@@ -1189,14 +1255,15 @@ class RealInboxRepository(
             when (part.string("kind")) {
                 "image", "emotion" -> {
                     val ref = part.string("url")
-                    LarkPart.Image(AuthenticatedLarkImage("${window.transport.scope}:$ref") { images.get("${window.transport.scope}:$ref") { window.transport.media(ref) } },
+                    val key = "${source.scope}:$ref"
+                    LarkPart.Image(AuthenticatedLarkImage(key) { images.get(key) { source.media(ref) } },
                         width = metadata.number("width")?.toInt()?.coerceAtLeast(1) ?: 1,
                         height = metadata.number("height")?.toInt()?.coerceAtLeast(1) ?: 1)
                 }
                 "file" -> LarkPart.File(part.string("url"), metadata.optional("name") ?: text.ifBlank { DataText.of(Key.LarkFile) },
-                    metadata.optional("mimeType") ?: "application/octet-stream")
+                    metadata.optional("mimeType") ?: "application/octet-stream", source)
                 "text", "at", "code" -> LarkPart.Text(text, source)
-                "card", "interactive" -> larkInteractivePart(metadata, text, window.transport)
+                "card", "interactive" -> larkInteractivePart(metadata, text, window.transport, manager = window.manager)
                 "link" -> LarkPart.Text(listOf(text, part.string("url")).filter { it.isNotBlank() }.distinct().joinToString("\n"), source)
                 else -> LarkPart.External(text, external, if (part.string("kind") == "media") "video" else "card",
                     metadata.string("duration"))
@@ -1208,9 +1275,9 @@ class RealInboxRepository(
                 "failed" -> LarkDelivery.Failed
                 "sending", "pending" -> LarkDelivery.Sending
                 else -> LarkDelivery.Sent
-            }, avatar = avatar(data.optional("sender_avatar"), window.transport),
+            }, avatar = avatar(data.optional("sender_avatar"), source),
             replyCount = maxOf(0L, data.number("reply_count") ?: 0L, data.number("thread_reply_count") ?: 0L),
-            thread = larkThreadSource(data, window.transport, window.feedId),
+            thread = larkThreadSource(data, window.transport, window.feedId, window.manager),
             // A recalled message shows a placeholder, an encrypted one its ciphertext: neither is the sender's text.
             translatable = !data.flag("recalled") && (data["olk"] == null || data["olk"] is JsonNull))
     }

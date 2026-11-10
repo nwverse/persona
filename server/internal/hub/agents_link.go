@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The Agents business is the manager's (internal/assistant, agents_*.go; docs/assistant/agent-work.md "Who owns what"): the triage of
+// The Agents business is the manager's (internal/assistant, agents_*.go; docs/assistant/agent-work.md "Responsibilities"): the triage of
 // an agent's turn, "Continue" after a transient model error, the wakes, the cards it opens and their answers, its switches,
 // state and history; the tab names of new agents; what a new or resumed agent runs on. The hub carries it: it tells
 // the manager what happened (session.turn_started / turn_ended, session.seen), shows what it reports (the snapshot's

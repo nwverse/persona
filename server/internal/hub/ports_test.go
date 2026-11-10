@@ -400,3 +400,22 @@ func TestTheLiveScreenTakesTheAppsDeviceToken(t *testing.T) {
 		t.Fatal("refused before anything is dialed")
 	}
 }
+
+// A node's streams outlive a hub restart, and it refuses for a while an id it heard closed before it opened
+// (streams.Mux.Open): a restarted hub (a new generator) never hands out an id the last one did.
+func TestStreamIDsDifferAcrossHubRestarts(t *testing.T) {
+	before, after := newStreamIDs(), newStreamIDs()
+	seen := map[string]bool{}
+	for _, ids := range []*streamIDs{before, after} {
+		for _, kind := range []string{"p", "v", "p"} {
+			id := ids.next(kind)
+			if !strings.HasPrefix(id, kind) || seen[id] {
+				t.Fatalf("id %q: want a new one starting with %q (had %v)", id, kind, seen)
+			}
+			seen[id] = true
+		}
+	}
+	if before.token == "" || before.token == after.token {
+		t.Fatalf("tokens %q and %q", before.token, after.token)
+	}
+}

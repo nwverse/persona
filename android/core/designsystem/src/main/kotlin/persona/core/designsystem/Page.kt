@@ -315,6 +315,13 @@ fun JTopBar(
     onTitleClick: (() -> Unit)? = null,
     showTitle: Boolean = true,
 ) {
+    LocalHomeChrome.current?.takeIf { onBack == null }?.let { home ->
+        CompositionLocalProvider(LocalIconsRaised provides true) {
+            HomeNavigation(home.items, home.selected, home.onSelect, home.leading,
+                trailing = actions, onSelectedMenu = onTitleClick)
+        }
+        return
+    }
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
     val leading: @Composable () -> Unit = {
