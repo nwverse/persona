@@ -440,6 +440,86 @@ func sendJSON(t *testing.T, c *websocket.Conn, raw string) {
 	}
 }
 
+// A pairing written while the link is up (persona-link pair, the tray's, the App's) is taken up at once: the link ends
+// as Reconnect now ends it and comes back with the new credential. An endpoints message, which rewrites link.json with
+// the same pairing, leaves the link alone.
+func TestLinkFollowsANewPairingWhileConnected(t *testing.T) {
+	type linkSeen struct {
+		auth  string
+		ended chan struct{}
+	}
+	links := make(chan linkSeen, 8)
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if r.URL.Path != Path || (auth != "Bearer jd_x" && auth != "Bearer jd_new") {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		if _, _, err := c.Read(r.Context()); err != nil { // the hello
+			return
+		}
+		seen := linkSeen{auth, make(chan struct{})}
+		links <- seen
+		sendJSON(t, c, `{"type":"endpoints","endpoints":[{"url":"`+srv.URL+`","kind":"lan"}],"hub_name":"home"}`)
+		for {
+			if _, _, err := c.Read(context.Background()); err != nil {
+				close(seen.ended)
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	path := filepath.Join(t.TempDir(), "link.json")
+	ch := runAgainst(t, srv, "jd_x", Options{Path: path})
+	next := func(within time.Duration) linkSeen {
+		t.Helper()
+		select {
+		case l := <-links:
+			return l
+		case <-time.After(within):
+			t.Fatalf("no new link within %s", within)
+			return linkSeen{}
+		}
+	}
+	first := next(10 * time.Second)
+	if first.auth != "Bearer jd_x" {
+		t.Fatalf("first link with %q", first.auth)
+	}
+	waitFor(t, ch, func(s Status) bool { return s.State == "connected" && s.HubName == "home" })
+	if c, err := Read(path); err != nil || c.HubName != "home" {
+		t.Fatalf("link.json %+v %v", c, err)
+	}
+	// link.json was rewritten with the same pairing: looking at it (every pairCheck) must not end the link.
+	select {
+	case l := <-links:
+		t.Fatalf("reconnected (%q) after an endpoints message", l.auth)
+	case <-time.After(pairCheck + time.Second):
+	}
+	paired := time.Now()
+	if err := Update(path, func(c *Config) error { c.Token = "jd_new"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	second := next(5 * time.Second)
+	if second.auth != "Bearer jd_new" {
+		t.Fatalf("second link with %q", second.auth)
+	}
+	if took := time.Since(paired); took > pairCheck+2*time.Second {
+		t.Fatalf("moved to the new pairing %s after it was written", took)
+	}
+	select { // the hub sees it end as it does after Reconnect now
+	case <-first.ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the old link is still up")
+	}
+	waitFor(t, ch, func(s Status) bool { return s.State == "connected" })
+}
+
 func TestLinkKeepsWhatTheHubSaysItIs(t *testing.T) {
 	next := make(chan string, 4)
 	srv, _ := fakeHub(t, func(c *websocket.Conn) {

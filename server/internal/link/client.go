@@ -45,6 +45,7 @@ const (
 	checkPing   = 3 * time.Second        // a ping after the network changed
 	refusedWait = 5 * time.Minute        // after the hub refused the credential, unless link.json changes
 	replaceWait = 30 * time.Second       // after another persona-link of this machine took over
+	pairCheck   = 2 * time.Second        // how often a connected link looks whether link.json was paired again
 )
 
 // errPairedAgain: link.json holds another credential than the link's (paired again meanwhile): nothing of this link's
@@ -54,6 +55,8 @@ var errPairedAgain = errors.New("paired again meanwhile")
 var (
 	errPin    = errors.New("TLS 公钥指纹和配对时的不一样，不是那台 hub")
 	errRedial = errors.New("手动重连")
+	// errRepaired: link.json was paired again while the link was up; it reconnects at once with the new pairing.
+	errRepaired = errors.New("重新配对了，用新凭据重连")
 )
 
 // Status is what persona-link reports: Run hands one to Options.Status every time something changes, and
@@ -304,7 +307,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 		wait := b.next()
 		var he *httpError
 		switch {
-		case errors.Is(end, errRedial):
+		case errors.Is(end, errRedial), errors.Is(end, errRepaired):
 			b, wait = backoff{}, 0
 		case errors.As(end, &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden):
 			state, wait = "refused", refusedWait
