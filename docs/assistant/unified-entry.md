@@ -59,8 +59,9 @@ each count is its rows:
   back to In progress. An empty Needs you is grey and opens "All caught up".
 
 The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
-`assistantEntries` (`persona.core.domain.tasks`). Both replay `spec/fixtures/entries`, which pins which entry every case goes
-to; iOS / Mac adopt the same rule by replaying the same fixture. The older Pending / Progress / Agents / To start entries
+`assistantEntries` (`persona.core.domain.tasks`), iOS / iPad / Mac `AssistantEntries.split`
+(`apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift`, #3393). All three replay `spec/fixtures/entries`, which pins
+which entry every case goes to (Apple: `AssistantEntriesFixtureTests`). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
 ### Progress tray: one task, one row (#2878)
@@ -345,19 +346,26 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879); Progress counts the open tasks by the To-dos page's rule (`TodoTriageLogic.bucket`, shelved left out; the main chat counts every to-do, #3331), To Start shows the plans waiting for Start (#3162) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
+| Action bar on iPhone, iPad and Mac: Needs You and In Progress in place of the dock, each opening its tray, each thing in one of them (#3393, the Apple side of #3387) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
-- **Action bar on iPhone and iPad (#2879)**: the dock's row becomes three entries, **Pending** (tasks that ask, then the
-  main chat's own waiting Agents), **Progress** (tasks going on, waiting first, then finished ones; the count is the To-dos
-  page's "Not done" rule, shelved ones left out, #3331) and **Agents** (the chat's own Agents and its tasks' Agents, waiting first). One tray at a time rises above
-  the bar; its row opens task details or the Agent's page as a pill did, and Progress' All opens the board. The entries
-  are the dock's capsule (`DockCapsule`, shared with the Mac dock's All): caption medium (13 pt at the default text
-  size, Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind
-  secondary text, 28 pt tall at the default size (16 pt line + 2 × 6 pt; radius 14 pt), 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
-  semibold); Pending with something waiting uses the waiting pill's tint. The Mac keeps the dock.
-  Tests: `AssistantActionBarTests`, UI `AssistantActionBarUITests` (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`).
+- **Action bar on iPhone, iPad and Mac (#3393, replacing #2879's Pending / To Start / Progress / Agents and the Mac's
+  dock)**: Needs You and In Progress as "Needs you and In progress: each thing once" above defines them. The split is
+  `AssistantEntries.split`, a port of the web's `assistantEntries`; `ActionTrayContent` puts the conversation's own cards
+  in front of Needs You (their row closes the tray onto the card below). An Agent linked to a to-do made by hand (no
+  `origin`) is that to-do's row in the main chat, not a second row of its own (#3387's `dockAgents` leaves out only the
+  agents of conversations' tasks, so web and Android list it twice; the fixture has no such case yet). Message cards also leave Needs You once the inbox
+  has the item handled or the user put the card off with Later. Rows: a task opens its details (right-click or long press
+  removes one that is not running) and says its status and, past one, its Agent count; an Agent opens its page; a plan or
+  a message card is the card itself, Start or Send right there; shelved tasks are one uncounted line under In Progress that
+  opens the board. Each tray's All opens the board.
+  The entries are the dock's capsule (`DockCapsule`, also the trays' All): caption medium (13 pt at the default text size,
+  Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind secondary
+  text, 28 pt tall at the default size, 8 pt apart. Open is the filter chip's on look in the same size (accent fill, white
+  semibold); Needs You with rows takes the waiting pill's tint, empty it is the plain grey capsule and opens "All Caught Up".
+  Tests: `AssistantEntriesFixtureTests` (the shared fixture), `AssistantActionBarTests`, UI `AssistantActionBarUITests`
+  (`MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1`).
 - Task details have one header layer: the embedded Agent page takes over the task name, Close, and task ⋯ (#3255; see "Task details" above).
 - Screenshots: `MOCK_TASKS=1`, `MOCK_TASKS_AT`, `-showTaskDetail`, `-showTaskBoard` (`docs/operations/testing.md`).
 
