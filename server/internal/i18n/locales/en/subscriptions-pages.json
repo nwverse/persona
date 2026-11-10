@@ -102,6 +102,7 @@
   "plain.snapshot": "Calls {source}'s read-only tool \"{tool}\" {every} and keeps a snapshot, only when it changed.",
   "plain.weak_dedup": "The result has no ID, so duplicates are caught by content: an edited item comes in again.",
   "problem.annotation": "Its maker marks it as changing something",
+  "problem.assistant_offline": "It's off now, but the assistant is away, so its stored content isn't deleted yet. Try again in a moment",
   "problem.bad_args": "The arguments don't match the tool",
   "problem.bad_recipe": "The recipe isn't valid",
   "problem.bad_request": "The request isn't valid",
