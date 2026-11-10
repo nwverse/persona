@@ -310,7 +310,7 @@ func TestInboxPollKeepsRulesGroupsAndDetectsOwnReply(t *testing.T) {
 	if group.Thread == "" || !strings.Contains(group.Context, "A second line") || group.Done != connector.DoneReplied {
 		t.Fatalf("group item = %+v", group)
 	}
-	if dm := items["larkcli:chat:oc_example_dm"]; dm.Tier != connector.TierAction || dm.Done != "" {
+	if dm := items["larkcli:chat:oc_example_dm"]; dm.Tier != "" || dm.Done != "" { // the Inbox triage tiers it
 		t.Fatalf("direct item = %+v", dm)
 	}
 	if group.Kind != "mention" || group.Title != "Example Group" || len(group.Tags) != 2 ||
@@ -356,7 +356,7 @@ func TestInboxDropsBoundAppMessagesButKeepsOtherBots(t *testing.T) {
 		t.Fatalf("bound app message entered Inbox: %#v", items)
 	}
 	bot, ok := items["larkcli:chat:oc_example_other_dm"]
-	if !ok || bot.Kind != "bot" || bot.Tier != connector.TierAction {
+	if !ok || bot.Kind != "bot" || bot.Tier != "" { // triage decides, not a fixed tier
 		t.Fatalf("other app bot = %+v", bot)
 	}
 	if bot.Tags[1].Key != connector.TagSender || bot.Tags[1].Value != "cli_other" {

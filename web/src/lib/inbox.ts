@@ -269,6 +269,12 @@ export function isLark(it: InboxItem): boolean {
   return it.source === "lark";
 }
 
+/** Lark in the filter chips and source groups: the Lark gateway's items and lark-cli's ("Lark · my messages") are one
+ *  "Lark", so the list never shows two Lark sources side by side. */
+export function isLarkSource(it: InboxItem): boolean {
+  return isLark(it) || it.source === "larkcli";
+}
+
 /** The thread as people write it (example-org/example-repo#12), undefined when it is only an id. */
 export function connectorReference(it: InboxItem): string | undefined {
   const t = it.connector?.thread;
@@ -470,7 +476,7 @@ function hasText(fields: (string | undefined)[], query: string): boolean {
 }
 
 export function matches(it: InboxItem, f: InboxFilter): boolean {
-  if (f.source === "feishu" && !isLark(it)) return false;
+  if (f.source === "feishu" && !isLarkSource(it)) return false;
   if (f.source && f.source !== "feishu" && it.account !== f.source && it.mail?.account_id !== f.source) return false;
   if (f.kind === "agent") return false; // only the waiting agents
   if (f.folder && !inFolderFilter(it, f.folder)) return false;
@@ -511,7 +517,7 @@ export function badgeCount(items: InboxItem[]): number {
 /** The connectors with items in the list (GitHub…), one filter chip each, in the order they first come. */
 export function connectorSources(items: InboxItem[]): { id: string; name: string }[] {
   const seen = new Map<string, string>();
-  for (const it of items) if (it.connector && !seen.has(it.account)) seen.set(it.account, it.account_name || it.source);
+  for (const it of items) if (it.connector && !isLarkSource(it) && !seen.has(it.account)) seen.set(it.account, it.account_name || it.source);
   return [...seen].map(([id, name]) => ({ id, name }));
 }
 
