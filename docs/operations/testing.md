@@ -952,6 +952,8 @@ maintained locally); backtick values in `CLAUDE.local.md`. Also any private IPv4
 (except `example.*`, public mailboxes, public `site/` contact). Reports type and origin only, never value:
 `private value (5 chars) from config machines.id, config machines.ssh`, `from private-words.txt`, `from CLAUDE.local.md`, `from the home directory`;
 a key that is not a snake_case word or is itself a private value shows as `*` (`config app_store.provisioning_profiles.*`).
+Staged and range scans read the files' Git objects in one `git cat-file --batch`, NUL-separated with `-z`; Git before 2.36 has no `-z` there,
+and the same requests then go one per line (#3224).
 **Ordinary-word config values** (#1065): a machine id like a room's name matches every variable, comment and environment variable of that name
 (`_` is a word boundary), blocking whole PRs on that machine. If such a value names nobody, add a `!<word>` line to `private-words.txt`
 (case-insensitive); the hint after the hits appears only when one of them can be taken back this way. The waiver goes by value, so it also covers

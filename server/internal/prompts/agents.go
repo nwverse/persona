@@ -155,3 +155,13 @@ type AgentReview struct {
 }
 
 func RenderAgentReview(r AgentReview) string { return render("agents/review", r) }
+
+// DispatchTask is the first message of an agent another agent started on this computer (agents/dispatch_task,
+// assistant/dispatch.go): who handed it the task, and that its last reply is what goes back.
+type DispatchTask struct {
+	From        string // the calling agent's tab / title, "" when it is not known
+	FromMachine string // the calling agent's computer, by name
+	Prompt      string
+}
+
+func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }

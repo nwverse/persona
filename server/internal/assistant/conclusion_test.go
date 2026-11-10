@@ -150,6 +150,7 @@ func TestConclusionFindsItsLink(t *testing.T) {
 // sends no second card.
 func TestDeployedWorkKeepsPleaseVerifyWithTheVerdictOnTop(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
+	s.ownerVerifiesAll = true
 	f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置看开关"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
