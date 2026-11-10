@@ -307,6 +307,10 @@ private fun ChatPage(
         awaitNow = java.time.Instant.now()
     }
     val live = isLiveStatus(session?.status) || awaiting
+    // Waiting on you (the hub's state says needs you, or one of this session's requests is pending): the turn is still the
+    // live one (it folds and opens as while it runs), but nothing is at work, so its line reads "Waiting for you" with no
+    // clock, as the header does (web goes by the same state).
+    val waitingOnYou = turnWaitsOnYou(session, key, requests)
     // Which items the lines were last built from: until the first build finishes, the page is still loading, not empty.
     var projectedFrom by remember { mutableStateOf<List<Item>?>(null) }
     val projection by produceState(persona.core.domain.lines.ChatSnapshot(emptyList(), emptyList(), persona.core.domain.lines.TaskIndex()),
@@ -1017,7 +1021,7 @@ private fun ChatPage(
                                             contentWorkGroups[it.groupId]?.steps?.lastOrNull()?.id == it.step.id
                                         } == true,
                                         plan = (line as? ChatLine.Step)?.let { contentPlans[it.groupId] },
-                                        showSourceLabel = line.id in contentSourceLabels)
+                                        showSourceLabel = line.id in contentSourceLabels, waiting = waitingOnYou)
                                         }
                                     }
                                 }

@@ -251,7 +251,7 @@ nonisolated enum InboxEventText {
         if s.isHandback { return [.confirm(String(localized: "Confirm")), .edit, .reject] }
         switch s.kind {
         case "reply": return [.confirm(String(localized: "Send")), .edit, .reject]
-        case "agent": return [.confirm(String(localized: "Started")), .edit, .reject]
+        case "agent": return [.confirm(String(localized: "Start")), .edit, .reject]
         case "conclusion": return [.confirm(String(localized: "OK [Recordings Section de32e2]")), .reject]
         default: return [.confirm(String(localized: "Confirm")), .reject]
         }

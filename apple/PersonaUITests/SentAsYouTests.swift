@@ -238,6 +238,41 @@ final class SentAsYouTests: XCTestCase {
         XCTAssertFalse(app.buttons["sent.row.69"].exists, "still on the list")
     }
 
+    /// Recall (#3219): the mock's row 66 can be taken back, row 60's recall is refused and row 54 was recalled before.
+    @MainActor func testRecallAsksThenTakesTheMessageBack() throws {
+        let app = openPage(try freshMock())
+        let recalled = any(app, "sent.recalled.54")
+        reveal(app, recalled, swipes: 10)
+        XCTAssertTrue(recalled.exists, "row 54 has no 已撤回 tag:\n\(app.debugDescription)")
+        app.swipeDown(); app.swipeDown()
+
+        let row = app.buttons["sent.row.66"]
+        reveal(app, row, swipes: 6)
+        row.tap()
+        let recall = app.buttons["sent.detail.recall"]
+        for _ in 0..<8 where !(recall.exists && recall.isHittable) { app.swipeUp() }
+        XCTAssertTrue(recall.exists, "no 撤回… in the details:\n\(app.debugDescription)")
+        shot(app, "sent-qa-recall")
+        recall.tap()
+        let alert = app.alerts["撤回这条消息？"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "no confirmation:\n\(app.debugDescription)")
+        alert.buttons["撤回"].tap()
+        XCTAssertTrue(any(app, "sent.detail.recalledAt").waitForExistence(timeout: 15), "the sheet does not say when it was recalled")
+        XCTAssertFalse(recall.exists, "撤回… stays after the recall")
+        app.buttons["sent.detail.done"].tap()
+
+        let refused = app.buttons["sent.row.60"]
+        reveal(app, refused, swipes: 6)
+        refused.tap()
+        for _ in 0..<8 where !(recall.exists && recall.isHittable) { app.swipeUp() }
+        recall.tap()
+        app.alerts["撤回这条消息？"].buttons["撤回"].tap()
+        let error = any(app, "sent.detail.recall.error")
+        XCTAssertTrue(error.waitForExistence(timeout: 15), "no refusal under the button:\n\(app.debugDescription)")
+        XCTAssertTrue(error.label.contains("消息没有撤回"), error.label)
+        shot(app, "sent-qa-recall-refused")
+    }
+
     // MARK: Load Earlier and the chips
 
     @MainActor func testLoadEarlierAddsTheOlderRows() throws {

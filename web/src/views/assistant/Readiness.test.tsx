@@ -5,7 +5,8 @@
 // hub (no `assistant_readiness`) keeps the page as it was.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPages } from "../../lib/lazy-page";
 import type { Machine } from "../../lib/types";
 import type { Readiness } from "../../lib/readiness";
 
@@ -29,6 +30,7 @@ const { resetReadiness, actionLabel } = await import("../../lib/readiness");
 const { getState } = await import("../../lib/store");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+beforeAll(() => loadPages(), 60_000);
 
 const setup: Readiness = {
   version: 1,

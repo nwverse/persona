@@ -51,7 +51,7 @@ import { ProviderWizard } from "./settings/ProviderWizard";
 import { ProviderImport } from "./settings/ProviderImport";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
-import { categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, searchSettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
+import { AGENT_KINDS, categoryState, FROM_LIST, itemIsPage, itemState, NAV_GROUPS, openedFromSub, redirectLegacySettings, searchSettings, settingsAt, settingsHref, SENT_SUB, stepsToList, TAB_INFO, TABS, type AgentTab, type SearchGroup, type SettingsSection, type Tab } from "./settings/nav";
 import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { formatList, t } from "../i18n";
 
@@ -233,7 +233,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   }, [scrollAnchor, tab]);
   const goGroup = (g: SearchGroup) => {
     setQuery("");
-    pick(g.tab, null);
+    const agent = g.tab === "agents" ? AGENT_KINDS.find((id) => g.anchor === `settings-${id}`) : undefined;
+    pick(g.tab, null, agent);
     setScrollAnchor(g.anchor);
   };
   return (
@@ -275,12 +276,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <ModelConfiguration open={sub} onOpen={(id) => pick("models", id, "model-config")} onProviders={() => pick("models", null, "providers")} />
                 </section>
               </>}
-              {tab === "agents" && (["claude", "codex", "agy", "omp"] as const).map((agent) => (
-                <section key={agent} id={`settings-${agent}`} className="scroll-mt-4">
-                  <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{agent === "claude" ? "Claude Code" : agent === "codex" ? "Codex" : agent === "agy" ? "Antigravity" : "omp"}</h2>
-                  <AgentSettings agent={agent} />
-                </section>
-              ))}
+              {tab === "agents" && <AgentSections section={at.section} />}
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
@@ -322,6 +318,59 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+
+const AGENT_LABEL: Record<AgentTab, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity", omp: "omp" };
+
+function isAgentSection(section: SettingsSection | null): section is AgentTab {
+  return section != null && (AGENT_KINDS as readonly string[]).includes(section);
+}
+
+/** The original stacked launcher sections. Each heading folds its own settings; all start open. */
+function AgentSections({ section }: { section: SettingsSection | null }) {
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (!isAgentSection(section)) return;
+    setClosed((cur) => {
+      if (!cur.has(section)) return cur;
+      const next = new Set(cur);
+      next.delete(section);
+      return next;
+    });
+  }, [section]);
+  const toggle = (id: AgentTab) => {
+    setClosed((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  return (
+    <>
+      {AGENT_KINDS.map((id) => {
+        const shown = !closed.has(id);
+        return (
+          <section key={id} id={`settings-${id}`} className="scroll-mt-4">
+            <button
+              type="button"
+              aria-expanded={shown}
+              aria-controls={`settings-${id}-body`}
+              aria-label={t(shown ? "settings-agentsettings.hide_agent" : "settings-agentsettings.show_agent", { agent: AGENT_LABEL[id] })}
+              onClick={() => toggle(id)}
+              className="mb-2 flex w-full items-center gap-1 px-1 py-0.5 text-left"
+            >
+              <h2 className="text-[15px] font-semibold text-ink">{AGENT_LABEL[id]}</h2>
+              <Icon name="chevronRight" size={14} className={cx("shrink-0 text-ink-3 transition-transform", shown && "rotate-90")} />
+            </button>
+            <div id={`settings-${id}-body`} hidden={!shown}>
+              <AgentSettings agent={id} />
+            </div>
+          </section>
+        );
+      })}
+    </>
   );
 }
 
