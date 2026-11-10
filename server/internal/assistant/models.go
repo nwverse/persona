@@ -134,8 +134,11 @@ func (s *Service) requestCtxLang(ctx context.Context) i18n.Lang {
 	return i18n.From(ctx).Or(s.lang(ctx))
 }
 
+// isTaskPurpose: a scheduled task's own use (task.<task id>).
+func isTaskPurpose(id string) bool { return strings.HasPrefix(id, "task.") }
+
 func modelCategoryID(id string) string {
-	if strings.HasPrefix(id, "task.") {
+	if isTaskPurpose(id) {
 		return "assistant"
 	}
 	for _, p := range modelPurposes {
@@ -152,17 +155,19 @@ var errModelConflict = i18n.Err("assistant-models.err_conflict")
 
 func modelKey(id string) string { return "model_config." + id }
 
-// Lark /agent overrides were retired with category-only settings. A fresh namespace keeps dormant records
-// (model_config.lark.agent) inert, including their revisions. Only a new user save creates this record.
+// Lark /agent and a task's own use were retired with category-only settings. A fresh namespace keeps dormant records
+// (model_config.lark.agent, model_config.task.<id>) inert, including their revisions. Only a new user save creates
+// such a record.
 func modelRecordKey(id string) string {
-	if id == purposeLarkAgent {
-		return "model_config.overrides.v1.lark.agent"
+	if id == purposeLarkAgent || isTaskPurpose(id) {
+		return "model_config.overrides.v1." + id
 	}
 	return modelKey(id)
 }
 
 func modelRecordID(p ModelPurpose) string {
-	if p.CategoryID != "" && p.ID != purposeLarkAgent && !isExtensionPurpose(p.ID) { // those two have records of their own
+	// Lark /agent, an extension's purpose and a task's own use have records of their own.
+	if p.CategoryID != "" && p.ID != purposeLarkAgent && !isExtensionPurpose(p.ID) && !isTaskPurpose(p.ID) {
 		return p.CategoryID
 	}
 	return p.ID
@@ -255,14 +260,18 @@ func (s *Service) modelPurposeDef(ctx context.Context, id string) (ModelPurpose,
 			return p, nil
 		}
 	}
-	if strings.HasPrefix(id, "task.") {
+	if isTaskPurpose(id) {
 		tasks := s.taskViews(ctx)
 		if tasks == nil {
 			return ModelPurpose{}, i18n.Err("assistant-models.err_read_tasks")
 		}
 		for _, t := range tasks {
 			if id == "task."+t.ID {
-				return ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: t.MachineID}, nil
+				// A task's own conversation starts on the assistant's machine (schedule.go runTask), so its override
+				// is held to that machine's launchers. A conversation it came from keeps its own launcher and does not
+				// use this purpose.
+				machine := cmp.Or(s.settings(ctx).MachineID, t.MachineID)
+				return ModelPurpose{ID: id, CategoryID: "assistant", Name: t.Label, Group: mc(l, "group_assistant"), Kind: "launcher", Parent: "assistant", MachineID: machine}, nil
 			}
 		}
 	}

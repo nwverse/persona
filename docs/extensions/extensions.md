@@ -495,7 +495,7 @@ The params, answers, error codes and events are described in `schema/extension/k
 
 kind is `projects`, `chats`, `people`, `docs`, `meetings`, `events` or `recordings`. list returns 30 by default, at most 200, with offset starting at 0;
 if not finished, continue with next_offset. Paging is not a snapshot when things change between requests, so extensions should deduplicate and re-read when needed. search searches messages by default, 40 by default, at most 200;
-get includes the most recent 12000 characters of messages by default; recent_chars may be 0, at most 20000. Empty lists return `[]`.
+get includes a chat's most recent 12000 bytes of messages by default, cut at a message or line start, or inside a long line at a whole character when the next start would drop more than half of them (a recording's transcript: its first 12000 characters); recent_chars may be 0, at most 20000. Empty lists return `[]`.
 `kb.get` does not include live Agents; reading Agent state still needs the matching permission. A missing scope returns `permission_denied` with `scope` in the error data;
 unknown fields, missing required fields or bad formats return `invalid_params`, a missing entity returns `not_found`, a write touching what someone else holds returns `conflict`, a manager that is offline returns `assistant_offline`, and a knowledge base that isn't ready returns `kb_unavailable`.
 Internal methods such as `kb.forget`, `kb.context`, `kb.posts_*` are not on this allowlist, and even extensions with full access can't call them this way.

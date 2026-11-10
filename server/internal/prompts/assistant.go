@@ -452,10 +452,14 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
+	// they wait here before going up a rung.
+	Asked      bool
+	AskMinutes int
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
-// started, escalated).
+// started, escalated, ask).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
@@ -480,6 +484,17 @@ type SuperviseEntry struct {
 	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
+	// ask: the cards waiting, and the task's decisions in effect (prompts/todo/decisions.md, rendered); escalated: the
+	// cards a leader gave the user.
+	Asks      []SuperviseAsk
+	Decisions string
+}
+
+// SuperviseAsk is one card of a task's agent on its way to the user: its interaction id, kind (question, permission,
+// plan), the agent's machine (a name) and short session id, what it asks, and whether the rung below did not handle it in time.
+type SuperviseAsk struct {
+	ID, Kind, Machine, Session, Text string
+	Raised                           bool
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }

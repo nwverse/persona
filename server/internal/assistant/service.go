@@ -143,6 +143,7 @@ type Service struct {
 	agentArchives agentArchiveBook
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
+	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
@@ -575,6 +576,7 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 	s.taskPlanApproval()
 	s.taskAnswered(ctx, r.Interaction, r.Resolution, r.Status)
 	s.cardDecisions(ctx, r.Interaction, r.Resolution, r.Status)
+	s.escalatedResolved(ctx, r.Interaction, r.Resolution, r.Status) // an approval the user gave on an escalation (ask_route.go)
 	// A quiet task's waiting notice may still be in its delay window or queued behind a turn: drop it now unless the
 	// task still waits on another card. An agent machine the recheck cannot reach is not an answer, so the notice
 	// is left for the drain-time recheck.
