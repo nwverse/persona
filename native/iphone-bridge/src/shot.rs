@@ -1,8 +1,7 @@
 //! Turning what the phone captured into the screenshot asked for: upright, at most `max_dimension`, in the
 //! requested format. The phone's bytes pass through untouched when nothing needs changing.
 
-use std::io::{Cursor, Write as _};
-use std::path::Path;
+use std::io::Cursor;
 
 use image::{DynamicImage, ImageFormat as Format, ImageReader};
 
@@ -63,6 +62,7 @@ pub fn prepare(raw: Vec<u8>, opts: &ShotOptions, o: Orientation) -> Result<Prepa
     let mut img = reader(&raw)?.decode().map_err(unreadable)?;
     img = match turns {
         1 => img.rotate90(),
+        2 => img.rotate180(),
         3 => img.rotate270(),
         _ => img,
     };
@@ -90,20 +90,6 @@ pub fn prepare(raw: Vec<u8>, opts: &ShotOptions, o: Orientation) -> Result<Prepa
         width,
         height,
     })
-}
-
-/// Writes a screenshot readable by this user only.
-pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), BridgeError> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        opts.mode(0o600);
-    }
-    opts.open(path)
-        .and_then(|mut f| f.write_all(bytes))
-        .map_err(|e| BridgeError::internal(format!("write {}: {e}", path.display())))
 }
 
 #[cfg(test)]

@@ -66,6 +66,7 @@ pub struct Device {
     indigo: Option<IndigoHidClient<Box<dyn ReadWrite>>>,
     gate: Option<Gate>,
     apps: Option<AppServiceClient<Box<dyn ReadWrite>>>,
+    springboard: Option<SpringBoardServicesClient>,
 }
 
 /// The phone takes synthetic input only while a display stream is running; its video is read and dropped.
@@ -140,7 +141,9 @@ impl Device {
             .create_tcp_listener()
             .await
             .map_err(|e| from_idevice(e, Phase::Tunnel, "open tunnel listener"))?;
-        let stream = dial(SocketAddr::new(addr.ip(), port), "connect tunnel").await?;
+        let mut tunnel_addr = addr; // keeps an IPv6 zone
+        tunnel_addr.set_port(port);
+        let stream = dial(tunnel_addr, "connect tunnel").await?;
         let tunnel = connect_tls_psk_tunnel_native(stream, control.encryption_key())
             .await
             .map_err(|e| from_idevice(e, Phase::Tunnel, "tunnel handshake"))?;
@@ -175,6 +178,7 @@ impl Device {
             indigo: None,
             gate: None,
             apps: None,
+            springboard: None,
         };
         let udid = device.udid_reported().await?;
         if !udid.eq_ignore_ascii_case(&target.udid) {
@@ -248,15 +252,25 @@ impl Device {
         v.and_then(|v| v.as_boolean())
     }
 
+    /// The interface orientation, portrait when it cannot be read.
     async fn orientation(&mut self) -> Orientation {
-        let Ok(mut sb) = SpringBoardServicesClient::connect_rsd(&mut self.adapter, &mut self.rsd).await else {
+        if self.springboard.is_none() {
+            self.springboard = SpringBoardServicesClient::connect_rsd(&mut self.adapter, &mut self.rsd)
+                .await
+                .ok();
+        }
+        let Some(sb) = self.springboard.as_mut() else {
             return Orientation::Portrait;
         };
         match sb.get_interface_orientation().await {
             Ok(InterfaceOrientation::PortraitUpsideDown) => Orientation::PortraitUpsideDown,
             Ok(InterfaceOrientation::LandscapeRight) => Orientation::LandscapeRight,
             Ok(InterfaceOrientation::LandscapeLeft) => Orientation::LandscapeLeft,
-            _ => Orientation::Portrait,
+            Ok(_) => Orientation::Portrait,
+            Err(_) => {
+                self.springboard = None;
+                Orientation::Portrait
+            }
         }
     }
 
@@ -351,7 +365,12 @@ impl Device {
             "orientation": orientation.as_str(),
             "locked": Value::Null,
             "developer_mode": developer_mode,
-            "ddi_mounted": input || screenshot,
+            // With Developer Mode off nothing is listed, whether the image is mounted or not.
+            "ddi_mounted": if developer_mode == Some(false) && !(input || screenshot) {
+                None
+            } else {
+                Some(input || screenshot)
+            },
             "battery": level.map(|l| json!({"level": l as f64 / 100.0, "charging": charging})),
             "capabilities": {"screenshot": screenshot, "ax_tree": false, "input": input, "apps": apps},
             "notes": notes,
@@ -377,7 +396,7 @@ impl Device {
             "orientation": orientation.as_str(),
         });
         match &opts.out_file {
-            Some(path) => shot::write_private(Path::new(path), &image.bytes)?,
+            Some(path) => crate::files::write_private(Path::new(path), &image.bytes)?,
             None => {
                 use base64::Engine as _;
                 out["data"] = json!(base64::engine::general_purpose::STANDARD.encode(&image.bytes));
@@ -713,13 +732,12 @@ impl Device {
                     .iter()
                     .find(|a| a.bundle_identifier == id)
                     .ok_or_else(|| BridgeError::new(Code::AppNotFound, format!("no app {id} on the phone")))?;
-                let bundle = app.path.trim_end_matches('/').to_owned() + "/";
                 processes
                     .iter()
                     .find(|p| {
                         p.executable_url
                             .as_ref()
-                            .is_some_and(|u| u.relative.trim_start_matches("file://").starts_with(&bundle))
+                            .is_some_and(|u| runs_from(&u.relative, &app.path))
                     })
                     .map(|p| p.pid)
             }
@@ -731,6 +749,38 @@ impl Device {
             .await?;
         Ok(json!({"terminated": true}))
     }
+}
+
+/// Whether an executable (a `file://` URL, percent-encoded) lies inside an app bundle (a plain path). Either
+/// may carry the `/private` prefix of `/var` on iOS.
+fn runs_from(executable_url: &str, bundle_path: &str) -> bool {
+    fn canonical(path: &str) -> String {
+        let path = path.trim_end_matches('/');
+        let path = path.strip_prefix("/private").unwrap_or(path);
+        format!("{path}/")
+    }
+    let path = executable_url.strip_prefix("file://").unwrap_or(executable_url);
+    canonical(&percent_decode(path)).starts_with(&canonical(bundle_path))
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 impl Phone for Device {
@@ -756,8 +806,9 @@ impl Phone for Device {
             gesture => self.gesture(gesture).await.map(|()| json!({})),
         };
         if input {
-            if let Err(e) = &result {
-                // The input services may be out of step after a failure: start them afresh next time.
+            if let Some(e) = result.as_ref().err().filter(|e| e.code != Code::BadRequest) {
+                // The input services may be out of step after a failure: start them afresh next time. A
+                // request refused before anything was sent leaves them as they are.
                 self.hid = None;
                 self.indigo = None;
                 self.close_gate(e.link_lost()).await;
@@ -768,10 +819,10 @@ impl Phone for Device {
         result
     }
 
-    fn idle_after(&self) -> Option<Duration> {
+    fn idle_at(&self) -> Option<tokio::time::Instant> {
         self.gate
             .as_ref()
-            .map(|g| GATE_IDLE.saturating_sub(g.last_used.elapsed()))
+            .map(|g| tokio::time::Instant::from_std(g.last_used + GATE_IDLE))
     }
 
     async fn idle(&mut self) {
@@ -808,6 +859,24 @@ mod tests {
             Code::Unreachable
         );
         assert_eq!(socket_addr("zz::1%1", 1).await.unwrap_err().code, Code::Unreachable);
+    }
+
+    #[test]
+    fn matches_a_process_to_its_app() {
+        let app = "/private/var/containers/Bundle/Application/0000/My App.app";
+        assert!(runs_from(
+            "file:///var/containers/Bundle/Application/0000/My%20App.app/My%20App",
+            app
+        ));
+        assert!(runs_from(
+            "file:///private/var/containers/Bundle/Application/0000/My%20App.app/My%20App",
+            "/var/containers/Bundle/Application/0000/My App.app/"
+        ));
+        assert!(!runs_from(
+            "file:///var/containers/Bundle/Application/0000/My%20App.appendix/x",
+            app
+        ));
+        assert_eq!(percent_decode("a%2Fb%zz%4"), "a/b%zz%4");
     }
 
     fn temp_record() -> (std::path::PathBuf, std::path::PathBuf) {

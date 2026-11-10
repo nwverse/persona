@@ -19,8 +19,9 @@ Status: v1. **Nothing here has been verified on a real device yet** (see "Verifi
   (RSD) and talks to the developer services listed there. It never changes the computer's routes, DNS or interfaces: no `utun`, no root.
 - Two ways to run it with the same requests and answers: **`call`** (one process per request) and **`serve`** (one process per phone,
   keeping the tunnel open). Every request has a total deadline.
-- It is optional for the node, like Cua Driver for a Mac: not part of personad's build or CI. The node looks for it in `PATH`, then in
-  `~/.persona/bin/` (`$PERSONA_HOME/bin`); without it the capability reports "not installed".
+- It is optional for the node, like Cua Driver for a Mac: not part of personad's build or CI. The node looks for it at
+  `$PERSONA_IPHONE_BRIDGE`, then in `PATH`, then in `$PERSONA_HOME/bin` (`~/.persona/bin/`), then next to `personad`; without it the
+  capability reports "not installed".
 - Build: `native/iphone-bridge/build.sh` (format, lint, tests, release build; `--install` copies it to `~/.persona/bin/`). Needs a Rust
   toolchain.
 
@@ -32,9 +33,10 @@ persona-iphone-bridge call                                # one request on stdin
 persona-iphone-bridge serve --udid <udid> --record <path> --host <address> [--port <port>] [--timeout-ms <ms>]
 persona-iphone-bridge usb-list --json                     # phones attached over USB (#3448)
 persona-iphone-bridge pair --udid <udid> --out <path>     # pair over trusted USB, write the record (#3448)
+persona-iphone-bridge match --record <path> --identifier <id> --auth-tag <tag>   # is this Bonjour advertisement the record's phone? (#3448)
 ```
 
-### One-shot commands (`call`, `usb-list`, `pair`, `version`)
+### One-shot commands (`call`, `usb-list`, `pair`, `match`, `version`)
 
 | Outcome | stdout | stderr | Exit code |
 | --- | --- | --- | --- |
@@ -148,9 +150,9 @@ All positions are in **points** in the current interface orientation, origin at 
 right and `y` down; fractions are allowed. `screenshot` and `device_info` report `point_width` / `point_height`: a position read off a
 screenshot `width` pixels wide maps to points as `x_pt = x_px × point_width / width`.
 
-The bridge turns a point into the touchscreen's own coordinates (the panel as built, in portrait), rotating for landscape. A screenshot is
-turned upright if the phone captures the panel in portrait while the interface is landscape. Both rotations are not verified on a real
-device.
+The bridge turns a point into the touchscreen's own coordinates (the panel as built, in portrait), rotating for landscape and upside down.
+It takes a capture to be the panel as built too, and turns it to match the interface: a quarter turn when a portrait-shaped capture comes
+with a landscape interface, a half turn for upside down. Both rotations are not verified on a real device.
 
 ## Operations
 
@@ -175,7 +177,7 @@ ready event.
 - `capabilities`: whether the phone lists the services each group needs (`screenshot`; `input` for touches, keys and buttons; `apps`),
   and `ax_tree`, always `false` in v1. For each `false`, `notes` gives the reason with an error code: `developer_mode_off`,
   `ddi_not_mounted`, `unsupported`. A listed service can still fail when used; the operation's error says so.
-- `ddi_mounted`: whether the developer services are listed at all.
+- `ddi_mounted`: whether the developer services are listed at all; `null` when Developer Mode is off, since then nothing is listed either way.
 
 ### `screenshot`
 
@@ -253,9 +255,9 @@ Durations are capped at 10 seconds.
 `{ "include_system": true }` → `{ "apps": [ { "bundle_id": "…", "name": "…", "version": "…", "type": "user" } ] }`: `type` `user` |
 `system` (Apple's own).
 
-## USB: `usb-list` and `pair`
+## USB and Bonjour: `usb-list`, `pair`, `match`
 
-Implemented in #3448, in `native/iphone-bridge/src/pair.rs`; until then both answer `unsupported`. Pairing needs the phone on USB and
+Implemented in #3448, in `native/iphone-bridge/src/pair.rs`; until then each answers `unsupported`. Pairing needs the phone on USB and
 already trusting this computer.
 
 - `usb-list --json` → `[{"udid": "<udid>", "name": "<device name>", "product_version": "18.1", "model": "iPhone16,2"}]`.
@@ -263,8 +265,9 @@ already trusting this computer.
   `trust_pending`, `locked`, `not_found`.
 - The record is the bridge's own format (`record.rs`: the RemotePairing keys plus the host name they were made under, which every later
   connection must send again) and opaque to the node.
-- Matching a `_remotepairing._tcp` Bonjour advertisement to a phone takes a key inside the record, so if the node needs it, it is a bridge
-  subcommand, not something the node computes.
+- `match --record <path> --identifier <id> --auth-tag <tag>` → `{"match": true}` or `{"match": false}`: whether a `_remotepairing._tcp`
+  advertisement (its TXT `identifier` and `authTag`) belongs to the record's phone. The tag is derived from a key inside the record, and the
+  identifier is not a stable value to save at pairing, so the node asks the bridge for each advertisement and connects to the first match.
 
 ## Verification status
 
@@ -288,4 +291,4 @@ to a phone has run against one:
 - **Text beyond ASCII**: the key channel cannot type it. The phone's pasteboard service plus a paste shortcut might, at the cost of the
   user's clipboard; not done.
 - **Locked screen**: no service found yet that reports it.
-- **Developer disk image**: mounting it is not in v1 (`ddi_not_mounted`); a follow-up issue tracks it.
+- **Developer disk image**: mounting it is not in v1 (`ddi_not_mounted`); #3470 tracks it.

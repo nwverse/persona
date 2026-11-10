@@ -3,6 +3,7 @@
 
 mod device;
 mod error;
+mod files;
 mod geometry;
 mod keys;
 mod ops;
@@ -23,7 +24,7 @@ use crate::error::{BridgeError, Code};
 use crate::ops::Action;
 use crate::run::{Outcome, Phone};
 
-const USAGE: &str = "usage: persona-iphone-bridge version | call | serve --udid <udid> --record <path> --host <address> [--port <port>] [--timeout-ms <ms>] | usb-list --json | pair --udid <udid> --out <path>";
+const USAGE: &str = "usage: persona-iphone-bridge version | call | serve --udid <udid> --record <path> --host <address> [--port <port>] [--timeout-ms <ms>] | usb-list --json | pair --udid <udid> --out <path> | match --record <path> --identifier <id> --auth-tag <tag>";
 
 fn version_line() -> String {
     format!(
@@ -178,6 +179,18 @@ async fn dispatch(args: &[String]) -> Outcome {
             };
             one_shot(result.await).await
         }
+        "match" => {
+            let result = async {
+                let flags = Flags::parse(rest, &["record", "identifier", "auth-tag"], &[])?;
+                pair::match_record(
+                    Path::new(flags.req("record")?),
+                    flags.req("identifier")?,
+                    flags.req("auth-tag")?,
+                )
+                .await
+            };
+            one_shot(result.await).await
+        }
         _ => failed(&BridgeError::bad_request(USAGE)),
     }
 }
@@ -227,5 +240,7 @@ mod tests {
         assert!(o.stderr_error.unwrap().contains("--host is required"));
         let o = dispatch(&strings(&["pair", "--udid", "U"])).await;
         assert!(o.stderr_error.unwrap().contains("--out is required"));
+        let o = dispatch(&strings(&["match", "--record", "/r", "--identifier", "i"])).await;
+        assert!(o.stderr_error.unwrap().contains("--auth-tag is required"));
     }
 }

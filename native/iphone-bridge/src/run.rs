@@ -1,9 +1,11 @@
 //! `call` and `serve`: reading requests, running them under their deadlines, writing answers.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::{BridgeError, Code};
 use crate::ops::{self, Action};
@@ -13,9 +15,9 @@ use crate::wire::{self, DeviceSpec, MAX_LINE};
 #[allow(async_fn_in_trait)]
 pub trait Phone {
     async fn run(&mut self, action: Action) -> Result<Value, BridgeError>;
-    /// How long after the last operation `idle` should be called, if something is held open until then.
-    fn idle_after(&self) -> Option<Duration>;
-    /// Nothing happened for `idle_after`: let go of what was held open for the next operation.
+    /// When `idle` should be called, if something is held open until then.
+    fn idle_at(&self) -> Option<Instant>;
+    /// Nothing happened until `idle_at`: let go of what was held open for the next operation.
     async fn idle(&mut self);
     /// The process is about to end normally.
     async fn close(&mut self);
@@ -49,29 +51,49 @@ enum Line {
     Eof,
 }
 
-/// Reads one line of at most `MAX_LINE` bytes, without its newline. With `whole_lines`, a last line cut off
-/// by end of input counts as never sent: the node closes stdin when a write fails halfway and may send the
-/// request again on a new connection.
-async fn read_line<R: AsyncBufRead + Unpin>(input: &mut R, whole_lines: bool) -> Result<Line, BridgeError> {
-    let mut buf = Vec::new();
-    let n = (&mut *input)
-        .take(MAX_LINE as u64 + 1)
-        .read_until(b'\n', &mut buf)
-        .await
-        .map_err(|e| BridgeError::internal(format!("read stdin: {e}")))?;
-    if n == 0 {
-        return Ok(Line::Eof);
+/// Reads one line of at most `MAX_LINE` bytes into `buf`, returning it without its newline. Cancel-safe:
+/// what was read before a cancellation stays in `buf` for the next call. With `whole_lines`, a last line cut
+/// off by end of input counts as never sent: the node closes stdin when a write fails halfway and may send
+/// the request again on a new connection.
+async fn read_line<R: AsyncBufRead + Unpin>(
+    input: &mut R,
+    buf: &mut Vec<u8>,
+    whole_lines: bool,
+) -> Result<Line, BridgeError> {
+    let too_long = || BridgeError::bad_request(format!("request line longer than {MAX_LINE} bytes"));
+    loop {
+        let avail = input
+            .fill_buf()
+            .await
+            .map_err(|e| BridgeError::internal(format!("read stdin: {e}")))?;
+        if avail.is_empty() {
+            let rest = std::mem::take(buf);
+            if rest.is_empty() || whole_lines {
+                return Ok(Line::Eof);
+            }
+            return text(rest);
+        }
+        if let Some(i) = avail.iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&avail[..i]);
+            input.consume(i + 1);
+            let line = std::mem::take(buf);
+            if line.len() > MAX_LINE {
+                return Err(too_long());
+            }
+            return text(line);
+        }
+        let n = avail.len();
+        buf.extend_from_slice(avail);
+        input.consume(n);
+        if buf.len() > MAX_LINE {
+            buf.clear();
+            return Err(too_long());
+        }
     }
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
-    } else if buf.len() > MAX_LINE {
-        return Err(BridgeError::bad_request(format!(
-            "request line longer than {MAX_LINE} bytes"
-        )));
-    } else if whole_lines {
-        return Ok(Line::Eof);
-    }
-    String::from_utf8(buf)
+}
+
+fn text(line: Vec<u8>) -> Result<Line, BridgeError> {
+    String::from_utf8(line)
         .map(Line::Text)
         .map_err(|_| BridgeError::bad_request("request is not UTF-8"))
 }
@@ -105,7 +127,7 @@ where
     C: AsyncFnOnce(DeviceSpec) -> Result<P, BridgeError>,
 {
     let start = Instant::now();
-    let line = match read_line(input, false).await {
+    let line = match read_line(input, &mut Vec::new(), false).await {
         Ok(Line::Text(l)) => l,
         Ok(Line::Eof) => return Outcome::failed(None, None, &BridgeError::bad_request("no request on stdin")),
         Err(e) => return Outcome::failed(None, None, &e),
@@ -154,11 +176,11 @@ where
     if let Err(e) = write_line(out, &wire::event_line("ready", ready_event)).await {
         return Outcome::failed(None, None, &e);
     }
-    let mut last = Instant::now();
+    let mut buf = Vec::new();
     loop {
-        let idle_at = phone.idle_after().map(|d| last + d);
+        let idle_at = phone.idle_at();
         let line = tokio::select! {
-            line = read_line(input, true) => line,
+            line = read_line(input, &mut buf, true) => line,
             _ = sleep_until(idle_at), if idle_at.is_some() => {
                 phone.idle().await;
                 continue;
@@ -195,7 +217,6 @@ where
                 (req.id, Some(req.op), result)
             }
         };
-        last = Instant::now();
         let (id, op) = (id.as_deref(), op.as_deref());
         let reply = match &result {
             Ok(v) => wire::answer_line(id, op.unwrap_or_default(), elapsed_ms(start), v.clone()),
@@ -222,7 +243,7 @@ where
 
 async fn sleep_until(at: Option<Instant>) {
     match at {
-        Some(at) => tokio::time::sleep_until(at.into()).await,
+        Some(at) => tokio::time::sleep_until(at).await,
         None => std::future::pending().await,
     }
 }
@@ -244,7 +265,7 @@ mod tests {
         log: Rc<RefCell<Log>>,
         /// Errors to answer with, by op.
         fail: Vec<(&'static str, BridgeError)>,
-        hold: Option<Duration>,
+        hold: Option<Instant>,
         slow: Duration,
     }
 
@@ -270,7 +291,7 @@ mod tests {
             }
             Ok(json!({"did": op}))
         }
-        fn idle_after(&self) -> Option<Duration> {
+        fn idle_at(&self) -> Option<Instant> {
             self.hold
         }
         async fn idle(&mut self) {
@@ -472,10 +493,33 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_line_split_across_the_idle_deadline_survives() {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let mut phone = Fake::new(&log);
+        phone.hold = Some(Instant::now() + Duration::from_secs(10));
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let mut reader = tokio::io::BufReader::new(reader);
+        let mut out = Vec::new();
+        let feed = async move {
+            writer.write_all(br#"{"id":"1","op":"#).await.unwrap();
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            writer.write_all(b"\"list_apps\"}\n").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            drop(writer.shutdown().await);
+        };
+        let (o, ()) = tokio::join!(serve(&mut phone, json!({}), &mut reader, &mut out), feed);
+        assert_eq!(o.code, 0);
+        assert_eq!(log.borrow().idled, 1);
+        let got = lines(&out);
+        assert_eq!(got[1]["id"], "1");
+        assert_eq!(got[1]["ok"], true);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn serve_lets_go_when_idle() {
         let log = Rc::new(RefCell::new(Log::default()));
         let mut phone = Fake::new(&log);
-        phone.hold = Some(Duration::from_secs(10));
+        phone.hold = Some(Instant::now() + Duration::from_secs(10));
         let (mut writer, reader) = tokio::io::duplex(1024);
         let mut reader = tokio::io::BufReader::new(reader);
         let mut out = Vec::new();

@@ -140,13 +140,15 @@ pub fn swipe_ends(dir: Direction, origin: Option<Point>, distance: Option<f64>, 
     (from, to)
 }
 
-/// How many quarter turns clockwise a screenshot needs so it shows what the user sees: the device may
-/// capture the panel as built (portrait) while the interface is landscape. Not verified on a real device.
+/// How many quarter turns clockwise a screenshot needs so it shows what the user sees. The capture is taken
+/// to be the panel as built, the same assumption `to_touch` makes, unless its shape shows the phone already
+/// turned it for a landscape interface. Not verified on a real device.
 pub fn screenshot_turns(image_w: u32, image_h: u32, o: Orientation) -> u8 {
     let image_portrait = image_h >= image_w;
     match o {
         Orientation::LandscapeRight if image_portrait => 3,
         Orientation::LandscapeLeft if image_portrait => 1,
+        Orientation::PortraitUpsideDown if image_portrait => 2,
         _ => 0,
     }
 }
@@ -243,5 +245,6 @@ mod tests {
         assert_eq!(screenshot_turns(1179, 2556, Orientation::LandscapeRight), 3);
         assert_eq!(screenshot_turns(1179, 2556, Orientation::LandscapeLeft), 1);
         assert_eq!(screenshot_turns(2556, 1179, Orientation::LandscapeLeft), 0);
+        assert_eq!(screenshot_turns(1179, 2556, Orientation::PortraitUpsideDown), 2);
     }
 }

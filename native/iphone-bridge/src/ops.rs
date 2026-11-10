@@ -138,7 +138,7 @@ pub fn parse(op: &str, args: &Map<String, Value>) -> Result<Action, BridgeError>
         },
         "swipe" => {
             let spec = match (
-                args.contains_key("from") || args.contains_key("to"),
+                a.present("from").is_some() || a.present("to").is_some(),
                 a.str_opt("direction")?,
             ) {
                 (true, None) => SwipeSpec::Ends(a.point("from")?, a.point("to")?),
@@ -202,7 +202,7 @@ pub fn parse(op: &str, args: &Map<String, Value>) -> Result<Action, BridgeError>
             },
             kill_existing: a.bool_opt("kill_existing")?.unwrap_or(false),
         },
-        "terminate_app" => Action::TerminateApp(match (args.contains_key("bundle_id"), args.get("pid")) {
+        "terminate_app" => Action::TerminateApp(match (a.present("bundle_id").is_some(), a.present("pid")) {
             (true, None) => AppTarget::BundleId(a.bundle_id()?),
             (false, Some(_)) => AppTarget::Pid(a.uint_in("pid", 0, 1, u64::from(u32::MAX))? as u32),
             _ => {
@@ -407,6 +407,13 @@ mod tests {
             }
         ));
         assert!(parse("swipe", &Map::new()).is_err());
+        assert!(matches!(
+            parse("swipe", &args(json!({"direction": "up", "from": null}))).unwrap(),
+            Action::Swipe {
+                spec: SwipeSpec::Direction { .. },
+                ..
+            }
+        ));
         assert!(parse("swipe", &args(json!({"direction": "up", "from": {"x": 0, "y": 0}}))).is_err());
         assert!(parse("swipe", &args(json!({"direction": "up", "distance": -3}))).is_err());
     }
@@ -467,6 +474,11 @@ mod tests {
         );
         assert!(parse("terminate_app", &args(json!({"pid": 42, "bundle_id": "a"}))).is_err());
         assert!(parse("terminate_app", &Map::new()).is_err());
+        assert!(parse("terminate_app", &args(json!({"pid": null}))).is_err());
+        assert_eq!(
+            parse("terminate_app", &args(json!({"bundle_id": "a", "pid": null}))).unwrap(),
+            Action::TerminateApp(AppTarget::BundleId("a".into()))
+        );
         assert_eq!(
             parse("list_apps", &Map::new()).unwrap(),
             Action::ListApps { include_system: true }

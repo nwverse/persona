@@ -4,7 +4,6 @@
 //! computer by that name, so every later connection has to send the same one.
 
 use std::hash::{BuildHasher, Hasher};
-use std::io::Write as _;
 use std::path::Path;
 
 use idevice::remote_pairing::RpPairingFile;
@@ -73,25 +72,7 @@ impl Record {
 
     /// Writes the record readable by this user only, replacing `path` in one step.
     pub fn write(&self, path: &Path) -> Result<(), BridgeError> {
-        let fail = |e: std::io::Error| BridgeError::internal(format!("write pairing record {}: {e}", path.display()));
-        let tmp = path.with_extension(format!("tmp-{:08x}", random_u32()));
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            opts.mode(0o600);
-        }
-        let result = (|| {
-            let mut f = opts.open(&tmp)?;
-            f.write_all(&self.to_bytes())?;
-            f.sync_all()?;
-            std::fs::rename(&tmp, path)
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-        result.map_err(fail)
+        crate::files::write_private(path, &self.to_bytes())
     }
 }
 
