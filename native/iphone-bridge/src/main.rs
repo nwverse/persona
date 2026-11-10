@@ -274,10 +274,80 @@ async fn dispatch(args: &[String]) -> Outcome {
     }
 }
 
+/// Where the latest panic happened, kept by the panic hook for the error line (the payload alone doesn't say).
+static PANIC_AT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Panics print nothing themselves: `guarded` answers them as one JSON error line, as any other failure.
+fn quiet_panics() {
+    std::panic::set_hook(Box::new(|info| {
+        let at = info
+            .location()
+            .map(|l| format!("{}:{}", crate_path(l.file()), l.line()));
+        if let Ok(mut slot) = PANIC_AT.lock() {
+            *slot = at;
+        }
+    }));
+}
+
+/// A source path from the crate's directory on (`idevice-0.1.68/src/remote_pairing/mod.rs`), never the build
+/// machine's directories above it.
+fn crate_path(file: &str) -> &str {
+    let src = file
+        .rmatch_indices("src/")
+        .map(|(i, _)| i)
+        .find(|&i| i == 0 || file.as_bytes()[i - 1] == b'/');
+    match src {
+        Some(0) => file,
+        Some(i) => match file[..i - 1].rfind('/') {
+            Some(j) => &file[j + 1..],
+            None => file,
+        },
+        None => file.rsplit('/').next().unwrap_or(file),
+    }
+}
+
+/// `fut`, polled so that a panic in it (ours, or a dependency's slicing or unwrap) ends it with an `internal` error
+/// instead of the process with exit code 101 and a backtrace.
+struct CatchPanic<F: Future>(std::pin::Pin<Box<F>>);
+
+impl<F: Future> Future for CatchPanic<F> {
+    type Output = Result<F::Output, Box<dyn std::any::Any + Send>>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let fut = self.0.as_mut();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fut.poll(cx))) {
+            Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+            Ok(std::task::Poll::Ready(v)) => std::task::Poll::Ready(Ok(v)),
+            Err(payload) => std::task::Poll::Ready(Err(payload)),
+        }
+    }
+}
+
+/// Runs a command; a panic in it is an `internal` failure, exit code 1, with what panicked and where.
+async fn guarded(fut: impl Future<Output = Outcome>) -> Outcome {
+    match CatchPanic(Box::pin(fut)).await {
+        Ok(outcome) => outcome,
+        Err(payload) => {
+            let what = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic".to_owned());
+            let at = PANIC_AT.lock().ok().and_then(|mut slot| slot.take());
+            let message = match at {
+                Some(at) => format!("the bridge failed unexpectedly: {what} ({at})"),
+                None => format!("the bridge failed unexpectedly: {what}"),
+            };
+            failed(&BridgeError::internal(message))
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    quiet_panics();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let outcome = dispatch(&args).await;
+    let outcome = guarded(dispatch(&args)).await;
     if let Some(line) = outcome.stderr_error {
         eprintln!("{line}");
     }
@@ -308,6 +378,54 @@ mod tests {
     #[test]
     fn says_its_version() {
         assert_eq!(version_line(), "persona-iphone-bridge 0.1.0 (wire 1)");
+    }
+
+    #[tokio::test]
+    async fn a_panic_is_an_internal_error_line() {
+        let o = guarded(async {
+            tokio::task::yield_now().await; // after a Pending, as a panic deep in a connection would be
+            let pin = String::new();
+            let _ = &pin.as_bytes()[..6];
+            Outcome {
+                code: 0,
+                stderr_error: None,
+            }
+        })
+        .await;
+        assert_eq!(o.code, 1);
+        let line = o.stderr_error.unwrap();
+        assert!(!line.contains('\n'), "{line}");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["code"], "internal");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.contains("the bridge failed unexpectedly: range end index 6 out of range"),
+            "{msg}"
+        );
+
+        let o = guarded(async { panic!("{}", "formatted") }).await;
+        assert!(o.stderr_error.unwrap().contains("unexpectedly: formatted"));
+        let o = guarded(async {
+            Outcome {
+                code: 0,
+                stderr_error: None,
+            }
+        })
+        .await;
+        assert_eq!(o.code, 0);
+    }
+
+    #[test]
+    fn panics_name_the_crate_path_only() {
+        assert_eq!(
+            crate_path(
+                "/home/me/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/idevice-0.1.68/src/remote_pairing/mod.rs"
+            ),
+            "idevice-0.1.68/src/remote_pairing/mod.rs"
+        );
+        assert_eq!(crate_path("src/pair.rs"), "src/pair.rs");
+        assert_eq!(crate_path("/x/lib.rs"), "lib.rs");
     }
 
     #[tokio::test]
