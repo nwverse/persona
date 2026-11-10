@@ -18,10 +18,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 // credential is the provider's Bearer credential: Key, the first line of KeyFile, or the first line KeyCommand
 // prints (run for every conversation, so a credential renewed elsewhere is picked up). None is allowed.
+//
+// KeyCommand runs in a session of its own: at its 20 s limit the whole group is killed, not just sh. A process it
+// leaves running that still holds its output (an agent it starts, cmd & echo token) is not waited for past
+// keyCommandWaitDelay once the command has exited; without it Output read the pipe until that process ended, and the
+// call start waited with it.
 func (p *Provider) credential(ctx context.Context) (string, error) {
 	switch {
 	case p.Key != "":
@@ -38,8 +45,12 @@ func (p *Provider) credential(ctx context.Context) (string, error) {
 		var stderr bytes.Buffer
 		cmd := exec.CommandContext(ctx, "sh", "-c", p.KeyCommand)
 		cmd.Stderr = &stderr
+		cmd.SysProcAttr = osproc.SessionGroupAttr()
+		cmd.Cancel = func() error { return osproc.StopGroup(cmd.Process.Pid, true) }
+		cmd.WaitDelay = keyCommandWaitDelay
 		out, err := cmd.Output()
-		if err != nil {
+		// ErrWaitDelay: the command exited 0 and only a process it left held the pipe; what it printed counts.
+		if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 			return "", fmt.Errorf("%s: key_command: %v %s", p.ID, err, strings.TrimSpace(stderr.String()))
 		}
 		if key := firstLine(out); key != "" {
@@ -49,6 +60,9 @@ func (p *Provider) credential(ctx context.Context) (string, error) {
 	}
 	return "", nil
 }
+
+// keyCommandWaitDelay is how long credential keeps reading KeyCommand's output after the command has exited.
+const keyCommandWaitDelay = time.Second
 
 func firstLine(b []byte) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
