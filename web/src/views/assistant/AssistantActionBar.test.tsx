@@ -271,6 +271,31 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(host.querySelector('[data-needs-row="task:open-asks"]')?.textContent).toContain("Needs a decision");
   });
 
+  it("says why a stopped task is not done, from the hub's completion check (#3180)", async () => {
+    const stoppedTodo: Todo = { id: "open-checked", title: "Waiting on CI", origin: conversation, created_at: at, updated_at: at,
+      agents: [{ machine_id: "demo", session_id: "idle-worker", linked_at: at }], check: { verdict: "waiting", reason: "Waiting for CI to finish", at, work_since: at } };
+    moreTodos = [stoppedTodo];
+    await act(async () => {
+      await refreshTodos();
+      upsertSession({ machine_id: "demo", session_id: "idle-worker", title: "Idle", cwd: "/demo", state: "idle", status: "idle", updated_at: at, last_text: "The checks are queued" });
+    });
+    act(() => entry("running").click());
+    const row = () => [...host.querySelectorAll("[data-task-slot]")].find((r) => r.querySelector(".font-semibold")?.textContent === "Waiting on CI");
+    expect(row()?.textContent).toContain(t("assistant-tasks.progress_stopped_reason", { reason: "Waiting for CI to finish" }));
+    expect(row()?.textContent).not.toContain("The checks are queued");
+    // no reason: the line alone; done or unsure: the row as before
+    act(() => putTodo({ ...stoppedTodo, check: { verdict: "not_done", at } }));
+    expect(row()?.textContent).toContain(t("assistant-tasks.progress_stopped"));
+    expect(row()?.textContent).not.toContain(" · ");
+    act(() => putTodo({ ...stoppedTodo, check: { verdict: "unsure", reason: "Can't tell", at } }));
+    expect(row()?.textContent).not.toContain(t("assistant-tasks.progress_stopped"));
+    expect(row()?.textContent).toContain("The checks are queued");
+    // working again: the agent's words, not the old check
+    act(() => putTodo(stoppedTodo));
+    await act(async () => upsertSession({ machine_id: "demo", session_id: "idle-worker", title: "Idle", cwd: "/demo", state: "working", status: "working", updated_at: at, last_text: "Rerunning the checks" }));
+    expect(row()?.textContent).not.toContain(t("assistant-tasks.progress_stopped"));
+  });
+
   it("counts a plan waiting for Start as one Needs you row, where Start is one click away", () => {
     const waiting: TaskPlan = { id: "tray-open-plan", conversation, state: "open", created_at: at, tasks: [{ title: "Diet card", prompt: "Build it", cwd: "/demo", machine: "demo" }, { title: "Fix the supervisor", prompt: "Fix it", cwd: "/demo", machine: "demo" }] };
     act(() => {

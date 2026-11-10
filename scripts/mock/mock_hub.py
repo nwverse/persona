@@ -3204,6 +3204,13 @@ if MOCK_TASKS:
             _task_todo("todo_task_long2", "Workflow 支持：hub / 网页 / 安卓 / Apple 端都能看到后台状态", "", "macbook", WIDGET,
                        "/Users/me/code/weather", 18, "plan_mock_2"),
         ]
+    # MOCK_TASK_CHECK=1 (#3180, docs/assistant/todos.md "Automatic completion"): the blog move's agent stopped and the
+    # hub's completion check found it waiting, so its Progress row says why it is not done.
+    if os.environ.get("MOCK_TASK_CHECK") == "1":
+        for _t in TODOS_INIT:
+            if _t["id"] == "todo_task_blog":
+                _t["check"] = {"verdict": "waiting", "reason": "等 Vercel 部署跑完", "at": ago(minutes=11),  # i18n-ignore
+                               "work_since": ago(minutes=40)}
     TODOS = copy.deepcopy(TODOS_INIT)
     # MOCK_TASK_DECISION=1: a stopped task whose owner can finish without another Agent turn.
     if os.environ.get("MOCK_TASK_DECISION") == "1":
