@@ -66,6 +66,10 @@ class ChatSyncScenariosTest(private val name: String, private val case: JsonObje
                 "#2770: the case wants the rest asked from the replay's cap (after_seq 12); Android reads after_seq=covered " +
                     "as soon as the socket is back (HubChatRepository catchUp), so it has every line before the replay",
                 Regex("""requests: no \{"get":"/items","after_seq":12}""")),
+            "rev_moves_during_catch_up_pulls_again" to Known(
+                "#3601: a rev that moves while the chat's catch-up read is on its way asks for nothing more " +
+                    "(HubChatRepository requestSync while the fill runs), so the line whose push was lost never comes",
+                Regex("""got {2}\[.*user\[shown] What should we eat\?]$""")),
             "start_answer_cut_then_receipt" to Known(
                 "can't be played yet: a new chat starts from the new-conversation page, not this harness's chat",
                 Regex("can't be played yet: a new chat")),

@@ -1334,8 +1334,10 @@ final class AppModel {
         visibleSession = shown.last?.key
     }
 
-    /// Asks for everything after what the chat holds without holes (`covered`), or the last exchanges if nothing.
+    /// Asks for everything after what the chat holds without holes (`covered`), or the last exchanges if nothing. Built
+    /// only to be sent: the moves of the session's rev heard so far count as read (`AgentSync.subscribing`).
     private func subscribeMessage(_ key: SessionKey) -> [String: Any] {
+        AgentSync.shared.subscribing(key)
         var msg: [String: Any] = ["type": "subscribe", "machine_id": key.machineID, "session_id": key.sessionID, "lazy_images": true,
                                   "fold_work": true]
         let covered = chat(key).covered
