@@ -32,6 +32,11 @@ packages:
   # Vision apps, not the watch or widgets.
   PersonaKit:
     path: Packages/PersonaKit
+  # The composer's glow while a reply is generating (Settings › Appearance › Glow While Replying, `ComposerGlow`): the iOS
+  # app only. Mac and Vision compile the same sources and skip it with `#if os(iOS) && canImport`.
+  MarqueeGlow:
+    url: https://github.com/szupzj18/MarqueeGlow
+    exactVersion: 0.1.0 # pinned: a new release is taken on purpose, not by the next package resolve
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -74,6 +79,7 @@ targets:
       - package: BeautifulUI
       - package: PersonaSSH
       - package: PersonaKit
+      - package: MarqueeGlow
     entitlements:
       path: Persona/Resources/Persona.entitlements
       properties:
@@ -177,11 +183,18 @@ targets:
         NSCameraUsageDescription: "Persona uses the camera to scan the pairing QR code printed by `personad hub pair`, for example when you first connect to your hub."
         NSFaceIDUsageDescription: "Persona asks for Face ID before it types a Mac's remembered password on that Mac's lock screen, when you tap One-Tap Unlock on the Mac's page."
         NSContactsUsageDescription: "Persona lets Claude look up your contacts when you ask, for example to find a colleague's phone number or email before drafting a message."
-        NSCalendarsFullAccessUsageDescription: "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting."
+        # The iPhone system integrations (docs/apple/phone-tools.md, #2278 / #2284 / #2285).
+        NSAlarmKitUsageDescription: "Persona sets alarms and timers only when you ask and approve it on your iPhone, for example to wake you at 6:40 or to start a 25-minute focus timer."
+        NSAppleMusicUsageDescription: "Persona plays Apple Music when you ask, for example a playlist for focused work, and can pause or skip what the Music app is playing."
+        NSHomeKitUsageDescription: "Persona controls your Home accessories and scenes only when you ask and approve each change on your iPhone, for example to turn off the living room light."
+        # Home's tools are offered only in a build signed with the HomeKit capability: YES there, with the
+        # com.apple.developer.homekit entitlement (docs/apple/phone-tools.md "Home"). Empty: no Home tools.
+        PersonaHomeKit: $(PERSONA_HOMEKIT)
+        NSCalendarsFullAccessUsageDescription: "Persona lets Claude read and add calendar events when you ask, for example to check whether you are free on Friday afternoon or to book a meeting. It also names a meeting recording after the event happening now."
         NSCalendarsWriteOnlyAccessUsageDescription: "Persona adds events to your calendar when you ask Claude to, for example to save a meeting it scheduled for you."
         NSRemindersFullAccessUsageDescription: "Persona lets Claude read and create reminders when you ask, for example to add “review the PR” to your Today list."
         NSLocationWhenInUseUsageDescription: "Persona shares your current location with Claude only when you ask, for example to find what time it is where you are or which office you are in."
-        NSHealthShareUsageDescription: "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night."
+        NSHealthShareUsageDescription: "Persona lets Claude read health summaries when you ask, for example how many steps you walked this week or how long you slept last night. With rolling recording on, Persona also checks heart rate, HRV, steps, workouts and the moods you log, on your iPhone only, to keep the minutes around them."
         # Asked when Claude saves a health sample (phone_health_write_sample); App Store processing also wants it with the HealthKit entitlement.
         NSHealthUpdateUsageDescription: "Persona saves health data only after you approve it on your iPhone, one entry at a time, for example a weight or last night's sleep you told Claude about."
         NSPhotoLibraryUsageDescription: "Persona shows your recent photos under the + button so you can attach them to a message, and lets Claude look at recent photos when you ask, for example to read a screenshot you took."
@@ -763,8 +776,11 @@ targets:
       - path: PersonaTests/ExtensionSettingsLifecycleTests.swift
       - path: PersonaTests/ExtensionUpgradeTests.swift
       - path: PersonaTests/DelegateTests.swift
+      - path: PersonaTests/GitReadFailureTests.swift
       - path: PersonaTests/ChatSupervisionLinesTests.swift
       - path: PersonaTests/SupervisionTests.swift
+      - path: PersonaTests/BriefCardTests.swift
+      - path: PersonaTests/TodoDecisionCompletionTests.swift
       - path: PersonaTests/FakeHub.swift
     dependencies:
       - target: PersonaMac

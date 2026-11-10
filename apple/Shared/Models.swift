@@ -25,6 +25,12 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     /// The hub is installing its own build there (Redeploy); deployError: why the last try did not work.
     var deploying: Bool?
     var deployError: String?
+    /// The hub's own answer on updating the node from here (newer hubs): whether it can (`can_deploy`), why not
+    /// (`deploy_reason`, in the request's language), and the stage of a deploy that is running (`deploy_phase`:
+    /// waiting_idle, transferring, restarting or confirming). nil from older hubs.
+    var canDeploy: Bool? = nil
+    var deployReason: String? = nil
+    var deployPhase: String? = nil
     /// OS and hardware (docs/server/machines.md); nil from hubs before machine monitoring, or a machine never connected.
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
@@ -33,6 +39,8 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
     var browser: MachineBrowser? = nil
+    /// Sharing its clipboard with the phone (#3064); nil from hubs before it.
+    var clipboard: MachineClipboard? = nil
     /// Hub mesh (docs/archive/operations/plan-hub-mesh.md 2.6): the hub that owns the computer in its group, its name, the computer's own
     /// id across hubs, and how the hub reaches it. nil from hubs before the mesh.
     var hubID: String? = nil
@@ -55,10 +63,11 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var manager: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, route, trust, manager
+        case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, clipboard, route, trust, manager
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
+        case canDeploy = "can_deploy", deployReason = "deploy_reason", deployPhase = "deploy_phase"
         case hubID = "hub_id", hubName = "hub_name", machineUID = "machine_uid", hubGroup = "app_hub_group",
              groupLabel = "app_group_label"
     }
@@ -94,11 +103,15 @@ extension Machine {
         nodeVersion = try c.decodeIfPresent(String.self, forKey: .nodeVersion)
         deploying = try c.decodeIfPresent(Bool.self, forKey: .deploying)
         deployError = try c.decodeIfPresent(String.self, forKey: .deployError)
+        canDeploy = try c.decodeIfPresent(Bool.self, forKey: .canDeploy)
+        deployReason = try c.decodeIfPresent(String.self, forKey: .deployReason)
+        deployPhase = try c.decodeIfPresent(String.self, forKey: .deployPhase)
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
+        clipboard = try? c.decodeIfPresent(MachineClipboard.self, forKey: .clipboard)
         hubID = try? c.decodeIfPresent(String.self, forKey: .hubID)
         hubName = try? c.decodeIfPresent(String.self, forKey: .hubName)
         machineUID = try? c.decodeIfPresent(String.self, forKey: .machineUID)
@@ -187,7 +200,9 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let orca = Self(rawValue: "orca")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo]
+    /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
+    static let cindy = Self(rawValue: "cindy")
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -196,6 +211,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
         case .paseo: "Paseo"
+        case .cindy: "Cindy"
         default: rawValue
         }
     }
@@ -206,6 +222,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
         case .paseo: String(localized: "Agents in Paseo")
+        case .cindy: String(localized: "Agents in Cindy")
         default: nil
         }
     }

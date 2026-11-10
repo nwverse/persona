@@ -8,6 +8,7 @@
   "launcher_not_on_machine": "Launcher {launcher} isn’t on {machine}, so nothing was started. Launchers that computer has: {launchers}",
   "launcher_swapped": "{launcher} isn’t on {machine}, so this runs on {to} with its default model",
   "start_identity_conflict": "The start response did not identify a session on the requested computer.",
+  "start_interrupted": "The hub restarted while this task’s agent was starting. The earlier request may still finish. Check the computer’s sessions after it reconnects before retrying to avoid starting a second agent.",
   "failed_start": "Didn’t start: {reason}",
   "task_failed_title": "“{name}” couldn’t be started",
   "task_failed_title_health": "Task couldn’t be started",
@@ -26,5 +27,6 @@
   "outcome_pitfall": "Pitfall",
   "adopt_notes": "Taken under supervision: {agent} · {machine} · {cwd}",
   "adopt_failed": "Could not take it under supervision: {reason}",
-  "interrupt_summary": "Stop {agent} · {machine}"
+  "interrupt_summary": "Stop {agent} · {machine}",
+  "start_remedy_notice": "Didn’t start: “{title}”. {reason}"
 }

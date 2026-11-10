@@ -37,7 +37,7 @@ import java.time.Instant
 /**
  * To-dos as iOS shows them (#3034): the list's line under each open to-do (red while an agent waits, the notes, "Not handed to an agent yet"),
  * finished ones with the auto-done reason, the empty list's "New to-do", the detail's "N agents · created X", projects and
- * where each agent came from, and "New to-do…" / "Create and link" when picking a to-do. Every style, light and dark.
+ * where each agent came from, the status sections (#3206: Needs you, PR to merge with its PR, Just finished, Other open unfolded), and "New to-do…" / "Create and link" when picking a to-do. Every style, light and dark.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -85,7 +85,7 @@ class TodosParityShotsTest {
             }
         }
         rule.waitForIdle()
-        if (scene == "list") { rule.onNodeWithText("已完成").performClick(); rule.waitForIdle() }
+        if (scene == "list") { rule.onNodeWithText("其他未完成").performClick(); rule.waitForIdle() }
         if (scene == "picker") { rule.onNodeWithText("新建待办…").performClick(); rule.waitForIdle() }
         assertTrue("$scene: no 「$expected」", rule.onAllNodesWithText(expected, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         val node = if (scene == "picker") rule.onNode(isDialog()) else rule.onNodeWithTag("shot")
@@ -110,6 +110,9 @@ class TodosParityShotsTest {
     @Test fun heldBriefDark() = shot("held", AppStyle.Brief, true, "卡在「等你批准合并」")
     @Test fun heldBoard() = shot("held", AppStyle.Board, false, "卡在「等你批准合并」")
     @Test fun heldBoardDark() = shot("held", AppStyle.Board, true, "卡在「等你批准合并」")
+
+    @Test fun listSectionsGlass() = shot("list", AppStyle.Glass, false, "PR 待合并")
+    @Test fun listSectionsGlassDark() = shot("list", AppStyle.Glass, true, "刚做完")
 
     @Test fun emptyGlass() = shot("empty", AppStyle.Glass, false, "新建待办")
     @Test fun emptyGlassDark() = shot("empty", AppStyle.Glass, true, "新建待办")

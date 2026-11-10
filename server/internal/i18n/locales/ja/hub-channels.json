@@ -26,6 +26,8 @@
   "feature_workbench_description": "/home で全体をまとめたホームカードをピン留めして呼び出し（常に1枚だけ、自動で更新）、どのカードにもそこへ戻るボタンが付きます。/today で今日、/inbox で受信箱を表示し、/start で権限モードを選べます",
   "feature_only_conclusions": "Larkには結論だけ送る",
   "feature_only_conclusions_description": "メインチャットのタスクの途中経過（ひと区切りの完了・あなた待ち・中断）は単独では送らずやることリストとブリーフィングにだけ残し、結論（完了・できない・あなたの判断が必要）が出たら結論カードをこれまでどおり送ります",
+  "feature_report_steps": "実行の細部もLarkに送る",
+  "feature_report_steps_description": "既定ではタスクの目標に変化があったとき（達成・あなたの判断が必要・行き詰まり）だけ送ります。オンにすると以前のカードに戻り、エージェントがひと区切りするたびの行（段階バーとエージェントの発言）、中断や完了も送ります",
   "feature_agents_description": "/agents でお使いのコンピューター上のエージェントを一覧表示し、選ぶと以降のメッセージがそのエージェントに送られます",
   "voice_name": "音声",
   "voice_description": "AppでPersonaと音声で会話します。やることはメインチャットに引き継ぎます",
