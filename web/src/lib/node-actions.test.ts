@@ -11,6 +11,7 @@ function deps(over: Partial<NodeActionDeps> = {}): NodeActionDeps {
     renameTab: vi.fn(async () => {}),
     launchers: vi.fn(async () => [{ name: "claude" }, { name: "work", model: "m1" }, { name: "cx", agent: "codex" }]),
     newAgent: vi.fn(),
+    openSession: vi.fn(),
     copy: vi.fn(),
     notify: vi.fn(),
     changed: vi.fn(),
@@ -79,7 +80,7 @@ describe("splitting and running an agent", () => {
   });
 
   it("lists the launchers that start Claude Code when the submenu opens, and starts the one picked in the pane", async () => {
-    const d = deps();
+    const d = deps({ post: vi.fn(async () => ({ session_id: "s9" })) });
     const agent = by(nodeActions(tab, d), "node-agent");
     expect(typeof agent.children).toBe("function");
     const list = await (agent.children as () => Promise<MenuItem[]>)();
@@ -87,6 +88,27 @@ describe("splitting and running an agent", () => {
     expect(list[1].hint).toBe("m1");
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "work" });
+    expect(d.notify).toHaveBeenCalledWith(expect.any(String), "ok");
+    expect(d.changed).toHaveBeenCalled();
+    // the agent it started opens, as New agent's does (#3287)
+    expect(d.openSession).toHaveBeenCalledWith("m1", "s9");
+  });
+
+  it("stays where it is when the answer names no session", async () => {
+    for (const answer of [{}, { session_id: "" }, undefined]) {
+      const d = deps({ post: vi.fn(async () => answer) });
+      const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+      await list[0].onSelect();
+      expect(d.notify).toHaveBeenCalledWith(expect.any(String), "ok");
+      expect(d.openSession).not.toHaveBeenCalled();
+    }
+  });
+
+  it("opens nothing when the start fails", async () => {
+    const d = deps({ post: vi.fn(async () => Promise.reject(new Error("pane busy"))) });
+    const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
+    await expect(list[0].onSelect()).rejects.toThrow("pane busy");
+    expect(d.openSession).not.toHaveBeenCalled();
   });
 
   it("says why a launcher this computer's terminal can't run, after the usable ones, and still lets it run (#1643)", async () => {

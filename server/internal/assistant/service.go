@@ -128,6 +128,9 @@ type Service struct {
 	fbot       feishuBook        // feishu.go
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
+	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
+	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
+	offers     routeBook         // route.go: the directions offered for New chats
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
@@ -139,8 +142,10 @@ type Service struct {
 
 	devs          Devices // the computers (devices.go); nil: no fleet
 	agentArchives agentArchiveBook
+	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
+	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
 	// delegateHook stands in for Delegate in tests (fleet_delegate.go).
 	delegateHook func(context.Context, DelegateParams) (DelegateResult, error)
 	// fleetEnded, when set, sees every card's end the channels are told (tests).
@@ -177,6 +182,10 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.reporterRoutes()
+	s.directionRoutes()
+	s.routeRoutes()
+	s.agentRouteRoutes()
+	s.directionNameRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()
@@ -275,6 +284,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
+	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
+		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
+		if name, _ := p["launcher"].(string); name != "" {
+			if err := s.launcherScopeErr(ctx, device, name); err != nil {
+				return err
+			}
+		}
+	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
 		// The node reads a missing is_main as false, and is_main is part of what a process runs: a relay into the main
 		// conversation (deliverRelay) without it started that conversation, or restarted it when idle, on the ordinary
@@ -288,7 +305,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p[holdPushesParam] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
@@ -436,6 +453,7 @@ func (s *Service) publish(ctx context.Context) {
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
 		s.logf("assistant: snapshot: %v", err)
 	}
+	s.directionsSoon() // a leader, its title or its tasks may have changed (directions.go)
 }
 
 func (s *Service) Resync(ctx context.Context) { s.publish(ctx) }
@@ -467,6 +485,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
+	}
+	directions, ok := s.directionViews(ctx)
+	snap.Partial = snap.Partial || !ok
+	leadersAt := s.settings(ctx).MachineID // a leader conversation is on the assistant's machine
+	for id, d := range directions {
+		view(id, leadersAt).Direction = d
 	}
 	snap.Tasks = s.taskViews(ctx)
 	snap.Partial = snap.Partial || snap.Tasks == nil
@@ -557,6 +581,7 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 	s.taskPlanApproval()
 	s.taskAnswered(ctx, r.Interaction, r.Resolution, r.Status)
 	s.cardDecisions(ctx, r.Interaction, r.Resolution, r.Status)
+	s.escalatedResolved(ctx, r.Interaction, r.Resolution, r.Status) // an approval the user gave on an escalation (ask_route.go)
 	// A quiet task's waiting notice may still be in its delay window or queued behind a turn: drop it now unless the
 	// task still waits on another card. An agent machine the recheck cannot reach is not an answer, so the notice
 	// is left for the drain-time recheck.

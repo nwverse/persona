@@ -561,7 +561,8 @@ Now one `Task` table (`assistant/schedule.go`, settings `assistant.tasks`), thre
 Readiness skips carry the optional persisted `not_ready` flag (#1857). The failure-streak counter ignores them, including temporary sleep / offline skips: they do not increase or reset the streak, and cannot trigger its notification. Other failures and skips still count as before. Existing history without the flag is not reclassified from its localized error text; the ready-again notice above is unchanged.
 
 **Failure and retry**: node accepts `assistant.send` before model output, so runs ending in API errors (quota, removed model, upstream 503) formerly counted successful.
-`watchScheduledRun` now follows the turn, reads final text, records API errors as failed, pushes "Scheduled task failed: …", and retries after 3 minutes once
+Before a turn is allowed to finish, node's bounded transient recovery may keep it working through a same-model retry and later launcher-model fallbacks (safeguards / 429 / 5xx only; [../integrations/claude-integration.md](../integrations/claude-integration.md) "Headless assistant"). The watcher therefore does not mistake an intermediate provider error for the run's outcome.
+`watchScheduledRun` now follows the final turn, reads final text, records API errors as failed, pushes "Scheduled task failed: …", and retries after 3 minutes once
 (`Retried`, no further push on repeat failure). Retry uses the task **then** in the table, not the startup copy (before #2313, users followed failure push and disabled / deleted it,
 yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry, disabled repeating tasks don't retry, once follow-ups disabled on due still retry, edited prompts use new text.
 
@@ -576,12 +577,18 @@ Each task therefore has `push`:
 - `"asked"` (only when it explicitly notifies): only `notify_user` pushes reach the phone; no news means no push. Run messages explain this (`task_run.md`).
   Errors (`TurnError`), model-truncated answers, blockers (⏳), "Scheduled task failed: …", and user-answer cards still push normally.
 
-**Implemented per chat, not per turn.** `asked` tasks always use their own chat (`ownConversationIfQuiet`: selecting `asked` clears `session_id`,
-including follow-ups no longer entering their originating chat, such as main chat). Snapshot tasks include `push` (`TaskView.Push`); if the finished push (`quietTaskFinish` in `assistant/fleet_push.go`, by the tasks of the manager's last snapshot) recognizes an `asked` task's own chat
+**Implemented per chat, not per turn.** `asked` tasks use their own chat unless they go on in the chat they came from (`session_id`), and never
+main chat (`ownConversationIfQuiet`: selecting `asked` clears a `session_id` that is, or may be, main chat; `runTask` sends a run whose chat became main to its own). Snapshot tasks include `push` (`TaskView.Push`); if the finished push (`quietTaskFinish` in `assistant/fleet_push.go`, by the tasks of the manager's last snapshot) recognizes an `asked` task's own chat
 (`run_session_id`) and a normal completion (`assistantwire.NormalFinish`, based on pushed text: final work explanation or last answer), suppress "Finished"
 but still finish through `settle`. Channel forwarding (Lark, plugin sync and task pushes) skips under the same `quietTaskTurn` rule.
 
-Cost: user-authored messages in that chat also don't push on completion. People generally don't chat in task-owned chats; if they do, they're likely viewing the App.
+**In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run holds that chat's pushes the way a supervision
+message does (`holdPushes`, the send carries `hold_pushes`): its normal finish is neither pushed nor mirrored to channels (`SupervisedFinish`), until the user or any
+other message speaks there (`releasePushes`). The chat stays the user's: their own turns push as ever. A run that arrives while another turn is on there (or the chat
+waits for the user) does not hold, so that turn's finish is not swallowed; that run is pushed as before. Errors, cut-offs, stuck turns, `notify_user` and escalated asks
+reach the user as ever. The hold is in memory: after a manager restart the next finish pushes.
+
+Cost (own chat): user-authored messages in that chat also don't push on completion. People generally don't chat in task-owned chats; if they do, they're likely viewing the App.
 
 Boundaries (`assistantwire.QuietTaskFinish`, shared by hub / channel forwarding):
 
@@ -590,7 +597,7 @@ Boundaries (`assistantwire.QuietTaskFinish`, shared by hub / channel forwarding)
   so runtime asked tasks still push "Finished" rather than swallowing failures as no news.
 - **Main chat is never quiet**: if a user makes a task chat main chat, normal pushes resume and the next task run creates another chat.
   If main-chat identity is uncertain (assistant settings read failure, hub hasn't received profile), treat it as possibly main: push / forward normally and don't reuse it for the task.
-- **Other tasks don't enter quiet chats**: `schedule_followup` from an asked-task chat runs in its own chat; existing tasks targeting it also move to their own on running (they require every-run push).
+- **Other tasks don't enter quiet chats** (an asked task's own chat, `run_session_id`; a chat an asked task only posts into is not one): `schedule_followup` from an asked-task chat runs in its own chat; existing tasks targeting it also move to their own on running (they require every-run push).
 - Decide after `settle`, not as "already pushed": background-pending turns remain suspended, their wakeup turn is judged separately, errors push normally.
 - Run-message explanations ("It's time again…", "This task only notifies when you use notify_user…") are stripped when the assistant renews with the whole message (`stripScheduleHeader`),
   preserving task identity, `push`, and prompt.

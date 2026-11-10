@@ -167,6 +167,12 @@ type Node struct {
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
+	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
+	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
+	recoveries     map[string]*assistantTurnRecovery
+	recoveryClosed bool
+	// adoptedFailures: failures a handover carried here, resumed once this connection's session state is loaded.
+	adoptedFailures []adoptedFailure
 
 	// runtimes: agent runtimes without a terminal, connected on runtime.sock (runtimes.go); runtimeSock overrides the
 	// socket path (tests).
@@ -391,6 +397,7 @@ func (n *Node) startState(ctx context.Context, adopted []*assistantProc) {
 			close(n.stateMissed)
 		}
 		n.resumeAssistants(adopted)
+		n.resumeAdoptedFailures(ok)
 		if !ok && n.reloadState(ctx) {
 			n.ultracodeStateReloaded() // stored observations read in again; what was seen meanwhile of Persona's sessions written
 			close(n.stateReady)
@@ -644,6 +651,13 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return res, err
 		}
 	}
+	// A Persona-managed provider whose secrets this computer has not fetched yet: fetched before anything runs it
+	// (managed.go; the manager refuses one out of this computer's scope).
+	if name := managedUser(method, p.Launcher, p.Name); name != "" {
+		if err := n.ensureManaged(ctx, name); err != nil {
+			return nil, err
+		}
+	}
 	switch method {
 	case "session.attach":
 		return ok(n.attachCodex(ctx, p.SessionID))
@@ -795,15 +809,25 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		shell, rcFile := launcherShell()
 		return map[string]any{"launchers": typedLaunchers(ls), "shell": shell, "rc_file": rcFile}, err
-	case "launchers.managed":
+	case "launchers.managed", "launchers.catalog": // the providers added in Persona (managed.go): all with their secrets, or this computer's scope
 		var c struct {
 			Launchers []proto.ManagedLauncher `json:"launchers"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
 		}
-		n.setManaged(c.Launchers)
+		if method == "launchers.catalog" {
+			n.setCatalog(c.Launchers)
+		} else {
+			n.setManaged(c.Launchers)
+		}
 		return map[string]any{"ok": true}, nil
+	case "launchers.own_service": // whether a harness has a usable service of its own here (ownservice.go)
+		var a struct {
+			Agent string `json:"agent"`
+		}
+		_ = json.Unmarshal(params, &a)
+		return n.ownService(ctx, a.Agent), nil
 	case "launchers.model.check":
 		if err := n.runnableLauncher(ctx, p.Name, p.Configured); err != nil {
 			return nil, err
@@ -1449,6 +1473,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			return ok(nil)
 		}
 		if n.isAssistantSession(p.SessionID) {
+			defer n.typing.lock(p.SessionID)()
 			n.stopAssistant(p.SessionID)
 			return ok(nil)
 		}
@@ -1542,6 +1567,17 @@ func nonNil(items []proto.Item) []proto.Item {
 		return []proto.Item{}
 	}
 	return items
+}
+
+// managedUser is the launcher a method runs (or asks a CLI about) that may need a managed provider's secrets.
+func managedUser(method, launcher, name string) string {
+	switch method {
+	case "session.start", "assistant.send", "assistant.warm", "session.send":
+		return launcher
+	case "launchers.check", "claude.auth_status", "launchers.models", "launchers.http", "launchers.probe", "launchers.model.check":
+		return name
+	}
+	return ""
 }
 
 func (n *Node) info(ctx context.Context) proto.NodeInfo {

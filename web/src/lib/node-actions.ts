@@ -8,6 +8,7 @@ import type { TermPane, TermSpace, TermTab } from "./terminals";
 import type { Launcher, Machine, Session } from "./types";
 import { copyText, toast } from "../ui/atoms";
 import { openNewAgent } from "./new-agent";
+import { navigate } from "./router";
 import { openNewWorktree } from "./worktree";
 import type { MenuItem } from "../ui/menu-model";
 import { launcherBlock, usableFirst } from "./launcher-health";
@@ -56,6 +57,8 @@ export interface NodeActionDeps {
   newAgent: (mid: string, cwd: string) => void;
   /** "New worktree…" for this workspace (the dialog, #2431); a deps without it leaves the item out. */
   newWorktree?: (node: MenuNode) => void;
+  /** Opens a session's chat: the agent "Run agent here" started, as "New agent" opens the one it starts (#3287). */
+  openSession: (mid: string, sid: string) => void;
   copy: (text: string) => void;
   notify: (text: string, tone: "ok" | "error" | "info") => void;
   /** The tree changed on the computer: read it again. */
@@ -73,6 +76,7 @@ export function defaultNodeDeps(changed: () => void = () => {}): NodeActionDeps 
     launchers: (mid) => api<{ launchers: Launcher[] }>(`/machines/${enc(mid)}/launchers`).then((r) => r.launchers ?? []),
     newAgent: (mid, cwd) => openNewAgent({ machineId: mid, cwd }),
     newWorktree: (node) => openNewWorktree(node, changed),
+    openSession: (mid, sid) => navigate({ name: "session", mid, sid }),
     copy: (text) => void copyText(text),
     notify: (text, tone) => toast(text, tone),
     changed,
@@ -105,6 +109,11 @@ export interface PaneGitResult {
   op?: string;
   outcome?: string;
   message?: string;
+}
+
+/** What `panes/agent` answers: the session it started in the pane (`docs/protocol/protocol.md`). */
+export interface PaneAgentResult {
+  session_id?: string;
 }
 
 const GIT_OUTCOMES = new Set(["fetched", "up_to_date", "pulled", "nothing_to_push", "pushed"]);
@@ -223,9 +232,12 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       ...(block ? { detail: block.reason, divider: i > 0 && !launcherBlock(all[i - 1]) } : {}),
       inline: true,
       onSelect: async () => {
-        await deps.post(mid, "panes/agent", { pane: node.paneId, launcher: l.name }).catch((e) => Promise.reject(fail("lib-node-actions.start_failed", e)));
+        const res = (await deps.post(mid, "panes/agent", { pane: node.paneId, launcher: l.name }).catch((e) => Promise.reject(fail("lib-node-actions.start_failed", e)))) as PaneAgentResult | undefined;
         deps.notify(t("lib-node-actions.started_in_pane", { name: l.name }), "ok");
         deps.changed();
+        // into the new agent's chat, as "New agent" opens the one it starts (#3287); an answer naming none stays here
+        const sid = res?.session_id?.trim();
+        if (sid) deps.openSession(mid, sid);
       },
     };
   };

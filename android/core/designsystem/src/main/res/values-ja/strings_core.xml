@@ -336,6 +336,8 @@
     <string name="designsystem_core_endpoint_protocol">応答の形式が正しくありません</string>
     <string name="designsystem_core_endpoint_rejected">ハブがリクエストを拒否しました</string>
     <string name="designsystem_core_endpoint_rate_limited">リクエストが多すぎます。しばらくしてからお試しください</string>
+    <string name="designsystem_core_endpoint_access_required">このハブは Cloudflare Access の内側にあり、サービストークンが必要です</string>
+    <string name="designsystem_core_endpoint_access_rejected">Cloudflare Access がサービストークンを拒否しました</string>
     <string name="designsystem_core_endpoint_failed">接続に失敗しました</string>
     <string name="designsystem_core_address_empty">アドレスを入力してください</string>
     <string name="designsystem_core_address_spaces">アドレスにスペースは使えません</string>

@@ -68,6 +68,7 @@
     <string name="agents_range_running">运行中</string>
     <string name="agents_range_all">全部</string>
     <string name="agents_range_history">历史</string>
+    <string name="agents_grouping_current">分组：%1$s</string>
     <string name="agents_grouping_repo">按仓库</string>
     <string name="agents_grouping_state">按状态</string>
     <string name="agents_grouping_todo">按待办</string>

@@ -21,8 +21,8 @@ val Session.canTerminal: Boolean get() = !hasSource || capabilities?.terminal ==
 /** Join a Codex app-server thread live: offered until it is attached. */
 val Session.canAttach: Boolean get() = hasSource && capabilities?.attach == true && !attached
 
-/** Permission mode and effort change on a running Claude session the phone may write to, Persona's included. */
-val Session.canChangeModes: Boolean get() = isLive && isClaude && canSend
+/** A declared modes capability wins; an older hub that omits it keeps the agent-based rule. */
+val Session.canChangeModes: Boolean get() = isLive && canSend && (capabilities?.modes ?: isClaude)
 /**
  * Only the effort changes, among the session's own [Session.efforts]: a Codex thread the hub drives through its
  * app-server (the hub lists the levels only then; the iOS `Session.setsEffortOnly`).
