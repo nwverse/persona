@@ -149,15 +149,21 @@ describe("Feishu bot dialog", () => {
     expect([...row.querySelectorAll<HTMLElement>("*")].some((element) => element.classList.contains("bg-orange-tint"))).toBe(true);
   });
 
-  it("orders credentials, bot controls and read-as-me sections", async () => {
-    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me" };
+  it("orders credentials, read-as-me, then the bot's controls", async () => {
+    const larkcli: HubConnector = { id: "larkcli", name: "Lark via lark-cli", status: "ok", account: "me", capabilities: ["login"] };
     act(() => root.render(<FeishuBot larkcli={larkcli} />));
     await act(async () => calls.status[0].resolve(saved({ owner: { name: "owner", paired_at: 1 } })));
     await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
 
     const headings = [...document.querySelectorAll<HTMLElement>("[role=dialog] section h2")].map((x) => x.textContent);
-    expect(headings.indexOf(t("settings-feishubot.credentials"))).toBeLessThan(headings.indexOf(t("settings-feishubot.bot_section")));
-    expect(headings.indexOf(t("settings-feishubot.bot_section"))).toBeLessThan(headings.indexOf(t("settings-feishubot.read_section")));
+    expect(headings.indexOf(t("settings-feishubot.credentials"))).toBeLessThan(headings.indexOf(t("settings-feishubot.read_section")));
+    expect(headings.indexOf(t("settings-feishubot.read_section"))).toBeLessThan(headings.indexOf(t("settings-feishubot.bot_section")));
+    // Signed in: the section is titled for the identity, and signing in again is the quiet secondary action.
+    const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
+    expect(dialog.textContent).toContain(t("settings-feishubot.read_as_you"));
+    const again = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(t("settings-feishubot.read_reauthorize")));
+    expect(again).toBeDefined();
+    expect([...dialog.querySelectorAll("button")].some((button) => button.textContent === t("settings-feishubot.read_authorize"))).toBe(false);
   });
 
   it("starts lark-cli authorization inline and renders a device-code step", async () => {
