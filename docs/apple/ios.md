@@ -931,6 +931,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     Page sides `Theme.Space.page` 16, aligned search/filters/group titles/cards/capsules, not individual paddings.
   - `Theme.Size` (requested 2026-10-31): named text-adjacent icons/dots/avatars/tap targets/thumbnails/label widths, default original points,
     `.scaledFrame(width:height:)` / `.scaledFrame(minWidth:…)` follows text up to 1.6× accessibility (44pt buttons not a third of screen).
+    `.tapTargetFrame(alignment:)`: a hit area that grows like `scaledFrame` but never under `tapTarget` (44pt) at Small / smaller system sizes, for small controls hit wider than drawn (uploaded avatar's corner delete).
     Lines/dividers/progress ≤4pt stay unscaled `frame`; geometric sizes unchanged; watch keeps own sizes, not App text sizing.
   - Dynamic Type + Settings › Appearance › Interface Style › Text Size (Small/Standard/Large, `TextSize`, `ui.textSize`) offsets system one level via RootView `.dynamicTypeSize`,
     changing text styles, `@ScaledMetric`, MarkdownUI and BeautifulUI together, ratios intact.
@@ -1518,8 +1519,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 
 - **Inbox items are their id and their manager** (`InboxItem.key`): the store, the bulk arithmetic (`InboxBulk`), the reply and status
   spinners, the Mac's selection, item windows and Quick Open use it. An answer about one item is put back with the manager asked
-  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. An item's
+  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. A request
+  about one item (details, Done, Mute, a reply, its suggestion, hand-off and Trail) names its manager unless that is the
+  roster's default (`AppModel.itemManager`, as the web's `itemHeaders`), and names its stamp until the roster is read (the
+  default may have moved); the Rules and Muted lists name their stamp. An item's
   rule sheet reads and saves its manager's rules and moves only that manager's items (`InboxPolicyTarget.manager`).
+- **An item's Lark chat is its manager's**: its emoji and quick reactions (`LarkMedia.catalog`, one per manager), its messaging
+  source (`MessagingSources.source(for:manager:)`: a named manager's list is read through it when its chat, a profile or a Moments
+  post opens, until one is found this launch; the default's stays the hub's), its drafts (`LarkDrafts.Key`, and the Lark user
+  its outbox draft opens under, `LarkOutboxAccounts`; the default's under the names they had) and the clients of what opens
+  inside it (thread, composer, profile, cards: `AppModel.larkAPI`, through the chat's group, `larkGroup`). A Moments post
+  pushed from an item sets its manager on its page. Tests `LarkChatManagerTests`, `LarkDraftsTests`, `LarkOutboxStoreTests`.
 - **Rules and Muted per manager**: both lists read every installed manager's at once, each one named
   (`ManagerRoster.readEach`), and show each one's under its name (`ManagerHeading`), the default first, a manager with none
   left out; one that can't be read says so in its place (offline: that they show once it is back). Each entry is stamped

@@ -61,6 +61,7 @@ import { dayKey, isCalendarMode, parseDayKey, startOfDay, type CalendarMode } fr
 import type { Route } from "../lib/router";
 import { ReviewBadge, ReviewChecklist } from "./assistant/Supervision";
 import { TodoStageBar } from "./TodoStageBar";
+import { TodoAskLine, TodoAskPanel } from "./TodoAsk";
 import { TaskCompletionCheck } from "./TaskCompletionCheck";
 import { useTodoField } from "./use-todo-field";
 import { todoUltracode } from "../lib/ultracode";
@@ -827,6 +828,9 @@ const TodoListItem = memo(function TodoListItem({
           {!todo.done_at && <ReviewBadge todo={todo} className="ml-auto" />}
         </div>
 
+        {/* What it waits on from the user, with the one tap that answers it (#2056) */}
+        <TodoAskLine todo={todo} className="mt-1" />
+
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
 
@@ -1155,6 +1159,9 @@ function TodoDetail({
           {todo.done_reason ? t("todos.auto_done_reason", { reason: todo.done_reason }) : t("todos.auto_done")}
         </p>
       )}
+
+      {/* What it waits on from the user and how to answer it (#2056) */}
+      <TodoAskPanel todo={todo} />
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} />

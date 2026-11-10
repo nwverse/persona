@@ -120,6 +120,11 @@ extension AppModel {
     /// otherwise.
     func pushedBy(_ manager: String?) -> String? { ManagerRoster.pushed(by: manager, defaultID: managerRoster?.defaultID) }
 
+    /// The manager a request about an inbox item stamped `manager` names (its details, Done, Mute, a reply): none for the
+    /// default's (docs/assistant/managers.md "Grouping"). Until a roster is read, its stamp: the default may have moved,
+    /// and naming the default is harmless. The Rules and Muted lists name their stamp too.
+    func itemManager(_ manager: String?) -> String? { managerRoster.map { $0.naming(manager) } ?? manager }
+
     /// The manager of `machine` while a hub with several managers has that manager offline: the computer comes back
     /// with it, and Reconnect, which goes through it, can't work meanwhile. nil otherwise.
     func offlineManager(of machine: Machine?, group: String) -> HubManager? {

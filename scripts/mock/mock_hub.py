@@ -2025,10 +2025,26 @@ def apply_todo_plan(t, body):
     return None
 
 
+# MOCK_TODO_ASKS=1 (#2056, docs/assistant/todos.md "Waiting for the owner"): to-dos carry the ask they wait on, as GET
+# /api/v1/todos lists it: a decision with a recommendation (the PR check, its agent idle), a conclusion that cannot be done
+# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" (the brief's accept row). POST …/accept takes one
+# (accept_brief): its ask is gone from the list, and a second press is 409.
+TODO_ASKS = {
+    "todo_review": {"outcome": "decide", "verdict": "🤔 要你拍板：PR #42 改了公开接口，旧接口留不留", "recommend": "先合入，下个版本再删旧接口"},
+    "todo_blog": {"outcome": "cannot", "verdict": "⛔ 做不了：旧主题的短代码没法照搬到 Astro"},
+    "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
+} if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
+TODO_ASKED_AT = ago(hours=2)
+
+
 def sorted_todos():
     tds = copy.deepcopy(TODOS)
     tds.sort(key=lambda t: t.get("created_at") or "", reverse=True)
-    return [format_todo(t) for t in tds]
+    out = [format_todo(t) for t in tds]
+    for t in out:
+        if t["id"] in TODO_ASKS and t["id"] not in BRIEF_ACCEPTED:
+            t["ask"] = dict(TODO_ASKS[t["id"]], asked_at=TODO_ASKED_AT)
+    return out
 
 
 def push_todos():
@@ -3536,6 +3552,8 @@ def tasks_area(h, method, p, raw):
         else:
             BRIEF_ACCEPTED.add(tid)
             h.send_json({"ok": True})
+            if tid in TODO_ASKS:
+                push_todos()  # its ask is gone (MOCK_TODO_ASKS), as the hub's askChanged says
         return True
     if method == "POST" and p.startswith("/api/v1/later/") and p.endswith("/handled"):
         # The Handled button of a question that can wait: the first press takes it out of the queue, a second one is 409.
@@ -9393,7 +9411,10 @@ def ext_look_personas():
 # POST /api/v1/looks/uploads makes a package in a temporary directory, as the hub does in personas/u-<hex>; the mock
 # keeps the image as it came for every size and state (the hub scales it and draws the states). DELETE takes it away.
 # MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404); =demo: one uploaded look at start.
+# MOCK_LOOK_UPLOAD_FILES=fail: the looks POST makes are listed but their files answer 503, so the apps' "made but not
+# downloaded" path (Try Again) can be seen.
 UPLOADED_LOOKS = tempfile.mkdtemp(prefix="mock-look-uploads-")
+MADE_LOOKS = set()
 PERSONA_ROOTS.append(UPLOADED_LOOKS)
 UPLOAD_STATES = ("idle", "thinking", "working", "needs_you", "offline")
 
@@ -9468,6 +9489,7 @@ def look_uploads_route(handler, method, p, raw):
             handler.send_json({"error": "这个文件不是 Persona 能读的图片，请用 PNG、JPEG、WebP 或 GIF", "code": "not_image"}, 400)
             return True
         lid = make_uploaded_look(name, image, (body.get("subtitle") or "").strip())
+        MADE_LOOKS.add(lid)
         looks = looks_list()
         out = {"look": next(l for l in looks if l["id"] == lid)}
         _push_live({"type": "personas"})
@@ -14270,6 +14292,8 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/personas": return self.send_json({"personas": personas() + ext_look_personas()})
         if looks_route(self, "GET", p, b""): return
         if p.startswith("/api/v1/personas/"):
+            if os.environ.get("MOCK_LOOK_UPLOAD_FILES") == "fail" and p[len("/api/v1/personas/"):].split("/", 1)[0] in MADE_LOOKS:
+                return self.send_json({"error": "mock: MOCK_LOOK_UPLOAD_FILES=fail"}, 503)
             f = persona_file(p[len("/api/v1/personas/"):])
             if not f: return self.send_json({"error": "no such file"}, 404)
             body = open(f, "rb").read()
