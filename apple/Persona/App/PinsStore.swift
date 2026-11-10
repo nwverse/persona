@@ -57,8 +57,8 @@ import SwiftUI
 
         var errorDescription: String? {
             switch what {
-            case .pins: String(localized: "Your pin change wasn't saved, so it was undone")
-            case .mutes: String(localized: "Your notification change wasn't saved, so it was undone")
+            case .pins: String(localized: "Couldn't save the pin change, so it was undone.")
+            case .mutes: String(localized: "Couldn't save the notification change, so it was undone.")
             }
         }
     }
