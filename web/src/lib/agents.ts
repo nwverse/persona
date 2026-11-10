@@ -183,25 +183,6 @@ export function providerLabel(p: string): string {
   return PROVIDER_LABEL[p] ?? (p || t("lib-agents.other"));
 }
 
-export interface ProviderGroup {
-  provider: string;
-  sessions: AgentSession[];
-  unread: number;
-}
-
-// Groups by provider (the group with the most recent session first), recent first inside; q filters on title / provider.
-export function groupSessions(list: AgentSession[], q = ""): ProviderGroup[] {
-  const needle = q.trim().toLowerCase();
-  const hit = (s: AgentSession) => !needle || s.title.toLowerCase().includes(needle) || s.provider.toLowerCase().includes(needle) || providerLabel(s.provider).toLowerCase().includes(needle);
-  const by = new Map<string, AgentSession[]>();
-  for (const s of list) if (hit(s)) (by.get(s.provider) ?? by.set(s.provider, []).get(s.provider)!).push(s);
-  const groups = [...by].map(([provider, ss]) => {
-    const sessions = ss.slice().sort((a, b) => b.rankTimeMs - a.rankTimeMs);
-    return { provider, sessions, unread: sessions.reduce((n, s) => n + (s.unreadCount || 0), 0) };
-  });
-  return groups.sort((a, b) => (b.sessions[0]?.rankTimeMs ?? 0) - (a.sessions[0]?.rankTimeMs ?? 0));
-}
-
 export const totalUnread = (list: AgentSession[]) => list.reduce((n, s) => n + (s.unreadCount || 0), 0);
 
 // Pages come back in position order with the odd swap: merge by externalId, newest copy wins, sort by position.

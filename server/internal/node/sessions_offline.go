@@ -24,21 +24,21 @@ var offlineCache struct {
 	list []proto.Session
 }
 
-// offline lists recent transcripts without a live agent; the directory scan is cached for 20s.
-func (n *Node) offline(live map[string]bool) []proto.Session {
+// appendOffline appends to dst the recent transcripts without a live agent, straight into the caller's list (sessionList's);
+// the directory scan is cached for 20s.
+func (n *Node) appendOffline(dst []proto.Session, live map[string]bool) []proto.Session {
 	offlineCache.Lock()
 	defer offlineCache.Unlock()
 	if time.Since(offlineCache.at) > 20*time.Second || offlineCache.home != n.offlineCacheKey() {
 		offlineCache.list = n.scanOffline()
 		offlineCache.at, offlineCache.home = time.Now(), n.offlineCacheKey()
 	}
-	var out []proto.Session
-	for _, s := range offlineCache.list {
-		if !live[s.SessionID] {
-			out = append(out, s)
+	for i := range offlineCache.list {
+		if !live[offlineCache.list[i].SessionID] {
+			dst = append(dst, offlineCache.list[i])
 		}
 	}
-	return out
+	return dst
 }
 
 // setKept replaces the sessions that are always listed; the next list has them.
