@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -147,9 +148,11 @@ func fitSnapshot(s *prompts.Snapshot) string {
 // clipSnapshot is text cut at a line break to the budget, with a line saying where the rest is: a section the drops
 // above cannot shorten (a long list of agents waiting for the user) must not push the block past it.
 func clipSnapshot(text string) string {
-	head := text
-	if cut := strings.LastIndexByte(text[:snapshotBudget], '\n'); cut > 0 {
-		head = text[:cut]
+	head := text[:snapshotBudget]
+	if cut := strings.LastIndexByte(head, '\n'); cut > 0 {
+		head = head[:cut]
+	} else if !utf8.ValidString(head) { // one line longer than the budget: cut at a rune boundary
+		head = strings.ToValidUTF8(head, "")
 	}
 	return head + "\n- 快照到此截断；其余用 agents_list、todo_list、inbox 查"
 }
