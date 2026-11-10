@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -136,5 +137,43 @@ func TestCatalogTranslations(t *testing.T) {
 	}
 	if item(i18n.En, "no such words") != nil {
 		t.Fatal("a search still narrows")
+	}
+}
+
+// pack takes l10n/ into the package, and the index entry it prints carries the same translations (a broken file is
+// said on stderr and left out of both the entry's l10n and the hub's reading of it).
+func TestPackCarriesTranslations(t *testing.T) {
+	dir := t.TempDir()
+	src := `{"manifest_version": 1, "id": "greeter", "name": "问候", "version": "1.0.0",
+ "contributes": {"prompts": [{"id": "hi", "kind": "quick", "title": "Hi", "text": "Say hi."}]}}`
+	if err := os.WriteFile(filepath.Join(dir, extension.ManifestFile), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, extension.L10nDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, extension.L10nDir, "en.json"), []byte(`{"name": "Greeter"}`), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, extension.L10nDir, "ja.json"), []byte(`{"name": ""`), 0o644)
+	var out, errs bytes.Buffer
+	if err := packExtension(context.Background(), dir, nil, &out, &errs); err != nil {
+		t.Fatalf("pack: %v\n%s", err, errs.String())
+	}
+	files := tarFiles(t, filepath.Join(dir, "dist", "greeter-1.0.0.tar.gz"))
+	if files["greeter-1.0.0/l10n/en.json"] != `{"name": "Greeter"}` || files["greeter-1.0.0/l10n/ja.json"] == "" {
+		t.Fatalf("the package's l10n/: %v", files)
+	}
+	if !strings.Contains(errs.String(), "l10n/ja.json is left out") {
+		t.Fatal("the broken file is said:", errs.String())
+	}
+	entry := out.String()[strings.Index(out.String(), "{"):]
+	var fields struct {
+		L10n json.RawMessage `json:"l10n"`
+	}
+	if err := json.Unmarshal([]byte(entry), &fields); err != nil {
+		t.Fatal(err, entry)
+	}
+	ts, err := extension.ParseEntryTranslations(fields.L10n)
+	if err != nil || ts.Name(i18n.En, "问候") != "Greeter" || ts.Name(i18n.Ja, "问候") != "Greeter" || len(ts) != 1 {
+		t.Fatalf("the entry's l10n: %s %v", fields.L10n, err)
 	}
 }
