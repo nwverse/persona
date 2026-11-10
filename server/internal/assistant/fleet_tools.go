@@ -113,6 +113,9 @@ func (s *Service) mcpCall(ctx context.Context, machine, session, name string, ar
 	if !assistant && name == "task_plan" { // only a task leader's agent has it (task_leader.go)
 		return s.leaderTaskPlan(ctx, machine, session, args)
 	}
+	if !assistant && name == "task_review" {
+		return s.leaderTaskReview(ctx, machine, session, args)
+	}
 	if !assistant && isDispatchTool(name) {
 		return s.dispatchTool(ctx, machine, session, name, args)
 	}

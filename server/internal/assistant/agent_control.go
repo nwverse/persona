@@ -570,16 +570,11 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 		return "", err
 	}
 	t, ok := s.taskOf(ctx, machine, session)
-	// A task leader's worker reports to its leader's session, not to a conversation (task_leader.go).
-	lead, isWorker, hasLeader := TodoAgent{}, false, false
-	if ok {
-		lead, isWorker, hasLeader = s.workerLeader(t, machine, session)
-	}
-	if isWorker && !hasLeader {
-		return "Nobody receives this: the task you work for is closed. Ask the user what you need the usual way.", errNoSupervisor
-	}
-	if !isWorker && (!ok || t.Supervision == nil || t.Supervision.Supervisor == "") {
+	if !ok || t.Supervision == nil || t.Supervision.Supervisor == "" {
 		return "Nobody receives this: your work is not a task Persona supervises. Ask the user what you need the usual way.", errNoSupervisor
+	}
+	if _, _, reachable := s.leaderSupervisor(t); s.agentSupervised(t) && !reachable {
+		return "Nobody receives this: the task leader that handed you this task is gone or its task is closed. Ask the user what you need the usual way.", errNoSupervisor
 	}
 	if !s.upReports.allow(machine, session, now) {
 		return "", fmt.Errorf("too many reports: at most %d in %d minutes; put what is left into one report later", reportLimit, int(reportWindow.Minutes()))
@@ -595,10 +590,8 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if steps > 0 {
 		step = min(step, steps)
 	}
-	if isWorker {
-		return s.reportToLeader(ctx, t, lead, machine, session, a.Kind, text, evidence, step, steps)
-	}
-	notUrgent := a.Urgent != nil && !*a.Urgent
+	// A task leader's worker has no owner briefing to wait for: its report goes to the leader at once, urgent or not.
+	notUrgent := a.Urgent != nil && !*a.Urgent && !s.agentSupervised(t)
 	if notUrgent && a.Kind == upReportQuestion {
 		answer, queued := s.reportLater(ctx, t, machine, session, text, evidence, now)
 		if queued {

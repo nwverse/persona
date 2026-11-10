@@ -1,4 +1,4 @@
-Hand part of your own task to workers: each task you give this starts a new coding agent on a computer, beneath the task you lead, at once, with no card for the user to start it. You get this tool only because your task was handed out as a leader task. Workers belong to this task only: you cannot pick another to-do (todo_id and role are refused), a worker cannot hand work on, and at most 8 workers of this task run at a time. A task that changes files (readonly false) must set permission "bypassPermissions", since nobody is there to answer a permission prompt; a task that only reads sets readonly true. Leave machine and cwd out to start the worker where you run. Each worker that has report_to_supervisor reports to you as a message that starts with "Persona · worker report"; your own reports still go to whoever handed your task to you. Returns at once, with each worker's to-do; it does not confirm the agent started.
+Hand part of your own task to workers: each task you give this starts a new coding agent on a computer, beneath the task you lead, at once, with no card for the user to start it. You get this tool only because your task was handed out as a leader task. Workers belong to this task only: you cannot pick another to-do (todo_id and role are refused), a worker cannot hand work on, and at most 8 workers of this task run at a time. A task that changes files (readonly false) must set permission "bypassPermissions", since nobody is there to answer a permission prompt; a task that only reads sets readonly true. Leave machine and cwd out to start the worker where you run. What a worker reports, and when it stops, stalls or waits for review, reaches you as a message that starts with "Persona · supervision"; your own reports still go to whoever handed your task to you. You supervise each worker: give it done_when, and review it with task_review when its supervision message comes. Returns at once, with each worker's to-do; it does not confirm the agent started.
 
 ```json
 {
@@ -77,6 +77,11 @@ Hand part of your own task to workers: each task you give this starts a new codi
               "type": "string"
             },
             "description": "what done means: results the worker must show, one each; the worker is told them"
+          },
+          "expect_minutes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "about how long the worker should take, in minutes; with no progress for 1.5 times that (at least 20 minutes) it counts as stuck and you are told"
           },
           "why": {
             "type": "string",

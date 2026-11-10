@@ -102,7 +102,7 @@ func (s *Service) elicitationReachable(ix proto.Interaction) bool {
 // card goes to its supervisor first when leaders are configured (ask_route.go); a question the assistant may answer for
 // the user goes to it first (fleet_delegate.go).
 func (s *Service) announce(ix proto.Interaction) {
-	if s.routeAsk(ix) {
+	if !s.agentSupervisedSession(ix.MachineID, ix.SessionID) && s.routeAsk(ix) { // a worker's card stays the user's (task_leader.go)
 		return
 	}
 	if forget := s.delegable(ix); forget != nil {

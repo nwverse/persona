@@ -26,6 +26,7 @@ const (
 	sigEscalated   = "escalated"   // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned    = "orphaned"    // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
 	sigAsk         = "ask"         // its agent's card came to the supervisor before the user (ask_route.go)
+	sigDecide      = "decide"      // a task leader's worker needs a decision its leader cannot make: told the conversation above the leader (task_leader.go)
 )
 
 var (
@@ -97,7 +98,7 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned: // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide: // started: the user waits to hear it
 		return true
 	case sigReport:
 		return g.Report != upReportProgress

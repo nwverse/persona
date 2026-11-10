@@ -84,7 +84,7 @@ func (s *Service) beginRemedy(ctx context.Context, planID string, i int, t PlanT
 		return false
 	}
 	todo, ok := s.todoNow(t.TodoID)
-	if !ok || todo.Supervision == nil || todo.DoneAt != nil {
+	if !ok || todo.Supervision == nil || todo.DoneAt != nil || s.agentSupervised(todo) { // a leader has no start remedies
 		return false
 	}
 	attempt := 0

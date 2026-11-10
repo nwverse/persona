@@ -197,18 +197,11 @@ func RenderTaskLeader() string { return render("agents/task_leader", struct{}{})
 // RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
 func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
 
-// WorkerReport is a worker's report as its task leader's agent reads it (agents/worker_report, assistant/task_leader.go).
-type WorkerReport struct {
-	Worker   string // the worker's tab or title, "" when it is not known
-	Title    string // the worker's task
-	Kind     string // progress, question, blocked, done or failed
-	Text     string
-	Evidence []string
-	Step     int
-	Steps    int
+// RenderWorkerSupervise is the supervision message a task leader's agent gets about its workers (agents/worker_supervise,
+// assistant/task_leader.go): what each task of its own needs, from the same entries a conversation's message lists.
+func RenderWorkerSupervise(entries []SuperviseEntry) string {
+	return render("agents/worker_supervise", struct{ Entries []SuperviseEntry }{entries})
 }
-
-func RenderWorkerReport(r WorkerReport) string { return render("agents/worker_report", r) }
 
 // AgentCloseoutRequired is what an agent is told when its stop is held for a missing closeout (#3612).
 type AgentCloseoutRequired struct {

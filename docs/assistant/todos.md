@@ -112,7 +112,7 @@ Records associations between to-dos and Agent sessions:
   - `space`: linked with the entire workspace project;
   - `spawned`: spawned by a parent Agent linked to the to-do.
   - `leader`: the Agent of a task handed out with `task_plan` role `leader` (#3656, [unified-entry.md](unified-entry.md), "Task leaders");
-  - `worker`: an Agent a task leader handed out with its own `task_plan`; `via` is the leader's to-do id (not a session): the worker's supervisor is that task's leader Agent;
+  - `worker`: an Agent a task leader handed out with its own `task_plan`; `via` is the leader's to-do id (not a session): the worker's `supervision.supervisor` is that task's leader Agent session;
   - `review`: an independent reviewer's session (kept released, hidden from the lists).
 - `via` (text, NOT NULL, DEFAULT ''): association path:
   - For source `space`, project key `<machine_id>/<space>`;

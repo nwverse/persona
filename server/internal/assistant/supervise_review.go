@@ -105,7 +105,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	var v Supervision
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			if isMain && !s.isLeader(ctx, v.Supervisor) {
+			if isMain && !s.isLeader(ctx, v.Supervisor) && !s.isLeaderSession(v.Supervisor) {
 				v.Supervisor = self // the main conversation takes over an old main conversation's task, not a leader's
 			} else if v.Supervisor == "" {
 				v.Supervisor = t.Origin

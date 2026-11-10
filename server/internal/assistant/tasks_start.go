@@ -107,7 +107,11 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
 		}
-		if t.ReuseTodo != "" || t.Parent != "" { // a worker's has no conversation to show a card in (task_leader.go)
+		if t.Parent != "" { // a task leader's worker: supervised by its leader's agent, with no conversation to show a card in
+			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+			continue
+		}
+		if t.ReuseTodo != "" {
 			continue
 		}
 		if _, err := s.appendFeed(ctx, p.Conversation, feedTask, todo.ID, nil); err != nil {
@@ -308,10 +312,6 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.remedyStep(ctx, conversation, t.TodoID, startRemedyBody{Action: "gave_up", By: "hub", Attempt: t.Start.Attempt, Reason: reason})
 	}
 	if retry && !remedied {
-		return
-	}
-	if t.Parent != "" { // a worker's leader hears of it; no conversation has a card for it (task_leader.go)
-		s.tellLeaderOfFailedStart(ctx, t, reason)
 		return
 	}
 	_, _ = s.appendFeed(ctx, conversation, feedReceipt, t.TodoID, receiptBody{Title: t.Title, State: "failed",

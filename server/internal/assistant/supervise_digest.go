@@ -75,8 +75,21 @@ func (s *Service) sendDigest(ctx context.Context) {
 	web := s.webBase(ctx)
 	groups := map[string][]superviseSignal{}
 	var order []string
+	leaders := map[string][]superviseSignal{} // a task leader's agent session → the signals of its workers (task_leader.go)
+	var leaderOrder []TodoAgent
 	gone := map[string]bool{} // leaders whose conversation is not there: their signals go to the main one
 	for _, g := range list {
+		if lead, handled, reachable := s.leaderRoute(g); handled { // never digestTo: a session is no conversation
+			if !reachable {
+				s.logf("supervise: %s of task %s has no task leader to go to; dropped", g.Kind, g.Todo)
+			} else {
+				if _, seen := leaders[lead.SessionID]; !seen {
+					leaderOrder = append(leaderOrder, lead)
+				}
+				leaders[lead.SessionID] = append(leaders[lead.SessionID], g)
+			}
+			continue
+		}
 		to := s.digestTo(here, g)
 		if to != here.Main {
 			if _, seen := gone[to]; !seen {
@@ -93,6 +106,9 @@ func (s *Service) sendDigest(ctx context.Context) {
 		groups[to] = append(groups[to], g)
 	}
 	delivered := false
+	for _, lead := range leaderOrder {
+		delivered = s.deliverToLeaderAgent(ctx, lead, leaders[lead.SessionID], web, now, prev) || delivered
+	}
 	for _, to := range order {
 		delivered = s.deliverDigest(ctx, here, to, groups[to], web, now, prev) || delivered
 	}
@@ -305,6 +321,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if !s.taskWaits(ctx, t) {
 			return prompts.SuperviseEntry{}, false // answered meanwhile
 		}
+	case sigDecide:
+		if st != reviewNeedsUser {
+			return prompts.SuperviseEntry{}, false // decided meanwhile
+		}
 	case sigEscalated:
 		if st != reviewNeedsUser && len(g.Cards) == 0 { // a leader's escalated cards are told as they were
 			return prompts.SuperviseEntry{}, false // decided meanwhile
@@ -328,6 +348,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind == sigEscalated {
 		e.Recommend = g.Ask // the leader's recommendation (escalate)
 		e.Asks = g.Cards
+	}
+	if g.Kind == sigDecide {
+		e.Recommend = g.Ask // the task leader's recommendation
 	}
 	if g.Kind == sigAsk {
 		e.Asks, e.Decisions = asks, s.todoDecisionsContext(ctx, t.ID) // what was settled already, not to be gone against
@@ -390,7 +413,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:

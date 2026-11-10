@@ -34,6 +34,7 @@ func TestMCPCaller(t *testing.T) {
 		{"dispatch_start", "", false, "sess-pane"},
 		{"dispatch_read", "", false, "sess-pane"},
 		{"task_plan", "", false, "sess-pane"},
+		{"task_review", "", false, "sess-pane"},
 		{"task_plan", "", true, ""},
 		{"kb_search", "", false, ""},
 		{"todo_decisions", "", true, ""},

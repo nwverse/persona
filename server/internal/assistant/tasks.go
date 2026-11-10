@@ -301,6 +301,9 @@ func (s *Service) appendFeed(ctx context.Context, conversation, kind, ref string
 
 // appendFeedAt is appendFeed for an item that belongs at another time (the "Today" card: the start of the day).
 func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref string, body any, at time.Time) (FeedItem, error) {
+	if s.isLeaderSession(conversation) { // a task leader's agent is no conversation: nobody reads a feed there (task_leader.go)
+		return FeedItem{}, nil
+	}
 	it := FeedItem{ID: "feed_" + randomHex(8), Conversation: conversation, At: at.UTC(), Kind: kind, Ref: ref}
 	if body != nil {
 		raw, err := json.Marshal(body)
