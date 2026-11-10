@@ -71,6 +71,10 @@ type Engine struct {
 	// MinutesWritten is told when a recording's minutes for its current revision are written (minutes.go): the
 	// assistant pushes them. Called from the loop, outside the store's locks.
 	MinutesWritten func(ctx context.Context, r Recording, m Minutes)
+	// LiveChanged is told of recording id when what the attending feeder does may have changed (live.go): a stored
+	// upload of a recording that attends or attended until then, and sentences LiveAppend stored. Called outside the
+	// store's locks; optional.
+	LiveChanged func(id string)
 	// HandleKey is the hub's key for the senders' identity hints (handles.go); without it none are kept.
 	HandleKey []byte
 

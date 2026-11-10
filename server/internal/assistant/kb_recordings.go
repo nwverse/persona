@@ -28,7 +28,8 @@ func (s *Service) recordingRoutes(engine func(http.ResponseWriter, *http.Request
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		status, err := e.PutRecording(r.PathValue("id"), u, time.Now())
+		put, err := e.PutRecording(r.PathValue("id"), u, time.Now())
+		status := put.Status
 		switch {
 		case errors.Is(err, kb.ErrRecordingDeleted):
 			apierr.WriteCode(w, http.StatusGone, codeRecordingDeleted, err)
