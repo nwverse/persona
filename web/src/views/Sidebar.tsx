@@ -58,7 +58,7 @@ import { SESSION_LIST_STYLE } from "../ui/list-metrics";
 import { runtimeIdentity, runtimeOrder, runtimeRemoval, runtimeSessions } from "../lib/runtime-list";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
-import { BADGE_CLASS, CURRENT_ROW, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, useActiveKey, useGo, useNavPages } from "./SidebarParts";
+import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, PinnedHeading, SessionRow } from "./SidebarRows";
 import { LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
@@ -262,7 +262,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
   const onConvMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
   const [chatsMenu, setChatsMenu] = useState<MenuAt | null>(null);
   const autoHolds = activeKey.startsWith("auto:") || isOpenAuto(assistant?.conversations, activeKey, convs);
-  const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || autoHolds || convs.some((c) => activeKey === `j:${c.session_id}`) });
+  const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || activeKey === "j:new" || autoHolds || convs.some((c) => activeKey === `j:${c.session_id}`) });
   // the pages fold under their own title (#2524); the drawer's grid of icons doesn't
   const [pagesFolded, togglePages] = useFolded("pages", false, { all: false, holds: more.some((p) => p.k === activeKey) });
   const { nav, reg, hover, highlight } = useGlide(activeKey);
@@ -282,12 +282,6 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink-3">{t("sidebar.search_sessions")}</span>
           <span className="hidden sm:inline-flex"><Kbd>{searchHint}</Kbd></span>
         </button>
-        {chats && (
-          <a href={href({ name: "persona-new" })} onClick={go({ name: "persona-new" })} aria-current={route.name === "persona-new" ? "page" : undefined} className={cx("touch-hit mb-1 flex h-8 w-full items-center gap-2 rounded-control px-2.5 text-[12.5px] font-medium text-ink-2 transition-colors hover:text-ink", route.name === "persona-new" ? CURRENT_ROW : "hover:bg-hover")}>
-            <Icon name="compose" size={13} stroke={1.8} />
-            <span className="min-w-0 flex-1 truncate">{t("sidebar.new_chat")}</span>
-          </a>
-        )}
       </div>
 
       {/* scroll-pt: a row reached by Tab doesn't stop under the pinned Persona row — about 62px with its 主对话 line
@@ -314,7 +308,11 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
             title={t("sidebar.persona_chats")}
             folded={personaFolded}
             onToggle={togglePersona}
+            // New chat lives with the chats it makes (#3231, after #2303 moved it above the main chat): a labeled
+            // first row, and while the group is folded the same compose icon on its title, one click either way
+            right={personaFolded ? <SectionAdd icon="compose" label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} /> : undefined}
           >
+            <NavRow k="j:new" reg={reg} hover={hover} active={activeKey === "j:new"} to={{ name: "persona-new" }} go={go} icon="compose" label={t("sidebar.new_chat")} />
             {pinnedConvs.length > 0 && <PinnedHeading onMenu={(at) => setChatsMenu(at)} />}
             {convs.map((c) => (
               <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={{ name: "persona", sid: c.session_id }} go={go} label={conversationTitle(c)} showState={false} icon={pinnedIds.includes(c.session_id) ? "pin" : undefined} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
