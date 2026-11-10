@@ -59,10 +59,10 @@ func (f *uploadNode) handle(_ context.Context, method string, params json.RawMes
 		if f.refuse != "" {
 			return nil, &rpc.Error{Code: f.refuse, Message: "refused", Data: json.RawMessage(`{"name":"a.txt"}`)}
 		}
-		if f.noDest && p.Dest == proto.UploadDestDir {
+		if f.noDest && (p.Dest == proto.UploadDestDir || p.Dest == proto.UploadDestInbox) {
 			return nil, errors.New(`unknown upload destination "dir"`)
 		}
-		if p.Dest == proto.UploadDestDir && !f.noEcho {
+		if (p.Dest == proto.UploadDestDir || p.Dest == proto.UploadDestInbox) && !f.noEcho {
 			return map[string]any{"upload_id": "u1", "dest": p.Dest}, nil
 		}
 		if p.HealthDir != "" && !f.noHealthEcho {
@@ -400,6 +400,84 @@ func TestUploadCancelledDuringChunkAborts(t *testing.T) {
 	for _, method := range f.calls {
 		if method == "file.upload.end" {
 			t.Fatal("canceled upload was finalized")
+		}
+	}
+}
+
+// inboxHub is uploadHubOf with the machine's file transfer switch on, as its manager would report it.
+func inboxHub(t *testing.T, f *uploadNode) (*Machine, http.Handler) {
+	t.Helper()
+	_, m, mux := uploadHubOf(t, f)
+	m.snap = &proto.Machine{ID: "m1", Name: "box", FileTransfer: &proto.MachineFileTransfer{Enabled: true, Inbox: proto.DefaultInboxDir}}
+	return m, mux
+}
+
+// dest=inbox names the machine's receive folder from hub.json (nothing: the node's default), takes up to the inbox's
+// cap and needs a node that knows it.
+func TestUploadIntoInbox(t *testing.T) {
+	f := &uploadNode{}
+	m, mux := inboxHub(t, f)
+	m.cfg.InboxDir = "~/Received"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/machines/m1/files?name=a.txt&dest=inbox&dir=/etc", strings.NewReader("hi")))
+	if rec.Code != 200 || len(f.begins) != 1 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if b := f.begins[0]; b["dest"] != "inbox" || b["dir"] != "~/Received" { // the client's dir is not the folder
+		t.Fatalf("begin %v", b)
+	}
+
+	f = &uploadNode{}
+	rec = httptest.NewRecorder()
+	_, mux = inboxHub(t, f)
+	mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/machines/m1/files?name=a.txt&dest=inbox", strings.NewReader("hi")))
+	if rec.Code != 200 || f.begins[0]["dir"] != "" {
+		t.Fatalf("default: %d %v", rec.Code, f.begins)
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/machines/m1/files?name=a.bin&dest=inbox", strings.NewReader("x"))
+	req.ContentLength = proto.MaxInboxUploadBytes + 1
+	rec = httptest.NewRecorder()
+	_, mux = inboxHub(t, &uploadNode{})
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over the inbox's cap: %d", rec.Code)
+	}
+
+	for _, old := range []*uploadNode{{noDest: true}, {noEcho: true}} {
+		rec = httptest.NewRecorder()
+		_, mux = inboxHub(t, old)
+		mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/machines/m1/files?name=a.txt&dest=inbox", strings.NewReader("hi")))
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"node_outdated"`) || old.data.Len() != 0 {
+			t.Fatalf("old node: %d %s %v", rec.Code, rec.Body, old.calls)
+		}
+	}
+}
+
+// The file transfer switch is off by default: with no report, a report without the field (an older manager) or the
+// switch off, a dest=inbox upload is 403 file_transfer_disabled and the node hears nothing. Chat attachments (no
+// dest) and the other destinations do not depend on it.
+func TestInboxUploadNeedsTheSwitch(t *testing.T) {
+	for name, snap := range map[string]*proto.Machine{
+		"no report":     nil,
+		"older manager": {ID: "m1"},
+		"off":           {ID: "m1", FileTransfer: &proto.MachineFileTransfer{}},
+	} {
+		f := &uploadNode{}
+		_, m, mux := uploadHubOf(t, f)
+		m.snap = snap
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/machines/m1/files?name=a.txt&dest=inbox", strings.NewReader("hi")))
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"`+proto.CodeFileTransferDisabled+`"`) || len(f.calls) != 0 {
+			t.Errorf("%s: %d %s %v", name, rec.Code, rec.Body, f.calls)
+		}
+		for _, q := range []string{"name=a.txt", "name=a.txt&dest=terminal", "name=a.txt&dest=dir&dir=~"} {
+			f.calls, f.begins = nil, nil
+			rec = httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/v1/machines/m1/files?"+q, strings.NewReader("hi")))
+			if rec.Code != 200 {
+				t.Errorf("%s, %s with the switch off: %d %s", name, q, rec.Code, rec.Body)
+			}
 		}
 	}
 }

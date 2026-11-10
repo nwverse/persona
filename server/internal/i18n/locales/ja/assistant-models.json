@@ -43,7 +43,7 @@
   "provider_legacy_judge": "ハブの判定API",
   "provider_legacy_kb": "ハブのナレッジAPI",
   "provider_claude_default": "Claude Codeのデフォルト",
-  "source_hub_config": "マネージャーの設定",
+  "source_hub_config": "アシスタントの設定",
   "source_assistant_default": "アシスタントのデフォルト",
   "source_default": "デフォルト",
   "source_extension_default": "拡張機能のデフォルト",

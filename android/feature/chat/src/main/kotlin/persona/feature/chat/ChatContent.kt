@@ -80,7 +80,9 @@ internal fun chatMarkdown(text: String) = ChatLinks.markdown(MathMarkdown.rewrit
  *
  * One parse per id and text: a caller that asks while a parse of the same id and text is under way (the page's prewarm
  * and the row it warms, say) waits for that one. The parse runs in the cache's own [scope], so a caller that leaves (a
- * row scrolled away, a prewarm restarted) does not cancel it for the others or lose its work.
+ * row scrolled away, a prewarm restarted) does not cancel it for the others or lose its work. Nor does the last caller
+ * to leave: the cache keeps no count of who waits, so a parse runs to the end and is kept even when nobody waits for it
+ * any more. That costs little, since a streaming reply parses only its tail.
  *
  * A streaming reply parses from its last settled block on ([ChatMarkdownStream]); once it ends, its final text is parsed
  * whole and kept under the same id.
@@ -147,7 +149,10 @@ internal class ChatMarkdownCache(
         val markdown = chatMarkdown(parse.text)
         val (result, whole) = if (parse.whole) parseWhole(markdown) to true else streams.parse(parse.id, markdown)
         synchronized(this) {
-            entries[parse.id] = Entry(parse.text, result, whole)
+            // A delta's tail parse that ends after the stream's whole parse of the same text keeps the whole one, which
+            // the next caller would otherwise parse again.
+            val entry = entries[parse.id]
+            if (whole || entry == null || !entry.whole || entry.text != parse.text) entries[parse.id] = Entry(parse.text, result, whole)
             trim()
         }
         return result
@@ -335,6 +340,7 @@ internal fun ChatPicture(session: SessionKey, item: Item, loader: ImageLoader, a
 /** [userImages] renders neighboring user-image rows in the same bubble; hide those rows with [imagesInUserBubble].
  * [workRunning] comes from the parent work group's live flag; [lastWorkStep] ends its timeline connector; [plan] is the
  * group's plan ([latestPlan]): its TodoWrite is the full plan card, with earlier updates retained as ordinary steps.
+ * [waiting]: the turn waits on you ([turnWaitsOnYou]); a running work line then reads "Waiting for you".
  */
 @Composable
 internal fun ChatLineContent(
@@ -350,6 +356,7 @@ internal fun ChatLineContent(
     lastWorkStep: Boolean = false,
     plan: LinePlan? = null,
     showSourceLabel: Boolean = true,
+    waiting: Boolean = false,
 ) {
     val res = LocalResources.current
     when (line) {
@@ -369,7 +376,7 @@ internal fun ChatLineContent(
             "image" -> line.row.item?.item?.let { ChatPicture(session, it, loader) }
             "recap" -> line.row.item?.item?.let { RecapLine(listOf(it)) }
             else -> line.row.item?.compaction?.let { TimelineMark(it.label.text()) }
-                ?: line.row.item?.takeIf { it.task != null }?.let { TaskNoteLine(it, last = true) }
+                ?: line.row.item?.takeIf { it.task != null }?.let { TaskNoteLine(it, last = true, onFullText = onFullText) }
                 ?: ChatSystemLine(line.row.item?.text.orEmpty(), line.row.item?.task?.failed == true)
         }
         is ChatLine.Recaps -> RecapLine(line.items.map { it.item })
@@ -382,9 +389,12 @@ internal fun ChatLineContent(
             // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary.
             if (style.compactToolSummary) AssistantWorkSummary(line, onToggle)
             else {
-                val now by rememberNow(1_000, enabled = line.live)
-                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }), line.open,
-                    { onToggle(line.id) }, running = line.live) {}
+                // Waiting on you, the turn stays the live one (it folds and opens as while it runs), but its line says it
+                // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
+                val waits = waiting && line.live
+                val now by rememberNow(1_000, enabled = line.live && !waits)
+                WorkGroup(workSummary(res, line, recordedDuration, now.takeIf { line.live }, waiting = waits), line.open,
+                    { onToggle(line.id) }, running = line.live && !waits) {}
             }
         }
         is ChatLine.Step -> WorkStep(line.step, session, loader, onFold, folding, foldErrors, onFullText, style, textUpdates, workRunning, lastWorkStep, plan)
@@ -441,7 +451,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
             val todos = remember(call.use.item) { todoEntries(call.use.item) }
             val searchItem = LocalChatSearchItem.current
             LaunchedEffect(searchItem) {
-                if (searchItem != null && (searchItem == call.use.id || searchItem == call.result?.id)) {
+                if (searchItem != null && (searchItem == call.use.id || call.results.any { it.id == searchItem })) {
                     open = true
                 }
             }
@@ -450,10 +460,12 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                 return
             }
             val presentation = toolPresentation(LocalResources.current, call.use.item)
+            val taskBadge = if (call.results.any { it.task?.kind == "agent" })
+                LocalChatTaskIndex.current.badge(call.use.item.toolUseId, concise = true)?.text?.text() else null
             Column(Modifier.fillMaxWidth()) {
                 // A named tool with nothing to name ("Read agent chat") is its title already: no verb tag saying it twice.
                 TimelineStep(toolCategory(call.name), presentation.title, verb = presentation.verb.takeUnless { it == presentation.title },
-                    detail = listOfNotNull(presentation.detail, if (call.running) stringResource(if (running) R.string.chat_content_tool_running else R.string.chat_content_tool_no_result) else null)
+                    detail = listOfNotNull(presentation.detail, taskBadge ?: if (call.running) stringResource(if (running) R.string.chat_content_tool_running else R.string.chat_content_tool_no_result) else null)
                         .joinToString(stringResource(R.string.chat_status_clause_separator)).ifBlank { null },
                     state = when {
                         call.failed -> WorkState.Failed
@@ -465,7 +477,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     onClick = { open = !open })
                 if (todos != null) TodoList(todos, call.failed)
                 if (call.name == "Task" || call.name == "Agent") SubagentEntry(call.use.item.toolUseId)
-                if (call.failed && !open) call.result?.text?.takeIf { it.isNotBlank() }?.let {
+                if (call.failed && !open && call.result?.task?.kind != "agent") call.result?.text?.takeIf { it.isNotBlank() }?.let {
                     Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, color = PersonaTheme.palette.danger.text,
                         style = PersonaTheme.type.caption)
                 }
@@ -477,12 +489,30 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
                     } else if (todos == null) ToolInputDetail(call.use.item, call.result?.item)
                     // A truncated output opens in full from "Raw output" below. An edit's own result only says it worked; an
                     // answered ask_user's result repeats the ticked choices above in the model's words (iOS ToolViews).
-                    call.result?.item?.let { result -> if (todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed)) CodeText(result.text.orEmpty(), stringResource(R.string.chat_content_output)) }
+                    val agentReports = call.results.any { it.task?.kind == "agent" }
+                    if (agentReports) {
+                        call.results.forEachIndexed { index, report ->
+                            val result = report.item
+                            val body = if (report.kind == "tool_result") result.text?.takeIf(String::isNotBlank) ?: report.task?.detail
+                                else report.task?.detail
+                            // A launch receipt and a status-only notification are lifecycle evidence, not reports.
+                            if (!body.isNullOrBlank() && !TaskIndex.isLaunchReceipt(body)) {
+                                if (report.task != null) TaskNoteLine(report, last = index == call.results.lastIndex, onFullText = onFullText)
+                                else {
+                                    CodeText(body, stringResource(R.string.chat_content_output))
+                                    ToolReaderActions(null, body, result.takeIf { it.fullSize != null }?.let { { onFullText(it) } })
+                                }
+                            }
+                        }
+                    } else call.result?.item?.let { result ->
+                        if (todos == null && (diff == null || call.failed) && (!PersonaTools.isAskUser(call.name) || call.failed))
+                            CodeText(result.text.orEmpty(), stringResource(R.string.chat_content_output))
+                    }
                     // A dev server saying where it listens (docs/operations/ports.md).
                     if (call.name == "Bash") call.result?.text?.let { PortBadges(it) }
                     call.images.forEach { ChatPicture(session, it.item, loader) }
-                    ToolReaderActions(call.use.item.toolInput?.toString(), call.result?.text,
-                        call.result?.item?.takeIf { it.fullSize != null }?.let { result -> { onFullText(result) } })
+                    ToolReaderActions(call.use.item.toolInput?.toString(), call.result?.text?.takeUnless { agentReports },
+                        call.result?.item?.takeIf { !agentReports && it.fullSize != null }?.let { result -> { onFullText(result) } })
                 }
             }
         }
@@ -492,7 +522,7 @@ private fun WorkStep(step: WorkItem, session: SessionKey, loader: ImageLoader, o
             if (!style.hideThoughts) ThoughtContent(textUpdates[step.item.id]?.text ?: step.item.text.orEmpty(), step.item.id, style.collapseThoughts, last)
         }
         else step.item.compaction?.let { TimelineMark(it.label.text()) }
-            ?: step.item.takeIf { it.task != null }?.let { TaskNoteLine(it, last) }
+            ?: step.item.takeIf { it.task != null }?.let { TaskNoteLine(it, last, onFullText) }
             ?: ChatSystemLine(step.item.task?.detail ?: step.item.text.orEmpty(), step.item.task?.failed == true)
     }
 }

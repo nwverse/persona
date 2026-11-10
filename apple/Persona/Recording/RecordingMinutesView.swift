@@ -29,7 +29,7 @@ import UIKit
     init(api: @escaping () -> APIClient? = { AppModel.shared.api }) { self.api = api }
 
     /// `detail.minutes`, and `detail.meta.minutes_state`: pending, ready, failed, or absent for a note.
-    private struct Answer: Decodable {
+    nonisolated struct Answer: Decodable, Sendable {
         struct Meta: Decodable {
             var state: String?
             enum CodingKeys: String, CodingKey { case state = "minutes_state" }
@@ -53,8 +53,11 @@ import UIKit
         guard RecordingSync.uploadable(entry) else { state = .none; return }
         guard let api = api(), !api.config.isDemo else { state = meeting ? .waitingForSync : .none; return }
         do {
-            let answer: Answer = try await api.get("/api/v1/kb/recordings/\(entry.id.uuidString.lowercased())")
+            let answer = try await Self.fetch(entry.id, api)
             state = Self.state(minutes: answer.detail.minutes, status: answer.detail.meta?.state, meeting: meeting, synced: synced)
+            #if os(iOS)
+            MinutesRelay.shared.note(entry, state: state)
+            #endif
         } catch let error as APIError where error.status == 404 {
             state = meeting ? .waitingForSync : .none
         } catch {
@@ -62,6 +65,11 @@ import UIKit
             if case .ready = state { return }
             state = meeting ? (synced ? .writing : .waitingForSync) : .none
         }
+    }
+
+    /// `GET /api/v1/kb/recordings/{id}`: the recording as the hub has it, its minutes included.
+    static func fetch(_ id: UUID, _ api: APIClient) async throws -> Answer {
+        try await api.get("/api/v1/kb/recordings/\(id.uuidString.lowercased())")
     }
 
     /// The hub's answer as a state: its minutes (`ready`, even with nothing to note); else what `minutes_state` says. A

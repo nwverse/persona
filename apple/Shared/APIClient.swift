@@ -493,7 +493,10 @@ nonisolated struct APIClient: Sendable {
     }
     func setEngine(machine: String, engine: MachineEngine) async throws -> Machine {
         struct Body: Encodable { var engine: String }
-        var m = try JSON.decoder.decode(Machine.self, from: await request("PUT", "/api/v1/machines/\(machine)/engine", body: Body(engine: engine.rawValue)))
+        // No terminal engine is the empty host set, which a single engine cannot say (docs/integrations/engines.md "Host sets").
+        struct Hosts: Encodable { var hosts: [String] }
+        let body: any Encodable = engine == .noEngine ? Hosts(hosts: []) : Body(engine: engine.rawValue)
+        var m = try JSON.decoder.decode(Machine.self, from: await request("PUT", "/api/v1/machines/\(machine)/engine", body: body))
         m.group = group
         return m
     }

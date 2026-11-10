@@ -48,6 +48,8 @@ class AssistantTraysShotsTest {
     private val running = Session("computer-a", "working", title = "Update the web interface", state = "working", status = "working",
         activity = "Checking the routes", plan = PlanInfo(3, 5, "Checking the routes"))
     private val blocked = Session("computer-b", "blocked", title = "Prepare the release", state = "needs_you", status = "blocked", attentionReason = "Waiting for signing access")
+    /** Opened by hand on the Agents page: no task stands for it, so the main conversation lists it itself. */
+    private val manual = Session("computer-a", "manual", title = "Explore the crash logs", state = "working", status = "working", activity = "Reading the logs")
     private val unread = Session("computer-b", "unread", title = "Improve the mobile interface", state = "unread", status = "done", lastText = "PR #42 is merged")
     private val todoRows = listOf(
         Todo("task-a", running.title, origin = "main", agents = listOf(TodoAgent(running.machineId, running.sessionId)),
@@ -72,7 +74,7 @@ class AssistantTraysShotsTest {
         val patches = mutableListOf<Pair<String, Boolean?>>()
         var completionGate: CompletableDeferred<Unit>? = null
         var completionFailure: Throwable? = null
-        val sessionRows = MutableStateFlow(listOf(Session(main.machineId, main.sessionId, title = "Persona", assistant = true, status = "done", state = "idle"), running, blocked, unread))
+        val sessionRows = MutableStateFlow(listOf(Session(main.machineId, main.sessionId, title = "Persona", assistant = true, status = "done", state = "idle"), running, blocked, unread, manual))
         val sessions = object : SessionsRepository {
             override val sessions = sessionRows
             override val machines = MutableStateFlow(listOf(Machine("computer-a", "Computer A", online = true), Machine("computer-b", "Computer B", online = true)))
@@ -201,39 +203,109 @@ class AssistantTraysShotsTest {
         for (s in AppStyle.entries) {
             val corners = mutableListOf<Int>()
             for (d in listOf(false, true)) {
-                style = s; dark = d; fixture.requests.value = listOf(permission, planRequest, question); fixture.drafts.value = listOf(inboxDraft); settle()
-                rule.onNodeWithTag("assistant-tray-pending").assertDoesNotExist()
-                for (entry in listOf("pending", "progress", "agents"))
+                // the release task's agent asks; the web task runs; the crash-log Agent was opened by hand
+                style = s; dark = d; fixture.requests.value = listOf(planRequest, question); fixture.drafts.value = listOf(inboxDraft); settle()
+                rule.onNodeWithTag("assistant-tray-needs").assertDoesNotExist()
+                for (entry in listOf("needs", "running"))
                     assertEquals(JChipTokens.height, rule.onNodeWithTag("assistant-entry-$entry").getUnclippedBoundsInRoot().height)
+                rule.onNodeWithTag("assistant-entry-agents").assertDoesNotExist()
                 val suffix = "${s.name.lowercase()}-${if (d) "dark" else "light"}"
                 corners += shot("collapsed-$suffix")
-                rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
-                rule.onNodeWithTag("assistant-tray-pending").assertIsDisplayed()
+                rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
+                rule.onNodeWithTag("assistant-tray-needs").assertIsDisplayed()
+                // one row for the release task, carrying its agent's oldest card; the running task is not here
+                rule.onNodeWithTag("assistant-needs-task-task-b").assertIsDisplayed()
+                rule.onAllNodesWithText(blocked.title).assertCountEquals(1)
+                rule.onNodeWithText(running.title).assertDoesNotExist()
                 rule.onNodeWithText("Sent on your behalf · Only after you tap").assertIsDisplayed()
-                shot("pending-$suffix")
-                rule.onNodeWithTag("assistant-entry-progress").performClick(); settle()
-                rule.onNodeWithTag("assistant-tray-pending").assertDoesNotExist()
-                rule.onNodeWithTag("assistant-tray-progress").assertIsDisplayed()
+                shot("needs-$suffix")
+                rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+                rule.onNodeWithTag("assistant-tray-needs").assertDoesNotExist()
+                rule.onNodeWithTag("assistant-tray-running").assertIsDisplayed()
                 rule.onNodeWithText("3 / 5 steps").assertIsDisplayed()
-                rule.onNodeWithText("Blocked").assertIsDisplayed()
-                shot("progress-$suffix")
-                rule.onNodeWithTag("assistant-entry-agents").performClick(); settle()
-                rule.onNodeWithTag("assistant-tray-progress").assertDoesNotExist()
-                rule.onNodeWithTag("assistant-agent-working").assertIsDisplayed()
+                rule.onNodeWithTag("assistant-agent-manual").assertIsDisplayed()
+                // the tasks' agents are in their tasks' rows, never rows of their own; the asking task is not here
+                rule.onNodeWithTag("assistant-agent-working").assertDoesNotExist()
+                rule.onNodeWithText(blocked.title).assertDoesNotExist()
                 rule.onNodeWithTag("assistant-task-board").assertExists()
-                shot("agents-$suffix")
-                rule.onNodeWithTag("assistant-entry-agents").performClick(); settle()
-                fixture.requests.value = emptyList(); fixture.drafts.value = emptyList(); settle()
-                rule.onNodeWithTag("assistant-entry-pending").assertIsEnabled()
-                rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+                shot("running-$suffix")
+                rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+                fixture.requests.value = emptyList(); fixture.drafts.value = emptyList()
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == blocked.key) it.copy(state = "working", status = "working") else it }; settle()
+                rule.onNodeWithTag("assistant-entry-needs").assertIsEnabled()
+                rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
                 rule.onNodeWithText("All caught up").assertIsDisplayed()
-                shot("empty-pending-$suffix")
-                rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+                shot("empty-needs-$suffix")
+                rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == blocked.key) blocked else it }
             }
             assertNotEquals("Dark images must not retain light pixels", corners[0], corners[1])
         }
         tab = "agents"; settle()
         rule.onNodeWithTag("assistant-tray-bar").assertDoesNotExist()
+    }
+
+    /** A task whose agent stopped while the hub's completion check found it waiting (#3180): its Progress row says why it is
+     *  not done, in every style, light and dark. */
+    @Test fun aStoppedTaskSaysWhyItIsNotDoneInEveryStyle() {
+        val fixture = Fixture()
+        val stopped = Session("computer-a", "stopped", title = "Ship the settings page", state = "idle", status = "done",
+            lastText = "Pushed the branch and opened the PR")
+        fixture.sessionRows.value = fixture.sessionRows.value + stopped
+        fixture.returnedTodos = todoRows + Todo("task-d", stopped.title, origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)),
+            prUrl = "https://github.com/example/project/pull/57",
+            check = TodoCheck("waiting", "Waiting for CI to finish", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z"))
+        fixture.tasks.reloadTodos()
+        fixture.requests.value = emptyList(); fixture.drafts.value = emptyList()
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            CompositionLocalProvider(LocalConfiguration provides configuration) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
+                            chrome = ChatChromeBindings(tasks = fixture.tasks, assistantManagement = fixture.management, inboxTrays = fixture.inbox,
+                                inboxScope = "fixture", onOpenSession = { fixture.opened += it }),
+                            renderStyle = ChatRenderStyle.Assistant, embedded = true, showTopBar = false)
+                    }
+                }
+            }
+        }
+        settle()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+        rule.onNodeWithText("Ship the settings page").performScrollTo()
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            style = s; dark = d; settle()
+            rule.onNodeWithTag("assistant-tray-running").assertIsDisplayed()
+            rule.onNodeWithText("Stopped, not done yet · Waiting for CI to finish").assertIsDisplayed()
+            rule.onNodeWithText("Pushed the branch and opened the PR").assertDoesNotExist()
+            shot("progress-stopped-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+        }
+    }
+
+    /** The check's line only while the task is stopped and open, and not for a done or unsure check (#3180). */
+    @Test fun aStoppedTasksCheckLineFollowsItsState() {
+        val fixture = Fixture()
+        val stopped = Session("computer-a", "stopped", title = "Ship", state = "idle", status = "done", lastText = "Opened the PR")
+        val check = TodoCheck("waiting", "Waiting for CI", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z")
+        val todo = Todo("task-d", "Ship", origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)), check = check)
+        fun row(t: Todo, s: Session = stopped) = trayProgress(listOf(t), emptyList(),
+            AssistantTaskHost(fixture.tasks, "main", listOf(s), { it }, {}, {}, {})).single()
+        assertEquals("Waiting for CI", row(todo).stopped)
+        assertEquals("", row(todo.copy(check = check.copy(reason = null))).stopped)
+        assertNull(row(todo.copy(check = check.copy(verdict = "done"))).stopped)
+        assertNull(row(todo.copy(check = check.copy(verdict = "unsure"))).stopped)
+        assertNull(row(todo.copy(check = null)).stopped)
+        assertNull(row(todo, stopped.copy(state = "working", status = "working")).stopped)
+        assertNull(row(todo, stopped.copy(state = "needs_you", status = "blocked")).stopped)
+        assertNull(row(todo.copy(doneAt = "2026-11-01T11:00:00Z")).stopped)
+        assertNull(row(todo.copy(ask = TodoAsk("decide", "Pick one", askedAt = "2026-11-01T10:30:00Z"))).stopped)
     }
 
     /** The #2920 entry this change replaced, kept here only as the "before" in the height comparison. */
@@ -271,16 +343,14 @@ class AssistantTraysShotsTest {
                         ReplacedTallEntry("Progress", 2, AssistantTrayTone.Progress)
                         ReplacedTallEntry("Agents", 3, AssistantTrayTone.Agents)
                     }
-                    androidx.compose.material3.Text("Now: Pending / Progress / Agents as JChip", style = caption, color = PersonaTheme.palette.ink3)
+                    androidx.compose.material3.Text("Now: Needs you / In progress as JChip", style = caption, color = PersonaTheme.palette.ink3)
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        AssistantTrayEntry("Pending", 4, AssistantTrayTone.Pending, false, "", {}, Modifier.testTag("entry-pending"))
-                        AssistantTrayEntry("Progress", 2, AssistantTrayTone.Progress, true, "", {}, Modifier.testTag("entry-progress"))
-                        AssistantTrayEntry("Agents", 3, AssistantTrayTone.Agents, false, "", {}, Modifier.testTag("entry-agents"))
+                        AssistantTrayEntry("Needs you", 4, AssistantTrayTone.Pending, false, "", {}, Modifier.testTag("entry-needs"))
+                        AssistantTrayEntry("In progress", 2, AssistantTrayTone.Progress, true, "", {}, Modifier.testTag("entry-running"))
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        AssistantTrayEntry("Pending", 0, AssistantTrayTone.Pending, false, "", {}, Modifier.testTag("entry-empty"))
-                        AssistantTrayEntry("Progress", 0, AssistantTrayTone.Progress, false, "", {})
-                        AssistantTrayEntry("Agents", 0, AssistantTrayTone.Agents, false, "", {})
+                        AssistantTrayEntry("Needs you", 0, AssistantTrayTone.Pending, false, "", {}, Modifier.testTag("entry-empty"))
+                        AssistantTrayEntry("In progress", 0, AssistantTrayTone.Progress, false, "", {})
                     }
                 }
             }
@@ -290,7 +360,7 @@ class AssistantTraysShotsTest {
             val historical = rule.onNodeWithTag("historical-all").getUnclippedBoundsInRoot().height
             assertEquals(JChipTokens.height, historical)
             assertEquals(historical, rule.onNodeWithTag("historical-task").getUnclippedBoundsInRoot().height)
-            for (tag in listOf("entry-pending", "entry-progress", "entry-agents", "entry-empty"))
+            for (tag in listOf("entry-needs", "entry-running", "entry-empty"))
                 assertEquals(tag, historical, rule.onNodeWithTag(tag).getUnclippedBoundsInRoot().height)
             assertEquals(44.dp, rule.onNodeWithTag("replaced-entry").getUnclippedBoundsInRoot().height)
             shot("height-comparison-${s.name.lowercase()}-${if (d) "dark" else "light"}")
@@ -306,19 +376,21 @@ class AssistantTraysShotsTest {
                 renderStyle = ChatRenderStyle.Assistant, showTopBar = false)
         } }
         settle()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         rule.onNodeWithTag("assistant-approve-all").performClick(); settle()
         assertEquals(setOf("permission", "plan"), fixture.approvals.map { it.first }.toSet())
         assertTrue(fixture.sends.isEmpty())
         assertEquals(listOf(question), fixture.requests.value)
-        rule.onNodeWithTag("assistant-draft-reply-item").assertIsDisplayed().performClick(); settle()
+        rule.onNodeWithTag("assistant-draft-reply-item").performScrollTo().assertIsDisplayed().performClick(); settle()
         assertEquals(listOf(inboxDraft), fixture.sends)
-        fixture.requests.value = emptyList(); settle()
-        rule.onNodeWithTag("assistant-tray-pending").assertDoesNotExist()
-        rule.onNodeWithTag("assistant-entry-pending").assertIsEnabled()
+        // the last card answered and the release agent back at work: nothing waits, the tray closes by itself
+        fixture.requests.value = emptyList()
+        fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == blocked.key) it.copy(state = "working", status = "working") else it }; settle()
+        rule.onNodeWithTag("assistant-tray-needs").assertDoesNotExist()
+        rule.onNodeWithTag("assistant-entry-needs").assertIsEnabled()
     }
 
-    @Test fun agentRowsRetainNavigationAndTheExistingTaskBoardAction() {
+    @Test fun aManualAgentRowOpensItsChatAndInProgressKeepsTheTaskBoardAction() {
         val fixture = Fixture()
         rule.mainClock.autoAdvance = false
         rule.setContent { PersonaTheme(reduceMotion = true) {
@@ -327,15 +399,15 @@ class AssistantTraysShotsTest {
                 renderStyle = ChatRenderStyle.Assistant, showTopBar = false)
         } }
         settle()
-        rule.onNodeWithTag("assistant-entry-agents").performClick(); settle()
-        rule.onNodeWithTag("assistant-agent-working").performClick(); settle()
-        assertEquals(listOf(running.key), fixture.opened)
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+        rule.onNodeWithTag("assistant-agent-manual").performClick(); settle()
+        assertEquals(listOf(manual.key), fixture.opened)
         rule.onNodeWithTag("assistant-task-board").performClick(); settle()
         rule.mainClock.advanceTimeBy(1_500); settle()
         rule.onNode(isDialog()).assertExists()
     }
 
-    @Test fun anExistingMainWithNoTasksAgentsOrPendingStillShowsThreeEntries() {
+    @Test fun anExistingMainWithNoTasksAgentsOrPendingStillShowsTwoEntries() {
         val fixture = Fixture()
         fixture.returnedTodos = emptyList()
         fixture.sessionRows.value = fixture.sessionRows.value.filter { it.key == main }
@@ -348,8 +420,8 @@ class AssistantTraysShotsTest {
                 renderStyle = ChatRenderStyle.Assistant, showTopBar = false)
         } }
         settle()
-        for (entry in listOf("pending", "progress", "agents")) rule.onNodeWithTag("assistant-entry-$entry").assertIsDisplayed()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        for (entry in listOf("needs", "running")) rule.onNodeWithTag("assistant-entry-$entry").assertIsDisplayed()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         rule.onNodeWithText("All caught up").assertIsDisplayed()
     }
 
@@ -384,7 +456,7 @@ class AssistantTraysShotsTest {
             }
         }
         settle()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         for (s in AppStyle.entries) {
             val pixels = mutableListOf<Int>()
             for (d in listOf(false, true)) {
@@ -413,7 +485,7 @@ class AssistantTraysShotsTest {
         rule.onNodeWithTag("assistant-task-decision-decision").assertDoesNotExist()
         assertTrue(fixture.tasks.todos.value.single().isDone)
         assertNull(fixture.tasks.todos.value.single().doneBy)
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         rule.onNodeWithText("都处理完了").assertIsDisplayed()
         shot("direct-finish-confirmed")
     }
@@ -429,7 +501,7 @@ class AssistantTraysShotsTest {
             }
         } }
         settle()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         rule.onNodeWithText("直接完成").performClick(); settle()
         rule.onNodeWithText("未能完成此任务，请重试。").assertIsDisplayed()
         rule.onNodeWithText("直接完成").assertIsEnabled()
@@ -450,7 +522,7 @@ class AssistantTraysShotsTest {
                 chrome = ChatChromeBindings(tasks = fixture.tasks), renderStyle = ChatRenderStyle.Assistant, showTopBar = false)
         } }
         settle()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         rule.onNodeWithText("Follow recommendation").assertIsDisplayed()
         rule.onNodeWithText("Finish now").assertDoesNotExist()
         rule.onNodeWithContentDescription("More").performClick(); settle()
@@ -469,7 +541,7 @@ class AssistantTraysShotsTest {
                 chrome = ChatChromeBindings(tasks = fixture.tasks), renderStyle = ChatRenderStyle.Assistant, showTopBar = false)
         } }
         settle()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         rule.onNodeWithText("ここで完了").assertIsDisplayed()
         rule.onNodeWithText("推奨に従う").performClick(); settle()
         assertEquals(listOf(ownerDecision.id to ownerDecision.ask!!.askedAt), fixture.accepted)
@@ -490,7 +562,7 @@ class AssistantTraysShotsTest {
                 chrome = ChatChromeBindings(tasks = fixture.tasks), renderStyle = ChatRenderStyle.Assistant, showTopBar = false)
         } }
         settle()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
         rule.onNodeWithTag("assistant-review-todo:task-a").performScrollTo().performClick(); settle()
         rule.mainClock.advanceTimeBy(1_500); settle()
         rule.onNode(hasText(ask.verdict) and hasAnyAncestor(isDialog())).assertIsDisplayed()
@@ -504,6 +576,8 @@ class AssistantTraysShotsTest {
         val fixture = Fixture()
         val ask = TodoAsk(outcome = "done", verdict = "The new page is deployed. Please verify it.", askedAt = "2026-11-01T09:00:00Z")
         fixture.returnedTodos = todoRows.map { if (it.id == "task-a") it.copy(ask = ask) else it }
+        // no card of its agent stands for the task now, so the owner's ask is its row
+        fixture.requests.value = listOf(planRequest, question)
         fixture.tasks.reloadTodos()
         rule.mainClock.autoAdvance = false
         rule.setContent { PersonaTheme(reduceMotion = true) {
@@ -511,7 +585,8 @@ class AssistantTraysShotsTest {
                 chrome = ChatChromeBindings(tasks = fixture.tasks), renderStyle = ChatRenderStyle.Assistant, showTopBar = false)
         } }
         settle()
-        rule.onNodeWithTag("assistant-entry-pending").performClick(); settle()
+        rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
+        rule.onAllNodesWithText(running.title).assertCountEquals(1)
         rule.onNodeWithTag("assistant-review-todo:task-a").performScrollTo().performClick(); settle()
         rule.mainClock.advanceTimeBy(1_500); settle()
         rule.onNode(hasText(ask.verdict) and hasAnyAncestor(isDialog())).assertIsDisplayed()

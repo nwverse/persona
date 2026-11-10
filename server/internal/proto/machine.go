@@ -68,6 +68,12 @@ type Machine struct {
 	Computer *Computer `json:"computer,omitempty"`
 	// Browser: its ego lite, while the plugin ego is on and it is a Mac (Browser).
 	Browser *Browser `json:"browser,omitempty"`
+	// Clipboard: sharing its clipboard with the phone (#3064, docs/operations/clipboard.md). Always set by a manager that
+	// knows the feature; nil from an older one.
+	Clipboard *MachineClipboard `json:"clipboard,omitempty"`
+	// FileTransfer: whether files may be sent to this computer to keep and between it and others (#3065,
+	// docs/protocol/file-transfer.md). Always set by a manager that knows the feature; nil (from an older one) is off.
+	FileTransfer *MachineFileTransfer `json:"file_transfer,omitempty"`
 	// Hub mesh (docs/server/mesh.md): the hub that connects to this machine (its owner), its name, the machine's own id
 	// (~/.persona/machine-uid, empty for an old node or one never reached) and how the hub the client talks to gets
 	// there. A hub without peers fills them in for its own machines too.
@@ -148,6 +154,9 @@ type NodeInfo struct {
 	// BuiltinPrograms are the extensions' programs built into this node (cua, ego): the hub asks them over
 	// plugin.node.call (node/builtin.go). An older node leaves it out, and the hub asks it by the old method names.
 	BuiltinPrograms []string `json:"builtin_programs,omitempty"`
+	// Clipboard: whether the node reaches a clipboard where it runs (clipboard.get / clipboard.set, capability
+	// clipboard). An older node leaves it out.
+	Clipboard *ClipboardSupport `json:"clipboard,omitempty"`
 }
 
 // System is what a machine is: OS, hardware, since when it runs (sysmon; docs/server/machines.md). Read once when the node

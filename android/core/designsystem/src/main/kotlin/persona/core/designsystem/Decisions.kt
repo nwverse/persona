@@ -58,6 +58,8 @@ enum class DecisionKind(@StringRes val labelRes: Int, val icon: PhIcon) {
  * brief an ink-on-neutral card; the board a neutral strip with a thin amber edge that expands in
  * place — collapsed it shows [summary] and [quickActions], tapping it opens the [body] and [actions].
  * [onOpen] opens the conversation (glass and brief: tapping the card; board: the "Open" action).
+ * [note] says why the quick actions cannot be used (the hub is out of reach, the computer must approve): the board shows it
+ * above them while collapsed, where the [body] that says it otherwise is not drawn (#2483).
  */
 @Composable
 fun DecisionCard(
@@ -69,6 +71,7 @@ fun DecisionCard(
     expires: String? = null,
     summary: String? = null,
     advice: String? = null,
+    note: String? = null,
     expandedByDefault: Boolean = true,
     onOpen: (() -> Unit)? = null,
     quickActions: (@Composable RowScope.() -> Unit)? = null,
@@ -138,6 +141,7 @@ fun DecisionCard(
                         onOpen?.let { Spacer(Modifier.height(4.dp)); JTextButton(stringResource(R.string.designsystem_decision_open_chat), it, icon = PhIcons.ArrowSquareOut) }
                     } else {
                         summary?.let { Spacer(Modifier.height(8.dp)); Text(it, style = type.code, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        note?.let { Spacer(Modifier.height(Tokens.Space.s)); Text(it, style = type.caption, color = palette.cautionText) }
                         quickActions?.let { Spacer(Modifier.height(10.dp)); Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = it) }
                     }
                 }

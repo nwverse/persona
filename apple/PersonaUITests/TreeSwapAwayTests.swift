@@ -51,7 +51,7 @@ final class TreeSwapAwayTests: XCTestCase {
     /// being below the form's fold; the sheet staying open is what tells.
     private var noDrag: Bool { ProcessInfo.processInfo.environment["PERSONA_NO_DRAG"] == "1" }
 
-    /// New Agent open (regular width only), "整理一下本周的发布说明" typed as its first message.
+    /// New Agent open (regular width only), with a release-notes request typed as its first message.
     @MainActor private func openNewAgent(_ extra: [String]) throws -> (XCUIApplication, Date) {
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"

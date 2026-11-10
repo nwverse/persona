@@ -20,6 +20,7 @@ const deployedReply = "已合入 https://github.com/o/r/pull/9 并已部署到 n
 func acceptService(t *testing.T) (*Service, *fakeHub, func() []string) {
 	t.Helper()
 	s, f, posts := reportService(t, true)
+	s.ownerVerifiesAll = true // these tests cover the owner's "Please verify" (a big feature's; ownerVerifies)
 	f.judge = `{"changed":"飞书机器人多了任务进展开关","link":"https://hub.example.com/settings?tab=feishu","how":"打开设置 › 飞书机器人，应看到「任务进展发到飞书」"}`
 	f.answerApp(AppFeishu, FeishuUpdateCard, func(json.RawMessage) (any, error) { return map[string]any{}, nil })
 	f.answerApp(AppFeishu, FeishuText, func(json.RawMessage) (any, error) { return map[string]any{}, nil })

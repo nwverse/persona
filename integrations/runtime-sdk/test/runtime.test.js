@@ -408,12 +408,13 @@ test('a runtime running several agents: launchers in hello and when they change,
       return { session: { session_id: p.resume ?? 'new', status: 'idle' } }
     },
     modes: async (p) => got.push(['modes', p]),
-  }), { runtime: 'paseo', socketPath: n.path, retryMs: 20, launchers, resume: true })
+  }), { runtime: 'paseo', socketPath: n.path, retryMs: 20, launchers, resume: true, readonly: true })
   t.after(() => rt.stop())
   rt.start()
   await n.ready
   assert.equal(n.hello.caps.modes, true)
   assert.equal(n.hello.caps.resume, true)
+  assert.equal(n.hello.caps.readonly, true)
   assert.deepEqual(n.hello.launchers, launchers)
   await n.peer.call('session.modes', { session_id: 's1', permission_mode: 'plan', effort: 'high' })
   const res = await n.peer.call('session.start', { cwd: '/w', resume: 'cccccccc-0000-0000-0000-000000000001', launcher: 'paseo-claude', model: 'opus' })
