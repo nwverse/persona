@@ -27,6 +27,7 @@ import { conversationTitle } from "./assistant/conversations";
 import { formatList, t } from "../i18n";
 import { useAssistantTitle, useShownOffline } from "./ManagerParts";
 import { chosenManager, noteConversation, ownerHeaders, shownManager } from "../lib/manager-choice";
+import { useScopedMachines } from "../lib/current-assistant";
 
 /** The example questions of a hub without readiness (its `suggestions` replace them, docs/assistant/onboarding.md 4.7). */
 const SUGGESTIONS = [t("personaassistant.suggestion_meetings"), t("personaassistant.suggestion_agents"), t("personaassistant.suggestion_lark"), t("personaassistant.suggestion_projects")];
@@ -128,7 +129,8 @@ function Centered({ children }: { children: React.ReactNode }) {
 
 function Starter({ main, onToggleSidebar }: { main?: boolean; onToggleSidebar: () => void }) {
   const assistant = useStore((s) => s.assistant);
-  const machines = useStore((s) => s.machines);
+  // the starter names the current assistant's computers, the ones it can work on
+  const machines = useScopedMachines();
   const persona = usePersona();
   const [seed, setSeed] = useState(0);
 
