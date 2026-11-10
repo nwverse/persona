@@ -237,8 +237,8 @@ class InboxGroupsShotsTest {
         assertEquals(emptyList<InboxDoneCursor?>(), inbox.historyAsked)
         for (title in listOf("刚刚处理", "昨天", "7 天前", "1 个月前")) assertHeader(title)
         rule.onAllNodesWithText("加载更早的").assertCountEquals(0)
-        // Done's own count is all of it, as its groups add up (3 in the list, 5 and 30 older).
-        assertTrue("Done counts 38", rule.onAllNodes(hasText("38"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+        // Done's own count is all of it, as its groups add up (3 in the list, 5 and 30 older): its title and the Done chip.
+        assertTrue("Done's title and chip count 38", rule.onAllNodes(hasText("38"), useUnmergedTree = true).fetchSemanticsNodes().size >= 2)
         rule.onNode(androidx.compose.ui.test.hasScrollToIndexAction()).performScrollToNode(hasText("1 个月前"))
         shots("inbox-done-counted")
         rule.onNode(androidx.compose.ui.test.hasScrollToIndexAction()).performScrollToNode(hasText("跳到"))

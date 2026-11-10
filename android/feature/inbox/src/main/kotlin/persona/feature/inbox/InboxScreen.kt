@@ -120,7 +120,6 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     val groups = displayGroups.filter { section.isEmpty() || it.id == section }
     val needsCount = needsYouCount(result, ::working)
-    val doneCount = result.groups.firstOrNull { it.id == "done" }?.count ?: 0
     val allCount = result.groups.sumOf { it.count }
     val sources = listOf("" to res.getString(R.string.inbox_all_sources)) + snapshot.records.map { record ->
         record.item.account to record.sourceLabel.ifBlank { if (record.feedId != null) res.getString(R.string.inbox_source_lark) else record.item.account.ifBlank { res.getString(R.string.inbox_source_mail) } }
@@ -243,6 +242,17 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val historyManagers = roster?.installed?.map { it.id }?.takeIf { it.size > 1 } ?: listOf(null)
     val doneOpen = groups.any { it.id == "done" && !it.folded }
     LaunchedEffect(doneOpen) { if (doneOpen && !history.started) history.start(historyManagers, zone) }
+    // Done's total with the hub's counts (#3016): what its groups add up to, folded or not, for the Done chip and Done's
+    // title alike; with a filter or search on, or no counts, what is loaded.
+    fun doneTotal(done: InboxGroup, manager: String): Int {
+        val days = history.days[manager]?.takeIf { !filtering } ?: return done.count
+        return inboxSectionGroups("done", done.rows, grouping, now, zone, res, locale, ::rowRecords, cardAt = { null }, doneDays = days)
+            .takeIf { it.isNotEmpty() }?.sumOf { it.count } ?: done.count
+    }
+    val doneCount = result.groups.firstOrNull { it.id == "done" }?.let { done ->
+        inboxByManager(roster, listOf(done)) { row -> records[row.id]?.manager }
+            ?.sumOf { (manager, shown) -> shown.sumOf { doneTotal(it, manager.id) } } ?: doneTotal(done, "")
+    } ?: 0
     // Show older at the end of Done: for the managers whose hub doesn't count, and for all of them while filtering.
     val olderManagers = if (filtering) historyManagers else historyManagers.filter { it.orEmpty() !in history.days }
     val showOlder = doneOpen && !history.counting && olderManagers.isNotEmpty() && (history.more || history.failed || history.loading)
@@ -462,7 +472,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     JSectionHeader(
                         title = title,
                         // Done with the hub's counts (#3016): all of it, as its groups add up, not just what is loaded.
-                        count = if (group.id == "done" && !filtering && history.days[manager] != null && subs.isNotEmpty()) subs.sumOf { it.count } else group.count,
+                        count = if (group.id == "done") doneTotal(group, manager) else group.count,
                         status = when (group.id) { "action" -> Status.NeedsYou; "working" -> Status.Working; else -> null },
                         trailing = if (group.id == "working") null else if (group.folded) stringResource(R.string.inbox_expand) else stringResource(R.string.inbox_collapse),
                         onClick = if (group.id == "working") null else ({
