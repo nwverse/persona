@@ -129,6 +129,14 @@ describe("another assistant's conversation opened by its address alone", () => {
     expect(conversationHeaders("work-chat")).toEqual({ "X-Persona-Manager": "m-work" });
   });
 
+  it("names the address's manager on plan requests when the store has no row (wrong computer in the address)", async () => {
+    await open("/persona/work-chat?machine=wrong&manager=m-work");
+    expect(getSession("wrong", "work-chat")).toBeUndefined();
+    expect(conversationHeaders("work-chat")).toEqual({ "X-Persona-Manager": "m-work" });
+    await act(async () => { await startPlan({ id: "p1", conversation: "work-chat", tasks: [], state: "open" }, false); });
+    expect(calls.find((c) => c.url === "/api/v1/task-plans/p1/start")?.header).toBe("m-work");
+  });
+
   it("opens an address without them as before: on the current assistant's computer", async () => {
     await open("/persona/work-chat");
     expect(chat()?.dataset.chat).toBe("hub/work-chat");

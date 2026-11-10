@@ -28,7 +28,7 @@ import { ShellHeaderSlots, ShellSwitch } from "./ShellSwitch";
 import { conversationTitle } from "./assistant/conversations";
 import { formatList, t } from "../i18n";
 import { useAssistantTitle, useShownOffline } from "./ManagerParts";
-import { chosenManager, noteConversation, ownerHeaders, sameManager, shownManager, useShownManager } from "../lib/manager-choice";
+import { chosenManager, noteConversation, noteRoutedConversation, ownerHeaders, sameManager, shownManager, useShownManager } from "../lib/manager-choice";
 import { useScopedMachines } from "../lib/current-assistant";
 import type { AssistantInfo, Session } from "../lib/types";
 
@@ -119,6 +119,12 @@ export function PersonaAssistant({ sid, fresh, routed, onToggleSidebar }: { sid?
   const shown = useShownManager();
   const routedMid = routed?.mid;
   const routedManager = routed?.manager;
+  // the address's manager, for the plan and briefing requests when no row says better (conversationHeaders)
+  useEffect(() => {
+    if (!sid || !routedManager) return;
+    noteRoutedConversation(sid, routedManager);
+    return () => noteRoutedConversation(sid, undefined);
+  }, [sid, routedManager]);
   const home = useStore((s) => {
     const h = sid && !fresh ? conversationHome(sid, shown, s.assistant, s.sessions, { mid: routedMid, manager: routedManager }) : null;
     return h ? `${h.other ? 1 : 0}${h.machine}` : "";
