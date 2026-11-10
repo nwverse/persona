@@ -88,4 +88,14 @@ describe("Persona chat launcher menu", () => {
     await act(async () => root.render(<StarterLauncherChip />));
     expect(pickedLauncher(NEW_CONVERSATION)).toBe("gw-claude");
   });
+
+  it("shows the launcher's own model, not the old one, for a conversation moved off a launcher it no longer offers", async () => {
+    Object.assign(getState(), { assistant: { machine_id: "devbox", launcher: "gw-claude", conversations: [] } });
+    const side = { ...session, session_id: "s-side", launcher: "cc-relay", model: "kimi" } as unknown as Session;
+    await act(async () => root.render(<AssistantLauncherChip session={side} />));
+    await act(async () => host.querySelector<HTMLButtonElement>(`button[title="${t("assistant-assistantchat.launcher_chip_title")}"]`)!.click());
+    const chip = host.querySelector<HTMLButtonElement>(`button[title="${t("assistant-assistantchat.launcher_chip_title")}"]`)!.textContent ?? "";
+    expect(chip).toContain("gw-claude");
+    expect(chip).not.toContain("kimi");
+  });
 });

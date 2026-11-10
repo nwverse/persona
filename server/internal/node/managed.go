@@ -399,18 +399,8 @@ func codexProviderArgs(args, env []string) []string {
 	if base == "" {
 		return nil
 	}
-	for i, a := range args {
-		flag, val, hasVal := strings.Cut(a, "=")
-		if !hasVal && i+1 < len(args) {
-			val = args[i+1]
-		}
-		key, _, _ := strings.Cut(val, "=")
-		switch {
-		case a == "--oss", flag == "-p", flag == "--profile":
-			return nil
-		case (flag == "-c" || flag == "--config") && strings.TrimSpace(key) == "model_provider":
-			return nil
-		}
+	if codexChoosesProvider(args) {
+		return nil
 	}
 	q := func(s string) string { b, _ := json.Marshal(s); return string(b) } // a JSON string is a TOML basic string
 	provider := "{name=" + q("Persona launcher") + ",base_url=" + q(base) + `,wire_api="responses"`
@@ -418,6 +408,44 @@ func codexProviderArgs(args, env []string) []string {
 		provider += `,env_key="OPENAI_API_KEY"`
 	}
 	return []string{"-c", `model_provider="persona-launcher"`, "-c", "model_providers.persona-launcher=" + provider + "}"}
+}
+
+// codexValueFlags are Codex's options that take the next argument as their value, so that value is no option itself.
+var codexValueFlags = map[string]bool{"-m": true, "--model": true, "-c": true, "--config": true, "-p": true, "--profile": true,
+	"-s": true, "--sandbox": true, "-a": true, "--ask-for-approval": true, "-C": true, "--cd": true, "-i": true, "--image": true,
+	"--enable": true, "--disable": true, "--add-dir": true, "--local-provider": true, "--output-schema": true, "--color": true,
+	"-o": true, "--output-last-message": true}
+
+// codexChoosesProvider: Codex's options in args pick a model provider or profile themselves (-c model_provider=…, in
+// any spelling, -p / --profile, --oss). Options end at "--": what follows is the prompt, whatever it says.
+func codexChoosesProvider(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return false
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			continue
+		}
+		flag, val, attached := a, "", false
+		if strings.HasPrefix(a, "--") {
+			flag, val, attached = strings.Cut(a, "=")
+		} else if len(a) > 2 { // -cKEY=V, -pNAME: a short option with its value attached
+			flag, val, attached = a[:2], a[2:], true
+		}
+		if !attached && codexValueFlags[flag] && i+1 < len(args) {
+			i++
+			val = args[i]
+		}
+		key, _, _ := strings.Cut(val, "=")
+		switch {
+		case flag == "--oss", flag == "-p", flag == "--profile":
+			return true
+		case (flag == "-c" || flag == "--config") && strings.TrimSpace(key) == "model_provider":
+			return true
+		}
+	}
+	return false
 }
 
 // launchExec is what `personad launch` execs (exe, argv, env; argv[0] is the agent's name): in the agent sandbox when

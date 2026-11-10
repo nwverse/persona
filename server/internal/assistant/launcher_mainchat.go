@@ -35,7 +35,7 @@ func (s *Service) mainChatFit(ctx context.Context, machine, name string) (mainCh
 	}
 	ctx = withSettingsMemo(ctx)
 	if m, managed := s.managedNamed(ctx, name); managed { // the same on every machine in its scope: no list to ask
-		allowed, err := s.assistantProviders(ctx, machine)
+		allowed, err := s.assistantProviders(ctx, machine, nil)
 		switch {
 		case !s.usableOn(ctx, m, machine):
 			return mainChatGone, nil
@@ -59,6 +59,44 @@ func (s *Service) mainChatFit(ctx context.Context, machine, name string) (mainCh
 		return mainChatRefused, s.mainChatRefusal(ctx, machine, name)
 	}
 	return mainChatGone, nil
+}
+
+// finishMainChatModel validates the binding after model resolution, including a default or a legacy fallback that
+// was not the caller's explicit pick. A bad default gives way to a launcher from the current compatible picker;
+// plain claude is preferred only when that list verified it. With no verified compatible launcher, nothing is sent.
+func (s *Service) finishMainChatModel(ctx context.Context, machine, purpose string, params map[string]any, picked bool) error {
+	name, _ := params["launcher"].(string)
+	fit, refusal := s.mainChatFit(ctx, machine, name)
+	if fit == mainChatFits {
+		return nil
+	}
+	launchers, err := s.assistantLaunchers(ctx, machine)
+	if err != nil {
+		return err
+	}
+	fallback := ""
+	for _, l := range launchers {
+		if l.Name == "claude" {
+			fallback = l.Name
+			break
+		}
+		if fallback == "" {
+			fallback = l.Name
+		}
+	}
+	if fallback == "" {
+		if refusal != nil {
+			return refusal
+		}
+		return s.mainChatRefusal(ctx, machine, name)
+	}
+	s.logf("[%s] resolved assistant launcher %s can't run it, using %s", machine, name, fallback)
+	params["launcher"] = fallback
+	delete(params, "model")
+	if picked {
+		return s.applyPickedModel(ctx, params)
+	}
+	return s.applyModel(ctx, purpose, params)
 }
 
 // mainChatRefusal says that launcher can't run the assistant on machine, for the user's language.

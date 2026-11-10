@@ -802,7 +802,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return n.usageSnapshot(false), nil
 	case "launchers.list":
 		ls, err := n.launchers(ctx)
-		bl := slices.DeleteFunc(n.runtimes.launchers(), func(l proto.Launcher) bool { return n.engineHostOff(l.Source) })
+		bl := n.runtimes.launchers()
 		if len(bl) > 0 {
 			// A runtime's launcher (DSH) is offered even when the login shell's list failed; one named like a shell
 			// launcher is not (the shell's runs: runtimeStart).
@@ -889,7 +889,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			if _, runtime := engineRuntimes[cmp.Or(p.Host, n.defaultKind())]; runtime { // the start's host is a runtime (Paseo)
 				kind = "runtime"
 			}
-			if n.runtimeOf(p.Launcher) != nil {
+			if h, _ := n.startRuntime(p.Launcher); h != nil { // what runtimeStart below would start it in
 				kind = "runtime"
 			}
 			if err := n.checkUltracodeStart(ctx, p.Ultracode, kind); err != nil {

@@ -97,7 +97,7 @@ export function AssistantLauncherChip({ session }: { session: Session }) {
   const fallback = isMain ? def ?? { provider: assistant?.launcher } : { provider: own || assistant?.launcher, model: own ? session.model : undefined };
   const defaultModel = isMain
     ? def?.model || (own === current ? session.model : list?.find((l) => l.name === current)?.model)
-    : (!own || own === current ? session.model : list?.find((l) => l.name === current)?.model);
+    : (own === current || (!own && !session.launcher) ? session.model : list?.find((l) => l.name === current)?.model);
   const modelId = pickedM ?? (picked ? list?.find((l) => l.name === picked)?.model : defaultModel);
   const named = knownModels?.machine === session.machine_id && knownModels.name === current ? knownModels.options.find((m) => m.id === modelId) : undefined;
   const model = named ? modelName(named) : shortModel(modelId);

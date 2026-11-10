@@ -34,10 +34,11 @@ export function runsAssistant(l: AssistantLauncher): boolean {
   return !l.agent || l.agent === "claude" || l.agent === "codex" || l.agent === "agy";
 }
 
-/** Whether the assistant's launcher list offers name: plain claude and an unknown or empty list always do (nothing is
- *  dropped on a guess). A pick it doesn't offer would be refused, and a conversation left on one moves to the main chat's. */
+/** Whether the assistant's launcher list offers name. A list not loaded yet (null) offers everything: nothing is dropped
+ *  on a guess. A loaded list, empty included, offers only its entries and plain claude: a pick it doesn't offer would be
+ *  refused, and a conversation left on one moves to the main chat's. */
 export function launcherOffered(list: AssistantLauncher[] | null | undefined, name?: string): boolean {
-  return !name || name === "claude" || !list?.length || list.some((l) => l.name === name);
+  return !name || name === "claude" || !list || list.some((l) => l.name === name);
 }
 
 /**

@@ -11,6 +11,8 @@ import (
 // runtimeOf is the runtime that runs launcher name: the one offering it, unless the login shell or a launcher kept in
 // Persona has that name. Those run instead, as the pickers list them under the name: a managed launcher made from a
 // Paseo provider of the same name is started with personad launch, not through Paseo. nil when no runtime runs it.
+// Engine runtimes this machine does not enable never offer launchers (runtimeRegistry.hostOff), so they cannot take a
+// name from an enabled runtime.
 func (n *Node) runtimeOf(name string) *runtimeConn {
 	if shellLauncherNames()[name] {
 		return nil
@@ -18,11 +20,7 @@ func (n *Node) runtimeOf(name string) *runtimeConn {
 	if _, managed := n.managedLauncher(name); managed {
 		return nil
 	}
-	h := n.runtimes.launcherRuntime(name)
-	if h != nil && n.engineHostOff(h.id()) {
-		return nil
-	}
-	return h
+	return n.runtimes.launcherRuntime(name)
 }
 
 // engineHostOff: runtime is an engine host (Paseo, Cindy) this machine does not enable. Its providers start nothing
@@ -32,19 +30,27 @@ func (n *Node) engineHostOff(runtime string) bool {
 	return engine && !n.hostEnabled(runtime)
 }
 
+// startRuntime is the runtime a start with launcher name goes to, and the model it starts with when the form chose
+// none: runtimeOf, or the runtime's own agy launcher for a managed Antigravity launcher, whatever its name. Every
+// check that must agree with the start (ultracode, models) asks here. nil when the start is not a runtime's.
+func (n *Node) startRuntime(name string) (h *runtimeConn, model string) {
+	if h = n.runtimeOf(name); h != nil {
+		return h, ""
+	}
+	if m, ok := n.managedLauncher(name); ok && m.AgentType() == "agy" && !shellLauncherNames()[name] {
+		return n.runtimes.launcherRuntime("agy"), m.Model
+	}
+	return nil, ""
+}
+
 // runtimeStart starts a session in the runtime offering the launcher; nil when no runtime does.
 func (n *Node) runtimeStart(ctx context.Context, p runtimeStartParams) (*proto.Session, error, bool) {
-	h := n.runtimeOf(p.Launcher)
-	if h == nil {
-		if m, ok := n.managedLauncher(p.Launcher); ok && m.AgentType() == "agy" {
-			h = n.runtimes.launcherRuntime("agy")
-			if p.Model == "" {
-				p.Model = m.Model
-			}
-		}
-	}
+	h, model := n.startRuntime(p.Launcher)
 	if h == nil || shellLauncherNames()[p.Launcher] { // the login shell's launcher of that name runs, as the form lists
 		return nil, nil, false
+	}
+	if p.Model == "" {
+		p.Model = model
 	}
 	s, err := n.runtimeStartOn(ctx, h, p)
 	return s, err, true

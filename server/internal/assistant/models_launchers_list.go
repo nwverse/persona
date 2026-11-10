@@ -221,19 +221,32 @@ func (s *Service) assistantLaunchers(ctx context.Context, machine string) ([]Con
 	return s.assistantLaunchersOf(ctx, machine, picker)
 }
 
-// assistantProviders are the launcher names whose provider the main conversation supports on machine
-// (modelProviderCompatible), whether or not the machine lists them now.
-func (s *Service) assistantProviders(ctx context.Context, machine string) (map[string]bool, error) {
+// assistantProviders are the launcher names whose current, merged configuration supports the main conversation on
+// machine. picker is the node's current list; managed and direct Messages providers are added from their stored records.
+func (s *Service) assistantProviders(ctx context.Context, machine string, picker []ConfiguredLauncher) (map[string]bool, error) {
 	p, err := s.modelPurposeDef(ctx, "assistant")
 	if err != nil {
 		return nil, err
 	}
 	p.MachineID = machine
 	stored := s.storedLaunchers(ctx)
+	current := slices.Clone(picker)
+	for _, managed := range stored {
+		if !slices.ContainsFunc(current, func(l ConfiguredLauncher) bool { return l.Name == managed.Name }) {
+			current = append(current, ConfiguredLauncher{Launcher: proto.Launcher{
+				Name: managed.Name, BaseURL: managed.BaseURL, Model: managed.Model, Source: "persona", Agent: managed.Agent,
+			}})
+		}
+	}
+	current = sessionLaunchers(current, s.hello(ctx).Models.Launchers[machine])
+	hidden := s.hiddenLaunchers(ctx)
 	allowed := map[string]bool{}
-	for _, v := range s.modelProviders(ctx) {
-		if name, ok := strings.CutPrefix(v.ID, "launcher."); ok && !v.Hidden && s.modelProviderCompatible(p, v, stored) {
-			allowed[name] = true
+	for _, l := range current {
+		if l.Name == "" || slices.Contains(hidden, l.Name) && compat.Source(l.Source) != "persona" {
+			continue
+		}
+		if s.modelLauncherCompatible(p, l, stored) {
+			allowed[l.Name] = true
 		}
 	}
 	return allowed, nil
@@ -242,7 +255,7 @@ func (s *Service) assistantProviders(ctx context.Context, machine string) (map[s
 // assistantLaunchersOf is assistantLaunchers from the machine's picker list (pickerLaunchers).
 func (s *Service) assistantLaunchersOf(ctx context.Context, machine string, picker []ConfiguredLauncher) ([]ConfiguredLauncher, error) {
 	ctx = withSettingsMemo(ctx)
-	allowed, err := s.assistantProviders(ctx, machine)
+	allowed, err := s.assistantProviders(ctx, machine, picker)
 	if err != nil {
 		return nil, err
 	}

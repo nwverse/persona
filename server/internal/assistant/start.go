@@ -226,7 +226,19 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if purpose == "" {
 		purpose = "assistant"
 	}
+	if p.Launcher != "" {
+		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
+		switch fit {
+		case mainChatRefused:
+			return proto.Session{}, refusal
+		case mainChatGone:
+			delete(params, "launcher")
+		}
+	}
 	if err := s.applyModel(ctx, purpose, params); err != nil {
+		return proto.Session{}, err
+	}
+	if err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
@@ -785,10 +797,15 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			delete(p, "model")
 		}
 	}
-	if l != "" {
-		return s.applyPickedModel(ctx, p)
+	pickedLauncher := l != ""
+	if pickedLauncher {
+		if err := s.applyPickedModel(ctx, p); err != nil {
+			return err
+		}
+	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
+		return err
 	}
-	return s.applyModel(ctx, "assistant", p)
+	return s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.

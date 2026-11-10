@@ -238,7 +238,7 @@ func TestLaunchArgsCodexGateway(t *testing.T) {
 	if want := []string{"codex", "-c", `model_provider="persona-launcher"`, "-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses"}`}; !slices.Equal(keyless, want) {
 		t.Fatalf("no key: got %v", keyless)
 	}
-	for _, own := range [][]string{{"-c", "model_provider=mine"}, {"--config=model_provider=\"mine\""}, {"-p", "work"}, {"--oss"}} {
+	for _, own := range [][]string{{"-c", "model_provider=mine"}, {"--config=model_provider=\"mine\""}, {"-cmodel_provider=mine"}, {"-p", "work"}, {"-pwork"}, {"--profile=work"}, {"--oss"}} {
 		if got := launchArgv("codex", own, nil, "", "", env); !slices.Equal(got, append([]string{"codex"}, own...)) {
 			t.Fatalf("own provider %v: got %v", own, got)
 		}
@@ -248,5 +248,12 @@ func TestLaunchArgsCodexGateway(t *testing.T) {
 	}
 	if got := launchArgv("codex", nil, nil, "", "gpt-x", nil); !slices.Equal(got, []string{"codex", "-m", "gpt-x"}) {
 		t.Fatalf("no gateway: got %v", got)
+	}
+	// The prompt after "--" is no option, and an option's value is not one either: the gateway still applies.
+	for _, prompt := range [][]string{{"--", "--oss"}, {"--", "-p"}, {"-m", "-p"}, {"exec", "--", "--profile=work"}} {
+		got := launchArgv("codex", prompt, nil, "", "", env)
+		if want := append(append([]string{"codex"}, provider...), prompt...); !slices.Equal(got, want) {
+			t.Fatalf("prompt %v: got %v", prompt, got)
+		}
 	}
 }
