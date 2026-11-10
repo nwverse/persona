@@ -116,7 +116,7 @@ type Service struct {
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
 	kb         kbState           // kb.go
-	inbox      inboxBook         // inbox.go
+	inbox      inboxBook         // inbox_book.go
 	board      boardBook         // workspace_board.go: the workspace board
 	viewEvents viewNotifications // views.go: only coalesced notifications; contents are stored first
 	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
