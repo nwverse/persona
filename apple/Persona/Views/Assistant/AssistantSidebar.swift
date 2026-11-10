@@ -721,6 +721,10 @@ struct AssistantSidebar: View {
     private var isShell: Bool { openInbox != nil }
     @State private var query = ""
     @State private var searchOpen = false
+    #if os(iOS)
+    /// The open iPhone Duo's search, over the whole window (`footerSearch`).
+    @State private var fullSearch = false
+    #endif
     #if os(macOS)
     /// Its header is in the title bar's row (#830): past the traffic lights when the window's sections column is hidden.
     @Environment(\.macTitleRowLeading) private var titleRowLeading
@@ -832,6 +836,14 @@ struct AssistantSidebar: View {
                 open(key)
             }
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $fullSearch) {
+            AssistantFullSearch { key in
+                fullSearch = false
+                open(key)
+            }
+        }
+        #endif
         .background {
             if let drawer {
                 SidebarClosed(drawer: drawer) {
@@ -893,10 +905,15 @@ struct AssistantSidebar: View {
         }
     }
 
-    /// Search at the foot, beside Persona's name, where the column has its fold at the top instead (iPhone Duo open).
+    /// Search at the foot, beside Persona's name, where the column has its fold at the top instead (iPhone Duo open): it
+    /// opens over the whole window, its field at the foot (`AssistantFullSearch`, #3705).
     private var footerSearch: (() -> Void)? {
         guard collapse != nil else { return nil }
+        #if os(iOS)
+        return { fullSearch = true }
+        #else
         return { openSearch() }
+        #endif
     }
 
     private func openSearch() {
