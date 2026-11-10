@@ -1,5 +1,5 @@
-// The Agent header's permission mode (#3956, as iOS `SessionModes` from #3719 and Android #3957; docs/design/DESIGN_SYSTEM.md
-// "ModeTone"): the mode's symbol in a tone that says how much it lets the agent do without asking, and the rules of the mode
+// The Agent header's permission mode (#3956, as iOS `SessionModes` from #3719 and Android #3957; its tones are
+// ModeTone in docs/design/DESIGN_SYSTEM.md): the mode's symbol in a tone that says how much it lets the agent do without asking, and the rules of the mode
 // menu the header and the composer's chip share (which modes it offers, which picks ask first).
 import { t } from "../i18n";
 import type { IconName } from "../ui/icons";
