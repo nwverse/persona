@@ -74,11 +74,15 @@ type assistantProc struct {
 	settingsMu sync.Mutex                               // serializes settings until their control responses arrive
 	controls   map[string]chan assistantControlResponse // guarded by mu
 
-	mu            sync.Mutex
-	mode          string // permission mode / effort level acknowledged by Claude (modes.go)
-	effort        string
-	model         modelExecution
-	fingerprint   string
+	mu          sync.Mutex
+	mode        string // permission mode / effort level acknowledged by Claude (modes.go)
+	effort      string
+	model       modelExecution
+	fingerprint string
+	// instructions is the digest of the CLAUDE.md / AGENTS.md in cwd when it started (instructionsDigest): the agent
+	// reads them only at start, so once the hub rewrites them (new prompts, assistant.prepare) the next idle message
+	// resumes the conversation in a fresh process (instructionsStale).
+	instructions  string
 	canBypass     bool // started with --permission-mode bypassPermissions: only then can it switch there (needsRestartFor)
 	busy          bool
 	lastActive    time.Time
@@ -318,7 +322,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if want == "" && p != nil {
 		want, _ = n.modesOf(id)
 	}
-	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want)) {
+	if p != nil && (!p.alive() || p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || p.needsRestartFor(want) || p.instructionsStale()) {
 		p.mu.Lock()
 		active := p.busy || len(p.tasks) > 0
 		p.mu.Unlock()
@@ -333,7 +337,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			}
 			p.mu.Unlock()
 		} else {
-			n.stopAssistant(id) // model switch, dead process or bypassPermissions (start-only): resume in a fresh one
+			n.stopAssistant(id) // model switch, dead process, bypassPermissions (start-only) or new instructions: resume in a fresh one
 			n.rememberTasks(id, nil)
 			p = nil
 		}
