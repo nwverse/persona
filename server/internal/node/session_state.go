@@ -39,6 +39,8 @@ type sessionState struct {
 	// AppMode / AppEffort: the permission mode and effort set on an assistant conversation (modes.go). AppMode
 	// also retains a terminal Codex start constraint for later resumes. They
 	// win over what its transcript recorded and outlive the node: an old "default" there no longer locks it in.
+	// PlanThen: the mode this session, started in plan mode, goes on in once its plan is approved (planthen.go).
+	PlanThen  string `json:"plan_then,omitempty"`
 	AppMode   string `json:"app_mode,omitempty"`
 	AppEffort string `json:"app_effort,omitempty"`
 	// Tasks: the assistant conversation's background tasks and monitors running right now (node/assistant.go).

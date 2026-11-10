@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "catalog": {
+    "can_share": true,
+    "reason": null,
+    "can_include_future": true,
+    "snapshot_id": "synthetic-snapshot",
+    "snapshot_version": "synthetic-snapshot-version",
+    "expires_at": "2026-11-10T00:05:00Z",
+    "complete": true,
+    "total_messages": 2,
+    "omitted_messages": 1,
+    "omissions": ["unknown_provenance"],
+    "messages": [
+      {"message_id": "synthetic-catalog-a", "role": "user", "text": "Synthetic input", "selectable": true},
+      {"message_id": "synthetic-catalog-b", "role": "assistant", "text": "Synthetic final answer", "selectable": true}
+    ],
+    "next_cursor": null
+  },
+  "denied_catalog": {
+    "can_share": false,
+    "reason": "ownership_unbound",
+    "can_include_future": false,
+    "messages": []
+  },
+  "create_preview_request": {
+    "operation": "create",
+    "snapshot_id": "synthetic-snapshot",
+    "snapshot_version": "synthetic-snapshot-version",
+    "selection": {"mode": "all"},
+    "include_future": false,
+    "show_tools": false,
+    "expires_in_days": 3
+  },
+  "preview": {
+    "preview_id": "synthetic-preview",
+    "expires_at": "2026-11-10T00:05:00Z",
+    "policy_version": 1,
+    "selected_count": 2,
+    "omitted_count": 1,
+    "messages": [{"message_id": "synthetic-preview-a", "role": "assistant", "text": "Synthetic final answer"}],
+    "next_cursor": null,
+    "requires_insecure_transport_ack": true,
+    "transport_warning": "HTTP sends the bearer link and shared content without encryption. A network observer may obtain them. Acknowledge this risk before creating or widening the share."
+  },
+  "create_request": {
+    "client_request_id": "50000000-0000-4000-8000-000000000001",
+    "machine": "synthetic-machine",
+    "session_id": "synthetic-session",
+    "snapshot_id": "synthetic-snapshot",
+    "snapshot_version": "synthetic-snapshot-version",
+    "selection": {"mode": "all"},
+    "include_future": false,
+    "show_tools": false,
+    "expires_in_days": 3,
+    "acknowledgement": {"sensitive_content": true, "policy_version": 1, "preview_id": "synthetic-preview", "insecure_transport": true}
+  },
+  "share": {
+    "share_id": "synthetic-share",
+    "revision": 1,
+    "content_version": 1,
+    "selection": {"mode": "all", "count": 2},
+    "include_future": false,
+    "show_tools": false,
+    "created_at": "2026-11-10T00:00:00Z",
+    "updated_at": "2026-11-10T00:00:00Z",
+    "expires_at": "2026-11-13T00:00:00Z",
+    "status": "active",
+    "publication_status": "frozen",
+    "pause_reason": null
+  },
+  "public_page": {
+    "revision": 1,
+    "content_version": 1,
+    "expires_at": "2026-11-13T00:00:00Z",
+    "publication_status": "frozen",
+    "poll_after_seconds": 30,
+    "messages": [{"message_id": "synthetic-public-a", "role": "assistant", "text": "Synthetic final answer"}],
+    "next_cursor": null
+  },
+  "tool_message": {
+    "message_id": "synthetic-public-b",
+    "role": "assistant",
+    "text": "Synthetic final answer",
+    "execution": [
+      {"kind": "text", "text": "Synthetic intermediate narration"},
+      {"kind": "tool", "tool_id": "synthetic-public-tool", "name": "command", "arguments": "[REDACTED]", "results": [{"text": "Synthetic tool result"}]},
+      {"kind": "agent", "tool_id": "synthetic-public-agent", "text": "Synthetic associated child result"}
+    ]
+  },
+  "narrow_patch": {"expected_revision": 1, "remove_message_ids": ["synthetic-editor-a"], "include_future": false, "show_tools": false},
+  "revoke_request": {"expected_revision": 2},
+  "revoked": {"share_id": "synthetic-share", "revision": 3, "status": "revoked"},
+  "inaccessible": {"code": "not_found", "error": "This share is unavailable."},
+  "stale_cursor": {"code": "share_changed", "error": "Sharing is unavailable."}
+}

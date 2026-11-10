@@ -113,7 +113,7 @@ func TestSwitchBindsPressedCard(t *testing.T) {
 // The agents card's "Start new agent" button posts the same form /start builds (startAgentCard), quoting the
 // pressed list card, and starts nothing itself (#5438).
 func TestStartFormCallbackPostsStartCard(t *testing.T) {
-	s, f, _, _ := startCardHub(t)
+	s, f, posts, _ := startCardHub(t)
 	ctx := context.Background()
 	var a feishubot.CardAction
 	a.Action.Value = map[string]any{"a": "start_form"}
@@ -122,18 +122,12 @@ func TestStartFormCallbackPostsStartCard(t *testing.T) {
 	if r.Toast == nil || r.Toast.Content != i18n.T("", "assistant-feishu_cards.start_form_opening") {
 		t.Fatalf("toast %+v", r.Toast)
 	}
-	var post map[string]any
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if ps := f.appParams(AppFeishu, FeishuPost); len(ps) > 0 {
-			post = ps[0]
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
+	waitForForm(t, posts, "the start form was not posted")
+	ps := f.appParams(AppFeishu, FeishuPost)
+	if len(ps) != 1 {
+		t.Fatalf("posted %d start forms, want one", len(ps))
 	}
-	if post == nil {
-		t.Fatal("the start form was not posted")
-	}
+	post := ps[0]
 	if replyTo, _ := post["reply_to"].(string); replyTo != "om_agents" {
 		t.Fatalf("the form replies to %q, want the pressed list card", replyTo)
 	}
