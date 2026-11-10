@@ -273,15 +273,44 @@ func writeJSON(p string, v any) error {
 	return writeFile(p, append(raw, '\n'))
 }
 
+// writeFile replaces p with data through a temporary file of its own in the same directory, so two writers of one
+// path cannot truncate each other's copy (a shared p+".tmp" made one rename fail or put an emptied file in place),
+// and a failed write leaves no temporary file behind. The name (p + ".tmp-" + a random part) never ends in .md or
+// .json, so listings and search skip it. It does not fsync: it backs frequent small writes (metadata, judged files,
+// handles). Rewrites of archive text that holds live lines go through archiveWrite, which does.
 func writeFile(p string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	dir := filepath.Dir(p)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	f, err := os.CreateTemp(dir, filepath.Base(p)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	tmp := f.Name()
+	if err := writeTemp(f, data); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// writeTemp makes f private (CreateTemp already does on Unix; the explicit mode keeps the other platforms the same),
+// writes data and closes f.
+func writeTemp(f *os.File, data []byte) error {
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // writeIfMissing writes what content returns to p unless p exists. content runs only then: the README renders a prompt

@@ -96,7 +96,7 @@ func (s *Store) mergeMessages(c *Chat, ruled []ingestLine, selected bool, usual 
 			return 0, err
 		}
 		if raw != nil {
-			if err := writeFile(s.ledgerPath(c.ID), raw); err != nil {
+			if err := archiveWrite(s.ledgerPath(c.ID), raw); err != nil {
 				return 0, err
 			}
 		}
@@ -107,7 +107,7 @@ func (s *Store) mergeMessages(c *Chat, ruled []ingestLine, selected bool, usual 
 		if n == 0 {
 			continue
 		}
-		if err := writeFile(p, []byte(out)); err != nil {
+		if err := archiveWrite(p, []byte(out)); err != nil {
 			return added, err
 		}
 		added += n

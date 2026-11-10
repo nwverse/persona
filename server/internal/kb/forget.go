@@ -246,5 +246,5 @@ func (s *Store) dropLogLines(slug string, gone func(source string) bool) (err er
 		}
 		kept = append(kept, l)
 	}
-	return writeFile(p, []byte(strings.Join(kept, "")))
+	return archiveWrite(p, []byte(strings.Join(kept, "")))
 }
