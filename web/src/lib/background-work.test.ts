@@ -12,6 +12,11 @@ describe("background work projections", () => {
       workflows: [flow], subagents: [{ id: "sub", session_id: "worker@sub", running: true }], background: [{ id: "shell", kind: "shell" }] })).toBeUndefined();
   });
 
+  it("old raw summary counts preserve active work without guessing an independent job count", () => {
+    expect(backgroundWork({ ...session, waiting: true, background_count: 7 })?.tasks).toBe(0);
+    expect(backgroundWork({ ...session, waiting: true, background_count: 7 })).toBeDefined();
+  });
+
   it("legacy full details classify workflow and subagent entries without inventing shell jobs", () => {
     expect(backgroundWork({ ...session, background: [{ id: "wf", kind: "workflow" }, { id: "sub", kind: "agent" }, { id: "mon", kind: "monitor" }] }))
       .toEqual({ tasks: 1, subagents: 1, workflows: 1, workflow: undefined });

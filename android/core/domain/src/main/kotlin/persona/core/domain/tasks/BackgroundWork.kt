@@ -17,9 +17,10 @@ fun Session.backgroundWork(): BackgroundWork? {
         ?: background.count { it.kind == "workflow" }
     val subagents = if (summary) runningSubagents ?: 0 else subagents?.count { it.running }
         ?: background.count { it.kind == "agent" }
-    val tasks = backgroundTasksCount ?: if (waiting != null) ((backgroundCountHint ?: 0) - workflows - subagents).coerceAtLeast(0)
+    // A legacy raw background count may include workflows and agents; it cannot define an independent job count.
+    val tasks = backgroundTasksCount ?: if (summary) 0
         else background.count { it.kind != "workflow" && it.kind != "agent" }
-    return if (tasks > 0 || subagents > 0 || workflows > 0 || backgroundWorking == true)
+    return if (tasks > 0 || subagents > 0 || workflows > 0 || backgroundWorking == true || (summary && (backgroundCountHint ?: 0) > 0))
         BackgroundWork(tasks, subagents, workflows, workflow) else null
 }
 

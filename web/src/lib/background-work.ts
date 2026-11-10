@@ -20,10 +20,12 @@ export function backgroundWork(session: Session | undefined): BackgroundWork | u
     ?? background.filter((b) => b.kind === "workflow").length;
   const subagents = summary ? session.running_subagents ?? 0 : session.subagents?.filter((a) => a.running).length
     ?? background.filter((b) => b.kind === "agent").length;
-  const tasks = session.background_tasks_count ?? (typeof session.waiting === "boolean"
-    ? Math.max(0, (session.background_count ?? 0) - workflows - subagents)
+  // Old summaries expose only a raw background count, which may include workflows and agents. It cannot be split
+  // reliably: retain a generic active-work line rather than invent an independent job count.
+  const tasks = session.background_tasks_count ?? (summary ? 0
     : background.filter((b) => b.kind !== "workflow" && b.kind !== "agent").length);
-  return tasks || subagents || workflows || session.background_working ? { tasks, subagents, workflows, workflow } : undefined;
+  return tasks || subagents || workflows || session.background_working || (summary && (session.background_count ?? 0) > 0)
+    ? { tasks, subagents, workflows, workflow } : undefined;
 }
 
 /** One task can have several active agents: do not mistake a quiet lead for an idle task. */
