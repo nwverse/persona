@@ -1,5 +1,14 @@
 # Lessons: web UI and interactions
 
+## Same-state list updates can change background progress (#3588)
+
+The task tray often has only list summaries, whereas the chat header has complete Session detail. A comparison of
+state, pending cards and hub work alone cannot detect a workflow's phase/count updates or background completion.
+Keep a compact activity projection on the list, prefer its fresh revision for task rows, and treat absent run metadata
+and omitted zero counts as clears rather than partial merges. When complete detail replaces a summary hint, remove
+all summary-only fields so they cannot override the detail arrays. Sum distinct active task bindings, not just the lead.
+Test running commands → workflow progress → subagents → real external wait on the same mounted row.
+
 ## A panel's entry point is not its displayed conversation (#3562)
 
 A task panel embeds its selected Agent's `ChatView`, but its header menu used the task's route for **Open in new window**. Build that destination from the same selected machine/session pair passed to the chat, including after switching Agents and before the session roster arrives. Only a task panel without an Agent opens the task page; the chat's separate linked-task action retains its own destination. Regress the real side panel, chat header and menu together, not only a route helper.

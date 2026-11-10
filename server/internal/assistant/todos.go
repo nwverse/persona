@@ -379,8 +379,9 @@ func (s *Service) todosLoaded() bool {
 func (s *Service) todosChanged(ctx context.Context) {
 	s.event(ctx, map[string]any{"type": "todos"})
 	s.todoChangedSoon()
-	s.remindSoon()   // a reminder set, moved or done (todo_plan.go)
-	s.boardChanged() // a to-do closed, reopened or gone leaves "Please verify"
+	s.remindSoon()     // a reminder set, moved or done (todo_plan.go)
+	s.boardChanged()   // a to-do closed, reopened or gone leaves "Please verify"
+	s.interruptsSoon() // an interrupted receipt of it may read cancelled, rerouted or done now (interruptions.go)
 }
 
 // linksChanged: which todo an agent works for changed (or a todo's title, or whether it is done): the hub is told
@@ -731,7 +732,7 @@ func (s *Service) todoRoutes() {
 	s.todoThreadRoutes()
 	s.todoRetitleRoute()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
-	// waiting for the owner carries its ask (todo_ask.go)
+	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -747,6 +748,9 @@ func (s *Service) todoRoutes() {
 		for i := range list {
 			if a, ok := asks[list[i].ID]; ok {
 				list[i].Ask = &a
+			}
+			if o, ok := s.orphanOf(list[i].ID); ok && list[i].DoneAt == nil {
+				list[i].Orphaned = &o
 			}
 		}
 
@@ -990,6 +994,7 @@ func (s *Service) todoRoutes() {
 			todoErr(w, err)
 			return
 		}
+		s.superviseLinkedTodo(r.Context(), todoID) // the user's own todo gets a supervisor (agent_tasks.go)
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 
@@ -1779,6 +1784,7 @@ func (s *Service) TodoLink(ctx context.Context, p TodoLinkParams) (TodoLinkResul
 	if err := s.linkTodoAgent(ctx, p.TodoID, p.MachineID, p.SessionID, title, p.Cwd, p.Agent); err != nil {
 		return TodoLinkResult{}, err
 	}
+	s.superviseLinkedTodo(ctx, p.TodoID) // the user's own todo gets a supervisor (agent_tasks.go)
 	res := TodoLinkResult{Title: title}
 	if t, ok, err := s.todo(ctx, p.TodoID); err == nil && ok {
 		res.Title = t.Title

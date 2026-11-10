@@ -1,12 +1,14 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // A direction's name and its leader's own progress (#3679; docs/assistant/unified-entry.md "Names and progress").
@@ -84,7 +87,7 @@ func (s *Service) toolDirectionName(ctx context.Context, self string, args json.
 	if strings.TrimSpace(a.Name) == "" {
 		return fmt.Sprintf("Direction %s has no name of its own now: it shows its project's name, else its title.", a.ID), nil
 	}
-	return fmt.Sprintf("Direction %s is called 「%s」 now (the app and the work-log extension show it).", a.ID, clip(oneLine(a.Name), directionNameMost)), nil // i18n-ignore: direction_name tool result, read by the model
+	return fmt.Sprintf("Direction %s is called “%s” now (the app and the work-log extension show it).", a.ID, clip(oneLine(a.Name), directionNameMost)), nil
 }
 
 // toolLeaderProgress is leader_progress: a leader reports its direction's progress at the goal level.
@@ -198,4 +201,70 @@ func (s *Service) directionOf(id string) *direction {
 	}
 	cp := *b.m[id]
 	return &cp
+}
+
+// leaderNames are what the directions of leaders ids are called now (directionName), read once for all of them; a
+// leader with no name at all is called by its id.
+func (s *Service) leaderNames(ctx context.Context, ids []string) map[string]string {
+	titles, _ := s.conversationTitles()
+	pn, ok := s.projectNames(ctx)
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		var name string
+		if d := s.directionOf(id); d != nil {
+			name = nameOf(d, titles[id].title, pn, ok)
+		} else {
+			name = directionName(nil, titles[id].title, "")
+		}
+		out[id] = cmp.Or(clip(oneLine(name), 40), id)
+	}
+	return out
+}
+
+// briefLeaders are the current leaders as the briefings list them, one line each (#3609): the direction's name, its
+// open tasks, how many wait for the owner (a review that needs the owner's decision, a plan waiting for Start counts
+// with the plans) and how many were reported stuck in the last day, and its leader's latest summary of the day.
+func (s *Service) briefLeaders(ctx context.Context, now time.Time) []prompts.BriefLeader {
+	cfg := s.settings(ctx)
+	var out []prompts.BriefLeader
+	stuck := map[string]time.Time{}
+	b := &s.lreports
+	b.mu.Lock()
+	if s.leaderReportsLocked(ctx) {
+		maps.Copy(stuck, b.told.Stuck)
+	}
+	b.mu.Unlock()
+	var todos []Todo // every supervised task, as the leaders' reports read them (leader_reports.go)
+	s.todos.mu.RLock()
+	for _, t := range s.todos.todos {
+		if t.Supervision != nil && t.DoneAt == nil {
+			todos = append(todos, copyTodoLocked(t))
+		}
+	}
+	s.todos.mu.RUnlock()
+	names := s.leaderNames(ctx, cfg.Leaders)
+	for _, id := range cfg.Leaders {
+		if id == "" || id == cfg.Main {
+			continue
+		}
+		bl := prompts.BriefLeader{Name: names[id]}
+		for _, t := range todos {
+			if t.DoneAt != nil || t.Supervision == nil || t.Supervision.Supervisor != id {
+				continue
+			}
+			bl.Open++
+			switch at, ok := stuck[t.ID]; {
+			case t.Supervision.state(t) == reviewNeedsUser:
+				bl.Waiting++ // counted once: waiting on the owner, whether or not it was also reported stuck
+			case ok && now.Sub(at) < 24*time.Hour:
+				bl.Stuck++
+			}
+		}
+		if d := s.directionOf(id); d != nil && d.Progress != nil && now.Sub(d.Progress.At) < 24*time.Hour {
+			p := d.Progress
+			bl.Reached, bl.Doing, bl.NeedsYou = clip(p.Reached, 120), clip(p.Doing, 120), clip(p.NeedsYou, 120)
+		}
+		out = append(out, bl)
+	}
+	return out
 }

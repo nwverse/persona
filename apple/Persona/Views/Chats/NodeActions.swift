@@ -86,14 +86,20 @@ extension APIClient {
     /// One of the node menu's routes, `POST /machines/{mid}/<path>`; only allowlisted fields and boolean flags reach the node.
     @discardableResult
     func nodeAction<Body: Encodable & Sendable>(machine: String, _ path: String, _ body: Body, timeout: TimeInterval = 40, opID: UUID? = nil) async throws -> Data {
-        try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        do {
+            return try await post("/api/v1/machines/\(machine)/\(path)", body: body, timeout: timeout, opID: opID)
+        } catch var error as APIError {
+            if error.status == 502 && error.code == "internal" { error.showsNodeReason = true }
+            throw error
+        }
     }
 }
 
 // MARK: - What the menus offer
 
 nonisolated enum NodeMenu {
-    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core and botmux are not asked.
+    /// Closing, splitting, running an agent in a shell and git are herdr's: Orca, herdr-core, Tern and botmux are not
+    /// asked.
     static func canChange(hostKind: String?) -> Bool { hostKind == "herdr" }
 
     /// The pane items of an agent row: a live herdr pane the app may drive.

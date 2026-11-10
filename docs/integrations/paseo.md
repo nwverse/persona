@@ -77,7 +77,7 @@ run with `ELECTRON_RUN_AS_NODE=1`. A plain `node` always runs the bridge without
 | Close | Backend support | Archives the Agent in Paseo, stopping it and removing it from the list. Like Rename, the App's Close button currently appears only for terminal sessions |
 | Change permission mode and reasoning effort | ✅ | Claude Code's five modes; on Codex, `bypassPermissions` switches to Paseo's `full-access` and a Codex agent in `full-access` reports `bypassPermissions`; reasoning effort includes only the levels supported by the model |
 | Keystrokes, screen reading, live terminal, phone takeover | ❌ | Paseo has no terminal |
-| Phone tools (`phone_*`, `mail_*`) | ❌ | Not yet injected into Paseo Agents |
+| Agent MCP tools | ✅ for new sessions | A new Agent gets whatever tools the hub gives an agent on that computer (see "Create"). Personal machine: the phone tools (`phone_*`), the connectors' agent tools (such as `mail_*`), the agent tools (`report_to_supervisor`, to-do decisions) and, when enabled, the dispatch tools (`dispatch_*`). Work machine: only the agent tools, no dispatch. Taken-over sessions and Agents Paseo created itself are not given them (what they already have stays) |
 
 Login-shell launchers (those in `~/.zshrc`) still appear in the creation form. If selected, use the Paseo provider with the same name if one exists;
 otherwise use Paseo's default provider (its built-in Claude Code provider if enabled, otherwise the first provider running Claude Code).
@@ -86,7 +86,7 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
 
 - **Bridge code**: bundled in personad as runtime package `persona-paseo-runtime` (`internal/runtimepkg`, generated from `integrations/` at build time).
   When the engine switches to Paseo, node writes it beside `runtime.sock` at `runtime-packages/persona-paseo-runtime/<hash>/`, then runs:
-  `node bridge.mjs --socket <runtime.sock> --paseo-home <Paseo home>`.
+  `node bridge.mjs --socket <runtime.sock> --paseo-home <Paseo home> --mcp-config <mcp.json beside runtime.sock>`.
 - **Which Node.js**: the first version 22 or newer, in this order:
   1. `PERSONA_NODEJS`
   2. The one used by the Paseo daemon (the process in `paseo.pid`)
@@ -152,13 +152,23 @@ otherwise use Paseo's default provider (its built-in Claude Code provider if ena
 - **Create**: use Paseo's `agent.create`. The bridge chooses the Agent ID and includes the form's selected model, permission mode, and reasoning effort. The first message is `initialPrompt`.
   - Creating from a space places it in that Paseo workspace.
   - If Paseo does not finish creation within 25 seconds, return the session row first and keep waiting in the background.
+  - **Agent MCP tools** (#3655): the bridge reads the node's `mcp.json` (the one terminal Agents load) at each creation and puts its stdio servers (`personad mcp`) into the request's `config.mcpServers`.
+    The tool list is the hub's, as for terminal Agents: it decides per computer (personal machine: phone, connector and agent tools; work machine: agent tools only), and the bridge adds no filter.
+    Each server's environment gets `PERSONA_SESSION_ID` set to that Agent's own `persona.session` label (`paseo-<uuid>`, from the first Paseo agent ID of that start), not the provider's session ID, so `report_to_supervisor` and the other
+    tools resolve the same task link as for terminal Agents. Paseo keeps `mcpServers` when it reloads the Agent. If `mcp.json` is missing or has no stdio server, the Agent is created without the tools and the bridge logs why.
+    Only new Agents are given them: taken-over sessions (`import_agent`) and Agents created in Paseo itself are left as they are.
+    A provider that takes no MCP servers makes Paseo 0.13 refuse the creation (`Provider '<name>' does not support MCP servers`). The bridge then creates the Agent again, once, without `mcpServers`,
+    as before this feature, and logs it; no other creation error is retried. The retry simply uses a new Paseo agent ID, but keeps the same Persona session ID (`persona.session` label, `PERSONA_SESSION_ID`) as the first request,
+    so the row the phone already got stays the Agent's. Paseo keeps a record of each creation request under `creations/` in its home; the refused request's record stays (failed, no Agent registered), and the bridge does not clean it up.
 - **Take over**: use Paseo's `import_agent`, choosing the provider used by the most recent Agent running Claude Code on that computer.
   Set the `persona.session` label to the original session ID; archived Paseo Agents are restored.
 
 ## Out of scope and known limitations
 
 - No terminal: no keystrokes, screen reading, live terminal view, or phone takeover. The App hides these entry points based on session capabilities.
-- Phone tools (`phone_*`, `mail_*`) are not yet injected into Paseo Agents.
+- Persona's MCP tools (phone, connector and agent tools) reach only Agents created through Persona; taken-over sessions and Agents created in Paseo itself are not given them (what they already have stays; see "Create").
+- The MCP server's `command` is the node's own program as an absolute path, stored in the Agent's config and kept by Paseo across reloads. Updates and deploys replace that file in place, so it normally stays valid. If the node's program
+  moves or is switched (for example `persona-link node switch`, or a reinstall elsewhere), Agents created earlier keep the old path and lose their Persona tools until they are created again; the bridge does not rewrite a stored config.
 - All three clients show "Rename" and "Close" based on whether the session has a terminal. Paseo sessions have none, so these actions are currently hidden. Node and the bridge already support both operations;
   the App can show them by capability once session `capabilities` includes rename / close.
 - Connect only to the local Paseo daemon. Paseo's relay and its other connected hosts are not integrated. Paseo on another computer uses that computer's own node.

@@ -203,6 +203,9 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let herdrApp = Self(rawValue: "herdr-core")
     static let herdrBoth = Self(rawValue: "herdr-both")
     static let orca = Self(rawValue: "orca")
+    /// Tern's terminals (docs/integrations/engines.md): its sessions are spaces, its tabs slots, its blocks panes
+    /// (`tern:<block id>`).
+    static let tern = Self(rawValue: "tern")
     /// Paseo's agents (docs/integrations/paseo.md): no terminal; the node runs a bridge to the Paseo daemon.
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
@@ -210,7 +213,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
     /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
     static let noEngine = Self(rawValue: "none")
-    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo, .cindy]
+    static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .tern, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
         switch self {
@@ -218,6 +221,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrApp: "Herdr App"
         case .herdrBoth: "herdr + Herdr App"
         case .orca: "Orca"
+        case .tern: "Tern"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
         case .noEngine: String(localized: "No Terminal Engine")
@@ -230,6 +234,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .herdrApp: String(localized: "Terminals in the desktop app")
         case .herdrBoth: String(localized: "Sessions from both the terminal and the desktop app")
         case .orca: String(localized: "Terminals in Orca")
+        case .tern: String(localized: "Terminals in Tern")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
         case .noEngine: String(localized: "Sessions of the desktop apps only")
@@ -739,6 +744,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var listBackgroundCount: Int? = nil
     var listRunningSubagents: Int? = nil
     var listRunningWorkflows: Int? = nil
+    /// Summary projection (#3588): independent live jobs; zero clears cached activity.
+    var listBackgroundTasksCount: Int? = nil
+    /// Newest running workflow, without chat-only agent/phase arrays.
+    var listWorkflowProgress: WorkflowRun? = nil
     /// The /loop driving this agent (it wakes itself up on a schedule).
     var loop: LoopInfo?
     /// The goal it works toward until it holds (Claude Code's /goal, a Codex thread goal; docs/integrations/agent-goal.md).
@@ -809,6 +818,9 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// AI twin, "routine": a scheduled task, "lark_agent": Lark /agent…). The sidebar keeps the others in Auto Chats. Nil
     /// from hubs that do not say, which list every conversation as before.
     var origin: String? = nil
+    /// The extension whose token opened an assistant conversation (protocol.md「Origin of assistant chats」); nil for any
+    /// other. Such a chat never attends a meeting (#2981).
+    var openedBy: String? = nil
     /// The last compaction the user asked for in an assistant conversation (POST …/compact, #1727): running, done or
     /// failed. Nil from hubs without `assistant_compact`, and before the first one.
     var compaction: CompactionRun? = nil
@@ -900,21 +912,21 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         return canSend ? label : String(localized: "\(label) · View only: \(reason)", comment: "A session's source, and why it can only be viewed")
     }
 
-    /// The host tool it lives in, from its pane ref: `botmux:…`, `orca:…`, `herdr-core:…`; any other pane is herdr's
-    /// (its ids go bare and may hold a colon); nil without a pane. Keep the kinds in step with Kinds in
+    /// The host tool it lives in, from its pane ref: `botmux:…`, `orca:…`, `herdr-core:…`, `tern:…`; any other pane is
+    /// herdr's (its ids go bare and may hold a colon); nil without a pane. Keep the kinds in step with Kinds in
     /// server/internal/host/host.go.
     var hostKind: String? {
         guard let paneID, !paneID.isEmpty else { return nil }
         let kind = paneID.firstIndex(of: ":").map { String(paneID[..<$0]) } ?? ""
-        return ["orca", "herdr-core", "botmux"].contains(kind) ? kind : "herdr"
+        return ["orca", "herdr-core", "botmux", "tern"].contains(kind) ? kind : "herdr"
     }
 
-    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr pane a terminal; nil for the
-    /// rest (Orca, runtimes, apps), which carry no source label.
+    /// Where it was opened (#2526): a botmux session is a Feishu group's topic, a herdr or Tern pane a terminal; nil
+    /// for the rest (Orca, runtimes, apps), which carry no source label.
     var source: SessionSource? {
         switch hostKind {
         case "botmux": .feishu
-        case "herdr", "herdr-core": .terminal
+        case "herdr", "herdr-core", "tern": .terminal
         default: nil
         }
     }
@@ -953,6 +965,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
+        case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
         case canFork = "can_fork"
         case sourceKind = "source_kind", sourceThreadID = "source_thread_id", sourceInstanceID = "source_instance_id",
@@ -972,7 +985,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
              starting, startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
-             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
+             turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, openedBy = "opened_by", compaction, work,
              runtime, runtimeFallback = "runtime_fallback", manager
     }
 
@@ -1041,6 +1054,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         listBackgroundCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundCount)
         listRunningSubagents = try c.decodeIfPresent(Int.self, forKey: .listRunningSubagents)
         listRunningWorkflows = try c.decodeIfPresent(Int.self, forKey: .listRunningWorkflows)
+        listBackgroundTasksCount = try c.decodeIfPresent(Int.self, forKey: .listBackgroundTasksCount)
+        listWorkflowProgress = (try? c.decodeIfPresent(WorkflowRun.self, forKey: .listWorkflowProgress)).flatMap { $0 }
         loop = try c.decodeIfPresent(LoopInfo.self, forKey: .loop)
         goal = try c.decodeIfPresent(GoalInfo.self, forKey: .goal)
         subagents = try c.decodeIfPresent([Subagent].self, forKey: .subagents)
@@ -1073,6 +1088,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         externalURL = try c.decodeIfPresent(String.self, forKey: .externalURL)
         channels = try c.decodeIfPresent([String].self, forKey: .channels)
         origin = try c.decodeIfPresent(String.self, forKey: .origin)
+        openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
         compaction = try? c.decodeIfPresent(CompactionRun.self, forKey: .compaction) // an odd one never drops the session
         work = try? c.decodeIfPresent(WorkState.self, forKey: .work) // an odd one never drops the session
         hubGroup = try c.decodeIfPresent(String.self, forKey: .hubGroup)
