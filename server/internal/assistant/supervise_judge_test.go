@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -110,19 +111,39 @@ func TestAcceptedTaskFollowUpIsNotStoppedShort(t *testing.T) {
 		t.Fatalf("not closed: %+v", got)
 	}
 
-	for _, judge := range []string{`{"verdict":"not_done","reason":"还差一处"}`, `{"verdict":"unsure","reason":"看不出"}`, ""} {
-		f.judge = judge
-		f.setItems(text("assistant", fullReport), text("user", "顺手把 README 也改一下"), text("assistant", "README 改了一半"))
-		agentTurn(s, f, proto.StatusWorking, "", 0)
-		if got := todoNow(s, todo.ID); got.DoneAt != nil {
-			t.Fatalf("not reopened by its agent's work: %+v", got)
-		}
-		agentTurn(s, f, proto.StatusDone, "README 改了一半", 0)
-		time.Sleep(4 * shortSuperviseTimings.every)
-		if got := len(f.notices()); got != 1 {
-			t.Fatalf("judge %q: %d messages, last:\n%s", judge, got, f.notices()[got-1])
+	// Its agent is sent more: the task is open again.
+	f.setItems(text("assistant", fullReport), text("user", "顺手把 README 也改一下"), text("assistant", "README 改了一半"))
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	reopened := todoNow(s, todo.ID)
+	if reopened.DoneAt != nil || reopened.Supervision.State != reviewAccepted {
+		t.Fatalf("not reopened by its agent's work: %+v %+v", reopened, reopened.Supervision)
+	}
+	// That work judged not finished, unsure or not at all: the supervisor is not told (signal is synchronous).
+	for _, j := range []struct {
+		c   taskDoneCheck
+		err error
+	}{
+		{taskDoneCheck{Verdict: verdictNotDone, Reason: "还差一处"}, nil},
+		{taskDoneCheck{Verdict: verdictUnsure, Reason: "看不出"}, nil},
+		{taskDoneCheck{}, errors.New("judge: 400")},
+	} {
+		s.superviseJudged(ctx, reopened, time.Now(), j.c, j.err)
+		if k := stopSignals(s, todo.ID); k != "" {
+			t.Fatalf("%+v %v: told %s", j.c, j.err, k)
 		}
 	}
+	// The same stop of a task never reviewed is told (the guard is only for one closed by review).
+	open := reopened
+	sup := *open.Supervision
+	sup.State = ""
+	open.Supervision = &sup
+	s.superviseJudged(ctx, open, time.Now(), taskDoneCheck{Verdict: verdictNotDone, Reason: "还差一处"}, nil)
+	if k := stopSignals(s, todo.ID); k != sigIdle {
+		t.Fatalf("an open task's stop: %q", k)
+	}
+	s.supervise.mu.Lock()
+	delete(s.supervise.pending, todo.ID+"|"+sigIdle)
+	s.supervise.mu.Unlock()
 
 	f.judge = `{"verdict":"done","reason":"README 也改好了"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -138,6 +159,22 @@ func entryLine(msg string) string {
 	for _, l := range strings.Split(msg, "\n") {
 		if strings.HasPrefix(l, "1. 任务") {
 			return l
+		}
+	}
+	return ""
+}
+
+// stopSignals names the stopped-short or unjudged signal waiting or told for todo id ("" none).
+func stopSignals(s *Service, id string) string {
+	b := &s.supervise
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, k := range []string{sigIdle, sigUnjudged} {
+		if _, ok := b.pending[id+"|"+k]; ok {
+			return k
+		}
+		if _, ok := b.sent[id+"|"+k]; ok {
+			return k
 		}
 	}
 	return ""
