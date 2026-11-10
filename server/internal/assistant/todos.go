@@ -379,8 +379,9 @@ func (s *Service) todosLoaded() bool {
 func (s *Service) todosChanged(ctx context.Context) {
 	s.event(ctx, map[string]any{"type": "todos"})
 	s.todoChangedSoon()
-	s.remindSoon()   // a reminder set, moved or done (todo_plan.go)
-	s.boardChanged() // a to-do closed, reopened or gone leaves "Please verify"
+	s.remindSoon()     // a reminder set, moved or done (todo_plan.go)
+	s.boardChanged()   // a to-do closed, reopened or gone leaves "Please verify"
+	s.interruptsSoon() // an interrupted receipt of it may read cancelled, rerouted or done now (interruptions.go)
 }
 
 // linksChanged: which todo an agent works for changed (or a todo's title, or whether it is done): the hub is told

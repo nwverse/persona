@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -213,10 +214,11 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                 LazyColumn(Modifier.heightIn(max = minOf(maximumHeight, AssistantTrayTokens.maximumHeight)),
                     contentPadding = PaddingValues(bottom = Tokens.Space.s)) {
                     item {
-                        JSectionHeader(stringResource(tray.label), trailing = stringResource(R.string.chat_tray_items, when (tray) {
+                        val count = when (tray) {
                             AssistantTray.NeedsYou -> needsCount
                             AssistantTray.Running -> entries.running.size
-                        }), action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
+                        }
+                        JSectionHeader(stringResource(tray.label), trailing = pluralStringResource(R.plurals.chat_tray_items, count, count), action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
                             JTextButton(stringResource(R.string.chat_tray_approve_all), { onApprove(approvals) },
                                 enabled = enabled && !busy, modifier = Modifier.testTag("assistant-approve-all"))
                         }) else if (tray == AssistantTray.Running) ({
@@ -434,7 +436,7 @@ private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null,
             val done = row.completed; val total = row.total
             if (!row.done && !row.cancelled) {
                 val counted = done != null && total != null && total > 0
-                if (counted) Text(stringResource(R.string.chat_tray_steps, done, total),
+                if (counted) Text(pluralStringResource(R.plurals.chat_tray_steps, total, done, total),
                     style = PersonaTheme.type.micro, color = palette.ink3, maxLines = 1)
                 val fraction = if (counted) done!!.toFloat() / total!! else if (row.plan != null) 0f else null
                 // a stopped task draws only a real count: nothing runs, so no indeterminate bar (#3576)
