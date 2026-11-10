@@ -8,7 +8,8 @@ Starts scripts/mock/mock_hub.py on a free port with a HOME of its own (MOCK_EXTE
 - each manager keeps its own inbox mutes and rules: one set for another manager covers only its items, and an offline
   one answers 503 assistant_offline;
 - the roster's inbox_needs_you is what the merged inbox lists open under "Needs you" for each online manager, absent
-  for an offline or installing one, and follows an item being handled;
+  for an offline or installing one, and follows an item being handled; the merged inbox leaves out the offline one's
+  items, as the hub leaves out a manager that doesn't answer;
 - a computer added with add.manager (MOCK_ADD_COMPUTER=1) is that manager's in the reply and in /machines (an offline
   manager's is not listed until a manager that is online has it); a manager the roster lacks is 404 no_manager, one
   being installed 409 installing, and neither adds a computer.
@@ -198,6 +199,7 @@ class MockHubManagersTests(unittest.TestCase):
         self.assertGreater(managers["m-3fa21c"]["inbox_needs_you"], 0)  # the other manager's badge has something to show
         for mid in ("m-8b04d2", "m-c1e9f0"):  # offline, installing
             self.assertNotIn("inbox_needs_you", managers[mid], mid)
+        self.assertNotIn("m-8b04d2", {x["manager"] for x in items})  # the offline one's items aren't merged in
         mine = next(x for x in items if x["manager"] == "assistant" and needs_you(x))
         body = json.dumps({"done": True, "items": [{"id": mine["id"]}]}).encode()
         status, _ = self.call("POST", "/api/v1/inbox/done", body)

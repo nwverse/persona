@@ -476,11 +476,27 @@ export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[
   return edits.some((e) => "ultracode" in e) ? edits : undefined;
 }
 
+/**
+ * The header naming the manager of conversation, for what its feed offers (a plan, a briefing's question): the routes
+ * name no conversation, so the hub would take them to the default manager (docs/protocol/protocol.md "Per-manager
+ * routing"), whichever assistant the conversation is (another made current, or another's conversation opened here).
+ * The manager a page noted for it, else the one the hub's sessions list has it under; none for the default's.
+ */
+export function conversationHeaders(conversation: string): Record<string, string> | undefined {
+  const noted = conversationManager(conversation);
+  if (noted) return itemHeaders(noted);
+  for (const list of Object.values(getState().sessions)) {
+    const s = list.find((x) => x.session_id === conversation);
+    if (s) return itemHeaders(s.manager);
+  }
+  return undefined;
+}
+
 export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
   if (st.busy[plan.id]) return;
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json: { tasks: edits, remember } });
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json: { tasks: edits, remember }, headers: conversationHeaders(plan.conversation) });
     set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
     void refreshTodos();
   } finally {
@@ -492,7 +508,7 @@ export async function dismissPlan(plan: TaskPlan) {
   if (st.busy[plan.id]) return;
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST" });
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST", headers: conversationHeaders(plan.conversation) });
     set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
@@ -536,9 +552,9 @@ export async function acceptBrief(todoId: string, askedAt: string): Promise<"acc
 
 /** The Handled button of a question in a `brief` item's `later` list: "marked", or "handled" when the hub says it is not in
  *  the queue any more (marked before, its to-do ended, or 7 days). Any other failure throws. */
-export async function handledLater(id: string): Promise<"marked" | "handled"> {
+export async function handledLater(id: string, conversation: string): Promise<"marked" | "handled"> {
   try {
-    await api(`/later/${enc(id)}/handled`, { method: "POST" });
+    await api(`/later/${enc(id)}/handled`, { method: "POST", headers: conversationHeaders(conversation) });
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) return "handled";
     throw e;
