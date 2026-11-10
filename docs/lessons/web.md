@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## Gate identity chrome by installed assistants, not by roster availability (#3967)
+
+A roster with one assistant does not need assistant identity or switching UI. Reuse the installed-assistant cardinality
+rule used by conversation titles and list grouping; offline installed assistants count and pending installs do not.
+Restore the earlier product header and its existing controls rather than hiding the whole header, which would also
+remove appearance, Settings and Disconnect. Keep product branding and the user's chosen Persona look separate from
+roster name/monogram attribution. Regress one → two → one on a mounted view, along with one installed plus a pending
+install, and assert the rendered labels, avatars and menu rows rather than only the count helper. A phone's menu and
+drawer own separate history entries: wait for each closing entry to pop before the next full-page navigation, or a
+late Back can replace the requested Inbox page with the previous main conversation. Prefer the built web preview for
+broad E2E runs on a busy machine; thousands of Vite development modules can exhaust Chromium's renderer resources.
+
 ## Retention mode changes must not save an intermediate window (#3780, #3862)
 
 Switching from forever to finite retention only exposes a local draft: saving a default such as 365 days first can
