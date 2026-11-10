@@ -292,9 +292,11 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		releaseGates()
 		gateEnv, releaseGates = nil, func() {} // no commands to gate: it has no Bash
 	}
+	cleanupMCP := func() {}
 	started := false
 	defer func() {
 		if !started {
+			cleanupMCP()
 			releaseGates()
 		}
 	}()
@@ -325,6 +327,10 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		shell, err := interactiveShell()
 		if err != nil {
 			return nil, err
+		}
+		args, cleanupMCP, err = assistantCLIMCPFlags(args)
+		if err != nil {
+			return nil, fmt.Errorf("prepare assistant MCP config: %w", err)
 		}
 		cmd = n.assistantCLICommand(shell, launcher, cwd, args, env)
 	}
@@ -372,6 +378,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 	go n.readAssistant(p, stdout)
 	go func() {
 		_ = cmd.Wait()
+		cleanupMCP()
 		releaseGates()
 		liveAssistants.Delete(p)
 		close(p.exited)
@@ -384,11 +391,17 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		if wasSpare {
 			n.spare = nil
 		}
+		var recovery *assistantTurnRecovery
 		if n.procs[id] == p {
 			delete(n.procs, id)
+			recovery = n.recoveries[id] // a current process that exits without a result must not leave a working placeholder
 		}
 		n.mu.Unlock()
 		if wasSpare {
+			return
+		}
+		if recovery != nil {
+			n.finishAssistantRecoveryOnExit(p, recovery)
 			return
 		}
 		n.emitDelta(id, "")

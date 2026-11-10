@@ -2,7 +2,7 @@ package assistant
 
 import (
 	"context"
-	"regexp"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -53,6 +54,18 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 	if reply == "" {
 		return &proto.WorkState{}, false, nil
 	}
+	co, coArtifacts, hasCloseout := closeout.Parse(reply)
+	if hasCloseout {
+		s.checkCloseout(ctx, &co, coArtifacts)
+		if closeoutDisproved(co) {
+			// It says merged or deployed and it is not: nobody can call this turn finished. Unsure, with the closeout
+			// and what was found kept for whoever looks.
+			return &proto.WorkState{Closeout: &co, Artifacts: workArtifacts(coArtifacts), By: "rule"}, false, nil
+		}
+	}
+	if hasCloseout && co.Status == proto.CloseoutDone {
+		return closeoutDone(co, coArtifacts, s.lang(ctx)), false, nil // its own closeout says so: no model
+	}
 	others, byShort := triageOthers(machine, c.SessionID, v.sessions(machine))
 	name := machine
 	if d, ok := v.device(machine); ok && d.Name != "" {
@@ -86,7 +99,11 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		text := strings.TrimSpace(q.Question)
 		return text == "" || !strings.Contains(reply, text) || !explicitUserRequest(text)
 	})
-	return triageWork(out, byShort, time.Now(), s.lang(ctx)), same, nil
+	w = triageWork(out, byShort, time.Now(), s.lang(ctx))
+	if hasCloseout {
+		w = withCloseout(w, co, coArtifacts)
+	}
+	return w, same, nil
 }
 
 // Interactions returns newest first. Deferral, delegation and permission approval are not user decisions on questions.
@@ -116,8 +133,8 @@ func triageAnswered(records []db.InteractionRecord) []prompts.AgentAnswerItem {
 }
 
 // A model may select a request, never turn a statement into one. The prompt handles intent; this checks its evidence.
-var userRequest = regexp.MustCompile(`(?i)^(?:请(?:你|您)?(?:确认|选择|提供|告诉|决定|批准|授权|登录|打开|回复|帮我|在)|麻烦|你决定|需要(?:你|您)(?:确认|选择|提供|决定|批准|授权)|(?:please\s+)?(?:confirm(?:\s+to)?|choose|select|provide|tell|approve|authorize|sign in|log in|open|visit|let me know|reply)\b|(?:確認|選択|承認|入力|ログイン)してください)`) // i18n-ignore: match literal request syntax, not UI text
-var requestAnnotation = regexp.MustCompile(`\s*(?:\([^()\n]*\)|（[^（）\n]*）|\[[^\[\]\n]*\]|【[^【】\n]*】)$`)
+var userRequest = lazyre.New(`(?i)^(?:请(?:你|您)?(?:确认|选择|提供|告诉|决定|批准|授权|登录|打开|回复|帮我|在)|麻烦|你决定|需要(?:你|您)(?:确认|选择|提供|决定|批准|授权)|(?:please\s+)?(?:confirm(?:\s+to)?|choose|select|provide|tell|approve|authorize|sign in|log in|open|visit|let me know|reply)\b|(?:確認|選択|承認|入力|ログイン)してください)`) // i18n-ignore: match literal request syntax, not UI text
+var requestAnnotation = lazyre.New(`\s*(?:\([^()\n]*\)|（[^（）\n]*）|\[[^\[\]\n]*\]|【[^【】\n]*】)$`)
 
 func explicitUserRequest(text string) bool {
 	text = strings.TrimSpace(text)

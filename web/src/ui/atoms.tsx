@@ -221,7 +221,9 @@ export function Spinner({ size = 12 }: { size?: number }) {
 /** An on / off switch (role=switch): the knob slides over 200 ms with the design system's ease (reduced motion: at once).
  *  Settings' rows, and the chat's and "New agent"'s ultracode switch (#3428). `className`: added to the track (a place
  *  that needs its grayed state drawn more clearly); without it the switch is as before. */
-export function Switch({ on, onChange, disabled, label, className, describedBy }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string; describedBy?: string }) {
+/** The one on/off switch, iOS-style (#3675): a green or grey track and a white knob with a soft shadow and no ring
+ *  (`--switch-on`, `--switch-off`, `--shadow-knob`). The `switch` class gives it a pill-shaped ring on keyboard focus only. */
+export function Switch({ on, onChange, disabled, label, className, describedBy, title }: { on: boolean; onChange: (on: boolean) => void; disabled?: boolean; label: string; className?: string; describedBy?: string; title?: string }) {
   return (
     <button
       type="button"
@@ -229,11 +231,12 @@ export function Switch({ on, onChange, disabled, label, className, describedBy }
       aria-checked={on}
       aria-label={label}
       aria-describedby={describedBy}
+      title={title}
       disabled={disabled}
       onClick={() => onChange(!on)}
-      className={cx("touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-accent" : "bg-hover-2", className)}
+      className={cx("switch touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-switch-on" : "bg-switch-off", className)}
     >
-      <span className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-btn transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
+      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
     </button>
   );
 }
@@ -733,6 +736,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
   const detailId = `${useId()}-detail`;
   const label = rowLabel(it, asking ? it.key : null);
   const detail = asking && it.confirmDetail ? it.confirmDetail : it.detail;
+  const tag = it.tag && <span className="ml-1.5 inline-block rounded-[5px] bg-ai-tint px-1.5 align-[1px] text-[10.5px] leading-[1.5] font-medium whitespace-nowrap text-ai">{it.tag}</span>;
   return (
     <button
       ref={refCb}
@@ -751,20 +755,24 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
         it.wrap || detail ? "min-h-8 py-1.5" : "h-8",
         it.danger ? "text-red" : "text-ink",
         asking && "bg-red-tint font-medium",
+        it.dim && "opacity-55",
       )}
     >
       {it.state && <StatusMark state={it.state} />}
+      {it.lead}
       {it.icon && <Icon name={it.icon} size={14} className={it.danger ? "" : "text-ink-3"} />}
       {detail ? (
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
-          <span className="block break-words">{label}</span>
+          <span className="block break-words">{label}{tag}</span>
           <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words text-ink-3">{detail}</span>
         </span>
       ) : (
-        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}</span>
+        <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
       )}
       {it.state && <StatePill state={it.state} />}
+      {!working && !!it.badge && <span data-menu-badge aria-hidden={it.badgeLabel ? true : undefined} className="flex h-4.5 min-w-4.5 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10.5px] font-semibold whitespace-nowrap text-attention tabular-nums">{it.badge > 99 ? "99+" : it.badge}</span>}
+      {!working && !!it.badge && it.badgeLabel && <span className="sr-only">{it.badgeLabel}</span>}
       {working ? <Spinner size={12} /> : it.hint && <span className="shrink-0 text-[11px] text-ink-3">{it.hint}</span>}
       {it.checked !== undefined && <Icon name="check" size={13} stroke={2.5} className={cx("shrink-0", it.checked ? "text-ink" : "invisible")} />}
       {accel && !working && <span aria-hidden className={cx("w-3.5 shrink-0 text-center text-[11px]", it.danger ? "" : "text-ink-3")}>{accel}</span>}

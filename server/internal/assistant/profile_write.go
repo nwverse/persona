@@ -72,6 +72,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("idle_close_hours must be 0–8760"))
 		return
 	}
+	if d := in.ArchiveClosedDays; d != nil && (*d < 0 || *d > maxArchiveClosedDays) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("archive_closed_days must be 0–3650"))
+		return
+	}
 	if in.Timezone != "" {
 		if _, err := time.LoadLocation(in.Timezone); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -129,11 +133,17 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.IdleCloseHours != nil {
 			v.IdleCloseHours = in.IdleCloseHours
 		}
+		if in.ArchiveClosedDays != nil {
+			v.ArchiveClosedDays = in.ArchiveClosedDays
+		}
 		if in.DoneNeedsDelivery != nil {
 			v.DoneNeedsDelivery = in.DoneNeedsDelivery
 		}
 		if in.ReviewSamplePercent != nil {
 			v.ReviewSamplePercent = in.ReviewSamplePercent
+		}
+		if in.InterjectBackground != nil {
+			v.InterjectBackground = in.InterjectBackground
 		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode

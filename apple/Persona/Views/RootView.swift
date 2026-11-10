@@ -484,7 +484,7 @@ private struct TabPage<Page: View>: View, Equatable {
             }
             .equatable()
         }
-        .badge(InboxStore.shared.actionCount)
+        .badge(InboxStore.shared.unreadCount)
     }
 }
 
