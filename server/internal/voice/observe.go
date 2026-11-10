@@ -381,14 +381,14 @@ func activityIn(l i18n.Lang, activity string) string {
 // away: nothing triages then).
 func (t *tracker) triage(ctx context.Context) triageSwitches {
 	if t.c.target == nil || t.c.target.Kind != "agent" {
-		return triageSwitches{}
+		return triageOff()
 	}
 	if now := time.Now(); !now.Before(t.tri.at) {
 		sw, err := t.c.pl.hub.triage(ctx)
 		t.tri.sw, t.tri.at = sw, now.Add(triageEvery)
 		if err != nil {
 			t.c.logf("the hub's triage switches: %s (taken as off)", hubOutcome(err))
-			t.tri.sw, t.tri.at = triageSwitches{}, now.Add(triageRetry)
+			t.tri.sw, t.tri.at = triageOff(), now.Add(triageRetry)
 		}
 	}
 	return t.tri.sw
@@ -440,13 +440,17 @@ func (t *tracker) untilTriaged(ctx context.Context, r *voiceRun, s *proto.Sessio
 	if s.TurnErrorKind == proto.TurnErrorTransient && r.Seen { // not an earlier turn's
 		r.transient = true
 	}
+	failed := strings.TrimSpace(s.TurnError) != "" && s.TurnErrorKind != proto.TurnErrorUser
 	switch {
-	case !tri.Enabled || now.Sub(r.stopAt) >= triageWait:
+	case now.Sub(r.stopAt) >= triageWait:
 		return false
+	case !tri.Enabled:
+		// Only a transient error is followed with the triage off (transient_retry, #3208).
+		return tri.transientOn() && failed && s.TurnErrorKind != proto.TurnErrorUsageLimit
 	case r.waitOn != "":
 		return true // woken from a wait
 	}
-	return tri.AutoContinue && strings.TrimSpace(s.TurnError) != "" && s.TurnErrorKind != proto.TurnErrorUser
+	return failed && (tri.AutoContinue || tri.transientOn() && s.TurnErrorKind != proto.TurnErrorUsageLimit)
 }
 
 // keepTold: r's answer was just said (state, res); it is kept until the hub's triage of that turn is in, which may
