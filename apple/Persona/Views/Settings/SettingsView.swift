@@ -11,7 +11,7 @@ struct SettingsView: View {
     @State private var showPair = false
     @State private var storage: Int64?
     @State private var plugins: [HubExtension]?
-    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI 插槽」).
+    /// Where links in the plugins' cards open (docs/extensions/extensions.md「UI slots」).
     @State private var pluginLink: LinkTarget?
     @StoredValue(TranslationPrefs.enabledKey) private var translating = false
     @StoredValue(TranslationPrefs.targetKey) private var translateTarget = TranslationPrefs.defaultTarget
@@ -75,7 +75,7 @@ struct SettingsView: View {
                 if !model.isDemo { ChecklistSettingsRow() }
 
                 #if os(iOS) || os(visionOS)
-                // The plugins' cards and pages (docs/extensions/extensions.md「UI 插槽」): at the top, where the main navigation's
+                // The plugins' cards and pages (docs/extensions/extensions.md「UI slots」): at the top, where the main navigation's
                 // entries are on an iPhone (the Mac has them in its sidebar).
                 ExtensionSlotsSettingsSection(link: $pluginLink)
                 #endif
@@ -276,7 +276,7 @@ struct SettingsView: View {
             #endif
             .themedPage()
             .pageToolbar {
-                    // As a sheet over the shell (docs/apple/ios.md「新外壳」): ChatGPT's × to close it.
+                    // As a sheet over the shell (docs/apple/ios.md「New shell」): ChatGPT's × to close it.
                     if shell != nil || inSheet {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button { model.shellSettings = false } label: { Label("Close", systemImage: Theme.Icon.close) }
@@ -499,17 +499,17 @@ enum SettingsPage: Hashable {
     /// the id; nil: the default's).
     case plugins
     case plugin(String, manager: String? = nil)
-    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「声明式 UI」), titled until its View says
+    /// A page a plugin draws (placement plugin_page, docs/extensions/extensions.md「Declarative UI」), titled until its View says
     /// otherwise; `manager`: the plugin's (nil: the default's).
     case pluginPage(plugin: String, ui: String, title: String, manager: String? = nil)
-    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「扩展市场」).
+    /// Settings › Extensions › Extension Market, one plugin of a market, and the markets (docs/extensions/extensions.md「Extension marketplace」).
     case pluginMarket
     case marketExtension(market: String, id: String)
     case pluginMarkets
     /// Settings › Channels, and one channel by its id (docs/extensions/channels.md).
     case channels
     case channel(String)
-    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// Settings › hub › SSH Tunnel of one paired hub (its id; docs/operations/network.md「Connecting to hub through SSH」).
     case sshTunnel(String)
     case inAppTunnel(String)
     /// Settings › hub › Local Proxy of one paired hub (docs/operations/network.md "Connecting to hub through a local SOCKS5 proxy").
@@ -934,7 +934,7 @@ struct PairView: View {
     var start: Start = .scan
     @State private var url = ""
     @State private var token = ""
-    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「经 SSH 隧道连 hub」).
+    /// The SSH tunnel set up here, for a hub this device cannot reach directly (docs/operations/network.md「Connecting to hub through SSH」).
     @State private var ssh: SSHRoute?
     #if os(macOS)
     @State private var editingSSH = false

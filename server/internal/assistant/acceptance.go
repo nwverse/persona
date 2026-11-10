@@ -21,7 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// "Please verify" (#2768, docs/extensions/bots.md "Please verify"): once a task's work is deployed, the hub keeps an ask for the user to try it —
+// "Please verify" (#2768, docs/extensions/bots.md "Task progress and review requests"): once a task's work is deployed, the hub keeps an ask for the user to try it —
 // three lines: what changed, where to look (a link straight to the page), how to check. With the bot on (and its task reports
 // on) the ask goes out as a Feishu card with "Pass" on it; without, it is kept all the same (NoCard) and the briefing, the
 // board and the web app show it. "Pass" (the button, a reply saying so, or the web Accept button) marks the task verified; any other reply to the card is written into the todo's

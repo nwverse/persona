@@ -262,7 +262,7 @@ Use an invalidation revision as the task key and handle the flag after completio
   (~45 in a long Persona main chat, 2026-11-01). Chat bubbles, replies, work rows and composer all use `Equatable` + `.equatable()`, comparing only messages;
   permanently mounted but hidden content (closed sidebar) must not read changing `allSessions`; use its previous value while hidden.
   Streaming full text arrives every 80 ms: split and cache completed blocks (`StreamChunks`), redraw only the last. Measurement: `docs/operations/testing.md` ("Persona page (long main chat)").
-- Do not sort lists by last update or let pushes touch them while scrolling (2026-11-01, TestFlight 77, `docs/archive/apple/live-updates.md` ("Forced refresh while scrolling")).
+- Do not sort lists by last update or let pushes touch them while scrolling (2026-11-01, TestFlight 77, `docs/archive/apple/live-updates.md` ("Forced refreshes while scrolling")).
   Real hub pushes a machine's sessions every 2 seconds with new `updated_at`; state + last-update sorting reordered spaces on 36% of pushes and jumped the screen.
   - Sort by a time independent of each output: working sessions by work start (`Session.sortDate`, `SpaceGroup.sortDate`).
   - Hold pushes during touch, inertia, covered pages or another tab; land together 0.5 seconds after stopping, at most 5 seconds even with continuous scrolling;
@@ -781,7 +781,7 @@ Queries always use `get(_:query:)`. Found only by mock logs (`MISSING GET …%3F
 - Processing one pairing link twice (scan + system-camera link, repeated scan callbacks) caused second `pair()` to write the exchanged temporary token back and fail exchange 401.
   Already-exchanged links retain device token (`DeviceCredentialTrade.keepsDevice`).
 - Handshake 401 (`URLSessionWebSocketTask.response` status) is not unreachable: `LiveConnection.rejected` shows Pairing expired and Pair again, slowing retries to 60 seconds (public auth failures trigger address blocking).
-- Reproduce with `MOCK_PAIR_TOKEN=jp_…` fake hub, `-openWelcome YES -openPairLink <link> -openPairLinkTimes 2`; alternate-address case in `docs/operations/testing.md` ("Temporary-code pairing").
+- Reproduce with `MOCK_PAIR_TOKEN=jp_…` fake hub, `-openWelcome YES -openPairLink <link> -openPairLinkTimes 2`; alternate-address case in `docs/operations/testing.md` ("Mock-data screenshots").
 
 ## Session cells are for display, not sending (2026-11-03, #624)
 
@@ -871,7 +871,7 @@ Do this **before** `rebuild` splits by last message; only `buildRows` is too lat
 `AVAssetExportSession` is not Sendable: `Task { for await s in session.states(updateInterval:) … }` fails Swift 6 with
 "passing closure as a 'sending' parameter risks causing data races". Obtain `let states = session.states(updateInterval: 0.25)` outside Task,
 then iterate only that sequence. Use picker `preferredItemEncoding: .current`, otherwise the system first transcodes HEVC (long 4K wait);
-app chooses transcoding by size (`VideoPrep`, docs/protocol/protocol.md "Sending video").
+app chooses transcoding by size (`VideoPrep`, docs/protocol/protocol.md "Sending videos").
 ## Telegram-style reply bubbles for quotes (2026-11-03, #986)
 
 - **Bubble width follows its widest piece**: a quote with `frame(maxWidth: .infinity)` inside normal `VStack` expands the bubble to full row width.
@@ -996,7 +996,7 @@ Inspect magnified corner crops and compare outside-corner pixels with the same s
 ## QuickLook Office files (2026-11-04, #1300)
 
 - xlsx displays stored formula values only, never calculates. Missing cached values leave totals blank. Write calculated values when generating workbooks (`personad office`, `docs/assistant/office.md` ("Formula values")).
-- QuickLook ignores docx borders only in table styles, `startOverride` numbering, and page breaks (squares). See `docs/assistant/office.md` ("Verification").
+- QuickLook ignores docx borders only in table styles, `startOverride` numbering, and page breaks (squares). See `docs/assistant/office.md` ("How it was verified").
 
 ## Ask Persona shortcut unexpectedly quits: Release stripped reflection names (2026-11-04, #990)
 
@@ -1014,7 +1014,7 @@ Inspect magnified corner crops and compare outside-corner pixels with the same s
 
 ## Hidden WKWebView snapshots: transparency, offsets, missing text (2026-11-04, #1295)
 
-Formulas / diagrams (`MarkdownRenderer`, `docs/apple/ios.md` ("Formulas and diagrams")) render in invisible WKWebView then `takeSnapshot`. Several traps all looked like empty images:
+Formulas / diagrams (`MarkdownRenderer`, `docs/apple/ios.md` ("Math and diagrams")) render in invisible WKWebView then `takeSnapshot`. Several traps all looked like empty images:
 - **View alpha enters snapshots**: `alpha = 0.01` made nearly transparent snapshots, invisible as template images. Use alpha 1, bottom window layer and offscreen frame. Web views outside any window cannot snapshot content.
 - **Window attachment adds safe-area content inset**: page shifted ~80 pt, leaving only formula top within `getBoundingClientRect` crop. Set `scrollView.contentInsetAdjustmentBehavior = .never`.
 - **`file://` cannot load bundled fonts**: CORS with opaque file origin blocked KaTeX woff 2; text invisible during font block (Mermaid system fonts worked). Inline fonts as data URLs in CSS (`font-src data:`). KaTeX relatively positions numerator / scripts outside their own boxes; crop the union of all descendant rectangles and avoid drawing against page top-left.

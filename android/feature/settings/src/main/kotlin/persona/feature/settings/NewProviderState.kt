@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * "New model provider" (docs/integrations/launchers.md "From extension"): typed in, or - when the hub's extensions offer presets - taken from one,
+ * "New model provider" (docs/integrations/launchers.md "Adding from extensions"): typed in, or - when the hub's extensions offer presets - taken from one,
  * where only the name, the key and maybe another of its models are filled in and the hub adds the rest.
  */
 internal data class NewProviderDraft(

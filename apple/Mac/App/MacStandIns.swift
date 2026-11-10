@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Mac versions of the iOS app's system integrations that have no macOS counterpart (docs/apple/mac.md「Mac 上没有的」).
+// Mac versions of the iOS app's system integrations that have no macOS counterpart (docs/apple/mac.md「Approach」).
 // Same names and calls as on iOS, so AppModel and the pages stay as they are.
 
 /// Live Activities / the Dynamic Island do not exist on a Mac. The hub's fleet state is kept here for the

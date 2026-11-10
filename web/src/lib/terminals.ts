@@ -1,4 +1,4 @@
-// The terminal browser's tree (docs/integrations/terminal.md "Standalone terminals"): what a machine's node lists (`GET /machines/{mid}/panes`:
+// The terminal browser's tree (docs/integrations/terminal.md "Standalone terminal"): what a machine's node lists (`GET /machines/{mid}/panes`:
 // workspaces, tabs and panes of its terminal host, agent or plain shell) turned into the rows the page shows, plus the
 // Jump-To filter and which terminals the page keeps alive. Pure, so it is tested without a DOM.
 import { t } from "../i18n";

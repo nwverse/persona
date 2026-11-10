@@ -29,6 +29,7 @@ type fleetDevs struct {
 	machines map[string]*fleetNode
 	order    []string
 	usage    assistantwire.UsageSummary
+	capacity proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
 	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
@@ -197,6 +198,12 @@ func (d *fleetDevs) Usage() assistantwire.UsageSummary {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.usage
+}
+
+func (d *fleetDevs) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.capacity
 }
 
 func (d *fleetDevs) SetAttention(a link.Attention) {

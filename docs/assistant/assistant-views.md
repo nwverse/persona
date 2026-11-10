@@ -60,7 +60,7 @@ Extension Action.id / push.ui / push.state and existing action results remain un
 
 ### Persistent submission
 
-API: `POST /api/v1/assistant/conversations/{conversation}/views/{key}/actions`, with generated `ViewActionInput` `{action, page?, values?, client_msg_id, confirmed?, expected_version?}`. **The server retrieves the original reply text and submit definition from the saved View; clients cannot override them**. Fields and error responses follow `docs/protocol/protocol.md` ("Assistant").
+API: `POST /api/v1/assistant/conversations/{conversation}/views/{key}/actions`, with generated `ViewActionInput` `{action, page?, values?, client_msg_id, confirmed?, expected_version?}`. **The server retrieves the original reply text and submit definition from the saved View; clients cannot override them**. Fields and error responses follow `docs/protocol/protocol.md` ("REST (App → hub)").
 
 - `expected_version` is the whole-card version the user saw and confirmed (body cards are always 1). Required for actions with confirm; the hub compares it inside a transaction locking the card. On mismatch, return 409 `view_changed` and the current card; the client preserves drafts, refreshes, and asks the user to reconfirm, without automatically retrying against the new version. Thus, if the hub updates a card while the confirmation dialog is open and the update event has not reached the phone, the new definition is not treated as user-confirmed.
 

@@ -812,7 +812,7 @@ export function createRuntime(driver, options) {
       return [...phoneDriven.keys()].slice(-TOUCHED).includes(id)
     },
     /**
-     * Which of a runtime's sessions to list (docs/integrations/runtimes.md "List"): those pinned (running, waiting for an answer) and
+     * Which of a runtime's sessions to list (docs/integrations/runtimes.md "What to implement"): those pinned (running, waiting for an answer) and
      * those the phone touched always; the rest updated within `days`, newest first, until `max` in all. Rows are
      * anything; `id(row)` and `updatedAt(row)` (ms) read them (by default a runtime.sessions row). Newest first.
      * @template T

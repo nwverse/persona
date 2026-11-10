@@ -1,4 +1,4 @@
-// What can be done with one item besides reading it (docs/assistant/inbox.md "What you can do with one item"): "AI draft reply" (a reply in the
+// What can be done with one item besides reading it (docs/assistant/inbox.md "Item actions"): "AI draft reply" (a reply in the
 // user's voice, edited and sent from here) and "Hand to AI" (the item as <persona-context> to Persona or a running agent;
 // Persona's main conversation may then write back to the item).
 import { chooseManager, noteConversation, otherManager, ownerHeaders } from "../../lib/manager-choice";
