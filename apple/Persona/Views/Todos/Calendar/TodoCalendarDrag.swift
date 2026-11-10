@@ -33,7 +33,7 @@ struct CalendarMoves {
 /// Where on a day or week's time axis a dragged to-do would land, from the parts' frames in the timeline's coordinate
 /// space: on the axis its top edge `grab` above the finger, in the day's column under the finger; on a day's All Day
 /// row, all day; nowhere above the row or below the axis.
-struct TimelineDropMap: Equatable {
+nonisolated struct TimelineDropMap: Equatable {
     /// The timeline's width, the hours' column at its left, how many days.
     var width: CGFloat = 0
     var gutter: CGFloat = 0
@@ -45,7 +45,7 @@ struct TimelineDropMap: Equatable {
     /// An hour's height on the axis.
     var hour: CGFloat = 1
 
-    enum Spot: Equatable {
+    nonisolated enum Spot: Equatable {
         case allDay(day: Int)
         case axis(day: Int, minutes: Double)
     }
@@ -80,7 +80,7 @@ struct TimelineDropMap: Equatable {
 
 /// Where on a month a dragged to-do would land: the day under the finger, from the grid's part in sight (the scroll
 /// view, in the month's coordinate space), how far it is scrolled and a day's height.
-struct MonthDropMap: Equatable {
+nonisolated struct MonthDropMap: Equatable {
     var grid = CGRect.zero
     var scrolled: CGFloat = 0
     var cell: CGFloat = 1

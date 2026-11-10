@@ -164,7 +164,7 @@ struct TodoCalendarView: View {
     /// What the grids do with a to-do moved on them: iOS and iPadOS only (the Mac app is frozen).
     private var moves: CalendarMoves? {
         #if os(iOS)
-        CalendarMoves(
+        return CalendarMoves(
             drop: { entry, drop in
                 guard case .todo(let id) = entry.source, TodoCalendar.moves(entry, to: drop, calendar: calendar) else { return }
                 TodoCalendarMove.save(id, to: TodoCalendar.due(drop, calendar: calendar))
@@ -175,7 +175,7 @@ struct TodoCalendarView: View {
             },
             carrying: { carrying = $0 })
         #else
-        nil
+        return nil
         #endif
     }
 

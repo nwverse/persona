@@ -70,6 +70,10 @@ final class TodoCalendarTests: XCTestCase {
         app.buttons["todo.calendar.newAdd"].tap()
         XCTAssertTrue(wait { try self.todos(hub).contains { $0["title"] as? String == "日历里记的事" && $0["due_date"] is String } })
         XCTAssertTrue(entry("日历里记的事").waitForExistence(timeout: 10))
+        // the mock as it was, for the tests after this one (a to-do due today, all day, would be today's first line)
+        for t in try todos(hub) where t["title"] as? String == "日历里记的事" {
+            try send(hub, "DELETE", "/api/v1/todos/\(t["id"] as? String ?? "")")
+        }
 
         // The bar under the calendar goes back to the list.
         app.descendants(matching: .any)["todo.calendar.undated"].tap()
@@ -104,10 +108,11 @@ final class TodoCalendarTests: XCTestCase {
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
         calendarSwitch.tap()
         app.buttons["日"].tap()
-        let review = entry("检查 PR #42")
-        XCTAssertTrue(review.waitForExistence(timeout: 60))
         let cal = Calendar.current
         let ten = cal.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        try resetReview(hub, to: ten)
+        let review = entry("检查 PR #42")
+        XCTAssertTrue(review.waitForExistence(timeout: 60))
         /// Checks the mock's to-do (not before), then Undo on the toast puts it back at 10:00 today.
         func expectSaved(_ what: String, at: Date? = nil, day: String? = nil, visible: Bool = true) {
             guard !before else { return }
@@ -196,11 +201,12 @@ final class TodoCalendarTests: XCTestCase {
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
         calendarSwitch.tap()
         app.buttons["日"].tap()
+        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        try resetReview(hub, to: ten)
         let review = entry("检查 PR #42")
         XCTAssertTrue(review.waitForExistence(timeout: 60))
         let start = review.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         start.click(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: Self.hour)), withVelocity: .slow, thenHoldForDuration: 0.3)
-        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
         XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: ten.addingTimeInterval(3600), day: nil) },
                       "\((try? self.due(hub, "todo_review")).map { "\($0)" } ?? "?")")
         let undo = app.buttons["toast-action"]
@@ -217,6 +223,8 @@ final class TodoCalendarTests: XCTestCase {
         }
         guard ProcessInfo.processInfo.environment["PERSONA_BEFORE"] == nil else { throw XCTSkip("not in the app before #2045") }
         continueAfterFailure = false
+        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
+        try resetReview(hub, to: ten)
         app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", pair, "-tab", "assistant", "-openAssistantPage", "todos",
@@ -225,14 +233,14 @@ final class TodoCalendarTests: XCTestCase {
         app.launchPinned()
         let calendarSwitch = app.buttons["日历"]
         XCTAssertTrue(calendarSwitch.waitForExistence(timeout: 60))
-        calendarSwitch.tap()
+        // The sheet opens with the calendar: at once when the page opens on it (a tap above the sheet would close it).
         let allDay = app.switches["todo.calendar.rescheduleAllDay"]
+        if !allDay.waitForExistence(timeout: 3) { calendarSwitch.tap() }
         XCTAssertTrue(allDay.waitForExistence(timeout: 30))
         XCTAssertTrue(app.navigationBars["改截止时间"].exists)
         shot("reschedule-sheet")
         allDay.switches.firstMatch.tap()
         app.buttons["todo.calendar.rescheduleSave"].tap()
-        let ten = Calendar.current.date(bySettingHour: 10, minute: 0, second: 0, of: .now)!
         XCTAssertTrue(wait { try self.due(hub, "todo_review") == Due(at: nil, day: self.dayKey(ten)) })
         let undo = app.buttons["toast-action"]
         XCTAssertTrue(undo.waitForExistence(timeout: 10))
@@ -249,6 +257,35 @@ final class TodoCalendarTests: XCTestCase {
     @MainActor private func drag(_ element: XCUIElement, to target: XCUICoordinate) {
         element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.6, thenDragTo: target, withVelocity: .slow, thenHoldForDuration: 0.5)
+    }
+
+    /// "检查 PR #42" due today at 10:00 again, whatever an earlier run left.
+    private func resetReview(_ hub: String, to ten: Date) throws {
+        try send(hub, "PATCH", "/api/v1/todos/todo_review", ["due_at": ISO8601DateFormatter().string(from: ten)])
+    }
+
+    /// A request to the mock hub, waited for; fails the test on an error status.
+    private func send(_ hub: String, _ method: String, _ path: String, _ body: [String: Any]? = nil) throws {
+        var req = URLRequest(url: URL(string: hub + path)!)
+        req.httpMethod = method
+        req.setValue("Bearer mock", forHTTPHeaderField: "Authorization")
+        if let body {
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let done = expectation(description: "\(method) \(path)")
+        let status = Status()
+        URLSession.shared.dataTask(with: req) { _, response, _ in
+            status.code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 10)
+        XCTAssertTrue((200..<300).contains(status.code), "\(method) \(path): \(status.code)")
+    }
+
+    /// A response's status, set on URLSession's queue and read once the request is done.
+    private final class Status: @unchecked Sendable {
+        var code = 0
     }
 
     private struct Due: Equatable {
