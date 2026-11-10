@@ -6,8 +6,10 @@ import "strings"
 // hub an extension's token may call names one (extmgr/extension_scopes.go); a route naming none is for full tokens
 // only.
 const (
-	ScopeKBRead        = "kb.read"
-	ScopeKBWrite       = "kb.write"
+	ScopeKBRead  = "kb.read"
+	ScopeKBWrite = "kb.write"
+	// ScopeSentRead reveals which archived messages Persona sent as the user (kb.day).
+	ScopeSentRead      = "sent.read"
 	ScopeInboxRead     = "inbox.read"
 	ScopeInboxWrite    = "inbox.write"
 	ScopeAgentsRead    = "agents.read"
@@ -17,6 +19,9 @@ const (
 	ScopeAssistantAsk  = "assistant.ask"
 	ScopeTodosRead     = "todos.read"
 	ScopeTodosWrite    = "todos.write"
+	// ScopeAgentsPermissionMode: changing the permission mode of a conversation the extension opened itself, and of no
+	// other (the hub checks who opened it: hub/extension_modes.go).
+	ScopeAgentsPermissionMode = "agents.permission_mode"
 	// ScopeModels: calling a model through the hub (model.complete) on the extension's own purpose in Settings ›
 	// Models; never a key (#6102).
 	ScopeModels = "models"

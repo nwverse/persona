@@ -192,6 +192,18 @@ nonisolated struct LauncherCheck: Codable, Hashable, Sendable {
     var error: String?
 }
 
+extension LauncherCheck {
+    /// The row for a check whose request failed (#1901), as web and Android show it: what the hub said when it answered
+    /// (the computer went offline, the node call failed or timed out, no machine to test on), a timeout's words included;
+    /// "The request didn't finish" only when nothing answered (a client timeout, no network) or it was cancelled.
+    nonisolated static func failed(_ error: any Error) -> LauncherCheck {
+        let reason: String?
+        if let api = error as? APIError { reason = api.message.isEmpty ? nil : api.localizedDescription }
+        else { reason = error.shown }
+        return LauncherCheck(ok: false, millis: 0, error: reason ?? String(localized: "The request didn't finish"))
+    }
+}
+
 /// A launcher added or changed in the app; an empty `apiKey` on a change keeps the key.
 nonisolated struct LauncherInput: Encodable, Sendable {
     var name: String
@@ -397,8 +409,13 @@ nonisolated struct LauncherPreset: Decodable, Hashable, Sendable, Identifiable {
               let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http", u.host() != nil else { return nil }
         return u
     }
-    /// The hub's key test speaks the Messages protocol only: a Responses API cannot be tested.
-    var testable: Bool { !(kind == "api" && api == "responses") }
+    /// Claude Code needs a Messages endpoint; Responses and Chat Completions serve only the hub's direct-API calls.
+    var runsClaude: Bool { kind != "api" || api == nil || api == "" || api == "messages" }
+    /// The hub's key test supports Messages, Responses and Chat Completions (an empty protocol means Messages).
+    var testable: Bool {
+        guard let api, !api.isEmpty else { return true }
+        return ["messages", "responses", "chat"].contains(api)
+    }
     /// The host it talks to, "" when the address does not parse.
     var host: String { URL(string: baseURL)?.host() ?? "" }
 

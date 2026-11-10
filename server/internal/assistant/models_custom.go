@@ -12,7 +12,6 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Model ids the user typed (#1644, docs/assistant/model-config.md "Typing a model ID"). New Agent, a running
@@ -45,7 +44,7 @@ func (c customModel) of(machine, launcher string) bool {
 
 // errModelInvalid refuses a model that is not a model id, saying which.
 func errModelInvalid(model string) error {
-	return i18n.Err("assistant-models.err_model_invalid", i18n.Args{"model": strconv.Quote(textfmt.Clip(model, 80))})
+	return i18n.Err("assistant-models.err_model_invalid", i18n.Args{"model": strconv.Quote(clip(model, 80))})
 }
 
 // checkModelID: model is none ("") or a model id.

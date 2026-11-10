@@ -167,6 +167,11 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   Scrolling doesn't affect keypresses. The 0.153 Ctrl+T pager covers subsequent approvals (`esc` in the pager edits the last message; close with `q`); 0.163 Ctrl+T only expands details.
   Headless herdr splits don't narrow panes; test small windows with `stty cols <n>` before starting Codex. `pane.send_text` forwards unchanged; bracketed paste (`\x1b[200~…\x1b[201~`) works in Codex.
 - Trusting a directory while testing Codex locally writes `~/.codex/config.toml` (`codex exec` does too). `-c projects.…trust_level` doesn't suppress the trust dialog; remove your added entry after testing.
+- Codex 0.167 asks to trust a folder only when it is a git repository (a plain `mkdir` never shows the dialog), and draws the dialog from the top of the pane. herdr's
+  `pane read --source recent --lines N` counts the blank rows under it, so the last 40 rows of a 51-row pane were all blank and the start never saw the dialog (#2351);
+  `--source visible` leaves those rows out. Headless herdr panes are 40 rows, which hides this: a live test that needs a tall pane keeps a herdr client attached in a pty
+  of that size (unset the `HERDR_*` variables, or it refuses to nest), and the size is lost once the client leaves.
+- Codex 0.167 creates a rollout empty and writes its `session_meta` line 8–19 ms later. Anything that caches what a rollout's first line says must not cache a read made before that line ends in a newline.
 - The 0.163 app-server control socket (daemon `<CODEX_HOME>/app-server-control/app-server-control.sock`, likewise `--listen unix://<path>`)
   is a symlink; the actual socket is at `<canonical /tmp>/codex-daemon-<uid>/<SHA-256 of the alias's canonical path>`. Identifying it by "Lstat says socket, not symlink"
   makes the daemon impossible to discover or connect to (as before 2026-11-02); follow only the target Codex itself computes (`codexSocketPath`). 0.153 uses a normal socket file.
@@ -176,6 +181,9 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
   Only accepted calls write an AgentMessage with `delivery: "async"`. #214 created cards from `function_call`, leaving a permanently unanswerable card; it appeared only in the first of three measured turns (2026-11-02).
 - When finding Codex rollouts by directory, `session_meta`'s `cwd` can be symlink-resolved (Codex uses the shell working directory) or the original `-C` value;
   accept both. macOS temporary `/var/…` is really `/private/var/…`: accepting only resolved paths passed every Linux test but timed out after 60 seconds on Mac (phone-created Codex, 2026-11-02).
+- Canonicalize a path that may not exist yet with `realPath`, not `filepath.EvalSymlinks` alone (2026-11-10, #2695). `EvalSymlinks` fails on a missing path, and keeping the
+  written spelling then gives one place two spellings over time: the node fixed Codex's `LegacyHome` before `~/.codex` existed, resolved `Homes` once it did, and under a linked
+  ancestor every session of the default home got a `c0de-…` ID. `realPath` resolves the longest existing ancestor. A test builds the home through an explicit link so Linux CI catches it.
 - When typing a command into a herdr pane to start Codex, don't type expanded alias words: aliases may contain keys, exposing them on screen and in shell history. Write launcher words and the first message together to a 0600 file;
   type only `personad codex-start <file>` in the pane (`codex_start.go`).
 - **Claude sessions open in Claude desktop (or another terminal)** (2026-11-01, Mac without herdr): Claude desktop runs a real `claude` process and writes
@@ -186,6 +194,10 @@ Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE
 - Codex / an internal Codex variant's sub-Agents write their own rollouts alongside the main chat, with the same directory and cwd, and newer updates. The internal variant's pre-tool automatic approval evaluation (guardian)
   is written by the same process, with its own owner file. Identifying sessions by "newest rollout / newest owner file" makes the App show the review chat, unlike the terminal (2026-11-01).
   Always inspect `thread_source` / `source.subagent` in `session_meta`; replace sub-Agent `session_id` with its main chat (`docs/integrations/codex.md`).
+- **A core chooses its own shell and layout destination** (#2532): use `terminal.run`'s returned argv for command syntax, sourcing and startup
+  probes; the node's login shell can be different. A missing foreground is unknown, not permission to type. Resolve automatic placement by
+  folder inside every layout CAS retry, updating terminal labels if the destination changes. Keep explicit space selection distinct so a
+  missing or unrecognized document cannot silently redirect it to a directory group.
 - **Classic herdr and Herdr App are separate, non-interoperable runtimes that can coexist on one computer** (2026-11-03): when Herdr App connects remotely from another computer,
   the local process is `herdr-core serve` (socket `$XDG_RUNTIME_DIR/herdr-core/<session>.sock`, state `~/.local/state/herdr-core/`),
   alongside `herdr remote-client-bridge` and `peers.json`; terminal tabs live in `doc.get("herdr-app")`. It and terminal `herdr server`
@@ -292,6 +304,13 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
   yields only "Not logged in · Please run /login". If the user selected a working launcher in "New Agent", use it (hub passes it to node, which uses it only when neither of the first two choices exists).
 - Keep the session's original model on resume (`sessionState.Model`); switch to the "New Agent" model only when using the hub-selected launcher.
 
+## `--resume` without `--model` brings back the session's last model (2026-11-09, #2487, 2.1.296)
+
+- Claude Code restores the model a resumed session last ran on. Only `--model`, `ANTHROPIC_MODEL` or an `ANTHROPIC_DEFAULT_*_MODEL` stops it; `"model"` in `settings.json` or `--settings` does not.
+  The main chat had no model configured, so the app said "Claude Code default", but every `--resume` kept the model an earlier start had used. When the gateway dropped that model, every turn failed (`model_not_found`, later a 503 retried ten times), and changing Claude Code's settings changed nothing.
+- To check which model a turn used, read the last `assistant` line's `message.model` in the transcript. `modelUsage` in `-p --output-format json` and in `cost-state` adds up the whole session.
+- An assistant conversation resumed with no configured model now gets `--model` with what a new session would use (`node/assistant_resume_model.go`). `--model default` alone would be wrong: it ignores the settings' `model`, and on a gateway set up through `ANTHROPIC_MODEL` it would replace that gateway's model.
+
 ## herdr restart and restore (v0.9.5, 2026-11-04, #1879)
 
 - `herdr server` is a foreground headless server; it doesn't daemonize itself. Socket: `$XDG_CONFIG_HOME/herdr/herdr.sock` (or `HERDR_SOCKET_PATH`).
@@ -347,6 +366,12 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 ## Package-level work is paid by every short personad command (2026-11-08, #1308)
 
 - Claude Code runs `personad hook` (or `persona-node hook`) on each of Persona's hook events and waits for it to exit. Most of that run was package initialization of the server it links: the i18n catalogs (parsed at start, and still parsed after they were made lazy because `extension.UISlots` and `assistant.silentTurnError` called `i18n.T` in package variables), every prompt template (parsed at start, and still parsed after they were made lazy because `prompts.peerMessageHead` rendered one in a package variable), about 460 package-level regexps (one `[\p{L}\p{N}_-]{1,64}` alone 0.8 ms and 2.5 MB), and the six garbage collections those 28 MB of allocations set off. On a busy Apple silicon Mac, where a Go program that only reads stdin took 6.8 ms, the hook took 40.4 ms (median of 50 runs; persona-node 45.3 ms); after making them lazy (`internal/lazyre` for patterns, `sync.OnceValue` for the rest and in the contract packages, which use the standard library only) it takes 15.2 ms (persona-node 16.4 ms), with init down from 29.5 ms / 28 MB to 3.6 ms / 1.4 MB and no collection. Keep package-level work out of anything personad links: `GODEBUG=inittrace=1 personad hook </dev/null` lists what each package's init costs, `GODEBUG=gctrace=1` the collections during it; a package-level `i18n.T` or prompt render defeats the lazy catalogs and templates, and `lazyre`'s guard test refuses a package-level `regexp.MustCompile`.
+
+## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
+
+- `pollAgents` rebuilds the whole list every second, so a lookup made once per row is made once per row per second. With 199 Codex rollouts on disk, `codexSessions` resolved each rollout's directory through `realPath` (an `lstat` per path part, a `readlink` per link), stat'ed the rollout up to three times, resolved the Codex home per rollout and rebuilt the assistant's project name with a regexp: about 19 stats per rollout per pass, 5,600 `newfstatat` and 380 `readlinkat` a second from an idle node, half its CPU. A pass-local memo (`codexListPass`) that keeps each directory's resolved path, each rollout's stat, the App socket check per home and the project name for that one call brought it to about 1,000 `newfstatat` and 13 `readlinkat` a second, with the rows unchanged. Keep such a memo local to the call: nothing is shared between callers, and nothing can go stale for longer than one pass. Count with `strace -c -f -p <node pid>` over a steady window against a copy of a real corpus (symlinks to `~/.claude/projects` and `~/.codex/sessions` in a scratch HOME), not on a fixture with a handful of files.
+- A walk of a Go map before a stable sort leaks the map's random order into the result wherever the sort key ties. Live panes with no transcript yet all have a zero `UpdatedAt`, the list key is order-sensitive, and every reshuffle sent the whole list to the hub (67 times a minute with eight such agents). Walk the map in sorted key order when the result is compared or published.
+- On a node's first list, `scanBackground` reads each listed transcript whole and tested each line against 28 markers one by one; that was over half of a reconnect's CPU on a real corpus. One Aho-Corasick pass (`bgmatch.go`) is about four times faster on real lines. It is built on the first scan, never at package init ("Package-level work" above). A new marker still goes into `bgMarkers` or transcript's marker slices; the matcher is built from them.
 
 ## MessageDisplay holds the terminal; measuring it in an isolated claude (2026-11-07, #1309, 2.1.319)
 
@@ -468,6 +493,15 @@ Found reviewing #3731 against real workflow transcripts, not the hand-written fi
 - Parsing every line of every workflow agent's transcript (`ParseLine` plus a row decode) took 8–9 s for 580 transcripts / 600 MB on the first list after a node restart. Now: an agent's transcript is read whole once for its call count (a workflow agent's calls; a sub-Agent's steps since #5602, which merged with this: before it a sub-Agent read only from its end back to its last words), but only reply lines with a tool call are parsed, line types come from where Claude Code puts them (a user line's type at byte 152, a reply's within 1.5 KB of its end, so most bytes are never searched), and the few lines with the latest call / words / usage are read again by offset. Under 1.1 s; the journal is read incrementally and ended runs once. A shortcut that decides a line's type from its start must check the match is a top-level key: a tool call's input can hold `"attachment":{` or `"type":"user"` within the first 512 bytes.
 - On this macOS dev machine, `go test -cpuprofile` put 70–80 % of the samples on `pread` / `fstat` while direct timing showed reading all 600 MB took 50 ms: measure stages with wall-clock timers before optimizing what the profile points at. `open()` alone took 0.3–0.5 s for 580 files there, a floor for any per-file approach.
 
+## A retried workflow agent kept its phase running (2026-11-09, #2323)
+
+Claude Code's workflow view can retry a stalled agent ("retry requested by user after 514s"). The journal then gets a second `started` line with the same `key` and a new `agentId`; the attempt it replaced never gets a `result` or `failed` line, only `[Request interrupted by user]` at the end of its transcript. Reading the journal by `agentId` left that attempt running for as long as the run ran: a two-probe phase showed **2/3** and stayed current in every client.
+
+- `key` names one `agent()` call, not its content: two identical calls in one script (same prompt, same options) got different keys when measured, so a repeated key is always the same call started again. A retry of an agent that had already returned reuses the key too (seen in a real journal, both attempts with results).
+- So node counts a call once, as its latest attempt, and keeps only the replaced attempt's `tokens` / `calls`. The transcript's interruption line is not needed for this, and it would not cover a retry of a finished agent.
+- Dropping the replaced attempt can leave every count as it was (both attempts running, neither has called a tool), so the session list's change key (`listkey.go`) includes each listed agent's id; without it, clients kept linking the replaced attempt until something else changed. Found by review, not by the first tests.
+- Hand-written fixtures had no retries, and the 58 real journals on the dev machine only three. Test journal readers against the real shapes, including user actions in Claude Code's own views.
+
 ## opencode plugin: awaiting the event loop in `setup`, subscriptions surviving cleanup, duplicate events per directory (#3070)
 
 2026-11-05: opencode loads plugins once per project directory. Until `setup` returns, every request for that directory returns 503 ("Location plugins did not finish activating"); `setup` must return a cleanup function that aborts event subscriptions,
@@ -574,6 +608,23 @@ Closing is not durable merely because the card vanished: persist the interaction
 - Probing herdr from Python with `subprocess.run` in another thread of the same process shows a ~110 ms stall on many
   of the spawns. That is the probe, not herdr: the same spawns from a separate process show none.
 
+## Text an agent is sent can press keys in its terminal
+
+- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename,
+  a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed later, in a prompt. Control
+  characters in that text are keys to the terminal, and the program in it acts on them as on the user's own, which can
+  change what the agent may do.
+- So the hub refuses terminal control characters (Unicode `Cc` but newline, carriage return and tab) from callers whose
+  grant is narrower than the user's, extension tokens, on the routes that type a caller's text into a terminal or keep
+  it for a prompt (`server/internal/hub/terminal_controls.go`). Check kept text as it comes in, while the caller is
+  still known. A new route that types or keeps a caller's text needs the same wrapper.
+- Newline, carriage return and tab pass because those routes deliver text as text, where a line break stays a line
+  break. A path that types text as raw keys would make them Enter and Tab, and needs a stricter rule.
+- Check every string of the body as JSON decodes it, keys included, not one named field: Go's `encoding/json` matches
+  a struct's field names without regard to case, so a check of `p["text"]` misses a body that spells it `"Text"`, and
+  a handler that decodes only the first value of a body leaves the rest to whatever reads it next. Check the decoded
+  path and query too: a route can keep text from them (a knowledge-base entry is named from its id).
+
 ## Profile acceptance must include launcher defaults
 
 A purpose-level model override does not change the managed launcher's default. Launcher health checks invoke the launcher without that override, and small-model and subagent paths read their own environment aliases. When testing a model profile, read back the launcher's main, small, subagent and alias fields, then exercise a real health check. Preserve sealed credentials and unrelated fields; capture the before-image in the same transaction as the switch. A purpose-only readback is not evidence that every execution path changed.
@@ -610,3 +661,7 @@ A purpose-level model override does not change the managed launcher's default. L
   A new variable the node gives only the assistant goes into `assistantOnlyEnv`.
 - To see what an Agent really got, read its process environment (`ps -E -ww -o command= -p <pid>` on a Mac). Print the
   names only. Its Bash tool's `env` also shows what its own Claude added for its children.
+
+## A Codex assistant conversation needs its own "process gone" row (2026-11-09, #2126)
+
+`scanOffline` reads only Claude's projects and `codexSessions` leaves the assistant's conversations out of Agents, so a Codex main conversation had no row once its idle process was reaped. A client with no row can't send, so the composer turned off and the message that would resume it could not go. `codexAssistantsAtRest` in `server/internal/node/sessions_offline.go` lists them now.

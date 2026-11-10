@@ -124,10 +124,12 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		listed[id] = true
 		m := n.meta(c.path, c.st)
-		if !n.sessionScopeAllows(m.cwd) {
+		// Where the session is: an assistant conversation's start directory, before the filters look at it.
+		cwd := n.assistantHome(id, m.cwd)
+		if !n.sessionScopeAllows(cwd) {
 			continue
 		}
-		if m.cwd != "" && n.cwdBlocked(m.cwd) {
+		if cwd != "" && n.cwdBlocked(cwd) {
 			continue
 		}
 		// Sessions that never produced output (hook probes): small files read whole with no title and no words. A bigger
@@ -139,14 +141,72 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		n.setPath(id, c.path)
 		s := proto.Session{
-			SessionID: id, Title: m.title, Cwd: m.cwd, Status: proto.StatusOffline, Model: m.model,
+			SessionID: id, Title: m.title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
 			Agent: "claude", AgentSurface: m.surface,
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
 		setContext(&s, m)
+		s.ModelFallback = m.modelFallback
 		s.PermissionMode, s.Effort = n.currentModes(id, m)
 		untitled(&s, m)
+		out = append(out, s)
+	}
+	return out
+}
+
+// codexAssistantsAtRest lists the assistant's Codex conversations whose process has been let go (assistantIdleTimeout).
+// scanOffline reads only Claude's projects and codexSessions keeps the assistant's out of Agents, so such a conversation
+// had no row at all, and every client turned its composer off, with nothing left to send the message that resumes it (#2126).
+func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
+	if n.state == nil || n.codices == nil {
+		return nil
+	}
+	n.state.mu.Lock()
+	cwds := map[string]string{}
+	for id, st := range n.state.Sessions {
+		if !seen[id] && validID(id) && identity.IsAssistantDir(st.Cwd) {
+			cwds[id] = st.Cwd
+		}
+	}
+	n.state.mu.Unlock()
+	keep := n.keptSessions()
+	type cand struct {
+		id, path string
+		st       os.FileInfo
+	}
+	var cands []cand
+	for id := range cwds {
+		path := n.codexPath(id)
+		if path == "" {
+			continue
+		}
+		st, err := os.Stat(path)
+		if err != nil || !keep[id] && time.Since(st.ModTime()) > offlineWindow {
+			continue
+		}
+		cands = append(cands, cand{id, path, st})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].st.ModTime().After(cands[j].st.ModTime()) })
+	var out []proto.Session
+	quiet := 0
+	for _, c := range cands {
+		if !keep[c.id] {
+			if quiet++; quiet > maxAssistantOffline {
+				continue
+			}
+		}
+		m := n.meta(c.path, c.st)
+		s := proto.Session{
+			SessionID: c.id, Title: m.title, Cwd: cwds[c.id], Status: proto.StatusOffline, Model: m.model, Agent: "codex",
+			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
+		}
+		s.Activity, s.ActivityAt = m.activityOf()
+		setContext(&s, m)
+		s.ModelFallback = m.modelFallback
+		s.PermissionMode, s.Effort = n.currentModes(c.id, m)
+		untitled(&s, m)
+		n.decorate(&s)
 		out = append(out, s)
 	}
 	return out
@@ -163,6 +223,33 @@ func (n *Node) assistantProject() string {
 	return nonAlnum.ReplaceAllString(identity.AssistantDir(n.home), "-")
 }
 
+// assistantDirOfProject is the directory of this node's assistant (or its health space) whose projects directory
+// Claude Code names base, "" for any other. Only this node's own names map back: the projects directory's name is
+// lossy ("/", ".", "-" and "_" all become "-"), so the former state directory's or a symlinked home's cannot be told
+// apart from another directory's (assistant-bin, another manager's assistant-m-<hex>).
+func (n *Node) assistantDirOfProject(base string) string {
+	switch own := n.assistantProject(); base {
+	case own:
+		return identity.AssistantDir(n.home)
+	case strings.TrimSuffix(own, "-assistant") + "-health":
+		return identity.HealthDir(n.home)
+	}
+	return ""
+}
+
+// assistantHome is the directory session id is listed in at rest: the directory its node record says it started in,
+// when that is an assistant or health directory (the unresolved path its running process and resumes use), else cwd
+// (what its transcript says: where an assistant conversation started, an agent's latest directory, #2368).
+func (n *Node) assistantHome(id, cwd string) string {
+	if n.state == nil {
+		return cwd
+	}
+	if st, ok := n.state.get(id); ok && identity.IsAssistantDir(st.Cwd) {
+		return st.Cwd
+	}
+	return cwd
+}
+
 // isAssistantProject: base is the name of the projects directory Claude Code keeps for the assistant's directory
 // (own: this node's, assistantProject). The assistant may have run under ~/.persona or the former state directory
 // (compat.StateDir), through a symlinked home, so the name is matched by its end as well (#1423: a copy under the
@@ -172,11 +259,17 @@ func isAssistantProject(base, own string) bool {
 	if base == own || base == strings.TrimSuffix(own, "-assistant")+"-health" {
 		return true
 	}
-	former := "-" + nonAlnum.ReplaceAllString(compat.StateDir, "-") // "." becomes "-" as in the project's name
-	for _, suffix := range []string{"--persona-assistant", former + "-assistant", "--persona-health", former + "-health"} {
+	for _, suffix := range assistantProjectSuffixes() {
 		if strings.HasSuffix(base, suffix) {
 			return true
 		}
 	}
 	return false
 }
+
+// assistantProjectSuffixes are the ends isAssistantProject matches, built on first use (not at start: every short
+// personad command would pay for the regexp) instead of on every call, once per Codex thread and transcript per list.
+var assistantProjectSuffixes = sync.OnceValue(func() []string {
+	former := "-" + nonAlnum.ReplaceAllString(compat.StateDir, "-") // "." becomes "-" as in the project's name
+	return []string{"--persona-assistant", former + "-assistant", "--persona-health", former + "-health"}
+})

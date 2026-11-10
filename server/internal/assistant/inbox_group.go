@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -629,7 +630,7 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	case prev.last != "" && it.handled():
 		// Messages that join an event being handled follow it: its tier, words and urgency stay; its processing
 		// conversation is told (inbox_handle.go).
-		it.Title, it.TriagedBy = title, orDefault(it.TriagedBy, "model")
+		it.Title, it.TriagedBy = title, cmp.Or(it.TriagedBy, "model")
 	case byModel:
 		it.Title, it.Summary, it.Tier, it.Reason, it.TriagedBy = clip(oneLine(e.title), 40), clip(oneLine(e.summary), 80), e.tier,
 			clip(oneLine(e.reason), 30), "model"
@@ -705,13 +706,6 @@ func (b *inboxBook) foldNoise(connectorID, thread string, plan *groupPlan) {
 		out = append(out, e)
 	}
 	plan.events = out
-}
-
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }
 
 // eventRuleTier is the tier the connector's rules give an event it wrote: extra's rule_tier, else its tier.

@@ -58,8 +58,13 @@ class ShardTests(unittest.TestCase):
 """
         self.assertIn(setup, workflow)
         self.assertLess(workflow.index(setup), workflow.index("      - name: Server checks"))
-        for filename in ("ci.yml", "runtimes-test.yml"):
-            self.assertIn("bun-version: '1.4.2'", (ROOT / ".github/workflows" / filename).read_text())
+        workflow = (ROOT / ".github/workflows/runtimes-test.yml").read_text()
+        setup = """      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+"""
+        self.assertIn(setup, workflow)
+        self.assertLess(workflow.index(setup), workflow.index("      - name: Runtime and SDK checks"))
         source_packages = ["example/server/internal/extension/denohost", "example/server/internal/extmgr"]
         self.assertEqual(server.select_packages(source_packages, "other"), source_packages)
 
@@ -72,6 +77,15 @@ class ShardTests(unittest.TestCase):
         for label in ("Go formatting", "Server vet", "Server build", "Windows node build and vet", "Go SDK tests"):
             self.assertIn(label, script)
         self.assertIn('lane="${1:-all}"', script)
+
+    def test_server_go_cache_is_saved_only_by_main_dispatches(self):
+        # actions/cache saves on every ref; branch entries pushed main's out of the 10 GB repository cache.
+        workflow = (ROOT / ".github/workflows/server-test.yml").read_text()
+        self.assertNotIn("actions/cache@", workflow)
+        self.assertEqual(workflow.count("actions/cache/save@v4"), 1)
+        save = workflow.split("- name: Save shard Go caches", 1)[1]
+        self.assertIn("if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'", save)
+        self.assertIn("key: ${{ steps.go-cache.outputs.cache-primary-key }}", save)
 
 
 if __name__ == "__main__":

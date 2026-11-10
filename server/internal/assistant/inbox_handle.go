@@ -842,16 +842,11 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 	return out, err
 }
 
-// linkTask asks the judge (model 2) which of the user's tasks going on the event is about (docs/assistant/unified-entry.md):
-// the conversation is told that task's progress, and its reply suggestion puts a card in the task's conversation.
-// Since phase 1 every Needs you event goes to the manager whatever the judge says of handling it; a model that fails
-// leaves the event unlinked.
-func (s *Service) linkTask(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask) bool {
-	return s.linkTaskFor(ctx, it, tasks, nil)
-}
-
-// linkTaskFor is linkTask on an item whose write w is not saved yet: the link joins that write while the item still
-// holds it (a concurrent move keeps the write from being undone over it).
+// linkTaskFor asks the judge (model 2) which of the user's tasks going on the event is about
+// (docs/assistant/unified-entry.md): the conversation is told that task's progress, and its reply suggestion puts a card
+// in the task's conversation. Since phase 1 every Needs you event goes to the manager whatever the judge says of
+// handling it; a model that fails leaves the event unlinked. w is the item's write not saved yet (nil: none): the link
+// joins that write while the item still holds it (a concurrent move keeps the write from being undone over it).
 func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompts.InboxTask, w *inboxWrite) bool {
 	b := &s.inbox
 	b.mu.Lock()

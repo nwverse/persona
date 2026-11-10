@@ -204,10 +204,13 @@ func adoptedPane(ctx context.Context) *host.Created {
 }
 
 // paneShells are the shells that read what a start types (typedHerdrAgent): the programs in front of the pane the
-// user picked, else the shell herdr opens a tab with.
-func paneShells(ctx context.Context) []string {
+// user picked, else the shell the host opened, falling back to herdr's shell when the host does not report one.
+func paneShells(ctx context.Context, created *host.Created) []string {
 	if a, ok := ctx.Value(adoptedPaneKey{}).(adopted); ok {
 		return a.shells
+	}
+	if created.Shell != "" {
+		return []string{created.Shell}
 	}
 	return []string{herdrPaneShell()}
 }
@@ -232,7 +235,7 @@ func (n *Node) runAgentInPane(ctx context.Context, pane, launcher string) (*prot
 	if err != nil {
 		return nil, err
 	}
-	launch, err := hostCap[host.Launcher](n)
+	launch, err := n.launcherFor(n.defaultKind())
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +393,8 @@ func (n *Node) gitOp(ctx context.Context, dir, op string) (proto.PaneGitResult, 
 		if st.Upstream == "" {
 			return res, refusal(gitOpNoUpstream, st.Branch+" has no upstream branch", nil)
 		}
-		if st.Ahead == 0 {
+		// a deleted upstream counts nothing ahead: the push below publishes the branch there again
+		if st.Ahead == 0 && !st.Gone {
 			res.Outcome, res.Message = proto.GitOutcomeNothingToPush, "No commits to push"
 			return res, nil
 		}

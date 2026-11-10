@@ -224,15 +224,6 @@ func (s *served) response(addrs []netip.Addr, ttl uint32) ([]byte, error) {
 	})
 }
 
-// buildResponse packs the announcement of svc with addrs (ttl 0: the goodbye).
-func buildResponse(svc Service, addrs []netip.Addr, ttl uint32) ([]byte, error) {
-	s, err := newServed(svc)
-	if err != nil {
-		return nil, err
-	}
-	return s.response(addrs, ttl)
-}
-
 // answer picks the records that answer qs: the asked-for records as answers, the ones a querier will want next
 // (SRV / TXT / addresses after a PTR, addresses after an SRV, the other address family) as additional records.
 func (s *served) answer(qs []question, addrs []netip.Addr, ttl uint32) (ans, add []record) {

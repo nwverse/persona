@@ -56,8 +56,9 @@ func TestRunningHubCommandsNeedHubJSON(t *testing.T) {
 	}
 }
 
-// A hub.json no hub has started with yet (db.sh's) stays exactly as it is: they say so instead of adding a token.
-func TestRunningHubCommandsLeaveATokenlessHubJSON(t *testing.T) {
+// A hub.json no hub has started with yet (db.sh's) keeps its content, but its mode is tightened to 0600 on the read:
+// even without a token it holds the database password, and these commands load it through readConfigFile.
+func TestRunningHubCommandsTightenATokenlessHubJSON(t *testing.T) {
 	for _, c := range runningHubCommands {
 		t.Run(c.name, func(t *testing.T) {
 			home := emptyHome(t)
@@ -68,8 +69,8 @@ func TestRunningHubCommandsLeaveATokenlessHubJSON(t *testing.T) {
 			}
 			b, _ := os.ReadFile(path)
 			st, _ := os.Stat(path)
-			if string(b) != `{"database_url":"postgres://x"}` || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o644) {
-				t.Fatalf("hub.json changed: %s %v", b, st.Mode())
+			if string(b) != `{"database_url":"postgres://x"}` || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
+				t.Fatalf("hub.json not tightened: %s %v", b, st.Mode())
 			}
 		})
 	}
@@ -95,19 +96,19 @@ func TestLoadConfigAddsTheTokenAsAnEdit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(o.keys, ",") != "database_url,from_a_newer_build,token" {
-		t.Fatalf("keys %v", o.keys)
+	if strings.Join(o.Keys(), ",") != "database_url,from_a_newer_build,token" {
+		t.Fatalf("keys %v", o.Keys())
 	}
 	var token string
-	if raw, _ := o.get("token"); json.Unmarshal(raw, &token) != nil || token != cfg.Token || cfg.DatabaseURL != "postgres://x" {
+	if raw, _ := o.Get("token"); json.Unmarshal(raw, &token) != nil || token != cfg.Token || cfg.DatabaseURL != "postgres://x" {
 		t.Fatalf("hub.json %s, config token %q database %q", b, cfg.Token, cfg.DatabaseURL)
 	}
-	if raw, _ := o.get("from_a_newer_build"); !bytes.Equal(compactedJSON(t, raw), []byte(`{"b":1,"a":2}`)) {
+	if raw, _ := o.Get("from_a_newer_build"); !bytes.Equal(compactedJSON(t, raw), []byte(`{"b":1,"a":2}`)) {
 		t.Fatalf("an unknown key changed: %s", raw)
 	}
 	entries, _ := os.ReadDir(filepath.Dir(path))
 	for _, e := range entries {
-		if e.Name() != "hub.json" && e.Name() != ".lock" { // .lock: lockDir on Windows
+		if e.Name() != "hub.json" && e.Name() != ".lock" { // .lock: managerconf.LockDir on Windows
 			t.Fatalf("left behind: %s", e.Name())
 		}
 	}
@@ -126,7 +127,7 @@ func TestLoadConfigAddsOnlyTheTokenToAnEmptyObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(path)
-	if o, err := parseJSONObject(b); err != nil || strings.Join(o.keys, ",") != "token" {
+	if o, err := parseJSONObject(b); err != nil || strings.Join(o.Keys(), ",") != "token" {
 		t.Fatalf("hub.json %s (%v)", b, err)
 	}
 }

@@ -108,6 +108,10 @@ fun JGroupItem(
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
+    if (LocalHomeDrawer.current && style == AppStyle.Glass) {
+        Column(modifier.fillMaxWidth(), content = content)
+        return
+    }
     val radius = if (separate) PersonaTheme.shapes.card else PersonaTheme.shapes.panel.coerceAtMost(26.dp).let { if (style == AppStyle.Board) 10.dp else it }
     val shape = if (separate) RoundedCornerShape(radius) else RoundedCornerShape(
         topStart = if (position.first) radius else 0.dp, topEnd = if (position.first) radius else 0.dp,
@@ -190,12 +194,14 @@ fun JRow(
     changingValue: Boolean = false,
     /** What accessibility services call the row's click: a switch row says [Role.Switch] so its on / off is read. */
     role: Role = Role.Button,
+    /** [leadingIcon]'s colour in place of the quiet ink (an extension's named `icon_color`). */
+    leadingIconTint: Color? = null,
 ) {
     val palette = PersonaTheme.palette
     RowFrame(modifier, onClick, onLongClick, null, enabled, selected, value, trailing, chevron, changingValue, role) {
         if (leading != null) { leading(); Spacer(Modifier.width(14.dp)) }
         else if (leadingIcon != null) {
-            JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else palette.ink2, decorative = true)
+            JIcon(leadingIcon, null, size = 22.dp, tint = if (destructive) palette.danger.dot else leadingIconTint ?: palette.ink2, decorative = true)
             Spacer(Modifier.width(16.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -255,10 +261,13 @@ private fun RowFrame(
 ) {
     val palette = PersonaTheme.palette
     val style = PersonaTheme.style
+    val drawer = LocalHomeDrawer.current && style == AppStyle.Glass
     Row(
-        modifier.fillMaxWidth().heightIn(min = 56.dp).selectedRow(selected).onSecondaryClick(onLongClick)
+        modifier.fillMaxWidth().heightIn(min = if (drawer) HomeTokens.drawerRowHeight else 56.dp)
+            .then(if (drawer) Modifier.clip(RoundedCornerShape(Tokens.Radius.control)).background(if (selected) palette.sunken else Color.Transparent) else Modifier.selectedRow(selected))
+            .onSecondaryClick(onLongClick)
             .then(if (onClick != null || onLongClick != null) Modifier.combinedClickable(enabled = enabled, role = role, onClickLabel = onClickLabel, onClick = onClick ?: {}, onLongClick = onLongClick) else Modifier)
-            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = rowPadding, vertical = 10.dp),
+            .stableAlpha(if (enabled) 1f else 0.45f).padding(horizontal = if (drawer) Tokens.Space.m else rowPadding, vertical = if (drawer) Tokens.Space.xs else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         content()
@@ -357,14 +366,17 @@ fun JEmptyState(
     modifier: Modifier = Modifier,
     icon: PhIcon? = null,
     action: (@Composable () -> Unit)? = null,
+    /** A named colour for the icon and its well (an extension's `icon_color`); none: the quiet ink. */
+    iconHue: JHue? = null,
 ) {
     val palette = PersonaTheme.palette
     Column(modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         icon?.let {
+            val hue = iconHue?.let { h -> palette.hue(h) }
             Box(
-                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(palette.surfaceStrong),
+                Modifier.size(64.dp).clip(if (PersonaTheme.style == AppStyle.Board) RoundedCornerShape(12.dp) else CircleShape).background(hue?.tint ?: palette.surfaceStrong),
                 contentAlignment = Alignment.Center,
-            ) { JIcon(it, null, size = 28.dp, tint = palette.ink2, decorative = true) }
+            ) { JIcon(it, null, size = 28.dp, tint = hue?.dot ?: palette.ink2, decorative = true) }
             Spacer(Modifier.height(16.dp))
         }
         Text(title, style = PersonaTheme.type.title, color = palette.ink, textAlign = TextAlign.Center)
