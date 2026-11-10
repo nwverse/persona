@@ -96,8 +96,9 @@ usually missed. The screenshot after the last input is the one attached to the r
 ## Typing
 
 The bridge types text as key presses on a US layout: only printable ASCII, tab and newline. A type step with any other
-character (Chinese, accented letters, emoji) is `not_sent` before anything, its focusing tap included, and says which
-character and that sending the same text again fails the same way.
+character (Chinese, accented letters, emoji) is `not_sent` before anything, its focusing tap included, and says at
+which character (its position, never the character: what a type step types goes into no result, log or error) and
+that sending the same text again fails the same way.
 
 ## Element numbers
 
@@ -228,7 +229,7 @@ list of the do's steps from there; one answer covers the do, though a step the r
 | `key`, `button`, `launch_app` | for those steps |
 | `evidence` | the facts the rules found (`button "Pay"`, `app Wallet (com.apple.Passbook)`) |
 | `at` | where the touch lands, when it is a point |
-| `steps` | with `confirm`: the do's steps from there (`action`, `target` or `at`, `text_len`, `key`, `button`, `app`) |
+| `steps` | with `confirm`: the do's steps from there (`action`, `target` or `at`, `text_len`, `key`, `button`, `app`); a target named by number, or by a label only one element has, is given as on the screen the owner is asked on (`n`, `role`, `label`), any other as the step wrote it |
 
 **The automation never approves itself**:
 
