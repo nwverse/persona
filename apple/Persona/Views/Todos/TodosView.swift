@@ -315,6 +315,8 @@ struct TodosView: View {
                 Label("Delete", systemImage: Theme.Icon.delete)
             }
         }
+        // VoiceOver: the row opens the to-do; its "N related" is an action of its own, not lost inside the row
+        .modifier(RelatedAction(related: related))
     }
 
     /// Restore from Shelved: counts as activity now, so it goes back to its section until another 48 hours pass.
@@ -447,6 +449,19 @@ private extension TodoListFilter {
         case .today: String(localized: "Nothing due today")
         case .week: String(localized: "Nothing due this week")
         case .month: String(localized: "Nothing due this month")
+        }
+    }
+}
+
+/// A merged row's "N related" as a VoiceOver action on the row (the row's own activation opens the to-do).
+private struct RelatedAction: ViewModifier {
+    var related: TodoRelatedToggle?
+
+    func body(content: Content) -> some View {
+        if let related {
+            content.accessibilityAction(named: Text("\(related.count) related"), related.toggle)
+        } else {
+            content
         }
     }
 }
