@@ -41,6 +41,28 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - Read-only tasks always retain `permission: plan`, including after card edits and on retries. Health-space plans still wait for Start. Runtime support and the current card labels are described in [To-dos](todos.md#read-only-planned-tasks).
 - `task_plan` **does not block**: once the plan is handed to you, the turn ends immediately and you can continue talking about something else. When you tap Start, hub starts the Agents directly; Persona sees the result in the next message's live snapshot.
 
+### Needs you and In progress: each thing once (#3387)
+
+Above the Assistant's composer there are two entries. **Needs you** lists everything the user has to act on; **In
+progress** everything running that does not need them. Each thing is one row in exactly one entry, Needs you first, and
+each count is its rows:
+
+- **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
+  for a decision or review (an open `ask`; `pending_review` / `needs_user` on an open task), one whose turn broke off on a
+  model error (`interrupted`) or whose start failed while it is still the user's to retry; in the main chat, an Agent
+  opened by hand (no task) that asks something; a plan waiting for Start (one row per plan); a message card waiting for
+  Send; the conversation's own cards.
+- **In progress**: every other task the To-dos page counts open (#3331), and in the main chat each working Agent opened by
+  hand. A task's agents are never rows of their own: the task's row carries their state and progress meter, and opens the
+  task's details, which switch between its agents' chats. Shelved tasks fold under one uncounted line.
+- Finished tasks (done, cancelled, accepted) are in neither; the board (**All**) has them. An answered card moves its task
+  back to In progress. An empty Needs you is grey and opens "All caught up".
+
+The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
+`assistantEntries` (`persona.core.domain.tasks`). Both replay `spec/fixtures/entries`, which pins which entry every case goes
+to; iOS / Mac adopt the same rule by replaying the same fixture. The older Pending / Progress / Agents / To start entries
+below are the earlier presentation (#2878, #3162).
+
 ### Progress tray: one task, one row (#2878)
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.

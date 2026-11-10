@@ -80,7 +80,7 @@ final class DuoOpenChromeTests: XCTestCase {
         let main = element("sidebar-main")
         XCTAssertTrue(main.waitForExistence(timeout: 20), "no main row:\n\(app.debugDescription)")
         main.press(forDuration: 1.2)
-        // Not 知识库: the column has a row of that name too.
+        // Not Knowledge: the column has a row of that name too.
         for label in ["详细信息", "拷贝目录", "拷贝信息"] {
             XCTAssertTrue(app.buttons[label].firstMatch.waitForExistence(timeout: 5), "no \(label) in the main row's menu:\n\(app.debugDescription)")
         }
