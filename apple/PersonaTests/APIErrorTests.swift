@@ -98,6 +98,34 @@ struct APIErrorTests {
         #expect(error.message == "private internal exception")
     }
 
+    @Test(arguments: ["worktree/prepare", "worktree/create", "panes/agent", "panes/split", "tabs/close"])
+    func nodeMenuInternalFailuresKeepTheNodesReason(route: String) async throws {
+        let reason = "already used by worktree"
+        let api = APIClient(config: .demo, transport: { _ in
+            throw APIError(status: 502, message: reason, fields: ["code": "internal"], requestID: "request-1")
+        })
+        do {
+            _ = try await api.nodeAction(machine: "m", route, ["pane": "p"])
+            Issue.record("expected the node to refuse")
+        } catch let error as APIError {
+            #expect(error.requestPath == "/api/v1/machines/m/\(route)")
+            #expect(error.errorDescription?.contains(reason) == true, "the node-menu action must not replace the actionable reason with HTTP 502")
+        }
+    }
+
+    @Test func anOrdinaryPostStillHidesInternalExceptions() async throws {
+        let api = APIClient(config: .demo, transport: { _ in
+            throw APIError(status: 502, message: "private internal exception", fields: ["code": "internal"])
+        })
+        do {
+            _ = try await api.post("/api/v1/other", body: ["x": "y"])
+            Issue.record("expected a refusal")
+        } catch let error as APIError {
+            #expect(error.errorDescription?.contains("HTTP 502") == true)
+            #expect(error.errorDescription?.contains("private") == false)
+        }
+    }
+
     @Test func answersAreShownAsTheyAre() {
         // A refusal or a missing item is the hub's answer, not a failure to look up.
         let e = APIError(status: 409, message: "电脑上的输入框里有字", fields: ["code": "input_draft"], requestID: "1a2b3c4d")

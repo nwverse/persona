@@ -76,8 +76,10 @@ nonisolated struct APIError: LocalizedError, Sendable {
     var details: JSONValue?
     /// Route context for the one pre-code knowledge refusal; never match diagnostics from unrelated endpoints.
     var requestPath: String?
+    /// A node-menu action relays the computer's actionable refusal as 502 internal; keep those words, not a generic service error.
+    var showsNodeReason = false
     var errorDescription: String? {
-        let text = businessMessage ?? (code == "internal" && status >= 500
+        let text = businessMessage ?? (code == "internal" && status >= 500 && !showsNodeReason
             ? String(localized: "The service couldn't complete this request. Try again later. (HTTP \(status))") : message)
         guard status >= 500, let requestID else { return text }
         return String(localized: "\(text) (request \(requestID))")
