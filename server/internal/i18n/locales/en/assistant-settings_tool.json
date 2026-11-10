@@ -23,5 +23,10 @@
   "title_model_tiers": "Agent presets",
   "change_model_tier": "{profile} · {tier}: {before} → {after}",
   "title_review_sample_percent": "Share of finished tasks to spot-check",
-  "change_review_sample_percent": "Share of finished tasks to spot-check: {before}% → {after}%"
+  "change_review_sample_percent": "Share of finished tasks to spot-check: {before}% → {after}%",
+  "title_meeting_attendance_default": "Persona in recorded meetings",
+  "change_meeting_attendance_default": "Persona in recorded meetings: {before} → {after}",
+  "meeting_role_off": "Off",
+  "meeting_role_listener": "Listener",
+  "meeting_role_participant": "Participant"
 }

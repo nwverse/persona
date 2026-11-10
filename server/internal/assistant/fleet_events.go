@@ -77,6 +77,7 @@ func (s *Service) NodeEvent(machine, event string, params json.RawMessage) bool 
 					s.fleet.mu.Unlock()
 				}
 				s.noteStop(machine, sid, p)
+				s.meetingTurnPrompt(machine, sid, p) // the user's own prompt to an Agent ends its meeting turn (meeting_turns.go)
 			}
 		}
 		// the hub shows it to the apps (hook_event)
