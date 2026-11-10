@@ -34,7 +34,7 @@ type fake struct {
 
 func (f *fake) List(_ context.Context, fl subscriptions.Filter) ([]subscriptions.Subscription, subscriptions.Features, error) {
 	var out []subscriptions.Subscription
-	for _, id := range []string{"sub_outlook", "sub_slack", "sub_github", "sub_broker", "sub_new"} {
+	for _, id := range []string{"sub_outlook", "sub_slack", "sub_github", "sub_broker", "sub_notion", "sub_new"} {
 		s, ok := f.subs[id]
 		if !ok || fl.Extension != "" && s.Extension != fl.Extension || fl.Connector != "" && s.Connector != fl.Connector {
 			continue
