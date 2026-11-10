@@ -16,6 +16,7 @@ Checks 1440×900, 1280×720 and a 390×844 phone (touch; Chromium only, WebKit's
 per check and a verdict; exits 1 on the first failure. --shots saves each size before and after scrolling.
 """
 import argparse
+import json
 import os
 import sys
 
@@ -87,6 +88,12 @@ def scroll_box(page, cdp, s, touch):
             y0 = max(nxt["main"]["y"] - 60, 80)
 
 
+def go(page, path):
+    """In-page navigation (a pushState and its popstate), as a link in the app would: a second page load would cut the
+    first page's requests off, which WebKit reports as page errors."""
+    page.evaluate(f"history.pushState(null, '', {json.dumps(path)}); dispatchEvent(new PopStateEvent('popstate'))")
+
+
 def check(browser, engine, base, label, w, h, shots, path="/persona", theme="light"):
     phone = w < 640
     touch = phone and engine == "chromium"
@@ -101,7 +108,7 @@ def check(browser, engine, base, label, w, h, shots, path="/persona", theme="lig
     if path.startswith("panel:"):
         # an agent's chat in the side panel over Persona's main chat (from its Agents tray): a phone's width, its cards
         # folded under the composer as on a phone
-        page.goto(base + "/persona")
+        go(page, "/persona")
         page.wait_for_selector("[data-chat-dock]", timeout=20000)
         page.wait_for_timeout(800)
         page.locator("[data-chat-dock] button").filter(has_text="Agents").first.click()
@@ -109,7 +116,7 @@ def check(browser, engine, base, label, w, h, shots, path="/persona", theme="lig
         page.locator("[data-chat-dock]").get_by_text(path[len("panel:"):]).first.click()
         page.wait_for_timeout(1500)
     else:
-        page.goto(base + path)
+        go(page, path)
         page.wait_for_selector("[data-chat-dock]", timeout=20000)
         page.wait_for_timeout(800)
     # Persona's main chat keeps what waits on you in the "Pending" tray over the composer: open it
