@@ -13,6 +13,15 @@
 - A raw asynchronous start registration is not successful prompt delivery. Keep
   the sanitized submission unknown until authoritative evidence resolves it; never
   publish the original app input as delivered solely because a session ID returned.
+- A database-backed fence does not make nested pool queries safe. Waiting
+  transactions can occupy every connection while the lock holder asks for one more;
+  read ownership through the transaction's connection. Keep node RPCs outside the
+  fence and reject stale results with revision, content-version and frontier CAS.
+  Check creation receipts before fresh RPCs, and do not recapture an unchanged live
+  future setting when applying offline narrowing.
+- Numeric credentials are still credentials. Exempt only explicit count/flag keys
+  from redaction; `password=123456` is not the same as `max_tokens=4096`. Preserve
+  string quoting when sanitizing serialized arguments.
 
 ## Bubblewrap masks are mount views, not path-denial rules (#2977)
 

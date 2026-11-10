@@ -212,32 +212,50 @@ func (d *Devices) shareCreate(w http.ResponseWriter, r *http.Request) error {
 	var futureOwner db.SessionShareOwnership
 	var future devicewire.ShareProjection
 	if req.Future {
-		o, err := d.owned(r.Context(), req.Machine, req.Session)
-		if err != nil {
+		// Committed requests recover tokenless metadata even while the node is
+		// offline; validate the preview before spending a fresh projection RPC.
+		var replay *sealedShare
+		if err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
+			var err error
+			replay, err = shareCreationReplay(r.Context(), t, actor, req.RequestID, digest)
+			if err != nil || replay != nil {
+				return err
+			}
+			p, err := targetPolicy(sharePolicy{Operation: "create", SnapshotID: req.SnapshotID, SnapshotVersion: req.SnapshotVersion, Selection: &req.Selection, Future: &req.Future, Tools: &req.Tools, Days: req.Days}, nil)
+			if err != nil {
+				return err
+			}
+			v, err := d.acknowledged(r.Context(), t, req.Ack, p, req.Machine, req.Session)
+			if err != nil {
+				return err
+			}
+			futureOwner, err = ownedShareTransaction(r.Context(), t, req.Machine, req.Session)
+			if err == nil && futureOwner != v.Snapshot.Owner {
+				return shareFail("snapshot_changed")
+			}
+			return err
+		}); err != nil {
 			return err
 		}
-		if future, err = d.projectShare(r.Context(), o, nil); err != nil {
+		if replay != nil {
+			shareReport(w, replay.Authority)
+			w.WriteHeader(http.StatusConflict)
+			return shareEncode(w, map[string]any{"code": "creation_already_committed", "share": replay.Meta})
+		}
+		var err error
+		if future, err = d.projectShare(r.Context(), futureOwner, nil); err != nil {
 			return err
 		}
-		futureOwner = o
 	}
 	var body any
 	status := 201
 	err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
-		if prior, id, err := t.Creation(actor, req.RequestID); err == nil {
-			if prior != digest {
-				return shareFail("idempotency_conflict")
-			}
-			_, s, err := loadSealed(t, id)
-			if err != nil {
-				return err
-			}
-			if !ownerMatches(devicewire.CallerOf(r.Context()), s.Owner) {
-				return shareMissing()
-			}
+		if replay, err := shareCreationReplay(r.Context(), t, actor, req.RequestID, digest); err != nil {
+			return err
+		} else if replay != nil {
 			status = 409
-			body = map[string]any{"code": "creation_already_committed", "share": s.Meta}
-			shareReport(w, s.Authority)
+			body = map[string]any{"code": "creation_already_committed", "share": replay.Meta}
+			shareReport(w, replay.Authority)
 			return nil
 		}
 		p, err := targetPolicy(sharePolicy{Operation: "create", SnapshotID: req.SnapshotID, SnapshotVersion: req.SnapshotVersion, Selection: &req.Selection, Future: &req.Future, Tools: &req.Tools, Days: req.Days}, nil)
@@ -248,7 +266,7 @@ func (d *Devices) shareCreate(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		owner, err := d.owned(r.Context(), req.Machine, req.Session)
+		owner, err := ownedShareTransaction(r.Context(), t, req.Machine, req.Session)
 		if err != nil {
 			return err
 		}
@@ -318,7 +336,7 @@ func (d *Devices) manageShare(ctx context.Context, t *db.ShareTx, id string) (db
 	if !ownerMatches(devicewire.CallerOf(ctx), s.Owner) {
 		return row, s, shareMissing()
 	}
-	o, err := d.owned(ctx, s.Owner.Machine, s.Owner.SessionID)
+	o, err := ownedShareTransaction(ctx, t, s.Owner.Machine, s.Owner.SessionID)
 	if err != nil || o != s.Owner {
 		return row, s, shareMissing()
 	}
@@ -419,18 +437,44 @@ func (d *Devices) sharePatch(w http.ResponseWriter, r *http.Request) error {
 	var futureOwner db.SessionShareOwnership
 	var future *devicewire.ShareProjection
 	if req.Future != nil && *req.Future {
+		needsFrontier := false
 		if err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
 			_, s, err := d.manageShare(r.Context(), t, r.PathValue("share_id"))
+			if err != nil {
+				return err
+			}
+			if s.Meta.Status != "active" {
+				return shareMissing()
+			}
+			if req.Revision != s.Meta.Revision || (req.ContentVersion != 0 && req.ContentVersion != s.Meta.ContentVersion) {
+				return shareFail("revision_conflict")
+			}
+			needsFrontier = !s.Meta.Future || s.Meta.Publication == "paused"
+			if !needsFrontier {
+				return nil
+			}
+			if req.Ack == nil {
+				return shareFail("preview_required")
+			}
+			p, err := targetPolicy(sharePolicy{Operation: "update", ShareID: s.Meta.ID, Revision: req.Revision, ContentVersion: req.ContentVersion, SnapshotID: req.SnapshotID, SnapshotVersion: req.SnapshotVersion, Selection: req.Selection, Future: req.Future, Tools: req.Tools, Expires: req.Expires}, &s)
+			if err != nil {
+				return err
+			}
+			if _, err = d.acknowledged(r.Context(), t, *req.Ack, p, s.Owner.Machine, s.Owner.SessionID); err != nil {
+				return err
+			}
 			futureOwner = s.Owner
-			return err
+			return nil
 		}); err != nil {
 			return err
 		}
-		p, err := d.projectShare(r.Context(), futureOwner, nil)
-		if err != nil {
-			return err
+		if needsFrontier {
+			p, err := d.projectShare(r.Context(), futureOwner, nil)
+			if err != nil {
+				return err
+			}
+			future = &p
 		}
-		future = &p
 	}
 	var body any
 	err := d.shareDB().ShareTransaction(r.Context(), func(t *db.ShareTx) error {
@@ -595,7 +639,7 @@ func (d *Devices) shareReadPublic(w http.ResponseWriter, r *http.Request) error 
 		if s.Meta.Status != "active" || !s.Meta.Expires.After(time.Now()) {
 			return shareMissing()
 		}
-		o, err := d.shareDB().SessionShareOwner(r.Context(), s.Owner.Machine, s.Owner.SessionID)
+		o, err := t.SessionShareOwner(s.Owner.Machine, s.Owner.SessionID)
 		if err != nil || o == nil || *o != s.Owner {
 			return shareMissing()
 		}

@@ -30,9 +30,22 @@ func (d *DB) BeginSessionCreation(ctx context.Context, machine string, caller de
 	_, err := d.pool.Exec(ctx, `INSERT INTO session_creation_intents(creation_id,machine_id,issuer,owner_subject,assignment_generation,incarnation) VALUES($1,$2,$3,$4,$5,$6)`, intent.CreationID, machine, caller.Issuer, caller.OwnerSubject, authority.Generation, intent.Incarnation)
 	return intent, err
 }
+
+const sessionShareOwnerQuery = `SELECT machine_id,session_id,issuer,owner_subject::text,incarnation,assignment_generation,owner_revision,audit_id::text FROM session_share_ownership WHERE machine_id=$1 AND session_id=$2`
+
 func (d *DB) SessionShareOwner(ctx context.Context, machine, session string) (*SessionShareOwnership, error) {
+	return scanSessionShareOwner(d.pool.QueryRow(ctx, sessionShareOwnerQuery, machine, session))
+}
+
+// SessionShareOwner uses the existing transaction connection, including when all
+// other pool connections are waiting for the sharing writer fence.
+func (t *ShareTx) SessionShareOwner(machine, session string) (*SessionShareOwnership, error) {
+	return scanSessionShareOwner(t.tx.QueryRow(t.ctx, sessionShareOwnerQuery, machine, session))
+}
+
+func scanSessionShareOwner(row pgx.Row) (*SessionShareOwnership, error) {
 	var o SessionShareOwnership
-	err := d.pool.QueryRow(ctx, `SELECT machine_id,session_id,issuer,owner_subject::text,incarnation,assignment_generation,owner_revision,audit_id::text FROM session_share_ownership WHERE machine_id=$1 AND session_id=$2`, machine, session).Scan(&o.Machine, &o.SessionID, &o.Issuer, &o.Subject, &o.Incarnation, &o.Generation, &o.Revision, &o.AuditID)
+	err := row.Scan(&o.Machine, &o.SessionID, &o.Issuer, &o.Subject, &o.Incarnation, &o.Generation, &o.Revision, &o.AuditID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

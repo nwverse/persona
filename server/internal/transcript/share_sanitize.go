@@ -30,12 +30,15 @@ var shareURL = lazyre.New(`(?i)\b[a-z][a-z0-9+.-]{1,15}://[^\s<>"']+`)
 var shareSensitiveKey = lazyre.New(`(?i)(?:api[_-]?key|apikey|secret|passw(?:or)?d|token|credential|private[_-]?key|access[_-]?key|session[_-]?key|authorization|cookie|signature|^sig$|x-amz-credential)`)
 var shareBasicUser = lazyre.New(`(?i)((?:^|\s)(?:-u|--user)[ =]+)("[^"\r\n]*"|'[^'\r\n]*'|\S+)`)
 var shareDigits = lazyre.New(`^[0-9]+$`)
+var shareCountKey = lazyre.New(`(?i)^(?:max_tokens|max_output_tokens|max_completion_tokens|input_tokens|output_tokens|total_tokens|token_count|token_limit|tokens)$`)
+var shareFlagKey = lazyre.New(`(?i)^use_tokens?$`)
 
 // redactAssignments replaces the value after `name:` or `name=` for any
 // credential-like name. Quoted values end at their quote; header-style values
 // (authorization, password, passwd, secret, cookie) end at the line, since they
-// often contain spaces; other values end at whitespace or a delimiter. Bare
-// numbers are kept: max_tokens=4096 is not a secret.
+// often contain spaces; other values end at whitespace or a delimiter. Only
+// explicit count/flag keys retain numeric/boolean values; numeric credentials
+// such as password=123456 are still secrets.
 func redactAssignments(s string) string {
 	var b strings.Builder
 	at := 0
@@ -69,11 +72,19 @@ func redactAssignments(s string) string {
 			}
 		}
 		value := s[valueStart:end]
-		if value == "" || shareDigits.MatchString(value) {
+		if value == "" || shareCountKey.MatchString(name) && shareDigits.MatchString(value) ||
+			shareFlagKey.MatchString(name) && (value == "true" || value == "false") {
 			continue
 		}
 		b.WriteString(s[at:valueStart])
+		quoted := value[0] == '"' || value[0] == '\''
+		if quoted {
+			b.WriteByte(value[0])
+		}
 		b.WriteString("[REDACTED]")
+		if quoted {
+			b.WriteByte(value[0])
+		}
 		at = end
 	}
 	b.WriteString(s[at:])
@@ -189,10 +200,14 @@ func SanitizeShareArguments(raw json.RawMessage) (string, error) {
 					return nil, err
 				}
 				if shareSensitiveKey.MatchString(k) {
+					keep := a == nil
 					switch a.(type) {
-					case json.Number, bool, nil:
-						// Counts and flags (max_tokens, use_token) are not secrets.
-					default:
+					case json.Number:
+						keep = shareCountKey.MatchString(k)
+					case bool:
+						keep = shareFlagKey.MatchString(k)
+					}
+					if !keep {
 						out[key] = "[REDACTED]"
 						continue
 					}

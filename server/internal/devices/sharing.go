@@ -167,6 +167,15 @@ func (d *Devices) owned(ctx context.Context, machine, session string) (db.Sessio
 		return db.SessionShareOwnership{}, shareFail("authority_unavailable")
 	}
 	o, err := s.SessionShareOwner(ctx, machine, session)
+	return checkedShareOwner(ctx, o, err)
+}
+
+func ownedShareTransaction(ctx context.Context, t *db.ShareTx, machine, session string) (db.SessionShareOwnership, error) {
+	o, err := t.SessionShareOwner(machine, session)
+	return checkedShareOwner(ctx, o, err)
+}
+
+func checkedShareOwner(ctx context.Context, o *db.SessionShareOwnership, err error) (db.SessionShareOwnership, error) {
 	if err != nil {
 		return db.SessionShareOwnership{}, err
 	}
@@ -378,6 +387,27 @@ func loadSealed(t *db.ShareTx, id string) (db.ShareRow, sealedShare, error) {
 	}
 	return r, s, nil
 }
+func shareCreationReplay(ctx context.Context, t *db.ShareTx, actor, requestID, digest string) (*sealedShare, error) {
+	prior, id, err := t.Creation(actor, requestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if prior != digest {
+		return nil, shareFail("idempotency_conflict")
+	}
+	_, s, err := loadSealed(t, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ownerMatches(devicewire.CallerOf(ctx), s.Owner) {
+		return nil, shareMissing()
+	}
+	return &s, nil
+}
+
 func saveSealed(t *db.ShareTx, r db.ShareRow, s sealedShare) error {
 	raw, err := json.Marshal(s)
 	if err != nil {
