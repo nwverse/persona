@@ -590,7 +590,7 @@ The same rules on the web (`web/src/lib/inbox-groups.ts`) and iOS / iPad (`Perso
   - Edit (`InboxSuggestionEditor`): changing text then Send / Start / Confirm = `confirm` with `text` (omit if unchanged); Say something + Tell AI below = `instruct`.
     One `client_id` per attempt, with the card's displayed `version`. `409 suggestion_stale` shows Suggestion updated and redraws from the returned item, closing the editor. Failure stays in the editor for retry (`InboxSuggestionModel`).
   - Chain initially shows only the latest entry; Expand all (N) reveals all, oldest first. Each row: time · kind icon · text. Taps follow `link` (`InboxChainTarget`):
-    source → source page; `session` → chat (manager handling chat in assistant, sub-chat as Agent); `item` → that item; no link → inline `detail` / `messages`.
+    source → source page; `session` → chat (manager handling chat in assistant, sub-chat as Agent; on the iPhone shell both, and AI Draft Reply's See How the AI Twin Handled It, push over the item (`InboxChatRoute`), so Back returns to it, #3114); `item` → that item; no link → inline `detail` / `messages`.
     Entries with both navigation and messages (Received messages) have a separate expand arrow on the right.
   - Manager-archived items (`done_by: "manager"`) show "Handled by the manager" in detail state. Chain `done` (user marked done / manager found no action needed) uses ✓ and is not tappable.
     FYI conclusions remain under FYI with their card; OK archives them.

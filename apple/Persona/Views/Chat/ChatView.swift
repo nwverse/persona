@@ -182,7 +182,7 @@ struct ChatView: View {
     /// Offered once this chat's pending card was answered and another conversation needs you (#4348); nil until then.
     @State private var offeredNext: SessionKey?
 
-    init(key: SessionKey, style: ChatStyle = .dev) {
+    init(key: SessionKey, style: ChatStyle = .dev, itemManager: String? = nil) {
         // Built again for the same path (a tree swap): the agent its header switched to, not the one it opened with.
         #if os(iOS)
         _key = State(initialValue: style == .dev ? AppModel.shared.chatSwitched[key] ?? key : key)
@@ -191,10 +191,13 @@ struct ChatView: View {
         #endif
         opened = key
         self.style = style
+        self.itemManager = itemManager
     }
 
     /// The session this page was opened with (the path's), which `switchTo` records its switches under.
     private let opened: SessionKey
+    /// The manager of the inbox item this conversation was opened from (`InboxChatRoute`).
+    private let itemManager: String?
 
     /// A subagent of this session being looked at instead of the main agent (read-only, same message UI).
     @State private var viewing: Subagent?
@@ -218,10 +221,10 @@ struct ChatView: View {
         ComputerActivity.latest(in: store.items, chat: shownKey.machineRef, machines: model.namedMachines)
     }
     private var session: Session? { model.session(key) }
-    /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the one the
-    /// Persona page shows it for; nil for the default's.
+    /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the inbox
+    /// item's it was opened from or the one the Persona page shows it for; nil for the default's.
     private var linkManager: String? {
-        model.linkManager(session?.manager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
+        model.linkManager(session?.manager ?? itemManager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
     }
     /// The latest state of the subagent being viewed (the list refreshes with the session).
     private var viewedAgent: Subagent? {

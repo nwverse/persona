@@ -1067,6 +1067,9 @@ final class AppModel {
             openAssistantConversation(key)
         } else {
             shellSettings = false // the shell's Settings sheet would cover the chat (#3818)
+            #if os(iOS)
+            if let shell = tabRouter as? ShellState, shell.drawer.isOpen { shell.drawer.close() } // and so would the drawer
+            #endif
             selectedTab = .chats
             openChat = key
         }

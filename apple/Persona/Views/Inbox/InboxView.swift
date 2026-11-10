@@ -69,7 +69,7 @@ struct InboxPage: View {
     private var store: InboxStore { .shared }
 
     /// The kind filters, by key.
-    static let kinds = [("mention", String(localized: "@Me")), ("dm", String(localized: "DMs")), ("group", String(localized: "Group chat")), ("mail", String(localized: "Mail [Assistant View 3d708e]")), ("agent", "Agent")]
+    static let kinds = [("mention", String(localized: "@Me")), ("dm", String(localized: "DMs")), ("group", String(localized: "Group chat")), ("mail", String(localized: "Mail [Assistant View 3d708e]")), ("agent", String(localized: "Agent"))]
 
     private var itemProjection: InboxProjection {
         itemMemo(store.items, filter: .init(source: source, kind: kind, query: query), revision: store.itemsRevision)
