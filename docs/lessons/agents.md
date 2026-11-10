@@ -727,3 +727,10 @@ conversation turn. Read `conversation_summaries.db` in read-only mode. `CASCADE_
 keeps the conversation working; an idle summary must cover the latest meaningful transcript step before its reply counts as
 done. Missing or unavailable summaries leave text-only replies unknown. Test the gap after narration and before the next tool
 step, plus stale idle summaries, actual completion and unavailable stores, through the normal runtime inventory protocol.
+
+## Runtime close is independent of terminal access (#3507)
+
+A runtime can implement `session.close` while exposing no terminal controls. Carry its declared close capability to the
+session row and use it in the web menu and confirmation. Antigravity must cancel its active prompt and withdraw permissions
+before closing. A queued prompt or late permission request must respect closure. Test through the runtime protocol, including
+a native agent that rejects `session/close`, and republish the closed inventory after a node reconnect.

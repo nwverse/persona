@@ -227,12 +227,15 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// DismissNotice: close a notice that Enter only closes (no options) before sending; any other dialog
 			// still refuses the send.
 			DismissNotice bool `json:"dismiss_notice"`
-			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go).
-			Task *sendTask `json:"task"`
+			// Task: new work handed to this agent becomes a supervised task of the main conversation (agent_control.go),
+			// read from RawTask by givenTask (nil: a reply).
+			Task    *sendTask       `json:"-"`
+			RawTask json.RawMessage `json:"task"`
 			// Attachments: the user's pictures and files, by their paths on this conversation's computer (#2437).
 			Attachments []string `json:"attachments"`
 		}
 		_ = json.Unmarshal(args, &a)
+		a.Task = givenTask(a.RawTask)
 		am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 		if err != nil {
 			return "", err

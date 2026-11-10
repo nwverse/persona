@@ -518,7 +518,7 @@
   },
   {
     "name": "agent_send",
-    "description": "Send a message to an agent as the user would type it (answers its question, tells it to continue, gives new instructions). Queued if the agent is working. Only send what the user asked for. An agent that is not running any more (a finished task's agent is closed after a few idle minutes) is resumed first, in the same session with the same machine, directory and launcher, so you can keep working with it. A text of only /exit or /quit closes a running agent and its terminal tab (the session can still be resumed later) and does nothing to one that is not running; a finished task's agent is closed for you, so there is no need to.\n\nWhen a dialog holds the agent's terminal the send is refused (dialog_open) with the dialog's first line, and whether it is only a notice that Enter closes (\"Enter to continue\", no options). Send again with dismiss_notice true to close such a notice first. Confirmations, permissions and pickers are never closed for you: tell the user, or answer them with interaction_answer.\n\nWhen you hand new work to an agent that runs already (one the user opened, a long-lived one that passes work on), give task from the main conversation: once the text is sent the agent is your supervised task, as agent_supervise makes one (a todo with the text as its notes, the agent on it, done_when, a card in the conversation; 督办 messages, task_review), so the work is tracked instead of only said. Put the criteria in the text too: the agent is told only what the text says. An agent already on one of your tasks takes more of it under the same title (no second task; done_when is updated); a different title is refused, so other work is not filed under that task. An agent on the user's own todo or another conversation's task is refused. Refused means nothing was sent. If the send fails, no task is made. Leave task out for a reply, a nudge or a decision on work it already has.",
+    "description": "Send a message to an agent as the user would type it (answers its question, tells it to continue, gives new instructions). Queued if the agent is working. Only send what the user asked for. An agent that is not running any more (a finished task's agent is closed after a few idle minutes) is resumed first, in the same session with the same machine, directory and launcher, so you can keep working with it. A text of only /exit or /quit closes a running agent and its terminal tab (the session can still be resumed later) and does nothing to one that is not running; a finished task's agent is closed for you, so there is no need to.\n\nWhen a dialog holds the agent's terminal the send is refused (dialog_open) with the dialog's first line, and whether it is only a notice that Enter closes (\"Enter to continue\", no options). Send again with dismiss_notice true to close such a notice first. Confirmations, permissions and pickers are never closed for you: tell the user, or answer them with interaction_answer.\n\nWhen you hand new work to an agent that runs already (one the user opened, a long-lived one that passes work on), give task from the main conversation: once the text is sent the agent is your supervised task, as agent_supervise makes one (a todo with the text as its notes, the agent on it, done_when, a card in the conversation; 督办 messages, task_review), so the work is tracked instead of only said. Put the criteria in the text too: the agent is told only what the text says. An agent already on one of your tasks takes more of it under the same title (no second task; done_when is updated); a different title is refused, so other work is not filed under that task. An agent on the user's own todo or another conversation's task is refused. Refused means nothing was sent. If the send fails, no task is made. Leave task out, or null, for a reply, a nudge or a decision on work it already has; a task with nothing in it (a blank title, no non-blank done_when, no expect_minutes above 0, no other key) counts as left out too.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -549,11 +549,12 @@
           "description": "pictures and files the user gave you for it, by their absolute paths on your computer: a picture they sent (the path Claude Code gives it), a file the app put in their message. They are copied to the agent's computer and listed at the end of its message, and the text's mentions of them name the copies. Only those the user gave you in this conversation are accepted"
         },
         "task": {
-          "type": "object",
-          "description": "new work: make it your supervised task first (main conversation only)",
-          "required": [
-            "title"
+          "type": [
+            "object",
+            "null"
           ],
+          "description": "new work: make it your supervised task first (main conversation only); null for a reply",
+          "additionalProperties": false,
           "properties": {
             "title": {
               "type": "string",
@@ -949,7 +950,7 @@
   },
   {
     "name": "kb_search",
-    "description": "Search the knowledge base: summaries and metadata of chats, people, projects, docs, meetings, events, recordings (with their full transcripts), project timelines, the notes directories the user added (hits with an absolute path) and, with messages=true, the full message archive (newest days first). All words must match.",
+    "description": "Search the knowledge base: summaries and metadata of chats, people, projects, docs, meetings, events, recordings (with their minutes and full transcripts), project timelines, the notes directories the user added (hits with an absolute path) and, with messages=true, the full message archive (newest days first). All words must match. Hits come in the order the files are read, not by relevance, so a broad search can fill the limit with chats: give kind to search one kind only, the entries whose name matches first, then as kb_list ranks them. A past meeting (its decisions, what is still open, who does what) is kind=recordings: found by its title, the calendar event's title or what was said; then kb_get it.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -958,6 +959,19 @@
       "properties": {
         "query": {
           "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "projects",
+            "chats",
+            "people",
+            "docs",
+            "meetings",
+            "events",
+            "recordings"
+          ],
+          "description": "only this kind's entries (no notes directories; the message archive only with chats)"
         },
         "messages": {
           "type": "boolean",
@@ -972,7 +986,7 @@
   },
   {
     "name": "kb_list",
-    "description": "List knowledge-base entities of one kind ranked by importance (P0 first), relevance to the user, recency: projects (short = a feature / launch, long = a team mission), chats, people, docs, meetings, events, recordings (transcripts of the user's phone / watch recordings, kept a few days). Optional tag filter.",
+    "description": "List knowledge-base entities of one kind ranked by importance (P0 first), relevance to the user, recency: projects (short = a feature / launch, long = a team mission), chats, people, docs, meetings, events, recordings (transcripts of the user's phone / watch recordings, kept a few days; newest first, saying which have meeting minutes). Meetings, events and recordings show when they started, in the user's time zone. Optional tag filter.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1003,7 +1017,7 @@
   },
   {
     "name": "kb_get",
-    "description": "Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, a chat's messages of the last 7 days, a recording's full timestamped transcript (recordings: the user's phone / watch recordings of the last days, text only). id from kb_list / kb_search (a project also by name).",
+    "description": "Read one entity: its metadata (links to people / chats / projects, tags), compressed context (summary.md), a project's timeline, a chat's messages of the last 7 days, a recording's meeting minutes with where each action item stands (a suggestion, or its to-do: open, done, cancelled, deleted) and its full timestamped transcript (recordings: the user's phone / watch recordings of the last days, text only), a meeting's or event's recordings. id from kb_list / kb_search (a project also by name).",
     "input_schema": {
       "type": "object",
       "required": [

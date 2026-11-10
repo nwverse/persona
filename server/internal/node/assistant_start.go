@@ -391,11 +391,17 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		if wasSpare {
 			n.spare = nil
 		}
+		var recovery *assistantTurnRecovery
 		if n.procs[id] == p {
 			delete(n.procs, id)
+			recovery = n.recoveries[id] // a current process that exits without a result must not leave a working placeholder
 		}
 		n.mu.Unlock()
 		if wasSpare {
+			return
+		}
+		if recovery != nil {
+			n.finishAssistantRecoveryOnExit(p, recovery)
 			return
 		}
 		n.emitDelta(id, "")
