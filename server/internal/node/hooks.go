@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -391,6 +392,13 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	}
 
 	switch {
+	case in.HookEventName == "SessionStart":
+		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
+		if brief := n.closeoutStart(ctx, req, in); brief != nil {
+			return brief, nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "Elicitation":
 		if !elicitationInteraction(in, &ix) {
 			return nil, nil
@@ -432,10 +440,14 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		_ = json.Unmarshal(in.ToolInput, &p)
 		ix.Kind, ix.Plan = proto.IxPlan, p.Plan
+		// The terminal's own dialog may decide the plan while the card still waits (the card is not always
+		// withdrawn then): the footer is watched from now, until the card is answered.
+		stopWatch := n.planThenAfterTerminal(in.SessionID)
 		res, ok, err := n.ask(ctx, ix)
 		if err != nil || !ok || res.Approve == nil {
-			return nil, err
+			return nil, err // the watch goes on: the terminal decides, and with it the mode that follows
 		}
+		stopWatch()
 		if !*res.Approve {
 			msg := "用户在手机上打回了这个计划。"
 			if strings.TrimSpace(res.Feedback) != "" {
@@ -445,7 +457,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		mode := res.Mode
 		if mode == "" {
-			mode = "bypassPermissions"
+			mode = cmp.Or(n.planThen(in.SessionID), "bypassPermissions")
 		}
 		var input map[string]any
 		_ = json.Unmarshal(in.ToolInput, &input)

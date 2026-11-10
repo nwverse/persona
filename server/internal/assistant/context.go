@@ -232,7 +232,7 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 			}
 			w := c.Work
 			if w != nil && w.Phase != proto.WorkWorking {
-				a.Line = w.Line
+				a.Line, a.Closeout = w.Line, snapshotCloseout(w)
 			}
 			if a.Line == "" && c.AwaitsReply {
 				a.Line = c.Asks // what it asks (#5096)

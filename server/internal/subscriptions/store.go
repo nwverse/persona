@@ -33,6 +33,26 @@ type Store interface {
 	SeenKeys(ctx context.Context, id string, uids []string) (map[string]bool, error)
 	// CommitRun writes a run's outcome in one transaction (RunCommit).
 	CommitRun(ctx context.Context, c RunCommit) error
+	// HeldItems are the subscription's held items q picks, in the order they were stored (#2039).
+	HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error)
+	// PruneItems removes the subscription's held items stored before before (their dedup keys stay).
+	PruneItems(ctx context.Context, id string, before time.Time) error
+}
+
+// ItemQuery picks held items: those stored at or after Since, after the stored order After, at most Limit (the
+// oldest, or the newest when Newest), returned in stored order.
+type ItemQuery struct {
+	After  int64
+	Since  time.Time
+	Limit  int
+	Newest bool
+}
+
+// Held is an item as it waits for the destinations: its place in the stored order and when its run stored it.
+type Held struct {
+	Seq    int64
+	Stored time.Time
+	Item
 }
 
 // RunCommit is what a run writes at once: the new dedup keys and items, the cursor and history, and the state. The
@@ -52,7 +72,8 @@ type MemStore struct {
 	mu    sync.Mutex
 	subs  map[string]Subscription
 	seen  map[string]map[string]time.Time
-	items []Item
+	items []Held
+	seq   int64
 	// FailCommit, when set, fails every CommitRun with it (a crash in the middle of a run).
 	FailCommit error
 }
@@ -108,7 +129,7 @@ func (m *MemStore) DeleteSubscription(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 	delete(m.subs, id)
 	delete(m.seen, id)
-	m.items = slices.DeleteFunc(m.items, func(it Item) bool { return it.SubscriptionID == id })
+	m.items = slices.DeleteFunc(m.items, func(it Held) bool { return it.SubscriptionID == id })
 	return nil
 }
 
@@ -156,7 +177,8 @@ func (m *MemStore) CommitRun(_ context.Context, c RunCommit) error {
 	}
 	for _, it := range c.Items {
 		it.SubscriptionID = c.Sub.ID
-		m.items = append(m.items, it)
+		m.seq++
+		m.items = append(m.items, Held{Seq: m.seq, Stored: c.Now, Item: it})
 	}
 	m.pruneSeen(c.Sub.ID, c.Now)
 	applyRun(&cur, c.Sub, cur.Revision == c.Revision)
@@ -188,11 +210,41 @@ func (m *MemStore) pruneSeen(id string, now time.Time) {
 	}
 }
 
+func (m *MemStore) HeldItems(_ context.Context, id string, q ItemQuery) ([]Held, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Held
+	for _, it := range m.items {
+		if it.SubscriptionID == id && it.Seq > q.After && !it.Stored.Before(q.Since) {
+			out = append(out, it)
+		}
+	}
+	if q.Limit > 0 && len(out) > q.Limit {
+		if q.Newest {
+			out = out[len(out)-q.Limit:]
+		} else {
+			out = out[:q.Limit]
+		}
+	}
+	return slices.Clone(out), nil
+}
+
+func (m *MemStore) PruneItems(_ context.Context, id string, before time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items = slices.DeleteFunc(m.items, func(it Held) bool { return it.SubscriptionID == id && it.Stored.Before(before) })
+	return nil
+}
+
 // Items are the pending items held, in order (tests).
 func (m *MemStore) Items() []Item {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return slices.Clone(m.items)
+	out := make([]Item, len(m.items))
+	for i, it := range m.items {
+		out[i] = it.Item
+	}
+	return out
 }
 
 // SeenCount is how many dedup keys a subscription has (tests).
@@ -208,10 +260,17 @@ func applyRun(cur *Subscription, out Subscription, withState bool) {
 	cur.LastRunAt, cur.LastOKAt, cur.LastNewCount = out.LastRunAt, out.LastOKAt, out.LastNewCount
 	cur.WeakDedup, cur.Shape, cur.NextRunAt = out.WeakDedup, out.Shape, out.NextRunAt
 	cur.SourceName, cur.Icon, cur.Service, cur.SourceMin, cur.MaxCallsPerHour = out.SourceName, out.Icon, out.Service, out.SourceMin, out.MaxCallsPerHour
+	if sameTime(cur.InboxFrom, out.InboxFrom) { // the catch-up mark of the Inbox turned on as the run saw it, not of another
+		cur.InboxCatchup = out.InboxCatchup
+	}
 	if withState {
 		cur.RunState, cur.Error, cur.FailCount, cur.FailingSince = out.RunState, out.Error, out.FailCount, out.FailingSince
 		cur.PausedUntil, cur.ShapeMisses, cur.ToolFingerprint = out.PausedUntil, out.ShapeMisses, out.ToolFingerprint
 	}
+}
+
+func sameTime(a, b *time.Time) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
 }
 
 func clone(s Subscription) Subscription {
