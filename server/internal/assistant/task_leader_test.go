@@ -1400,3 +1400,26 @@ func TestRehomedWorkerSurvivesARestart(t *testing.T) {
 		t.Fatalf("the rehomed worker after a restart: origin %q %+v", cur.Origin, cur.Supervision)
 	}
 }
+
+// A leader's workers are held to the brief rule (goal for a read-only worker, done_when for a writable one, and
+// expect_minutes for both) as any task_plan task is, and the leader's schema can say them.
+func TestLeaderWorkersNeedABrief(t *testing.T) {
+	s, f := newQuietService(t)
+	startTaskLeader(t, s, f)
+	s.briefsOptional = false
+	call := func(task map[string]any) proto.ToolResult {
+		raw, _ := json.Marshal(map[string]any{"tasks": []any{task}})
+		return s.mcpCall(context.Background(), "box", "s1", "task_plan", raw, false)
+	}
+	res := call(map[string]any{"title": "改登录页", "prompt": "改", "readonly": false, "permission": "bypassPermissions", "done_when": []string{"测试通过"}})
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "expect_minutes") {
+		t.Fatalf("a writable worker without expect_minutes: %+v", res)
+	}
+	res = call(map[string]any{"title": "查一下", "prompt": "查", "readonly": true, "expect_minutes": 10})
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "goal") {
+		t.Fatalf("a read-only worker without a goal: %+v", res)
+	}
+	if res = call(map[string]any{"title": "查一下", "prompt": "查", "readonly": true, "goal": "知道登录页为什么崩", "expect_minutes": 10}); res.IsError {
+		t.Fatalf("a read-only worker with its brief: %+v", res)
+	}
+}

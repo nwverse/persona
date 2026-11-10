@@ -78,6 +78,10 @@ Hand part of your own task to workers: each task you give this starts a new codi
             },
             "description": "what done means: results the worker must show, one each; the worker is told them"
           },
+          "goal": {
+            "type": "string",
+            "description": "a read-only worker's goal: what you get from it, in one sentence (a writable worker needs done_when instead); expect_minutes is needed for both"
+          },
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,

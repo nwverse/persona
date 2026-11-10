@@ -267,6 +267,7 @@ type leaderTaskIn struct {
 	Permission    string   `json:"permission"`
 	Readonly      bool     `json:"readonly"`
 	DoneWhen      []string `json:"done_when"`
+	Goal          string   `json:"goal"`
 	ExpectMinutes int      `json:"expect_minutes"`
 	Why           string   `json:"why"`
 }
@@ -286,7 +287,7 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	for _, t := range in.Tasks {
 		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
 			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Permission: t.Permission, Readonly: t.Readonly,
-			DoneWhen: t.DoneWhen, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
+			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
 		if strings.TrimSpace(pt.Machine) == "" {
 			pt.Machine = l.agent.MachineID
 			if strings.TrimSpace(pt.Cwd) == "" {
