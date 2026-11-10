@@ -1585,3 +1585,21 @@ A worktree's display name and its Agents' conversation names are different comma
   `MathInlineImages` returns the TeX source as a picture on an error.
 - Keys that change at every delta in a shared memo that empties itself when full (`TextMemo`) wipe everyone else's entries every few
   seconds; give them their own small memo (`StreamTail`).
+
+## `difference(from:)` can need memory in the square of the changes (2026-11-10, #2915)
+
+- The standard library's Myers diff keeps every step's frontier in the older runtimes: on macOS 15.6, two sides of
+  2,000 lines that share none took the process to 67 MB, of 4,000 lines to 290 MB (of 500 lines: 6 MB). iOS devices before 26.4
+  are expected to behave the same.
+- Never hand it a whole file or an unbounded input from a view or a memo. `LineDiff` (PersonaKit) sets the lines both
+  sides start and end with aside first (a typical edit leaves a few lines to compare), maps lines to integers, and above
+  1,000 lines in between draws them as removed then added instead. `TextCompare` (document versions) caps each side at
+  20,000 lines only, far more than a phone has memory for when two big versions share little; not changed yet.
+
+## A read the user asked for must say when it fails (2026-11-10, #1889)
+
+- The Git tab's load paths kept a failure quiet once a status was shown (`if status == nil && !live`), and Load Earlier
+  Commits used `try?`: a pull to refresh or ⌘R over a stale status, or a failed page of history, looked exactly like
+  "nothing new" or "no earlier commits". Keep the quiet path only for the automatic live refresh; a read the user started
+  says it failed over what stays shown (a notice with Retry, or the button itself turning into Try Again). Decide it in a
+  small pure type (`GitReadFailure`) so a test pins which case is quiet.

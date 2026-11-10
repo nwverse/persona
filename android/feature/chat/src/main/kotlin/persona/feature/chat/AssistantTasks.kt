@@ -387,6 +387,7 @@ private fun ReportCard(item: FeedItem, title: String, onOpenTask: (() -> Unit)?)
 internal fun permissionLabel(mode: String?): String = when (mode ?: "default") {
     "acceptEdits" -> stringResource(R.string.chat_tasks_permission_accept_edits)
     "plan" -> stringResource(R.string.chat_tasks_permission_plan)
+    "auto" -> stringResource(R.string.chat_tasks_permission_auto)
     "bypassPermissions" -> stringResource(R.string.chat_tasks_permission_bypass)
     "default" -> stringResource(R.string.chat_tasks_permission_default)
     else -> mode.orEmpty()
