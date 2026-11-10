@@ -296,9 +296,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	} else {
 		s.putWork(ctx, e)
 	}
-	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), w.Phase, orEmpty("/", e.Work.On), by,
+	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), e.Work.Phase, orEmpty("/", e.Work.On), by,
 		time.Since(start).Seconds(), e.Work.Line)
-	s.workEvent(machine, c.SessionID, "triaged", map[string]any{"phase": w.Phase, "on": e.Work.On, "by": by,
+	s.workEvent(machine, c.SessionID, "triaged", map[string]any{"phase": e.Work.Phase, "on": e.Work.On, "by": by,
 		"line": e.Work.Line, "ms": time.Since(start).Milliseconds()})
 }
 
