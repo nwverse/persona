@@ -142,6 +142,7 @@
   "review_title": "Done when",
   "review_none": "No criteria were given",
   "review_open": "Not reviewed yet",
+  "review_unchecked": "Not checked separately: added after the task was accepted",
   "review_met": "Met",
   "review_missing": "Missing",
   "review_note": "Supervisor: {note}",

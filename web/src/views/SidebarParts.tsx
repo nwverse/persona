@@ -13,6 +13,9 @@ import { toneOf } from "../lib/extension-ui";
 import { BADGE_TONE, navIcon, pageRoute } from "./extensions/ExtensionSlots";
 import { href, navigate, type Route } from "../lib/router";
 import { useAgentSessions, useCounts } from "../lib/sessions";
+import { triageTodos } from "../lib/todo-triage";
+import { makeSessionLookup } from "../lib/todos";
+import { useRestoredTodos } from "../lib/todo-restore";
 import { useLarkOn, useStore } from "../lib/store";
 import { connPhase } from "../lib/connection";
 import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
@@ -69,8 +72,11 @@ export function useNavPages() {
   const assistant = useStore((s) => s.assistant);
   const todos = useStore((s) => s.todos);
   const todosSupported = useStore((s) => s.todosSupported);
-  // Quiet tasks (#1731) are told about in the main conversation, not counted here.
-  const uncompletedTodosCount = useMemo(() => todos.filter((todo) => !todo.done_at && !todo.quiet).length, [todos]);
+  // The To-dos page's open count (#3156): not shelved, not finished; quiet tasks (#1731) are told about in the main
+  // conversation, not counted here.
+  const agentSessions = useAgentSessions();
+  const [restored] = useRestoredTodos();
+  const uncompletedTodosCount = useMemo(() => triageTodos(todos, makeSessionLookup(agentSessions), Date.now(), restored).open, [todos, agentSessions, restored]);
   const counts = useCounts();
   const inbox = useInboxBadge();
   const larkSwitch = useLarkHome();

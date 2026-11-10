@@ -129,6 +129,7 @@
   "review_title": "完了条件",
   "review_none": "完了条件は未指定",
   "review_open": "未検収",
+  "review_unchecked": "受け入れ後に追加、個別の確認なし",
   "review_met": "達成",
   "review_missing": "不足",
   "review_note": "監督メモ：{note}",

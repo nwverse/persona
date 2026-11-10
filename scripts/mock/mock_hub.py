@@ -1966,6 +1966,68 @@ if os.environ.get("MOCK_TODO_OFFLINE") == "1" and not MOCK_MACHINES:
     SESSIONS.append(sess("nas", "a1f3c2d4-0000-4000-8000-0000000000b1", "备份照片库", "/home/me/backup", "unknown",
                          "unknown", "backup", 1, "1", 1, 180, "开始同步照片库。"))
 
+
+# MOCK_TODO_TRIAGE=1 (#3156, docs/assistant/todo-status-sop.md): a long-running hub's to-do list. A few to-dos really move;
+# most are old agent records nobody touched for days, one accepted task was reopened when its agent got more work (eight
+# criteria, the accepted review judged five), an old PR still waits to merge, and two pairs are the same piece of work.
+def _triage_fixture():
+    tr = []
+
+    def agent(sid, title, cwd, state, minutes, last, machine="macbook", **kw):
+        status = {"working": "working", "needs_you": "blocked", "unread": "done", "idle": "idle"}[state]
+        space = cwd.rstrip("/").rsplit("/", 1)[-1]
+        SESSIONS.append(sess(machine, sid, title, cwd, status, state, space, 7, "1", 1, minutes, last, **kw))
+        return {"machine_id": machine, "session_id": sid, "linked_at": ago(minutes=minutes + 30), "released_at": None,
+                "title": title, "cwd": cwd, "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def todo(tid, title, minutes, agents=(), **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 600),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": list(agents)}
+        t.update(kw)
+        tr.append(t)
+
+    def sid(n):
+        return f"c3d5e7f9-0000-4000-8000-{n:012d}"
+
+    todo("tr_inbox", "收件箱分拣加批量操作", 4, [agent(sid(1), "收件箱批量操作", "/Users/me/code/persona", "working", 4,
+         "批量标记已处理的接口写好了，正在补单测。")],
+         supervision={"supervisor": "conv_demo", "done_when": ["批量标记已处理", "单测覆盖"], "state": "", "round": 0, "reviews": [],
+                      "progress": {"kind": "progress", "step": 3, "steps": 5, "text": "写单测", "at": ago(minutes=4)}})
+    todo("tr_migrate", "数据库升级到 18", 12, [agent(sid(2), "数据库升级", "/home/me/code/shop-api", "needs_you", 12,
+         "要不要先在备份库上演练一遍？", pending=1)])
+    accepted_at = ago(hours=5)
+    done_when = ["网关能按账号池转发请求", "额度窗口按重置时间合并", "设置页能添加网关", "单测覆盖转发和合并",
+                 "部署到 hub 后实测", "网页侧边栏显示额度条", "iOS 机器页显示额度", "文档写清楚接入方式"]
+    todo("tr_gateway", "账号池网关第一阶段", 180, [agent(sid(3), "账号池网关", "/Users/me/code/persona", "idle", 180,
+         "追加的三项也做完了。")], reopened_at=ago(hours=4),
+         supervision={"supervisor": "conv_demo", "done_when": done_when, "state": "accepted", "round": 1,
+                      "reviews": [{"at": accepted_at, "verdict": "accepted", "note": "前五项都有证据，验收通过。",
+                                   "checks": [{"criterion": c, "met": True, "evidence": "见 PR 描述"} for c in done_when[:5]]}],
+                      "updated_at": accepted_at})
+    todo("tr_search_pr", "设置页加搜索", 60 * 24 * 6, [agent(sid(4), "设置页搜索", "/Users/me/code/persona", "idle", 60 * 24 * 6,
+         "PR 已经开好了，等合并。")], stage="review", pr_url="https://github.com/example/app/pull/31",
+         delivery={"state": "pr", "gate": "等你批准合并", "unblock": "user", "at": ago(days=6)})
+    todo("tr_push_fix", "修复 #412 推送丢失", 50, [agent(sid(5), "推送丢失", "/Users/me/code/persona", "unread", 50,
+         "修好了：重连后补拉漏掉的推送，单测已加。")])
+    todo("tr_push_test", "#412 推送丢失：补回归测试", 60 * 30, [agent(sid(6), "推送回归测试", "/Users/me/code/persona", "idle",
+         60 * 30, "回归测试写完了。")])
+    todo("tr_follow", "整理本周会议纪要", 120, [agent(sid(7), "会议纪要", "/Users/me/work", "idle", 120, "纪要初稿放在知识库里了。")])
+    stale = [("排查 node 内存上涨", "/Users/me/code/persona", 3), ("试一下新的启动器", "/Users/me/workspace", 4),
+             ("清理旧的构建缓存", "/Users/me", 5), ("看一下日志轮转", "/home/me/work", 7), ("调研新引擎", "/Users/me/workspace", 9),
+             ("修 Android 深色模式的边框", "/Users/me/code/persona", 11)]
+    for i, (title, cwd, days) in enumerate(stale):
+        todo(f"tr_stale_{i}", title, 60 * 24 * days, [agent(sid(20 + i), title, cwd, "idle", 60 * 24 * days, "先到这里。")])
+    tr.append({"id": "tr_deployed", "title": "网页加载提速", "notes": "", "done_at": ago(hours=1), "created_at": ago(days=1),
+               "updated_at": ago(hours=1), "origin": "conv_demo", "done_by": "review", "done_reason": "验收通过",
+               "delivery": {"state": "live", "at": ago(hours=1)}, "spaces": [], "agents": [],
+               "supervision": {"supervisor": "conv_demo", "done_when": ["首屏少于 1 秒"], "state": "accepted", "round": 0,
+                               "reviews": [{"at": ago(hours=1), "verdict": "accepted",
+                                            "checks": [{"criterion": "首屏少于 1 秒", "met": True}]}]}})
+    return tr
+
+
+if os.environ.get("MOCK_TODO_TRIAGE") == "1":
+    TODOS_INIT.extend(_triage_fixture())
 TODOS = copy.deepcopy(TODOS_INIT)
 
 
