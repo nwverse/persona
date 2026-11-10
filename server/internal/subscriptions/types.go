@@ -185,11 +185,13 @@ type CatalogSource struct {
 }
 
 type CatalogTool struct {
-	Name         string   `json:"name"`
-	Title        string   `json:"title,omitempty"`
-	Description  string   `json:"description"`
-	Subscribable bool     `json:"subscribable"`
-	Refused      *Problem `json:"refused,omitempty"`
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description"`
+	// InputSchema is the tool's, as the connector declares it: the pages draw the recipe's argument form from it.
+	InputSchema  json.RawMessage `json:"input_schema"`
+	Subscribable bool            `json:"subscribable"`
+	Refused      *Problem        `json:"refused,omitempty"`
 }
 
 // DryRunRequest names a subscription (ID) or a source not subscribed yet (Connector, Source); Recipe replaces the

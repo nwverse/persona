@@ -109,7 +109,7 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | --- | --- |
 | `GET /api/v1/subscriptions?connector=&extension=` | `{subscriptions, features: {deliver, generate}}`; `deliver` and `generate` turn true with #2039 and #2040 |
 | `GET /api/v1/subscriptions/summary` | `{connectors: [{connector, extension, subscribable?, on, failing}]}` from cached catalogs only (never a live call); `subscribable` is absent until the catalog was read |
-| `GET /api/v1/subscriptions/catalog?connector=` | the connector's sources and tools read now, each tool `subscribable` or `refused` with a code, the source's own recipes and its subscriptions; `direct` says whether the connector's own Inbox / archive feeds are on |
+| `GET /api/v1/subscriptions/catalog?connector=` | the connector's sources and tools read now, each tool with its `input_schema` and `subscribable` or `refused` with a code, the source's own recipes and its subscriptions; `direct` says whether the connector's own Inbox / archive feeds are on. Without `connector`: `{catalogs: [...]}`, every connector's catalog from earlier reads only (never a call; a connector not read yet is left out and read in the background) |
 | `GET /api/v1/subscriptions/{id}` | `{subscription, runs}`: the newest 20 runs first, `{at, ms, trigger, new, count, error}` |
 | `POST /api/v1/subscriptions/-/dry-run` | `{id}` or `{connector, source}`, with `recipe?` → the dry run; nothing is written |
 | `POST /api/v1/subscriptions` | `{connector, source, recipe?, label?}` → 201 and the subscription, both destinations off; without a recipe, the source's first own one (422 `needs_recipe` when it has none) |
@@ -117,7 +117,7 @@ Reading is open to every device; changing anything, dry runs included, needs ful
 | `POST /api/v1/subscriptions/{id}/run` | 202: runs as soon as the connector's limits allow, also while it is off |
 | `DELETE /api/v1/subscriptions/{id}?data=1` | 204; removes its seen keys and pending items |
 
-A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature while the service runs, and broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
+A subscription's `state` is `off` (both destinations off), `ok`, `failing`, `not_connected`, `rate_limited` or `needs_recipe`, with `error {code, message}`. The message is one English sentence without source content; clients localize the code. The manager reports the `source_subscriptions` feature only once subscriptions deliver (`features.deliver`, #2039), so the apps show their entry rows only then; it broadcasts `subscription` `{id, connector, revision, state, removed}` when one is saved, runs or is deleted.
 
 ## Follow-up behavior
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,7 @@ type catalogEntry struct {
 	sources []connector.CatalogSource
 	err     error
 	at      time.Time
+	conn    ConnectorInfo // as it was when read (Catalogs shows it without asking again)
 }
 
 func New(o Options) *Service {
@@ -157,6 +159,9 @@ func defaultIntervalOf(mode string, sourceMin int) int {
 	}
 	return max(defaultInterval, sourceMin)
 }
+
+// Features are the later stages that are in.
+func (s *Service) Features() Features { return s.o.Features }
 
 // List is every subscription, or those of one connector or extension.
 func (s *Service) List(ctx context.Context, f Filter) ([]Subscription, Features, error) {
@@ -277,7 +282,9 @@ func (s *Service) catalog(ctx context.Context, c ConnectorInfo, fresh time.Durat
 	defer cancel()
 	sources, err := connector.ReadCatalog(cctx, c.Conn)
 	s.mu.Lock()
-	s.catalogs[c.ID] = catalogEntry{sources: sources, err: err, at: s.now()}
+	kept := c
+	kept.Conn = nil
+	s.catalogs[c.ID] = catalogEntry{sources: sources, err: err, at: s.now(), conn: kept}
 	s.mu.Unlock()
 	return sources, err
 }
@@ -300,19 +307,53 @@ func (s *Service) Catalog(ctx context.Context, id string) (Catalog, error) {
 	if !ok {
 		return Catalog{}, notFound("connector")
 	}
-	out := Catalog{Connector: c.ID, Extension: c.Extension, Status: c.Status, Direct: c.Direct, Sources: []CatalogSource{}}
 	if !c.ready() {
+		out := Catalog{Connector: c.ID, Extension: c.Extension, Status: c.Status, Direct: c.Direct, Sources: []CatalogSource{}}
 		out.Error = &Problem{CodeNotConnected, "The connector cannot be reached now."}
 		return out, nil
 	}
 	sources, err := s.catalog(ctx, c, 0)
-	if err != nil {
-		out.Error = catalogProblem(err)
-		return out, nil
+	all, lerr := s.o.Store.ListSubscriptions(ctx)
+	if lerr != nil {
+		return Catalog{}, lerr
 	}
+	return catalogOf(c, sources, err, all), nil
+}
+
+// Catalogs are the catalogs kept from earlier reads, one a connector still registered, without asking any connector:
+// one not read yet is left out and read in the background, as is one kept longer than catalogFresh. Status and
+// Direct are as they were at that read.
+func (s *Service) Catalogs(ctx context.Context) ([]Catalog, error) {
 	all, err := s.o.Store.ListSubscriptions(ctx)
 	if err != nil {
-		return Catalog{}, err
+		return nil, err
+	}
+	out := []Catalog{}
+	for _, c := range s.o.Connectors.All(ctx) {
+		s.mu.Lock()
+		e, ok := s.catalogs[c.ID]
+		s.mu.Unlock()
+		if c.Conn != nil && c.Enabled && (!ok || s.now().Sub(e.at) > catalogFresh) {
+			s.readLater(c.ID)
+		}
+		if !ok {
+			continue
+		}
+		kept := e.conn
+		kept.Extension = c.Extension
+		out = append(out, catalogOf(kept, e.sources, e.err, all))
+	}
+	slices.SortFunc(out, func(a, b Catalog) int { return strings.Compare(a.Connector, b.Connector) })
+	return out, nil
+}
+
+// catalogOf is a connector's catalog as the API shows it: each tool subscribable or refused with why, the sources'
+// own recipes and the subscriptions on each.
+func catalogOf(c ConnectorInfo, sources []connector.CatalogSource, err error, all []Subscription) Catalog {
+	out := Catalog{Connector: c.ID, Extension: c.Extension, Status: c.Status, Direct: c.Direct, Sources: []CatalogSource{}}
+	if err != nil {
+		out.Error = catalogProblem(err)
+		return out
 	}
 	for _, src := range sources {
 		cs := CatalogSource{ID: src.ID, Name: src.Name, Icon: src.Icon, Service: src.Service, MinIntervalSeconds: src.MinIntervalSeconds,
@@ -321,7 +362,7 @@ func (s *Service) Catalog(ctx context.Context, id string) (Catalog, error) {
 			cs.Recipes = []Recipe{}
 		}
 		for _, t := range src.Tools {
-			ct := CatalogTool{Name: t.Name, Title: t.Title, Description: t.Description, Refused: refusal(t)}
+			ct := CatalogTool{Name: t.Name, Title: t.Title, Description: t.Description, InputSchema: t.InputSchema, Refused: refusal(t)}
 			ct.Subscribable = ct.Refused == nil
 			cs.Tools = append(cs.Tools, ct)
 		}
@@ -332,7 +373,7 @@ func (s *Service) Catalog(ctx context.Context, id string) (Catalog, error) {
 		}
 		out.Sources = append(out.Sources, cs)
 	}
-	return out, nil
+	return out
 }
 
 // target is what a dry run or a save works on: the connector, the source in its catalog, the tool and the recipe.

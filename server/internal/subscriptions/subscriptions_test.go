@@ -638,6 +638,19 @@ func TestSummaryUsesTheCachedCatalogOnly(t *testing.T) {
 	if err != nil || len(c.Sources) != 1 || len(c.Sources[0].Subscriptions) != 2 {
 		t.Fatalf("catalog: %+v %v", c, err)
 	}
+	if string(c.Sources[0].Tools[0].InputSchema) != string(noticesSchema) {
+		t.Fatalf("a tool's schema: %s", c.Sources[0].Tools[0].InputSchema)
+	}
+	// The cached catalogs: what was read, without a call; a connector never read is left out.
+	e.conns.mu.Lock()
+	e.conns.infos["other"] = &ConnectorInfo{ID: "other", Status: connector.StateOK, Enabled: true,
+		Conn: &fakeConn{id: "other", answer: func(connector.CatalogQuery) (string, error) { return "{}", nil }}}
+	e.conns.mu.Unlock()
+	list, err := e.svc.Catalogs(e.ctx)
+	if err != nil || len(list) != 1 || list[0].Connector != "example" || list[0].Extension != "examplechat" ||
+		list[0].Status != connector.StateOK || len(list[0].Sources[0].Subscriptions) != 2 {
+		t.Fatalf("cached catalogs: %+v %v", list, err)
+	}
 	for _, tool := range c.Sources[0].Tools {
 		if tool.Name == "send_message" && (tool.Subscribable || tool.Refused.Code != CodeWriteVerb) {
 			t.Fatalf("send_message: %+v", tool)

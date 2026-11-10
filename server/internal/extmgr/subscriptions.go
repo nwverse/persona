@@ -16,8 +16,12 @@ import (
 // manager's connectors, database, audit and broadcasts, and answers /api/v1/subscriptions. Reading is for every
 // device; changing anything needs full access (read_only_device otherwise).
 
-// subscriptionsFeature is in the manager's report while subscriptions run: the apps show their entry rows then.
+// subscriptionsFeature is in the manager's report once subscriptions deliver to the Inbox and the knowledge base
+// (#2039): the apps show their entry rows only then, so a subscription the user turns on does what its switch says.
 const subscriptionsFeature = "source_subscriptions"
+
+// subscriptionsShown says whether the report carries subscriptionsFeature.
+func (h *Manager) subscriptionsShown() bool { return h.subs != nil && h.subs.Features().Deliver }
 
 // startSubscriptions makes the service and starts its runner (after the connectors, so it finds them).
 func (h *Manager) startSubscriptions(ctx context.Context) {
@@ -105,7 +109,17 @@ func (h *Manager) subscriptionRoutes(mux *http.ServeMux) {
 		writeJSON(w, map[string]any{"connectors": lines})
 	})
 	api.HandleFunc("GET /api/v1/subscriptions/catalog", func(w http.ResponseWriter, r *http.Request) {
-		c, err := h.subs.Catalog(r.Context(), r.URL.Query().Get("connector"))
+		id := r.URL.Query().Get("connector")
+		if id == "" { // every connector's, from what was read before: never a call to a connector
+			list, err := h.subs.Catalogs(r.Context())
+			if err != nil {
+				writeSubscriptionErr(w, err)
+				return
+			}
+			writeJSON(w, map[string]any{"catalogs": list})
+			return
+		}
+		c, err := h.subs.Catalog(r.Context(), id)
 		if err != nil {
 			writeSubscriptionErr(w, err)
 			return

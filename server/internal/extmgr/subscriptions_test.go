@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
 // The subscriptions' routes: anyone reads, only full access changes, and the service's errors keep the API's body.
@@ -29,6 +31,12 @@ func TestSubscriptionRoutes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	h.startSubscriptions(ctx)
+	if h.subscriptionsShown() {
+		t.Fatal("the apps are told about subscriptions before they deliver (#2039)")
+	}
+	if !subscriptions.New(subscriptions.Options{Features: subscriptions.Features{Deliver: true}}).Features().Deliver {
+		t.Fatal("Features does not say what the service was made with")
+	}
 	code, out := call(watch, "GET", "/api/v1/subscriptions", "")
 	if code != http.StatusOK || out["subscriptions"] == nil || out["features"] == nil {
 		t.Fatalf("list from an answer-only device: %d %v", code, out)
