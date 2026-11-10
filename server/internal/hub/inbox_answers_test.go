@@ -289,6 +289,48 @@ func TestMergedInboxFailuresNotShared(t *testing.T) {
 	}
 }
 
+// A fetch that panics is answered 500 as any handler's panic (recoverPanics) and leaves nobody waiting on it: the
+// request that joined it fetches for itself, and no fetch stays under way for the next ones to join.
+func TestMergedInboxLeaderPanics(t *testing.T) {
+	h := newTestHub(t)
+	newCountingInbox(t, h, 4)
+	gate := make(chan struct{})
+	var asks atomic.Int32
+	ask := func(w http.ResponseWriter, r *http.Request, id string) {
+		if asks.Add(1) == 1 {
+			<-gate
+			panic("the list broke")
+		}
+		h.forwardInboxList(w, r, id)
+	}
+	srv := recoverPanics(h, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.mergedInbox(w, r, "items", ask) }))
+	get := func(ctx context.Context, code chan<- int) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, localRequest("GET", "/api/v1/inbox?sources=all").WithContext(ctx))
+		code <- rec.Code
+	}
+	first, second := make(chan int), make(chan int)
+	go get(t.Context(), first)
+	eventually(t, 5*time.Second, "the first is asking", func() bool { return asks.Load() == 1 })
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second) // waiting it out would end in a 502
+	defer cancel()
+	go get(ctx, second)
+	eventually(t, 5*time.Second, "the second waits for the first", func() bool { return h.inboxAnswers.waiting() == 1 })
+	close(gate)
+	if code := <-first; code != http.StatusInternalServerError {
+		t.Fatalf("the request that panicked: %d", code)
+	}
+	if code := <-second; code != http.StatusOK {
+		t.Fatalf("the request waiting for it: %d", code)
+	}
+	h.inboxAnswers.mu.Lock()
+	under := len(h.inboxAnswers.calls)
+	h.inboxAnswers.mu.Unlock()
+	if under != 0 {
+		t.Fatalf("%d fetches still under way", under)
+	}
+}
+
 // One manager's failure makes the merge nobody else's too, though the merge (the default's list) is a 200.
 func TestMergedInboxOtherManagerFailing(t *testing.T) {
 	h := newTestHub(t)

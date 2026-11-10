@@ -258,9 +258,7 @@ func (h *Hub) mergedInbox(w http.ResponseWriter, r *http.Request, key string, as
 		c.write(w, r, kept)
 		return
 	case leader:
-		a := h.mergedAnswer(r, key, ids, ask)
-		c.finish(k, ids, call, a)
-		c.write(w, r, a)
+		c.write(w, r, h.leadInbox(r, key, k, ids, call, ask))
 		return
 	}
 	select {
@@ -272,6 +270,23 @@ func (h *Hub) mergedInbox(w http.ResponseWriter, r *http.Request, key string, as
 	case <-r.Context().Done():
 	}
 	c.write(w, r, h.mergedAnswer(r, key, ids, ask))
+}
+
+// leadInbox fetches call's answer and finishes call with it. When the fetch panics, call is finished with an answer
+// nobody shares, so the requests waiting for it fetch for themselves rather than wait out their contexts on a call that
+// never ends, and the panic goes on to recoverPanics as it would have without the reuse.
+func (h *Hub) leadInbox(r *http.Request, key string, k inboxAnswerKey, ids []string, call *inboxCall, ask func(w http.ResponseWriter, r *http.Request, id string)) *inboxAnswer {
+	c := &h.inboxAnswers
+	finished := false
+	defer func() {
+		if !finished {
+			c.finish(k, ids, call, &inboxAnswer{})
+		}
+	}()
+	a := h.mergedAnswer(r, key, ids, ask)
+	c.finish(k, ids, call, a)
+	finished = true
+	return a
 }
 
 // mergedAnswer is what mergeList writes when it asks ids (none named, no body), as one answer.
