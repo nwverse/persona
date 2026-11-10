@@ -528,7 +528,8 @@ type ErrorReportsItem struct {
 }
 
 // TunnelItem: A tunnel the apps can reach this hub through when its own addresses do not answer (docs "In-app
-// tunnels"): an in-app tunnel core built into the app, going to the configuration's target_host and target_port.
+// tunnels"): an in-app tunnel core built into the app, going to the configuration's target_host and target_port; an
+// optional integer ssh_port is the hub machine's SSH port, for an SSH tunnel the app dials through this tunnel.
 type TunnelItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`

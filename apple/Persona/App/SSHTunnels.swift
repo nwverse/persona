@@ -217,7 +217,7 @@ final class SSHTunnels {
     private func relay(_ id: String, _ route: SSHRoute, _ carrier: InAppTunnelRoute?) async throws -> Int {
         guard InAppTunnel.available else { throw InAppTunnel.missing }
         guard let carrier else { throw InAppTunnel.Failure(message: String(localized: "No paired hub has an in-app tunnel to reach the SSH server through")) }
-        return try await InAppTunnels.shared.relay(id, to: route.server, carrier: carrier)
+        return try await InAppTunnels.shared.relay(id, to: route.server, carrier: carrier.sshProbe)
     }
 
     /// While a group goes through a tunnel only because the hub's own addresses did not answer: ask them again every

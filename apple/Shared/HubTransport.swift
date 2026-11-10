@@ -140,14 +140,28 @@ nonisolated struct InAppTunnelRoute: Codable, Hashable, Sendable {
     var name: String = ""
     /// Through the tunnel every time, not only when the hub's own addresses do not answer.
     var always = false
+    /// The hub machine's SSH port in the tunnel's network (the extension's `ssh_port`); nil when it gave none. An SSH
+    /// tunnel dialled through this tunnel probes `targetHost:sshPort`, which answers when the hub listens only on loopback.
+    var sshPort: Int?
 
     static let defaultTargetPort = 18660
 
-    init(targetHost: String, targetPort: Int = InAppTunnelRoute.defaultTargetPort, name: String = "", always: Bool = false) {
+    init(targetHost: String, targetPort: Int = InAppTunnelRoute.defaultTargetPort, name: String = "", always: Bool = false,
+         sshPort: Int? = nil) {
         self.targetHost = targetHost
         self.targetPort = targetPort
         self.name = name
         self.always = always
+        self.sshPort = sshPort
+    }
+
+    /// What the core probes for an SSH tunnel dialled through this tunnel: the hub machine's SSH port when the
+    /// extension gave one, else the route as it is (the direct in-app tunnel always uses `targetPort`).
+    var sshProbe: InAppTunnelRoute {
+        guard let sshPort else { return self }
+        var r = self
+        r.targetPort = sshPort
+        return r
     }
 
     var isUsable: Bool { !targetHost.trimmingCharacters(in: .whitespaces).isEmpty && (1...65535).contains(targetPort) }
@@ -166,7 +180,7 @@ nonisolated struct InAppTunnelRoute: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case always, name
-        case targetHost = "target_host", targetPort = "target_port"
+        case targetHost = "target_host", targetPort = "target_port", sshPort = "ssh_port"
     }
 
     init(from decoder: Decoder) throws {
@@ -175,6 +189,7 @@ nonisolated struct InAppTunnelRoute: Codable, Hashable, Sendable {
         targetPort = try c.decodeIfPresent(Int.self, forKey: .targetPort) ?? Self.defaultTargetPort
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         always = try c.decodeIfPresent(Bool.self, forKey: .always) ?? false
+        sshPort = try c.decodeIfPresent(Int.self, forKey: .sshPort)
     }
 }
 

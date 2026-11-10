@@ -295,7 +295,7 @@ extension InAppTunnelRoute {
     }
 
     /// The tunnel an extension's detail says: its first tunnel contribution, switched on, gives the name, and its
-    /// settings (`target_host`, `target_port`) where the tunnel goes; with this phone's 「总是走隧道」. Nil when it has
+    /// settings (`target_host`, `target_port`, optional `ssh_port`) where the tunnel goes; with this phone's 「总是走隧道」. Nil when it has
     /// no tunnel switched on or names no host.
     nonisolated init?(extension detail: HubExtensionDetail, always: Bool) {
         let tunnels = (detail.contributions ?? []).filter { $0.point == "tunnels" }
@@ -312,6 +312,8 @@ extension InAppTunnelRoute {
         guard !host.isEmpty else { return nil }
         var port = Self.defaultTargetPort
         if case .number(let n)? = config["target_port"], let p = Int(exactly: n) { port = p }
-        self.init(targetHost: host, targetPort: port, always: always)
+        var ssh: Int?
+        if case .number(let n)? = config["ssh_port"], let p = Int(exactly: n), (1...65535).contains(p) { ssh = p }
+        self.init(targetHost: host, targetPort: port, always: always, sshPort: ssh)
     }
 }
