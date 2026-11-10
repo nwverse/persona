@@ -131,11 +131,28 @@ func serveAndroidAPKGzip(w http.ResponseWriter, r *http.Request, dir, checksum s
 	// Other bytes, so another validator: a conditional request carrying the plain APK's tag gets these in full.
 	h.Set("ETag", `"`+checksum+`-gzip"`)
 	// ServeContent leaves out the length of an encoded body (it may be compressed as it is written); this one is the
-	// file, so a browser can show the download's progress. Its 304 and error answers drop the header again.
+	// file, so a browser can show the download's progress.
 	h.Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-	http.ServeContent(w, r, "persona.apk", info.ModTime(), f)
+	http.ServeContent(fileOnlyHeaders{w}, r, "persona.apk", info.ModTime(), f)
 	return true
 }
+
+// fileOnlyHeaders drops the gzip copy's Content-Length and Content-Encoding from any answer other than 200: those
+// carry no file. ServeContent drops them itself from a 304 and its errors, but its 412 (If-Match or
+// If-Unmodified-Since failed) only writes the status, and an empty body under the file's length is one the client
+// waits for in vain.
+type fileOnlyHeaders struct{ http.ResponseWriter }
+
+func (w fileOnlyHeaders) WriteHeader(code int) {
+	if code != http.StatusOK {
+		w.Header().Del("Content-Length")
+		w.Header().Del("Content-Encoding")
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap lets http.ResponseController reach the writer beneath.
+func (w fileOnlyHeaders) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func androidAppError(w http.ResponseWriter, err error) {
 	if os.IsNotExist(err) {

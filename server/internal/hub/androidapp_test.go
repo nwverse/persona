@@ -174,6 +174,11 @@ func TestAndroidAPKGzipCopy(t *testing.T) {
 	if w := request(http.MethodGet, "apk", gz, "gzip", "If-None-Match", `"`+digest+`-gzip"`); w.Code != http.StatusNotModified {
 		t.Fatalf("revalidated gzip copy: %d", w.Code)
 	}
+	// A failed If-Match sends no body, so neither the copy's length nor its encoding: a client would wait for the bytes.
+	if w := request(http.MethodGet, "apk", gz, "gzip", "If-Match", `"other"`); w.Code != http.StatusPreconditionFailed ||
+		w.Body.Len() != 0 || w.Header().Get("Content-Length") != "" || w.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("failed If-Match: %d %v (%d bytes)", w.Code, w.Header(), w.Body.Len())
+	}
 	// Not taking gzip, HEAD and ranges keep getting the APK itself.
 	identity("identity", request(http.MethodGet, "apk"), apk)
 	identity("gzip refused", request(http.MethodGet, "apk", gz, "gzip;q=0"), apk)
