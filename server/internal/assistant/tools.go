@@ -72,6 +72,12 @@ func (s *Service) Tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	switch call.Name {
 	case "persona_settings":
 		return s.toolPersonaSettings(ctx, call, args) // settings_tool.go
+	case "task_plan", "agent_start":
+		// A task's agent does the work itself (supervise_leader.go); the hub's own starts (an inbox hand-off) are not
+		// a model's call and come through runTool.
+		if err := s.workerRefusal(ctx, call.MachineID, call.SessionID); err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
 	}
 	res, err := s.runTool(ctx, call.MachineID, call.SessionID, call.Name, args)
 	if err != nil {

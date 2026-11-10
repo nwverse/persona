@@ -78,6 +78,9 @@ type Settings struct {
 	// review still goes to the main conversation (#3128, supervise_sample.go); the rest the judge closes. nil is 100:
 	// every finished task waits for task_review, as before.
 	ReviewSamplePercent *int `json:"review_sample_percent,omitempty"`
+	// Leaders are the side conversations the user made leaders (#3133, supervise_leader.go): a task one hands out with
+	// task_plan is supervised by it instead of the main conversation. Empty (the default): only the main one supervises.
+	Leaders []string `json:"leaders,omitempty"`
 }
 
 // FormerMain is a main conversation that was replaced, and until when it was the main one.

@@ -99,8 +99,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	var v Supervision
 	if ledger {
 		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			if isMain {
-				v.Supervisor = self // the main conversation takes over an old main conversation's task
+			if isMain && !s.isLeader(ctx, v.Supervisor) {
+				v.Supervisor = self // the main conversation takes over an old main conversation's task, not a leader's
 			} else if v.Supervisor == "" {
 				v.Supervisor = t.Origin
 			}
@@ -159,7 +159,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 		}
 		if verdict == reviewCancelled {
-			return fmt.Sprintf("Task %s is cancelled and closed; its agent is closed once it stays still. Tell the user only if they need to know.", t.ID), nil
+			s.stopTaskAgents(ctx, t) // its cards stop asking the user (supervise_leader.go)
+			return fmt.Sprintf("Task %s is cancelled and closed; its agents are being closed and archived (archived, not deleted: "+
+				"agent_unarchive brings one back), and the cards they had waiting end. Tell the user only if they need to know.", t.ID), nil
 		}
 		if carded {
 			return fmt.Sprintf("Task %s is accepted and closed; its agent is closed once it stays still. Its conclusion card (the verdict, "+
@@ -175,6 +177,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 		if over && a.Reason == "" { // the note is the rework asked for, written to the agent: not the owner's question
 			conclusion.Reason, conclusion.Note = i18n.T(s.botLang(ctx), "assistant-reports.verdict_over", i18n.Args{"rounds": maxReworkRounds}), ""
+		}
+		if !isMain && s.isLeader(ctx, v.Supervisor) { // a leader's: the main conversation hears of it too (supervise_leader.go)
+			s.escalateToMain(t, v.Round, cmp.Or(conclusion.Reason, note), a.Recommend)
 		}
 		carded := s.askConclusion(ctx, t, conclusion)
 		// A recommendation is also pushed to their phone, whose OK takes it (todo_ask.go), with the bot on or off. The hub

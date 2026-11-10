@@ -24,6 +24,14 @@ retains planning, permission/question and owner-acceptance flows; `Todo.ask` use
 individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
 TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
 
+Progress lists and counts **every open task** of the conversation (#3162): working, waiting for the user, finished but
+unseen, stopped between rounds (`follow_up`, where supervised tasks spend most of their time) and plan tasks still waiting
+for Start — not only the ones with a running agent. What needs the user sorts first (`todoRank`, a plan task waiting for
+Start right after), each row leads with its status mark (`TaskMark`), and closed tasks (done, accepted, cancelled, failed to
+start) fold under one **Closed N** line. While a plan waits for Start a fourth entry, **To start N**, sits after Pending:
+its tray is the plan cards themselves (Start, Edit, Don't start), so a plan is not lost in the chat; Pending no longer
+lists or counts those plans. Tapping a plan task in Progress opens To start.
+
 The three entries are the dock's old **All** / task capsules (#2999): `DOCK_CAPSULE` in `web/src/views/assistant/Tasks.tsx`
 gives "All", the task pills and the entries one height (2 rem, 32 px at the default size), full capsule radius, 12 px side
 padding and the 12.5 px type. Each entry is content-wide at the leading edge with an 8 px tone dot, its label and a count;

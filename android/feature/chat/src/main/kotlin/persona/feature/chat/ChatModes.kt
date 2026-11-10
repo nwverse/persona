@@ -141,11 +141,14 @@ internal object Ultracode {
     }
 }
 
-/** The switch under the thinking effort, with [Ultracode.line] under it. */
+/**
+ * The switch under the thinking effort, with [Ultracode.line] under it in full: its last part ("this session only") or
+ * the node's reason is what the user must read, and Glass's narrower text column or a large font needs a third line.
+ */
 @Composable
 internal fun UltracodeSwitchRow(session: Session, ask: Ultracode.Ask?, enabled: Boolean, onChange: (Boolean) -> Unit) =
     JSwitchRow(Ultracode.NAME, Ultracode.shownOn(session, ask), onChange, subtitle = Ultracode.line(session, ask, LocalResources.current),
-        leadingIcon = WorkflowIcon, enabled = enabled)
+        leadingIcon = WorkflowIcon, enabled = enabled, subtitleLines = Int.MAX_VALUE)
 
 /** Non-default settings and the current GPT model in the existing hint above the composer. */
 internal fun chatModeHint(session: Session?, resources: Resources, includeModes: Boolean = true): String? = listOfNotNull(
