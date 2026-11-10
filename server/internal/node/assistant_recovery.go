@@ -3,11 +3,12 @@ package node
 import (
 	"context"
 	"errors"
-	"regexp"
+	"os"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -71,9 +72,9 @@ func (n *Node) noteAssistantRecoveryProcess(ctx context.Context, p *assistantPro
 }
 
 var (
-	assistantServerError = regexp.MustCompile(`\b5[0-9][0-9]\b`)
-	assistantRateLimit   = regexp.MustCompile(`\b429\b`)
-	assistantBadRequest  = regexp.MustCompile(`\b400\b`)
+	assistantServerError = lazyre.New(`\b5[0-9][0-9]\b`)
+	assistantRateLimit   = lazyre.New(`\b429\b`)
+	assistantClientError = lazyre.New(`\b4(?:0[0-9]|1[0-9]|2[0-8]|[3-9][0-9])\b`) // every 4xx but 429
 )
 
 // assistantRecoverableError is deliberately narrower than the Agents' transient-continuation rule. Only the failure
@@ -90,11 +91,55 @@ func assistantRecoverableError(failed bool, result string) bool {
 	if strings.Contains(t, "usage limit") || strings.Contains(t, "usage_limit") || strings.Contains(t, "account_quota_exhausted") {
 		return false // Claude's result has no structured kind: a subscription reset is not an ordinary 429 retry
 	}
-	if assistantBadRequest.MatchString(t) {
-		return false // a hub/request 400 is not transient, even when its detail mentions an upstream status
+	if assistantClientError.MatchString(t) {
+		return false // a 400, 401, 403…: ours or the user's to fix, even when the detail mentions an upstream 5xx (#3495)
 	}
 	return assistantRateLimit.MatchString(t) || strings.Contains(t, "rate limit") || strings.Contains(t, "rate_limit") ||
 		strings.Contains(t, "too many requests") || assistantServerError.MatchString(t)
+}
+
+// claudeResultKinds is what the transcript says of the failed turn that just ended (transcript.claudeErrorKind): a
+// result carries only its text, and a usage limit's text need not say "usage limit" (#3495). A turn Claude Code says
+// it goes on with by itself after the reset counts as a usage limit: typing into it would cancel that. Read fresh, not
+// from the list's cache, which keeps a growing transcript's meta for a few seconds.
+func (n *Node) claudeResultKinds(id string) []string {
+	path := n.transcriptPath(id)
+	if path == "" {
+		return nil
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	f := readQuickMeta(path, st).turnErr
+	if f.resumes {
+		return []string{proto.TurnErrorUsageLimit}
+	}
+	if f.kind == "" {
+		return nil
+	}
+	return []string{f.kind}
+}
+
+// assistantRecoverable: whether a failed turn is replayed, from its words and the kinds the agent's record gives
+// (kinds[0] is the session's TurnErrorKind). The structured kind wins over the words (#3495): a usage limit has its
+// own continuation that an immediate retry cannot spend back, and authentication, a model route or a bad request are
+// the user's. Only a safeguards refusal, which may itself come as a bad request, is replayed whatever the kind.
+func assistantRecoverable(failed bool, result string, kinds []string) bool {
+	if !failed {
+		return false
+	}
+	if len(kinds) > 0 {
+		switch kinds[0] {
+		case proto.TurnErrorUsageLimit:
+			return false
+		case proto.TurnErrorUser:
+			if !strings.Contains(strings.ToLower(result), "safeguards flagged") {
+				return false
+			}
+		}
+	}
+	return assistantRecoverableError(failed, result) || slices.Contains(kinds, assistantModelServiceFailure)
 }
 
 func (n *Node) clearAssistantRecovery(p *assistantProc) {
@@ -122,16 +167,19 @@ func (n *Node) clearAssistantRecovery(p *assistantProc) {
 // cancelAssistantRecovery lets a user's newer message take over. Release the old turn's held busy flag too: if that
 // newer send is itself refused before delivery, the old conversation must not remain working forever. No idle event is
 // published here; a successful new send marks itself working, and a refused one is returned to its caller as before.
+// A recovery turn already delivered is answering: its busy is the process's own, and clearing it would let the newer
+// message restart the process mid-answer (#3495).
 func (n *Node) cancelAssistantRecovery(id string) {
 	if id == "" {
 		return
 	}
 	n.mu.Lock()
 	r := n.recoveries[id]
+	held := r != nil && (r.running || r.pending != nil)
 	delete(n.recoveries, id)
 	p := n.procs[id]
 	n.mu.Unlock()
-	if r != nil && p != nil {
+	if held && p != nil {
 		p.mu.Lock()
 		p.busy = false
 		p.mu.Unlock()
@@ -148,10 +196,7 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 // recoverAssistantResultFor optionally requires the recovery that captured a pending result to still own the session.
 // That identity check prevents a result delayed by process replacement from restarting a turn the user has cancelled.
 func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTurnRecovery, failed bool, result string, kinds ...string) bool {
-	if len(kinds) > 0 && kinds[0] == proto.TurnErrorUsageLimit {
-		return false // a subscription reset has its own continuation; an immediate retry cannot spend it back
-	}
-	if !assistantRecoverableError(failed, result) && !(failed && slices.Contains(kinds, assistantModelServiceFailure)) {
+	if !assistantRecoverable(failed, result, kinds) {
 		return false
 	}
 	p.mu.Lock()
@@ -173,11 +218,24 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	if n.recoveryClosed {
 		if r == nil {
 			owner := p.ownerOr(n)
-			n.mu.Unlock()
 			if owner != n { // a result that read the old owner just before adoption continues on the new one
+				n.mu.Unlock()
 				return owner.recoverAssistantResultFor(p, expected, failed, result, kinds...)
 			}
-			return false
+			// A turn's first failure in the gap: start its budget here, for the keeper to carry it (#3495). Only while the
+			// next adopt will see it: the process is not handed to the keeper yet, or the keeper still holds it.
+			if expected != nil || n.procs[p.id] != p && (n.keeper == nil || !n.keeper.carryRecovery(p, n)) {
+				n.mu.Unlock()
+				return false
+			}
+			r = &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
+			if current != "" {
+				r.used[current] = true
+			}
+			if n.recoveries == nil {
+				n.recoveries = map[string]*assistantTurnRecovery{}
+			}
+			n.recoveries[p.id] = r
 		}
 		if (expected != nil && r != expected) || (r.proc != nil && r.proc != p) {
 			n.mu.Unlock()
@@ -286,6 +344,26 @@ func nextAssistantModel(list proto.LauncherModels, current string, used map[stri
 	return "", false
 }
 
+// resolvedAssistantDefault is the model the launcher's default stands for, when current is that default (unnamed or
+// "default"); "" otherwise.
+func resolvedAssistantDefault(list proto.LauncherModels, current string) string {
+	if current != "" && current != "default" {
+		return ""
+	}
+	for _, m := range list.Models {
+		if m.Default || m.ID == "default" {
+			if m.Resolved != "" {
+				return m.Resolved
+			}
+			if m.ID != "default" {
+				return m.ID
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 // assistantExecutionForModel keeps the requested effort when the fallback supports it. Otherwise it follows the
 // launcher's default, matching the model picker instead of making the new model refuse an unsupported level.
 func assistantExecutionForModel(execution modelExecution, list proto.LauncherModels, id string) modelExecution {
@@ -326,6 +404,9 @@ func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, 
 			n.logger.Printf("assistant %s: list fallback models: %v", p.id[:8], err)
 			n.finishAssistantRecovery(p, r)
 			return
+		}
+		if resolved := resolvedAssistantDefault(list, current); resolved != "" {
+			r.used[resolved] = true // the default that failed before naming its model: never selected again (#3495)
 		}
 		next, ok := nextAssistantModel(list, current, r.used)
 		if !ok {
@@ -376,6 +457,9 @@ func (n *Node) finishAssistantRecoveryOnExit(p *assistantProc, r *assistantTurnR
 	n.mu.Unlock()
 	if valid && current == nil {
 		n.finishAssistantRecovery(p, r)
+	} else if !valid { // cancelled meanwhile (a Stop): the exit is the last word, as without a recovery (#3495)
+		n.emitDelta(p.id, "")
+		n.notifySessions()
 	}
 }
 

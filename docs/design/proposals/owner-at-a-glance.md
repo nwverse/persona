@@ -1,6 +1,6 @@
 # Proposal: the owner sees every direction at a glance
 
-Status: proposal (#3465), nothing built yet. Covers hub, prompts, web, iOS / Mac and Android, plus a contract with
+Status: proposal (#3465); H1 built (#3494, #3519, #3530), H2 built (#3561, `docs/assistant/todos.md` "Concerns"); H3 New chat routing and the direction endpoints built (#3607, `docs/assistant/unified-entry.md` "New chat opens a direction"). Covers hub, prompts, web, iOS / Mac and Android, plus a contract with
 work-log extensions.
 
 ## 1. Goal
@@ -98,8 +98,9 @@ against leaders' titles and projects; else **Persona** (the secretary). Start is
 changes it. The hub then creates the task with that leader as supervisor, as `agent_supervise` does for the main chat.
 Moving a task later: the task's ⋯ **Move to…**; signals follow from the next one.
 
-**Stored**: one record per leader in the assistant's store, `assistant.directions` (kept like `assistant.titles`, on the
-session lists as `direction`): `{project: "<kb slug>", by: "assistant" | "user", at, ended_at?}`. Who is a leader is
+**Stored**: one record per leader in the assistant's store, `assistant.directions` (kept like `assistant.titles`; H1 lists
+it at `GET /api/v1/assistant/leaders` and on the snapshot's session views; the apps' session rows get `direction` in W1,
+where its cost on the list's allocation budgets is weighed): `{project: "<kb slug>", by: "assistant" | "user", at, ended_at?}`. Who is a leader is
 still only `assistant.leaders`; which task is whose is still `supervision.supervisor`. The kb project lists the leader
 among its related chats (`meta.json`), as for any chat.
 
@@ -125,8 +126,8 @@ title, so a secretary → leader → task tree never reaches it and its progress
 
 | | Reused | New |
 | --- | --- | --- |
-| Events to extensions | `agent.finished`, `agent.needs_you`, `todo.changed`, `todo.decision` (`docs/extensions/extensions.md`) | `leader.changed` (`id`, `title`, `project`, `ended?`) and `leader.report` (`leader`, `kind` reached / decision / stuck, `todo`, `text` ≤ 300 characters, `link?`); `todo.changed` gains `supervisor` and also fires when the supervisor changes (Move to…), which it does not today |
-| Scopes | `todos.read`, `todos.write` | `leaders.read` for the two events |
+| Events to extensions | `agent.finished`, `agent.needs_you`, `todo.changed`, `todo.decision` (`docs/extensions/extensions.md`) | `leader.changed` (`id`, `title`, `project?`, `ended?`) and `leader.report` (`id`, `leader`, `kind` reached / decision / stuck, `todo`, `text` ≤ 300 characters, `link?`, `at`; H1 added `id` and `at`, see `docs/extensions/extensions.md` "Leader events"); `todo.changed` gains `supervisor` and also fires when the supervisor changes (Move to…), which it does not today |
+| Scopes | `todos.read`, `todos.write` | `leaders.read` for the two events and `GET /api/v1/assistant/leaders` (the leaders made before the extension was installed; added in H1) |
 | Extension side (in its own repository) | Its progress-line route, its board and progress card | Create a record on `leader.changed`, keep leader id → record in its state; on `leader.report` write the line; map a session through its task's supervisor before directory / title |
 | Report to the owner | The extension's progress card (sections by project, waiting on you, please verify) | Sections are leaders; the secretary sends that card instead of writing a report by hand (prompt change) |
 
