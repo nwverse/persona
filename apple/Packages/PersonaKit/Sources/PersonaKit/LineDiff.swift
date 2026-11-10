@@ -74,6 +74,14 @@ public nonisolated struct LineDiff: Sendable, Equatable {
         self.capped = capped
     }
 
+    /// The lines added and removed, as `LineDiff(old:new:)` counts them, without its lines or words: the +N −N of an
+    /// edit that is not on screen.
+    public static func counts(old: String, new: String) -> (adds: Int, dels: Int) {
+        let (a, b) = split(old, new)
+        let m = compare(a, b, old: old, new: new, maxChars: maxChars, maxChangedLines: maxChangedLines)
+        return (m.inserted.reduce(0) { $0 + ($1 ? 1 : 0) }, m.removed.reduce(0) { $0 + ($1 ? 1 : 0) })
+    }
+
     /// Which lines of `a` were removed and which of `b` inserted; `capped` past the budgets.
     private static func compare(_ a: [String], _ b: [String], old: String, new: String, maxChars: Int,
                                 maxChangedLines: Int) -> (removed: [Bool], inserted: [Bool], capped: Bool) {

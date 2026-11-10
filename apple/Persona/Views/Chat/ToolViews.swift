@@ -317,17 +317,15 @@ enum ToolRunSummary {
         let i = c.input
         switch ToolPresentation.baseName(c.name) {
         case "Edit":
-            let d = i["diff"]?.string.map(ToolDiffMemo.unified)
-                ?? ToolDiffMemo.edit(old: i["old_string"]?.string ?? "", new: i["new_string"]?.string ?? "")
-            return (d.adds, d.dels)
+            if let diff = i["diff"]?.string { return ToolDiffMemo.unifiedCounts(diff) }
+            return ToolDiffMemo.editCounts(old: i["old_string"]?.string ?? "", new: i["new_string"]?.string ?? "")
         case "MultiEdit":
             return (i["edits"]?.array ?? []).reduce((0, 0)) { n, e in
-                let d = ToolDiffMemo.edit(old: e["old_string"]?.string ?? "", new: e["new_string"]?.string ?? "")
+                let d = ToolDiffMemo.editCounts(old: e["old_string"]?.string ?? "", new: e["new_string"]?.string ?? "")
                 return (n.0 + d.adds, n.1 + d.dels)
             }
         case "Write":
-            let d = ToolDiffMemo.edit(old: "", new: i["content"]?.string ?? "")
-            return (d.adds, d.dels)
+            return ToolDiffMemo.editCounts(old: "", new: i["content"]?.string ?? "")
         default:
             return (0, 0)
         }
@@ -876,6 +874,10 @@ nonisolated enum ToolDiffMemo {
 
     private enum Input: Hashable { case edit(String, String), unified(String) }
     nonisolated(unsafe) private static var values: [Input: Content] = [:]
+    /// Every diff's +N −N, apart from `values` and many more of them: an open work line's chips and changed files
+    /// (`ToolRunSummary.diff`) count all of its edits each time the chat's lines are rebuilt. Read from `values`, a
+    /// turn with more edits than it holds emptied it on every pass and compared every edit again on the main thread.
+    nonisolated(unsafe) private static var counts: [Input: (adds: Int, dels: Int)] = [:]
     private static let lock = NSLock()
 
     private static func cached(_ input: Input, make: () -> Content) -> Content {
@@ -886,8 +888,45 @@ nonisolated enum ToolDiffMemo {
         lock.lock()
         if values.count >= 64 { values.removeAll(keepingCapacity: true) }
         values[input] = value
+        remember(input, (value.adds, value.dels))
         lock.unlock()
         return value
+    }
+
+    private static func counted(_ input: Input, make: () -> (adds: Int, dels: Int)) -> (adds: Int, dels: Int) {
+        lock.lock()
+        if let n = counts[input] { lock.unlock(); return n }
+        lock.unlock()
+        let n = make()
+        lock.lock()
+        remember(input, n)
+        lock.unlock()
+        return n
+    }
+
+    /// Under `lock`. A long session's worth (a few small values, and the texts the items hold anyway); then start over.
+    private static func remember(_ input: Input, _ n: (adds: Int, dels: Int)) {
+        if counts.count >= 4000 { counts.removeAll(keepingCapacity: true) }
+        counts[input] = n
+    }
+
+    /// The +N −N `edit(old:new:)` shows, without its lines: the work line's chips and changed files.
+    static func editCounts(old: String, new: String) -> (adds: Int, dels: Int) {
+        counted(.edit(old, new)) { LineDiff.counts(old: old, new: new) }
+    }
+
+    /// The +N −N `unified(_:)` shows, without keeping its lines.
+    static func unifiedCounts(_ text: String) -> (adds: Int, dels: Int) {
+        counted(.unified(text)) { tally(DiffText.parse(text)) }
+    }
+
+    private static func tally(_ lines: [DiffText.Line]) -> (adds: Int, dels: Int) {
+        var adds = 0, dels = 0
+        for line in lines {
+            if line.kind == .add { adds += 1 }
+            if line.kind == .del { dels += 1 }
+        }
+        return (adds, dels)
     }
 
     static func edit(old: String, new: String) -> Content {
@@ -917,12 +956,8 @@ nonisolated enum ToolDiffMemo {
     static func unified(_ text: String) -> Content {
         cached(.unified(text)) {
             let lines = DiffText.parse(text)
-            var adds = 0, dels = 0
-            for line in lines {
-                if line.kind == .add { adds += 1 }
-                if line.kind == .del { dels += 1 }
-            }
-            return Content(lines: lines, short: lines, adds: adds, dels: dels)
+            let n = tally(lines)
+            return Content(lines: lines, short: lines, adds: n.adds, dels: n.dels)
         }
     }
 

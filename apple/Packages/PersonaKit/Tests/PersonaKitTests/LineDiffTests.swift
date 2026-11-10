@@ -158,6 +158,22 @@ struct LineDiffTests {
         }
     }
 
+    @Test func countsAreTheDiffs() {
+        let old = (1...40).map { "line \($0)" }.joined(separator: "\n")
+        var lines = (1...40).map { "line \($0)" }
+        lines[3] = "line four"
+        lines.insert("new line", at: 20)
+        lines.removeLast()
+        let cases: [(String, String)] = [
+            (old, lines.joined(separator: "\n")), ("", "a\nb\n"), ("a\nb\n", ""), ("x\na", "y\na\n"), ("}\n", "}"), ("same", "same"),
+            ((0..<600).map { "a \($0)" }.joined(separator: "\n"), (0..<600).map { "b \($0)" }.joined(separator: "\n")), // capped
+        ]
+        for (old, new) in cases {
+            let d = LineDiff(old: old, new: new), n = LineDiff.counts(old: old, new: new)
+            #expect(n.adds == d.adds && n.dels == d.dels)
+        }
+    }
+
     @Test func emptySides() {
         let w = LineDiff(old: "", new: "a\nb")
         #expect(rows(w) == ["+a", "+b"] && w.lines.map(\.newLine) == [1, 2])
