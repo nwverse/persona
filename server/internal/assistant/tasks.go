@@ -150,6 +150,8 @@ func (s *Service) settleDelay(ctx context.Context) time.Duration {
 
 type tasksState struct {
 	mu sync.Mutex
+	// recoverBefore excludes starts admitted by this service before its background loops begin.
+	recoverBefore time.Time
 	// completionMu serializes a resumed turn with committing an earlier judgment.
 	completionMu sync.Mutex
 	// Without a store (unit tests) plans and the feed live here.
@@ -186,7 +188,7 @@ type tasksState struct {
 }
 
 func newTasksState() tasksState {
-	return tasksState{plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
+	return tasksState{recoverBefore: time.Now(), plans: map[string]*TaskPlan{}, feed: map[string][]FeedItem{},
 		working: map[string]time.Time{}, receipted: map[string]time.Time{}, retrying: map[string]bool{},
 		outcomes: map[string]time.Time{}, reusing: map[string]bool{}}
 }

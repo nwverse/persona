@@ -689,7 +689,7 @@ struct PhoneDataView: View {
             // Sending the phone's clipboard to a computer (#3064): offered when the app comes back after copying.
             Section {
                 Toggle(isOn: $offerClipboard) {
-                    Text("Offer to Send What You Copied").lineLimit(1).minimumScaleFactor(0.8)
+                    Text("Offer to Send What You Copied") // a switch's title: wraps at large sizes
                 }
                 .accessibilityIdentifier("clipboard-offer")
             } header: {

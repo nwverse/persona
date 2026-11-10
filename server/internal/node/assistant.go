@@ -61,6 +61,9 @@ type assistantProc struct {
 	stdin    io.WriteCloser
 	exited   chan struct{}
 	born     time.Time
+	// personaMCPOnly is fixed at Claude process start. A warm spare must still match
+	// the hub's current capability before it becomes a new conversation.
+	personaMCPOnly bool
 	// stderrDone closes when its stderr ends (watchAssistantStderr has read all of it): what a failed start printed
 	// is complete only then. nil for Codex.
 	stderrDone chan struct{}

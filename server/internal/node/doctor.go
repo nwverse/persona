@@ -237,7 +237,10 @@ func generatedFiles(bin, dir string) ([]generatedFile, error) {
 	if dir != "" {
 		server["env"] = map[string]string{"PERSONA_HOME": dir}
 	}
-	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.AddMCPAliases(map[string]any{"persona": server})})
+	// This shared file also serves automatic Agent resumes, before any hub handshake.
+	// Keep both namespaces here so historical tool calls remain available. Assistant
+	// starts choose their own per-process registration after capability negotiation.
+	mcp, err := marshalJSON(map[string]any{"mcpServers": compat.MCPRegistrationServers(map[string]any{"persona": server}, true)})
 	if err != nil {
 		return nil, err
 	}
