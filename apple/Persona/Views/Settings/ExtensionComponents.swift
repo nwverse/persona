@@ -20,6 +20,8 @@ struct ExtensionComponentRowLabel<Trailing: View>: View {
                 if let s = row.subtitle, !s.isEmpty { Text(s).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2) }
             }
             Spacer(minLength: Theme.Space.s)
+            // UI version 6: its trend before its value.
+            if let spark = row.spark { ExtensionSparkLine(spark: spark) }
             if let v = row.value, !v.isEmpty { ExtensionChangingText(v).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1) }
             if let b = row.badge {
                 // Drawn again with another tone, its colors change; with other words, they fade in (#37).
@@ -357,11 +359,22 @@ struct ExtensionChartItem: View {
                 if item.kind == ExtensionChartKind.donut || item.kind == ExtensionChartKind.pie, let s = series.first {
                     RingChart(parts: s.points.map { RingChart.Part(label: $0.label, value: $0.value, display: $0.display ?? format($0.value)) },
                               center: item.center, pie: item.kind == ExtensionChartKind.pie)
+                } else if item.kind == ExtensionChartKind.candlestick, let s = series.first {
+                    // UI version 6: one series of open / high / low / close (value is the close), rising green unless
+                    // the extension says red (as its market writes it).
+                    let up = item.rising == "red" ? Theme.Diff.del : Theme.Diff.add
+                    let down = item.rising == "red" ? Theme.Diff.add : Theme.Diff.del
+                    CandleChart(candles: s.points.map { p in
+                                    CandleChart.Candle(label: p.label, open: p.open ?? p.value, high: p.high ?? p.value, low: p.low ?? p.value,
+                                                       close: p.close ?? p.value, volume: p.volume)
+                                },
+                                rising: up, falling: down, format: format, compact: compact)
+                        .animation(reduceMotion ? nil : Theme.Motion.layout, value: item.series)
                 } else {
-                DataChart(kind: item.kind == "line" ? .line : .bar, labels: labels,
+                DataChart(kind: item.kind == "line" ? .line : item.kind == ExtensionChartKind.area ? .area : .bar, labels: labels,
                           series: series.enumerated().map { i, s in
                               DataChart.Series(name: s.name?.isEmpty == false ? s.name! : String(localized: "Series \(i + 1)"),
-                                               color: ExtensionUIStyle.series(s.tone), values: s.points.map(\.value),
+                                               color: ExtensionUIStyle.series(s.tone) ?? ExtensionUIStyle.color(s.color), values: s.points.map(\.value),
                                                displays: s.points.map(\.display))
                           },
                           stacked: item.stacked == true, format: format, compact: compact)
@@ -380,6 +393,22 @@ struct ExtensionChartItem: View {
         let n = DataChart.compact(v)
         guard let u = item.unit, !u.isEmpty else { return n }
         return n + " " + u
+    }
+}
+
+/// An extension's `spark` (UI version 6): a small trend line, in its named color, else its tone's, else the quiet ink.
+struct ExtensionSparkLine: View {
+    var spark: ExtensionSpark
+    var width: CGFloat? = Theme.Size.box56
+
+    var body: some View {
+        if spark.values.filter(\.isFinite).count >= 2 {
+            TrendLine(values: spark.values, color: Self.color(spark), fill: spark.fill == true, width: width)
+        }
+    }
+
+    static func color(_ s: ExtensionSpark) -> Color {
+        ExtensionUIStyle.color(s.color) ?? (s.tone == nil || s.tone == "neutral" ? Color.secondary : ExtensionUIStyle.tone(s.tone))
     }
 }
 
@@ -421,6 +450,7 @@ struct ExtensionStatGrid: View {
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(s.label).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
             ExtensionChangingText(s.value).font(Theme.Font.heading.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
+            if let spark = s.spark { ExtensionSparkLine(spark: spark) }
             if let d = s.detail, !d.isEmpty {
                 Text(d).font(Theme.Font.label).foregroundStyle(ExtensionUIStyle.tone(s.tone)).lineLimit(1).minimumScaleFactor(0.8)
             }

@@ -1,6 +1,50 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@: open %@, high %@, low %@, close %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: open %2$@, high %3$@, low %4$@, close %5$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@：开 %2$@，高 %3$@，低 %4$@，收 %5$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@：始値 %2$@、高値 %3$@、安値 %4$@、終値 %5$@"
+          }
+        }
+      }
+    },
+    ", volume %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", volume %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "，量 %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "、出来高 %@"
+          }
+        }
+      }
+    },
     "Background workflow": {
       "extractionState": "manual",
       "localizations": {
@@ -30716,6 +30760,28 @@
       },
       "extractionState": "manual"
     },
+    "Close [Candle]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "終値"
+          }
+        }
+      }
+    },
     "Close [Home Accessory]": {
       "extractionState": "manual",
       "localizations": {
@@ -52004,6 +52070,28 @@
         }
       }
     },
+    "Flat at %@, low %@, high %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flat at %1$@, low %2$@, high %3$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "持平在 %1$@，最低 %2$@，最高 %3$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ で横ばい、最安 %2$@、最高 %3$@"
+          }
+        }
+      }
+    },
     "Floating cards": {
       "localizations": {
         "en": {
@@ -56070,6 +56158,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "High [Candle]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "High"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "高"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "高値"
+          }
+        }
+      }
     },
     "High [Machine Detail View cde631]": {
       "localizations": {
@@ -66811,6 +66921,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "HRVが低め"
+          }
+        }
+      }
+    },
+    "Low [Candle]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Low"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "低"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安値"
           }
         }
       }
@@ -85490,6 +85622,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "下でチェックしたコンピューターだけ。ほかのコンピューターからは見えません。"
+          }
+        }
+      }
+    },
+    "Open [Candle]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "始値"
           }
         }
       }
@@ -134693,6 +134847,50 @@
         }
       }
     },
+    "Trending down, from %@ to %@, low %@, high %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trending down, from %1$@ to %2$@, low %3$@, high %4$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "走势向下，从 %1$@ 到 %2$@，最低 %3$@，最高 %4$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下降傾向、%1$@ から %2$@、最安 %3$@、最高 %4$@"
+          }
+        }
+      }
+    },
+    "Trending up, from %@ to %@, low %@, high %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trending up, from %1$@ to %2$@, low %3$@, high %4$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "走势向上，从 %1$@ 到 %2$@，最低 %3$@，最高 %4$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上昇傾向、%1$@ から %2$@、最安 %3$@、最高 %4$@"
+          }
+        }
+      }
+    },
     "Trends for steps, sleep and weight appear on an iPhone with the Health app.": {
       "localizations": {
         "en": {
@@ -142431,6 +142629,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "音色：%1$@"
+          }
+        }
+      }
+    },
+    "Volume [Candle]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Volume"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "量"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "出来高"
           }
         }
       }
