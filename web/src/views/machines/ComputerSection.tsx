@@ -1,11 +1,12 @@
 // "Computer control" on a Mac's page while the hub's extension cua is on (docs/extensions/computer-use.md, iOS ComputerSection): the switch that
 // lets the assistant operate it through Cua Driver, and whether it can now. What is missing comes with what to do:
 // "Install Cua Driver" (after a confirmation) when it is not there, "Grant access" when a permission is missing (macOS asks on the
-// Mac's own screen), the node's progress while it works, and VNC (the web's live screen, /screen/<mid>) when
-// Screen Sharing is on. The hub is asked again when the page opens, and every 2 s while a job runs and the tab is shown.
+// Mac's own screen), the node's progress while it works, and how to turn on Screen Sharing while it is off. The live screen
+// itself (/screen/<mid>) is the page's "View screen" button (MachineDetail), whatever Cua Driver's state. The hub is asked again
+// when the page opens, and every 2 s while a job runs and the tab is shown.
 import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
-import { computerView, computerWatching, GRANT_HINT, NO_SCREEN_SHARING, screenPath, type ComputerAction, type MachineComputer } from "../../lib/computer";
+import { computerView, computerWatching, GRANT_HINT, NO_SCREEN_SHARING, type ComputerAction, type MachineComputer } from "../../lib/computer";
 import { documentPage, latestRequest, visiblePoll } from "../../lib/visible-poll";
 import { Button, cx, Dialog, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -90,11 +91,6 @@ export function ComputerSection({ mid, computer, online, manager }: { mid: strin
   };
 
   const v = computerView(shown, online);
-  const look = (prominent: boolean) => (
-    <Button tone={prominent ? "primary" : "secondary"} icon="monitor" onClick={() => window.open(screenPath(mid), "_blank", "noopener")}>
-      VNC
-    </Button>
-  );
   const action = (title: string, what: ComputerAction, prominent = false) => (
     <Button tone={prominent ? "primary" : "secondary"} busy={asking} onClick={() => (what === "install" ? setConfirmInstall(true) : void run(what))}>
       {title}
@@ -126,12 +122,7 @@ export function ComputerSection({ mid, computer, online, manager }: { mid: strin
                   <Spinner />
                   {v.text}
                 </p>
-                {(v.cancel || v.screen) && (
-                  <div className="flex flex-wrap gap-2">
-                    {v.cancel && action(t("common.cancel"), "cancel")}
-                    {v.screen && look(true)}
-                  </div>
-                )}
+                {v.cancel && action(t("common.cancel"), "cancel")}
               </>
             )}
             {v.kind === "install" && (
@@ -152,11 +143,7 @@ export function ComputerSection({ mid, computer, online, manager }: { mid: strin
             {v.kind === "granted" && (
               <>
                 <Line text={GRANT_HINT} />
-                <div className="flex flex-wrap gap-2">
-                  {v.screen && look(true)}
-                  {action(t("machines-computersection.ask_again"), "grant")}
-                </div>
-                {!v.screen && <p className="text-[11.5px] leading-relaxed text-ink-3">{NO_SCREEN_SHARING}</p>}
+                {action(t("machines-computersection.ask_again"), "grant")}
               </>
             )}
             {v.kind === "grant" && (
@@ -165,13 +152,9 @@ export function ComputerSection({ mid, computer, online, manager }: { mid: strin
                 {action(t("machines-computersection.grant"), "grant", true)}
               </>
             )}
-            {v.kind === "ready" && (
-              <>
-                <Line text={v.text} ok />
-                {v.screen ? look(false) : <p className="text-[11.5px] leading-relaxed text-ink-3">{NO_SCREEN_SHARING}</p>}
-              </>
-            )}
+            {v.kind === "ready" && <Line text={v.text} ok />}
             {v.kind === "unknown" && <Line text={v.text} />}
+            {v.kind !== "offline" && !shown.screen_sharing && <p className="text-[11.5px] leading-relaxed text-ink-3">{NO_SCREEN_SHARING}</p>}
           </div>
         )}
         <AllowedComputerApps mid={mid} manager={manager} />
