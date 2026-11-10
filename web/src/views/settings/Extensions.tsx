@@ -1,8 +1,10 @@
 // Settings › Extensions: all sources use the host-owned layout in ExtensionSettingsPage.
 // This controller owns manager routing, configuration drafts, authentication and mutation results;
 // extensions supply only their configuration fields and custom content (docs/extensions/extension-settings.md).
+import { OwnerMark } from "./OwnerMark";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { enc, errorText, subscribeCredentialOwner } from "../../lib/api";
+import { OfflineState, useShownOffline } from "../ManagerParts";
 import { defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
@@ -190,6 +192,8 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
   const scope = useScope();
   const own = useMemo(() => (extensions ? scoped(extensions, scope) : null), [extensions, scope]);
   const drafts = useUnsaved();
+  // an offline current assistant: the hub has none of its extensions to merge in, which must not read as "none installed"
+  const offline = useShownOffline();
 
   return (
     <>
@@ -243,7 +247,8 @@ function ExtensionList({ onOpen, onMarket, onMarkets }: { onOpen: (id: string) =
             </Button>
           </div>
         )}
-        {own?.length === 0 && (
+        {own?.length === 0 && offline && <OfflineState offline={offline} ring="ring-surface" className="py-8" />}
+        {own?.length === 0 && !offline && (
           <div className="flex flex-col items-center gap-2 px-6 py-8 text-center">
             <span className="flex size-10 items-center justify-center rounded-[10px] bg-inset text-ink-3 shadow-hairline">
               <Icon name="extension" size={18} />
@@ -645,6 +650,7 @@ function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChann
         <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2">
           {t("settings-extensions.title")}
         </Button>
+        <OwnerMark manager={manager} />
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-extensions.reload")} onClick={load} disabled={loading} />
       </div>

@@ -113,9 +113,9 @@ interface DeviceToken {
 const enLauncher = (n: string) => `/launchers/${enc(n)}`;
 
 /** What the current assistant's pages ask of its manager besides their merged lists and configuration editors (which
- *  name it themselves): the model providers, session triage, mail accounts, the chat connector's accounts and status, the
+ *  name it themselves): the model providers, session triage, mail accounts, the chat connector (all its routes: accounts, status, message display), the
  *  chat bot, and the messages sent as you. Pinned to the current assistant while one of those pages is open. */
-const ASSISTANT_PREFIXES = ["/launchers", "/agents/triage", "/mail", "/lark/accounts", "/lark/status", "/bots", "/connectors/sent"];
+const ASSISTANT_PREFIXES = ["/launchers", "/agents/triage", "/mail", "/lark", "/bots", "/connectors/sent"];
 
 export function tokens(n: number): string {
   if (n >= 1_000_000 && n % 100_000 === 0) return `${n % 1_000_000 === 0 ? n / 1_000_000 : (n / 1_000_000).toFixed(1)}M`;

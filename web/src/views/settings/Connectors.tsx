@@ -6,10 +6,10 @@
 // unless the hub has no such client (GET /mail/oauth/google/config): then Gmail goes in here with an app password.
 // Outlook too (Microsoft calls back to a custom scheme only the app catches), though its client ID can be set up here.
 import { useEffect, useId, useState } from "react";
-import { parseOwnedSub } from "../../lib/manager-choice";
+import { otherManager, parseOwnedSub, useChosenManager } from "../../lib/manager-choice";
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, mailSummary, signsInOnPhone, type MailAccount, type MailForm, type MicrosoftConfig } from "../../lib/agent-settings";
 import { t } from "../../i18n";
-import { api, enc, errorText } from "../../lib/api";
+import { api, ApiError, enc, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { accountTitle, type LarkAccount, type LarkAccountList } from "../../lib/lark-accounts";
 import { useLarkOn, useStore } from "../../lib/store";
@@ -37,6 +37,7 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   // Lark (the Lark gateway through /api/v1/lark/…) only on a hub that has it (feature `lark`); "Lark bot" is the hub's own.
   const lark = useLarkOn();
+  const picked = useChosenManager();
   // "feishu-bot" is not a hub connector: FeishuBot reads it and opens its own dialog.
   // `<id>@<manager>`: another manager's connector, opened from its extension's page (docs/assistant/managers.md "Clients")
   if (open === SENT_SUB) return (
@@ -48,7 +49,8 @@ export function Connectors({ open, onOpen, onChannel }: { open: string | null; o
   );
   if (open && open !== "feishu-bot") {
     const { id, manager } = parseOwnedSub(open);
-    return <ConnectorDetail key={open} id={id} manager={manager} onBack={() => onOpen(null)} onChannel={onChannel} />;
+    // no `@manager` in the address: the current assistant's copy, as for an extension
+    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={() => onOpen(null)} onChannel={onChannel} />;
   }
   return (
     <>
@@ -465,14 +467,16 @@ function Feishu() {
   const [st, setSt] = useState<LarkStatus | null>(null);
   const [accounts, setAccounts] = useState<LarkAccountList | null>(null);
   const [error, setError] = useState("");
+  const [absent, setAbsent] = useState(false);
   const [loading, setLoading] = useState(true);
   const load = () => {
     setLoading(true);
     // the Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md "Multiple accounts"); a hub from before them has none to list
     api<LarkAccountList>("/lark/accounts").then(setAccounts).catch(() => setAccounts(null));
     api<LarkStatus>("/lark/status")
-      .then((r) => (setSt(r), setError("")))
-      .catch((e) => setError(errorText(e)))
+      .then((r) => (setSt(r), setAbsent(false), setError("")))
+      // the current assistant has no such connector (its manager has no route for it): the group shows "not set up"
+      .catch((e) => (e instanceof ApiError && e.status === 404 ? (setSt({ configured: false, connected: false }), setAbsent(true), setError("")) : (setAbsent(false), setError(errorText(e)))))
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
@@ -515,7 +519,7 @@ function Feishu() {
         </>
       )}
       <LarkHomeSwitch />
-      <LarkDisplaySettings />
+      {!absent && <LarkDisplaySettings />}
       <div className="px-4 pt-2.5 pb-1 text-[11.5px] font-medium text-ink-3">{t("settings-connectors.lark_uses")}</div>
       {USES.map((u) => (
         <div key={u.title} className="flex items-start gap-3 px-4 py-2.5">

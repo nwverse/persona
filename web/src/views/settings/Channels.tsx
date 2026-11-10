@@ -2,6 +2,7 @@
 // each one's page — its switch, binding a step at a time (a QR code to scan in the chat app, a pairing code to send the
 // bot, credentials), where its messages go, what it does, a test message to the owner — and, for a market's, the way
 // to install it. Read-only ones (the apps, /agent, voice) say where they are set up.
+import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
@@ -155,8 +156,10 @@ export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => 
 // ── one channel ──────────────────────────────────────────
 
 /** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
- *  is open; none: the default's. */
-export function ChannelPage({ id, manager, onBack, onSettings }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void }) {
+ *  is open; none: the current assistant's. */
+export function ChannelPage({ id, manager: named, onBack, onSettings }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void }) {
+  // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
+  const manager = named ?? otherManager(useChosenManager() ?? undefined);
   useLayoutEffect(() => pinManager(`/channels/${encodeURIComponent(id)}`, otherManager(manager)), [id, manager]);
   const [d, setD] = useState<ChannelDetail | null>(null);
   const [error, setError] = useState("");
@@ -211,6 +214,7 @@ export function ChannelPage({ id, manager, onBack, onSettings }: { id: string; m
   const head = (
     <div className="mb-3 flex items-center gap-2">
       <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>
+      <OwnerMark manager={manager} />
       <span className="flex-1" />
       <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void load()} />
     </div>

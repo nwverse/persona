@@ -185,6 +185,34 @@ describe("another manager's connector and channel pages", () => {
   });
 });
 
+describe("a page opened by an address that names no assistant, or another one", () => {
+  it("opens a connector and a channel without `@` as the current assistant's", async () => {
+    setRoster(ROSTER);
+    act(() => chooseManager("m-1"));
+    act(() => root.render(<Connectors open="wechat" onOpen={() => {}} />));
+    await flush();
+    expect(host.textContent).toContain("work@example.com");
+    expect(host.textContent).not.toContain("home@example.com");
+    expect(managerHeaderFor("/connectors/wechat/settings")).toBe("m-1");
+    act(() => root.render(<ChannelPage id="wechat" onBack={() => {}} onSettings={() => {}} />));
+    await flush();
+    expect(calls.find((c) => c.url.endsWith("/channels/wechat"))?.header).toBe("m-1");
+  });
+
+  it("names whose it is beside the title when it is another assistant's than the current one's, and nowhere else", async () => {
+    setRoster(ROSTER);
+    act(() => root.render(<Connectors open="wechat@m-1" onOpen={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-owner-mark=m-1]")?.textContent).toContain("工作");
+    act(() => chooseManager("m-1"));
+    await flush();
+    expect(host.querySelector("[data-owner-mark]")).toBeNull();
+    act(() => root.render(<Extensions open="example-wechat@assistant" onOpen={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-owner-mark=assistant]")?.textContent).toContain("助手");
+  });
+});
+
 describe("Settings › Connectors' rows", () => {
   const rows = () => [...host.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent?.includes("微信"));
 
@@ -231,6 +259,18 @@ describe("Settings › Connectors' rows", () => {
 });
 
 describe("Settings › Extensions' rows", () => {
+  it("says the current assistant is offline rather than that nothing is installed", async () => {
+    setRoster({ ...ROSTER, managers: [...ROSTER.managers, { id: "m-2", name: "家里", online: false }] });
+    act(() => chooseManager("m-2"));
+    act(() => root.render(<Extensions open={null} onOpen={() => {}} />));
+    await flush();
+    expect(host.querySelector('[data-assistant-offline="m-2"]')).not.toBeNull();
+    expect(host.textContent).not.toContain(t("settings-extensions.empty_title"));
+    act(() => chooseManager("m-1"));
+    await flush();
+    expect(host.querySelector("[data-assistant-offline]")).toBeNull();
+  });
+
   const rows = () => [...host.querySelectorAll<HTMLElement>("[data-extension-row]")];
   // what follows a row's name: its source's word, if it has one
   const tags = (row: HTMLElement) => [...row.querySelector("span.truncate")!.parentElement!.children].slice(1).map((c) => c.textContent);

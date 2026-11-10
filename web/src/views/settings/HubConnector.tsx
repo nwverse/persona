@@ -5,6 +5,7 @@
 // at a time (fields the hub asks for, GitHub's device code, or a QR code to scan), "Add to knowledge base" / "Add to Inbox", sign-out and delete. GitHub adds
 // where its token comes from (a computer's gh, or the device flow), the scopes it lacks, and its inbox options.
 // Messages (iMessage) adds "Hand to Persona" and deleting what the hub kept (iOS MessagesConnectorView, /api/v1/imessage…).
+import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { otherManager, ownedSub, pinManagerAt, sameManager } from "../../lib/manager-choice";
@@ -94,7 +95,7 @@ export function ConnectorList({ onOpen }: { onOpen: (id: string) => void }) {
 // ── one connector's page ─────────────────────────────────
 
 /** `manager`: whose connector (another manager's, opened from its extension's page, docs/assistant/managers.md "Clients"): the
- *  merged list's copy of that manager, and every request of the page names it while it is open; none: the default's. */
+ *  merged list's copy of that manager, and every request of the page names it while it is open; none: the current assistant's (Connectors fills it in). */
 export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string; manager?: string; onBack: () => void; onChannel?: (id: string, manager?: string) => void }) {
   useLayoutEffect(() => pinManagerAt(id === "imessage" ? [`/connectors/${encodeURIComponent(id)}`, "/imessage"] : [`/connectors/${encodeURIComponent(id)}`], otherManager(manager)), [id, manager]);
   const [c, setC] = useState<HubConnector | null>(null);
@@ -159,6 +160,7 @@ export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string
     <div>
       <div className="mb-3 flex items-center gap-2">
         <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-hubconnector.back")}</Button>
+        <OwnerMark manager={manager} />
         <span className="flex-1" />
         <IconButton icon="retry" label={t("settings-hubconnector.recheck")} onClick={() => void load()} disabled={loading} />
       </div>

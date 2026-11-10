@@ -7,13 +7,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const viewport = vi.hoisted(() => ({ phone: false }));
+const viewport = vi.hoisted(() => ({ phone: false, lark: false }));
 vi.hoisted(() => {
   window.matchMedia = ((query: string) => ({ get matches() { return viewport.phone; }, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
-  useStore: (select: (state: Record<string, unknown>) => unknown) => select({ features: ["channels", "extension_manager", "connectors"], machines: [], sessions: {}, interactions: [], mutes: { spaces: [], sessions: [] }, conn: "online", link: { networkUp: true, restarting: false }, hubName: "", mesh: [], loaded: true }),
+  useStore: (select: (state: Record<string, unknown>) => unknown) => select({ features: ["channels", "extension_manager", "connectors", ...(viewport.lark ? ["lark"] : [])], machines: [], sessions: {}, interactions: [], mutes: { spaces: [], sessions: [] }, conn: "online", link: { networkUp: true, restarting: false }, hubName: "", mesh: [], loaded: true }),
 }));
 vi.mock("./settings/ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
 vi.mock("./settings/NotificationSettings", () => ({ NotificationSettings: () => <div data-page="notifications" /> }));
@@ -54,9 +54,12 @@ let root: Root;
 let calls: { path: string; manager: string | null }[];
 // what the hub answers GET /managers (the roster is read again when the page subscribes to it)
 let roster: ManagerList | null;
+// the current assistant has no route for the chat connector: its manager answers 404
+const larkAbsent = { on: false };
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
 beforeEach(() => {
   viewport.phone = false;
+  viewport.lark = false;
   localStorage.clear();
   resetManagerChoice();
   resetRoster();
@@ -66,6 +69,9 @@ beforeEach(() => {
     const path = new URL(String(input), "http://hub.example.com").pathname;
     calls.push({ path, manager: new Headers(init.headers).get("X-Persona-Manager") });
     if (path === "/api/v1/agents/triage") return Promise.resolve(json({ triage: true }));
+    if (path === "/api/v1/lark/status" && larkAbsent.on) return Promise.resolve(new Response(JSON.stringify({ error: "not found" }), { status: 404, headers: { "Content-Type": "application/json" } }));
+    if (path === "/api/v1/lark/status") return Promise.resolve(json({ configured: true, connected: true }));
+    if (path === "/api/v1/lark/message-display") return Promise.resolve(json({ anti_recall: false, show_edit_history: false, account_id: "a1" }));
     if (path === "/api/v1/mail/accounts") return Promise.resolve(json({ accounts: [] }));
     if (path === "/api/v1/managers") return Promise.resolve(roster ? json(roster) : new Response("{}", { status: 404 }));
     return Promise.resolve(json({ accounts: [], connectors: [], channels: [], extensions: [] }));
@@ -176,6 +182,33 @@ describe("the current assistant's pages", () => {
     calls = [];
     await mount("/settings?tab=general");
     expect(calls.every((c) => c.manager === null)).toBe(true);
+  });
+
+  it("ask the current assistant for every route of the chat connector, message display included", async () => {
+    viewport.lark = true;
+    setRoster(ROSTER);
+    await switchTo("m-1");
+    await mount("/settings?tab=connectors");
+    expect(asked("/api/v1/lark/status")).toEqual(["m-1"]);
+    expect(asked("/api/v1/lark/accounts")).toEqual(["m-1"]);
+    expect(asked("/api/v1/lark/message-display").length).toBeGreaterThan(0);
+    expect(asked("/api/v1/lark/message-display").every((m) => m === "m-1")).toBe(true);
+  });
+
+  it("show the chat connector's group as not set up, with no display switches, for an assistant without it", async () => {
+    viewport.lark = true;
+    larkAbsent.on = true;
+    try {
+      setRoster(ROSTER);
+      await switchTo("m-1");
+      await mount("/settings?tab=connectors");
+      const group = host.querySelector('[data-anchor="lark"], #settings-lark') ?? host;
+      expect(group.textContent).toContain(t("settings-connectors.not_configured"));
+      expect(host.textContent).not.toContain(t("settings-connectors.lark_status_failed", { error: "" }).slice(0, 4));
+      expect(host.textContent).not.toContain(t("settings-larkdisplay.title"));
+    } finally {
+      larkAbsent.on = false;
+    }
   });
 
   it("go back to the list when an item is open and another assistant becomes current", async () => {
