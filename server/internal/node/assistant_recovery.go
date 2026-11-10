@@ -2,7 +2,9 @@ package node
 
 import (
 	"context"
+	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,17 +18,35 @@ type assistantTurnRecovery struct {
 	retried map[string]bool // one same-model continuation per model
 	used    map[string]bool // models this request has already tried, never selected again
 	running bool
+	pending *assistantPendingFailure
+}
+
+// assistantPendingFailure is a new turn result that arrived while its recovery send was still returning. It is not a
+// duplicate of the previous result: swallowing it would leave the conversation working forever.
+type assistantPendingFailure struct {
+	text  string
+	kinds []string
 }
 
 type assistantRecoveryContextKey struct{}
 
-func withAssistantRecovery(ctx context.Context) context.Context {
-	return context.WithValue(ctx, assistantRecoveryContextKey{}, true)
+type assistantRecoveryCall struct {
+	recovery *assistantTurnRecovery
+	restart  bool
 }
 
-func isAssistantRecovery(ctx context.Context) bool {
-	on, _ := ctx.Value(assistantRecoveryContextKey{}).(bool)
-	return on
+var (
+	errAssistantRecoveryCancelled = errors.New("assistant recovery superseded")
+	errAssistantRecoveryTasks     = errors.New("assistant background tasks are running or not explicitly known to be empty")
+)
+
+func withAssistantRecovery(ctx context.Context, recovery *assistantTurnRecovery, restart bool) context.Context {
+	return context.WithValue(ctx, assistantRecoveryContextKey{}, assistantRecoveryCall{recovery: recovery, restart: restart})
+}
+
+func assistantRecoveryOf(ctx context.Context) (*assistantTurnRecovery, bool) {
+	call, _ := ctx.Value(assistantRecoveryContextKey{}).(assistantRecoveryCall)
+	return call.recovery, call.restart
 }
 
 var (
@@ -46,6 +66,9 @@ func assistantRecoverableError(failed bool, result string) bool {
 	if strings.Contains(t, "safeguards flagged") {
 		return true // the provider's transient refusal may itself be an HTTP 400 (#3204)
 	}
+	if strings.Contains(t, "usage limit") || strings.Contains(t, "usage_limit") || strings.Contains(t, "account_quota_exhausted") {
+		return false // Claude's result has no structured kind: a subscription reset is not an ordinary 429 retry
+	}
 	if assistantBadRequest.MatchString(t) {
 		return false // a hub/request 400 is not transient, even when its detail mentions an upstream status
 	}
@@ -53,13 +76,15 @@ func assistantRecoverableError(failed bool, result string) bool {
 		strings.Contains(t, "too many requests") || assistantServerError.MatchString(t)
 }
 
-func (n *Node) clearAssistantRecovery(id string) {
-	if id == "" {
+func (n *Node) clearAssistantRecovery(p *assistantProc) {
+	if p == nil || p.id == "" {
 		return
 	}
 	n.mu.Lock()
-	delete(n.recoveries, id)
-	n.mu.Unlock()
+	defer n.mu.Unlock()
+	if n.procs[p.id] == p { // a replaced process's late result cannot clear its replacement's recovery
+		delete(n.recoveries, p.id)
+	}
 }
 
 // cancelAssistantRecovery lets a user's newer message take over. Release the old turn's held busy flag too: if that
@@ -97,9 +122,10 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 		return false
 	}
 	launcher, cwd, execution := p.launcher, p.cwd, p.model
-	current := execution.Model
+	key := execution.Model // the launcher's default stays one budget even when its concrete name arrives on a later attempt
+	current := key
 	if current == "" {
-		current = p.replyModel
+		current = p.replyModel // used only to locate that default in the launcher's ordered list
 	}
 	p.mu.Unlock()
 
@@ -110,23 +136,36 @@ func (n *Node) recoverAssistantResult(p *assistantProc, failed bool, result stri
 	}
 	r := n.recoveries[p.id]
 	if r == nil {
-		r = &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{current: true}}
+		r = &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
+		if current != "" {
+			r.used[current] = true
+		}
 		if n.recoveries == nil {
 			n.recoveries = map[string]*assistantTurnRecovery{}
 		}
 		n.recoveries[p.id] = r
 	}
 	if r.running {
+		r.pending = &assistantPendingFailure{text: result, kinds: kinds}
 		n.mu.Unlock()
+		p.mu.Lock()
+		p.busy = true
+		p.mu.Unlock()
 		return true
 	}
-	same := !r.retried[current]
+	same := !r.retried[key]
 	if same {
-		r.retried[current] = true
+		r.retried[key] = true
 	}
-	r.used[current], r.running = true, true
+	if current != "" {
+		r.used[current] = true
+	}
+	r.running = true
 	n.mu.Unlock()
 
+	p.mu.Lock()
+	p.busy = true // before the goroutine can finish: the caller must never overwrite an already-published final idle
+	p.mu.Unlock()
 	go n.runAssistantRecovery(p, r, launcher, cwd, execution, current, same)
 	return true
 }
@@ -147,12 +186,26 @@ func nextAssistantModel(list proto.LauncherModels, current string, used map[stri
 	}
 	for i := at + 1; i < len(list.Models); i++ {
 		m := list.Models[i]
-		if m.Default || m.ID == "" || m.ID == "default" || !proto.ValidModelID(m.ID) || used[m.ID] || used[m.Resolved] {
+		if m.Default || m.ID == "" || m.ID == "default" || !proto.ValidModelID(m.ID) || used[m.ID] || (m.Resolved != "" && used[m.Resolved]) {
 			continue
 		}
 		return m.ID, true
 	}
 	return "", false
+}
+
+// assistantExecutionForModel keeps the requested effort when the fallback supports it. Otherwise it follows the
+// launcher's default, matching the model picker instead of making the new model refuse an unsupported level.
+func assistantExecutionForModel(execution modelExecution, list proto.LauncherModels, id string) modelExecution {
+	execution.Model = id
+	if execution.Effort == "" || execution.Effort == effortAuto {
+		return execution
+	}
+	i := slices.IndexFunc(list.Models, func(m proto.AgentModel) bool { return m.ID == id })
+	if i < 0 || !slices.Contains(list.Models[i].Efforts, execution.Effort) {
+		execution.Effort = effortAuto
+	}
+	return execution
 }
 
 // assistantRecoveryModels is launchers.models, replaced by deterministic tests without a CLI or model call.
@@ -163,11 +216,6 @@ var assistantRecoveryModels = func(ctx context.Context, n *Node, launcher string
 func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, launcher, cwd string, execution modelExecution, current string, same bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	valid := func() bool {
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		return n.recoveries[p.id] == r
-	}
 	if !same {
 		list, err := assistantRecoveryModels(ctx, n, launcher)
 		if err != nil {
@@ -180,30 +228,21 @@ func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, 
 			n.finishAssistantRecovery(p, r)
 			return
 		}
-		execution.Model = next
+		execution = assistantExecutionForModel(execution, list, next)
 		r.used[next] = true
 	}
-	if !valid() {
-		return // the user's newer message owns the conversation now
-	}
-	if !same {
-		p.mu.Lock()
-		tasks := len(p.tasks)
-		p.mu.Unlock()
-		if tasks != 0 {
-			// Switching models resumes in another process. Do not kill background work to manufacture a fallback.
-			n.finishAssistantRecovery(p, r)
-			return
-		}
-		n.stopAssistant(p.id)
-	}
-	_, err := n.assistantSend(withAssistantRecovery(ctx), p.id, cwd, launcher, prompts.RenderModelRetry(), nil, "", "", execution)
+	_, err := n.assistantSend(withAssistantRecovery(ctx, r, !same), p.id, cwd, launcher, prompts.RenderModelRetry(), nil, "", "", execution)
+	var pending *assistantPendingFailure
 	n.mu.Lock()
 	if n.recoveries[p.id] == r {
 		r.running = false
+		pending, r.pending = r.pending, nil
 	}
 	n.mu.Unlock()
 	if err == nil {
+		if pending != nil {
+			n.recoverAssistantResult(p, true, pending.text, pending.kinds...)
+		}
 		return
 	}
 	n.logger.Printf("assistant %s: model recovery did not start: %v", p.id[:8], err)

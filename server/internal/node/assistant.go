@@ -201,7 +201,34 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
-	if !isAssistantRecovery(ctx) {
+	if id != "" {
+		defer n.typing.lock(id)()
+	}
+	recovery, restart := assistantRecoveryOf(ctx)
+	if recovery != nil {
+		n.mu.Lock()
+		valid := n.recoveries[id] == recovery
+		p := n.procs[id]
+		n.mu.Unlock()
+		if !valid {
+			return "", errAssistantRecoveryCancelled
+		}
+		if restart {
+			if p == nil {
+				return "", errAssistantRecoveryTasks
+			}
+			if p.agent == "codex" && p.cx != nil {
+				p.cx.syncTasks() // a successful explicit empty list is the only proof that a restart kills no background work
+			}
+			p.mu.Lock()
+			safe := p.tasksObserved && len(p.tasks) == 0
+			p.mu.Unlock()
+			if !safe {
+				return "", errAssistantRecoveryTasks
+			}
+			n.stopAssistantProcess(id)
+		}
+	} else {
 		n.cancelAssistantRecovery(id)
 	}
 	if err := validModes(mode, effort); err != nil {
@@ -340,7 +367,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			}
 			p.mu.Unlock()
 		} else {
-			n.stopAssistant(id) // model switch, dead process, bypassPermissions (start-only) or new instructions: resume in a fresh one
+			n.stopAssistantProcess(id) // model switch, dead process, bypassPermissions (start-only) or new instructions: resume in a fresh one
 			n.rememberTasks(id, nil)
 			p = nil
 		}
@@ -417,7 +444,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		}
 		switch {
 		case werr != nil && !fresh:
-			n.stopAssistant(id)
+			n.stopAssistantProcess(id)
 			return "", fmt.Errorf("send to claude: %w", werr)
 		case werr != nil:
 			werr = p.startFailure() // it is gone already: say why, not that the pipe is closed (#2581)
@@ -427,7 +454,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if werr == nil {
 			break
 		}
-		n.stopAssistant(id)
+		n.stopAssistantProcess(id)
 		if !p.missingCommand() || attempt > assistantStartRetries {
 			return "", p.startRefusal(werr)
 		}
@@ -624,7 +651,7 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 		case "result":
 			recovering := n.recoverAssistantResult(p, ev.IsError, ev.Result)
 			if !recovering {
-				n.clearAssistantRecovery(p.id)
+				n.clearAssistantRecovery(p)
 			}
 			p.mu.Lock()
 			manual := p.manual
@@ -632,7 +659,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			window := reportedWindow(ev.ModelUsage, p.replyModel)
 			changed, idleAt := p.followWindow(window), p.compactIdleAt
 			p.compacting = false
-			p.busy = recovering
+			if !recovering {
+				p.busy = false
+			}
 			p.lastActive = time.Now()
 			p.partial.Reset()
 			p.mu.Unlock()

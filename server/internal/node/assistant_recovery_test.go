@@ -2,11 +2,13 @@ package node
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -54,6 +56,7 @@ func TestAssistantRefusalThenUsesTheNextLauncherModel(t *testing.T) {
 	f := sdkTest(t)
 	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
 echo '{"type":"system","subtype":"init"}'
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
 model=primary-model
 case "$*" in *'--model fallback-model'*) model=fallback-model ;; esac
 while IFS= read -r line; do
@@ -66,7 +69,9 @@ while IFS= read -r line; do
       count=$((count+1))
       echo "$count" > "$SDK_FAKE_DIR/attempts"
       if [ "$count" -le 2 ]; then
-        echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
+        if [ "$count" -eq 2 ]; then
+          echo '{"type":"stream_event","event":{"type":"message_start","message":{"model":"primary-model","usage":{"input_tokens":5}}},"parent_tool_use_id":null}'
+        fi
         echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
       else
         printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
@@ -105,6 +110,10 @@ done
 	}
 }
 
+func TestModelRetryPromptGolden(t *testing.T) {
+	goldenNode(t, "model_retry", prompts.RenderModelRetry())
+}
+
 func TestAssistantRecoverableErrorClasses(t *testing.T) {
 	for _, tc := range []struct {
 		name, result string
@@ -112,6 +121,8 @@ func TestAssistantRecoverableErrorClasses(t *testing.T) {
 	}{
 		{"safeguards", "API Error: 400 safeguards flagged this message", true, true},
 		{"429", "API Error: 429 Too Many Requests", true, true},
+		{"subscription 429", "API Error: 429 account_quota_exhausted: Account usage limit reached", true, false},
+		{"usage limit text", "API Error: 429 usage_limit_reached", true, false},
 		{"rate limit", "API Error: rate_limit_error", true, true},
 		{"500", "API Error: 500 internal server error", true, true},
 		{"503", "API Error: 503 no eligible upstream", true, true},
@@ -157,9 +168,27 @@ func TestNextAssistantModelFollowsLauncherOrderOnce(t *testing.T) {
 	}
 }
 
+func TestAssistantFallbackEffortFollowsTheNextModel(t *testing.T) {
+	list := proto.LauncherModels{Models: []proto.AgentModel{{ID: "supports", Efforts: []string{"high", "max"}}, {ID: "limited", Efforts: []string{"low", "high"}}, {ID: "unknown"}}}
+	for _, tc := range []struct {
+		id, effort, want string
+	}{
+		{"supports", "max", "max"},
+		{"limited", "max", effortAuto},
+		{"unknown", "max", effortAuto},
+		{"limited", effortAuto, effortAuto},
+	} {
+		got := assistantExecutionForModel(modelExecution{Effort: tc.effort, UseEffort: true}, list, tc.id)
+		if got.Model != tc.id || got.Effort != tc.want || !got.UseEffort {
+			t.Errorf("%s at %s: %+v, want effort %s", tc.id, tc.effort, got, tc.want)
+		}
+	}
+}
+
 func TestAssistantRecoveryStopsAfterBothModelsAndTheirRetries(t *testing.T) {
 	f := sdkTest(t)
 	script := `echo '{"type":"system","subtype":"init"}'
+echo '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
 model=primary-model
 case "$*" in *'--model fallback-model'*) model=fallback-model ;; esac
 while IFS= read -r line; do
@@ -204,5 +233,60 @@ func TestAssistantRecoveryCancelReleasesTheHeldTurn(t *testing.T) {
 	}
 	if _, ok := n.recoveries[id]; ok {
 		t.Fatal("the newer message did not cancel the old recovery")
+	}
+}
+
+func TestAssistantRecoveryIgnoresAReplacedProcessCleanup(t *testing.T) {
+	n := assistantNode(t)
+	const id = "11111111-2222-3333-4444-555555555555"
+	old, current := &assistantProc{id: id}, &assistantProc{id: id}
+	n.procs[id] = current
+	n.recoveries = map[string]*assistantTurnRecovery{id: {running: true}}
+	n.clearAssistantRecovery(old)
+	if n.recoveries[id] == nil {
+		t.Fatal("a replaced process cleared its replacement's recovery")
+	}
+	n.clearAssistantRecovery(current)
+	if n.recoveries[id] != nil {
+		t.Fatal("the current process did not clear its completed recovery")
+	}
+}
+
+func TestAssistantInterruptCancelsRecovery(t *testing.T) {
+	n := assistantNode(t)
+	const id = "11111111-2222-3333-4444-555555555555"
+	n.recoveries = map[string]*assistantTurnRecovery{id: {running: true}}
+	if err := n.assistantInterrupt(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := n.recoveries[id]; ok {
+		t.Fatal("an explicit Stop left a recovery able to restart the conversation")
+	}
+}
+
+func TestAssistantFallbackNeverKillsUnknownOrRunningBackgroundTasks(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		observed bool
+		tasks    []string
+	}{
+		{"unknown inventory", false, nil},
+		{"running task", true, []string{"deploy"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := assistantNode(t)
+			const id = "11111111-2222-3333-4444-555555555555"
+			p := &assistantProc{id: id, agent: "claude", launcher: "claude", tasksObserved: tc.observed, tasks: tc.tasks}
+			n.procs[id] = p
+			r := &assistantTurnRecovery{}
+			n.recoveries = map[string]*assistantTurnRecovery{id: r}
+			_, err := n.assistantSend(withAssistantRecovery(context.Background(), r, true), id, "", "claude", "retry", nil, "", "")
+			if !errors.Is(err, errAssistantRecoveryTasks) {
+				t.Fatalf("restart error = %v, want %v", err, errAssistantRecoveryTasks)
+			}
+			if n.procs[id] != p {
+				t.Fatal("the old process was stopped without a proven empty background inventory")
+			}
+		})
 	}
 }

@@ -182,10 +182,12 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		}
 		recovering := n.recoverAssistantResult(p, failure != "", failure, failureKind)
 		if !recovering {
-			n.clearAssistantRecovery(p.id)
+			n.clearAssistantRecovery(p)
 		}
 		p.mu.Lock()
-		p.busy = recovering
+		if !recovering {
+			p.busy = false
+		}
 		p.turnError = failure
 		p.turnErrorKind = failureKind
 		p.lastActive = time.Now()

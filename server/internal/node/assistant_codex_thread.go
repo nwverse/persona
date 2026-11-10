@@ -249,6 +249,7 @@ func (c *codexConn) syncTasks() {
 		} `json:"data"`
 	}
 	if err := c.call(ctx, "thread/backgroundTerminals/list", map[string]any{"threadId": thread}, &res); err != nil {
+		c.p.invalidateUpdateTasks()
 		return
 	}
 	tasks := []string{}
@@ -256,7 +257,8 @@ func (c *codexConn) syncTasks() {
 		tasks = append(tasks, "后台命令："+unwrapShell(t.Command))
 	}
 	c.p.mu.Lock()
-	c.p.tasks = tasks
+	c.p.tasks, c.p.tasksObserved = tasks, true
+	c.p.tasksRevision++
 	c.p.mu.Unlock()
 	c.p.ownerOr(c.n).rememberTasks(c.p.id, tasks)
 }
