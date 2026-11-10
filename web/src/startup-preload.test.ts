@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { brotliDecompressSync } from "node:zlib";
+import { brotliDecompressSync, gzipSync } from "node:zlib";
 import { LANG_MATCHES, LANGS, preferredLanguage } from "./i18n";
-import { brotliCopies, BROTLI_MIN_SIZE, localeDirs, preloadScript, sentBytes, startupNamespaceGaps } from "./startup-preload";
+import { brotliCopies, BROTLI_MIN_SIZE, gzipBytes, idleImports, localeDirs, preloadScript, sentBytes, startupNamespaceGaps } from "./startup-preload";
 
 const langs = localeDirs(join(__dirname, "i18n/locales"));
 
@@ -82,6 +82,29 @@ describe("brotli copies", () => {
     expect(await sentBytes(dir, ["assets/App-1.js", "assets/small-2.js"])).toBe(br.length + BROTLI_MIN_SIZE - 1);
     await brotliCopies(dir, ["assets/App-1.js"]);
     expect(readFileSync(join(dir, "assets/App-1.js.br")).equals(br)).toBe(true);
+    rmSync(dir, { recursive: true });
+  });
+});
+
+describe("idle tier", () => {
+  it("finds the modules lazyPage loads at idle, not those it loads on intent or when shown", () => {
+    const code = [
+      'const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });',
+      'const Settings = lazyPage(() => import("./views/Settings").then((m) => m.Settings), { routes: ["settings"] });',
+      "const Chart = lazyPage(() => import('./Chart').then((m) => m.Chart), {\n  idle: true,\n});",
+      'const Diff = lazyPage(() => import("./DiffView").then((m) => m.DiffView));',
+      'const idle = { idle: true };',
+    ].join("\n");
+    expect(idleImports(code)).toEqual(["./views/Palette", "./Chart"]);
+  });
+
+  it("counts each file gzipped at the best level, or as it is under 1 KB", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "idle-gz-"));
+    mkdirSync(join(dir, "assets"));
+    const big = "export const greeting = \"hello\";\n".repeat(100);
+    writeFileSync(join(dir, "assets/Palette-1.js"), big);
+    writeFileSync(join(dir, "assets/small-2.js"), "x".repeat(BROTLI_MIN_SIZE - 1));
+    expect(await gzipBytes(dir, ["assets/Palette-1.js", "assets/small-2.js"])).toBe(gzipSync(big, { level: 9 }).length + BROTLI_MIN_SIZE - 1);
     rmSync(dir, { recursive: true });
   });
 });

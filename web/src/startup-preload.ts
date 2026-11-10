@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { brotliCompress, constants } from "node:zlib";
+import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -98,6 +98,33 @@ export const FIRST_SCREEN_BUDGET = 576_352;
 export async function sentBytes(dir: string, files: string[]): Promise<number> {
   const sizes = await Promise.all(files.map((file) => stat(join(dir, `${file}.br`)).catch(() => stat(join(dir, file)))));
   return sizes.reduce((sum, s) => sum + s.size, 0);
+}
+
+/**
+ * The most the idle tier may send (src/lib/lazy-page.ts: the chunks of each `lazyPage(…, { idle: true })` and what they
+ * import beyond the first screen), in bytes as gzipBytes counts them (vite.config.ts startupPreload fails the build past
+ * it): 28,085 B at #2880 plus 3%. Every other lazy page loads on intent, not at idle; raise it on purpose, in the change
+ * that needs it.
+ */
+export const IDLE_TIER_BUDGET = 28_928;
+
+const gzip = promisify(gzipCompress);
+
+/** What the built-in hub sends for `files` (paths below `dir`, none with a brotli copy) once the release precompressed
+ *  them (server/internal/webasset): each one gzipped at the best level, or the file itself under BROTLI_MIN_SIZE. Build
+ *  time only. */
+export async function gzipBytes(dir: string, files: string[]): Promise<number> {
+  const sizes = await Promise.all(files.map(async (file) => {
+    const data = await readFile(join(dir, file));
+    return data.length < BROTLI_MIN_SIZE ? data.length : (await gzip(data, { level: 9 })).length;
+  }));
+  return sizes.reduce((sum, n) => sum + n, 0);
+}
+
+/** The modules a source file (`code`) loads at idle: each `lazyPage(() => import("x")…, { idle: true })`'s "x", as
+ *  written. Build time only. */
+export function idleImports(code: string): string[] {
+  return [...code.matchAll(/lazyPage\(\s*\(\)\s*=>\s*import\(\s*["']([^"']+)["']\s*\)[^;]*?\{\s*idle:\s*true\s*,?\s*\}/g)].map((m) => m[1]);
 }
 
 /**
