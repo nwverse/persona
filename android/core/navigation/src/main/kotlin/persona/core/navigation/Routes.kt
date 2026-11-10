@@ -45,7 +45,7 @@ data class InboxItemUiRoute(val itemId: String, val extensionId: String, val uiI
 @Serializable enum class SettingsPage { Diagnostics, Readiness, Notifications, PhoneData, Appearance, Devices, About, Pairing, ClaudeCode, ModelConfig, Hubs, Persona, Extensions, Mail, Feishu, Channels, HubUpdate, Translation, Triage, Capsule, Language, Codex, Providers, Storage, Desktops, Managers, FeishuBot, Sent, Connectors }
 @Serializable @SerialName("persona.core.navigation.SettingsPageRoute") data class SettingsPageRoute(val page: SettingsPage) : NavKey
 
-enum class AppTab { Persona, Agents, Inbox, Settings }
+enum class AppTab { Persona, Agents }
 
 interface Navigator {
     fun navigate(key: NavKey)

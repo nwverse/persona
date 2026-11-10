@@ -14,7 +14,7 @@ var pictureExts = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".g
 	".heif": true, ".bmp": true, ".tif": true, ".tiff": true}
 
 // ViewedImages are the images the tool calls of run looked at, in the order they came, each once
-// (docs/protocol/protocol.md "Images seen this turn"): the images their results carried, and the picture files Read opened whose
+// (docs/protocol/protocol.md "Images viewed this turn"): the images their results carried, and the picture files Read opened whose
 // results carried none (Codex's view_image is a Read too). uses holds the calls by id (the page's: an image's call
 // may sit before the run). The apps apply the same rules to the work they have; a fold carries what it hides.
 func ViewedImages(run []proto.Item, uses map[string]proto.Item) []proto.FoldImage {

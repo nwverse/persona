@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-// The composer's dictation and stop buttons, the shell's (docs/apple/ios.md「新外壳」): every composer draws these two, so an
+// The composer's dictation and stop buttons, the shell's (docs/apple/ios.md「New shell」): every composer draws these two, so an
 // agent's chat and the assistant's look and behave alike (#1079). Each is a size up like the shell's chrome
 // (`shellScaled`), wherever it sits. A field outside the composer dictates with the same tap (`FieldMicButton`).
 

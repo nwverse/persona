@@ -1,5 +1,6 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useManagerOffline } from "../ManagerParts";
+import { LinkManager } from "../../lib/manager-choice";
 import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
@@ -22,7 +23,7 @@ import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, suba
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
-import { forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type OutboxEntry } from "../../lib/outbox";
+import { acceptOutgoing, forgetOutgoing, inSendOrder, keepFailed, keepOutgoing, noteWritten, outboxKey, placeFailed, restoreOutbox, retryOutbox, SENT_GRACE_MS, settleOutbox, type OutboxEntry } from "../../lib/outbox";
 import { apiOp } from "../../lib/ops";
 import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistant-chat";
 import { unlinkAgentFromTodo } from "../../lib/todos";
@@ -38,6 +39,8 @@ import { awaitsReply } from "../../lib/agent-groups";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
+import { segmentChanges, shiftAbove } from "./offscreen";
+import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands } from "../../lib/composer-commands";
 import { PendingCards } from "./Interactions";
@@ -47,7 +50,7 @@ import { FailureNote, showsFailureNote } from "./FailureNote";
 import { AWAIT_MS, awaitingTurn, DOCK_MAX, turnStart } from "./dock";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { ContextMeter } from "./ContextMeter";
-import { NARROW, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
+import { NARROW, NO_HOVER, PHONE, SHORT, useFinePointer, useMedia } from "../../lib/viewport";
 import { UserBubble } from "./SegmentView";
 import { scrollsAFold } from "./fold-scroll";
 import { ActivityChips, GoalChip } from "./Activity";
@@ -57,7 +60,8 @@ import { PaneTabs } from "./PaneTabs";
 import { RunningStatusBar } from "./RunningStatusBar";
 import { latestPlan, PlanPill, usePlanOutOfView } from "./PlanCard";
 import { publishPlan } from "../../lib/plan-store";
-import { ChatContext, FreshWords, LiveClockContext, type ChatContextValue } from "./chat-context";
+import { ChatContext, LiveClockContext, type ChatContextValue } from "./chat-context";
+import { addFreshWords, resetFreshWords } from "./fresh-words";
 import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowCalls, workflowCallsKey } from "../../lib/workflows";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource } from "../../lib/nav-rail";
@@ -72,7 +76,7 @@ import { ChatSidebarButton } from "../ShellSwitch";
 import { appArchiveDeps, deleteInsteadOfArchive, restoreAgent, useArchived } from "../../lib/agent-archives";
 import { UltracodeLostNote } from "./Ultracode";
 import { isUltracodeQueued, ultracodeQueueDone } from "../../lib/ultracode";
-import { ChatActionsContext, type ChatActions } from "./chat-actions";
+import { ChatActionsContext, liveValue, type ChatActions } from "./chat-actions";
 import { QueueStrip } from "./QueueStrip";
 import { ChatSearch, type LoadOutcome } from "./ChatSearch";
 import { forgetReveals, revealItem, undoReveals, clearReveal } from "./search-reveal";
@@ -129,6 +133,7 @@ interface Pending {
   id: string;
   msg: UserMessage;
   at: number;
+  acceptedAt?: number;
   /** The node held it back until an ultracode change waiting for the turn is through (#3428): it goes again then. */
   waits?: boolean;
   /** Its POST has not been answered yet (it may be behind earlier ones): the bubble does not time out. */
@@ -343,8 +348,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const named = session ?? archivedHere;
   const title = isMain ? MAIN_TITLE : named ? (assistant ? conversationTitle(named) : sessionTitle(named)) : assistant ? t("chat-chatview.new_chat") : t("chat-chatview.session");
   const canFork = Boolean(session?.can_fork) && !readOnly;
-  // "Rewind to here" (#2436): offered on your messages of a session in a terminal; off with a reason while it cannot
+  // "Rewind to here" (#2436): offered on your messages of a session in a terminal; off with a reason while it cannot. Live
+  // (chat-actions.ts): it changes with every turn, and in `actions` it would render every message's actions again.
   const rewindOff = rewindBlock(session, working);
+  const [rewindLive] = useState(() => liveValue(rewindOff));
+  useLayoutEffect(() => rewindLive.set(rewindOff), [rewindLive, rewindOff]);
   const canRewind = canCompose && !readOnly && !assistant;
   const actions = useMemo<ChatActions>(
     () => ({
@@ -355,9 +363,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
       fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space) : undefined,
-      rewind: canRewind ? { block: rewindOff, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
+      rewind: canRewind ? { block: rewindLive, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
     }),
-    [draftKey, title, canCompose, canFork, canRewind, rewindOff, mid, sid, assistant, persona.name],
+    [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
   );
   // the assistant works on any computer, so its @ menu offers workspaces too
   const mention = useMemo(() => ({ cwd: session?.cwd, self: draftKey, files: () => chatFiles(items.current), workspaces: Boolean(assistant) }), [session?.cwd, draftKey, assistant]);
@@ -376,30 +384,49 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const shown = echoed(pending, users, (p) => ({ id: p.id, text: p.msg.text, images: p.msg.images, at: p.at }), claimed.current);
     const drop = new Set([...shown].map((p) => p.id));
     const now = Date.now();
+    for (const p of pending) {
+      if (drop.has(p.id) || (!p.waits && !p.posting && state !== "working" && now - (p.acceptedAt ?? p.at) >= SENT_GRACE_MS)) {
+        forgetOutgoing(outboxKey(mid, sid), p.id);
+      }
+    }
     setPending((ps) => {
       // a sent one waits for its copy while the agent works and SENT_GRACE_MS after, as the outbox and the apps do: the
       // transcript can write it late (a long context compacted first, #1119); one held back for an ultracode change
       // waits as long as the turn does
-      return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - p.at < SENT_GRACE_MS));
+      return ps.filter((p) => !drop.has(p.id) && (p.waits || p.posting || state === "working" || now - (p.acceptedAt ?? p.at) < SENT_GRACE_MS));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segs, tr.firstRead, refusedNoRow]);
+
+  // A quiet transcript must not leave accepted bubbles forever. Reloads use the same stored deadline; local
+  // composer bubbles retain their existing grace while the agent works. Never expire a POST still in flight.
+  useEffect(() => {
+    const expiring = state === "working" ? [] : pending.filter((p) => !p.posting && !p.waits);
+    const deadlines = [...expiring, ...outbox.filter((e) => e.state === "sent")].map((e) => (e.acceptedAt ?? e.at) + SENT_GRACE_MS);
+    if (!deadlines.length) return;
+    const timer = setTimeout(() => {
+      settleOutbox(mid, sid, []);
+      const expired = new Set(expiring.filter((p) => Date.now() - (p.acceptedAt ?? p.at) >= SENT_GRACE_MS).map((p) => p.id));
+      for (const id of expired) forgetOutgoing(outboxKey(mid, sid), id);
+      if (expired.size) setPending((ps) => ps.filter((p) => !expired.has(p.id)));
+    }, Math.max(0, Math.min(...deadlines) - Date.now()));
+    return () => clearTimeout(timer);
+  }, [mid, sid, pending, outbox, state]);
 
   // seen: on open, when the page comes back to the front, and whenever a turn ends while it is on screen (lib/store.ts
   // viewSession); a subagent's transcript is not an agent of its own
   useEffect(() => (readOnly ? undefined : viewSession(mid, sid)), [mid, sid, readOnly]);
 
   // what came in over the WebSocket after the chat subscribed: the agent's words among it fade in (contract §3); the
-  // first page, older pages and unfolded ranges come over HTTP and do not
-  const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
+  // first page, older pages and unfolded ranges come over HTTP and do not. Outside React (fresh-words.ts): a new reply
+  // renders its own words, not every exchange; added before the transcript renders it, so its words mount fading.
   useEffect(() => {
-    setFresh(new Set());
-    return listenSession(mid, sid, {
-      items: (e) => {
-        const add = freshWords(items.current, e.items ?? []);
-        if (add.length) setFresh((f) => new Set([...f, ...add]));
-      },
-    });
+    resetFreshWords(mid, sid);
+    const off = listenSession(mid, sid, { items: (e) => addFreshWords(mid, sid, freshWords(items.current, e.items ?? [])) });
+    return () => {
+      off();
+      resetFreshWords(mid, sid);
+    };
   }, [mid, sid]);
 
   // ── scrolling (lib/disclosure.ts "following the end"): the end stays in view until the reader scrolls away from it;
@@ -417,12 +444,44 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // the jump's smooth scroll running: its first frames, a few px off the end, do not start following again
   const jumping = useRef(0);
   const [away, setAway] = useState(false);
+  // A row a jump brought into view (the rail, a search hit, a comment): it stays `at` px under the view's top while what
+  // is around it settles (pictures coming in, exchanges drawn for the first time). Held while the view moves and a
+  // moment after; the reader scrolling, or the view going to the end, lets it go.
+  const landing = useRef<{ row: Element | Range; at: number; quiet: number } | null>(null);
+  const holdLanding = useCallback((ms: number) => {
+    const l = landing.current;
+    if (!l) return;
+    clearTimeout(l.quiet);
+    l.quiet = window.setTimeout(() => (landing.current = null), ms);
+  }, []);
+  const land = useCallback((row: Element | Range, at: number) => {
+    clearTimeout(landing.current?.quiet);
+    landing.current = { row, at, quiet: 0 };
+    holdLanding(1200);
+  }, [holdLanding]);
+  // a smooth jump on its way (glide.ts): it reads where to go each frame, and the ResizeObserver leaves the view to it
+  const gliding = useRef<(() => void) | null>(null);
+  const stopGlide = useCallback(() => {
+    gliding.current?.();
+    gliding.current = null;
+  }, []);
+  useEffect(() => stopGlide, [stopGlide]);
+  const glideTo = useCallback((aim: () => number) => {
+    const sc = scroller.current;
+    stopGlide();
+    if (!sc) return;
+    if (scrollBehavior() === "auto") sc.scrollTop = aim();
+    else gliding.current = glide(sc, aim, () => (gliding.current = null));
+  }, [stopGlide]);
   // something came in since the reader left the end: the pill says "New messages"
   const [newSince, setNewSince] = useState(false);
   const follow = useCallback((on: boolean) => {
     atEnd.current = on;
     setAway(!on);
-    if (on) setNewSince(false);
+    if (on) {
+      setNewSince(false);
+      landing.current = null;
+    }
   }, []);
   const lastTop = useRef(0);
   const dragging = useRef(false);
@@ -471,6 +530,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const readerMoves = () => {
       moved = true;
       drop();
+      stopGlide();
+      landing.current = null;
     };
     const onClick = (e: MouseEvent) => {
       const el = e.target instanceof Element ? e.target.closest("button[aria-expanded]") : null;
@@ -497,19 +558,31 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       sc.removeEventListener("click", onClick, true);
       for (const ev of ["wheel", "touchstart", "keydown", "pointerdown"]) sc.removeEventListener(ev, readerMoves);
     };
-  }, [follow, scrollEl]);
+  }, [follow, scrollEl, stopGlide]);
 
   // content that grows by itself (images loading, a live group's steps) keeps the end in view; a held row stays put.
   // A ResizeObserver runs after layout and before paint, so the offset moves in the same frame as the height. The view
   // itself is watched too: what sits under it (the composer growing, the task dock, a question card) makes it shorter
-  // without the content changing, and at the end the newest line stays in view.
-  useEffect(() => {
-    const view = scroller.current;
-    const el = view?.firstElementChild;
-    if (!view || !el) return;
-    const ro = new ResizeObserver(() => {
+  // without the content changing, and at the end the newest line stays in view. So are the exchanges that skip drawing
+  // off screen (watchSegment): one drawn for the first time above the view swaps its guessed height for its own, and
+  // the view moves by as much, so what is on screen stays (offscreen.ts).
+  const heights = useRef(new WeakMap<Element, number>());
+  const resized = useRef<ResizeObserver | null>(null);
+  const sizes = useCallback(() => (resized.current ??= new ResizeObserver((entries) => {
       const sc = scroller.current;
       if (!sc) return;
+      const changes = segmentChanges(entries, heights.current);
+      if (gliding.current) return;
+      const viewTop = sc.getBoundingClientRect().top;
+      const l = landing.current;
+      if (l && (l.row instanceof Range ? l.row.startContainer : l.row).isConnected) {
+        const off = l.row.getBoundingClientRect().top - viewTop - l.at;
+        if (Math.abs(off) >= 0.5) {
+          sc.scrollTop += off;
+          holdLanding(1200);
+        }
+        return;
+      }
       const a = anchor.current;
       if (a && a.el.isConnected) {
         const r = a.el.getBoundingClientRect();
@@ -523,11 +596,34 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         return;
       }
       if (atEnd.current) sc.scrollTop = sc.scrollHeight;
-    });
+      else {
+        const shift = shiftAbove(changes, viewTop);
+        if (shift) sc.scrollTop += shift;
+      }
+    })), [holdLanding]);
+  useEffect(() => {
+    const view = scroller.current;
+    const el = view?.firstElementChild;
+    if (!view || !el) return;
+    const ro = sizes();
     ro.observe(el);
     ro.observe(view);
-    return () => ro.disconnect();
-  }, [scrollEl]);
+    return () => {
+      ro.unobserve(el);
+      ro.unobserve(view);
+    };
+  }, [scrollEl, sizes]);
+  // Its height as this commit's layout effects see it is where its changes count from: an earlier page landing keeps
+  // the view still by that layout (the guessed heights), and the browser may draw the new exchanges later in the same
+  // frame, before the observer's first look at them. Read in the layout effects, where the chat reads its own height
+  // anyway; nothing in between writes to the page, so it is one layout for all of them.
+  const watchSegment = useCallback((section: HTMLElement) => {
+    const ro = sizes();
+    const h = section.getBoundingClientRect().height;
+    if (h > 0) heights.current.set(section, h);
+    ro.observe(section);
+    return () => ro.unobserve(section);
+  }, [sizes]);
 
   // the reader leaving the end: the wheel or a trackpad going up, a finger pulling the list down, PageUp / ↑ / Home,
   // the scroll bar dragged up (onScroll)
@@ -574,6 +670,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
     const delta = el.scrollTop - lastTop.current;
     lastTop.current = el.scrollTop;
+    holdLanding(600);
     if (atEnd.current) {
       if (leavesOnScrollbarDrag({ dragging: dragging.current, delta })) follow(false);
     } else if (!anchor.current && !jumping.current && followsAgain({ gap, delta })) follow(true);
@@ -590,7 +687,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     const el = scroller.current;
     if (!el) return;
     follow(true);
-    el.scrollTo({ top: el.scrollHeight, behavior: scrollBehavior() });
+    glideTo(() => el.scrollHeight - el.clientHeight);
   };
 
   // ── sending ──
@@ -625,8 +722,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           opId: id,
           json: { text: out.text, images: out.images.length ? out.images : undefined, client_msg_id: id, clear_draft: clearDraft, launcher, model },
         }));
-        forgetOutgoing(key, id);
-        setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false } : x)));
+        const acceptedAt = Date.now();
+        acceptOutgoing(key, id, acceptedAt);
+        setPending((ps) => ps.map((x) => (x.id === id ? { ...x, posting: false, acceptedAt } : x)));
         return true;
       } catch (e) {
         // An ultracode change waits for the turn (docs/protocol/protocol.md "Claude Code ultracode"): the node holds messages back
@@ -667,7 +765,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }
 
   const onSend = async (out: Outgoing): Promise<boolean> => {
-    // Routed to a task ("Tell "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Who it points at").
+    // Routed to a task ("Tell "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
     if (assistant && out.images.length && getFeedState().routes[sid]) {
       toast(t("chat-chatview.route_no_images"), "error");
       return false;
@@ -775,6 +873,12 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     [tr.items, lastLive, readOnly, outgoing],
   );
   lastLines.current = lines;
+  // the last two exchanges are always drawn (the one going on, the one just done); those before them skip drawing while
+  // off screen (SegmentView `offscreen`). Not on a touch-only screen: a script moving the view (keeping it still as one
+  // is drawn) can stop a fling there.
+  const touch = useMedia(NO_HOVER);
+  const drawnLast = useMemo(() => new Set(lines.filter((l) => l.kind === "segment").slice(-2).map((l) => l.id)), [lines]);
+  const offscreen = (line: ChatLine) => (!touch && line.kind === "segment" && !line.live && !drawnLast.has(line.id) ? watchSegment : undefined);
   const linesNow = useRef(lines);
   linesNow.current = lines;
   const limitOn = limitLine ? lines.reduce((id, line) => (line.kind === "apiError" ? line.id : id), "") : "";
@@ -792,18 +896,19 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
   const inputIndex = useUserInputs(mid, sid, tr.history, inputRevision, fine && !tr.loading, tr.reload);
   const railTicks = useMemo(() => inputIndex ? indexedNavTicks(inputIndex, lines, tr.items) : loadedRailTicks, [inputIndex, lines, tr.items, loadedRailTicks]);
-  /** Brings a row into view in the chat's own scroller (scrollIntoView would also scroll an opening group's clipped
-   *  box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
+  /** Brings a row (or a run of words) into view in the chat's own scroller (scrollIntoView would also scroll an opening
+   *  group's clipped box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
   const landRow = useCallback(
-    (row: HTMLElement, topOffset: number) => {
+    (row: HTMLElement | Range, topOffset: number) => {
       const sc = scroller.current;
       if (!sc) return;
       follow(false);
       clearTimeout(jumping.current);
       jumping.current = window.setTimeout(() => (jumping.current = 0), 1200);
-      sc.scrollTo({ top: sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top + topOffset, behavior: scrollBehavior() });
+      land(row, -topOffset);
+      glideTo(() => sc.scrollTop + row.getBoundingClientRect().top - sc.getBoundingClientRect().top + topOffset);
     },
-    [follow],
+    [follow, land, glideTo],
   );
   const railJump = useCallback(
     async (lineId: string) => {
@@ -964,16 +1069,18 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       const el = r.value;
       const tall = el.getBoundingClientRect().height > sc.clientHeight;
       el.scrollIntoView({ block: tall ? "start" : "center", behavior: "auto" });
+      land(el, el.getBoundingClientRect().top - sc.getBoundingClientRect().top);
       unlight();
       void el.getBoundingClientRect(); // the same row picked again lights again
       el.setAttribute("data-search-hit", "");
       lit.current = { el, timer: window.setTimeout(unlight, HIT_MS) };
     });
-  }, [ctx.scope, follow, unlight]);
+  }, [ctx.scope, follow, unlight, land]);
   const backToOrigin = useCallback(() => {
     const o = origin.current;
     origin.current = null;
     setPicked(false);
+    landing.current = null;
     const run = ++going.current;
     unlight();
     undoReveals();
@@ -1115,7 +1222,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const commands = useMemo(() => (assistant ? [] : agentCommands(AGENT_COMMANDS, session)), [assistant, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
 
-  return (
+  const page = (
     <div className="flex h-full min-w-0 flex-col">
       {!readOnly && (
         <Header
@@ -1183,7 +1290,6 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             )}
             <LiveClockContext.Provider value={countClock}>
             <ChatContext.Provider value={ctx}>
-              <FreshWords.Provider value={fresh}>
               <CardConversation.Provider value={assistant ? sid : ""}>
               {assistant
                 ? displayLines(lines, feed).flatMap((d) => [
@@ -1206,6 +1312,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         fix={d.line.id === lines.at(-1)?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
+                        offscreen={offscreen(d.line)}
                       />
                     ),
                   ])
@@ -1223,10 +1330,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
+                  offscreen={offscreen(line)}
                 />
               )])}
               </CardConversation.Provider>
-              </FreshWords.Provider>
             </ChatContext.Provider>
             </LiveClockContext.Provider>
             {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
@@ -1245,7 +1352,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
             )}
             {voiceState && <VoiceTail owner={voiceOwner} persona={persona.name} />}
           </div>
-          {!readOnly && <CommentMarks scroller={scroller} />}
+          {!readOnly && <CommentMarks scroller={scroller} jump={landRow} />}
           </ChatActionsContext.Provider>
         </div>
         {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}
@@ -1411,6 +1518,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       </Dialog>
     </div>
   );
+  // a link tapped in the chat opens what it opens as the chat's manager
+  return <LinkManager.Provider value={session?.manager}>{page}</LinkManager.Provider>;
 }
 
 /** Over the chat's top edge when the page keeps getting its items by asking for them, not by push (lib/stale-page.ts). */

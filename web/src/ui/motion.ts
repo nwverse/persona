@@ -18,8 +18,6 @@ export const COUNT_MS = 400;
 /** The running bar after its turn: how long it stays as it was, then how long it fades out. */
 export const LINGER_MS = 1000;
 export const FADE_OUT_MS = 400;
-/** One breath of the running bar (`.status-breath` in ui/stream/stream.css runs this long). */
-export const BREATH_MS = 1500;
 
 /** `cubic-bezier(x1, y1, x2, y2)` as a function of the progress (0…1), so JS moves with the same curve as CSS. */
 export function bezier(css: string): (p: number) => number {
@@ -129,8 +127,9 @@ export function useCountUp(target: number, ms = COUNT_MS): number {
 }
 
 /**
- * One breath (BREATH_MS) each time `value` moves while `on`: a new key replays the one-shot animation. A change during a
- * breath queues one more, so steady output breathes continuously and silence (a long think, a tool) stays still.
+ * One breath (`.status-breath` in ui/stream/stream.css, 1.5 s) each time `value` moves while `on`: a new key replays the
+ * one-shot animation. A change during a breath queues one more, so steady output breathes continuously and silence (a
+ * long think, a tool) stays still.
  */
 export function useBreath(value: number | undefined, on: boolean): { cycle: number; ended: () => void } {
   const [cycle, setCycle] = useState(0);

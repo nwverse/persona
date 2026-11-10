@@ -4,7 +4,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-// Videos from Photos (docs/protocol/protocol.md「发送视频」) go as files, never as pictures: read out of the library, compressed
+// Videos from Photos (docs/protocol/protocol.md「Sending videos」) go as files, never as pictures: read out of the library, compressed
 // to H.264 MP4 only when they would not fit the hub's upload cap, and uploaded to the conversation's machine the way
 // Files is. The composer shows each as a card until the message goes; the message carries it as a `<persona-file>` tag
 // after what was typed: the agent reads the path, the app draws the card from the rest.
@@ -71,7 +71,7 @@ nonisolated struct AttachedFile: Hashable, Sendable {
     }
 }
 
-/// How a picked video is made to fit the upload (docs/protocol/protocol.md「发送视频」): as it is up to the hub's cap, else
+/// How a picked video is made to fit the upload (docs/protocol/protocol.md「Sending videos」): as it is up to the hub's cap, else
 /// H.264 MP4 at the largest of 1080p / 720p / 540p that fits; a video too long for even 540p is refused.
 nonisolated enum VideoPrep {
     /// What the hub takes in one upload (`proto.MaxUploadBytes`).

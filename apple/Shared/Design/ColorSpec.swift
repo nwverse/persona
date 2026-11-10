@@ -71,7 +71,7 @@ nonisolated struct ColorSpec: Sendable {
         extensionRoles = theme
     }
 
-    /// A persona's colors (docs/apple/persona.md「色系」), the style's own where it brings none.
+    /// A persona's colors (docs/apple/persona.md「Color scheme → design tokens」), the style's own where it brings none.
     init(persona p: PersonaPalette, over base: ColorSpec) {
         self = base
         title = ThemeColor.persona.title

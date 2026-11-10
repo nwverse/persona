@@ -143,7 +143,7 @@ struct ChatView: View {
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
-    /// The Persona conversation in the shell (docs/apple/ios.md「新外壳」).
+    /// The Persona conversation in the shell (docs/apple/ios.md「New shell」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
     /// iPhone Duo's bars down the side: the shell's bar over the Persona conversation is the side rail (`ShellSideRail`).
@@ -220,6 +220,11 @@ struct ChatView: View {
         ComputerActivity.latest(in: store.items, chat: shownKey.machineRef, machines: model.namedMachines)
     }
     private var session: Session? { model.session(key) }
+    /// The manager the links tapped here read through: the session's, else (a conversation not listed yet) the one the
+    /// Persona page shows it for; nil for the default's.
+    private var linkManager: String? {
+        model.linkManager(session?.manager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
+    }
     /// The latest state of the subagent being viewed (the list refreshes with the session).
     private var viewedAgent: Subagent? {
         viewing.flatMap { v in (session?.subagents?.first { $0.id == v.id } ?? v).shown(in: model.chat(key).tasks, sessionWorks: sessionWorks) }
@@ -263,7 +268,7 @@ struct ChatView: View {
     @ViewBuilder private var chatPage: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("ChatView")
-        // `-showPerfChanges YES`: what made the page draw again, in the log (docs/apple/mac.md「卡顿怎么量」).
+        // `-showPerfChanges YES`: what made the page draw again, in the log (docs/apple/mac.md「Measuring hitches on Mac」).
         let _ = Self.printsChanges ? Self._printChanges() : ()
         #endif
         let _ = actions.set(handlers)
@@ -1092,7 +1097,7 @@ struct ChatView: View {
             // The hub's own pages first: a hub on the agent's machine (or the phone's localhost, a mock) would read as a port.
             openLink: { [model, key] url in
                 if openHubPage(url) { return }
-                if let l = PortLinks.link(url, hostnames: model.hostnames(of: key.machineRef)) { openPort(l) } else { link = LinkTarget(url: url) }
+                if let l = PortLinks.link(url, hostnames: model.hostnames(of: key.machineRef)) { openPort(l) } else { link = LinkTarget(url: url, manager: linkManager) }
             },
             openPort: { openPort($0) },
             viewImages: { viewingImages = $0 },
@@ -2067,7 +2072,7 @@ struct ChatView: View {
         }
     }
 
-    /// Opening a work line the page folded fetches its steps (docs/protocol/protocol.md「折叠的工作」).
+    /// Opening a work line the page folded fetches its steps (docs/protocol/protocol.md「Folded work」).
     private var openFold: (Item) async throws -> Void {
         { [model, shownKey] fold in try await model.unfold(shownKey, fold) }
     }
@@ -3115,7 +3120,8 @@ struct ChatView: View {
     @ToolbarContentBuilder private var sideBarItems: some ToolbarContent {
         if !hidesBack {
             ToolbarItem(placement: .cancellationAction) {
-                Button { back() } label: { Label("Back [Task Sheets 572cf4]", systemImage: Theme.Icon.back) }
+                // A hosting sheet's ✕ Close, its pushed page's ‹ Back, the panes' ‹ Back (#2625): as the header's would be.
+                Button { back() } label: { Label(backLabel, systemImage: backSymbol) }
             }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -3754,7 +3760,7 @@ struct ChatView: View {
             if let source = MessageSource.of(i) {
                 SourceMessage(item: i, source: source, showsSource: showsSource).equatable()
             } else if let n = Injected.of(i) {
-                // Persona's message for the model: one line in its place, never its words (docs/protocol/protocol.md「Persona 注入的消息」).
+                // Persona's message for the model: one line in its place, never its words (docs/protocol/protocol.md「Messages injected by Persona」).
                 InjectedLine(item: i, injected: n, conversation: style == .assistant ? shownKey.sessionID : nil)
             } else if (i.text ?? "").hasPrefix("/loop") {
                 LoopTickRow(item: i)
@@ -4035,11 +4041,18 @@ struct Composer: View, Equatable {
     @State private var showPhotos = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
-    @State private var images: [(UIImage, ImagePayload)] = []
+    /// The photos, videos and file uploads for the next message: the app keeps them per conversation, as it keeps the
+    /// text (#2626), so a composer built again still has them.
+    private var held: ComposerAttachments { model.composerAttachments(key) }
+    private var images: [(UIImage, ImagePayload)] {
+        get { held.images }
+        nonmutating set { held.images = newValue }
+    }
+    private var imagesBinding: Binding<[(UIImage, ImagePayload)]> { Binding(get: { images }, set: { images = $0 }) }
+    private var uploads: FileUploads { held.uploads }
+    private var videos: VideoAttachments { held.videos }
     @State private var editingIndex: Int?
     @State private var showFiles = false
-    @State private var uploads = FileUploads()
-    @State private var videos = VideoAttachments()
     #if os(iOS)
     /// The iPhone's 「+」 panel (`AttachSheet`, Telegram's attachment menu).
     @State private var attachPanel = AttachPanel()
@@ -4075,7 +4088,7 @@ struct Composer: View, Equatable {
         voiceNote = VoiceEntry.start(key, model: model)
     }
 
-    /// Voice Chat in the 「+」 menu (iOS only: the Mac and visionOS have no call audio yet, docs/assistant/voice.md 6.9).
+    /// Voice Chat in the 「+」 menu (iOS and visionOS: the Mac has no call audio yet, docs/assistant/voice.md 6.9).
     @ViewBuilder private var voiceMenuItem: some View {
         if VoicePlatform.current == .phone {
             Button { startVoice() } label: { Label("Voice Chat", systemImage: Theme.Icon.voiceChannel) }
@@ -4093,7 +4106,7 @@ struct Composer: View, Equatable {
     /// The manager whose conversation this is, while a hub with several has it offline: nothing goes to it until it is
     /// back; its history reads.
     private var offlineManager: HubManager? { model.offlineManager(of: model.session(key)) }
-    /// A health conversation's files go to the health space's reports/ (docs/assistant/health.md「体检报告」), not the temp directory.
+    /// A health conversation's files go to the health space's reports/ (docs/assistant/health.md「Checkup reports」), not the temp directory.
     private var uploadDest: String? { model.session(key)?.isHealth == true ? Session.healthSpace : nil }
 
     /// /loop for Claude agents (`LoopCommand.offered`, as on the web): in the quick commands, with a line saying what
@@ -4335,7 +4348,7 @@ struct Composer: View, Equatable {
                 PasteImageChip(focused: focused) { add($0) }
                 #endif
                 if !images.isEmpty {
-                    ComposerImages(images: $images) { editingIndex = $0 } // a tap marks it up before sending
+                    ComposerImages(images: imagesBinding) { editingIndex = $0 } // a tap marks it up before sending
                 }
                 // In the stack, not over it: the composer sits in its own hosting controller, which takes no touches
                 // outside its bounds (#518).
@@ -4358,7 +4371,7 @@ struct Composer: View, Equatable {
                 VoiceBar(call: call, key: key, label: VoiceEntry.label(model.session(key), model: model))
                     .transition(.opacity)
             } else if usesShellComposer {
-                // The shell's composer (docs/apple/ios.md「新外壳」), whatever the style: the assistant's and an agent's (#1091).
+                // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
                                      : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
@@ -4627,8 +4640,10 @@ struct Composer: View, Equatable {
         #endif
         .fullScreenCover(item: Binding(get: { editingIndex.map(EditIndex.init) }, set: { if $0 == nil { editingIndex = nil } })) { e in
             if images.indices.contains(e.id) {
-                ImageEditor(image: images[e.id].0) { edited in
-                    if let p = MessagePhotos.payload(edited), images.indices.contains(e.id) { images[e.id] = p }
+                let original = images[e.id].0
+                ImageEditor(image: original) { edited in
+                    // The photo marked up, wherever it is now: another window on the same chat may have taken one out.
+                    if let p = MessagePhotos.payload(edited), let i = images.firstIndex(where: { $0.0 === original }) { images[i] = p }
                 }
             }
         }
@@ -4942,7 +4957,11 @@ extension UIImage {
         guard side > maxSide else { return self }
         let scale = maxSide / side
         let target = CGSize(width: size.width * scale, height: size.height * scale)
-        return UIGraphicsImageRenderer(size: target).image { _ in draw(in: CGRect(origin: .zero, size: target)) }
+        // One pixel a point: at the screen's scale (the renderer's default) 1600 came out 4800 px on a phone, three
+        // times the side meant, nine times the memory, in the composer until sent (#2626) and in the message.
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in draw(in: CGRect(origin: .zero, size: target)) }
     }
 }
 
@@ -5395,7 +5414,7 @@ struct ChatLine: Identifiable {
         case quick(QuickResult)
         /// The date over the first line of a day (the assistant's conversation).
         case day(Date)
-        /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「这一轮看过的图片」).
+        /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
         case viewed(id: String, images: [ViewedImage])
 
         var id: String {

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Videos picked in Photos go as files (#981, docs/protocol/protocol.md「发送视频」), against scripts/mock/mock_hub.py with
+/// Videos picked in Photos go as files (#981, docs/protocol/protocol.md「Sending videos」), against scripts/mock/mock_hub.py with
 /// `MOCK_SENT_VIDEO=<a video>` (TEST_RUNNER_PERSONA_VIDEO_SEND_HUB=http://127.0.0.1:<port>) and a made-up video in the
 /// simulator's library (`xcrun simctl addmedia`). Each runs in the style the environment picks
 /// (PERSONA_UI_STYLE); PERSONA_SHOTS saves the screenshots there too.

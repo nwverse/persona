@@ -25,7 +25,8 @@ word tokens of the exact SHA-256-pinned, unmodified public Mermaid resource. Com
 long values and generic IP/email checks remain active there; any changed byte falls back to strict app matching.
 Prints the file and the kind of hit, never the value.
 For public Go builds, narrowly scoped dependency constants are classified separately from private data. This requires
-unreplaced dependencies whose build-info checksums match server/go.sum; registered personal values always win.
+a build with exactly the tags of server/build-tags.txt (the public marker and ts_omit_ feature tags), and unreplaced
+dependencies whose build-info checksums match server/go.sum; registered personal values always win.
 The seven known swift-nio-ssh algorithm/certificate names are also classified as a complete original printable field
 or a complete comma-separated list; that fallback excludes URLs, surrounding context and normalized fragments.
 """
@@ -87,9 +88,27 @@ RFC1918_NETWORKS = tuple(ipaddress.ip_network((address, prefix)) for address, pr
 CLOUD_METADATA_IP = ipaddress.ip_address(0xA9FEA9FE)
 
 
-def go_dependencies(path, sums_path=None):
-    """Only classify constants from unreplaced modules recorded in both this Go executable and go.sum."""
+def public_build_tags(tags_path=None):
+    """The -tags of a published build (server/build-tags.txt): the public marker plus tailscale.com's ts_omit_ feature
+    tags, each once. A file with any other tag, or none, marks no build as public."""
+    try:
+        with open(tags_path or os.path.join(pc.ROOT, "server", "build-tags.txt")) as f:
+            tags = f.read().strip().split(",")
+    except OSError:
+        return None
+    if "public" not in tags or len(set(tags)) != len(tags) or not all(
+            tag == "public" or re.fullmatch(r"ts_omit_[a-z0-9_]+", tag) for tag in tags):
+        return None
+    return tags
+
+
+def go_dependencies(path, sums_path=None, tags_path=None):
+    """Only classify constants from unreplaced modules recorded in both this Go executable and go.sum, in a build
+    with exactly the published tags."""
     sums_path = sums_path or os.path.join(pc.ROOT, "server", "go.sum")
+    public_tags = public_build_tags(tags_path)
+    if public_tags is None:
+        return set()
     try:
         with open(sums_path) as sums:
             trusted = {tuple(line.split()) for line in sums if len(line.split()) == 3}
@@ -103,7 +122,7 @@ def go_dependencies(path, sums_path=None):
     public_build = False
     for line in result.stdout.splitlines():
         fields = line.split()
-        if fields == ["build", "-tags=public"]:
+        if fields == ["build", "-tags=" + ",".join(public_tags)]:
             public_build = True
         if fields[:1] == ["dep"] and len(fields) == 4:
             previous = fields[1]

@@ -114,6 +114,7 @@ type Node struct {
 	akeys     map[string]*assistantProc  // the key a Codex conversation's MCP server reports until its thread exists
 	lastList  string                     // serialized last sessions.changed payload
 	sent      sentList                   // the last sessions.changed as written, not written twice (sessions_sent.go)
+	listRows  atomic.Int32               // rows the last sessionList gathered before its keep pass: the next one's size
 	lastRevs  map[string]int64           // session id -> rev as last pushed (sessions.changed or sessions.revs)
 	metas     map[string]quickMeta       // transcript path -> cached meta; deleted ones leave it (meta_prune.go)
 	goneDirs  map[string]time.Time       // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
@@ -1328,7 +1329,7 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		return map[string]any{"commits": list}, err
 	case "git.stage", "git.commit", "git.push", "git.branches", "git.switch", "git.stash", "git.pr", "git.pr_create", "git.pr_merge":
 		return n.gitWrite(ctx, method, params) // the Git panel's writes and pull request (gitwrite.go, gitpr.go)
-	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Moving skills out of the binary")
+	case "skills.list": // the skills the assistant gets on this machine (docs/operations/hub-update.md "Skills move out of the binary")
 		cwd := p.Cwd
 		if cwd == "" {
 			cwd = n.assistantDirOf(".persona/assistant")

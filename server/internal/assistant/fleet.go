@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// What comes from the nodes is the manager's (docs/server/machines.md "Who handles the computers' events"). The hub did all of this until the
+// What comes from the nodes is the manager's (docs/server/machines.md "Who handles computer events"). The hub did all of this until the
 // manager connected the computers itself; it moved here as it was (fleet_*.go):
 //
 //   - the interactions (approval / question / plan / screen / Codex cards): made from the nodes' interaction.create
@@ -346,12 +346,8 @@ type stateMark struct {
 	at    time.Time
 }
 
-// markStates fills in StateSince: the time an agent's state last changed, kept until it changes again. It drops the
-// marks and hook flags of the machine's sessions no longer listed.
-func (s *Service) markStates(machine string, list []proto.Session, now time.Time) {
-	s.fillStateMarks(machine, list, now, true)
-}
-
+// fillStateMarks fills in StateSince: the time an agent's state last changed, kept until it changes again. A complete
+// list also drops the marks and hook flags of the machine's sessions no longer listed.
 func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.Time, complete bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()

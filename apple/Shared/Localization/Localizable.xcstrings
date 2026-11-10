@@ -1,6 +1,46 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Automatic workout reports": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Automatic workout reports"}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポートを自動生成"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "运动后自动生成报告"}}}},
+    "Workout report": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Workout report"}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポート"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "运动报告"}}}},
+    "Couldn't read workout report settings. Turn the feature on again to start fresh.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Couldn't read workout report settings. Turn the feature on again to start fresh."}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポートの設定を読み込めませんでした。機能を再度オンにしてやり直してください。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "无法读取运动报告设置。请重新开启此功能以重新开始。"}}}},
+    "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Off by default. After you enable this, opening Persona checks for new workouts of at least 10 minutes and sends their measurements to your hub to create a report. Older workouts are not imported. Reports already submitted may finish after you turn this off."}}, "ja": {"stringUnit": {"state": "translated", "value": "初期設定はオフです。有効にすると、Persona を開いた際に新しい10分以上のワークアウトを確認し、測定データを hub に送信してレポートを作成します。有効にする前の運動は取り込みません。オフにしても、送信済みのレポートは完了する場合があります。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "默认关闭。开启后，打开 Persona 会检查新完成且至少持续 10 分钟的运动，并将运动数据发送到你的 hub 生成报告。不导入开启前的运动。关闭后，已提交的报告仍可能完成。"}}}},
+    "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Reports contain measurement cards and a heart-rate chart when data is available, followed by a brief summary. Health read permissions are managed in iOS Settings; an empty result can also mean access was not granted."}}, "ja": {"stringUnit": {"state": "translated", "value": "レポートには測定値カード、データがある場合は心拍数グラフ、簡潔なまとめが含まれます。ヘルスケアの読み取り権限は iOS の設定で管理できます。結果が空の場合、権限が許可されていない可能性もあります。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "报告包含数据卡片、有数据时的心率图，以及简短总结。健康数据读取权限可在 iOS 设置中管理；没有读取到运动也可能是未授予权限。"}}}},
+    "%lld child worktrees" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktree"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld child worktrees"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "子ワークツリー%lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个子工作树"
+          }
+        }
+      }
+    },
     "%@ stopped, not done yet" : {
       "localizations" : {
         "en" : {
@@ -3405,6 +3445,28 @@
           "stringUnit": {
             "state": "translated",
             "value": "CI"
+          }
+        }
+      }
+    },
+    "Changes the extension ID from %@ to %@. Needs your confirmation; its settings and data stay.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes the extension ID from %@ to %@. Needs your confirmation; its settings and data stay."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拡張機能の ID が %1$@ から %2$@ に変わります。確認が必要です。設定とデータはそのまま保持されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扩展 ID 会从 %1$@ 改为 %2$@，需要你确认；设置和数据保持不变。"
           }
         }
       }
@@ -13961,24 +14023,24 @@
       },
       "extractionState" : "manual"
     },
-    "A Responses API key can't be tested here; save it and use it." : {
+    "This API protocol's key can't be tested here; save it and use it." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses 协议的 Key 没法在这里测试，保存后直接用就行。"
+            "value" : "这种协议的 Key 没法在这里测试，保存后直接用就行。"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A Responses API key can't be tested here; save it and use it."
+            "value" : "This API protocol's key can't be tested here; save it and use it."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Responses プロトコルのキーはここではテストできません。保存してそのまま使えます。"
+            "value" : "この種類のAPIのキーはここではテストできません。保存してそのまま使えます。"
           }
         }
       },
@@ -38509,6 +38571,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "有照片读不出来（可能还在 iCloud 里没下载完）"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Couldn't read the gateway; showing the last numbers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't read the gateway; showing the last numbers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ゲートウェイを読み取れませんでした。前回の数値を表示しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读网关出错，显示的是上次的数字"
           }
         }
       },
@@ -70923,6 +71008,29 @@
       },
       "extractionState" : "manual"
     },
+    "No agents on it now. Reopen it to hand it to an agent." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No agents on it now. Reopen it to hand it to an agent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在エージェントはいません。エージェントに任せるには、まず再開してください。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现在没有 Agent 在做。要交给 Agent，先重新打开。"
+          }
+        }
+      }
+    },
     "No agents right now" : {
       "localizations" : {
         "en" : {
@@ -77371,6 +77479,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "离线，暂无检测信息"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its mutes show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its mutes show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにミュートが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的静音。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Offline: its rules show here once it is back." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offline: its rules show here once it is back."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オフラインです。戻るとここにルールが表示されます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离线中：它回来后这里会显示它的规则。"
           }
         }
       },
@@ -86075,6 +86229,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Push to the Remote?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Push to the Remote?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートにプッシュしますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "推送到远端？"
+          }
+        }
+      }
     },
     "Push When Done" : {
       "localizations" : {
@@ -110606,6 +110782,50 @@
       },
       "extractionState" : "manual"
     },
+    "The current branch goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current branch goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在のブランチをアップストリームブランチにプッシュします。強制プッシュはしません。リモートに新しいコミットがあれば止めて知らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前分支会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。"
+          }
+        }
+      }
+    },
+    "The current branch in “%@” goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current branch in “%@” goes to its upstream branch. Never forced: if the remote has newer commits, the push stops and says so."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「%@」の現在のブランチをアップストリームブランチにプッシュします。強制プッシュはしません。リモートに新しいコミットがあれば止めて知らせます。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“%@”的当前分支会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。"
+          }
+        }
+      }
+    },
     "The current main chat will be archived as “%@” and you can find it under Archived. The new main chat starts with your next message." : {
       "localizations" : {
         "en" : {
@@ -111196,6 +111416,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "网关没有给出模型列表，在下面手动添加。"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The gateway turned the key away; update it in Admin → Usage sources. Showing the last numbers" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The gateway turned the key away; update it in Admin → Usage sources. Showing the last numbers"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ゲートウェイがキーを拒否しました。管理画面 → 使用量ソースで更新してください。前回の数値を表示しています"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网关不认这把 Key，请到管理界面 → 用量来源更新。显示的是上次的数字"
           }
         }
       },
@@ -119938,6 +120181,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "仍要发送的话，改一下「要它做什么」，或重新打开「交给 AI」"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主对话和 Agent 不能用它。信息处理、信息筛选等没有单独选模型的用途，现在可能会改用它；要调整，到「模型配置」里选。"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The main chat and Agents can't run on it. Processing, Sorting and other uses without a picked model may now use it; change that under Models."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メインチャットとエージェントでは使えません。情報処理や仕分けなど、モデルを選んでいない用途ではこれが使われることがあります。変更は「モデル設定」で。"
           }
         }
       },

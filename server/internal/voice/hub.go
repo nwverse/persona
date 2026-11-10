@@ -332,7 +332,7 @@ type sendOpts struct {
 }
 
 // send types text into a conversation as message id (voice-…: the conversation shows it came by voice,
-// docs/extensions/channels.md "Source marks"; the hub sends an id once, and forgets one it refused: the same id goes again).
+// docs/extensions/channels.md "Source markers"; the hub sends an id once, and forgets one it refused: the same id goes again).
 func (h *hubClient) send(ctx context.Context, machine, session, text, id string, opts ...sendOpts) error {
 	body := map[string]any{"text": text, "client_msg_id": id}
 	for _, o := range opts {

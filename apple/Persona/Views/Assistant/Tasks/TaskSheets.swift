@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A task's detail, risen from the bottom like a link (docs/assistant/unified-entry.md「任务详情」): opens full, pulled down to
+/// A task's detail, risen from the bottom like a link (docs/assistant/unified-entry.md「Task details」): opens full, pulled down to
 /// 0.6 the conversation behind stays usable. Its agent's page is the Agents page's own chat (`ChatView(style: .dev)`),
 /// so everything that page does works here. That chat's header is the sheet's only one (`HostedChat`, #3255): ✕, the
 /// task's title over the agent's state and place, and ⋯ with the task's own actions; no strip of the space's other
@@ -33,10 +33,12 @@ struct TaskDetailSheet: View {
                     content(todo)
                 } else {
                     EmptyStateView(symbol: Theme.Icon.todo, title: String(localized: "This task is gone"), message: String(localized: "It may have been deleted."))
+                        .toolbarVisibility(.hidden, for: .navigationBar)
                 }
             }
-            // The agent's page hides the bar (it draws its own header), and so does the page while it has none.
-            .toolbarVisibility(.hidden, for: .navigationBar)
+            // No bar from here: the agent's page says it itself (hidden under its own header, shown while its buttons
+            // are the system's, in iPhone Duo's side column, `ChatView.sideBars`); hidden from here, its Back went with
+            // it and nothing led back (#2625). The page's own headers below hide it where they are.
         }
         .confirmTaskRemoval($removing)
         .presentationDetents([.fraction(0.6), .large], selection: $detent)
@@ -104,6 +106,8 @@ struct TaskDetailSheet: View {
         .padding(.top, Theme.Space.l) // below the sheet's grabber
         .padding(.bottom, Theme.Space.m)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Its own header: no bar over it (the agent's page decides its own, #2625).
+        .toolbarVisibility(.hidden, for: .navigationBar)
     }
 }
 
