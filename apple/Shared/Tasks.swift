@@ -181,6 +181,9 @@ nonisolated struct FeedItem: Codable, Hashable, Identifiable, Sendable {
     var sentAt: Date? { string("sent_at").flatMap(JSON.parseDate) }
     var sent: String? { string("sent") }
     var filedAt: Date? { sentAt == nil ? string("filed_at").flatMap(JSON.parseDate) : nil }
+    /// A per-card decision; it does not file the Inbox item or stop the task's Agent.
+    var dismissedAt: Date? { string("dismissed_at").flatMap(JSON.parseDate) }
+    var dismissalID: String? { string("dismissal_id") }
 
     /// `review`: the supervisor's verdict (accepted / rework / needs_user / cancelled), the rework round, its note.
     var verdict: String? { string("verdict") }
@@ -817,6 +820,26 @@ nonisolated extension APIClient {
     private struct PlanResponse: Decodable { var plan: TaskPlan }
     nonisolated private struct TodosResponse: Decodable, Sendable { var todos: [TodoItem] }
     private struct ItemResponse: Decodable { var item: FeedItem }
+    struct DraftDismissal: Decodable, Sendable {
+        var item: FeedItem
+        var dismissalID: String
+        enum CodingKeys: String, CodingKey { case item, dismissalID = "dismissal_id" }
+    }
+
+    /// Resolve exactly the displayed draft, using its original text rather than local edits.
+    func dismissDraft(_ id: String, original: String) async throws -> DraftDismissal {
+        struct Body: Encodable { var draft: String }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/dismiss", body: Body(draft: original), as: DraftDismissal.self)
+    }
+
+    /// Only the decision identified by this receipt can be undone.
+    func undoDraftDismissal(_ id: String, receipt: String) async throws -> FeedItem {
+        struct Body: Encodable {
+            var dismissalID: String
+            enum CodingKeys: String, CodingKey { case dismissalID = "dismissal_id" }
+        }
+        return try await post("/api/v1/assistant/feed/\(Self.pathPart(id))/undo-dismiss", body: Body(dismissalID: receipt), as: ItemResponse.self).item
+    }
 
     /// A conversation's feed after `since` (nil: all of it), with the plans its `plan` items name.
     func feed(conversation: String, since: Date? = nil) async throws -> FeedResponse {
