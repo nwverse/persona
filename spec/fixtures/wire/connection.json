@@ -213,6 +213,7 @@
     "input": {
       "build": 0,
       "channel": "",
+      "commit": "",
       "features": [
         "persona_contracts_v1",
         "look_uploads",

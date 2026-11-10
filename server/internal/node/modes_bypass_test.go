@@ -44,6 +44,11 @@ func TestClaudeCanBypassReadsTheProcess(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+		// Start can return between fork and exec, when the kernel still has no argv for the child.
+		waitFor(t, "the child's process arguments", func() bool {
+			_, err := updateProcessArgv(cmd.Process.Pid)
+			return err == nil
+		})
 		return cmd.Process.Pid
 	}
 	if pid := start("claude", "--dangerously-skip-permissions"); !claudeCanBypass(pid) {

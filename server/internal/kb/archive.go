@@ -96,7 +96,7 @@ type Engine struct {
 	// (WriteHistory) may download while the archive runs.
 	failed atomic.Int32
 
-	find findCache // what Find read last time, kept while the files are unchanged (find.go)
+	find findCache // what Find read last time, kept while the files are unchanged (find_cache.go)
 
 	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
 }
