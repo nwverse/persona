@@ -432,7 +432,7 @@ and the pointer tooltip. Going into Allow Everything asks first; so does leaving
 (`SessionModes.confirmation`), on the header and the composer's model menu alike. An agent whose mode can be neither
 read nor changed shows none. The folded bar shows no marks on its right, so its capsule stays centered. Why a new
 pattern: Claude Code keeps the mode in its footer at all times; the composer's chips (`ModeChip`) are a level down on
-the phone. Web and Android follow in their own issues.
+the phone. Android does the same in its one-row header, left of `⋯` (#3957); the web follows in #3956.
 
 ### 3.9 Empty states
 
