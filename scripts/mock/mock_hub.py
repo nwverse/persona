@@ -4769,6 +4769,7 @@ def node_action(h, p, body):
                      pane_id=pane, tab_id=shell["tab_id"], slot_id=shell["tab_id"], workspace_id=ws, space_id=mate.get("space_id", ws))
             s["launcher"] = body.get("launcher") or "claude"
             SESSIONS.append(s)
+            push_machine(mid)  # as the hub pushes the machine's list once the node has the session: the app's chat gets its name
             return h.send_json({"session_id": s["session_id"]})
     return h.send_json({})
 

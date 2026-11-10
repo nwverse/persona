@@ -132,7 +132,9 @@ final class NodeMenuUITests: XCTestCase {
         // The agent it started opens, as New Session's does (#3287): its chat comes up, not the list with it idle there.
         let title = app.buttons.matching(identifier: "chat.title").firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 10), "the started agent's chat did not open")
-        XCTAssertTrue(title.label.contains("新会话"), "another chat opened: \(title.label)")
+        // Its name comes with the machine's list, which the hub pushes once the node has the session.
+        let named = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "chat.title", "新会话")).firstMatch
+        XCTAssertTrue(named.waitForExistence(timeout: 10), "another chat opened: \(title.label)")
         shot(app, "run-here-opened")
     }
 
@@ -154,7 +156,7 @@ final class NodeMenuUITests: XCTestCase {
         let path = app.textFields["worktree.path"]
         XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-taken", "the path does not follow the branch")
         shot(app, "worktree-form")
-        app.buttons["创建"].tap()
+        app.buttons["worktree.create"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["worktree.failure"].waitForExistence(timeout: 10), "git's refusal is not shown")
         XCTAssertTrue(text(app, containing: "already used by worktree").exists)
         shot(app, "worktree-refused")
@@ -163,7 +165,7 @@ final class NodeMenuUITests: XCTestCase {
         for _ in 0..<5 { branch.typeText(XCUIKeyboardKey.delete.rawValue) }
         branch.typeText("x")
         XCTAssertEqual(path.value as? String, "/home/me/.herdr/worktrees/persona/feat-x")
-        app.buttons["创建"].tap()
+        app.buttons["worktree.create"].tap()
         XCTAssertTrue(text(app, containing: "persona · feat/x").waitForExistence(timeout: 10), "新建 Agent is not set to the new worktree")
         shot(app, "worktree-new-agent")
         let made = try actions().last
