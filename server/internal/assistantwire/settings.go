@@ -99,6 +99,10 @@ type RenameParams struct {
 	MachineID string         `json:"machine_id"`
 	SessionID string         `json:"session_id"`
 	Params    map[string]any `json:"params"`
+	// Extension is the extension whose token asked, as the hub's auth found it (never what the caller says), "" for
+	// anyone else: its title is a hint the hub names the conversation by, not the user's (docs/protocol/protocol.md
+	// "Origin of assistant chats"). An older hub never sends it, and an older manager takes every rename as the user's.
+	Extension string `json:"extension,omitempty"`
 }
 
 // CodeBadRequest is what the assistant refuses a request of the hub's with when the app's request itself is wrong

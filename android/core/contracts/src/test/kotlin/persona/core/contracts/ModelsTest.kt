@@ -93,6 +93,9 @@ class ModelsTest {
         assertEquals(listOf("tool:Bash"), bash.alwaysKeys)
         val legacy = JsonCodec.decodeFromString<Interaction>("""{"id":"ix_legacy","machine_id":"computer","session_id":"chat","kind":"permission","tool_name":"Bash"}""")
         assertEquals(null, legacy.alwaysKeys)
+        assertEquals(null, legacy.alwaysHonored)
+        val own = JsonCodec.decodeFromString<Interaction>("""{"id":"ix_own","machine_id":"computer","session_id":"chat","kind":"permission","tool_name":"iphone_do","always_honored":false}""")
+        assertEquals(false, own.alwaysHonored)
     }
 
     @Test fun interactionNamesItsAgentAndWhatAlwaysAllows() {
@@ -104,10 +107,10 @@ class ModelsTest {
         assertEquals("访问网络", (codex.reason).zhAny())
         val dsh = JsonCodec.decodeFromString<Interaction>("""{"id":"d","kind":"question","agent":"dsh","agent_label":"DSH"}""")
         assertEquals("DSH", (dsh.agentDisplayName).zhAny())
-        assertEquals("DSH 有问题问你", (dsh.headline).zhAny())
+        assertEquals("DSH 在问你", (dsh.headline).zhAny())
         assertEquals("DSH 请求使用 read_file：读取报表", (dsh.copy(kind = "permission", toolName = "read_file", summary = "读取报表").headline).zhAny())
         assertNull(JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question","agent":"claude"}""").agentDisplayName)
-        assertEquals("Claude 有问题问你", (JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question"}""").headline).zhAny())
+        assertEquals("Claude 在问你", (JsonCodec.decodeFromString<Interaction>("""{"id":"c","kind":"question"}""").headline).zhAny())
     }
 
     @Test fun sessionInfoDecodes() {

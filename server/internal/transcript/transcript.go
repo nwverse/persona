@@ -216,7 +216,9 @@ type Meta struct {
 	TurnErrorAfterWork bool
 	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next
 	// turn's start sets it back. turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
-	turnWorked    bool
+	turnWorked bool
+	// turnParts: the latest turn's words so far, for TurnAnswer (answer.go).
+	turnParts     []AnswerPart
 	turnErrorLine string
 	// codexLimitFull: when the full windows of a rollout's latest rate limits (Codex's own limit, at 100%) reset, the
 	// latest of them; zero when none is full. A usage-limit failure resets then (TurnErrorResetsAt).
@@ -351,6 +353,11 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		meta.trackActivity(it)
 		meta.trackPlan(it)
+		if it.Wake || it.Role == "user" && !it.Queued && (it.Kind == proto.KindText || it.Kind == proto.KindImage) {
+			// A new turn's words start afresh (TurnAnswer): a photo with no caption and a command that runs the model
+			// start one too, though they do not reach ClaudeTurnStarted.
+			meta.turnParts = nil
+		}
 		switch {
 		case it.Wake:
 			meta.LastTurnWake = true
@@ -759,6 +766,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 					}
 					continue
 				}
+				meta.turnTool()
 				it := mk(i, "assistant", proto.KindToolUse)
 				it.ToolUseID = b.ID
 				it.ToolName = b.Name
@@ -778,6 +786,7 @@ func (m *Meta) said(t string, ts time.Time) {
 	if t != "" {
 		m.LastText = t
 		m.tree.said = t
+		m.turnSaid(t)
 	}
 	m.LastTextAt = ts
 	m.tree.saidAt, m.tree.spoke = ts, true

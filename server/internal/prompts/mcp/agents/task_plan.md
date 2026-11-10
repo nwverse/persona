@@ -1,4 +1,4 @@
-Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.
+Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why. From the main conversation, supervisor hands the whole plan to a leader conversation (one of assistant.leaders): its tasks are that leader's to supervise and review, as if it had handed them out; leave it out to supervise them yourself. Every task gets a brief, kept from the moment it starts and never rewritten: the hub records the owner's message that led to it (their words, from this conversation; work you start on your own after a 督办 message, a notice or a routine is recorded as yours, with started_why), and you supply the goal, done_when, expect_minutes and out_of_bounds. A writable task (readonly false) without done_when (at least one result that can be checked) and expect_minutes is refused, and so is a read-only task without goal and expect_minutes; the refusal says what is missing. The card shows the brief, so the owner's 开始 confirms it. A task that takes over from an earlier one (a retry on another computer, a rework round, a new agent after the first failed, a part split off) gives continues (that task's todo id) and continues_why: it keeps that task's brief (the owner's request, the criteria as they stand, the clock) while its prompt is its own, and the earlier task is linked as superseded; do not restate the request in a new brief. After a task started, done_when changes only with task_scope.
 
 ```json
 {
@@ -7,6 +7,10 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
     "tasks"
   ],
   "properties": {
+    "supervisor": {
+      "type": "string",
+      "description": "optional, main conversation only: the id of the leader conversation (assistant.leaders) whose direction this work belongs to; it supervises the tasks instead of you. Leave it out for work of no direction or of your own"
+    },
     "tasks": {
       "type": "array",
       "minItems": 1,
@@ -85,7 +89,31 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
             "items": {
               "type": "string"
             },
-            "description": "what done means: results you will check before you accept it (Chinese, one each), e.g. 「PR 合并到 master」「浅色 / 深色截图贴进 PR」「线上 hub 已部署并验证」; the agent is told them"
+            "description": "what done means: results you will check before you accept it (Chinese, one each), e.g. 「PR 合并到 master」「浅色 / 深色截图贴进 PR」「线上 hub 已部署并验证」; the agent is told them. Required for a writable task (at least one); with continues the earlier task's criteria apply and this is ignored"
+          },
+          "goal": {
+            "type": "string",
+            "description": "the work in one sentence, as the owner would say what they get from it (Chinese); required for a read-only task, the title when left out of a writable one"
+          },
+          "out_of_bounds": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string"
+            },
+            "description": "optional: what the agent must not do or touch (Chinese, one each), e.g. 「不合并」「不动线上」"
+          },
+          "continues": {
+            "type": "string",
+            "description": "optional: the todo id of the task this one takes over from or was split off; it keeps that task's brief and criteria instead of getting new ones. Needs continues_why"
+          },
+          "continues_why": {
+            "type": "string",
+            "description": "with continues: one line on why the earlier task stopped and this one takes over (shown in the task's lineage)"
+          },
+          "started_why": {
+            "type": "string",
+            "description": "when the owner did not just ask for this (your own idea, something a 督办 message or a routine led to): one line on why you start it; kept on the brief"
           },
           "attachments": {
             "type": "array",
@@ -98,7 +126,7 @@ Hand the user a plan of one or more tasks for agents on their computers, instead
           "expect_minutes": {
             "type": "integer",
             "minimum": 0,
-            "description": "about how long the task should take, in minutes; a task with no progress for 1.5× that (at least 20 minutes) counts as stuck"
+            "description": "about how long the task should take, in minutes; required (above 0) unless continues is given. A task with no progress for 1.5× that (at least 20 minutes) counts as stuck, and one with no end after 3× that (at least a day) is raised to you as overdue"
           },
           "project": {
             "type": "string",

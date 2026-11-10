@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -47,6 +48,38 @@ func TestCriteriaReportRejectsChangedTask(t *testing.T) {
 			t.Fatalf("stale evidence applied to a new criterion: %+v", c)
 		}
 	}
+}
+
+// A decision review keeps both the current criteria and the decision; when the
+// owner hands it back, the digest carries the evidence beside that decision.
+func TestCriteriaReviewAndDecisionDigest(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "两种走法")
+	args := rolloutDecision()
+	args["checks"] = []ReviewCheck{{Criterion: todo.Supervision.DoneWhen[0], Met: true, Evidence: "PR merged before rollout"}}
+	if _, err := reviewErr(s, todo.ID, args); err != nil {
+		t.Fatal(err)
+	}
+	v := todoNow(s, todo.ID).Supervision
+	r, c := v.Reviews[len(v.Reviews)-1], v.Criteria[0]
+	if v.State != reviewNeedsUser || r.WhyOwner != "priority" || r.Reason != args["reason"] ||
+		r.Recommend != args["recommend"] || len(r.Options) != 2 || r.CostOfWaiting != args["cost_of_waiting"] ||
+		c.State != "met" || c.Evidence != "PR merged before rollout" || c.By != "supervisor:conv1" || c.At == nil || !c.At.Equal(r.At) {
+		t.Fatalf("decision or criterion lost: review %+v, criterion %+v", r, c)
+	}
+	if rec := answerAsk(s, todo.ID, map[string]string{"response": respondDecideYourself}); rec.Code != http.StatusOK {
+		t.Fatalf("owner response: %d %s", rec.Code, rec.Body.String())
+	}
+	waitFor(t, "the decision and criterion in the owner response digest", func() bool {
+		for _, n := range f.notices() {
+			if strings.Contains(n, "用户回答不了你发的决定") && strings.Contains(n, r.Reason) &&
+				strings.Contains(n, r.Options[1].LeadsTo) && strings.Contains(n, "criterion 1 [met]") &&
+				strings.Contains(n, c.Evidence) && strings.Contains(n, c.By) && strings.Contains(n, c.At.UTC().Format(time.RFC3339)) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func TestCriteriaReportAndReview(t *testing.T) {

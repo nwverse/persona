@@ -1,0 +1,18 @@
+{
+  "computer_run": "Computer control",
+  "computer_state": "Computer view",
+  "browser_run": "Browser script",
+  "iphone_do": "iPhone control",
+  "extension_ui": "Extension action",
+  "persona_settings": "Persona settings change",
+  "agent_send": "Message to an agent",
+  "agent_start": "New agent",
+  "task_plan": "Task plan",
+  "agent_interrupt": "Agent interruption",
+  "agent_archive": "Agent archiving",
+  "todo_create": "New to-do",
+  "todo_update": "To-do change",
+  "todo_complete": "Task completion",
+  "todo_reopen": "Task reopening",
+  "todo_delete": "To-do deletion"
+}

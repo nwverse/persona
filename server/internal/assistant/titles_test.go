@@ -79,7 +79,7 @@ func TestMakeTitle(t *testing.T) {
 	}
 
 	s, f := model("修复 | 搜索框和顶栏重叠")
-	if got, _ := s.makeTitle(ctx, started, first, reply); got != "1102 | 修复 | 搜索框和顶栏重叠" {
+	if got, _ := s.makeTitle(ctx, started, first, reply, ""); got != "1102 | 修复 | 搜索框和顶栏重叠" {
 		t.Fatalf("%q", got)
 	}
 	if c := f.modelCalls(); len(c) != 1 || !strings.Contains(c[0].User, first) || !strings.Contains(c[0].User, reply) {
@@ -87,7 +87,7 @@ func TestMakeTitle(t *testing.T) {
 	}
 
 	s, f = model("Bug fix: search bar", "修复 | 搜索框和顶栏重叠")
-	if got, _ := s.makeTitle(ctx, started, first, reply); got != "1102 | 修复 | 搜索框和顶栏重叠" {
+	if got, _ := s.makeTitle(ctx, started, first, reply, ""); got != "1102 | 修复 | 搜索框和顶栏重叠" {
 		t.Fatalf("retried once: %q", got)
 	}
 	if c := f.modelCalls(); len(c) != 2 || !strings.Contains(c[1].User, "Bug fix: search bar") {
@@ -95,20 +95,20 @@ func TestMakeTitle(t *testing.T) {
 	}
 
 	s, _ = model("修复 | 搜索框在搜索时和顶栏重叠而且键盘弹起后错位")
-	if got, _ := s.makeTitle(ctx, started, first, reply); got != "1102 | 修复 | 搜索框在搜索时和顶栏重叠而且" {
+	if got, _ := s.makeTitle(ctx, started, first, reply, ""); got != "1102 | 修复 | 搜索框在搜索时和顶栏重叠而且" {
 		t.Fatalf("a topic still too long is cut: %q", got)
 	}
 
 	s, _ = model("随便聊聊")
-	if got, _ := s.makeTitle(ctx, started, "<persona-context>\n今天\n</persona-context>\n**帮我** 看看明天的会议安排和要准备的材料", ""); got != "1102 | 探索 | 帮我 看看明天的会议安排和要" {
+	if got, _ := s.makeTitle(ctx, started, "<persona-context>\n今天\n</persona-context>\n**帮我** 看看明天的会议安排和要准备的材料", "", ""); got != "1102 | 探索 | 帮我 看看明天的会议安排和要" {
 		t.Fatalf("the fallback: %q", got)
 	}
-	if got, _ := s.makeTitle(ctx, started, "<persona-context>\n今天\n</persona-context>\n**帮我** 看看明天的会议安排和要准备的材料", ""); got != "1102 | 探索 | 帮我 看看明天的会议安排和要" {
+	if got, _ := s.makeTitle(ctx, started, "<persona-context>\n今天\n</persona-context>\n**帮我** 看看明天的会议安排和要准备的材料", "", ""); got != "1102 | 探索 | 帮我 看看明天的会议安排和要" {
 		t.Fatalf("the fallback past a <persona-context>: %q", got)
 	}
 	s, f = model()
 	f.noModel = true
-	if got, _ := s.makeTitle(ctx, started, "", ""); got != "1102 | 探索 | 新对话" {
+	if got, _ := s.makeTitle(ctx, started, "", "", ""); got != "1102 | 探索 | 新对话" {
 		t.Fatalf("no model, no message: %q", got)
 	}
 }
@@ -143,7 +143,7 @@ func TestMakeTitleOutlastsASlowCall(t *testing.T) {
 	shortTitleCalls(t, 200*time.Millisecond)
 	started := time.Date(2026, 11, 1, 16, 30, 0, 0, time.UTC)
 	s, f := titleService(t, []string{searchTitle}, fakeAnswer{delay: 2 * time.Second}) // the next answer comes at once
-	got, final := s.makeTitle(context.Background(), started, searchAsk, searchReply)
+	got, final := s.makeTitle(context.Background(), started, searchAsk, searchReply, "")
 	if got != "1102 | "+searchTitle || !final {
 		t.Fatalf("a slow call is made again: %q %v", got, final)
 	}
@@ -157,7 +157,7 @@ func TestMakeTitleOutlastsASlowCall(t *testing.T) {
 func TestMakeTitleDropsACutOffReply(t *testing.T) {
 	started := time.Date(2026, 11, 1, 16, 30, 0, 0, time.UTC)
 	s, _ := titleService(t, []string{"修复 | 搜索", searchTitle}, fakeAnswer{stop: "max_tokens"})
-	if got, _ := s.makeTitle(context.Background(), started, searchAsk, searchReply); got != "1102 | "+searchTitle {
+	if got, _ := s.makeTitle(context.Background(), started, searchAsk, searchReply, ""); got != "1102 | "+searchTitle {
 		t.Fatalf("a cut-off reply is not a title: %q", got)
 	}
 }
@@ -177,14 +177,14 @@ func TestMakeTitleRetriesDontCrowdEachOtherOut(t *testing.T) {
 		{"cut off, then timed out", []string{"修复 | 搜索", "", searchTitle}, []fakeAnswer{{stop: "max_tokens"}, slow}},
 	} {
 		s, f := titleService(t, c.replies, c.answers...)
-		got, final := s.makeTitle(context.Background(), started, searchAsk, searchReply)
+		got, final := s.makeTitle(context.Background(), started, searchAsk, searchReply, "")
 		if got != "1102 | "+searchTitle || !final || len(f.modelCalls()) != 3 {
 			t.Errorf("%s: %q %v after %d calls", c.name, got, final, len(f.modelCalls()))
 		}
 	}
 	// An empty answer is a broken format like any other: asked once more, then the fallback.
 	s, f := titleService(t, []string{""})
-	if got, final := s.makeTitle(context.Background(), started, searchAsk, searchReply); got != "1102 | 探索 | 搜索的时候搜索框和顶栏叠在一" || !final || len(f.modelCalls()) != 2 {
+	if got, final := s.makeTitle(context.Background(), started, searchAsk, searchReply, ""); got != "1102 | 探索 | 搜索的时候搜索框和顶栏叠在一" || !final || len(f.modelCalls()) != 2 {
 		t.Fatalf("empty answers: %q %v after %d calls", got, final, len(f.modelCalls()))
 	}
 }
@@ -271,5 +271,92 @@ func TestTitleNamedAgainAfterTheModelWasOutOfReach(t *testing.T) {
 	s.titleAfterTurn(ctx, "server", "c4")
 	if got := title("c4"); got != standIn {
 		t.Fatalf("a model that turned the naming down is not asked again: %q", got)
+	}
+}
+
+// An extension's rename is a hint (#3758): a conversation the hub started is still named after its first turn, with the
+// hint in what the model reads, and keeps that name; one the hub never noted shows the hint until the user renames it;
+// the user's rename wins over the hint, before the first turn ends too.
+func TestAnExtensionsRenameIsAHint(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now() // a conversation still waiting for its title a day on is forgotten
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := titleDay(started, shanghai)
+	s, f := titleService(t, []string{searchTitle})
+	f.setSessions("server", proto.Session{SessionID: "ext", Assistant: true}, proto.Session{SessionID: "old", Assistant: true},
+		proto.Session{SessionID: "mine", Assistant: true})
+	f.setItems(proto.Item{Role: "user", Kind: proto.KindText, Text: searchAsk}, proto.Item{Role: "assistant", Kind: proto.KindText, Text: searchReply})
+	rename := func(id, title, ext string) {
+		t.Helper()
+		if _, err := s.Rename(ctx, RenameParams{MachineID: "server", SessionID: id, Params: map[string]any{"title": title}, Extension: ext}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shown := func(id string) (string, bool) {
+		t.Helper()
+		got, ok := s.conversationTitles()
+		if !ok {
+			t.Fatal("titles unread")
+		}
+		v, ok := got[id]
+		return v.title, ok
+	}
+	sends := f.sent()
+
+	s.titleNew("server", "ext", started)
+	rename("ext", "/agent · 示例群 · 查一下周五发布的进度", "larkext")
+	if by, _ := s.titleOf("ext"); by != titlePending {
+		t.Fatalf("still waiting for the hub's name: %q", by)
+	}
+	if got, ok := shown("ext"); ok {
+		t.Fatalf("the hub shows no title of its own yet (the node's is the hint): %q", got)
+	}
+	if f.sent() != sends+1 {
+		t.Fatal("the node renames the session all the same")
+	}
+	s.titleAfterTurn(ctx, "server", "ext")
+	if got, _ := shown("ext"); got != day+" | "+searchTitle {
+		t.Fatalf("named like any other: %q", got)
+	}
+	if c := f.modelCalls(); len(c) != 1 || !strings.Contains(c[0].User, "「/agent · 示例群 · 查一下周五发布的进度」") || !strings.Contains(c[0].User, searchAsk) {
+		t.Fatalf("the model reads the hint with the first exchange: %+v", c)
+	}
+	rename("ext", "/agent · 示例群 · 又一句", "larkext")
+	if got, _ := shown("ext"); got != day+" | "+searchTitle {
+		t.Fatalf("a named conversation keeps its name: %q", got)
+	}
+
+	rename("old", "扩展起的名字", "larkext")
+	if got, _ := shown("old"); got != "扩展起的名字" {
+		t.Fatalf("one the hub never noted shows the hint: %q", got)
+	}
+	s.titleAfterTurn(ctx, "server", "old")
+	if len(f.modelCalls()) != 1 {
+		t.Fatal("and the hub doesn't name it")
+	}
+	rename("old", "我的名字", "")
+	rename("old", "扩展又起的", "larkext")
+	if got, _ := shown("old"); got != "我的名字" {
+		t.Fatalf("the user's name stays: %q", got)
+	}
+
+	s.titleNew("server", "mine", started)
+	rename("mine", "扩展的提示", "larkext")
+	rename("mine", "我自己起的", "")
+	s.titleAfterTurn(ctx, "server", "mine")
+	if got, _ := shown("mine"); got != "我自己起的" || len(f.modelCalls()) != 1 {
+		t.Fatalf("the user's rename before the first turn ended wins: %q, %d calls", got, len(f.modelCalls()))
+	}
+}
+
+// With no first message to read, the stand-in's topic is the extension's hint.
+func TestStandInTitleFallsBackOnTheHint(t *testing.T) {
+	s, _ := titleService(t, nil)
+	started := time.Date(2026, 11, 1, 16, 30, 0, 0, time.UTC)
+	if got, final := s.makeTitle(context.Background(), started, "", "", "部署进度  \n 示例群"); got != "1102 | 探索 | 部署进度 示例群" || final {
+		t.Fatalf("%q final=%v", got, final)
 	}
 }

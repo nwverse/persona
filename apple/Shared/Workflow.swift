@@ -144,7 +144,7 @@ nonisolated struct WorkflowRun: Codable, Identifiable, Hashable, Sendable {
     /// The phase, and where it sits among the declared ones: 「Verify 2/2」.
     var phaseLabel: String? {
         guard let p = phase, !p.isEmpty else { return nil }
-        let n = phases?.count ?? 0
+        let n = phaseCount ?? phases?.count ?? 0
         if let i = phaseIndex, i >= 1, n > 1 { return "\(p) \(i)/\(n)" }
         return p
     }

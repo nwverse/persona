@@ -232,3 +232,12 @@ type InboxFolderItem struct {
 }
 
 func RenderInboxFoldersInput(in InboxFoldersInput) string { return render("inbox/folders_input", in) }
+
+// SubscriptionKind is a source subscription's kind of Inbox item (#2039, inbox/kinds/subscription): what its items'
+// type line says (InboxItem.Described, through the round's kinds).
+type SubscriptionKind struct {
+	Kind  string // sub_mail … sub_digest, sub_failing
+	Label string // the subscription's label: whose items they are
+}
+
+func RenderSubscriptionKind(k SubscriptionKind) string { return render("inbox/kinds/subscription", k) }

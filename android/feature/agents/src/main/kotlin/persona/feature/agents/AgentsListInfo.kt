@@ -67,9 +67,9 @@ internal fun Interaction.cardTitle(res: Resources): String {
     return when (kind) {
         "question" -> if (who != null) res.getString(R.string.agents_card_question_by, who) else res.getString(R.string.agents_card_question)
         // A password card names the computer it runs on (#1137).
+        // One title per kind on every client (#3690); the card's summary line names the tool and what it runs.
         "permission" -> if (isSecretRun) headline.resolve(res) else {
-            val tool = toolName?.takeIf { it.isNotEmpty() }?.let(::toolDisplayName) ?: res.getString(R.string.agents_card_tool)
-            if (who != null) res.getString(R.string.agents_card_permission_by, who, tool) else res.getString(R.string.agents_card_permission, tool)
+            if (who != null) res.getString(R.string.agents_card_permission_by, who) else res.getString(R.string.agents_card_permission)
         }
         "plan" -> res.getString(R.string.agents_card_plan)
         "screen" -> res.getString(R.string.agents_card_screen)

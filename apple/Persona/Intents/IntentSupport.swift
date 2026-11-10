@@ -39,7 +39,7 @@ nonisolated enum IntentText {
             return String(localized: "A plan is waiting for your approval")
         case .permission:
             if let s = ix.summary, !s.isEmpty { return s }
-            if let tool = ix.toolName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
+            if let tool = ix.toolDisplayName, !tool.isEmpty { return String(localized: "\(tool) is asking for permission") }
             return String(localized: "A permission request is waiting for you")
         case .screen:
             return String(localized: "The terminal is waiting for your input")
@@ -158,6 +158,15 @@ nonisolated enum IntentSupport {
         let all = try clients()
         return all.first { $0.group == group } ?? all[0]
     }
+
+    /// The hub group the app has selected (`hub.group`), "" when none was picked yet.
+    static func selectedGroup(_ defaults: UserDefaults = .standard) -> String {
+        defaults.string(forKey: IntentText.hubGroupKey) ?? ""
+    }
+
+    /// The client of the group the app has selected: where the To-dos and Personal Agents pages read, so what Siri
+    /// says and sends matches them (and the Spotlight index). The first group's when it is gone.
+    static func selectedClient() throws -> APIClient { try client(group: selectedGroup()) }
 
     /// Every group's machines; with several groups each named with its group ("MacBook · Work").
     static func machines() async throws -> [Machine] {
