@@ -338,6 +338,9 @@ func TestNodeSwitchBackAndBundled(t *testing.T) {
 	g := newFakeEnv(t)
 	deviceFiles(t, g, true, false)
 	exe, _ := g.exe()
+	if p, err := filepath.EvalSymlinks(exe); err == nil { // where placeBundledNode looks: beside the resolved executable
+		exe = p
+	}
 	bundled := filepath.Join(filepath.Dir(exe), "persona-node")
 	_ = os.WriteFile(bundled, []byte("#!/bin/sh\n# bundled persona-node\n"), 0o755)
 	prev := g.onCommand
@@ -707,7 +710,7 @@ func TestKeepLinkWatchesNodeSwitches(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- keepLink(ctx, path, "", &bytes.Buffer{}) }()
+	go func() { done <- keepLink(ctx, path, "", &bytes.Buffer{}, nil) }()
 	select {
 	case locked := <-started:
 		if !locked {
@@ -716,7 +719,7 @@ func TestKeepLinkWatchesNodeSwitches(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("persona-link run does not watch for a node switch that did not finish")
 	}
-	if err := keepLink(context.Background(), path, "", &bytes.Buffer{}); !errors.Is(err, link.ErrRunning) {
+	if err := keepLink(context.Background(), path, "", &bytes.Buffer{}, nil); !errors.Is(err, link.ErrRunning) {
 		t.Fatalf("a second one: %v", err)
 	}
 	cancel()

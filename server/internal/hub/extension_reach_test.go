@@ -113,6 +113,7 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 		header                   map[string]string
 	}{
 		{"names A: a merged list", "GET", "/api/v1/inbox", "", namesA},
+		{"names A: a paged list", "GET", "/api/v1/inbox/done", "", namesA},
 		{"names A by query: a manager route", "GET", "/api/v1/assistant?manager=assistant", "", nil},
 		{"names A: an inbox reply", "POST", "/api/v1/inbox/item-1/reply", `{"text":"x"}`, namesA},
 		{"names A: the knowledge base", "GET", "/api/v1/kb/people", "", namesA},
@@ -152,6 +153,7 @@ func TestAnExtensionsTokenActsOnlyAsItsManager(t *testing.T) {
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/v1/assistant?manager=m-0b0b0b", ""},
 		{"GET", "/api/v1/assistant", ""},
+		{"GET", "/api/v1/inbox/done", ""},
 		{"POST", "/api/v1/notify", `{"title":"t","body":"b","machine_id":"mb","session_id":"b1"}`},
 	} {
 		if code, out := extDo(t, url, c.method, c.path, c.body, nil); code != http.StatusOK {
@@ -175,11 +177,12 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/kb/{kind}": "manager", "GET /api/v1/kb/{kind}/{id}": "manager", "GET /api/v1/kb/chats/{id}/context": "manager",
 		"GET /api/v1/kb/chats/{id}/days/{day}": "manager", "GET /api/v1/kb/moments/{id}": "manager", "GET /api/v1/kb-search": "manager",
 		"PUT /api/v1/kb/{kind}/{id}": "manager",
-		"GET /api/v1/inbox":          "manager", "GET /api/v1/inbox/{id}": "manager", "GET /api/v1/inbox/mutes": "manager",
+		"GET /api/v1/inbox":          "manager", "GET /api/v1/inbox/done": "manager", "GET /api/v1/inbox/{id}": "manager", "GET /api/v1/inbox/mutes": "manager",
 		"GET /api/v1/inbox/policies": "manager", "POST /api/v1/inbox/done": "manager", "POST /api/v1/inbox/bulk": "manager",
 		"POST /api/v1/inbox/{id}/done": "manager", "POST /api/v1/inbox/{id}/draft": "manager", "POST /api/v1/inbox/{id}/reply": "manager",
 		"POST /api/v1/inbox/{id}/suggestion": "manager", "POST /api/v1/inbox/{id}/handoff": "manager", "POST /api/v1/inbox/{id}/doc/status": "manager",
 		"PUT /api/v1/inbox/{id}/parent": "manager", "GET /api/v1/inbox/tree/{kind}/{id...}": "manager",
+		"PUT /api/v1/inbox/{id}/folder": "manager", "GET /api/v1/inbox/folders": "manager", "PUT /api/v1/inbox/folders": "manager",
 		"POST /api/v1/inbox/mutes": "manager", "DELETE /api/v1/inbox/mutes/{id}": "manager", "POST /api/v1/inbox/policies": "manager",
 		"PATCH /api/v1/inbox/policies/{id}": "manager", "DELETE /api/v1/inbox/policies/{id}": "manager", "POST /api/v1/inbox/refresh": "manager",
 		"GET /api/v1/sessions/archived":                      "own+body",
@@ -201,6 +204,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/sessions/{mid}/{sid}/queue":          "path",
 		"POST /api/v1/sessions/{mid}/{sid}/queue/send-now": "path",
 		"POST /api/v1/sessions/{mid}/{sid}/seen":           "path",
+		"POST /api/v1/sessions/{mid}/{sid}/rename":         "path",
+		"POST /api/v1/sessions/{mid}/{sid}/modes":          "path", // and only of a conversation its extension opened (extensionModeRefused)
 		"POST /api/v1/interactions/{id}/choose":            "path",
 		"POST /api/v1/interactions/{id}/resolve":           "path",
 		"POST /api/v1/interactions/{id}/reanswer":          "path", // pending: its card; no longer pending: its manager
@@ -219,6 +224,7 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/assistant/reporters":                  "manager",
 		"GET /api/v1/todos":                                "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"POST /api/v1/todos": "manager", "PATCH /api/v1/todos/{id}": "manager",
+		"POST /api/v1/todos/{id}/decisions":                 "manager",
 		"PUT /api/v1/todos/{id}/agents/{mid}/{sid}":         "path",
 		"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}":      "path",
 		"PUT /api/v1/todos/{id}/spaces/{mid}/{space...}":    "path",

@@ -132,7 +132,7 @@ private struct ExtensionRowLabel: View {
 }
 
 /// A line of a plugin's Update section: what, and below it what happens (in the caution colour when it needs the user).
-private struct ExtensionUpgradeLine: View {
+struct ExtensionUpgradeLine: View {
     var title: String
     var detail: String
     var attention: Bool
@@ -210,51 +210,18 @@ struct ExtensionDetailView: View {
         SettingsForm {
             header
             if let d = page.detail {
-                if let auth {
-                    ExtensionAuthSection(auth: auth, enabled: d.plugin.enabled ?? true, model: signIn)
+                ExtensionSettingsView(page: page, detail: d, hasConfiguration: hasConfiguration(d)) {
+                    configuration(d)
+                } advancedInformation: {
+                    contributions(d)
+                    dependencies(d)
+                    permissions(d)
                 }
-                if d.readOnly {
-                    Section {
-                        Text("This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager.").font(Theme.Font.label).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Section {
-                        Toggle(isOn: Binding(get: { d.plugin.enabled ?? true }, set: { on in Task { await page.setEnabled(on) } })) {
-                            Text("Enabled").lineLimit(1)
-                        }
-                        .disabled(page.changingEnabled || page.saving || page.changingContribution != nil)
-                        .accessibilityIdentifier("plugin-enabled")
-                    } footer: {
-                        Text("When off, it stops running and the connectors and other things it provides turn off too; its settings and secrets stay.")
-                    }
-                }
-                if d.plugin.autoUpgrade != nil { upgrades(d.plugin) }
-                pages(d)
-                connectorSections(d)
-                if !d.readOnly && !d.form.isEmpty { form(d) }
-                if !d.readOnly && !d.secrets.isEmpty { secrets(d) }
-                contributions(d)
-                dependencies(d)
-                permissions(d)
-                about(d)
             }
         }
         .themedPage()
         .detailTitle(page.detail?.plugin.name ?? String(localized: "Extensions"))
         .navigationBarTitleDisplayMode(.inline)
-        .pageToolbar {
-            if page.detail?.readOnly == false && !(page.detail?.form.isEmpty ?? true) {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button {
-                        Task { await page.save() }
-                    } label: {
-                        if page.saving { ProgressView() } else { Text("Save").lineLimit(1) }
-                    }
-                    .disabled(!page.canSave)
-                    .accessibilityIdentifier("plugin-save")
-                }
-            }
-        }
         .confirmationDialog("Also Turn Off Extensions That Depend on It?", isPresented: Binding(
             get: { page.disableConfirmation != nil },
             set: { if !$0 { page.disableConfirmation = nil } }), titleVisibility: .visible) {
@@ -271,6 +238,8 @@ struct ExtensionDetailView: View {
                               clear: { await page.clearSecret(secret.name) }, close: { editingSecret = nil })
         }
         .task { await page.load() }
+        // A launcher field's choices (format launcher): the hub asks every machine for them, so apart from the page.
+        .task(id: page.detail?.plugin.id) { await page.loadLaunchersIfNeeded() }
         // Again when the connector's page closes (its switch may have changed there) or the extension is switched.
         // Also once paired (opened at launch, before the hub's address is known) or paired to another hub.
         .task(id: ConnectorSectionsKey(ids: connectorIDs, depth: AppModel.shared.settingsPath.count,
@@ -338,47 +307,45 @@ struct ExtensionDetailView: View {
     private var stateText: String {
         guard let p = page.detail?.plugin else { return page.loading ? String(localized: "Loading… [File Viewer 86b6d0]") : String(localized: "Couldn't load [Connector Thread Models 153e20]") }
         // Another manager's copy says whose it is (the default's page is as before).
-        return [ExtensionText.state(p), p.version, ExtensionText.source(p.source), page.managerName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return [ExtensionText.state(p), page.managerName].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// A market plugin's upgrades (docs/extensions/extensions.md「自动升级」): its own switch, its newer version (opening the market's
-    /// upgrade when it waits for the user) or what happened last.
-    @ViewBuilder private func upgrades(_ p: HubExtension) -> some View {
-        // Switched off, the extension is not upgraded: its switch shows off and waits (the hub keeps it) until it is on.
-        let paused = p.autoUpgradePaused != nil
-        Section {
-            Toggle(isOn: Binding(get: { ExtensionText.autoUpgradeShown(p) }, set: { on in Task { await page.setAutoUpgrade(on) } })) {
-                Text("Auto-Update").lineLimit(1)
+    private func hasConfiguration(_ d: HubExtensionDetail) -> Bool {
+        auth != nil || !d.ui.isEmpty || !connectorInbox.connectors.isEmpty || d.readOnly || !d.form.isEmpty || !d.secrets.isEmpty
+            || VoiceTimbreSection.shows(d.plugin, manager: page.manager)
+    }
+
+    @ViewBuilder private func configuration(_ d: HubExtensionDetail) -> some View {
+        if let auth {
+            ExtensionAuthSection(auth: auth, enabled: d.plugin.enabled ?? true, model: signIn)
+        }
+        // The voice extension: the voice this device's calls speak with (#2411), whoever's settings the rest are.
+        if VoiceTimbreSection.shows(d.plugin, manager: page.manager) {
+            VoiceTimbreSection(extensionID: d.plugin.id, group: AppModel.shared.api?.group ?? "")
+        }
+        if d.readOnly {
+            Section {
+                Text("This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager.")
+                    .font(Theme.Font.label).foregroundStyle(.secondary)
             }
-            .disabled(paused)
-            .accessibilityIdentifier("plugin-auto-upgrade")
-            if let u = p.upgrade {
-                if let action = ExtensionText.upgradeAction(u) {
-                    NavigationLink(value: SettingsPage.marketExtension(market: u.market, id: u.id)) {
-                        // The action stays at the end of the row however long what it asks for is.
-                        HStack(spacing: Theme.Space.m) {
-                            ExtensionUpgradeLine(title: String(localized: "New Version \(u.to) [Extensions Views fc9053]"), detail: ExtensionText.upgradeDetail(u),
-                                              attention: u.state == "needs_permission" || u.state == "skipped")
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Text(action).foregroundStyle(Theme.accent).lineLimit(1).fixedSize()
+        }
+        pages(d)
+        connectorSections(d)
+        if !d.readOnly && !d.form.isEmpty { form(d) }
+        if !d.readOnly && !d.secrets.isEmpty { secrets(d) }
+        if !d.readOnly && !d.form.isEmpty {
+            Section {
+                FormAction {
+                    Button { Task { await page.save() } } label: {
+                        Group {
+                            if page.saving { ProgressView() } else { Text("Save").lineLimit(1) }
                         }
+                        .formActionWidth()
                     }
-                    .accessibilityIdentifier("plugin-upgrade")
-                } else {
-                    ExtensionUpgradeLine(title: String(localized: "New Version \(u.to) [Extensions Views fc9053]"), detail: ExtensionText.upgradeDetail(u), attention: false)
-                        .accessibilityIdentifier("plugin-upgrade")
+                    .themedButton(prominent: true)
+                    .disabled(!page.canSave)
+                    .accessibilityIdentifier("plugin-save")
                 }
-            } else if let n = p.upgradeNote, let text = ExtensionText.upgradeNote(n) {
-                ExtensionUpgradeLine(title: text, detail: n.at.formatted(.relative(presentation: .named)), attention: n.kind == "rolled_back")
-                    .accessibilityIdentifier("plugin-upgrade-note")
-            }
-        } header: {
-            SettingsHeading(String(localized: "Update [Extension Market Views 94996c]"))
-        } footer: {
-            if paused {
-                Text("Auto-update is paused while this extension is off. Turn it back on and your auto-update setting applies again.")
-            } else {
-                Text("When the market has a new version, it installs while the extension is idle, and asks you first if it wants more permissions. If it doesn't start after installing, it goes back to the previous version.")
             }
         }
     }
@@ -407,18 +374,20 @@ struct ExtensionDetailView: View {
         if d.plugin.enabled ?? true {
             ForEach(connectorInbox.connectors) { c in
                 Section {
-                    Toggle(isOn: Binding(get: { c.inbox ?? false }, set: { on in
-                        Task { await connectorInbox.setInbox(c.id, on: on) }
-                    })) {
-                        Text("Show in Inbox").lineLimit(1)
+                    if let inbox = c.inbox {
+                        Toggle(isOn: Binding(get: { inbox }, set: { on in
+                            Task { await connectorInbox.setInbox(c.id, on: on) }
+                        })) {
+                            Text("Show in Inbox").lineLimit(1)
+                        }
+                        .disabled(connectorInbox.changing != nil)
+                        .accessibilityIdentifier("extension-connector-inbox-\(c.id)")
                     }
-                    .disabled(connectorInbox.changing != nil)
-                    .accessibilityIdentifier("extension-connector-inbox-\(c.id)")
                     NavigationLink(value: SettingsPage.connector(c.id, manager: page.manager)) {
                         Label {
                             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                                 Text("Connector Settings").lineLimit(1)
-                                Text("Sign-in, status and more Inbox settings").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                                Text(c.id == "imessage" ? String(localized: "Access, status and Hand to Persona [Extensions Views 1224]") : String(localized: "Sign-in, status and more Inbox settings")).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
                             }
                         } icon: {
                             ThemedIcon(Theme.Icon.connectors)
@@ -428,10 +397,12 @@ struct ExtensionDetailView: View {
                 } header: {
                     SettingsHeading(String(localized: "Connector \(c.name)"))
                 } footer: {
-                    if c.inbox == true {
-                        Text("New \(c.name) items show in the Inbox. This is the same switch as Show in Inbox on the connector's page.")
-                    } else {
-                        Text("Not showing in Inbox: nothing new arrives; existing items stay.")
+                    if let inbox = c.inbox {
+                        if inbox {
+                            Text("New \(c.name) items show in the Inbox. This is the same switch as Show in Inbox on the connector's page.")
+                        } else {
+                            Text("Not showing in Inbox: nothing new arrives; existing items stay.")
+                        }
                     }
                 }
             }
@@ -566,42 +537,12 @@ struct ExtensionDetailView: View {
         }
     }
 
-    @ViewBuilder private func about(_ d: HubExtensionDetail) -> some View {
-        Section {
-            if let v = d.plugin.version, !v.isEmpty { LabeledContent("Version", value: v) }
-            if let v = d.previousVersion, !v.isEmpty { LabeledContent("Previous Version", value: v) }
-            if let s = ExtensionText.source(d.plugin.source) { LabeledContent("Source", value: s) }
-            if let o = d.origin, !o.isEmpty {
-                LabeledContent("Installed From") { Text(o).lineLimit(2).truncationMode(.middle).textSelection(.enabled) }
-            }
-            if let p = d.publisher, !p.isEmpty { LabeledContent("Publisher", value: p) }
-
-            if let h = d.homepage, let url = URL(string: h) {
-                Link(destination: url) { Label("Website", systemImage: Theme.Icon.openExternal).lineLimit(1) }
-            }
-            ForEach(ExtensionAuthText.warnings(d.plugin.warnings, shown: auth), id: \.self) { w in
-                Label { Text(w).font(Theme.Font.label) } icon: { ThemedIcon(Theme.Icon.error).foregroundStyle(Theme.caution) }
-            }
-        } header: {
-            SettingsHeading(String(localized: "About"))
-        }
-        // The command-line programs this version runs with (#4507), the machine's own marked.
-        if let tools = d.plugin.tools, !tools.isEmpty {
-            Section {
-                ForEach(tools) { t in
-                    LabeledContent(ExtensionAuthText.toolName(t), value: ExtensionAuthText.toolVersion(t))
-                        .accessibilityIdentifier("plugin-tool-\(t.name)")
-                }
-            } header: {
-                SettingsHeading(String(localized: "Command line"))
-            }
-        }
-    }
 }
 
 /// One field of a plugin's form, by its type: a text field, a number, a switch, a choice, a list of texts or of
 /// choices. Its title above, its description and the hub's word on it below.
 private struct ExtensionFieldRow: View {
+    @Environment(AppModel.self) private var model
     var field: ExtensionField
     var path: [String]
     @Bindable var page: ExtensionModel
@@ -616,15 +557,19 @@ private struct ExtensionFieldRow: View {
                     set: { page.set($0.isEmpty ? nil : .string($0), at: path) }), templates: templates)
             }
             if let text = field.description, !text.isEmpty {
-                Text(text).font(Theme.Font.label).foregroundStyle(.secondary)
+                Text(text).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityIdentifier(identifier)
             }
             if let e = page.fieldError(path) {
-                Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger)
+                Text(e).font(Theme.Font.label).foregroundStyle(Theme.danger).accessibilityIdentifier(identifier)
             }
         }
         .padding(.vertical, Theme.Space.xxs)
-        .accessibilityIdentifier("plugin-field-\(path.joined(separator: "."))")
+        // On the whole row, except for a list of machines: there it would replace its machines' own (their setup links,
+        // #2446), so the list puts it on its title and switches itself.
+        .modifier(ExtensionFieldIdentifier(id: field.items?.format == "machine" ? nil : identifier))
     }
+
+    private var identifier: String { "plugin-field-\(path.joined(separator: "."))" }
 
     private var title: String { field.required == true && field.default == nil ? String(localized: "\(field.label) (required)") : field.label }
 
@@ -649,10 +594,26 @@ private struct ExtensionFieldRow: View {
                 } label: {
                     Text(title).lineLimit(2)
                 }
+            } else if field.picksMachine {
+                // The page's hub's machines (the app's first group), as the machine switches list them.
+                ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
+                                      choices: ExtensionPickerChoice.machines(field, current: page.value(path)?.string,
+                                                                              machines: model.machines.filter { $0.group.isEmpty }.map { ($0.id, $0.name, $0.os) }))
+            } else if field.picksLauncher, let launchers = page.launchers {
+                ExtensionChoicePicker(title: title, placeholder: placeholder, path: path, page: page,
+                                      choices: ExtensionPickerChoice.launchers(current: page.value(path)?.string, launchers: launchers))
             } else if field.type == "integer" || field.type == "number" {
                 labeled {
-                    TextField(placeholder, text: numberBinding)
-                        .keyboardType(field.type == "integer" ? .numberPad : .decimalPad)
+                    HStack(spacing: Theme.Space.s) {
+                        TextField(placeholder, text: numberBinding)
+                            .keyboardType(field.type == "integer" ? .numberPad : .decimalPad)
+                        if field.type == "integer" {
+                            // A step at a time within its bounds (#2385); typing still works for a far value.
+                            Stepper(value: stepperBinding, in: stepperRange) { Text(title) }
+                                .labelsHidden()
+                                .fixedSize()
+                        }
+                    }
                 }
             } else {
                 labeled {
@@ -661,6 +622,10 @@ private struct ExtensionFieldRow: View {
                         .keyboardType(field.format == "uri" ? .URL : field.format == "email" ? .emailAddress : .default)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    if field.picksLauncher, page.loadingLaunchers {
+                        // Typed until the hub's launchers are in (or if they can't be read).
+                        Text("Loading launchers…").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
             }
         }
@@ -687,6 +652,20 @@ private struct ExtensionFieldRow: View {
         return String(localized: "Not set")
     }
 
+    /// The stepper's value: what is set, else the default, else the lowest it may be. A step drops what was typed.
+    private var stepperBinding: Binding<Double> {
+        let key = path.joined(separator: ".")
+        return Binding(get: { page.value(path)?.double ?? field.default?.double ?? field.minimum ?? 0 }, set: { n in
+            page.numberText[key] = nil
+            page.set(.number(n.rounded()), at: path)
+        })
+    }
+
+    private var stepperRange: ClosedRange<Double> {
+        let low = field.minimum ?? -1_000_000_000
+        return low...max(low, field.maximum ?? 1_000_000_000)
+    }
+
     /// A number as typed: kept as text until it reads as one (ExtensionModel.numberProblems), then the value.
     private var numberBinding: Binding<String> {
         let key = path.joined(separator: ".")
@@ -698,11 +677,40 @@ private struct ExtensionFieldRow: View {
     }
 }
 
+/// One of the hub's machines or launchers by name (format machine / launcher on a string, #2385), Not set first; saved
+/// with the rest of the form.
+private struct ExtensionChoicePicker: View {
+    var title: String
+    var placeholder: String
+    var path: [String]
+    @Bindable var page: ExtensionModel
+    var choices: [ExtensionPickerChoice]
+
+    var body: some View {
+        Picker(selection: Binding(get: { page.value(path)?.string ?? "" }, set: { page.set($0.isEmpty ? nil : .string($0), at: path) })) {
+            Text(placeholder).tag("")
+            ForEach(choices) { c in Text(c.label).tag(c.value) }
+        } label: {
+            Text(title).lineLimit(2)
+        }
+    }
+}
+
+/// A field's accessibility identifier on all of a row, or on none of it (`nil`: its parts carry it).
+private struct ExtensionFieldIdentifier: ViewModifier {
+    var id: String?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let id { content.accessibilityIdentifier(id) } else { content }
+    }
+}
+
 /// A list of the hub's machines (schema format machine, docs/extensions/extensions.md): a switch per machine of the systems the field
 /// names, by its name and how it is, in effect at once (`ExtensionModel.saveNow`), the same setting as where else it
 /// shows (the Control Computer switch on a Mac's page). A value that names no machine still shows, to be turned off.
 private struct ExtensionMachineSwitches: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.splitPush) private var splitPush
     var field: ExtensionField
     var title: String
     var path: [String]
@@ -725,13 +733,14 @@ private struct ExtensionMachineSwitches: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            Text(title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(2)
+            Text(title).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier(identifier)
             if machines.isEmpty && unknown.isEmpty {
                 Text(field.items?.os == ["darwin"] ? String(localized: "This hub doesn't have a Mac yet.") : String(localized: "This hub doesn't have any machines yet."))
-                    .font(Theme.Font.secondary).foregroundStyle(.secondary)
+                    .font(Theme.Font.secondary).foregroundStyle(.secondary).accessibilityIdentifier(identifier)
             }
             ForEach(machines) { m in
                 row(m.id, name: m.name, status: nodeStatus(m) ?? (browsers ? Self.browserStatus(m) : Self.status(m, computers: computers)))
+                if computers || browsers { setUp(m) }
             }
             ForEach(unknown, id: \.self) { id in
                 row(id, name: id, status: String(localized: "Can't find this machine"))
@@ -749,6 +758,24 @@ private struct ExtensionMachineSwitches: View {
         }
     }
 
+    /// Its machine page, where the plugin is set up there. A button pushing that page alone: the Macs share one row, and
+    /// links in one row all open at once, every Mac's page on one tap (#2446).
+    @ViewBuilder private func setUp(_ m: Machine) -> some View {
+        let label = Label("Set Up [Extensions Views 1224]", systemImage: Theme.Icon.settings).font(Theme.Font.label).lineLimit(1)
+        Group {
+            if let splitPush {
+                Button { splitPush.push(MachineDetailRoute(m.ref)) } label: { label }
+            } else {
+                NavigationLink(value: MachineDetailRoute(m.ref)) { label }
+            }
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("extension-machine-setup-\(m.id)")
+    }
+
+    /// The field's identifier, on its title and switches (the row leaves it to them: a setup link keeps its own).
+    private var identifier: String { "plugin-field-\(path.joined(separator: "."))" }
+
     /// The field picking where the plugin's program runs: a machine switched on says how the program is there.
     private func nodeStatus(_ m: Machine) -> String? {
         guard let detail = page.detail, detail.nodeMachines == path.last, items.contains(m.id) else { return nil }
@@ -758,7 +785,11 @@ private struct ExtensionMachineSwitches: View {
 
     private func save(_ id: String, on: Bool) {
         var next = items.filter { $0 != id }
-        if on { next.append(id) }
+        if on {
+            // A single-choice field replaces its old value in one save; asking the hub to keep both cannot succeed.
+            if field.maxItems == 1 { next = [] }
+            next.append(id)
+        }
         Task { await page.saveNow(next.isEmpty ? nil : .array(next.map(JSONValue.string)), at: path) }
     }
 
@@ -772,6 +803,7 @@ private struct ExtensionMachineSwitches: View {
             }
         }
         .disabled(page.saving)
+        .accessibilityIdentifier(identifier)
     }
 
     /// Online / Offline, then how ego lite is on it (Ready is the switch worth turning on).

@@ -39,6 +39,23 @@ nonisolated enum AppStyle: String, CaseIterable, Identifiable, Sendable {
 }
 
 nonisolated enum Theme {
+    #if os(iOS)
+    /// By Repository's tree on iOS (#2531): a card per repository, its worktrees and their agents a level in each, every
+    /// line's mark in one column per level, a worktree's agents on a thin line down from its mark.
+    enum Tree {
+        /// A level in.
+        static let indent: CGFloat = 22
+        /// The column a line's mark sits in: the folder, a worktree's mark, an agent's state.
+        static let column: CGFloat = 18
+        /// Above and below a line: its height is its own, so the guide line runs on from row to row.
+        static let rowPadding = Space.sm
+        /// The line down a worktree's agents.
+        static let guide = Color(uiColor: .separator)
+        /// The agent or worktree open beside the list (regular width).
+        static let selected = Palette.systemBlue.opacity(0.1)
+    }
+    #endif
+
     /// Orca-compatible workspace cards. Scoped to repository browsing, including nested selection surfaces.
     enum WorkspaceSidebar {
         static let background = Color(light: 0xF5F5F5, dark: 0x2A2A2A)
@@ -527,6 +544,41 @@ nonisolated enum Theme {
     /// The system's sidebar column on iPad (iOS 26, the glass styles), measured from its pixels: the split fills the
     /// status bar above the column with it (`SidebarTopFill`), which the column itself cannot draw into.
     static let systemSidebar = Color(light: 0xE6E9EE, dark: 0x191C20)
+
+    /// The to-dos' calendar (#2029, docs/assistant/todos.md "Calendar"): its time axis, its columns and how a to-do's
+    /// block is drawn on it.
+    enum CalendarGrid {
+        /// An hour on the time axis: a to-do's block (`Size.tapTarget` high) takes most of one, so two an hour apart
+        /// never overlap.
+        static let hour: CGFloat = 52
+        /// The column of hours at the left of a day: "09:00", "11:00 AM" and the now line's "2:20 PM" fit.
+        static let gutter: CGFloat = 60
+        /// The same on a phone's week, whose seven columns need the room: the hours alone, and the moment's "14:20".
+        static let gutterNarrow: CGFloat = 40
+        /// A day of the month grid, at the least: its date and two lines.
+        static let monthCell: CGFloat = 92
+        /// The width from which the week shows each to-do's own block with its time and state (iPad, Mac); narrower,
+        /// a block is a few characters and the to-dos due at one time share one.
+        static let wide: CGFloat = 600
+        /// A day's dots in the week strip: at most this many, the rest are counted in the day.
+        static let dots = 3
+        /// The ground of a to-do's block and chip: its state's color, this strong.
+        static let tint: Double = 0.14
+        /// A done to-do, faded.
+        static let doneFade: Double = 0.5
+        /// A day of the month grid that belongs to the month before or after.
+        static let outsideFade: Double = 0.45
+        /// Lines a day of the month grid shows: its entries, or one fewer and "N more".
+        static let monthLines = 3
+        /// Where a new to-do's time snaps to when the empty axis is tapped, in minutes.
+        static let snapMinutes = 30
+        /// The calendar's ground under the page's controls: white on the grouped gray in the glass styles, as the list's
+        /// rows are; the style's card otherwise.
+        static var ground: Color { StyleSpec.current.usesGlass ? Theme.groupedCard : Theme.card }
+        /// The hour lines and the columns' edges; the line under the all-day row is `lineStrong`.
+        static let line = Color.primary.opacity(0.1)
+        static let lineStrong = Color.primary.opacity(0.18)
+    }
 
     /// Motion: a state change snaps, a layout change glides. Nothing repeats except the Needs You dot, the work spinner and
     /// the persona's dot in the Persona tab's top bar (docs/apple/persona.md), and those stop with Reduce Motion (the spinner

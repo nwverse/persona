@@ -41,6 +41,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if i < len(edits) {
 			applyPlanEdit(&p.Tasks[i], edits[i])
 		}
+		p.Tasks[i].normalizeReadonlyPermission()
 		if err := p.Tasks[i].normalizeMachinePolicy(); err != nil {
 			return nil, planInvalid{err}
 		}
@@ -70,9 +71,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				t.Error = err.Error()
 				continue
 			}
+			if t.Project != "" && todo.Project != t.Project {
+				if moved, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Project: &t.Project}); err != nil {
+					s.logf("task %s: project: %v", todo.ID, err)
+				} else {
+					todo = moved
+				}
+			}
 		} else {
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
-			todo, err = s.createTodo(ctx, title, t.Prompt, p.Conversation, p.ID)
+			todo, err = s.createTaskTodo(ctx, title, t.Prompt, p.Conversation, p.ID, t.Project)
 			if err != nil {
 				t.Error = err.Error()
 				continue
@@ -188,14 +196,14 @@ const taskFailTimeout = 30 * time.Second
 func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, retry bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
 	defer cancel()
-	placed := t.Machine
+	placed, placedWhy := t.Machine, t.Why
 	mid, sid, err := s.startTaskAgent(ctx, &t, retry)
-	if err != nil && ctx.Err() == nil {
+	if err != nil && ctx.Err() == nil && !startStalled(err) {
 		// The machine's link dropped (a node restarting, a tunnel blinking): try once more after a moment. Any other
-		// failure counts against the launcher there. Only flexible tasks may retry on another healthy machine.
+		// launcher failure may move a flexible task, after verifying its directory on the destination.
 		shouldRetry := transientStartErr(err)
 		if !shouldRetry && t.MachinePolicy == machineFlexible {
-			_, _, shouldRetry = s.healthDetour(ctx, Device{ID: t.Machine}, s.startLauncher(ctx, t.Launcher))
+			shouldRetry = s.healthyPlace(ctx, &t)
 		}
 		if shouldRetry {
 			s.logf("task %s: start: %v; retrying", t.TodoID, err)
@@ -206,7 +214,7 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 			}
 		}
 	}
-	if t.Machine != placed { // the card shows where it runs
+	if t.Machine != placed || t.Why != placedWhy { // the card shows where it runs, and on what (launcher_fit.go)
 		s.updatePlanTask(ctx, planID, i, t)
 	}
 	if err == nil {
@@ -236,11 +244,11 @@ func (s *Service) startPlanTask(planID, conversation string, i int, t PlanTask, 
 	if ferr := s.failTodo(ctx, t.TodoID, reason); ferr != nil {
 		s.logf("task %s: fail: %v", t.TodoID, ferr)
 	}
-	if p, lerr := s.loadPlan(ctx, planID); lerr == nil && i < len(p.Tasks) {
-		p.Tasks[i].Error = err.Error()
-		p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = codedStartRefusal(err)
-		_, _ = s.movePlan(ctx, p, planStarted)
-		s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
+	if perr := s.patchPlanTask(ctx, planID, i, func(pt *PlanTask) {
+		pt.Error = err.Error()
+		pt.ErrorCode, pt.ErrorArgs = codedStartRefusal(err)
+	}); perr != nil {
+		s.logf("plan %s: task %d's start error: %v", planID, i, perr)
 	}
 	s.tasks.mu.Lock()
 	s.tasks.receipted[t.TodoID] = time.Now()
@@ -325,6 +333,7 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if i < 0 {
 		return nil, errTaskNotInPlan
 	}
+	p.Tasks[i].normalizeReadonlyPermission()
 	t := p.Tasks[i]
 	m, ok := s.machineByName(ctx, t.Machine)
 	if !ok {
@@ -344,11 +353,14 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if !ok { // another assistant sharing the store reopened it first
 		return view, nil
 	}
-	p.Tasks[i].Error, p.Tasks[i].ErrorCode, p.Tasks[i].ErrorArgs = "", "", nil
-	if _, err := s.movePlan(ctx, p, planStarted); err != nil {
+	// Task i is kept as this retry starts it (t), its error cleared. The plan is read again under its lock, so what its
+	// other tasks recorded since p was read stays.
+	if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
+		*pt = t
+		pt.Error, pt.ErrorCode, pt.ErrorArgs = "", "", nil
+	}); err != nil {
 		s.logf("plan %s: %v", p.ID, err)
 	}
-	s.event(ctx, map[string]any{"type": "task_plan", "plan": p})
 	s.logf("task %s: retrying its start on %s", todoID, m.ID)
 	started = true
 	go func() {
@@ -443,12 +455,13 @@ var (
 )
 
 // transientStartErr: the agent did not start because a link on the way was down or dropped (this hub's to the
-// machine, or one further on that answered with the same words: a member hub, a connector), not because the node
-// refused; worth one retry.
+// machine, or one further on that answered with the same words: a member hub, a connector), or the new tab's
+// terminal was not ready for the start command (proto.CodeTerminalNotReady), not because the node refused or the
+// launcher failed; worth one retry, and never counted against the launcher (launcher_health.go).
 func transientStartErr(err error) bool {
 	var re *rpc.Error
 	return errors.Is(err, rpc.ErrClosed) || errors.Is(err, apierr.ErrOffline) ||
-		errors.As(err, &re) && re.Message == rpc.ErrClosed.Error()
+		errors.As(err, &re) && (re.Message == rpc.ErrClosed.Error() || re.Code == proto.CodeTerminalNotReady)
 }
 
 func (s *Service) dismissPlan(ctx context.Context, id string) (*TaskPlan, error) {

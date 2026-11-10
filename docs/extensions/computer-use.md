@@ -27,6 +27,7 @@ Click sounds and the Agent cursor only apply to Cua Driver. LCU has no separate 
 - **Per machine**: once the extension is on, each Mac's machine page gains Control Computer, with **Let the Assistant Control This Computer**
   (`PUT /api/v1/machines/{mid}/computer`), stored in `machines` in extension config. Controllable Computers on the extension page is the same value: Macs only, one switch each (name, online status, Cua status), effective immediately (`format: machine`, [extensions.md](extensions.md)).
 - **Confirm before acting**: extension config `confirm` (Confirm on Phone Before Acting), off by default; see "Write operations".
+- **From the extension page**: **Set Up** beside a Mac opens that machine's existing Control Computer section. Install Cua Driver there, grant **Accessibility** and **Screen & System Audio Recording** (Screen Recording on older macOS), then **Check Again**. These are macOS permissions for Cua Driver, not a Persona hub switch.
 
 **With the extension off**:
 - The hub never asks any node about cua-driver (the node never probes on its own).
@@ -474,9 +475,11 @@ Flags used:
 - **Identifying Apps** (`callApps`, `computer_apps.go`):
   - `app` in `computer_state`; absent means whole screen, also asks once.
   - Each step's `app` in `computer_run` (or the call-level `app`).
-  - Literal `cua.getApp("…")` in scripts.
+  - The app a `launch_app` step opens: its `name` (or `bundle_id`), in both step forms (`{"launch_app": {…}}`, `{"tool": "launch_app", "args": {…}}`), never the call-level `app`.
+  - Literal `cua.getApp("…")` and `cua.launch("…")` in scripts.
   - Names resolved to bundle ids through Cua `list_apps` before comparison, so identically named different Apps aren't conflated; unknown names stored by name.
-  - Any step without an app, computed app names in a script, or no getApp in a script makes identification incomplete: ask every time for the whole call, without Always Allow.
+  - Any step without an app, a `launch_app` step naming no app, computed app names in a script (`getApp` or `launch`), or a script naming no app makes identification incomplete: ask every time for the whole call, without Always Allow.
+    A `getApp` / `launch` occurrence the literal reader cannot parse counts the same way: space or a comment before the call's parentheses (`getApp ("Terminal")`), a computed callee (`cua["getApp"]`, a saved function), or an argument that is not a plain string. The completeness check compares every occurrence of the callee's name with the parsed literal calls, so an unreadable one cannot be missed.
 - **Always ask, never offer Always Allow**: terminals (Terminal, iTerm2, Warp, Ghostty, etc.), System Settings, Keychain Access, password managers (Passwords, 1Password, Bitwarden, etc.), Persona, identified by bundle id or name (Chinese/English).
 - **With Confirm on Phone Before Acting**: if this call already asked because of an App, don't ask twice; otherwise with confirmation enabled, ask each time as before.
 - **Agent's own Cua MCP** (`mcp__cua-driver__*`): bypasses the hub and still uses the Agent's tool approvals. Integrate allowed Apps later.

@@ -23,8 +23,13 @@ func (h *Hub) inboxRoutesRelayed(api *http.ServeMux) {
 	// An item is its manager's: the request names it (the manager its list stamped on it), else the default.
 	relay := func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, h.byRequest) }
 	for _, pattern := range assistantwire.InboxRoutes {
+		// The lists are localized item by item as they are merged (forwardInboxList).
 		if key, ok := mergedLists[pattern]; ok { // the list: every manager's items
-			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.mergeList(w, r, key, h.forwardHTTP) })
+			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.mergeList(w, r, key, h.forwardInboxList) })
+			continue
+		}
+		if key, ok := pagedLists[pattern]; ok { // the done items' history: one manager's page, its items stamped
+			api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.pagedList(w, r, key, h.forwardInboxList) })
 			continue
 		}
 		if pattern == "POST /api/v1/inbox/{id}/reply" {

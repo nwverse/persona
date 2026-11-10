@@ -154,7 +154,7 @@ struct InboxDraftSheet: View {
             }
             .task {
                 guard text.isEmpty else { return }
-                if let u = InboxStore.shared.unsentReplies[item.id] { text = u } else if let d = item.agentDraft { text = d } else { await load() }
+                if let u = InboxStore.shared.unsentReplies[item.key] { text = u } else if let d = item.agentDraft { text = d } else { await load() }
             }
         }
         .presentationDetents([.medium, .large])
@@ -169,8 +169,7 @@ struct InboxDraftSheet: View {
             }
             if let key = a.sessionKey {
                 Button {
-                    model.assistantCurrent = model.inHub(key)
-                    model.selectedTab = .assistant
+                    model.openAssistantConversation(model.inHub(key), manager: item.manager)
                     dismiss()
                 } label: {
                     Label("See How the AI Twin Handled It", systemImage: Theme.Icon.list).font(Theme.Font.captionMedium).lineLimit(1)
@@ -221,7 +220,7 @@ struct InboxDraftSheet: View {
     }
 
     private func load() async {
-        guard let api = model.api else { return }
+        guard let api = model.api?.manager(item.manager) else { return }
         loading = true
         defer { loading = false }
         do {
@@ -250,7 +249,9 @@ struct InboxDraftSheet: View {
 // MARK: - Hand to AI
 
 /// Hands the item to Persona (its main conversation by default, which may write back to the item, or a new one) or to a
-/// running agent, as a <persona-context> plus what to do with it (`InboxHandOffModel`).
+/// running agent, as a <persona-context> plus what to do with it (`InboxHandOffModel`), and opens where it went. The Mac
+/// and the iPhone's source pages (which have their own reply composer at the bottom) use it; an event's page has
+/// `InboxHandOffBar` instead.
 struct InboxHandOffSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -263,12 +264,10 @@ struct InboxHandOffSheet: View {
         _handOff = State(initialValue: InboxHandOffModel.live(item, model: .shared))
     }
 
-    private static let presets = [String(localized: "Summarize it, tell me what to do, and suggest a reply"), String(localized: "Handle it for me, but ask before replying [Inbox Actions 6612fa]"), String(localized: "Handle it for me, but ask before replying [Inbox Actions 616ea2]")]
+    private static let presets = InboxAsk.allCases.map(\.ask)
 
     private var agents: [Session] {
-        model.allSessions.filter { !$0.assistant }
-            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
-            .prefix(8).map { $0 }
+        InboxHandOffModel.agents(model.allSessions, limit: 8) { model.machine($0)?.online == true }
     }
 
     var body: some View {
@@ -312,6 +311,7 @@ struct InboxHandOffSheet: View {
                 }
                 Section {
                     Toggle("Also Mark as Done", isOn: Binding(get: { handOff.markDone }, set: { handOff.setMarkDone($0) }))
+                        .disabled(handOff.sending)
                 }
                 if let error = handOff.error { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
             }
@@ -333,6 +333,7 @@ struct InboxHandOffSheet: View {
         let ask = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard await handOff.send(ask: ask.isEmpty ? Self.presets[0] : ask) else { return }
         Haptics.success()
+        handOff.open()
         dismiss()
     }
 

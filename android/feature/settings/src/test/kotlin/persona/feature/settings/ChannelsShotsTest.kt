@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -191,14 +192,15 @@ class ChannelsShotsTest {
     private fun assertSettingsEntryOrder() {
         // With a navigation host, the removed introduction row used to be present.
         rule.onAllNodesWithText("助手").assertCountEquals(0)
-        rule.onAllNodesWithText("Persona").assertCountEquals(0)
+        // The brand card is Persona too; only a separate legacy navigation entry is forbidden.
+        rule.onAllNodes(hasText("Persona") and !hasTestTag("settings-hub-card")).assertCountEquals(0)
         rule.onAllNodesWithText("认识 Persona").assertCountEquals(0)
-        rule.onNodeWithText("这台手机").performScrollTo()
+        rule.onNode(hasText("连接器") and hasClickAction()).performScrollTo()
         rule.onAllNodesWithText("渠道").assertCountEquals(2) // Its own section header and its one clickable row.
         val computer = rule.onNode(hasText("Claude Code 设置") and hasClickAction()).fetchSemanticsNode().boundsInRoot
         val channelHeader = rule.onNode(hasText("渠道") and !hasClickAction()).fetchSemanticsNode().boundsInRoot
         val channelRow = rule.onNode(hasText("渠道") and hasClickAction()).fetchSemanticsNode().boundsInRoot
-        val connectors = rule.onNodeWithText("连接器").fetchSemanticsNode().boundsInRoot
+        val connectors = rule.onNode(hasText("连接器") and !hasClickAction()).fetchSemanticsNode().boundsInRoot
         assertTrue(computer.bottom <= channelHeader.top)
         assertTrue(channelHeader.bottom <= channelRow.top)
         assertTrue(channelRow.bottom <= connectors.top)

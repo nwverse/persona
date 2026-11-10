@@ -359,7 +359,11 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 			if link.Said != "" && link.Said != p.Record.Version {
 				v.Attached.Version = link.Said
 				if v.Status == host.StateError {
-					v.Error = i18n.T(l, "extension-status.attached_version", i18n.Args{"current": link.Said, "approved": p.Record.Version, "id": p.Record.ID})
+					key := "extension-status.attached_version"
+					if p.Record.AttachedPackage() { // its package's version is the one approved: no upgrade while attached
+						key = "extension-status.attached_package_version"
+					}
+					v.Error = i18n.T(l, key, i18n.Args{"current": link.Said, "approved": p.Record.Version, "id": p.Record.ID})
 				}
 			}
 		}
@@ -368,7 +372,8 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		v.Status, v.NeedsSetup = extensionNeedsSetup, append(v.NeedsSetup, needsTriageModelSetup(ps.h.contextLang(ctx)))
 	}
 	if ps.h != nil {
-		ps.voiceView(ctx, p, &v) // runs, but no conversation starts without an upstream (voice_extension.go)
+		ps.voiceView(ctx, p, &v)    // runs, but no conversation starts without an upstream (voice_extension.go)
+		ps.imessageView(ctx, p, &v) // no connector until its one Mac is picked (imessage_extension.go)
 	}
 	if ps.h != nil {
 		ps.h.extensionUpgrades().decorate(ctx, &v, p)
@@ -631,12 +636,18 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 	ps.mu.Unlock()
 	why := tokenStopReason(ps.reg.GetExact(id))
 	if ps.h != nil {
+		ps.h.widgetsDropExtension(id)
+		// Wake after the replacement is published, so a catalog refresh sees the new contributions.
+		defer ps.h.widgetsWake(id, nil, true)
 		ps.h.pageDropExtension(id)
 		// Switched off, upgraded (maybe to fewer scopes), uninstalled or reconfigured: its token goes now, and a new
 		// one comes with its next start.
 		ps.h.extTokens.revoke(id, why)
 	}
 	ps.forgetEgress(id) // the same for its proxy credential (extension_sandbox.go)
+	if ps.h != nil {
+		ps.h.forgetImages(id) // and the pictures it served (extension_images.go)
+	}
 	if old != nil {
 		ps.removeAgentSources(old)
 		for _, c := range old.conns {
@@ -772,7 +783,7 @@ func (hp *hubExtension) closeIdle() {
 	}
 }
 
-// serveExtensionHTTP hands one request to the plugin's HTTP side, counted by route (extension_metrics.go).
+// serveExtensionHTTP hands one request to the plugin's HTTP side, counted by route (extension_metrics_relay.go).
 func (hp *hubExtension) serveExtensionHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Del("Cache-Control") // set by the hub's auth for its own answers: the plugin's own goes instead
 	if hp.stats == nil {
@@ -826,6 +837,11 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 	m := p.Manifest
 	id := p.Record.ID
 	s := host.Spec{ID: id, Name: m.Name, Logf: ps.hostLogf()}
+	if ps.h != nil {
+		// A start that does not come up keeps no token, whatever stopped it: initialize or the environment had it already.
+		// Nor does a program elsewhere once its run ends (an idle stop, a lost connection): it goes on running there.
+		s.Release = func() { ps.h.extTokens.revoke(id, tokenStopReason(ps.reg.GetExact(id))) }
+	}
 	if st := ps.stats.of(id); st != nil {
 		s.Observe = st
 	}
@@ -888,6 +904,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		s.RPC, s.HTTP = r.RPCSocket != "", r.HTTPSocket != ""
 		hp.socket = r.HTTPSocket
 		s.Attached = true
+		s.Version = p.Record.Version // the program on the sockets must say it is this one before Init gives it anything
 	} else {
 		if rt.IsDeno() {
 			if err := ps.sourceSpec(ctx, p, &s); err != nil {
@@ -950,9 +967,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if err != nil {
 			return extension.InitializeParams{}, err
 		}
-		info := extension.ExtensionInfo{ID: id, Version: p.Record.Version, Dir: p.Dir}
-		if p.Record.Remote == nil {
-			info.DataDir = ps.reg.DataDir(id)
+		info := extension.ExtensionInfo{ID: id, Version: p.Record.Version}
+		if p.Record.Remote == nil { // paths on the manager's machine, for the program it runs
+			info.Dir, info.DataDir = p.Dir, ps.reg.DataDir(id)
 		}
 		var build int64
 		if ps.h != nil {
@@ -972,7 +989,10 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if ps.h != nil && !ps.h.builtin() {
 			params.Hub.Manager = ps.h.opts.ManagerID
 		}
-		if g := p.Record.Granted; !g.FullHub() && len(g.Hub) > 0 && ps.h != nil {
+		// An attached package granted the full token the old way (hub_api) gets one of every scope instead: never the
+		// hub's own, whatever runs on its sockets. One installed from remote: gets none, as before.
+		attachedFull := p.Record.AttachedPackage() && p.Record.Granted.FullHub()
+		if g := p.Record.Granted; (attachedFull || !g.FullHub() && len(g.Hub) > 0) && ps.h != nil {
 			url, err := ps.hubURL()
 			if err != nil {
 				return extension.InitializeParams{}, err
@@ -980,9 +1000,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			// The program the hub started has it already (StartEnv); one elsewhere gets its first here.
 			tok := hubToken.current()
 			if tok == "" || p.Record.Remote != nil {
-				tok = hubToken.renew(ps, p, false)
+				tok = hubToken.renew(ps, p, attachedFull)
 			}
-			params.Hub.URL, params.Hub.Token, params.Hub.Scopes = url, tok, slices.Clone(g.Hub)
+			scopes := slices.Clone(g.Hub)
+			if attachedFull { // the routes' scopes: model calls are granted by name only (extension_model_calls.go)
+				scopes = slices.DeleteFunc(extension.EveryScope(), func(s string) bool { return s == extension.ScopeModels })
+			}
+			params.Hub.URL, params.Hub.Token, params.Hub.Scopes = url, tok, scopes
 		}
 		for _, c := range conns {
 			if ps.h == nil || ps.h.connectors.Enabled(c.ID) {
@@ -1002,6 +1026,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			params.ContributionsToMe = ps.reg.ContributionsToContext(ctx, id)
 			hp.contributions = params.ContributionsToMe
 			hp.contributionsMu.Unlock()
+		}
+		if err := ps.storageStart(ctx, p); err != nil {
+			return extension.InitializeParams{}, storeError(ctx, err)
 		}
 		return params, nil
 	}
@@ -1027,6 +1054,11 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 	s.Handle = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		if current := ps.reg.SnapshotExact(id); current == nil || current.Record.Version != p.Record.Version || !current.Record.UpdatedAt.Equal(p.Record.UpdatedAt) {
 			return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: "retired extension runtime"}
+		}
+		if strings.HasPrefix(method, "storage.") {
+			// Keep this process's captured epoch/grants. Re-resolving after the
+			// preliminary fence could lend a retired run the replacement's scope.
+			return ps.storageCall(ctx, p, method, params)
 		}
 		switch method {
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
@@ -1231,7 +1263,11 @@ func (ps *extensions) remoteManifest(ctx context.Context, r extension.Remote) (*
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", r.HTTPSocket)
 		}
-		client := &http.Client{Transport: &http.Transport{DialContext: dial}, Timeout: 10 * time.Second}
+		// One request per transport: nothing reuses its connection, which would otherwise stay idle (and keep its
+		// goroutines and descriptor) until the plugin closes it.
+		tr := &http.Transport{DialContext: dial, DisableKeepAlives: true}
+		defer tr.CloseIdleConnections()
+		client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://plugin/manifest", nil)
 		res, err := client.Do(req)
 		if err != nil {

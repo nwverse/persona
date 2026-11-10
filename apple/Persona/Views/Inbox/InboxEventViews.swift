@@ -429,11 +429,11 @@ struct InboxChainSection: View {
         case .url(let u):
             Button { openURL(u) } label: { label() }.buttonStyle(.plain)
         case .session(let key, let manager):
-            Button { InboxEventOpen.session(key, manager: manager, model: model) } label: { label() }
+            Button { InboxEventOpen.session(key, manager: manager, owner: item.manager, model: model) } label: { label() }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("inbox.chain.session")
         case .item(let id):
-            if let it = InboxStore.shared.items.first(where: { $0.id == id }) {
+            if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: id, manager: item.manager) }) {
                 if let openItem {
                     Button { openItem(it) } label: { label() }.buttonStyle(.plain)
                 } else {
@@ -504,7 +504,7 @@ struct InboxRelatedSection: View {
                     }
                     .padding(.vertical, Theme.Space.xs)
                     .contentShape(.rect)
-                    if let it = InboxStore.shared.items.first(where: { $0.id == r.id }) {
+                    if let it = InboxStore.shared.items.first(where: { $0.key == InboxItem.key(id: r.id, manager: item.manager) }) {
                         if let openItem {
                             Button { openItem(it) } label: { label }.buttonStyle(.plain)
                         } else {
@@ -522,10 +522,10 @@ struct InboxRelatedSection: View {
 /// Opening a chain's conversation: the processing one is the assistant's (Persona's own conversations), a sub-session
 /// an Agent's.
 @MainActor enum InboxEventOpen {
-    static func session(_ key: SessionKey, manager: Bool, model: AppModel) {
+    /// `owner`: the item's manager, whose Persona the processing conversation is.
+    static func session(_ key: SessionKey, manager: Bool, owner: String?, model: AppModel) {
         if manager && model.session(key) == nil {
-            model.assistantCurrent = model.inHub(key)
-            model.selectedTab = .assistant
+            model.openAssistantConversation(model.inHub(key), manager: owner)
         } else {
             model.open(key)
         }
@@ -545,6 +545,7 @@ struct InboxSourceRoute: Hashable {
 struct InboxSourcePage: View {
     var route: InboxSourceRoute
     var accounts: [MailAccount]
+    @Environment(AppModel.self) private var model
     @State private var slot: InboxItemSlotModel
 
     init(route: InboxSourceRoute, accounts: [MailAccount]) {
@@ -566,9 +567,9 @@ struct InboxSourcePage: View {
         } else if item.connector != nil {
             InboxConnectorDetailView(item: item)
         } else if let m = item.moment {
-            LarkMomentsPostView(postID: m.postID, pushed: true)
+            LarkMomentsPostView(postID: m.postID, pushed: true, manager: model.linkManager(item.manager))
         } else if let c = conversation {
-            LarkChatView(conversation: c)
+            LarkChatView(conversation: c, manager: model.linkManager(item.manager))
         } else if let m = mail {
             MailDetailView(summary: m, accounts: accounts)
         } else {
@@ -594,22 +595,21 @@ struct InboxSourcePage: View {
 // MARK: - iPhone
 
 /// One event opened on the iPhone: the summary with 'view original', the processing state, recap, the suggestion and its buttons,
-/// the chain, the thread line and related items, then draft reply / hand to AI. The source is a push away (view original, the received entry).
+/// the chain, the thread line and related items; Hand to AI (with Draft Reply among its chips) is the bar along the bottom
+/// (`InboxHandOffBar`). The source is a push away (view original, the received entry).
 struct InboxEventPage: View {
     var item: InboxItem
     var accounts: [MailAccount]
     var draft: () -> Void
-    var handOff: () -> Void
     @State private var suggestion: InboxSuggestionModel
     @State private var editing = false
     @State private var line: InboxTree?
 
-    init(item: InboxItem, accounts: [MailAccount], draft: @escaping () -> Void, handOff: @escaping () -> Void) {
+    init(item: InboxItem, accounts: [MailAccount], draft: @escaping () -> Void) {
         self.item = item
         self.accounts = accounts
         self.draft = draft
-        self.handOff = handOff
-        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id))
+        _suggestion = State(initialValue: InboxSuggestionModel.live(item.id, manager: item.manager))
     }
 
     var body: some View {
@@ -618,12 +618,16 @@ struct InboxEventPage: View {
                 header
                 InboxEventBlocks(item: item, model: suggestion, edit: { editing = true })
                 InboxLineSection(tree: line)
-                actions
             }
             .padding(.horizontal, Theme.Space.page)
             .padding(.vertical, Theme.Space.l)
             .frame(maxWidth: Theme.Size.readable, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            InboxHandOffBar(item: item, draft: canDraft ? draft : nil,
+                            draftTitle: item.agentDraft == nil ? nil : String(localized: "View Draft"))
         }
         .themedPage()
         .inboxLine(item, tree: $line)
@@ -665,16 +669,9 @@ struct InboxEventPage: View {
         return [source, it.title].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// draft reply (when there is no suggested reply already) and hand to AI, as the old detail's strip had them.
-    private var actions: some View {
-        HStack(spacing: Theme.Space.s) {
-            let canReply = item.connector.map { $0.canReply == true } ?? true
-            if canReply && item.currentSuggestion?.kind != "reply" && !item.isDone {
-                InboxSuggestionButton(title: item.agentDraft == nil ? String(localized: "AI Draft Reply") : String(localized: "View Draft"),
-                                      prominent: false, spinning: false, perform: draft)
-            }
-            InboxSuggestionButton(title: String(localized: "Hand to AI"), prominent: false, spinning: false, perform: handOff)
-            Spacer(minLength: 0)
-        }
+    /// Draft Reply is offered when the item can be answered from here and no suggested reply is there already.
+    private var canDraft: Bool {
+        let canReply = item.connector.map { $0.canReply == true } ?? true
+        return canReply && item.currentSuggestion?.kind != "reply" && !item.isDone
     }
 }

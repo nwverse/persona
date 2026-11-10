@@ -1,5 +1,61 @@
 # Lessons: web UI and interactions
 
+## A collapsed execution default is more than an open-state flag (#2602)
+
+The old Agent work line was called folded, but still previewed five tool/thinking steps and left every intermediate text visible. The assistant-only default-open change then exposed the full trace. Removing just that default does not implement a single replace-in-place text segment: grouping, stream-to-item handoff, preview rendering and manual history loading must agree. Keep a stable text-slot identity, put every tool kind and older text inside the same summary, and do not use text length or Markdown shape to exempt intermediate narration. Retain all plan updates for manual inspection even when the composer selects only the latest plan.
+
+External jump/search reveals use the expansion-memory API, not the summary button. When run overrides are separate from remembered history state, bridge those reveals into the live override and collapse both at completion. Mark untouched resumed runs too: otherwise an earlier historical expansion can return automatically at completion. A fold's virtual block ID can differ from its first real nonzero block; test the real segment parser and stabilize both the transcript row and summary identity, while leaving wire IDs unchanged. Preserve existing input-backed segment identities.
+
+A background wake can reopen an exchange before its recap. Find the live exchange from the latest source item rather than the last drawn block; keep continuation calls in the normal summary, not a second drawer. Test actual browser replacement, manual expansion, folded history, recap wakes and reload. A lazy collapse can retain its children during its closing animation; checking raw `textContent` then is not a visibility assertion. Use the latest-text slot and folded header state, or browser-visible locators.
+
+
+## Report evidence is separate from report prose (#2554)
+
+The supervision feed's `body.evidence` is a separate array, not part of `body.text`. Hide that array only in the report renderer: preserve authored links and newlines in the body, as well as review-checklist evidence. The server also carries report evidence into its supervision prompt and uses it to validate completion handoffs; removing the wire field would change supervision behavior and break compatibility. Check the actual feed renderer, including expanded progress reports, rather than filtering URL-shaped text.
+
+## Extension lifecycle controls use manager metadata, not configuration (#2355)
+
+- `source: installed` does not grant a full-rights web client owner-only management of local or attached installations. Market lifecycle actions follow the manager-owned `origin` and the existing endpoint policy; a manifest field or arbitrary URL cannot grant that capability. Keep unavailable controls visible with a reason rather than inventing an API request.
+- A saved Auto-upgrade preference is not its effective execution state. Show the saved value while separately explaining extension-disabled, removed-market and manager-global pauses. Read global preferences and catalog refreshes with the same explicit manager as the extension; a default-manager read can describe the wrong same-ID copy.
+- Preserve dirty configuration when maintenance reads or lifecycle writes return an entire detail. A catalog with a newer version must not become a misleading “no new version” notice merely because the background upgrade list has not caught up; use the catalog's authoritative `upgradable` result and retain the consent preview.
+
+## Leaving a page is more than its Back button (#2800)
+
+- A guard on the page's own Back covers one way out of several: another row in a list beside it, another category, the sidebar, browser Back and a reload all unmount it without asking. Keep unsaved edits outside the component (in memory, keyed by owner and item, cleared on a new credential) and put them back after the first read is shown, so the existing save bar marks them; mark the list row too, and use `beforeunload` only for a reload or a closed tab, which memory cannot survive.
+- Keep what the user changed, not the whole form: store the draft with the configuration it was made on and, on return (or a newer read), put only the changed fields on the configuration just read. A whole-form snapshot shows another device's change as the old value, and Save quietly puts it back.
+- An item page pushed over its list needs its own Back to go back (`history.back()`), not to replace the entry with the list's URL: a replace leaves the item's entry under it, so the next browser Back reopens the item. An overlay open over the item has its own entry on top; take its marker (`takeOverlayEntry`) and go back past both.
+
+## Chat states need their way out, and fallbacks need a second trigger (#2450)
+
+- An action that ends a card leaves the same receipt an answer does; a card that just vanishes reads as a failure. Name it in words on its own row, not an icon in the head, so it is not mistaken for "close".
+- When the composer says Working…, Interrupt and Esc must work too: derive both from the same condition (`state === "working" || awaiting`), not one from `state` alone. A state that otherwise only times out (`awaiting` lasts `AWAIT_MS`) must also end on the action that ends it: once the hub takes the interrupt, or Working… and Interrupt stay and a second press sends another stop.
+- Do not put a native `confirm()` in front of a reversible step such as replacing the draft: replace at once and offer Undo that restores the text, its quotes and the caret. Offer it for everything the step drops: a box with no text but a quote or a comment card on its bar loses the user's own writing too.
+- An older-hub fallback that re-reads on an event the older hub never sends stays stale. Re-read when the data it reads first arrives (here: the chat's row in the store), and stop watching once it has.
+
+## Cards in a scrolling flex box: `shrink-0`, and `overflow-clip` for sticky (#2017)
+
+- A flex child with `overflow-hidden` has a `min-height:auto` of 0, so flex squeezes it below its content when the box above the input is full. The card's footer (the answer buttons) then sits below the fold, and a receipt can be squeezed to a fraction of its content. Give every card in that box `shrink-0`, not only the one that was reported (`Card`, `AnsweredCard`, `DelegatedCard`).
+- An `overflow-hidden` ancestor makes itself the scroll container that `position: sticky` refers to, so a sticky footer inside it never sticks to the outer scroller. Use `overflow-clip`: it clips to the rounded corners the same way but is not a scroll container. The sticky offset also has to cancel the scroller's padding (`-bottom-1` for the dock's `p-1`), or the body shows under the footer.
+- jsdom has no layout; check it in a browser with `scripts/test/web_card_actions_e2e.py`, which asserts the button row's box is inside the viewport and the dock's visible area.
+
+## A native select's arrow ignores the field's padding (#2314)
+
+- A `<select>` styled as a field (`bg-field`, `px-2.5`) but left at `appearance: auto` still gets the browser's arrow, drawn where the browser likes: Chrome pins a bold black arrow 2 px from the right edge and adds its own inset on the left, Safari drops the author padding altogether and draws ⇕. Every select in the app showed it, differently in each browser, so measure in both Chrome and WebKit.
+- Fix it once, in `styles.css`: `appearance: none`, the icon's chevron as a background image, and right padding for it. The rule has to be unlayered (like the touch-screen font-size rule), or the `px-*` utilities win and long options run under the chevron. A background image cannot read `var()`, so the chevron's color is written into a light / dark token and a test keeps it equal to `--ink-3`.
+- To check the arrow in a screenshot, diff the select with and without its background image; with the text made transparent too, the right padding must be plain fill, which also proves no native arrow is left (`scripts/test/web_select_chevron_e2e.py`).
+
+## Settings layout tests need real scroll regions (#2197)
+
+- A flex child with `overflow-y-auto` also needs `min-h-0` and `min-w-0`; otherwise adding a sidebar can expand the page rather than give each side its own scroll area. Check geometry and wheel input in short windows, not just class names in jsdom, and retain 640 px / 320 px boundary checks.
+- `lib/viewport.ts` caches each MediaQueryList. A responsive test mock must expose a live `matches` getter (and deliver change events when testing an in-place resize), rather than capture its first value. Pin the test language explicitly: a shared Chrome's browser preferences can differ from the test driver's locale.
+- A host-owned secondary page under a connector route must opt out of the connector split-detail layout (#2412); otherwise the record ledger keeps an unrelated connector list beside it. Scope category-button assertions to the settings navigation: a secondary page's Back button can have the same label as its parent category. Legacy path aliases also need normalization on browser history events, not only on initial mount.
+- Continuous deep-link reloads hit a Vite development-module fetch failure during this check. Keep the failure record and rerun against the production build with the same mock hub; a working initial dev screenshot does not prove reload/share behavior.
+
+## Message provenance is independent of model roles (#2125)
+
+- An automatic or relayed input can legitimately have model role `user` without belonging in a user bubble, pending-message echo matching or the user-input navigator. Carry structured provenance through display parsing and cached pages; test these consumers together. Legacy relay inference requires the complete machine template, and an app user's protected quotation must suppress inference. Use transcript-backed metadata for long-lived history rather than a short-lived echo record.
+- Source folding uses the chat typography tokens. Unlayered `.prose-j` rules override component-layer inheritance unless the component deliberately pins that inheritance; otherwise narrow-screen folds can clip half a line.
+
 ## Pushed batches follow more_after too (#1118)
 
 - A contiguous reconnect replay can still be incomplete when its final batch carries `more_after`. Follow that flag on pushed batches as well as HTTP pages, continuing from the updated contiguous coverage cursor through the existing gap-fill timer; do not wait for another push to reveal a gap.
@@ -11,6 +67,16 @@
 ## A cancelled frame must clear its pending marker (#2060)
 
 - An animation-frame ref used as a coalescing guard must be reset to zero whenever cleanup cancels it, including the final unmount cleanup. React StrictMode replays initial effects: a cancelled nonzero marker can then prevent every later scroll, resize and transcript change from scheduling another measurement. Test the empty-to-loaded transition under StrictMode, and exercise the actual browser; non-StrictMode component tests can miss a navigator that never appears.
+
+## Hover ownership is not an idle-fade timer (#2168)
+
+- The navigation rail may linger after activity, but a hover card must leave in its mouse-leave handler. Connect rail/card hit zones with the card wrapper's padding rather than a grace timeout; clicking or selecting card text must not bubble into the rail's pointer-capture gesture. Keep captured drags and keyboard selections distinct from pointer-owned previews.
+- The current viewport input is not an interactive preview (#2298). Without a preview, every mark stays at the short tick width and height; current-position emphasis uses color only. Generate bell-shaped shoulders only for hover, keyboard selection or captured dragging, and check equal idle geometry after scrolling and pointer exit in the actual browser.
+- An interactive preview can appear under a stationary pointer while keyboard selection moves. Entering that card must retain the selected identity/window, not recenter it on the viewport owner. Browser tests must move outside both hit zones before checking idle fade, and measure actual exit-to-removal time rather than waiting for the old delay to expire.
+
+## Full-history positions are not a tail-window count (#2338)
+
+The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. If a richer independent navigation API is being developed elsewhere, keep the temporary adapter narrow and document its migration boundary rather than taking over that task.
 
 ## Render-count tests must separate store pushes from live clocks (#1989)
 
@@ -140,6 +206,9 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 
 ## Retrying failed Settings reads (2026-11-06, #4493)
 
+- Combining settings pages combines their mount-time reads too: moving General's read-only "Runs on" into the full Assistant page duplicates `/assistant` and breaks single-pending-read retry tests. Keep the more complete existing component instead of mounting two readers for the same information.
+- Legacy category links need to retain both a nested dialog's query (`purpose`, `manager`) and its new section fragment. Keep legacy query aliases when canonicalizing `tab`; the nested component otherwise opens nothing after an apparently successful redirect.
+
 - Initial hub / assistant reads were inline in `useEffect`; extract a reusable `load` before adding Retry, so first open and button use the same path. Assistant reloads status, scheduled tasks, and memory; avatars use existing `refreshPersonas` with shared-request deduplication.
 - Successful retries clear old errors; disable the button or show loading while in flight. Read retries only repeat reads: hub "Check for updates" / "Update hub" are separate write operations, not substitutes for rereading.
 - `npm ci` rebuilds `node_modules`; never run it alongside Vite screenshots that depend on them, or temporary services may report missing modules. Finish installation before starting your temporary service; after reinstalling dependencies, stop and restart only your own Vite by port.
@@ -159,6 +228,11 @@ An auth status push rerenders the sign-in group and replaces inline completion c
 - Acknowledgements advance the saved baseline without replacing current text. On leave, compare against the last admitted snapshot too: typing back to the original baseline while A is pending still needs a restoring write. Deduplicate an unchanged pending snapshot, let rejection release the queue for retry, and fence retired callbacks from newer editors.
 - Regress the actual settings component through the real API with deferred, abort-aware synthetic fetches. Assert authoritative stored notes, remounted drafts, rejection/retry, empty overrides versus hub fallback, and owner isolation; response-only mocks hide dispatch-time credential lookup.
 
+## Whole-document knowledge settings keep their owner and original identity (#2217)
+
+A settings editor must wait for the loaded document, preserve history, optional rule fields, nulls and tied priority levels, and target the selected manager on every read, picker request and write. Retire old responses when the credential, manager or picker changes. Chat and document `read` without `store` have different fallthrough rules; null document days does not schedule default pruning. Display names and sanitized KB filenames are not item identities: read the original source/id in document metadata. An observed change can fence a dirty draft, but a whole-document PUT without a revision precondition cannot promise atomic conflict prevention.
+
+
 ## Panel identity for workspaces without sessions (2026-11-04, #1646)
 
 - **File and Git panel keys must include the directory**: without an Agent, `sid` is empty, so two empty workspace cards on one machine share the same `mid/sid` key. Open files or a commit in A, then the same panel type from B, and React retains A's preview or Git subview, leaking state across directories. Generate stable keys from machine, session, and directory. Regression tests must cover same machine, empty sid, different cwd, not just static card HTML.
@@ -175,8 +249,9 @@ Exercise the actual hook and upload helper together with a synthetic XHR transpo
 ## Popup menus
 
 - React event `currentTarget` is valid only during event handling. Do not read `e.currentTarget` in a functional `setState` updater: deferred execution can see `null`, making the menu open once but fail after closing (found in browser validation of the same-space menu, 2026-11-02). Save the target element in the handler, then use it in the updater. Test deferred updater execution and open / close / reopen.
-- A button that toggles a `Menu` must sit inside the menu's `anchor` (#174). `Menu` (`web/src/ui/atoms.tsx`) closes on a `pointerdown` outside its panel and its anchor, so a press on a toggle outside the anchor closes the menu, and the `click` that follows opens it again: the handler's toggle never fires. A sidebar row's ⋯ is a sibling of the row's `<a>`, so it anchors on their parent (`RowMenuFn` in `web/src/views/Sidebar.tsx`). jsdom's `click()` sends no `pointerdown` and jsdom has no `CSS.escape`, so a test that only clicks passes either way: dispatch `pointerdown`, then `click`, with a `CSS.escape` polyfill (`web/src/views/SidebarRowMenuToggle.test.tsx`).
+- A button that toggles a `Menu` must sit inside the menu's `anchor` (#174). `Menu` (`web/src/ui/atoms.tsx`) closes on a `pointerdown` outside its panel and its anchor, so a press on a toggle outside the anchor closes the menu, and the `click` that follows opens it again: the handler's toggle never fires. A sidebar row's ⋯ is a sibling of the row's `<a>`, so it anchors on their parent (`RowMenuFn` in `web/src/views/SidebarParts.tsx`). jsdom's `click()` sends no `pointerdown` and jsdom has no `CSS.escape`, so a test that only clicks passes either way: dispatch `pointerdown`, then `click`, with a `CSS.escape` polyfill (`web/src/views/SidebarRowMenuToggle.test.tsx`).
 - After adding status labels, keep titles single-line with truncation, prevent labels from shrinking, and provide full-title tooltips. Constrain actual menu width to viewport minus side margins before positioning by that width, rather than merely moving the left edge; desktop fixed-width menus overflow narrow screens.
+- A menu row that opens a dialog must give the focus back to the menu's button first (#2434). The menu keeps the DOM focus on its button and only draws the highlight (other fields on the page keep their keys), but a click focuses the row's own button. `useModalFocus` notes that row as the opener, the row unmounts with the menu, and on close the focus fell to `<body>`; the keyboard path never showed it. `Menu` notes what had the focus as it opened and hands it back (else the anchor, else the anchor's first control: a sidebar row's ⋯ is hidden once the pointer leaves) before `onSelect`, so a row that moves the focus itself (Quote to the composer) still wins. For the same reason Tab closes the menu without `preventDefault`: the browser moves on from the button, not from a control behind an open menu. A test must focus the row before clicking it, as a browser does, or it passes either way (`web/src/ui/dialog-focus.test.tsx`).
 - Browser tests closing a menu must wait for removal (`detached`), not just `hidden`; its hidden initial-positioning phase can satisfy `hidden` too early. Wait for specific rows and status text before assertions, avoiding false "missing state" reports before rendering finishes.
 - Cards use `overflow-hidden` for rounded corners (`Group` in Settings), clipping overlays opened from rows: the last row's "Confirm delete" / "Confirm revoke" shows only an edge; clicking the button center hits the description below the card (2026-11-04, #1504). `z-index` cannot defeat clipping. Confirm row actions inline (`RowConfirm`), or put real overlays outside the card (portal). Measure the last row; the first row cannot reveal this.
 
@@ -235,6 +310,8 @@ Exercise the actual hook and upload helper together with a synthetic XHR transpo
 - `JSON.parse` moves integer-like keys first and loses 64-bit precision. For display formatting alone, reindent without parsing values.
 
 ### Talking to hub
+
+- Explicit task diagnostics are reads even when their endpoint uses POST (#1373). Give them a bounded timeout past the hub’s own judgment limit, admit once synchronously and keep their result separate from status and supervised review. Scope admission, result, error and finally to task, manager and credential generation; abort retirement and test late responses with the real REST client so stale 401 handling is exercised. A stamped manager on a merged task list belongs on the diagnostic request, while an unstamped task follows the default. Only route-level 404 evidence identifies an unsupported endpoint; a missing task must remain a missing task.
 
 - **Per-chat rule removal has a durable retry state** (#1481): DELETE `store_failed` disables the live rule before its durable removal succeeds. Retain the original opaque ID and destination separately from the GET list, which can already omit it, and keep Retry revoke until a successful DELETE. Fence both ledger and rule reads at mutation admission and across credential generations, navigation and manager changes; an old page must not revive a removed rule. Exercise the actual settings component with the real REST client and deferred synthetic responses, including normal current-owner 401 handling.
 
@@ -309,6 +386,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - `SessionRow` is `memo`ized (#3026): unchanged sessions retain object identity after pushes (`lib/sessions-delta.ts`), so only the changed session's row rerenders. Functions must be stable (`useGo`, `onRowMenu` use `useCallback`);
   pass `prefix` as a string, not JSX; compare routes by `routePath`. Adding a freshly created prop per render (inline arrow, object, element) rerenders the whole list on every push again (/agents under mock: 580 renders in 20 seconds vs 100).
   Rows calculating "N minutes ago" from `Date.now()` (offline row suffix, detail row) no longer update on other sessions' pushes; age-displaying rows use their own `useNow(60_000)` to rerender every minute.
+- **`memo` on a row holds only if a refetch keeps unchanged objects** (#2294): a push or poll that reads JSON again gives every row a new prop, so `memo` alone still draws the whole list. Keep the old object of each item that reads the same (`sameValue` in `lib/stable-lines.ts`; `lib/lark-reuse.ts`, `LarkChatsStore.refresh`, `BoardModel.refresh`), keep the array itself when nothing changed, and notify no one for a patch that changes nothing. A label the row derives from the clock (`shortTime`, `clock`) is then worked out by the list and passed as a string, or a kept row still says 10:00 after midnight; where the list itself skips the render (an unchanged page) or rows sit in other components (threads, dialogs), the rows read a context that changes with the day (`Today` in `LarkThread.tsx`).
 - A roughly 280 px sidebar wraps four filter pills (dots and counts) with `px-2 gap-1`; tighten to `px-[7px] gap-0.5`.
 - Reference-line labels on charts ("N cores" on load) get crossed by data lines when drawn underneath. Draw after the lines, with a page-background outline (`paint-order: stroke`).
 - Machine details has three monitoring cells per row; at 390 width a subtitle gets about 94 px, while "56.5 GB / 64.0 GB" takes 92 px (2026-11-06, #3637). Headless Chrome at 390 just fits and hides truncation in screenshots; 15 px narrower (desktop scrollbar), or a slightly wider font, cuts the total. Measure natural text width (`Range.getBoundingClientRect`) against cell `clientWidth`, not just 390-wide screenshots. Show a shared unit once (`usedOfTotal`, "56.5 / 64.0 GB", 74 px).
@@ -338,6 +416,9 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Pending bubbles and transcript echoes (2026-11-03, #950)
 
 - Match sent messages in the transcript with more than exact equality and no time check: an older identical "Continue" among recent entries immediately removes a new bubble (hiding later send failure); one entry can also remove two identical bubbles. Match iOS / Android rules (`lib/echo.ts`: normalization, computer clock at most 2 minutes behind, prefix matching for truncated text, one transcript entry claims only one bubble, recorded in `claimed`).
+- A transcript echo can arrive before the send's HTTP 200 (#2792). Keep accepted messages across reloads until their copy arrives, but mark acceptance only on an entry still in storage: recreating one already removed by the echo revives the pending bubble on reload. Test both response orders, and keep storage writes and echo claims outside React state updaters so StrictMode cannot repeat them. Browser reload checks must also wait for the chat to finish loading, advancing an installed test clock while waiting; `DOMContentLoaded` alone can expose an empty loading shell and mistake it for a lost message. Check readiness independently of the message under test.
+
+- Local storage is shared across tabs (#2792). Restoring accepted messages on every conversation visit is safe, but unconfirmed or failed entries need the original once-per-page, per-conversation guard: an entry written after this page opened may still be sending in another tab. Test both the initial restoration and later transcript updates, and reset the guard only when simulating a fresh page.
 
 ## Composer cleared only after delivery (#1176)
 
@@ -357,6 +438,22 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Fetching folded steps while following latest can add thousands of pixels in one frame; staying bottom-pinned throws the group header to the top. If movement exceeds 64px in a frame, stop following and hold this row.
 - Validation: Playwright (`playwright-core` + cached Chrome for Testing), CDP `Emulation.setCPUThrottlingRate`, `long-animation-frame`, and `Page.startScreencast` frames. Playwright's bundled ffmpeg decodes only MJPEG; record JPEG frames, combining into a file before reading if no pipe.
   `recordVideo` produces no file on this machine (ffmpeg version mismatch errors, then silent after symlinking). Measuring dev Vite is meaningless: React dev expansion takes 700ms; production builds are what users see.
+
+## Skipping off-screen exchanges in a chat without browser scroll anchoring (2026-11-09, #2485)
+
+- `content-visibility: auto` on finished exchanges takes most of the layout and style cost of a long chat off sends and cold opens. With `overflow-anchor: none` (#1124), each exchange that is drawn for the first time above the view swaps its guessed height for its real one and moves the reader.
+  Correct this in the ResizeObserver that already pins rows (after layout, before paint): add up the height changes of exchanges whose top was above the view's top before the change, and add the total to `scrollTop`. An exchange the view's top cuts through counts too, so its end and everything under it stay in place.
+- A ResizeObserver's first report of an element is its size when the observer looks, and for a new `content-visibility: auto` element Chromium settles whether it is near the view earlier in that frame. An exchange an earlier page adds just above the view is drawn before that first report, so the change from the guess to its drawn height is never reported, while the page's own scroll correction (in the layout effect) used the guess: the view jumped 230-570 px per page. Count from the height read when the element starts being watched, in the same layout effects.
+- `contain-intrinsic-size: auto` remembers a height only while the element has it. Putting it on an exchange at the moment it starts skipping (a new exchange came in) leaves nothing remembered, and an off-screen one drops to the guess. Give every exchange `auto` ahead of time and switch only `content-visibility`.
+- The checks that hand the chat its whole history at once miss both: one needs pages arriving while the reader scrolls up, the other an exchange arriving while the reader is scrolled up (`web_chat_scroll_e2e.py --hub`).
+- A good guess matters less than the correction, but a bad one makes the scroll bar thumb jump. Counting the reply's lines at the bubble's width guessed 1.8 times the drawn height (median). Counting them at 2.5 times the bubble's characters to a line brought that to 1.25.
+- The browser's smooth `scrollTo` aims once. When rows above the target change height on the way, it lands off the row (rail jumps at 200 turns landed thousands of px away). Setting `scrollTop` to fix that cancels the smooth scroll, and calling `scrollTo` again each frame restarts its curve, so it never arrives (10 s instead of 1.5 s).
+  Drive the jump instead: read the target each frame and ease toward it (`glide.ts`, at Chromium's pace of √distance × 15 ms, at most 1.5 s), then hold the row while things settle.
+- A script that sets `scrollTop` while the chat still follows the end is pulled straight back, because a scroll from a script is not the reader leaving. Leave the end with a wheel first.
+- Paint containment clips overflow and outlines, and Chromium applies `overflow-clip-margin` to it. Fixed-position descendants are contained as well: the zoomed Mermaid diagram is `fixed inset-0` and not portaled, so exchanges holding `[aria-modal="true"]` are excluded.
+- With the exchanges skipped, a cold open still forced a layout of the whole chat before its first paint: each bubble reads its own height in a layout effect (`getComputedStyle` + `scrollHeight`) to decide whether it folds, and then `useFoldScroll` reads its scroll height for the fade.
+  A message that cannot pass 14 lines even in a bubble far narrower than any real one now skips the first read, and a block that is not folded skips the second. Skipping only the first moved the whole cost to the second read (in the profile `moreBelow` took what the bubble's effect had taken): after removing a forced layout, profile again, because the next read in the same commit pays for it.
+- Context that every row reads but only an open menu uses (why "Rewind to here" is off) belongs in a small store, read with `useSyncExternalStore` only while the menu is open. A set that every reader checks for its own id (fresh words) becomes a per-id subscription. With these, a send and a pushed item render the rows they touch instead of every exchange.
 
 ## Opening and refreshing chats stays at latest (2026-11-04, #1340)
 
@@ -439,6 +536,11 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - **`refresh()` snapshots restore just-resolved cards**: it concurrently fetches `/sessions` (seconds on busy hub) and `/interactions`, replacing state when all finish. An intervening `interaction_resolved` removes the card; the old snapshot restores it, still clickable, and another click gets 410 "no longer pending." Number every pending-card change (`changeInteraction` in `store.ts`); snapshots update only state predating the request. Android `HubInteractionCenter` uses the same approach.
 - **Collapse cards locally on successful submission**, not only on WS events (late or lost on disconnection); iOS / Android already do this. Hub idempotently returns 200 with the original answer (`already`) for answered cards; 410 only for expiry, withdrawal, or hand-back to computer. See `docs/protocol/protocol.md`.
 
+## Sessionless requests are cards, not missing sessions (#1882)
+
+- Only an explicitly empty `session_id` bypasses session approval capability checks. A nonempty id whose session is absent or restricted must still refuse. Use the same decision for card forms, quick answers and notification actions.
+- A script request has no conversation to open. Route it by interaction id from Overview, Inbox and notifications, and reuse the existing card renderer and answer receipt. Give each sessionless request its own notification identity so answering one cannot close another's notification; retain initial-snapshot suppression and device preferences.
+
 ## Chat rendering aligned with a reference client (2026-11-05, #1963)
 
 - **Claude Code in herdr has no token stream**: transcript writes only complete blocks; thinking blocks are mostly empty (5 tested sessions, 1698 of 2066 blocks with empty bodies). Screen text also appears in whole chunks (20 consecutive reads every 0.4 s verified). Only the bottom status line changes each second, so real-time information uses node status-line `live` pushes; replies can only "fade in word by word after a whole block arrives." Only assistant main chat has true deltas.
@@ -477,7 +579,7 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 
 ## Reduced motion and busy indicators (2026-11-05, #3475)
 
-- **Globally reducing animations to 1ms × 1 iteration freezes spinners and breathing dots**, hiding ongoing work. Busy indicators (spinners, Working / Connecting dots, loading shimmer / pixel grids, skeleton pulses) use `busy-motion`; its class selector overrides `*` `!important` by specificity (both important), slowing cycles to 2.4 seconds. Redefine `breathe` as opacity-only under reduced motion. `phaseTone().color` includes the class, so both `Sidebar.tsx` dots inherit it without changes.
+- **Globally reducing animations to 1ms × 1 iteration freezes spinners and breathing dots**, hiding ongoing work. Busy indicators (spinners, Working / Connecting dots, loading shimmer / pixel grids, skeleton pulses) use `busy-motion`; its class selector overrides `*` `!important` by specificity (both important), slowing cycles to 2.4 seconds. Redefine `breathe` as opacity-only under reduced motion. `phaseTone().color` includes the class, so both sidebar dots (the account row's in `Sidebar.tsx`, the folded rail's in `SidebarRail.tsx`) inherit it without changes.
 - **Tailwind scans source for class names**: variants such as `group-hover/sec:invisible` must appear as complete literal strings, not assembled with `replaceAll`, or CSS omits them.
 - **Aligned count rows must not reserve space for right-side buttons**: machine rows have no ⋯, workspace rows do, shifting counts 24px left. Absolutely position ⋯ over the row end; hide counts on hover / keyboard focus with `invisible`. Touch ⋯ is always visible; all tree heading rows reserve 44px (like session rows), preserving right alignment.
 
@@ -502,6 +604,13 @@ If the header grows, elements below it (App.tsx connection-status pill) cannot a
 - **Chat answers remount wholesale**: when streaming ends, item `Answer` replaces the streaming version. When another answer joins the same segment, `SegmentView`'s live-dependent `cut` changes and moves the old answer between `WorkNodes` groups. Remounting `Markdown` with `fade` creates a new timeline: already-visible text visibly fades out / in, one span per word, then switches back to ordinary Markdown after 0.35 s. This explains CPU-profile long frames at both start and end; more answers in a segment make it slower. Now remember recent timelines by text (`rememberShown` / `shownBefore` in `wordFade.ts`); remounts reuse them, and finished words render normally.
 - **Measure these frames with 2× CPU throttling first**: unthrottled, longest frames with fade on / off both lie at 50–100 ms, obscured by other processes; 2× gives stable differences. Restart mock hub before each measurement group; `/mock/say` appends replies to the same ever-growing segment.
 - **`useSyncExternalStore` updates are always synchronous**, even within `startTransition`. To redraw answers in a transition after a lazy-loaded plugin arrives, use `useState` + subscription. Plugins are functions: `useState(plugin)` / `setState(plugin)` calls them as initializer / updater, so use `() => plugin`.
+
+## A lazy rehype plugin re-renders every reply; keep finished trees by content (#2465)
+
+- **Whole-reply plugins make their arrival a full re-render**: rehype-highlight ran as a plugin of each reply, so when its chunk arrived every reply with a fenced block re-rendered and was parsed again from scratch, off-screen ones included (about 2,600 component renders while scrolling right after opening a 200-turn chat). Work that only a part of a block needs belongs in that part's component, which can then take it up near the viewport only (`CodeBlock`, `stream/highlight.ts`).
+- **rehype-highlight builds its lowlight inside the plugin**: `createLowlight(common)` runs every time a processor is made, that is once per block per draw; a shared instance cost 156 ms for all 325 blocks of the same history against about 1.7 s through the plugin.
+- **react-markdown's `Markdown()` is a plain function** (no hooks: create processor, parse, `runSync`, to JSX), so its result can be kept and drawn again. The key must hold everything the tree is made from: the text, the remark plugin list, each rehype plugin that runs, and whatever the components close over (machine, directory); a new input to the tree joins the key, or a kept tree is drawn stale. Components built in a `useMemo` per mount make a kept tree's component types differ from a fresh one's; share them per key instead.
+- **Count with a `<Profiler>` per block and a probe on a hook the reply calls** (`highlight-lazy.test.tsx`): a Profiler's `onRender` fires for any commit in its subtree, so it tells which blocks updated, not whether the reply itself rendered again.
 
 ## Cleanup warnings after successful uninstall (#4757)
 
@@ -589,3 +698,7 @@ A saved credential and an empty input are different from explicitly removing tha
 ## Pairing fallback needs an unsupported-route response (#1916)
 
 A successful token check does not prove the subsequent device-token exchange succeeded: a redeemed pairing code can still read during its grace period. Keep the legacy credential only when the exchange returns 404 for an old hub. Authentication refusal, server failure and transport failure must reject sign-in without replacing browser credentials. Both opened and pasted links should classify a 401 by status, not by the exact error sentence returned by the hub.
+
+## An op receipt keeps the hub's answer and the digest covers the body (#2459)
+
+A write under an op id can be repeated only unchanged: the hub replays the answer it kept for that id (a refusal included) and answers `409 op_id_reused` when the body changed. So a retry after a gap keeps the id and the request as they were, which means a start that may have reached the hub cannot reopen its form; a retry after a refusal needs a new id. Another request of the same flow, such as the Codex start with a prompt, has its own id. A repeat can also come back `202 {"state":"pending"}` or `{"state":"unknown"}`, which `res.ok` reads as success, so a caller that needs the real answer has to look at `state`.

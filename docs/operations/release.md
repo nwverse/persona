@@ -5,7 +5,7 @@ TestFlight internal testing (testers in the configured `app_store.testers`), plu
 ## Accounts and identifiers
 
 The product is Persona (previously under another product name), but the existing Bundle IDs, App Group, keychain groups, signing profile names and App Store Connect app record stay the same; don't recreate the App because of the rename.
-Since 2026-11-03 the store name in App Store Connect is **Persona Side** (formerly "Persona Herd"; the home screen still shows `CFBundleDisplayName`, Persona), and the privacy policy URL is `app_store.external.privacy_url` (the website's privacy policy page). The store name lives in the App Info localizations (`name` in `appInfoLocalizations`) and can be changed directly via the API while the version hasn't been submitted for review; see "Changing the store name" below. "Persona App Store" and "Persona Watch App Store" below are existing signing profile names and stay as they are; the generated project / targets and archive / `.app` products use the Persona name, and old project / scheme aliases and module identity are in [compatibility migration](rename.md). Historical build records keep the names of their time. New default config and `personad` / `personad` compatibility are in [naming and compatibility](config.md#命名与兼容).
+Since 2026-11-03 the store name in App Store Connect is **Persona Side** (formerly "Persona Herd"; the home screen still shows `CFBundleDisplayName`, Persona), and the privacy policy URL is `app_store.external.privacy_url` (the website's privacy policy page). The store name lives in the App Info localizations (`name` in `appInfoLocalizations`) and can be changed directly via the API while the version hasn't been submitted for review; see "Changing the store name" below. "Persona App Store" and "Persona Watch App Store" below are existing signing profile names and stay as they are; the generated project / targets and archive / `.app` products use the Persona name, and old project / scheme aliases and module identity are in [compatibility migration](rename.md). Historical build records keep the names of their time. New default config and `personad` / `personad` compatibility are in [naming and configuration](config.md#naming-and-configuration).
 
 All in the build config (`docs/operations/config.md`): `app.bundle_id` / `app.team_id`, `app_store.key_id` / `issuer_id` / `key_path` (the API key file lives only
 outside the repo, e.g. `~/.appstoreconnect/`), `app_store.app_id` (the app record's numeric ID), `app_store.testers`, `app_store.feedback_email`.
@@ -54,7 +54,7 @@ The build number can also be given by hand: `./scripts/release/release.sh 42`.
 
 What `release.sh` does:
 
-1. `xcodegen generate` (the source is `apple/project.yml`, generating `Persona.xcodeproj`; the old `Persona.xcodeproj` is a symlink to the project entry, and generated content isn't committed).
+1. `xcodegen generate` (the source is `apple/project.yml`, generating `Persona.xcodeproj`; generated content isn't committed).
 2. Release archive to `~/Library/Developer/Xcode/Archives/<date>/Persona <build number>.xcarchive` (dSYMs kept for Organizer symbolication),
    with the watch App embedded.
 3. `check_bundle_strings.py` checks `Persona.app` and `Persona.app/Watch/Persona.app`: `*UsageDescription` in Info.plist
@@ -81,12 +81,11 @@ Install the worker in `~/.local/lib/persona-autorelease/`, its private JSON conf
 `persona-autorelease.timer` from `scripts/operations/` in `~/.config/systemd/user/`.
 Enable linger for the user if the service must survive logout. The timer checks every ten minutes and coalesces intervening commits.
 
-CI admission belongs to the PR head: require the automatic `CI required` check and every relevant manually selected full lane before
-merging. For this scripts-only automation change, dispatch `ci.yml` with `lanes=scripts` and verify that its script shards actually ran.
-Full server, Android, scripts, iOS and Mac tests are manual; unselected lanes are not evidence that those platforms passed.
+CI admission belongs to the PR's local verification: run every affected platform check and `scripts/privacy_check.py` before
+merging. PRs start no hosted checks. A scheduler explicitly dispatches full CI on `main`, including iOS and Mac; Mac remains
+independent of the `CI required` aggregate. Failures are fixed separately rather than being treated as local PR verification.
 The unattended worker consumes the newest already-merged `origin/main`, then applies path selection and local build/release verification.
-It neither waits for a full CI check on the main commit (none is automatically created) nor dispatches full platform CI on every timer tick.
-This keeps the release gate aligned with the PR-merge policy rather than waiting indefinitely for an obsolete main-branch check.
+It does not wait for the scheduled main CI result before releasing; the two checks are separate operational gates.
 
 Each target has its own last-success revision, path patterns, command argument vector, and timeout. Worker events are appended to
 `worker.log` in the private state directory; `log_output: true` additionally retains command output in mode-0600 per-step files
@@ -295,7 +294,7 @@ python3 scripts/release/asc_testflight.py external   # create the group, enable/
 
 ## Mac version (2026-11-02)
 
-The Mac App (target `PersonaMac`, old `PersonaMac` scheme compatible) shares the iPhone's bundle id, so it is **the same app record** in App Store Connect (macOS platform added, version 1.0),
+The Mac App (target and scheme `PersonaMac`) shares the iPhone's bundle id, so it is **the same app record** in App Store Connect (macOS platform added, version 1.0),
 and uses the same TestFlight: the same Internal / Friends groups and public link. Testers install TestFlight on a Mac to see Mac builds.
 
 - **Build numbers**: a number can only be used once per platform; different platforms can reuse it. Rule: **the Mac build and iPhone build in one release use the same number**
@@ -346,6 +345,7 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
 - Web dependencies always install from the official npm registry (`npm ci --registry=https://registry.npmjs.org/`, overridable with `PERSONA_NPM_REGISTRY`), ignoring local npm config. `package-lock.json` already points to the official registry; a locally configured mirror may lack packages (on 2026-11-06 it lacked `elkjs`, stopping release before web bundling).
 - Build four platforms (linux / darwin × amd64 / arm64), with `-tags public -trimpath -s -w`, embedding `channel=release`, build number (UTC `YYYYMMDDHHMM`) and `updateURL`:
   - **Web bundled into the binary** (`server/internal/hub/webdist`, `go:embed`): the hub uses it when the hub machine has no `~/.persona/web`; otherwise it still uses the directory.
+    The plain copy is privacy-scanned first, then its hashed assets and `third-party-licenses.txt` are kept gzipped (`go run ./internal/webasset/precompress`); the script stops if none are, or if a compressible asset of 1 KB or more is left plain. The first screen's brotli copies (`name.br`) come from `npm run build` and stay as they are (`docs/web/web.md` "Precompressed assets").
   - **No skills included**: the skill connecting to the Lark gateway was copied from a private upstream repository (GPL-3.0) and cannot be redistributed. Skills live in `~/.persona/skills/` on each machine,
     so there is only one binary, used by our own hub too (`docs/operations/hub-update.md`). The script ensures the binary only contains skills registered as redistributable (`scripts/release/check_bundle_skills.py`).
     `-tags public` changes no code (`TestOneBuild`); it is only a privacy-scan marker.
@@ -373,27 +373,101 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
   `min_app_build` in `latest.json`) to the build containing it so old Apps prompt for an update. Raising `min_app_build` makes every older App unable to use this hub; ask the user first.
 - Only the latest version is hosted (R2 also retains the previous one, as above). Bucket uploads and deployment use configured `publish.wrangler` (otherwise `npx wrangler`). Cloudflare OAuth expires after one hour;
   on an auth error, run `cf auth login` and retry. After deployment it reads back `dl/VERSION`, `dl/SHA256SUMS`, `dl/latest.json`, `dl/SLOT` to confirm the just-built version is live, and checks every archive's size with `HEAD`.
-  The push relay is in the same Worker (`/relay/*`) and is redeployed on each publish too.
+  The push relay is in the same Worker (`/relay/*`) and is redeployed on each publish too: when `/relay/v1/health` answered `ok` and `apns` before the deploy,
+  the publish fails unless it still does within about two minutes after it (#1263; a site without a working relay only gets a note).
 - Push relay deployed (2026-11-02): resident `personad relay` + Cloudflare Tunnel + website Worker forwarding; public health, origin protection, registration and authentication verified.
   Release config needs `app.push_relay`; only a new TestFlight with the notification extension registers. Notification decryption on real devices still needs separate acceptance; see `docs/operations/push-relay.md`.
-- Not yet available (others can install, but it's still awkward; see `docs/operations/config.md`): one-step `personad setup` (hub currently needs manual Postgres and `hub.json` setup),
+- Not yet available (others can install, but it's still awkward; see `docs/operations/config.md`):
   Developer ID notarization of the macOS binary (browser downloads get blocked by Gatekeeper; `curl` doesn't).
 
-## Publishing the hub image (`.github/workflows/hub-image.yml`, 2026-11-01)
+## Publishing a release (`.github/workflows/release.yml`)
 
-Docker hubs (`docs/operations/docker.md`) use the ghcr image, linux/amd64 + linux/arm64:
+A `v*` tag publishes the hub container image and creates a GitHub Release. Docker hubs (`docs/operations/docker.md`) use the ghcr image, linux/amd64 + linux/arm64:
 
 ```sh
-git tag v1.2.0 && git push origin v1.2.0   # -> ghcr.io/<owner>/<repo>:1.2.0 and :latest
+git tag v1.2.0 && git push origin v1.2.0
+# -> ghcr.io/<owner>/<repo>:1.2.0 and :latest
+# -> GitHub Release v1.2.0 with generated notes
 ```
 
-- Smoke-test first (amd64 + compose), then build and push both architectures only after it passes. Prerelease tags containing `-` (`v1.3.0-rc1`) only push the version tag, without touching `latest`.
-
-- To get an image of the current branch without a tag: manually run hub image in Actions (`edge`, `sha-<commit>`).
-- PRs only run smoke tests, with no push (`packages: write` is granted only to the push step).
+- Smoke-test first (amd64 + compose), then build and push both architectures only after it passes. Once image publication succeeds, the same job creates a GitHub Release named for the full tag with automatically generated notes. Prerelease tags containing `-` (`v1.3.0-rc1`) only push the version image, without touching `latest`, and mark the GitHub Release as a prerelease. Creating the Release does not push another tag.
+- To get an image of the current branch without a tag or GitHub Release: manually run release in Actions (`edge`, `sha-<commit>`).
+- Image smoke tests run through an explicit workflow dispatch; only the documented `v*` release-tag event starts image and GitHub Release publication automatically (`packages: write` and `contents: write` are granted only to the publish job). This exception supplies the version and `latest` images used by Docker installations; no branch push or PR starts it. A manual dispatch never creates a GitHub Release.
+- If Release creation fails after the images were pushed, rerun the failed job for the same tag. Rebuilding and pushing the same immutable image tags does not advance `latest` to another source revision; fix any reported tag or Release conflict rather than creating a replacement tag.
 - The image's personad uses the tag minus `v` as its version (`personad version`); when node differs, the App prompts to redeploy, using the image's own builds or the release's (`docs/operations/docker.md` ("Node builds")).
 - The image's personad is on the `docker` channel: no skills (like all binaries), no self-update; a new image prompts you to pull it (`docs/operations/hub-update.md`).
 - When the repository is private, the package is private too; NAS installs need `docker login ghcr.io` (`docs/operations/docker.md` ("Image")).
+
+### Private version-tag consumers
+
+A version tag starts the public container/GitHub Release workflow only. It does
+**not** copy Apple or Android signing keys, private publication endpoints, or
+broad personal API tokens to GitHub Actions. Each release computer instead runs
+its existing Claude loop with the prompt printed by:
+
+```sh
+python3 scripts/operations/tag_release.py --config <unused> --repository <owner>/<name>
+```
+
+The loop calls `scripts/operations/tag_release.py --once` for every private
+platform configuration installed at `~/.config/persona/tag-release/<platform>.json`
+(0600). It does not run an Agent or build on every poll: the coordinator skips
+a completed platform/tag pair and invokes an optional per-tag Agent only for a
+new one. The same prompt file also describes the platform-specific publication
+and receipt contract (`scripts/operations/tag_release_prompt.md`). Configure the
+loop's own normal scheduler on each machine; do not start a second scheduler
+for the same platform.
+
+A private configuration has only these fields, with no secrets:
+
+```json
+{
+  "repo": "/absolute/path/to/shared/repository",
+  "worktree": "/absolute/path/to/dedicated/detached/worktree",
+  "state_dir": "/absolute/path/to/private/platform-state",
+  "repository": "<owner>/<name>",
+  "platform": "android",
+  "command": ["/absolute/path/to/existing/platform-publisher", "--source", "{commit}", "--version", "{version}"],
+  "receipt": "/absolute/path/to/private/platform-state/artifacts.json",
+  "agent": ["claude", "--print", "--permission-prompts", "host", "{tag}"]
+}
+```
+
+- `command` is required and is an argv array, never a shell string. Allowed
+  placeholders are `{repo}`, `{worktree}`, `{state_dir}`, `{tag}`, `{commit}`,
+  and `{version}`. The coordinator runs it only after checking the immutable
+  remote tag and preparing its exact detached worktree. The command reuses the
+  platform's existing signing, release lock, and publication receipts.
+- The optional `agent` argv array additionally accepts `{prompt_file}` and
+  `{log_file}`. Its prompt and tag/commit environment let the local Claude loop
+  select already-supported platform steps, not discover or distribute secrets.
+  The coordinator retains its exclusive lock across the Agent and the command.
+- The private command writes the receipt only after its platform verification
+  succeeds. The receipt has the exact `commit`, `store_verified: true`, and an
+  `assets` list of absolute regular files with safe names and SHA-256 digests.
+  An empty list is valid only for verified store-only publication such as
+  TestFlight; it never substitutes an unsigned APK or development archive.
+- `ios` uses the existing resumable TestFlight action and verifies its exact
+  commit's build is VALID and in Internal. The embedded Watch app shares that
+  archive. The frozen native Mac app is not restarted by a generic release;
+  desktop uses the web artifact and Persona Link.
+- `android` uses the existing signed-APK pipeline (`android_release_worker.py`)
+  and its private signing configuration. If that configuration is absent, the
+  platform is blocked and reported as such, not silently omitted. A signed APK
+  must pass package, version, source and certificate checks before upload.
+- `hub` uses `publish.sh`, its publication lock, and live download verification;
+  `web` is carried by that verified artifact. GitHub asset upload does not
+  independently prove a production deployment or TestFlight processing is done.
+- The coordinator never creates or moves a tag. It requires the corresponding
+  public (not draft) GitHub Release to exist, then uploads verified assets and
+  compares their remote SHA-256 digests. A failed platform does not complete
+  that platform's checkpoint, and does not claim that another platform passed.
+
+For the first release, merge this consumer's PR before pushing `v0.1.0` from
+the merged `main` commit. The public workflow creates the Release and image;
+the separately configured private loops then publish their platforms and
+attach verified artifacts. Inspect the Release assets and every platform's
+actual store/publication receipt before declaring the whole release complete.
 
 ## Android publisher repository migration and status retries
 
@@ -404,6 +478,14 @@ an old checkpoint without that identity is rejected rather than silently attribu
 When moving to rewritten history, pause the existing publisher, retain its evidence and use a separate `state_directory` for the new
 repository. Keep the existing package, signing certificate and signing entry. Never post an old commit's status to the new repository
 or treat an old verified APK as a build of the new source. Compare migrated file content when commit IDs have changed.
+
+The release APK is shrunk by R8 without obfuscation (docs/android/android.md "Release shrinking"). After `:app:assembleRelease` and
+before the APK is copied for signing, the worker runs `scripts/release/check_android_shrink.py` on it and on R8's
+output in `app/build/outputs/mapping/release`; any class, constructor or method that Android or the app reaches only by name and
+that R8 removed fails the build, so nothing is signed or published. Before the first shrunk release, install it on a phone and
+open pairing, a chat with a formula, the Inbox, Settings, a notification action, the home-screen widget and the Quick Settings
+tile; a crash there is fixed with a keep rule in `android/app/proguard-rules.pro` (or rolled back with `isMinifyEnabled = false`
+and the test line that pins it, docs/android/android.md "Release shrinking").
 
 Versions are `version_base + first-parent commit count`; `version_base` defaults to 100000. Before enabling the new lane, choose a
 fixed nonnegative base so its first version exceeds the currently published APK. Keep that base stable thereafter. The worker rejects

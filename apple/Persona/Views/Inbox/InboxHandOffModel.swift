@@ -5,7 +5,8 @@ import Observation
 /// and the send. Persona's main conversation is the default: the item's hand-off (`POST /api/v1/inbox/{id}/handoff`)
 /// puts the item and the ask there and links the item to it, so that conversation may write back to the item. An older
 /// hub or manager answers 404 / 405, and the main chat gets the text as before. A new Persona conversation and a running
-/// Agent get it as a message. `InboxHandOffSheet` draws it.
+/// Agent get it as a message. Sending never moves the app: `open()` goes to where it went. The detail page's
+/// `InboxHandOffBar` queues a send behind an Undo window (`queue`); `InboxHandOffSheet` sends at once and opens.
 @MainActor @Observable
 final class InboxHandOffModel {
     enum Target: Hashable, Sendable {
@@ -14,22 +15,63 @@ final class InboxHandOffModel {
         /// A new Persona conversation.
         case newChat
         case agent(SessionKey)
+
+        /// How the last choice is remembered (`lastTargetKey`): "main", "new", or "agent:" + the session's path.
+        var stored: String {
+            switch self {
+            case .main: "main"
+            case .newChat: "new"
+            case .agent(let key): "agent:" + key.path
+            }
+        }
+
+        /// Reads `stored` back; anything else is the main chat.
+        init(stored: String) {
+            if stored == "new" {
+                self = .newChat
+            } else if stored.hasPrefix("agent:"), let key = SessionKey(path: String(stored.dropFirst("agent:".count))) {
+                self = .agent(key)
+            } else {
+                self = .main
+            }
+        }
     }
+
+    /// The terminal outcome of one Agent hand-off. A waiting message is still being tracked, not a result yet.
+    struct AgentSendResult: Equatable {
+        let delivered: Bool
+        let error: String?
+        /// The outbox already initiated this item's Done write; the caller must not file it again.
+        let filed: Bool
+
+        static let sent = AgentSendResult(delivered: true, error: nil, filed: false)
+        static func failed(_ error: String? = nil) -> AgentSendResult {
+            AgentSendResult(delivered: false, error: error ?? String(localized: "The message couldn't be sent to the agent"), filed: false)
+        }
+    }
+
+    /// The user default holding the last target chosen in the detail page's bar.
+    static let lastTargetKey = "inbox.handOffTarget"
+    /// How long a queued send waits for Undo: as long as a toast with a button stays (`ToastCapsule.shown`).
+    static let undoWindow: Duration = .seconds(5)
 
     struct Deps {
         /// The item with its conversation text (`GET /api/v1/inbox/{id}`).
         var load: (String) async throws -> InboxItem
         /// The main chat's hand-off (item id, text, client id): the conversation it went to.
         var handOff: (String, String, UUID) async throws -> SessionKey
-        /// Opens that conversation on the message as sent under the client id, which its transcript copy carries.
-        var openMain: (SessionKey, String, UUID) -> Void
+        /// Shows the message as sent in that conversation under the client id, which its transcript copy carries.
+        var showMain: (SessionKey, String, UUID) -> Void
         /// An older hub's main chat: sends the text there as a plain message (starting the conversation when there is
-        /// none) and opens it.
-        var plainToMain: (String) async throws -> Void
-        /// Starts a new Persona conversation with the text and opens it.
-        var startNew: (String) async throws -> Void
-        /// Sends the text to an Agent and opens its chat.
-        var sendToAgent: (SessionKey, String) -> Void
+        /// none); the conversation it went to.
+        var plainToMain: (String) async throws -> SessionKey
+        /// Starts a new Persona conversation with the text: the conversation.
+        var startNew: (String) async throws -> SessionKey
+        /// Sends the text to an Agent and waits for its pending message's terminal outcome, with the refusal's reason.
+        /// The bool is the user's Also Mark as Done choice; the result says whether the outbox already filed it.
+        var sendToAgent: (SessionKey, String, Bool) async -> InboxHandOffModel.AgentSendResult
+        /// Opens a conversation it went to: Persona's (the first two targets) or an Agent's.
+        var open: (Target, SessionKey) -> Void
         /// Files the item.
         var markDone: () -> Void
     }
@@ -43,6 +85,14 @@ final class InboxHandOffModel {
     private(set) var sending = false
     /// Why the last send failed.
     private(set) var error: String?
+    /// Where the last send went, and to which target: what `open()` opens.
+    private(set) var sent: (target: Target, key: SessionKey)?
+    /// The ask waiting out the Undo window (`queue`).
+    private(set) var queued: String?
+    /// The last ask sent or tried, for Retry.
+    private(set) var lastAsk: String?
+
+    @ObservationIgnored private var timer: Task<Void, Never>?
 
     @ObservationIgnored private var doneChosen = false
     /// The main chat's hand-off being tried, by its ask: the same ask sent again sends the first text again under the same
@@ -70,35 +120,44 @@ final class InboxHandOffModel {
         self.deps = deps
     }
 
-    /// The app's own: the hub of the moment, its Persona and the inbox store.
+    /// The app's own: the hub of the moment, its Persona and the inbox store. The item and its hand-off are its
+    /// manager's (its list's stamp), and so is a new conversation it starts.
     static func live(_ item: InboxItem, model: AppModel) -> InboxHandOffModel {
         // Without a hub nothing happens and nothing is said.
         func api() throws -> APIClient {
-            guard let api = model.api else { throw CancellationError() }
+            guard let api = model.api?.manager(item.manager) else { throw CancellationError() }
             return api
         }
         return InboxHandOffModel(itemID: item.id, deps: Deps(
             load: { try await api().inboxItem($0) },
             handOff: { id, text, clientID in
                 let answer = try await api().inboxHandoff(id, text: text, clientID: clientID)
-                if let it = answer.item { InboxStore.shared.put(it) }
+                if let it = answer.item { InboxStore.shared.put(it, manager: item.manager) }
                 return answer.session
             },
-            openMain: { key, text, clientID in
+            showMain: { key, text, clientID in
                 model.showSent(key, text: text, images: [], id: clientID)
-                model.openAssistantConversation(key)
                 Task { await model.refreshAssistant() } // the hand-off may have started the main conversation
             },
             plainToMain: { text in
                 let key: SessionKey
-                if let main = model.assistantMain, model.session(main)?.canSend == true {
+                let client = try api()
+                // The item's manager's main conversation: the Persona page's when it shows that manager and has read its
+                // settings, else read from them (with none known, a start would replace the main conversation).
+                let main: SessionKey?
+                if model.assistantShows(item.manager), model.assistantConfig != nil {
+                    main = model.assistantMain
+                } else {
+                    let st = try await client.assistant()
+                    main = st.main.flatMap { $0.isEmpty ? nil : SessionKey(group: client.group, machineID: st.machineID, sessionID: $0) }
+                }
+                if let main, model.session(main)?.canSend == true {
                     model.sendNow(main, text: text) // a failure shows in the conversation, with Retry
                     key = main
-                } else if let main = model.assistantMain { // sendNow does nothing for a conversation not listed
-                    try await api().send(main, text: text)
+                } else if let main { // sendNow does nothing for a conversation not listed
+                    try await client.send(main, text: text)
                     key = main
                 } else {
-                    let client = try api()
                     let s = try await AssistantStart.run(receipts: model.hubFeatures.contains(AssistantStart.feature)) { op in
                         try await client.startConversation(prompt: text, main: true, opID: op)
                     }
@@ -106,7 +165,7 @@ final class InboxHandOffModel {
                     key = s.key
                     Task { await model.refreshAssistant() }
                 }
-                model.openAssistantConversation(key)
+                return key
             },
             startNew: { text in
                 let client = try api()
@@ -114,29 +173,83 @@ final class InboxHandOffModel {
                     try await client.startConversation(prompt: text, opID: op)
                 }
                 model.began(s, text: text)
-                model.assistantCurrent = s.key
-                model.selectedTab = .assistant
+                return s.key
             },
-            sendToAgent: { key, text in
-                model.sendNow(key, text: text)
-                model.openChat = key
-                model.selectedTab = .chats
+            sendToAgent: { key, text, file in await model.sendForHandOff(key, text: text, item: item, file: file) },
+            open: { target, key in
+                if case .agent = target {
+                    model.openChat = key
+                    model.selectedTab = .chats
+                } else {
+                    // On the item's manager's page, which the conversation may not be listed on yet.
+                    model.openAssistantConversation(key, manager: item.manager)
+                }
             },
             markDone: { InboxStore.shared.setDone(item, true, haptic: false) }))
     }
 
     static func marksDone(_ target: Target) -> Bool { target != .main }
 
+    /// The Agents a hand-off may target, latest first. Shared by the sheet and the event page's bar.
+    static func agents(_ sessions: [Session], limit: Int, online: (MachineRef) -> Bool) -> [Session] {
+        sessions.filter { !$0.assistant && $0.canSend && $0.state.isLive && online($0.machineRef) }
+            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+            .prefix(limit).map { $0 }
+    }
+
     func setMarkDone(_ on: Bool) {
         markDone = on
         doneChosen = true
     }
 
-    /// Sends `ask` after the item as context; true once it went, and the sheet closes.
+    /// Goes to the conversation the last send went to.
+    func open() {
+        guard let sent else { return }
+        deps.open(sent.target, sent.key)
+    }
+
+    /// Sends `ask` after `window`, unless `undo()` comes first. Leaving the page does not stop it: the task keeps the
+    /// model until it has sent.
+    func queue(ask: String, after window: Duration = undoWindow) {
+        timer?.cancel()
+        queued = ask
+        error = nil
+        timer = Task {
+            do { try await Task.sleep(for: window) } catch { return }
+            // Not `sendQueued()`: that cancels the timer, which is this task, and the send under it.
+            self.timer = nil
+            _ = await self.fire()
+        }
+    }
+
+    /// Takes the queued ask back before it went: the ask, or nil when nothing was waiting.
+    @discardableResult func undo() -> String? {
+        timer?.cancel()
+        timer = nil
+        defer { queued = nil }
+        return queued
+    }
+
+    /// Sends the queued ask now (View while it waits); true once it went.
+    func sendQueued() async -> Bool {
+        timer?.cancel()
+        timer = nil
+        return await fire()
+    }
+
+    private func fire() async -> Bool {
+        guard let ask = queued else { return false }
+        queued = nil
+        return await send(ask: ask)
+    }
+
+    /// Sends `ask` after the item as context; true once it went.
     func send(ask: String) async -> Bool {
         guard !sending else { return false }
         sending = true
         error = nil
+        sent = nil
+        lastAsk = ask
         defer { sending = false }
         let text: String
         if target == .main, let pending = attempt, pending.ask == ask {
@@ -150,17 +263,24 @@ final class InboxHandOffModel {
                 return false
             }
         }
+        var filed = false
         do {
             switch target {
             case .main:
                 try await handOff(ask: ask, text: text)
                 return true
             case .newChat:
-                try await deps.startNew(text)
+                sent = (target, try await deps.startNew(text))
             case .agent(let key):
-                deps.sendToAgent(key, text)
+                let result = await deps.sendToAgent(key, text, markDone)
+                guard result.delivered else {
+                    self.error = result.error
+                    return false
+                }
+                filed = result.filed
+                sent = (target, key)
             }
-            if markDone { deps.markDone() }
+            if markDone && !filed { deps.markDone() }
             return true
         } catch {
             self.error = Self.words(for: error)
@@ -215,7 +335,7 @@ final class InboxHandOffModel {
             if tried.inDoubt { throw InDoubt() }
             // An older hub or manager: the text goes to the main chat as a plain message, with nothing to write back to.
             do {
-                try await deps.plainToMain(text)
+                sent = (.main, try await deps.plainToMain(text))
             } catch {
                 settle(tried, after: error)
                 throw error
@@ -235,7 +355,8 @@ final class InboxHandOffModel {
             throw answer
         }
         attempt = nil
-        deps.openMain(to, text, tried.id)
+        deps.showMain(to, text, tried.id)
+        sent = (.main, to)
         if markDone { deps.markDone() }
     }
 
@@ -248,5 +369,43 @@ final class InboxHandOffModel {
         var kept = tried
         kept.inDoubt = true
         attempt = kept
+    }
+}
+
+extension AppModel {
+    /// Keeps one hand-off pending message and its id through the outbox's retries. Only a terminal sent / failed state
+    /// answers the sheet, so another Send cannot type a second copy while the first waits for a connection (#1846).
+    func sendForHandOff(_ key: SessionKey, text: String, item: InboxItem? = nil, file: Bool = false) async -> InboxHandOffModel.AgentSendResult {
+        guard allowSend(key) else { return .failed(session(key)?.sourceSubtitle) }
+        var msg = PendingMessage(text: text, images: [])
+        if file, let item { msg.inboxHandOff = .init(itemID: item.id, manager: item.manager) }
+        chat(key).pending.append(msg)
+        saveOutbox()
+        let outcome = await sendPending(key, msg)
+        settleSend(key, msg.id, outcome)
+        if outcome == .sent { return handOffSent(key, msg) }
+        if outcome == .failed { return .failed(chat(key).pending.first { $0.id == msg.id }?.failure) }
+
+        // The outbox owns every retry. Waiting for a link is not failure: follow this message until a retry delivers it
+        // or refuses it. A transcript copy can consume the pending bubble before this loop sees its sent state.
+        while !Task.isCancelled {
+            if let current = chat(key).pending.first(where: { $0.id == msg.id }) {
+                switch current.state {
+                case .sent: return handOffSent(key, current)
+                case .failed: return .failed(current.failure)
+                case .sending, .waiting: break
+                }
+            } else if chat(key).items.contains(where: { PendingMessage.arrived(msg, as: $0) }) {
+                return handOffSent(key, msg)
+            } else {
+                return .failed() // discarded by the user or reset with its hub
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return .failed()
+    }
+
+    private func handOffSent(_ key: SessionKey, _ msg: PendingMessage) -> InboxHandOffModel.AgentSendResult {
+        InboxHandOffModel.AgentSendResult(delivered: true, error: nil, filed: completeInboxHandOff(key, msg))
     }
 }
