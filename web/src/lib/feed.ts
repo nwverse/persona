@@ -11,7 +11,7 @@ import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
-import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
+import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
 import { closePanel, getPanel } from "./panel";
 import type { ChatLine } from "./turns";
 import type { Item } from "./types";
@@ -458,7 +458,8 @@ async function readFeedPages(conversation: string) {
   const owner = conversationManager(conversation)
     ?? Object.values(getState().sessions).flat().find((s) => s.session_id === conversation)?.manager
     ?? managerHeaderFor(endpoint);
-  const headers = owner ? { [MANAGER_HEADER]: owner } : undefined;
+  // the default's conversation names none (itemHeaders): one manager gets the requests it always did
+  const headers = itemHeaders(owner);
   for (let n = 0; n < FEED_PAGES; n++) {
     const readingAt = feedRevision;
     const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
@@ -575,7 +576,7 @@ export function planUltracodeToSend(plan: TaskPlan, ultracode: readonly boolean[
  * The header naming the manager of conversation, for what its feed offers (a plan, a briefing's question): the routes
  * name no conversation, so the hub would take them to the default manager (docs/protocol/protocol.md "Per-manager
  * routing"), whichever assistant the conversation is (another made current, or another's conversation opened here).
- * The manager a page noted for it, else the one the hub's sessions list has it under; none for the default's.
+ * The manager a page noted for it, else the one the hub's sessions list has it under, else the one its address named; none for the default's.
  */
 export function conversationHeaders(conversation: string): Record<string, string> | undefined {
   const noted = conversationManager(conversation);
@@ -584,7 +585,8 @@ export function conversationHeaders(conversation: string): Record<string, string
     const s = list.find((x) => x.session_id === conversation);
     if (s) return itemHeaders(s.manager);
   }
-  return undefined;
+  const routed = routedConversationManager(conversation);
+  return routed ? itemHeaders(routed) : undefined;
 }
 
 export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
