@@ -18,7 +18,7 @@ type assistantTurnRecovery struct {
 	retried map[string]bool // one same-model continuation per model
 	used    map[string]bool // models this request has already tried, never selected again
 	proc    *assistantProc  // working-status placeholder while a model switch has no registered process
-	sent    bool            // the current recovery message reached the model; its turn is still running after handover
+	done    chan struct{}   // non-nil while runAssistantRecovery can still send; cleared after its final state update
 	running bool
 	pending *assistantPendingFailure
 }
@@ -55,16 +55,16 @@ func assistantRecoveryOf(ctx context.Context) (*assistantTurnRecovery, bool) {
 	return call.recovery, call.restart
 }
 
-// markAssistantRecoverySent runs inside assistantSend's session lock after the model accepted the recovery message.
-// Keeper handover uses the same lock to distinguish this live turn from an attempt that has not started yet.
-func (n *Node) markAssistantRecoverySent(ctx context.Context, id string) {
+// noteAssistantRecoveryProcess follows the current process through a model replacement. During keeper handover it
+// distinguishes a current result from a replaced process's late result; the latter must not overwrite pending work.
+func (n *Node) noteAssistantRecoveryProcess(ctx context.Context, p *assistantProc) {
 	recovery, _ := assistantRecoveryOf(ctx)
-	if recovery == nil {
+	if recovery == nil || p == nil {
 		return
 	}
 	n.mu.Lock()
-	if n.recoveries[id] == recovery {
-		recovery.sent = true
+	if n.recoveries[p.id] == recovery {
+		recovery.proc = p
 	}
 	n.mu.Unlock()
 }
@@ -101,6 +101,14 @@ func (n *Node) clearAssistantRecovery(p *assistantProc) {
 		return
 	}
 	n.mu.Lock()
+	if n.recoveryClosed && n.procs[p.id] != p {
+		owner := p.ownerOr(n)
+		n.mu.Unlock()
+		if owner != n { // the result handler read the old owner before adoption; finish on the current one
+			owner.clearAssistantRecovery(p)
+		}
+		return
+	}
 	defer n.mu.Unlock()
 	if n.procs[p.id] == p { // a replaced process's late result cannot clear its replacement's recovery
 		delete(n.recoveries, p.id)
@@ -120,22 +128,6 @@ func (n *Node) cancelAssistantRecovery(id string) {
 	p := n.procs[id]
 	n.mu.Unlock()
 	if r != nil && p != nil {
-		p.mu.Lock()
-		p.busy = false
-		p.mu.Unlock()
-	}
-}
-
-func (n *Node) cancelAssistantRecoveryForHandover(id string) {
-	n.mu.Lock()
-	r := n.recoveries[id]
-	delete(n.recoveries, id)
-	p := n.procs[id]
-	n.mu.Unlock()
-	// A delivered turn continues under the next Node's ownership. If its result was already pending, or no recovery
-	// message reached the model, there is no live turn to keep working and the cancelled attempt must release busy.
-	delivered := r != nil && r.sent && r.pending == nil
-	if r != nil && p != nil && !delivered {
 		p.mu.Lock()
 		p.busy = false
 		p.mu.Unlock()
@@ -173,11 +165,34 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 	p.mu.Unlock()
 
 	n.mu.Lock()
-	if n.recoveryClosed || n.procs[p.id] != p || (expected != nil && n.recoveries[p.id] != expected) {
+	r := n.recoveries[p.id]
+	if n.recoveryClosed {
+		if r == nil {
+			owner := p.ownerOr(n)
+			n.mu.Unlock()
+			if owner != n { // a result that read the old owner just before adoption continues on the new one
+				return owner.recoverAssistantResultFor(p, expected, failed, result, kinds...)
+			}
+			return false
+		}
+		if (expected != nil && r != expected) || (r.proc != nil && r.proc != p) {
+			n.mu.Unlock()
+			return false
+		}
+		// No new goroutine runs on the ended connection. The keeper carries this failure and the remaining budget to
+		// the next Node, even when the result arrives after the process map has already handed over.
+		r.pending = &assistantPendingFailure{text: result, kinds: kinds}
+		r.proc = p
+		n.mu.Unlock()
+		p.mu.Lock()
+		p.busy = true
+		p.mu.Unlock()
+		return true
+	}
+	if n.procs[p.id] != p || (expected != nil && r != expected) {
 		n.mu.Unlock()
 		return false
 	}
-	r := n.recoveries[p.id]
 	if r == nil {
 		r = &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
 		if current != "" {
@@ -208,12 +223,24 @@ func (n *Node) recoverAssistantResultFor(p *assistantProc, expected *assistantTu
 		r.used[replyModel] = true // an alias and the concrete model it resolved to share one retry budget
 	}
 	r.running = true
+	done := make(chan struct{})
+	r.done = done
 	n.mu.Unlock()
 
 	p.mu.Lock()
 	p.busy = true // before the goroutine can finish: the caller must never overwrite an already-published final idle
 	p.mu.Unlock()
-	go n.runAssistantRecovery(p, r, launcher, cwd, execution, current, same)
+	go func() {
+		defer func() {
+			n.mu.Lock()
+			if r.done == done {
+				r.done = nil
+			}
+			n.mu.Unlock()
+			close(done)
+		}()
+		n.runAssistantRecovery(p, r, launcher, cwd, execution, current, same)
+	}()
 	return true
 }
 
@@ -288,11 +315,6 @@ func sendAssistantRecovery(ctx context.Context, n *Node, p *assistantProc, launc
 func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, launcher, cwd string, execution modelExecution, current string, same bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	n.mu.Lock()
-	if n.recoveries[p.id] == r {
-		r.sent = false
-	}
-	n.mu.Unlock()
 	if !same {
 		list, err := assistantRecoveryModels(ctx, n, launcher)
 		if err != nil {

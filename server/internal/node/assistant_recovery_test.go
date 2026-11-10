@@ -328,6 +328,41 @@ done
 	}
 }
 
+func TestAssistantProcessExitClearsItsRecovery(t *testing.T) {
+	f := sdkTest(t)
+	script := `printf '%s\n' "$*" >> "$SDK_FAKE_DIR/cli-argv"
+echo '{"type":"system","subtype":"init"}'
+while IFS= read -r line; do
+  case "$line" in *'"type":"user"'*)
+    printf '%s\n' "$line" >> "$SDK_FAKE_DIR/user.jsonl"
+    count=$(cat "$SDK_FAKE_DIR/attempts" 2>/dev/null || echo 0)
+    count=$((count+1))
+    echo "$count" > "$SDK_FAKE_DIR/attempts"
+    if [ "$count" -eq 1 ]; then
+      echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+    else
+      exit 0 # the recovered turn ends without any result event
+    fi ;;
+  esac
+done
+`
+	if err := os.WriteFile(filepath.Join(os.Getenv("HOME"), "bin", "claude"), []byte("#!/bin/sh\n"+script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "original request", nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdkWait(t, "the exited recovery process to publish its final state", func() bool {
+		f.n.mu.Lock()
+		defer f.n.mu.Unlock()
+		return f.n.procs[id] == nil && f.n.recoveries[id] == nil && strings.Count(f.file("user.jsonl"), `"type":"user"`) >= 2
+	})
+	if sessions := f.n.assistantSessions(); len(sessions) != 0 {
+		t.Fatalf("an exited process left a working recovery placeholder: %+v", sessions)
+	}
+}
+
 func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
 	n := assistantNode(t)
 	const id = "11111111-2222-3333-4444-555555555555"
@@ -365,6 +400,15 @@ func TestAssistantRecoveryKeepsSessionWorkingBetweenProcesses(t *testing.T) {
 		close(release)
 		<-returned
 		t.Fatalf("the recovery gap was published as a final non-working state: %+v", sessions)
+	}
+	n.mu.Lock()
+	n.procs[id] = &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fallback-model"}}
+	n.mu.Unlock()
+	sessions = n.assistantSessions()
+	if len(sessions) != 1 || sessions[0].Status != proto.StatusWorking {
+		close(release)
+		<-returned
+		t.Fatalf("the registered replacement published Done before its message was delivered: %+v", sessions)
 	}
 	close(release)
 	<-returned
@@ -476,17 +520,121 @@ func TestAssistantHandoverKeepsTheDeliveredRecoveryTurnWorking(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
 	p := keptProc(t, a, id, "claude")
 	p.busy = true
-	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}, sent: true, running: true}
+	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true, "resolved-primary": true}}
 	a.recoveries = map[string]*assistantTurnRecovery{id: r}
 	a.handOverAssistants()
 	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
 		t.Fatalf("the running recovery turn was not handed over: %+v", adopted)
+	}
+	if b.recoveries[id] != r || !r.retried["primary-model"] || !r.used["resolved-primary"] {
+		t.Fatal("handover lost the recovery's per-model retry budget")
 	}
 	p.mu.Lock()
 	busy := p.busy
 	p.mu.Unlock()
 	if !busy {
 		t.Fatal("handover marked a delivered, still-running model turn idle")
+	}
+}
+
+func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
+	k := newAssistantKeeper()
+	a, b := assistantNode(t), assistantNode(t)
+	a.keeper, b.keeper = k, k
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := keptProc(t, a, id, "claude")
+	p.launcher, p.model, p.busy = "claude", modelExecution{Model: "primary-model"}, true
+	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true}}
+	a.recoveries = map[string]*assistantTurnRecovery{id: r}
+	a.handOverAssistants()
+	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+		t.Fatal("a result in the handover gap was published instead of queued")
+	}
+
+	models := assistantRecoveryModels
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model"}, {ID: "fallback-model"}}}, nil
+	}
+	send := assistantRecoverySend
+	selected := make(chan string, 1)
+	assistantRecoverySend = func(_ context.Context, _ *Node, _ *assistantProc, _, _ string, execution modelExecution) error {
+		selected <- execution.Model
+		return nil
+	}
+	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
+	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
+		t.Fatalf("the live conversation was not adopted: %+v", adopted)
+	}
+	select {
+	case got := <-selected:
+		if got != "fallback-model" {
+			t.Fatalf("the queued failure restarted or consumed the wrong budget: %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the queued handover failure did not resume on the new Node")
+	}
+	if b.recoveries[id] != r || !r.retried["primary-model"] {
+		t.Fatal("the pending handover lost its original recovery budget")
+	}
+}
+
+func TestAssistantSuccessOnTheOldNodeClearsTheAdoptedRecovery(t *testing.T) {
+	k := newAssistantKeeper()
+	a, b := assistantNode(t), assistantNode(t)
+	a.keeper, b.keeper = k, k
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := keptProc(t, a, id, "claude")
+	p.busy = true
+	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}}
+	a.recoveries = map[string]*assistantTurnRecovery{id: r}
+	a.handOverAssistants()
+	if adopted := k.adopt(b); len(adopted) != 1 {
+		t.Fatalf("the live conversation was not adopted: %+v", adopted)
+	}
+	a.clearAssistantRecovery(p) // the result handler read the old owner before adoption
+	p.mu.Lock()
+	p.busy = false
+	p.mu.Unlock()
+	if b.recoveries[id] != nil {
+		t.Fatal("a successful result on the old owner left the adopted session recovering forever")
+	}
+}
+
+func TestAssistantResultOnTheOldNodeForwardsAfterAdoption(t *testing.T) {
+	k := newAssistantKeeper()
+	a, b := assistantNode(t), assistantNode(t)
+	a.keeper, b.keeper = k, k
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := keptProc(t, a, id, "claude")
+	p.launcher, p.model, p.busy = "claude", modelExecution{Model: "primary-model"}, true
+	r := &assistantTurnRecovery{retried: map[string]bool{"primary-model": true}, used: map[string]bool{"primary-model": true}}
+	a.recoveries = map[string]*assistantTurnRecovery{id: r}
+	a.handOverAssistants()
+	if adopted := k.adopt(b); len(adopted) != 1 {
+		t.Fatalf("the live conversation was not adopted: %+v", adopted)
+	}
+
+	models := assistantRecoveryModels
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model"}, {ID: "fallback-model"}}}, nil
+	}
+	send := assistantRecoverySend
+	selected := make(chan string, 1)
+	assistantRecoverySend = func(_ context.Context, _ *Node, _ *assistantProc, _, _ string, execution modelExecution) error {
+		selected <- execution.Model
+		return nil
+	}
+	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
+	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+		t.Fatal("a result that read the old owner was not forwarded after adoption")
+	}
+	select {
+	case got := <-selected:
+		if got != "fallback-model" {
+			t.Fatalf("the forwarded result lost its recovery budget: %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the old owner's delayed result did not resume on the new Node")
 	}
 }
 
@@ -497,43 +645,49 @@ func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
 	p := keptProc(t, a, id, "claude")
 	p.launcher, p.model = "claude", modelExecution{Model: "primary-model"}
-	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{"primary-model": true}, running: true}
+	r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{"primary-model": true}}
 	a.recoveries = map[string]*assistantTurnRecovery{id: r}
 
 	send := assistantRecoverySend
-	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	entered, release, handed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var spawned atomic.Int32
 	assistantRecoverySend = func(_ context.Context, n *Node, p *assistantProc, _, _ string, _ modelExecution) error {
 		close(entered)
-		<-release // the connection hands over before this send enters assistantSend's session lock
+		<-release // the connection starts handing over before this send enters assistantSend's session lock
 		defer n.typing.lock(p.id)()
 		n.mu.Lock()
 		defer n.mu.Unlock()
-		if n.recoveries[p.id] == r { // the identity check assistantSend performs under the same lock
+		if n.recoveries[p.id] == r && n.procs[p.id] == nil {
 			n.procs[p.id] = &assistantProc{id: p.id, agent: "claude", launcher: "claude"}
 			spawned.Add(1)
 		}
 		return nil
 	}
 	t.Cleanup(func() { assistantRecoverySend = send })
-	go func() {
-		defer close(done)
-		a.runAssistantRecovery(p, r, "claude", p.cwd, p.model, "primary-model", true)
-	}()
+	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+		t.Fatal("the failed turn did not enter recovery")
+	}
 	select {
 	case <-entered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("recovery did not reach the send")
 	}
-	a.handOverAssistants()
-	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
-		t.Fatalf("the live conversation was not handed over: %+v", adopted)
+	go func() {
+		a.handOverAssistants()
+		close(handed)
+	}()
+	select {
+	case <-handed: // an implementation that does not wait for the active send
+	case <-time.After(50 * time.Millisecond):
 	}
 	close(release)
 	select {
-	case <-done:
+	case <-handed:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the old recovery did not stop after handover")
+		t.Fatal("handover did not finish after the active send returned")
+	}
+	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
+		t.Fatalf("the live conversation was not handed over: %+v", adopted)
 	}
 	if spawned.Load() != 0 {
 		t.Fatal("the ended connection's Node started a replacement process after the new Node took over")
@@ -543,6 +697,9 @@ func TestAssistantRecoveryCannotRestartOnTheOldNodeAfterHandover(t *testing.T) {
 	a.mu.Unlock()
 	if left != 0 {
 		t.Fatal("the old Node retained a process after handover")
+	}
+	if b.recoveries[id] != r {
+		t.Fatal("the new Node did not retain the handed-over recovery")
 	}
 }
 
