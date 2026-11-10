@@ -852,6 +852,31 @@ if os.environ.get("MOCK_BG_WAITING") == "1":
                       background=[{"id": "bb1d5te2k", "kind": "shell", "description": "打包发布产物", "command": "make release",
                                    "started_at": ago(minutes=4)}])
 
+# MOCK_HEADER_MODES=1 (#3719): one agent per permission mode, for the mode at the end of the Agents header's second row
+# and its menu. The widget agent: Auto-Edit, and it can take Allow Everything while it runs; tests: Ask First, with a long
+# title; photos: Plan Only; release: Auto; review: no mode reported yet; blog: Allow Everything with no way back from the
+# phone, its turn over and four background commands that only wait (the screenshot the issue came from). The recipe agent
+# (offline, no space) keeps Ask First: a second row with only the mode. The Codex agent has none.
+if os.environ.get("MOCK_HEADER_MODES") == "1":
+    _waits = [("等 PR #7 的检查跑完", "gh pr checks 7 --watch"), ("等预发环境部署完成", "until curl -sf https://staging.example.com/health; do sleep 30; done"),
+              ("等夜间构建出结果", "gh run watch 4711"), ("盯着日志里的超时报错", "tail -f /tmp/blog-build.log")]
+    for _s in SESSIONS:
+        _sid = _s["session_id"]
+        if _sid == WIDGET:
+            _s.update(bypass_available=True)
+        elif _sid == TESTS:
+            _s.update(title="补齐网络层的单元测试，包括重试、超时和离线缓存的各种边界情况")
+        elif _sid == RELEASE:
+            _s.update(permission_mode="auto")
+        elif _sid == REVIEW:
+            _s.update(permission_mode=None)
+        elif _sid == BLOG:
+            _s.update(status="done", state="working", state_since=ago(minutes=9), seen_at=None, background_working=True,
+                      background_waiting=True, permission_mode="bypassPermissions", bypass_available=False,
+                      last_text="PR 开好了，后台四个任务都在等结果，等齐了我再合。",
+                      background=[{"id": "bw%d" % i, "kind": "shell", "description": d, "command": c, "started_at": ago(minutes=9 - i)}
+                                  for i, (d, c) in enumerate(_waits)])
+
 # MOCK_WORKFLOW=crowded (#4532): three workflows on the review agent, as a user's chat had them: one running with ten
 # agents, one stopped with its error, one completed. The chat's header must not push the conversation off the screen.
 if os.environ.get("MOCK_WORKFLOW") == "crowded":
@@ -7235,24 +7260,39 @@ def inbox_suggestion_bump(iid):
 # session.send_once does; under none when it started the conversation (the hub's start takes no message id). The item keeps the hand-off and its chain gets one entry per conversation. What went is in
 # /mock/sent and /mock/sent_to. MOCK_HANDOFF=old: a hub from before the route (404).
 HANDOFFS = {}  # client_id -> the answer given
+# Another manager's main conversation a hand-off started (X-Persona-Manager names it): its assistant runs on its own
+# computer (MANAGED_MACHINES; 工作's MacBook), so the conversation is there, not on the default's.
+MANAGER_MAINS = {}
 
 
-def inbox_handoff(iid, body):
+def inbox_handoff(iid, body, manager=""):
     if os.environ.get("MOCK_HANDOFF") == "old": return {"error": "404 page not found"}, 404
     x = next((x for x in INBOX if x["id"] == iid), None)
     if x is None: return {"error": "收件箱里没有这一条", "code": "not_found"}, 404
     text, cid = (body.get("text") or "").strip(), (body.get("client_id") or "").lower()
     if not text: return {"error": "text is required"}, 400
     if cid in HANDOFFS: return HANDOFFS[cid], 200
-    mid, started = ASSISTANT_CONFIG["machine_id"], not ASSISTANT_CONFIG["main"]
-    if started:
+    own = next((m for m, owner in MANAGED_MACHINES.items() if owner == manager), "") if manager and manager != MANAGERS["default"] and _stamps() else ""
+    if own:
+        mid, started = own, manager not in MANAGER_MAINS
+        if started:
+            session = assistant_sess(str(uuid.uuid4()), "", 0, "")
+            session.update(machine_id=mid, status="working", state="working")
+            MANAGER_MAINS[manager] = session["session_id"]
+            ASSISTANT.append(session)
+            push_machine(mid)
+        sid = MANAGER_MAINS[manager]
+    else:
+        mid, started = ASSISTANT_CONFIG["machine_id"], not ASSISTANT_CONFIG["main"]
+    if not own and started:
         sid = str(uuid.uuid4())
         session = assistant_sess(sid, "", 0, "")
         session.update(status="working", state="working", main=True)
         ASSISTANT_CONFIG["main"] = sid
         ASSISTANT.append(session)
         push_machine(mid)
-    sid = ASSISTANT_CONFIG["main"]
+    if not own:
+        sid = ASSISTANT_CONFIG["main"]
     head = '<persona-context kind="context" title="收件箱事件 · %s" url="">\n用户从收件箱把这件事交给你（事件 id：%s）。\n</persona-context>\n' % (
         x["title"].replace('"', "'"), iid)
     sent = {"text": head + text} if started else {"text": head + text, "client_msg_id": cid}
@@ -17304,7 +17344,8 @@ class H(BaseHTTPRequestHandler):
                             return self.send_json(x)
             return self.send_json({"error": "no such row"}, 400)
         if p.startswith("/api/v1/inbox/") and p.endswith("/handoff") and self.command == "POST":  # Hand to AI, main chat
-            return self.send_json(*inbox_handoff(unquote(p[len("/api/v1/inbox/"):-len("/handoff")]), json.loads(self.last_body or b"{}")))
+            return self.send_json(*inbox_handoff(unquote(p[len("/api/v1/inbox/"):-len("/handoff")]), json.loads(self.last_body or b"{}"),
+                                                 self.headers.get("X-Persona-Manager") or ""))
         if p.startswith("/api/v1/inbox/") and p.endswith("/suggestion") and self.command == "POST":  # "Confirm" / "Reject" / "Say something"
             return self.send_json(*inbox_suggestion(unquote(p[len("/api/v1/inbox/"):-len("/suggestion")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/draft"):  # AI draft reply

@@ -9,6 +9,7 @@ import { ago, sessionTitle, shortPath, stateOf, tabLabel } from "../lib/format";
 import { appCommands, commandKeys, contextCommands, filterCommands, inboxHits, orderGroups, parseQuery, placeHits, setPaletteQuery, terminalHits, usePalette, type InboxHit, type MachinePanes, type PaletteCommand, type PlaceHit, type PlaceInput, type TerminalHit } from "../lib/palette";
 import { isDone, itemRoute, useInbox, type InboxItem } from "../lib/inbox";
 import { useNavPages } from "./Sidebar";
+import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, type Route } from "../lib/router";
 import { composing } from "../lib/send-history";
 import { useAgentSessions } from "../lib/sessions";
@@ -198,7 +199,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME }: { ope
     }
     for (const s of assistant?.conversations ?? []) {
       const sc = score(s, query, "persona");
-      if (sc) out.push({ key: `j:${s.session_id}`, s, to: { name: "persona", sid: s.session_id }, assistant: true, score: sc });
+      if (sc) out.push({ key: `j:${s.session_id}`, s, to: conversationPage(s.session_id, s.machine_id, s.manager), assistant: true, score: sc });
     }
     const all: (Row & { score: number; at: string })[] = [
       ...out.map((h) => ({ kind: "session" as const, key: h.key, hit: h, score: h.score, at: h.s.updated_at ?? "" })),
