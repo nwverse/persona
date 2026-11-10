@@ -116,7 +116,7 @@ func TestLeaderProgress(t *testing.T) {
 	res, err := runJSON(t, e.s, "conv_lead_a", "leader_progress", map[string]any{
 		"reached": "侧栏分组上线并实测", "doing": "平板布局，卡在模拟器排队", "needs_you": "确认平板要不要双栏",
 		"links": []string{"https://example.com/pull/7", "https://example.com/pull/7", " https://example.com/doc "}})
-	if err != nil || !strings.Contains(res, "Reported") {
+	if err != nil || !strings.Contains(res, "Reported as the direction") {
 		t.Fatalf("progress: %s %v", res, err)
 	}
 	var got []assistantwire.LeaderReportEvent

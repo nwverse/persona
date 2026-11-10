@@ -352,19 +352,17 @@ func (s *Service) makeDirection(ctx context.Context, id, project, newProject, ti
 		return nil, errors.New("the directions could not be read")
 	}
 	d := b.m[id]
-	if d == nil || d.EndedAt != nil {
-		told := (*leaderTold)(nil)
-		if d != nil {
-			told = d.Told
-		}
-		d = &direction{MachineID: cfg.MachineID, At: now, Told: told}
+	if d == nil {
+		d = &direction{MachineID: cfg.MachineID, At: now}
 		b.m[id] = d
+	} else if d.EndedAt != nil { // a direction again: since now, keeping its name, project and last progress
+		d.At = now
 	}
 	d.By, d.EndedAt = directionByUser, nil
 	if project != "" {
 		d.Project = project
 	}
-	if t := clip(oneLine(title), directionNameMost); t != "" { // the name the owner accepted or gave (#3679)
+	if t := clip(oneLine(title), directionNameMost); t != "" && d.Name == "" { // the name the owner accepted or gave (#3679)
 		d.Name, d.NameBy = t, directionByUser
 	}
 	s.saveDirectionsLocked(ctx)
@@ -378,6 +376,10 @@ func (s *Service) makeDirection(ctx context.Context, id, project, newProject, ti
 	}
 	if titles, ok := s.conversationTitles(); ok {
 		view.Title = titles[id].title
+	}
+	if d := s.directionOf(id); d != nil {
+		pn, pok := s.projectNames(ctx)
+		view.Name = nameOf(d, view.Title, pn, pok)
 	}
 	_, _ = s.takeRouteOffer(ctx, id)
 	s.directionsSoon()

@@ -116,12 +116,13 @@ func (s *Service) toolLeaderProgress(ctx context.Context, self string, args json
 		return "", err
 	}
 	if !told {
-		return "Kept as the direction's latest progress (no work-log extension listens on this hub).", nil
+		return "Kept as the direction's latest progress (this hub tells no extensions).", nil
 	}
-	return "Reported as the direction's latest progress (the work-log extension has it).", nil
+	return "Reported as the direction's latest progress: an extension that keeps the work log (if one is installed) shows it.", nil
 }
 
-// leaderProgressReport keeps p as leader lead's latest and tells the extensions (false: none listens).
+// leaderProgressReport keeps p as leader lead's latest and tells the extensions that subscribe (false: this hub tells
+// none).
 func (s *Service) leaderProgressReport(ctx context.Context, lead string, p leaderProgress) (bool, error) {
 	b := &s.directions
 	b.mu.Lock()
@@ -185,4 +186,16 @@ func (s *Service) directionNameRoutes() {
 		}
 		apierr.WriteJSON(w, map[string]any{"name": clip(oneLine(in.Name), directionNameMost)})
 	})
+}
+
+// directionOf is a copy of direction id's record, nil when it has none or the records cannot be read.
+func (s *Service) directionOf(id string) *direction {
+	b := &s.directions
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.directionsLocked(context.Background()) || b.m[id] == nil {
+		return nil
+	}
+	cp := *b.m[id]
+	return &cp
 }
