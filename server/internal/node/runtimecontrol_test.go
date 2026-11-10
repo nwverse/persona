@@ -302,6 +302,7 @@ func TestRuntimeLauncherAvailabilityCheck(t *testing.T) {
 	hello := paseoEngineHello()
 	hello["caps"].(map[string]any)["check"] = true
 	host := dialRuntime(t, n, hello)
+	enablePaseo(n)
 	var workspace string
 	host.mu.Lock()
 	host.answer = func(method string, params json.RawMessage) (any, error) {
