@@ -1759,8 +1759,14 @@ final class AppModel {
             if isHub { Task { await personas.reload(api) } }
         case .look(let id, let effective):
             // Another device chose an avatar, or the hub went back to the default. Like every hub-level setting, the
-            // avatar is the current hub's: another group's choice is its own (docs/protocol/multi-hub.md).
-            if isHub { Task { await personas.follow(id, effective: effective, api: api) } }
+            // avatar is the current hub's: another group's choice is its own (docs/protocol/multi-hub.md). The hub it
+            // came from goes with it: when another group's became current before it is handled, it changes nothing.
+            if isHub, let from = api {
+                Task {
+                    guard api?.config.url == from.config.url else { return }
+                    await personas.follow(id, effective: effective, api: from)
+                }
+            }
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
@@ -2832,6 +2838,8 @@ final class AppModel {
         InboxStore.shared.reload()
         TodoStore.shared.forget()
         TodoStore.shared.reload()
+        // The avatar is the new hub's from now, before its list is read below: a card tapped meanwhile goes to it.
+        personas.switchHub(api)
         Task {
             await refreshAssistant()
             await personas.refresh(api)

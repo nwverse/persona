@@ -52,8 +52,9 @@ final class PersonaStore {
     /// list read or a download that started before one does not undo it (`latest`). Read by the tests to know one
     /// got that far.
     @ObservationIgnored private(set) var choices = 0
-    /// The choices made here (their `choices`) that put nothing on screen: waiting for their packages, or given up when
-    /// one did not come. They do not count as newer for `latest`: until one shows, what was there is still in force.
+    /// The choices made here (their `choices`) that put nothing on screen that is still there: waiting for their
+    /// packages, given up when one did not come, not taken by the hub, or never sent (a newer one was). They do not
+    /// count as newer for `latest`: what was there before them is still in force.
     @ObservationIgnored private var silent: Set<Int> = []
     /// Each hub's choice as far as this device knows (the last it listed, pushed or took from here) and when it was
     /// heard (`heard` then): what comes back when that hub does not take one made here.
@@ -124,6 +125,14 @@ final class PersonaStore {
         guard hub != url else { return }
         hub = url
         choices += 1
+    }
+
+    /// Another group's hub became the current one (`AppModel.hubChanged`): from now on, before its list is read, a
+    /// choice goes to it, and what is still under way for the one before (a late answer, a download) changes nothing
+    /// here. (A push from it still waiting to be handled is dropped by `AppModel.handle`.)
+    func switchHub(_ api: APIClient?) {
+        guard let api, !api.config.isDemo else { return }
+        read(api.config.url)
     }
 
     /// Notes `id` as `url`'s choice, heard now.
@@ -229,6 +238,8 @@ final class PersonaStore {
 
     private func load(_ api: APIClient) async {
         let asked = choices
+        // What was heard of the hubs' choices when the list was asked for: a push or an answer heard since is newer.
+        let mark = heard
         let url = api.config.url
         let list: [PersonaInfo]
         var settled: String?
@@ -252,13 +263,17 @@ final class PersonaStore {
         guard hub == url else { return }
         self.error = nil
         listed = true
-        // The hub's choice, unless one was made here or pushed since the list was asked for (that one is newer). It is
+        // The hub's choice, as this device knows it from now (what a choice it refuses goes back to), unless a push or an
+        // answer heard since the list was asked for is newer. It shows unless a choice was made here or pushed since, or
+        // one made here is still on its way (the hub may not have had it when it answered: its answer decides). It is
         // saved once its package is on the phone, as a choice made here is: a launch shows the saved one from disk.
         var target = chosenID
-        if let id = settled, latest(asked) {
-            followsHub = true
+        if let id = settled, (hubChoices[url]?.heard ?? 0) <= mark {
             hear(id, on: url)
-            target = id
+            if latest(asked), undos[url] == nil {
+                followsHub = true
+                target = id
+            }
         }
         offered = Persona.builtins + list.filter(Self.supportedPackage).map(Persona.init(info:))
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -310,8 +325,9 @@ final class PersonaStore {
               mine != Persona.builtinID else { return shown }
         guard let answer = try? await api.chooseLook(mine, ifUnset: true) else { return nil }
         // Moved up (or another device's got there first): never again, to this hub or the next, also when the current
-        // hub changed while this one answered and its answer is not shown.
-        followsHub = true
+        // hub changed while this one answered and its answer is not shown. A choice made here meanwhile with no hub or an
+        // older one is this device's own: that one moves up next.
+        if NativeStateMigration.readPersonaID(from: defaults).map(PersonaSelection.resolve) == mine { followsHub = true }
         return PersonaSelection.resolve(answer.effective ?? answer.id)
     }
 
@@ -321,7 +337,7 @@ final class PersonaStore {
     /// device's own. A choice made with a hub that is no longer the current one (another group's became current while
     /// it was read or the package downloaded) is dropped. `onHub`: the hub has chosen it already (an upload with
     /// `choose`, a delete of the chosen one), as of `heard` then (taken before asking it), so it is only shown here;
-    /// unless the hub's push for it came since and another one after that: that one is newer, and on screen already.
+    /// unless the hub replaced it since (`replaced`): that one is newer, and only the package comes.
     func choose(_ p: Persona, api: APIClient?, onHub: Int? = nil) async {
         guard offered.contains(p) else { return }
         let hubAPI = api.flatMap { $0.config.isDemo ? nil : $0 }
@@ -329,6 +345,11 @@ final class PersonaStore {
             if onHub == nil, keeps[api.config.url] == nil { await refresh(api) } // does it keep it?
             if hub == nil { read(api.config.url) }
             guard hub == api.config.url else { return }
+            // Before it counts as a choice: that would drop the newer one's download still under way.
+            if let asked = onHub, replaced(p.id, on: api.config.url, since: asked) {
+                if !isOnPhone(p) { await download(p, api) }
+                return
+            }
         }
         if !isOnPhone(p), api == nil {
             error = String(localized: "“\(p.name)” isn’t on this phone yet. Connect to the hub, then choose it.")
@@ -353,8 +374,7 @@ final class PersonaStore {
         let url = api.config.url
         let keeps = keeps[url]
         if let asked = onHub {
-            // Its push came since, and another one after it: that one is newer (and shows already).
-            if (echoes[url]?[p.id] ?? 0) > asked, let known = hubChoices[url], known.id != p.id { return }
+            if replaced(p.id, on: url, since: asked) { return } // while its package downloaded
             if keeps == true { followsHub = true; hear(p.id, on: url) }
             return show(p)
         }
@@ -368,6 +388,12 @@ final class PersonaStore {
         followsHub = true
         show(p)
         await send(p, api, mine: mine, before: before)
+    }
+
+    /// The hub chose `id` (as of `heard` mark `asked`) and replaced it since: its push came after that, and another
+    /// choice was heard after it (newer: on screen, or its package on the way).
+    private func replaced(_ id: String, on url: URL, since asked: Int) -> Bool {
+        (echoes[url]?[id] ?? 0) > asked && hubChoices[url].map { $0.id != id } == true
     }
 
     /// What a choice sent to the hub replaced: what comes back when the hub does not take it and knows no choice of
@@ -387,8 +413,9 @@ final class PersonaStore {
     /// Tells the hub, one PUT at a time and only the newest choice (one that another followed while it waited is not
     /// sent). When the hub does not take the newest, its choice as known now comes back (an earlier tap it took, what
     /// it listed or pushed meanwhile), else what was there `before`: the one on screen then when it is that one, else
-    /// its package when it is on the phone, else the default. A hub that is no longer the current one changes nothing
-    /// on screen.
+    /// its package when it is on the phone. While that package is not on the phone (still downloading, or it did not
+    /// come), what was there `before` stays, as when a list or a push brings it. A hub that is no longer the current
+    /// one changes nothing on screen.
     private func send(_ p: Persona, _ api: APIClient, mine: Int, before: Undo) async {
         let url = api.config.url
         undos[url] = (before, (undos[url]?.count ?? 0) + 1)
@@ -396,7 +423,8 @@ final class PersonaStore {
         let task = Task {
             await previous?.value
             defer { if let u = undos[url] { undos[url] = u.count > 1 ? (u.undo, u.count - 1) : nil } }
-            guard latest(mine) else { return }
+            // Not sent (a newer one is, or another came since): what it put up is gone, it counts as a choice no more.
+            guard latest(mine) else { silent.insert(mine); return }
             let asked = heard
             do {
                 _ = try await api.chooseLook(p.id)
@@ -404,15 +432,24 @@ final class PersonaStore {
                 // Its own push came already: that, or what was pushed after it, is the hub's now.
                 if (echoes[url]?[p.id] ?? 0) <= asked { hear(p.id, on: url) }
             } catch {
+                guard !error.isCancellation else { return }
+                // Not taken: it counts as a choice no more, so what it replaced is in force again (a push or a list from
+                // before it whose package is still downloading shows once that is here).
+                silent.insert(mine)
                 // Since then the hub's push came (it did take it), another choice showed, or another hub became the
                 // current one (its own shows): that one stays. A later choice still waiting for its package does not
                 // count: nothing shows for it yet.
-                guard latest(mine), hub == url, !error.isCancellation else { return }
+                guard latest(mine), hub == url else { return }
                 let back = hubChoices[url]?.id ?? before.chosen
                 // The old local choice stays this device's (moved up later) unless the hub's own comes back.
                 followsHub = hubChoices[url] != nil || before.followed
-                setChosen(back)
-                current = before.shown.id == back ? before.shown : offered.first { $0.id == back && isOnPhone($0) } ?? .builtin
+                if let shown = before.shown.id == back ? before.shown : offered.first(where: { $0.id == back && isOnPhone($0) }) {
+                    setChosen(back)
+                    current = shown
+                } else {
+                    setChosen(before.chosen)
+                    current = before.shown
+                }
                 self.error = String(localized: "Couldn’t switch to “\(p.name)” on the hub: \(error.localizedDescription)")
             }
         }
@@ -423,20 +460,21 @@ final class PersonaStore {
     /// Another device chose `effective` (the hub's `look` push), or the hub went back to the default: shown and saved
     /// here once its package is on the phone, as when a list brings it (until then the one before stays, also at the next
     /// launch). This device's own older choice coming back while a newer one is still to come (on its way, or waiting
-    /// for its package) changes nothing (the newer one's push follows).
+    /// for its package) changes nothing on screen (the newer one's push follows), but it is still the hub's choice as
+    /// known here.
     func follow(_ id: String?, effective: String?, api: APIClient?) async {
         guard let api, !api.config.isDemo, let pushed = effective ?? id, !pushed.isEmpty else { return }
         let id = PersonaSelection.resolve(pushed)
         let url = api.config.url
         heard += 1
         echoes[url, default: [:]][id] = heard
+        hear(id, on: url) // what a choice the hub refuses goes back to
         if pending.contains(id), id != pending.last { return }
         read(url)
         choices += 1
         let mine = choices
         keeps[url] = true
         followsHub = true
-        hear(id, on: url)
         guard let p = offered.first(where: { $0.id == id }) else {
             // Not listed here yet (just made on another device): the list read brings it, downloads it and shows it.
             return await reload(api)
