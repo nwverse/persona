@@ -1,5 +1,11 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Reusing a topic to-do must retire the previous plan's execution binding (#3985). Released or dismissed Agents let
+  a later plan take over the same to-do, while the old plans stay in storage. A historical `TodoID` match cannot
+  impose that plan's read-only constraint on the current session. Clear old execution bindings under the takeover
+  reservation before launching the replacement; keep `ReuseTodo` as history. Plan creation order is not start order,
+  and retries can change `UpdatedAt`. Cover both directions of permission changes, memory, storage and restart.
+
 - Unavailable context is not nonexistent data (#3780, #3862). When a privacy switch excludes earlier meetings, carry
   that policy into both answer prompts: do not promise earlier minutes or render an empty lookup as “none with
   minutes.” Keep goldens for disabled, enabled-with-results and enabled-without-results modes. Tool descriptions must

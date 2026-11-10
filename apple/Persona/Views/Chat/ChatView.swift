@@ -230,6 +230,15 @@ struct ChatView: View {
     private var linkManager: String? {
         model.linkManager(session?.manager ?? itemManager ?? (style == .assistant ? model.assistantManagerID : nil), group: key.group)
     }
+    /// A listed default-manager session has a nil owner; it must not inherit the page's current selection.
+    private var feedManager: String? {
+        if let session { return session.manager ?? model.managerRosters[key.group]?.defaultID }
+        return linkManager ?? model.managerRosters[key.group]?.defaultID
+    }
+    nonisolated private struct FeedScope: Hashable {
+        var key: SessionKey
+        var manager: String?
+    }
     /// The latest state of the subagent being viewed (the list refreshes with the session).
     private var viewedAgent: Subagent? {
         viewing.flatMap { v in (session?.subagents?.first { $0.id == v.id } ?? v).shown(in: model.chat(key).tasks, sessionWorks: sessionWorks) }
@@ -634,9 +643,9 @@ struct ChatView: View {
         .task(id: "\(key.machineID)/\(key.sessionID)|\(session?.cwd ?? "")") { await loadGit() }
         // A Workflow call the hub folded into a turn's work (#3436): that fold is fetched, so the run's card comes out.
         .task(id: workflowFolds.map(\.id)) { await unfoldWorkflowCalls(workflowFolds) }
-        .task(id: key) {
+        .task(id: FeedScope(key: key, manager: feedManager)) {
             guard style == .assistant else { return }
-            TasksStore.shared.load(key.sessionID)
+            TasksStore.shared.load(key.sessionID, api: model.api(key.group)?.manager(feedManager))
             if key == model.assistantMain { TasksStore.shared.loadToday(key.sessionID) }
             #if DEBUG
             // `-showTaskDetail <todo id>` / `-showTaskBoard YES`: a task's detail or the board, for screenshots.
@@ -2213,7 +2222,7 @@ struct ChatView: View {
                 }
                 // The last card was answered: one low-key entry to the next conversation that needs you (#4348).
                 if let next = nextNeedsYouSession {
-                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.persona.name : next.title) : next.displayTitle) {
+                    NextNeedsYouStrip(title: next.assistant ? (next.title.isEmpty ? model.assistantDisplayName : next.title) : next.displayTitle) {
                         openNext(next)
                     }
                 }
@@ -2235,7 +2244,7 @@ struct ChatView: View {
                 if let s = session, !s.canSend, let reason = s.sourceSubtitle {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
+                Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantDisplayName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
                          onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 })
                     // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                     // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -2337,7 +2346,7 @@ struct ChatView: View {
             // (`FirstMessagePending`), where the turn's work line comes in. Without it the chat that took over showed
             // the message a line lower, then pushed it up when the turn began (#1911).
             if frozen == nil, startingTurn(pending) {
-                TypingIndicator(text: String(localized: "\(style == .assistant ? model.persona.name : (session?.agentLabel ?? "Claude")) is getting ready…"))
+                TypingIndicator(text: String(localized: "\(style == .assistant ? model.assistantDisplayName : (session?.agentLabel ?? "Claude")) is getting ready…"))
                     .flippedBack()
                     .id("starting-turn")
             }
@@ -4412,7 +4421,7 @@ struct Composer: View, Equatable {
             } else if usesShellComposer {
                 // The shell's composer (docs/apple/ios.md「New shell」), whatever the style: the assistant's and an agent's (#1091).
                 ShellComposerBar(placeholder: status.isActive ? String(localized: "Add a note (queued)")
-                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.persona.name)") : placeholder ?? String(localized: "Message Claude"))),
+                                     : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantDisplayName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
                                  stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,

@@ -56,7 +56,7 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 			return // the independent review first; it ends in rework or the wait for review (supervise_autoreview.go)
 		}
 		detail := c.Reason
-		if c.AutoCheck.passed() { // the judge's own check passed (supervise_sample.go)
+		if c.AutoCheck.passed() && !s.agentSupervised(t) { // the judge's own check passed (supervise_sample.go); a leader's worker is reviewed by its leader
 			if pct := s.reviewSamplePercent(ctx); !spotCheck(t.ID, key, pct) {
 				if s.judgeClose(ctx, t, key, c.Reason, c.AutoCheck) {
 					return

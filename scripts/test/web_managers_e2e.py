@@ -8,6 +8,11 @@ machines checks need; MOCK_MANAGER_OUTDATED=1 marks 工作 needs_update, for --o
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
     python3 scripts/test/web_managers_e2e.py http://127.0.0.1:<web port> --outdated [--shots <directory>]
 and for one manager (MOCK_MANAGERS=1 MOCK_EXTENSIONS=1 on another mock): web_managers_e2e.py <its web address> --single.
+Another assistant's conversation reopened by its address (a reload, a new page) on a hub with the paged sessions list:
+a mock with MOCK_SESSIONS_LIST=1 MOCK_MANAGER_NAS=1 and web_managers_e2e.py <web address> --reload.
+Adding a computer to the current assistant: a mock with MOCK_ADD_COMPUTER=1 MOCK_ADD_COMPUTER_JOIN=2 and
+web_managers_e2e.py <web address> --add-computer; with MOCK_ADD_COMPUTER_NO_MANAGER=1 too (a hub from before add.manager),
+--add-computer --old-hub.
 A mock with MOCK_MANAGER_NEEDS_YOU=0 as well (a hub whose roster has no inbox counts) runs the same: the counts are then
 the agents waiting only.
 It moves the NAS to 工作 and back to 家里, so every round (390 / 1200, light / dark) starts alike.
@@ -20,7 +25,8 @@ item opened by its address (its requests name its manager, the Trail's too, and 
 Hand to AI on it), the Muted dialog, and Settings › Assistants' Notifications switch;
 Once after the rounds: the count beside 工作 (its agents waiting plus the roster's inbox_needs_you) moving without a
 reload when the hub pushes `managers`, and every row of the list reachable and clickable at 200% zoom and at the largest
-text size. --outdated its Needs update badge; --single checks the switcher is there with one assistant, that nothing is filtered
+text size. --outdated its Needs update badge; --single checks the earlier Persona product row and appearance menu,
+without assistant identity or a roster dropdown, that nothing is filtered
 and that no request names a manager (no X-Persona-Manager header, no manager= in the address). Screenshots (390 and
 1200 wide, light and dark) contain only mock data.
 """
@@ -31,9 +37,13 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Error as PlaywrightError, expect, sync_playwright
 
+# Shared development machines may take longer than Playwright's five-second assertion default.
+expect.set_options(timeout=15000)
+
 
 def go(page, url):
-    """page.goto, once more when a navigation the page started itself (a dialog closed with Back) cut it short."""
+    """Navigate after a closed overlay's pending history entry has been popped."""
+    page.wait_for_function("!history.state?.personaOverlay")
     try:
         page.goto(url)
     except PlaywrightError as e:
@@ -46,6 +56,9 @@ def go(page, url):
 # What this browser keeps of the pick (lib/manager-choice.ts): the pick and its name, each per hub, both only while the
 # pick is another assistant than the default.
 KEPT = "Object.fromEntries(Object.entries(localStorage).filter(([k]) => k.startsWith('persona.currentManager') || k.startsWith('persona.pickedAssistantName')))"
+
+# 工作's inbox item opened by its address (the mock hub's MANAGED_INBOX), from under another assistant.
+WORK_ITEM = "/inbox/lark%3Af3%3A300?manager=m-3fa21c"
 
 # The mock hub's installed managers (scripts/mock/mock_hub.py), by the name the switcher shows.
 MANAGERS = {"助手": "assistant", "工作": "m-3fa21c", "家里": "m-8b04d2"}
@@ -63,42 +76,63 @@ def check(browser, base, width, theme, shots, single, outdated):
     page.on("request", lambda r: "/api/" in r.url and api_requests.append((r.method, r.url, r.headers.get("x-persona-manager"), (parse_qs(urlparse(r.url).query).get("manager") or [None])[0])))
     name = lambda what: os.path.join(shots, f"managers-{what}-{width}-{theme}.png")
     try:
-        page.goto(base + "/?token=mock")
+        with page.expect_response(lambda r: "/api/v1/managers" in r.url):
+            page.goto(base + "/?token=mock")
         main = page.locator("main")
         head = page.locator("[data-assistant-switcher]")
 
         # a phone's drawer is off screen and inert until opened
         shut = lambda: head.evaluate("(e) => Boolean(e.closest('[inert]'))")
 
-        def open_list():
-            """The switcher's list, from the sidebar's head (a phone opens the drawer first)."""
+        def open_drawer():
             if width < 1024:
                 # once the page is drawn (its sidebar button), and settled after a navigation
                 expect(main.get_by_role("button", name="侧边栏").first).to_be_visible()
                 page.wait_for_timeout(300)
                 if shut():
                     main.get_by_role("button", name="侧边栏").first.click()
+
+        def open_list():
+            """The head's menu: product settings with one assistant, the roster with several."""
+            open_drawer()
             head.click()
             return page.get_by_role("menu")
 
         def pick(assistant):
-            open_list().get_by_role("menuitemradio").filter(has_text=assistant).click()
+            menu = open_list()
+            overlay = page.evaluate("history.state?.personaOverlay")
+            menu.get_by_role("menuitemradio").filter(has_text=assistant).click()
             expect(head).to_have_attribute("data-assistant-switcher", MANAGERS[assistant])
-            if not shut() and width < 1024:  # a phone's drawer stays open when the page did not change: close it
-                page.keyboard.press("Escape")
+            expect(menu).to_have_count(0)
+            if width < 1024:
+                # Menu and drawer close pop separate history entries asynchronously. Let both settle before page.goto.
+                if overlay:
+                    page.wait_for_function("(id) => history.state?.personaOverlay !== id", arg=overlay)
+                if not shut():
+                    page.keyboard.press("Escape")
+                page.wait_for_function("!history.state?.personaOverlay")
 
         if single:
             # signed in and the assistant page drawn (its box)
             page.wait_for_function("localStorage.getItem('persona.token')")
             expect(main.get_by_role("textbox").last).to_be_visible()
-            # one assistant: the switcher is there with New assistant, and nothing to switch to
-            menu = open_list()
-            expect(menu.get_by_role("menuitemradio")).to_have_count(1)
-            expect(menu.get_by_role("menuitem", name="新建助手")).to_be_visible()
-            expect(menu.get_by_text("默认", exact=True)).to_have_count(0)
+            # The installed roster has loaded: the head stays product-branded and the chat does not name an assistant.
+            expect(head).to_have_attribute("data-assistant-switcher", "")
+            expect(head).to_contain_text("Persona")
+            expect(head).not_to_contain_text("助手")
+            expect(page.locator("[data-assistant-avatar]")).to_have_count(0)
+            open_drawer()
             if shots:
                 page.wait_for_timeout(400)
                 page.screenshot(path=name("single"))
+            menu = open_list()
+            expect(menu.get_by_role("menuitemradio")).to_have_count(0)
+            expect(menu.get_by_role("menuitem", name="新建助手")).to_have_count(0)
+            expect(menu.get_by_role("menuitem", name="管理助手…")).to_have_count(0)
+            expect(menu.get_by_role("menuitem", name="设置", exact=True)).to_be_visible()
+            expect(menu.get_by_role("menuitem", name="深色", exact=True)).to_be_visible()
+            if shots:
+                page.screenshot(path=name("single-menu"))
             page.goto(base + "/machines")
             expect(main.get_by_text("MacBook", exact=True).first).to_be_visible()
             # the pages that name a manager with several: with one, none of their requests may name it
@@ -260,7 +294,7 @@ def check(browser, base, width, theme, shots, single, outdated):
         expect(main.get_by_role("textbox").last).to_be_enabled()
         assert page.evaluate(KEPT) == {}, page.evaluate(KEPT)
         # another assistant's item opened by its address: the item opens, the current assistant stays
-        go(page, base + "/inbox/lark%3Af3%3A300?manager=m-3fa21c")
+        go(page, base + WORK_ITEM)
         expect(main.get_by_text("周末徒步群", exact=False).first).to_be_visible()
         if width >= 1024:
             expect(head).to_have_attribute("data-assistant-switcher", "assistant")
@@ -272,7 +306,8 @@ def check(browser, base, width, theme, shots, single, outdated):
         expect(dialog).to_be_visible()
         dialog.get_by_role("button", name="发送", exact=True).click()
         expect(dialog).to_have_count(0)
-        page.wait_for_url(re.compile(r"/persona/[^/?]+$"))
+        # its address names its computer and manager (lib/conversation-page.ts): 工作's assistant runs on the MacBook
+        page.wait_for_url(re.compile(r"/persona/[^/?]+\?machine=macbook&manager=m-3fa21c$"))
         handed = [r for r in api_requests[before:] if r[0] == "POST" and re.search(r"(:|%3A)f3(:|%3A)300/handoff", r[1])]
         assert handed and handed[0][2] == "m-3fa21c", api_requests[before:]
         expect(head).to_have_attribute("data-assistant-switcher", "assistant")
@@ -342,6 +377,15 @@ def check(browser, base, width, theme, shots, single, outdated):
         page.get_by_role("menu").get_by_role("menuitem").filter(has_text="家里").click()
         expect(page.get_by_text("已移到「家里」", exact=True)).to_be_visible()
         assert not errors, errors
+    except Exception:
+        # This driver is for mock data only; retain the actual page when a selector or browser fails.
+        print("failed mock page:", page.url, "errors:", errors)
+        if shots:
+            try:
+                page.screenshot(path=name("failure"), timeout=5000)
+            except PlaywrightError:
+                pass
+        raise
     finally:
         context.close()
 
@@ -499,18 +543,147 @@ def check_reach(browser, base, shots):
             context.close()
 
 
+def check_reload(browser, base, width, theme):
+    """Another assistant's conversation opened by its address alone, on a hub with the paged sessions list
+    (MOCK_SESSIONS_LIST=1: no `sessions` pushes to find it in): Hand to AI on 工作's item under the default opens 工作's
+    conversation on the MacBook; after a reload, and in a new page at the same address, every request about it still
+    goes to the MacBook (the exact lookup there brings its row) and the composer takes a message, the default staying
+    current."""
+    context = browser.new_context(viewport={"width": width, "height": 900}, color_scheme=theme, locale="zh-CN")
+    context.add_init_script("localStorage.setItem('persona.theme', " + repr(theme) + ")")
+    errors, about = [], []
+    sid = {"id": ""}
+
+    def watch(page):
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        # the conversation's session routes and its exact lookup, with the computer each names
+        page.on("request", lambda r: sid["id"] and sid["id"] in r.url and "/api/v1/sessions" in r.url and about.append(r.url))
+
+    try:
+        page = context.new_page()
+        page.set_default_timeout(20000)
+        watch(page)
+        page.goto(base + "/?token=mock")
+        main = page.locator("main")
+        expect(main.get_by_role("textbox").last).to_be_visible()
+        go(page, base + WORK_ITEM)
+        main.get_by_role("button", name="交给 AI", exact=True).first.click()
+        dialog = page.get_by_role("dialog").filter(has_text="交给 AI")
+        dialog.get_by_role("button", name="发送", exact=True).click()
+        page.wait_for_url(re.compile(r"/persona/[^/?]+\?machine=macbook&manager=m-3fa21c$"))
+        address = page.url
+        sid["id"] = urlparse(address).path.rsplit("/", 1)[-1]
+
+        def opened(p):
+            del about[:]
+            box = p.locator("main").get_by_role("textbox").last
+            expect(box).to_be_enabled()
+            p.wait_for_timeout(1500)
+            assert about, "no request about the conversation"
+            wrong = [u for u in about if "/sessions/macbook/" not in u and "machine_id=macbook" not in u]
+            assert not wrong, wrong
+            assert any("machine_id=macbook" in u and "session_id=" in u for u in about) or any("/sessions/macbook/" in u for u in about), about
+            expect(p.locator("[data-assistant-switcher]")).to_have_attribute("data-assistant-switcher", "assistant")
+            assert p.evaluate(KEPT) == {}, p.evaluate(KEPT)
+
+        page.reload()
+        opened(page)
+        other = context.new_page()
+        other.set_default_timeout(20000)
+        watch(other)
+        other.goto(address)
+        opened(other)
+        assert not errors, errors
+    finally:
+        context.close()
+
+
+def check_add_computer(browser, base, width, theme, shots, old):
+    """Add computer with 工作 current: the code names it (add.manager), and the computer joins 工作's list with nothing
+    said on the waiting screen; a hub from before add.manager (old) puts it under its own assistant, which the waiting
+    screen says. With 家里 (offline) current nothing can be added and the dialog says why."""
+    context = browser.new_context(viewport={"width": width, "height": 900}, color_scheme=theme, locale="zh-CN")
+    context.add_init_script("localStorage.setItem('persona.theme', " + repr(theme) + ")")
+    # the pick as the switcher keeps it (lib/manager-choice.ts)
+    context.add_init_script("if (!localStorage.getItem('persona.currentManager')) localStorage.setItem('persona.currentManager', 'm-3fa21c')")
+    page = context.new_page()
+    page.set_default_timeout(20000)
+    errors, asked = [], []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("request", lambda r: r.method == "POST" and r.url.split("?")[0].endswith("/api/v1/auth/pair-codes") and asked.append(r.post_data_json))
+    name = lambda what: os.path.join(shots, f"managers-{what}-{width}-{theme}.png")
+    try:
+        page.goto(base + "/machines?token=mock")
+        main = page.locator("main")
+        expect(page.locator("[data-assistant-switcher]")).to_have_attribute("data-assistant-switcher", "m-3fa21c")
+        main.get_by_role("button", name="添加电脑", exact=True).first.click()
+        dialog = page.get_by_role("dialog").filter(has_text="添加电脑")
+        computer = f"e2e 电脑 {width} {theme}"
+        dialog.locator("input").fill(computer)
+        dialog.get_by_role("button", name="下一步", exact=True).click()
+        expect(dialog.locator('[data-stage="waiting"]')).to_be_visible()
+        assert asked and asked[-1]["add"].get("manager") == "m-3fa21c", asked
+        under = dialog.locator("[data-added-under]")
+        if old:
+            expect(under).to_have_text("这台电脑加到了「助手」名下。")
+        else:
+            expect(under).to_have_count(0)
+        if shots:
+            page.wait_for_timeout(400)
+            page.screenshot(path=name("add-under" if old else "add-waiting"))
+        # it joins (MOCK_ADD_COMPUTER_JOIN): It's mine, then the list
+        dialog.get_by_role("button", name="是我的电脑", exact=True).click(timeout=30000)
+        dialog.get_by_role("button", name="完成", exact=True).click()
+        expect(dialog).to_have_count(0)
+        listed = main.get_by_text(computer, exact=True)
+        if old:
+            expect(listed).to_have_count(0)  # the hub's own assistant's, not 工作's
+        else:
+            expect(listed.first).to_be_visible()
+        # 家里, offline: nothing is added to it
+        page.evaluate("localStorage.setItem('persona.currentManager', 'm-8b04d2')")
+        page.reload()
+        expect(page.locator("[data-assistant-switcher]")).to_have_attribute("data-assistant-switcher", "m-8b04d2")
+        before = len(asked)
+        main.get_by_role("button", name="添加电脑", exact=True).first.click()
+        dialog = page.get_by_role("dialog").filter(has_text="添加电脑")
+        expect(dialog.locator('[data-stage="assistant-offline"]')).to_have_text("「家里」离线，暂时不能给它添加电脑。")
+        expect(dialog.get_by_role("button", name="下一步", exact=True)).to_have_count(0)
+        if shots and not old:
+            page.wait_for_timeout(400)
+            page.screenshot(path=name("add-offline"))
+        assert len(asked) == before, asked
+        assert not errors, errors
+    finally:
+        context.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("base")
     ap.add_argument("--shots")
     ap.add_argument("--single", action="store_true")
     ap.add_argument("--outdated", action="store_true")
+    ap.add_argument("--reload", action="store_true")
+    ap.add_argument("--add-computer", action="store_true")
+    ap.add_argument("--old-hub", action="store_true")
     a = ap.parse_args()
     if a.shots:
         os.makedirs(a.shots, exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
         try:
+            if a.reload:
+                for width in (390, 1200):
+                    check_reload(browser, a.base.rstrip("/"), width, "light")
+                print("web managers e2e (reload): ok")
+                return
+            if a.add_computer:
+                for width in (390, 1200):
+                    for theme in ("light", "dark"):
+                        check_add_computer(browser, a.base.rstrip("/"), width, theme, a.shots, a.old_hub)
+                print("web managers e2e (add computer%s): ok" % (", old hub" if a.old_hub else ""))
+                return
             for width in (390, 1200):
                 for theme in ("light", "dark"):
                     check(browser, a.base.rstrip("/"), width, theme, a.shots, a.single, a.outdated)

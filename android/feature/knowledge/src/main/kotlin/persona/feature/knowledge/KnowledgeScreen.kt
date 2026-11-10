@@ -69,6 +69,8 @@ private const val LINKS_SHOWN = 4
 @Composable
 internal fun KnowledgeScreen(model: KnowledgeViewModel, navigator: Navigator) {
     val page by model.page.collectAsStateWithLifecycle()
+    // The list is the current assistant's (a model per assistant): an entry opens as its.
+    val owner = persona.core.designsystem.currentAssistant().id
     var tagMenu by remember { mutableStateOf(false) }
     var ignored by rememberSaveable(page.scope?.path) { mutableStateOf(false) }
     val search = page.filter.query.isNotBlank()
@@ -95,8 +97,8 @@ internal fun KnowledgeScreen(model: KnowledgeViewModel, navigator: Navigator) {
             !page.paired -> item("unpaired") {
                 JEmptyState(stringResource(R.string.knowledge_unpaired_title), stringResource(R.string.knowledge_unpaired_text))
             }
-            search -> searchResults(page, navigator)
-            else -> listContent(page, ignored, { ignored = !ignored }, navigator, model::refresh)
+            search -> searchResults(page, navigator, owner)
+            else -> listContent(page, ignored, { ignored = !ignored }, navigator, model::refresh, owner)
         }
     }
     if (tagMenu) JActionSheet(listOf(JAction(stringResource(R.string.knowledge_all), checked = page.filter.tag == null) { model.tag(null) }) +
@@ -118,7 +120,8 @@ private fun KindChips(kind: KnowledgeKind, count: Int?, onPick: (KnowledgeKind) 
     }
 }
 
-private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean, toggleIgnored: () -> Unit, navigator: Navigator, retry: () -> Unit) {
+private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean, toggleIgnored: () -> Unit, navigator: Navigator, retry: () -> Unit,
+    owner: String) {
     val kind = page.filter.kind
     when {
         page.entries.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_error_title, requireNotNull(page.message), retry) }
@@ -136,7 +139,7 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
                         trailing = if (section.collapsed) stringResource(if (showIgnored) R.string.knowledge_collapse else R.string.knowledge_expand) else null)
                 }
                 if (!section.collapsed || showIgnored) items(section.entries, key = { "entry/${it.key}" }, contentType = { "entry" }) {
-                    KnowledgeRow(it, onClick = { navigator.open(it) })
+                    KnowledgeRow(it, onClick = { navigator.open(it, owner) })
                 }
                 section.note?.let { note -> item(key = "note/${section.key}", contentType = "note") { Note(stringResource(note)) } }
             }
@@ -144,7 +147,7 @@ private fun LazyListScope.listContent(page: KnowledgePage, showIgnored: Boolean,
     }
 }
 
-private fun LazyListScope.searchResults(page: KnowledgePage, navigator: Navigator) {
+private fun LazyListScope.searchResults(page: KnowledgePage, navigator: Navigator, owner: String) {
     val query = page.filter.query.trim()
     when {
         page.groups.isEmpty() && page.message != null -> item("error") { KnowledgeFailure(R.string.knowledge_search_error, requireNotNull(page.message), null) }
@@ -155,7 +158,7 @@ private fun LazyListScope.searchResults(page: KnowledgePage, navigator: Navigato
         else -> searchSections(page.groups).forEach { (kind, groups) ->
             item(key = "hits/${kind.wire}", contentType = "section") { JSectionHeader(kind.label(), count = groups.size) }
             items(groups, key = { "hit/${it.key}" }, contentType = { "hit" }) { group ->
-                KnowledgeRow(group.entry, metadata = group.named, name = if (group.named) group.entry.name else kind.label(), onClick = { navigator.open(group.entry) }, trailing = {
+                KnowledgeRow(group.entry, metadata = group.named, name = if (group.named) group.entry.name else kind.label(), onClick = { navigator.open(group.entry, owner) }, trailing = {
                     if (group.hits.size > 2) Text(pluralStringResource(R.plurals.knowledge_hits, group.hits.size, group.hits.size), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1)
                 }) {
                     group.hits.take(2).forEach { hit ->
@@ -284,7 +287,12 @@ internal fun KnowledgeDetailScreen(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(model, lifecycle, navigator) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            model.handoffs.collect { navigator.selectTab(AppTab.Persona) }
+            // The Persona page shows the current assistant's main conversation; another assistant's opens by itself.
+            model.handoffs.collect { handoff ->
+                val main = handoff.main
+                if (main == null) navigator.selectTab(AppTab.Persona)
+                else navigator.navigate(ChatRoute(main.machineId, main.sessionId, ConversationKind.Assistant))
+            }
         }
     }
     LaunchedEffect(tagging.saved) { if (tagging.saved > 0) editing = false }
@@ -351,7 +359,7 @@ internal fun KnowledgeDetailScreen(
                     facts?.let { recordingBookmarks(it) }
                     links(linkGroups(detail.links), openLinks, { kind ->
                         openLinks = if (kind in openLinks) openLinks - kind else openLinks + kind
-                    }, navigator)
+                    }, navigator, model.owner)
                     dirs(detail.meta.strings("dirs"))
                     // A recording's `recent` is its transcript as text: the transcript below shows it line by line.
                     facts?.let { recordingTranscript(it, transcript(detail.segments)) }
@@ -543,7 +551,8 @@ private fun RecordingLength.label(): String = when (this) {
 }
 
 /** Related entries by kind, a few each with "All" for the rest. */
-private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeEntry>>>, open: List<String>, toggle: (String) -> Unit, navigator: Navigator) {
+private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeEntry>>>, open: List<String>, toggle: (String) -> Unit, navigator: Navigator,
+    owner: String?) {
     groups.forEach { (kind, entries) ->
         val all = kind.wire in open
         val more = entries.size > LINKS_SHOWN
@@ -552,7 +561,7 @@ private fun LazyListScope.links(groups: List<Pair<KnowledgeKind, List<KnowledgeE
         item("links-header/${kind.wire}", contentType = "section") { JSectionHeader(stringResource(kind.words.linked), count = entries.size) }
         itemsIndexed(shown, key = { _, linked -> "link/${kind.wire}/${linked.key}" }, contentType = { _, _ -> "link" }) { index, linked ->
             JGroupItem(GroupPosition.of(index, count)) {
-                JRow(linked.name, subtitle = linked.oneLine?.takeIf { it.isNotBlank() }, subtitleLines = 1, onClick = { navigator.open(linked) })
+                JRow(linked.name, subtitle = linked.oneLine?.takeIf { it.isNotBlank() }, subtitleLines = 1, onClick = { navigator.open(linked, owner) })
             }
         }
         if (more) item("links-more/${kind.wire}", contentType = "row") {
@@ -618,8 +627,9 @@ private fun KnowledgeMarkdown(text: String) {
     }
 }
 
-private fun Navigator.open(entry: KnowledgeEntry) {
-    KnowledgeKind.fromWire(entry.kind)?.let { navigate(KnowledgeDetailRoute(it, entry.id)) }
+/** [entry]'s page, kept [manager]'s (the assistant whose knowledge base listed it, or the entry's page it was linked from). */
+private fun Navigator.open(entry: KnowledgeEntry, manager: String?) {
+    KnowledgeKind.fromWire(entry.kind)?.let { navigate(KnowledgeDetailRoute(it, entry.id, manager)) }
 }
 
 @Composable

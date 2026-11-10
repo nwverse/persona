@@ -111,9 +111,13 @@ Records associations between to-dos and Agent sessions:
   - `manual`: manually linked or handed to an existing Agent;
   - `space`: linked with the entire workspace project;
   - `spawned`: spawned by a parent Agent linked to the to-do.
+  - `leader`: the Agent of a task handed out with `task_plan` role `leader` (#3656, [unified-entry.md](unified-entry.md), "Task leaders");
+  - `worker`: an Agent a task leader handed out with its own `task_plan`; `via` is the leader's to-do id (not a session): the worker's `supervision.supervisor` is that task's leader Agent session;
+  - `review`: an independent reviewer's session (kept released, hidden from the lists).
 - `via` (text, NOT NULL, DEFAULT ''): association path:
   - For source `space`, project key `<machine_id>/<space>`;
-  - For source `spawned`, parent Agent identifier `<machine_id>/<session_id>`.
+  - For source `spawned`, parent Agent identifier `<machine_id>/<session_id>`;
+  - For source `worker`, the leader's to-do id.
 - `dismissed_at` (timestamptz): manual removal timestamp. Removal sets both `released_at` and `dismissed_at`. APIs exclude removed records, and subsequent session updates do not automatically relink them.
 - Constraints:
   - Primary key: `(todo_id, machine_id, session_id)`.
@@ -662,6 +666,16 @@ Not yet: manual editing/undo of conclusions (currently **Replace** in decisions)
 - **Not yet**: dragging on iOS / Mac (#2045); Android's day and week, and making one on its calendar (#2046 is the month).
 - **What it draws**: entries, not to-dos (`CalendarEntry`: a source, a title, a start, an optional end, all day or not, the state's look). A to-do is one source (`TodoEntrySource`); the phone's calendar events can be another later (read on the device with EventKit, drawn with their length), and the layout (`TodoCalendar`: the days of a mode, lanes, clusters, what a month's day fits, where a tap lands) needs no change for it. A source is asked for the days shown (`entries(in:)`), so once the hub pages its to-dos the calendar can ask it for a range (`due_from` / `due_to` on `GET /api/v1/todos`, written as `todo_list`'s `due_after` / `due_before`).
 - **Code**: `apple/Shared/TodoCalendar.swift` (pure, `TodoCalendarTests`), `apple/Persona/Views/Todos/Calendar/` (the views; the Mac's to-dos page shows the opened to-do beside the calendar), tokens in `Theme.CalendarGrid`. Checked by `TodoCalendarTests` (iOS UI, mock hub). Android: `core/domain/.../tasks/TodoCalendar.kt` (pure, `TodoCalendarTest`), `feature/agents/.../TodoCalendar.kt` (the month, the day's sheet, the drag and "Change Due Date…"), tokens in `CalendarTokens`, checked by `TodoCalendarDragTest` and shots `TodoCalendarShotsTest`.
+
+## List filter and sort
+
+#3740 (Android so far; iOS and the web follow with the same rules). Beside List | Calendar, the list view has one filter button whose menu picks what the list shows and how rows are ordered; both are kept per device and worked out on the device from the list it already has, so nothing is asked of the hub.
+
+- **Show**: All (the default), No due date, Today, This week, This month, each with how many to-dos it would show. Today, This week and This month take the to-dos due in them (a due day by its day, a due moment by itself) and also open to-dos already overdue; a done to-do counts only by its own due date. The week is the calendar's ("Calendar" above): Monday to Sunday in Chinese, the same days the calendar view shows.
+- **Sort by**: Recent activity (the default: most recently active first, the list as it always was), Due date (earliest first, those without one last) or Priority (high, normal, low; then by due date). Rows are ordered inside each status section; the sections keep their order, so Needs you stays first. A merged row sorts by its earliest due and its highest priority member.
+- **With the sections and counts**: the search and the filter pick the to-dos first, then the SOP places them (`docs/assistant/todo-status-sop.md`), so a section with nothing left does not show and each section's count is the to-dos its rows list. A filter opens Other open; Shelved and Done stay folded with their counts. Needs you is filtered like the rest, and a line over the list says how many to-dos waiting on the user it leaves out ("1 more waiting on you, not in This week"), with Show all. The sidebar's badge and the assistant's Progress count every to-do, whatever this page shows.
+- **Seen**: an active filter shows as a chip beside the button that clears it (`docs/design/DESIGN_SYSTEM.md` 3.4, "List controls"); the button is filled while the filter or the order is not the default. A filter that leaves nothing says so ("Nothing due this week") with Show all.
+- **Code**: Android `core/domain/.../tasks/TodoListFilter.kt` (pure, `TodoListFilterTest`) and `feature/agents/.../TodoListControls.kt`, described in `docs/android/android.md`.
 
 ## Project
 

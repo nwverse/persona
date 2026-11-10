@@ -34,6 +34,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import persona.core.domain.tasks.moveTo
+import persona.core.domain.tasks.TodoListFilter
+import persona.core.domain.tasks.TodoListSort
+import persona.core.domain.tasks.filterCounts
+import persona.core.domain.tasks.hiddenWaiting
+import persona.core.domain.tasks.listed
+import persona.core.domain.tasks.matches
+import persona.core.domain.tasks.sortedRows
+import persona.core.domain.tasks.weekStart
 import persona.core.contracts.*
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
@@ -97,6 +105,8 @@ fun TodosScreen(
     pending: List<Interaction> = emptyList(),
     /** The launcher's "New to-do": each request brings the sheet up, also on a list kept from an earlier use (#5718). */
     newTodoRequests: NewTodoRequests? = null,
+    /** The assistant whose to-dos [todos] are: while it is offline its list is out of reach, not empty (JAssistantOffline). */
+    assistant: persona.core.contracts.api.CurrentAssistant? = null,
 ) {
     val cards = remember(pending) { pending.firstBySession() }
     var query by rememberSaveable { mutableStateOf("") }
@@ -114,6 +124,31 @@ fun TodosScreen(
     val calendarPrefs = remember(context) { TodoCalendarPrefs(context) }
     var view by remember(calendarPrefs) { mutableStateOf(calendarPrefs.view) }
     var showDone by remember(calendarPrefs) { mutableStateOf(calendarPrefs.showDone) }
+    // The list's filter and sort (#3740), kept on this device.
+    val listPrefs = remember(context) { TodoListPrefs(context) }
+    var listFilter by remember(listPrefs) { mutableStateOf(listPrefs.filter) }
+    var listSort by remember(listPrefs) { mutableStateOf(listPrefs.sort) }
+    val setFilter = { f: TodoListFilter -> listFilter = f; listPrefs.filter = f }
+    val setSort = { o: TodoListSort -> listSort = o; listPrefs.sort = o }
+    val zone = ZoneId.systemDefault()
+    // The week is the calendar's ([weekStart], the region of the app's language).
+    val appLocale = LocalConfiguration.current.locales[0]
+    val firstDay = remember(appLocale) { weekStart(appLocale) }
+
+    val sessionMap = remember(sessions) { sessions.associateBy { it.key } }
+    val sessionLookup: (SessionKey) -> Session? = remember(sessionMap) { { key: SessionKey -> sessionMap[key] } }
+
+    val searched = remember(todos, query) {
+        if (query.isBlank()) todos
+        else {
+            val q = query.trim()
+            todos.filter { it.title.contains(q, ignoreCase = true) || it.notes.contains(q, ignoreCase = true) }
+        }
+    }
+    // A search, then the filter, pick the to-dos; the sections place what is left (#3740), so their counts follow.
+    val filtered = remember(searched, listFilter, now, firstDay) { searched.filter { it.matches(listFilter, now, zone, firstDay) } }
+    // what each filter would show, under it in the menu
+    val counts = remember(searched, now, firstDay) { filterCounts(searched, now, zone, firstDay) }
     val viewBar: @Composable (Modifier) -> Unit = { modifier ->
         TodosViewBar(
             view = view,
@@ -121,18 +156,8 @@ fun TodosScreen(
             showDone = showDone,
             onShowDone = { showDone = it; calendarPrefs.showDone = it },
             modifier = modifier,
+            listControls = { TodoListControls(listFilter, listSort, counts, setFilter, setSort) },
         )
-    }
-
-    val sessionMap = remember(sessions) { sessions.associateBy { it.key } }
-    val sessionLookup: (SessionKey) -> Session? = remember(sessionMap) { { key: SessionKey -> sessionMap[key] } }
-
-    val filtered = remember(todos, query) {
-        if (query.isBlank()) todos
-        else {
-            val q = query.trim()
-            todos.filter { it.title.contains(q, ignoreCase = true) || it.notes.contains(q, ignoreCase = true) }
-        }
     }
 
     // Status sections (#3206, docs/assistant/todo-status-sop.md), the web's rules: related to-dos share a row.
@@ -140,12 +165,17 @@ fun TodosScreen(
     var restored by remember(restores) { mutableStateOf(restores.read()) }
     val nowMs = now.toEpochMilli()
     val triaged = remember(filtered, sessionMap, restored, nowMs) { triageTodos(filtered, sessionLookup, nowMs, restored) }
+    // With a filter, Needs you is filtered too: the line over the list says how many it leaves out.
+    val hidden = remember(searched, filtered, sessionMap, restored, nowMs, listFilter) {
+        if (listFilter == TodoListFilter.All) 0 else hiddenWaiting(searched, filtered, sessionLookup, nowMs, restored)
+    }
     // Which sections the user folded or unfolded: Other open, Shelved and Done start folded.
     var toggled by rememberSaveable { mutableStateOf(emptyList<String>()) }
     // Other open starts unfolded when the open sections above it are empty, so the list never opens on nothing.
     val quietAbove = listOf(TriageSection.Waiting, TriageSection.Working, TriageSection.JustDone, TriageSection.Pr).all { triaged.rows(it).isEmpty() }
     fun isFolded(section: TriageSection): Boolean {
-        val byDefault = section.folded && !(section == TriageSection.Other && quietAbove)
+        // a filter narrows, so what it leaves in Other open shows (as iOS); Shelved and Done stay folded
+        val byDefault = section.folded && !(section == TriageSection.Other && (quietAbove || listFilter != TodoListFilter.All))
         return byDefault != (section.name in toggled)
     }
     var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
@@ -298,8 +328,33 @@ fun TodosScreen(
                 JSearchField(query, { query = it }, placeholder = stringResource(R.string.agents_todos_search))
             }
 
-            if (filtered.isEmpty()) {
-                item(key = "empty") {
+            if (hidden > 0) {
+                item(key = "hidden-waiting") {
+                    JNotice(
+                        stringResource(R.string.agents_todos_filter_hidden_waiting, hidden, listFilter.title),
+                        Modifier.testTag("todos-hidden-waiting"),
+                        status = Status.NeedsYou,
+                        icon = PhIcons.WarningCircle,
+                        actionLabel = stringResource(R.string.agents_todos_filter_show_all),
+                        onAction = { setFilter(TodoListFilter.All) },
+                        inlineAction = true,
+                    )
+                }
+            }
+            if (filtered.isEmpty() && searched.isNotEmpty() && listFilter != TodoListFilter.All) {
+                item(key = "empty-filter") {
+                    JEmptyState(
+                        title = listFilter.emptyTitle,
+                        description = stringResource(R.string.agents_todos_filter_empty_hint),
+                        icon = PhIcons.FunnelSimple,
+                        action = { JButton(stringResource(R.string.agents_todos_filter_show_all), { setFilter(TodoListFilter.All) }) },
+                    )
+                }
+            } else if (filtered.isEmpty()) {
+                // The hub's list leaves out an assistant that is offline: its to-dos are out of reach, not none (a search that
+                // finds nothing among kept ones is "no match").
+                if (assistant?.offline != null && todos.isEmpty()) item(key = "offline") { JAssistantOffline(assistant) }
+                else item(key = "empty") {
                     JEmptyState(
                         title = stringResource(if (query.isBlank()) R.string.agents_todos_empty else R.string.agents_todos_no_match),
                         description = stringResource(if (query.isBlank()) R.string.agents_todos_empty_hint else R.string.agents_todos_no_match_hint),
@@ -310,24 +365,17 @@ fun TodosScreen(
                     )
                 }
             } else {
-                item(key = "summary") {
-                    Text(
-                        stringResource(R.string.agents_todos_summary, triaged.open, triaged.shelved, triaged.finished),
-                        style = PersonaTheme.type.caption,
-                        color = PersonaTheme.palette.ink3,
-                        maxLines = 1,
-                        modifier = Modifier.testTag("todos-summary"),
-                    )
-                }
+                // No "N open · N shelved · N done" line: each section title carries its count (#3712).
                 for (section in TriageSection.entries) {
-                    val rows = triaged.rows(section)
+                    val rows = sortedRows(triaged.rows(section), listSort, zone)
                     if (rows.isEmpty()) continue
                     val folded = isFolded(section)
                     item(key = "section:${section.name}") {
                         JSectionHeader(
                             section.label,
-                            count = triaged.todoCounts[section],
+                            count = triaged.listed(section),
                             status = section.status,
+                            countTone = section.status ?: Status.Idle,
                             onClick = { toggled = if (section.name in toggled) toggled - section.name else toggled + section.name },
                             sub = false,
                             action = { JIcon(if (folded) PhIcons.CaretDown else PhIcons.CaretUp, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) },
