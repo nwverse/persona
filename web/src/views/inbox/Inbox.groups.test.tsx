@@ -259,3 +259,40 @@ describe("Done's day counts from the hub (#2969)", () => {
     expect(head("done", "week").textContent).not.toContain("+");
   });
 });
+
+// docs/assistant/inbox.md "Corrections and learned rules": FYI shows the AI's picks first, each tagged, with what the user
+// put there in its own group, folded until the AI's are dealt with; ignored items are their own section after Done; what
+// the user handed to the AI is In progress.
+describe("FYI's picks, Ignored and In progress", () => {
+  const remount = async (items: InboxItem[]) => {
+    act(() => root.unmount());
+    calls.items = items;
+    calls.history = [];
+    resetInboxForTests();
+    root = createRoot(host);
+    act(() => root.render(<Inbox onToggleSidebar={() => {}} />));
+    await flush();
+  };
+  const row = (section: string, id: string) => host.querySelector<HTMLElement>(`[data-section="${section}"] [data-item="${id}"]`);
+
+  it("tags the AI's FYI and the user's, folds the user's while the AI's wait, lists Ignored apart from Done", async () => {
+    await remount([lark("a1", { tier: "fyi", status: "fyi" }), lark("u1", { tier: "fyi", status: "fyi", user_tier: "fyi" }),
+      lark("i1", { done_at: ago(0, 0.2), done_by: "ignored" }), lark("d1", { done_at: ago(0, 0.3), done_by: "user" }),
+      lark("p1", { status: "working", progress: { kind: "handoff" } })]);
+    expect(row("fyi", "a1")?.textContent).toContain("AI");
+    expect(row("fyi", "u1")?.textContent).toContain("人工");
+    expect(head("fyi", "by-you").textContent).toContain("你标记的1");
+    expect(head("fyi", "by-you").textContent).toContain("先看完上面 AI 推荐的");
+    expect(toggle("fyi", "by-you").getAttribute("aria-expanded")).toBe("false");
+    expect(row("ignored", "i1")).not.toBeNull();
+    expect(row("done", "i1")).toBeNull();
+    expect(row("done", "d1")).not.toBeNull();
+    expect(row("working", "p1")?.textContent).toContain("AI 处理中");
+  });
+
+  it("opens the user's FYI once the AI's are dealt with", async () => {
+    await remount([lark("u1", { tier: "fyi", status: "fyi", user_tier: "fyi" })]);
+    expect(toggle("fyi", "by-you").getAttribute("aria-expanded")).toBe("true");
+    expect(head("fyi", "by-you").textContent).not.toContain("先看完");
+  });
+});

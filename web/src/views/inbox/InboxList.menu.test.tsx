@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InboxItem } from "../../lib/inbox";
 
-const calls = vi.hoisted(() => ({ done: [] as unknown[][], mute: [] as unknown[][], toast: [] as unknown[][], fail: false }));
+const calls = vi.hoisted(() => ({ done: [] as unknown[][], mute: [] as unknown[][], toast: [] as unknown[][], tier: [] as unknown[][], ignore: [] as unknown[][], fail: false }));
 vi.mock("../../ui/atoms", async (original) => ({
   ...(await original<typeof import("../../ui/atoms")>()),
   toast: (...a: unknown[]) => void calls.toast.push(a),
@@ -11,6 +11,8 @@ vi.mock("../../lib/inbox", async (original) => ({
   ...(await original<typeof import("../../lib/inbox")>()),
   setDone: (...a: unknown[]) => (calls.done.push(a), Promise.resolve(!calls.fail)),
   muteItem: (...a: unknown[]) => (calls.mute.push(a), Promise.resolve()),
+  setTier: (...a: unknown[]) => (calls.tier.push(a), Promise.resolve(true)),
+  ignoreItem: (...a: unknown[]) => (calls.ignore.push(a), Promise.resolve(true)),
 }));
 vi.mock("../../lib/translate", () => ({ useTranslatePrefs: () => ({ enabled: false }), hubTranslation: () => undefined }));
 import { markFromRow, rowMenu } from "./InboxList";
@@ -22,9 +24,9 @@ const item = (over: Partial<InboxItem> = {}): InboxItem => ({
 });
 
 describe("收件箱的行菜单", () => {
-  it("offers 已处理 alone for an open item with nothing to mute by", () => {
+  it("offers 已处理, a move and 忽略 for an open item with nothing to mute by", () => {
     const m = rowMenu(item(), false);
-    expect(m.map((x) => [x.key, x.label])).toEqual([["done", "已处理"]]);
+    expect(m.map((x) => [x.key, x.label])).toEqual([["done", "已处理"], ["tier:fyi", "改为知悉即可"], ["ignore", "忽略"]]);
     m[0].onSelect();
     expect(calls.done.at(-1)).toEqual([expect.objectContaining({ id: "lark:f1:1" }), true]);
   });
@@ -49,18 +51,32 @@ describe("收件箱的行菜单", () => {
   it("puts the mutes under a divider on the first, each muting with its own option", () => {
     const it0 = item({ mutes: [sender, chat] });
     const m = rowMenu(it0, false);
-    expect(m.map((x) => x.key)).toEqual(["done", "mute:sender:u1", "mute:chat:c1", "policy:sender:u1", "policy:chat:c1"]);
-    expect(m.map((x) => !!x.divider)).toEqual([false, true, false, true, false]);
-    expect(m[1].hint).toBeTruthy();
-    m[2].onSelect();
+    expect(m.map((x) => x.key)).toEqual(["done", "tier:fyi", "ignore", "mute:sender:u1", "mute:chat:c1", "policy:sender:u1", "policy:chat:c1"]);
+    expect(m.map((x) => !!x.divider)).toEqual([false, true, false, true, false, true, false]);
+    expect(m[3].hint).toBeTruthy();
+    m[4].onSelect();
     expect(calls.mute.at(-1)).toEqual([it0, chat]);
   });
 
   it("adds 移到文件夹… last when the list shows folders", () => {
     expect(rowMenu(item({ mutes: [sender] }), false).some((x) => x.key === "folder")).toBe(false);
     const m = rowMenu(item({ mutes: [sender], folder: "work/alerts" }), false, true);
-    expect(m.map((x) => x.key)).toEqual(["done", "mute:sender:u1", "policy:sender:u1", "folder"]);
-    expect([m[3].label, m[3].hint, m[3].divider]).toEqual(["移到文件夹…", "work/alerts", true]);
+    expect(m.map((x) => x.key)).toEqual(["done", "tier:fyi", "ignore", "mute:sender:u1", "policy:sender:u1", "folder"]);
+    expect([m[5].label, m[5].hint, m[5].divider]).toEqual(["移到文件夹…", "work/alerts", true]);
+  });
+
+  it("moves an item to the section it is not in, and ignores it (docs/assistant/inbox.md \"Corrections and learned rules\")", () => {
+    const fyi = item({ tier: "fyi", status: "fyi" });
+    const m = rowMenu(fyi, false);
+    expect(m.map((x) => [x.key, x.label, x.hint ?? ""])).toEqual([["done", "已处理", ""], ["tier:action", "改为需要你处理", ""], ["ignore", "忽略", "不感兴趣"]]);
+    m[1].onSelect();
+    expect(calls.tier.at(-1)).toEqual([fyi, "action"]);
+    m[2].onSelect();
+    expect(calls.ignore.at(-1)).toEqual([fyi]);
+    // Collapsed: both moves; In progress: both too (the user may still want it elsewhere)
+    expect(rowMenu(item({ tier: "noise", status: "noise" }), false).map((x) => x.key)).toEqual(["done", "tier:fyi", "tier:action", "ignore"]);
+    // a done item moves back only
+    expect(rowMenu(item({ done_at: "2026-11-01T09:00:00Z", done_by: "ignored" }), true).map((x) => x.key)).toEqual(["undone"]);
   });
 });
 

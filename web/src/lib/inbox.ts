@@ -140,6 +140,12 @@ export interface InboxItem {
   related?: InboxRelated[];
   /** The conversations it was handed to with "Hand to AI" (POST /inbox/{id}/handoff), oldest first: they may write back to it. */
   handoffs?: InboxHandoff[];
+  /** The tier the user moved it to from its menu ("Mark as FYI" / "Mark as Needs you"; docs/assistant/inbox.md "Corrections
+   *  and learned rules"): it stays there whatever triage says. Absent: the AI's (or a rule's). */
+  user_tier?: Tier;
+  /** The user put the AI on it (handed it to a conversation) and the work is not done: "In progress" until the result
+   *  comes back for the user to confirm. */
+  progress?: { kind: string; since?: string; machine_id?: string; session_id?: string };
 }
 
 /** One hand-off of an item to Persona's main conversation. */
@@ -489,19 +495,33 @@ const byDoneAt = (a: InboxItem, b: InboxItem) => byTime(b.done_at, a.done_at) ||
 export interface InboxSections {
   tiers: Record<SectionKey, InboxItem[]>;
   done: InboxItem[];
+  /** Done items the user ignored ("Ignore": not interested), listed apart from Done. */
+  ignored: InboxItem[];
+}
+
+/** An item the user ignored ("Ignore" in its menu): Ignored, not Done. */
+export function isIgnored(it: InboxItem): boolean {
+  return isDone(it) && it.done_by === "ignored";
+}
+
+/** In FYI: whether the user put it there (a "Marked by you" tag), not the AI. */
+export function userMarked(it: InboxItem): boolean {
+  return Boolean(it.user_tier);
 }
 
 /** The open items by section (the hub's `status`, else the triage tier; newest first) and the done ones (most
  * recently done first). */
 export function sections(items: InboxItem[], f: InboxFilter): InboxSections {
-  const out: InboxSections = { tiers: { action: [], working: [], fyi: [], noise: [] }, done: [] };
+  const out: InboxSections = { tiers: { action: [], working: [], fyi: [], noise: [] }, done: [], ignored: [] };
   for (const it of items) {
     if (!matches(it, f)) continue;
-    if (isDone(it)) out.done.push(it);
+    if (isIgnored(it)) out.ignored.push(it);
+    else if (isDone(it)) out.done.push(it);
     else out.tiers[statusOf(it)].push(it);
   }
   for (const t of TIERS) out.tiers[t.key].sort(byUpdated);
   out.done.sort(byDoneAt);
+  out.ignored.sort(byDoneAt);
   return out;
 }
 
@@ -1158,15 +1178,15 @@ export async function refreshInbox(): Promise<void> {
 
 /** "Done" / "Move back": shown at once, sent in the background; a failure puts the item back. */
 /** Marks an item done or open; resolves to whether the hub took it. */
-export async function setDone(item: InboxItem, done: boolean): Promise<boolean> {
+export async function setDone(item: InboxItem, done: boolean, ignore = false): Promise<boolean> {
   const before = listed(item);
   if (!before) return done ? false : reopenFromHistory(item);
   const key = itemKey(before);
-  const mark: DoneMark = { done_at: done ? new Date().toISOString() : null, done_by: done ? "user" : null };
+  const mark: DoneMark = { done_at: done ? new Date().toISOString() : null, done_by: done ? (ignore ? "ignored" : "user") : null };
   putMark(key, mark);
   patchItem(before, (it) => ({ ...it, ...mark }));
   try {
-    const r = await api<InboxItem>(`${itemPath(item.id)}/done`, { method: "POST", json: { done }, headers: itemRequest(before) });
+    const r = await api<InboxItem>(`${itemPath(item.id)}/done`, { method: "POST", json: ignore && done ? { done, ignore } : { done }, headers: itemRequest(before) });
     const hub = r?.id === item.id ? keepStamp(r, before) : undefined;
     settleMark(key, mark, true, hub);
     // The hub answers the item as it has it now; a newer mark still out stays on top.
@@ -1300,9 +1320,9 @@ export async function loadDoneGroup(manager: string | undefined, key: string, ra
 }
 
 /** Done as the list shows it: the list's done items, then the history's it doesn't have (the list's copy is newer). */
-export function doneWithHistory(done: InboxItem[], history: InboxItem[], f: InboxFilter): InboxItem[] {
+export function doneWithHistory(done: InboxItem[], history: InboxItem[], f: InboxFilter, ignored = false): InboxItem[] {
   const listedKeys = new Set(done.map(itemKey));
-  const older = history.filter((it) => isDone(it) && matches(it, f) && !listedKeys.has(itemKey(it)));
+  const older = history.filter((it) => isDone(it) && isIgnored(it) === ignored && matches(it, f) && !listedKeys.has(itemKey(it)));
   return older.length ? [...done, ...older].sort(byDoneAt) : done;
 }
 
@@ -1319,6 +1339,63 @@ async function reopenFromHistory(item: InboxItem): Promise<boolean> {
     toast(t("lib-inbox.undone_failed", { error: errorText(e) }), "error");
     return false;
   }
+}
+
+/** "Ignore" (not interested): the item goes to Ignored at once, with "Undo"; the hub keeps it as a correction the
+ *  rules learn from (docs/assistant/inbox.md "Corrections and learned rules"). */
+export async function ignoreItem(item: InboxItem): Promise<boolean> {
+  const ok = await setDone(item, true, true);
+  if (ok) toast(t("lib-inbox.ignored"), "ok", { label: t("lib-inbox.undo"), run: () => void setDone(item, false) });
+  return ok;
+}
+
+/** The hub's answer to a move: the item, and whether enough moves like it were made that a rule is being drafted. */
+type TierAnswer = InboxItem & { rule_drafting?: boolean };
+
+/**
+ * "Mark as FYI" / "Mark as Needs you" (docs/assistant/inbox.md "Corrections and learned rules"): the item moves to that
+ * section at once and stays there; "Undo" (tier "") puts back what it had. A failure puts it back too. The toast says
+ * when the hub drafts a rule from the moves, to approve on the phone.
+ */
+export async function setTier(item: InboxItem, tier: Tier | "", undoable = true): Promise<boolean> {
+  const before = listed(item);
+  if (!before || isDone(before)) return false;
+  if (tier) patchItem(before, (it) => ({ ...it, tier, user_tier: tier, status: it.progress || it.suggestion || it.handling ? it.status : tier, urgent: tier === "action" ? it.urgent : false, reason: t("lib-inbox.by_you") }));
+  try {
+    const r = await api<TierAnswer>(`${itemPath(item.id)}/tier`, { method: "POST", json: { tier }, headers: itemRequest(before) });
+    if (r?.id === item.id) {
+      const { rule_drafting: drafting, ...hub } = r;
+      replaceItem(keepStamp(hub, before));
+      if (tier && undoable) {
+        const text = drafting ? t("lib-inbox.moved_rule", { tier: tierName(tier) }) : t("lib-inbox.moved", { tier: tierName(tier) });
+        toast(text, "ok", { label: t("lib-inbox.undo"), run: () => void setTier(item, "", false) });
+      }
+    }
+    return true;
+  } catch (e) {
+    patchItem(before, (it) => ({ ...it, tier: before.tier, user_tier: before.user_tier, status: before.status, urgent: before.urgent, reason: before.reason }));
+    toast(t("lib-inbox.move_failed", { error: errorText(e) }), "error");
+    return false;
+  }
+}
+
+/** A tier's name as the sections call it. */
+export function tierName(tier: Tier): string {
+  return t(`lib-inbox.tier_${tier}`);
+}
+
+// ── the inbox's rules (inbox.rules; Settings › Inbox rules) ───
+
+/** The user's triage rules, one a line. */
+export async function loadInboxRules(): Promise<string[]> {
+  const r = await api<{ rules?: string[] }>("/inbox/rules");
+  return r?.rules ?? [];
+}
+
+/** Replaces the rules (each one line; blank ones are dropped): what the hub keeps. */
+export async function saveInboxRules(rules: string[]): Promise<string[]> {
+  const r = await api<{ rules?: string[] }>("/inbox/rules", { method: "PUT", json: { rules } });
+  return r?.rules ?? [];
 }
 
 /** "Move to folder…": files the item under `folder` by hand ("" in no folder), or hands it back to the model (null).

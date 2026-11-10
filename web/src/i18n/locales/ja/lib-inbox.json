@@ -103,5 +103,10 @@
   "group_lark": "Lark",
   "group_mail": "メール · {account}",
   "group_agents": "あなたを待っている Agent",
-  "folder_failed": "移動できませんでした：{error}"
+  "folder_failed": "移動できませんでした：{error}",
+  "ignored": "無視しました",
+  "by_you": "あなたが変更",
+  "moved": "{tier}に移動しました",
+  "moved_rule": "{tier}に移動しました。同じような変更が続いたので、Persona がルールを作成中です。スマートフォンで確認してください",
+  "move_failed": "移動できませんでした：{error}"
 }

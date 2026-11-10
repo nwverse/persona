@@ -30,6 +30,8 @@ final class InboxProjection {
     let openItems: [InboxItem]
     let byTier: [InboxItem.Tier: [InboxItem]]
     let doneItems: [InboxItem]
+    /// The ones the user ignored (docs/assistant/inbox.md「Corrections and learned rules」): Ignored, apart from Done, newest first.
+    let ignoredItems: [InboxItem]
     let connectorSources: [Source]
     // Closed Done sections never sort. Expanding, closing and expanding again reuse this snapshot's order.
     private(set) lazy var sortedDoneItems = doneItems.sorted {
@@ -40,6 +42,7 @@ final class InboxProjection {
         var open: [InboxItem] = []
         var tiers: [InboxItem.Tier: [InboxItem]] = [:]
         var done: [InboxItem] = []
+        var ignored: [InboxItem] = []
         var sources: [Source] = []
         var seen = Set<String>()
         for item in items {
@@ -48,7 +51,9 @@ final class InboxProjection {
                 sources.append(Source(id: item.account, name: item.accountName))
             }
             guard filter.matches(item) else { continue }
-            if item.isDone {
+            if item.isIgnored {
+                ignored.append(item)
+            } else if item.isDone {
                 done.append(item)
             } else {
                 open.append(item)
@@ -58,6 +63,7 @@ final class InboxProjection {
         openItems = open
         byTier = tiers
         doneItems = done
+        ignoredItems = ignored.sorted { ($0.doneAt ?? .distantPast) > ($1.doneAt ?? .distantPast) }
         connectorSources = sources
     }
 }

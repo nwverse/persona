@@ -62,8 +62,13 @@ type InboxItem struct {
 	Reason      string     `json:"reason,omitempty"`
 	Read        bool       `json:"read,omitempty"` // read somewhere else (Feishu, another mail client)
 	DoneAt      *time.Time `json:"done_at,omitempty"`
-	DoneBy      string     `json:"done_by,omitempty"` // user | dismissed | read | replied | superseded
-	Lark        *InboxLark `json:"lark,omitempty"`
+	DoneBy      string     `json:"done_by,omitempty"` // user | dismissed | ignored | read | replied | superseded
+	// UserTier is the tier the user moved the item to from its menu ("Mark as FYI" / "Mark as Needs you"; inbox_reclass.go):
+	// it stands over triage, the rules and the policies until the user moves it again (or someone needs them urgently).
+	UserTier string `json:"user_tier,omitempty"`
+	// TierWas is what the item had before the user's last move (persisted, not listed): undoing the move puts it back.
+	TierWas *inboxTierWas `json:"tier_was,omitempty"`
+	Lark    *InboxLark    `json:"lark,omitempty"`
 	// Conversation is where the item opens in a messaging source (docs/extensions/extension-messaging.md "9", #2138): listed
 	// only, from Lark; an app with the source opens it there, an older one uses Lark.
 	Conversation *wire.MessagingConversationRef `json:"conversation,omitempty"`
@@ -103,6 +108,9 @@ type InboxItem struct {
 	Related    []InboxRelated    `json:"related,omitempty"`
 	// Handoffs are the latest conversations the event was handed to (inbox_handoff.go), oldest first.
 	Handoffs []InboxHandoff `json:"handoffs,omitempty"`
+	// Progress: the user put the AI on it (handed it to a conversation) and the work is not done: the item is "In
+	// progress" until that conversation hands back a result and the user confirms it (inbox_reclass.go).
+	Progress *InboxProgress `json:"progress,omitempty"`
 
 	// Bookkeeping: persisted, not listed (GET /api/v1/inbox/{id} returns Context).
 	Last      string `json:"last,omitempty"`       // newest message position / mail uid in the item
@@ -189,6 +197,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.ArrivedAt = time.Time{}
 	c.Meta, c.Group = nil, nil
 	c.ChainSeq, c.SuggestSeq = 0, 0
+	c.TierWas = nil
 	c.Status = it.status()
 	c.Chain = listedChain(it)
 	c.Related = slices.Clone(it.Related)
@@ -196,6 +205,10 @@ func (it *InboxItem) listed() InboxItem {
 	if it.Handling != nil {
 		h := *it.Handling
 		c.Handling = &h
+	}
+	if it.Progress != nil {
+		p := *it.Progress
+		c.Progress = &p
 	}
 	if g := currentSuggestion(it); g != nil {
 		g := *g

@@ -88,6 +88,9 @@ func (b *inboxBook) policyTwin(it *InboxItem) string {
 // which policy did (the model's summary and title stay); a tier that is not Needs you is not urgent. It says whether
 // it changed the item; under b.mu.
 func (b *inboxBook) applyPolicyTier(it *InboxItem) bool {
+	if done, changed := b.applyUserTier(it); done { // the user's own move of this item comes first (inbox_reclass.go)
+		return changed
+	}
 	p := b.policyTierChange(it)
 	if p == nil {
 		return false
@@ -119,7 +122,7 @@ func (b *inboxBook) policyReason(name string) string {
 func (b *inboxBook) applyPolicies() []*inboxWrite {
 	var changed []*inboxWrite
 	for _, it := range b.items {
-		if !it.open() || it.Tier == "" || it.handled() || b.policyTierChange(it) == nil {
+		if !it.open() || it.Tier == "" || it.handled() || it.UserTier != "" || b.policyTierChange(it) == nil {
 			continue
 		}
 		w := beginWrite(it) // only the items it changes are snapshot

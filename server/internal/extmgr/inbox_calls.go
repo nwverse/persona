@@ -106,6 +106,14 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 		out = map[string]any{}
 	case assistantwire.AppInbox + " " + assistantwire.InboxConfigMethod:
 		out = h.inboxConfigView(ctx)
+	case assistantwire.AppInbox + " " + assistantwire.InboxSetRules:
+		var a struct {
+			Rules string `json:"rules"`
+		}
+		if err = json.Unmarshal(p.Params, &a); err == nil {
+			err = h.setInboxRules(ctx, a.Rules)
+			out = map[string]any{}
+		}
 	case assistantwire.AppInbox + " " + assistantwire.InboxMailBody:
 		var ref assistantwire.InboxMailRef
 		if err = json.Unmarshal(p.Params, &ref); err == nil {

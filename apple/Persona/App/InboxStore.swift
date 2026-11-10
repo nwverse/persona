@@ -365,6 +365,84 @@ final class InboxStore {
         }
     }
 
+    /// Ignore (the row's menu; docs/assistant/inbox.md「Corrections and learned rules」): the item goes to Ignored at once, with
+    /// Undo; the hub keeps it as a correction the rules learn from. A failure puts it back.
+    func ignore(_ item: InboxItem) {
+        guard let i = items.firstIndex(where: { $0.key == item.key }), !items[i].isDone else { return }
+        let before = items[i]
+        items[i].doneAt = .now
+        items[i].doneBy = "ignored"
+        let key = item.key
+        let token = marks.put(key, .init(doneAt: items[i].doneAt, doneBy: "ignored"))
+        Haptics.tap()
+        Task {
+            do {
+                try await AppModel.shared.api?.manager(AppModel.shared.itemManager(item.manager)).ignoreInbox(item.id)
+                marks.settle(key, token: token, taken: true)
+                AppModel.shared.toast = Toast(String(localized: "Ignored [Inbox Toast]"), style: .success,
+                                              action: Toast.Action(title: String(localized: "Undo")) { [weak self] in self?.setDone(before, false, haptic: false) })
+            } catch {
+                marks.settle(key, token: token, taken: false)
+                if !marks.out(key), let j = items.firstIndex(where: { $0.key == key }) {
+                    items[j].doneAt = before.doneAt
+                    items[j].doneBy = before.doneBy
+                }
+                AppModel.shared.show(error)
+            }
+        }
+    }
+
+    /// Mark as FYI / Mark as Needs You (the row's menu): the item moves to that section at once and stays there; Undo
+    /// (`tier` "") puts back what it had. The toast says when the hub drafts a rule from moves like it, to approve on the
+    /// phone. A failure puts it back.
+    func setTier(_ item: InboxItem, _ tier: String, undoable: Bool = true) {
+        guard let i = items.firstIndex(where: { $0.key == item.key }), !items[i].isDone else { return }
+        let before = items[i]
+        if !tier.isEmpty {
+            items[i] = Self.moved(items[i], to: tier)
+            Haptics.tap()
+        }
+        let key = item.key
+        Task {
+            do {
+                guard let api = AppModel.shared.api else { return }
+                let answer = try await api.manager(AppModel.shared.itemManager(item.manager)).setInboxTier(item.id, tier)
+                if let j = items.firstIndex(where: { $0.key == key }) {
+                    var fresh = answer.item
+                    fresh.manager = before.manager
+                    items[j] = fresh
+                }
+                guard !tier.isEmpty, undoable else { return }
+                let name = InboxItem.Tier(rawValue: tier)?.title ?? tier
+                let text = answer.ruleDrafting
+                    ? String(localized: "Moved to \(name). You’ve moved similar items before, so Persona is drafting a rule for you to approve.")
+                    : String(localized: "Moved to \(name)")
+                AppModel.shared.toast = Toast(text, style: .success,
+                                              action: Toast.Action(title: String(localized: "Undo")) { [weak self] in self?.setTier(before, "", undoable: false) })
+            } catch {
+                if let j = items.firstIndex(where: { $0.key == key }) {
+                    items[j].tier = before.tier
+                    items[j].userTier = before.userTier
+                    items[j].status = before.status
+                    items[j].urgent = before.urgent
+                    items[j].reason = before.reason
+                }
+                AppModel.shared.show(error)
+            }
+        }
+    }
+
+    /// The item as a move to `tier` shows it before the hub answers: the section, "Moved by you", no urgency off Needs You.
+    nonisolated static func moved(_ it: InboxItem, to tier: String) -> InboxItem {
+        var it = it
+        it.tier = tier
+        it.userTier = tier
+        if it.progress == nil, it.suggestion == nil, it.handling == nil { it.status = tier }
+        if tier != InboxItem.Tier.action.rawValue { it.urgent = false }
+        it.reason = String(localized: "Moved by you")
+        return it
+    }
+
     /// Files an outbox-restored hand-off whose item may not be listed yet. The optimistic path is used when it is;
     /// otherwise the same single-item request goes directly to its manager.
     func setDone(id: String, manager: String?, done: Bool) {

@@ -6455,6 +6455,47 @@ def set_policy(body, pid=None, manager=None):
     return pol, applied
 
 
+# MOCK_INBOX_RECLASS=1 (docs/assistant/inbox.md "Corrections and learned rules"): FYI has one item the user put there
+# ("Marked by you"), one the user ignored sits under Ignored, and one handed to the AI is In progress. The moves
+# (POST /api/v1/inbox/{id}/tier) answer rule_drafting from the second on. The rules (GET/PUT /api/v1/inbox/rules) start
+# with two with MOCK_INBOX_RULES=1.
+INBOX_RULES = ["发版通知算知悉即可", "示例商城的营销邮件直接折叠"] if os.environ.get("MOCK_INBOX_RULES") else []
+INBOX_MOVES = {"n": 0}
+if os.environ.get("MOCK_INBOX_RECLASS"):
+    for _x in INBOX:
+        if _x["id"] == "mail:acc1:t2:502":
+            _x.update(tier="fyi", user_tier="fyi", status="fyi", reason="你改的")
+        if _x["id"] == "mail:acc1:t1:501":
+            _x.update(status="working", progress={"kind": "handoff", "since": ago(minutes=20)})
+    INBOX.append({"id": "mail:acc1:t5:505", "source": "mail", "kind": "mail", "account": "acc1", "account_name": "个人邮箱",
+                  "title": "限时优惠：全场 8 折", "sender": "示例商城", "preview": "本周末全场 8 折，会员再享……", "count": 1,
+                  "started_at": ago(hours=6), "updated_at": ago(hours=6), "tier": "noise", "summary": "商城促销邮件", "read": False,
+                  "done_at": ago(minutes=12), "done_by": "ignored",
+                  "mail": {"account_id": "acc1", "mailbox": "INBOX", "uids": [505], "from": {"name": "示例商城", "email": "shop@example.com"}}})
+
+
+def inbox_reclass(iid, body):
+    """POST /api/v1/inbox/{id}/tier: move it ("" puts back the AI's tier)."""
+    x = next((x for x in INBOX if x["id"] == iid), None)
+    if x is None: return {"error": "no such inbox item"}, 404
+    tier = body.get("tier", "")
+    if tier not in ("", "action", "fyi", "noise"): return {"error": "tier must be action, fyi, noise or empty"}, 400
+    if tier:
+        x.setdefault("tier_was", x.get("tier"))
+        x.update(tier=tier, user_tier=tier, status=tier, reason="你改的")
+        INBOX_MOVES["n"] += 1
+    else:
+        was = x.pop("tier_was", x.get("tier"))
+        x.pop("user_tier", None)
+        x.update(tier=was, status=was)
+    for send, _ in list(LIVE):
+        try: send({"type": "inbox"})
+        except Exception: pass
+    out = dict({k: v for k, v in x.items() if k not in ("context", "tier_was")}, version=inbox_version(x))
+    if tier and INBOX_MOVES["n"] >= 2: out["rule_drafting"] = True
+    return out, 200
+
+
 def inbox_version(x):
     """What the item holds now (the hub's inboxVersion): it moves when something new comes in."""
     return hashlib.sha256((x["id"] + "\0" + str(x.get("updated_at")) + str(x.get("count"))).encode()).hexdigest()[:16]
@@ -16425,6 +16466,7 @@ class H(BaseHTTPRequestHandler):
             if other and other[1]: return self.send_json(*other[1])
             return self.send_json({"mutes": OTHER_MUTES.get(other[0], []) if other else MUTES})
         if p == "/api/v1/inbox/folders": return self.send_json(folder_state(q))
+        if p == "/api/v1/inbox/rules": return self.send_json({"rules": INBOX_RULES})
         if p == "/api/v1/inbox/policies":
             other = other_manager(self)
             if other and other[1]: return self.send_json(*other[1])
@@ -17660,6 +17702,9 @@ class H(BaseHTTPRequestHandler):
             pid = p.rsplit("/", 1)[1]
             PLACES[:] = [x for x in PLACES if x["id"] != pid]
             return self.send_json({"ok": True})
+        if p == "/api/v1/inbox/rules" and self.command == "PUT":
+            INBOX_RULES[:] = [" ".join(str(r).split()) for r in json.loads(self.last_body or b"{}").get("rules", []) if str(r).strip()]
+            return self.send_json({"rules": INBOX_RULES})
         if p == "/api/v1/inbox/folders" and self.command == "PUT":
             body = json.loads(self.last_body or b"{}")
             if "enabled" in body: FOLDER_CFG["enabled"] = bool(body["enabled"])
@@ -17733,12 +17778,14 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/translate":  # marks the texts, enough to see where they show
             body = json.loads(self.last_body or b"{}")
             return self.send_json({"texts": ["【译】" + t for t in body.get("texts", [])]})
+        if p.startswith("/api/v1/inbox/") and p.endswith("/tier") and self.command == "POST":
+            return self.send_json(*inbox_reclass(unquote(p[len("/api/v1/inbox/"):-len("/tier")]), json.loads(self.last_body or b"{}")))
         if p.startswith("/api/v1/inbox/") and p.endswith("/done") and self.command == "POST":
             iid, body = unquote(p[len("/api/v1/inbox/"):-len("/done")]), json.loads(self.last_body or b"{}")
             x = next((x for x in INBOX if x["id"] == iid), None)
             if x is None: return self.send_json({"error": "no such inbox item"}, 404)
             if body.get("done"):
-                x["done_at"], x["done_by"] = ago(minutes=0), "dismissed" if body.get("dismiss") else "user"
+                x["done_at"], x["done_by"] = ago(minutes=0), "ignored" if body.get("ignore") else "dismissed" if body.get("dismiss") else "user"
             else:
                 x.pop("done_at", None), x.pop("done_by", None)
             for send, _ in list(LIVE):

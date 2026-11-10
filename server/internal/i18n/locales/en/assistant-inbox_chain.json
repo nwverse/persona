@@ -40,5 +40,8 @@
   "suggested_handback": "Assistant suggests a next step for you to decide",
   "confirmed_agent": "You confirmed: an Agent started",
   "failed_agent": "The Agent couldn’t start",
-  "handed_main": "Handed to Persona’s main chat"
+  "handed_main": "Handed to Persona’s main chat",
+  "reclassified": "You moved it to {tier}",
+  "reclassified_back": "Your move was undone: {tier}",
+  "done_ignored": "You ignored it"
 }

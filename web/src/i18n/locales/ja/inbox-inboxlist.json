@@ -63,5 +63,18 @@
   "load_older": "さらに読み込む",
   "loading_older": "読み込み中…",
   "older_failed": "以前の項目を読み込めませんでした：{error}",
-  "subscriptions": "購読"
+  "subscriptions": "購読",
+  "mark_fyi": "参考程度に変更",
+  "mark_action": "要対応に変更",
+  "ignore": "無視",
+  "ignore_hint": "興味なし",
+  "ignored_section": "無視",
+  "tag_ai": "AI",
+  "tag_ai_title": "AI が分類しました。正しいか確認してください",
+  "tag_you": "手動",
+  "tag_you_title": "あなたが分類しました",
+  "fyi_by_you": "あなたが分類",
+  "fyi_review_first": "先に上の AI の分類を確認してください",
+  "progress": "AI が対応中",
+  "progress_title": "AI に任せました。終わると結果とともに「要対応」に戻り、確認を待ちます"
 }

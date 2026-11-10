@@ -111,5 +111,10 @@
   "group_lark": "Lark",
   "group_mail": "Mail · {account}",
   "group_agents": "Agents waiting on you",
-  "folder_failed": "Couldn't move it: {error}"
+  "folder_failed": "Couldn't move it: {error}",
+  "ignored": "Ignored",
+  "by_you": "Moved by you",
+  "moved": "Moved to {tier}",
+  "moved_rule": "Moved to {tier}. You’ve moved similar items before, so Persona is drafting a rule for you to approve on your phone",
+  "move_failed": "Couldn’t move it: {error}"
 }

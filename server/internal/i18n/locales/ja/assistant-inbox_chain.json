@@ -36,5 +36,8 @@
   "suggested_handback": "アシスタントが提案、判断をお願いします",
   "confirmed_agent": "確認しました：Agent を起動",
   "failed_agent": "Agent を起動できませんでした",
-  "handed_main": "Persona のメインチャットに渡しました"
+  "handed_main": "Persona のメインチャットに渡しました",
+  "reclassified": "あなたが変更：{tier}",
+  "reclassified_back": "変更を取り消しました：{tier}",
+  "done_ignored": "興味なしとして無視しました"
 }

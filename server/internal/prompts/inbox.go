@@ -19,6 +19,34 @@ type InboxTriage struct {
 	Rules string // the user's own rules, trimmed: the item's source's (InboxThing.Rules), else inbox.rules
 	// Language is the summary's language by its own name ("English", "Japanese" written in Japanese); "" is Chinese, as before i18n.
 	Language string
+	// Corrections are the user's latest moves of items of the same source, oldest first: their habits, as examples.
+	Corrections []InboxCorrection
+}
+
+// InboxCorrection is one item the user moved by hand: who and where it came from, what it was about, the tier it had
+// and the one the user gave it (action | fyi | noise | ignore).
+type InboxCorrection struct {
+	Sender, Chat, About, From, To string
+}
+
+// InboxRuleDraft is the system prompt that turns the user's corrections into one triage rule (inbox/rule_draft).
+type InboxRuleDraft struct {
+	Owner    string // "" is the Chinese "you"
+	Language string // the rule's language by its own name; "" is Chinese
+	Rules    string // inbox.rules as they are, trimmed
+}
+
+func RenderInboxRuleDraft(d InboxRuleDraft) string { return render("inbox/rule_draft", d) }
+
+// InboxRuleDraftInput is the corrections the rule is drafted from (inbox/rule_draft_input): all of one sender or chat
+// (Name; Tag sender | chat | repo) moved to one place.
+type InboxRuleDraftInput struct {
+	Name, Tag   string
+	Corrections []InboxCorrection
+}
+
+func RenderInboxRuleDraftInput(in InboxRuleDraftInput) string {
+	return render("inbox/rule_draft_input", in)
 }
 
 func RenderInboxTriage(t InboxTriage) string { return render("inbox/triage", t) }

@@ -164,7 +164,7 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		switch {
 		case in.Kind == SuggestConclusion:
 			b.chainAdd(it, InboxChainEntry{Kind: ChainConcluded, At: now, Text: i18n.T(l, "assistant-inbox_chain.concluded"), Detail: in.Text})
-			if in.Outcome == "done" {
+			if in.Outcome == "done" && it.Progress == nil { // what the user put the AI on waits for their OK
 				it.Suggestion = nil
 				b.file(it, now, doneByManager)
 				if from != nil {

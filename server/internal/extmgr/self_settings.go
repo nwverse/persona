@@ -147,6 +147,16 @@ func (h *Manager) settingText(ctx context.Context, key, fallback string) string 
 func (h *Manager) inboxRules(ctx context.Context) string {
 	return h.settingText(ctx, "inbox.rules", h.cfg.Inbox.Rules)
 }
+
+// setInboxRules keeps text as inbox.rules (the user's own edit in Settings, or a learned rule they approved on the
+// phone; assistant/inbox_reclass.go); "" removes the setting, so manager.json's rules apply again.
+func (h *Manager) setInboxRules(ctx context.Context, text string) error {
+	if h.store == nil {
+		return errors.New("no database on this manager")
+	}
+	return h.store.PutSetting(ctx, "inbox.rules", strings.TrimSpace(text))
+}
+
 func (h *Manager) inboxAgentRules(ctx context.Context) string {
 	return h.settingText(ctx, "inbox.agent_rules", h.cfg.Inbox.Agent.Rules)
 }

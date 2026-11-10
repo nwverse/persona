@@ -5,8 +5,9 @@ import {
   agentDraft, agentWorking, conversationRoute, fromLine, interactionAgentTitle, interactionAsk, interactionTitle, isDone, isLark,
   itemKey, itemRoute, listInboxMutes, muteItem, muteLine, muteShortName, muteTitle, policyMenuTitle, sameItem, unmuteInbox,
   BULK_CONFIRM_AT, bulkScope, bulkScopeName, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, mailShort, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS,
-  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup,
+  useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup, ignoreItem, setTier, userMarked,
 } from "../../lib/inbox";
+import { statusOf } from "../../lib/inbox-events";
 import { dayGroupCounts, doneGroups, groupBySource, groupByTime, openAtFirst, sortTimeKeys, timeRange, timeTitle, type Grouping, type InboxGroup } from "../../lib/inbox-groups";
 import { useMailAccounts } from "../../lib/mail";
 import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
@@ -67,6 +68,8 @@ function useFolds(): [Record<string, boolean>, (key: string, open: boolean) => v
 
 /** The sections open at first (in every manager's group): Needs you and FYI. */
 const OPEN_AT_FIRST = new Set(["action", "fyi"]);
+/** FYI's group of what the user put there themselves. */
+const BY_YOU = "by-you";
 
 /** Selecting (#2059): the picked items' keys (itemKey), null when not selecting. */
 type Picked = Set<string> | null;
@@ -189,21 +192,32 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
     const pending = filtered ? sortTimeKeys(counts.keys(), now).find((key) => !complete(key, 0)) : undefined;
     return { groups: sortTimeKeys(filtered ? byKey.keys() : [...byKey.keys(), ...counts.keys()], now).map(groupOf), next: pending ? groupOf(pending) : undefined };
   };
+  // FYI's "Marked by you": folded while the AI's picks above still wait to be checked, open once they are all dealt with
+  const mineOpen = (group: string, aiLeft: number) => folds[`${group}|fyi|${BY_YOU}`] ?? aiLeft === 0;
   const layout = (byManager ?? [{ manager: null, sec: s, ags: agents }]).map(({ manager, sec, ags }) => {
     const tiers = TIERS.map((tier) => {
       const list = sec.tiers[tier.key];
       const waiting = tier.key === "action" ? ags : [];
-      const groups: InboxGroup[] = tier.key === "working" ? [] : grouping === "time" ? groupByTime(list, now, (it) => it.updated_at) : groupBySource(list, order, mailName);
-      return { tier, list, waiting, groups, titled: tier.key !== "working" && (groups.length > 1 || (waiting.length > 0 && list.length > 0)) };
+      // FYI (docs/assistant/inbox.md "Corrections and learned rules"): what the AI put there first, for the user to check;
+      // what the user put there themselves in its own group under it, folded while the AI's are still there
+      const mine = tier.key === "fyi" ? list.filter(userMarked) : [];
+      const ai = mine.length ? list.filter((it) => !userMarked(it)) : list;
+      const groups: InboxGroup[] = tier.key === "working" ? [] : grouping === "time" ? groupByTime(ai, now, (it) => it.updated_at) : groupBySource(ai, order, mailName);
+      return { tier, list, ai, mine, waiting, groups, titled: tier.key !== "working" && (groups.length > 1 || (waiting.length > 0 && ai.length > 0)) };
     });
-    const done = doneWithHistory(sec.done, scoped(history, mine), { source, kind, query, folder });
+    const own = scoped(history, mine);
+    const done = doneWithHistory(sec.done, own, { source, kind, query, folder });
+    const ignored = doneWithHistory(sec.ignored, own, { source, kind, query, folder }, true);
     const group = manager?.id ?? "";
     const { groups: dg, next } = doneGroupsOf(group, done);
-    return { manager, group, tiers, done, doneGroups: dg, doneNext: next };
+    return { manager, group, tiers, done, ignored, doneGroups: dg, doneNext: next };
   });
   // the open items in sight: in sections and groups shown open (In progress is always open)
   const shownOpen = kind === "agent" ? [] : layout.flatMap(({ group, tiers }) => tiers.filter(({ tier }) => tier.key === "working" || isOpen(group, tier.key))
-    .flatMap(({ tier, list, groups, titled }) => (titled ? groups.filter((g) => groupOpen(group, tier.key, g.key)).flatMap((g) => g.items) : list)));
+    .flatMap(({ tier, ai, mine, groups, titled }) => [
+      ...(titled ? groups.filter((g) => groupOpen(group, tier.key, g.key)).flatMap((g) => g.items) : ai),
+      ...(mine.length && mineOpen(group, ai.length) ? mine : []),
+    ]));
   const chosen = picking ? openInView.filter((it) => picked.has(itemKey(it))) : [];
   const shownKeys = new Set(shownOpen.map(itemKey));
   const chosenFolded = chosen.filter((it) => !shownKeys.has(itemKey(it))).length;
@@ -399,7 +413,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           </div>
         )}
 
-        {layout.map(({ manager, group, tiers, done, doneGroups: dg, doneNext: nextGroup }) => {
+        {layout.map(({ manager, group, tiers, done, ignored, doneGroups: dg, doneNext: nextGroup }) => {
           const exact = Boolean(doneDays[group]);
           const more = exact ? Boolean(nextGroup) || dg.some((g) => g.plus) : historyMore.includes(group);
           const doneCount = exact ? dg.reduce((n, g) => n + g.count, 0) : done.length;
@@ -408,11 +422,12 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           const row = (it: InboxItem, off = false) => (
             <ItemRow key={itemKey(it)} it={it} selected={isSelected(it)} showAccount={chips.length > 1} folder={foldersShown ? folder : undefined} onEdit={setEditing} pick={picking && !off ? pick : undefined} picked={picked?.has(itemKey(it)) ?? false} off={off && picking} />
           );
-          const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean; count?: number } = {}) => {
+          const groupOf = (section: string, g: { key: string; title: string; items: InboxItem[] }, body: React.ReactNode, opts: { more?: boolean; pickable?: boolean; count?: number; open?: boolean; hint?: string } = {}) => {
             const id = `${group}|${section}|${g.key}`;
             const n = picking && opts.pickable ? g.items.filter((it) => picked.has(itemKey(it))).length : 0;
+            const open = opts.open ?? groupOpen(group, section, g.key);
             return (
-              <Group key={id} id={id} title={g.title} count={opts.count ?? g.items.length} more={opts.more} open={groupOpen(group, section, g.key)} onToggle={(open) => putFold(id, open)}
+              <Group key={id} id={id} title={g.title} count={opts.count ?? g.items.length} more={opts.more} open={open} hint={open ? undefined : opts.hint} onToggle={(o) => putFold(id, o)}
                 pick={picking && opts.pickable ? { state: n === 0 ? "none" : n === g.items.length ? "all" : "some", picked: n, run: () => pickGroup(g.items) } : undefined}>
                 {body}
               </Group>
@@ -420,7 +435,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
           };
           return (
             <Fragment key={group}>
-              {ready && tiers.map(({ tier, list, waiting, groups, titled }) => {
+              {ready && tiers.map(({ tier, list, ai, mine, waiting, groups, titled }) => {
                 if (!list.length && !waiting.length) return null;
                 const clear = tier.key === "fyi" ? t("inbox-inboxlist.clear_fyi") : tier.key === "noise" ? t("inbox-inboxlist.clear_noise") : undefined;
                 const agentRows = waiting.map((ix) => <AgentRow key={ix.id} ix={ix} off={picking} />);
@@ -435,9 +450,11 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                     ) : (
                       <>
                         {agentRows}
-                        {list.map((it) => row(it))}
+                        {ai.map((it) => row(it))}
                       </>
                     )}
+                    {mine.length > 0 && groupOf(tier.key, { key: BY_YOU, title: t("inbox-inboxlist.fyi_by_you"), items: mine }, mine.map((it) => row(it)),
+                      { pickable: true, open: mineOpen(group, ai.length), hint: ai.length ? t("inbox-inboxlist.fyi_review_first") : undefined })}
                   </Section>
                 );
               })}
@@ -459,6 +476,11 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
                   }) : done.map((it) => row(it, true))}
                   {!exact && more && history.length > 0 && <OlderButton busy={historyLoading} error={moreError} run={() => void loadOlderDone(historyManagers)} />}
                   {nextGroup && <OlderButton busy={groupLoading.includes(`${group}|${nextGroup.key}`)} error={moreError} run={() => void loadDoneGroup(manager?.id, nextGroup.key, nextGroup.range)} />}
+                </Section>
+              )}
+              {ready && ignored.length > 0 && (
+                <Section k="ignored" title={t("inbox-inboxlist.ignored_section")} count={sectionCount(ignored.length, 0)} open={isOpen(group, "ignored")} onToggle={() => toggle(group, "ignored")}>
+                  {ignored.map((it) => row(it, true))}
                 </Section>
               )}
             </Fragment>
@@ -495,7 +517,7 @@ export function sectionCount(items: number, agents: number): { text: string; lab
 }
 
 /** A section of the list; without `onToggle` it is always open (In progress: what the AI is on never hides). */
-function Section({ k, title, count, open, onToggle, action, menu, children }: { k: SectionKey | "done"; title: string; count: { text: string; label: string }; open: boolean; onToggle?: () => void; action?: { label: string; run: () => void }; /** Done's "Jump to": its groups with their counts. */ menu?: MenuItem[]; children: React.ReactNode }) {
+function Section({ k, title, count, open, onToggle, action, menu, children }: { k: SectionKey | "done" | "ignored"; title: string; count: { text: string; label: string }; open: boolean; onToggle?: () => void; action?: { label: string; run: () => void }; /** Done's "Jump to": its groups with their counts. */ menu?: MenuItem[]; children: React.ReactNode }) {
   const jump = useMenu();
   const head = (
     <>
@@ -529,7 +551,7 @@ function Section({ k, title, count, open, onToggle, action, menu, children }: { 
       </div>
       {/* the clip pulled out by 2px with 2px of padding inside: the cards stay put and the selected one's 1.5px ring
           (and the cards' shadow) is not cut at the sides; the top 2px stays while closed, so the header keeps its 6px */}
-      <Collapse open={open} unclipped className="-mx-0.5" clipClassName="px-0.5 pt-0.5">
+      <Collapse open={open} unclipped className="-mx-0.5" clipClassName="min-w-0 px-0.5 pt-0.5">
         <div inert={!open} className="flex flex-col gap-1.5 pb-0.5">{children}</div>
       </Collapse>
     </section>
@@ -579,7 +601,7 @@ function GroupTick({ state }: { state: "none" | "some" | "all" }) {
  * A group inside a section (#2059): its title sticks to the top while its rows scroll by, and folds it to the title and
  * count. Selecting, its tick picks or unpicks all of it, folded or not; "n selected" says what is picked in it.
  */
-function Group({ id, title, count, more, open, onToggle, pick, children }: { id: string; title: string; count: number; more?: boolean; open: boolean; onToggle: (open: boolean) => void; pick?: { state: "none" | "some" | "all"; picked: number; run: () => void }; children: React.ReactNode }) {
+function Group({ id, title, count, more, open, hint, onToggle, pick, children }: { id: string; title: string; count: number; more?: boolean; open: boolean; /** said beside the title while folded */ hint?: string; onToggle: (open: boolean) => void; pick?: { state: "none" | "some" | "all"; picked: number; run: () => void }; children: React.ReactNode }) {
   return (
     <div data-group={id}>
       <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-canvas/95 px-2 pt-2 pb-0.5 backdrop-blur-sm">
@@ -593,6 +615,7 @@ function Group({ id, title, count, more, open, onToggle, pick, children }: { id:
           <Icon name="chevronRight" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform duration-200" style={{ transform: open ? "rotate(90deg)" : undefined }} />
           <span className="truncate">{title}</span>
           <span className="shrink-0 text-ink-3 tabular-nums">{more ? `${count}+` : count}</span>
+          {hint && <span className="min-w-0 truncate text-ink-3">· {hint}</span>}
         </button>
         {pick && pick.picked > 0 && <span className="shrink-0 text-[11px] text-accent-ink tabular-nums">{t("inbox-inboxlist.group_picked", { count: pick.picked })}</span>}
       </div>
@@ -626,7 +649,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   // a suggestion takes the AI twin's draft's place, and the event's handling the AI twin's "working on it"
   const draft = !done && !it.suggestion && agentDraft(it);
   const working = !done && !it.handling && agentWorking(it);
-  const mark = done ? (it.done_by === "manager" ? <EventMark it={it} /> : null) : it.suggestion || it.handling ? <EventMark it={it} /> : null;
+  const mark = done ? (it.done_by === "manager" ? <EventMark it={it} /> : null) : it.suggestion || it.handling ? <EventMark it={it} /> : it.progress ? <ProgressMark /> : null;
   const rows = !done ? it.doc?.rows ?? [] : [];
   const first = rows[0];
   const translated = hubTranslation(it, useTranslatePrefs());
@@ -644,6 +667,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
             <span className={cx("truncate text-[13.5px]", done ? "text-ink-2" : "font-semibold text-ink")}>{translated?.subject || it.title}</span>
             {translated && <span role="img" aria-label={t("inbox-inboxlist.translated")} title={t("inbox-inboxlist.translated")} className="shrink-0 text-ink-3"><Icon name="translate" size={12} /></span>}
             {label && <Tag urgent={labelIsUrgent(it)}>{label}</Tag>}
+            {!done && statusOf(it) === "fyi" && <ByTag it={it} />}
             <span className="flex-1" />
             <span className={cx("shrink-0 text-[11.5px] text-ink-3 tabular-nums group-focus-within:invisible group-hover:invisible", TOUCH_DONE_ROOM)}>{shortTime(it.updated_at)}</span>
           </span>
@@ -710,6 +734,22 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   );
 });
 
+/** FYI's tag on a row: who put it there, the AI (to check) or the user. */
+function ByTag({ it }: { it: InboxItem }) {
+  const mine = userMarked(it);
+  return <span title={mine ? t("inbox-inboxlist.tag_you_title") : t("inbox-inboxlist.tag_ai_title")}><Tag>{mine ? t("inbox-inboxlist.tag_you") : t("inbox-inboxlist.tag_ai")}</Tag></span>;
+}
+
+/** What the user put the AI on and is not done: "With the AI". */
+function ProgressMark() {
+  return (
+    <span title={t("inbox-inboxlist.progress_title")} className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-2">
+      <Icon name="sparkles" size={12} className="shrink-0 text-accent-ink" />
+      <span className="truncate">{t("inbox-inboxlist.progress")}</span>
+    </span>
+  );
+}
+
 /** A row's menu: "Done" (or "Move back"), then "Mute this repository / chat / sender" with the name under it (iOS InboxView.rowMenu),
  *  and "Move to folder…" when the list shows folders. */
 export function rowMenu(it: InboxItem, done: boolean, folders = false): MenuItem[] {
@@ -718,6 +758,13 @@ export function rowMenu(it: InboxItem, done: boolean, folders = false): MenuItem
       ? { key: "undone", label: t("inbox-inboxlist.move_back"), icon: "inbox", onSelect: () => void setDone(it, false) }
       : { key: "done", label: t("inbox-inboxlist.done"), icon: "check", onSelect: () => void markFromRow(it, true, true) }, // a menu pick: "Undo" on any screen (#4162)
   ];
+  // move it (docs/assistant/inbox.md "Corrections and learned rules"): to the section it belongs in, or out of sight
+  if (!done) {
+    const at = statusOf(it);
+    if (at !== "fyi") items.push({ key: "tier:fyi", label: t("inbox-inboxlist.mark_fyi"), icon: "eye", divider: true, onSelect: () => void setTier(it, "fyi") });
+    if (at !== "action") items.push({ key: "tier:action", label: t("inbox-inboxlist.mark_action"), icon: "flag", divider: at === "fyi", onSelect: () => void setTier(it, "action") });
+    items.push({ key: "ignore", label: t("inbox-inboxlist.ignore"), hint: t("inbox-inboxlist.ignore_hint"), icon: "eyeOff", onSelect: () => void ignoreItem(it) });
+  }
   (it.mutes ?? []).forEach((m, i) => items.push({ key: `mute:${m.tag}:${m.value}`, label: muteTitle(m), hint: muteShortName(m), icon: "bellOff", divider: i === 0, onSelect: () => void muteItem(it, m) }));
   // then a rule for each (docs/assistant/inbox.md "Policies"): the tier its items get, what the AI twin does with them
   (it.mutes ?? []).forEach((m, i) => items.push({ key: `policy:${m.tag}:${m.value}`, label: policyMenuTitle(m), hint: muteShortName(m), icon: "target", divider: i === 0, onSelect: () => openPolicyDialog({ item: it, option: m, source: it.source }) }));

@@ -13,7 +13,7 @@ import {
   badgeCount, bulkMessage, bulkScope, bulkScopeName, canDraft, cardText, connectorReference, connectorSources, contextXML, openTitle, openURL, sourceLine, conversationRoute, docChangeLine, emojiLabel, fromLine, getInbox, handOffMessage, interactionAsk,
   interactionMuted, interactionTitle, itemPath, kindLabel, labelIsUrgent, mailAccounts, mergeMessages, momentText, nextLarkPosition, partRuns, reloadInbox,
   replyLarkMessage, resetInboxForTests, sections, sendLarkMessage, sendReply, setAllDone, setDocStatus, setDone, shortTime, triage, triageBanner, TRIAGE_REASONS, TRIAGE_SETTINGS,
-  listInboxMutes, muteCovers, muteItem, muteLine, muteShortName, muteTitle, unmuteInbox,
+  listInboxMutes, muteCovers, muteItem, muteLine, muteShortName, muteTitle, unmuteInbox, ignoreItem, setTier, loadInboxRules, saveInboxRules, doneWithHistory,
   unsentReplies, waitingAgents, withToken, type InboxFilter, type InboxItem, type InboxTriage, type LarkMessage,
 } from "./inbox";
 import { toast } from "../ui/atoms";
@@ -974,5 +974,80 @@ describe("静音的文字", () => {
     expect(muteCovers("lark", o, item("b", { mutes: [o], done_at: at(1) }))).toBe(false);
     expect(muteCovers("lark", o, item("c", { mutes: [{ ...o, value: "f2" }] }))).toBe(false);
     expect(muteCovers("github", o, item("d", { mutes: [o] }))).toBe(false);
+  });
+});
+
+// docs/assistant/inbox.md "Corrections and learned rules": moving an item, ignoring it, the rules.
+describe("改分级和忽略", () => {
+  const ok = (body: unknown) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+  const fail = (status: number, error: string) => ({ ok: false, status, text: async () => JSON.stringify({ error }) });
+  let fetcher: ReturnType<typeof vi.fn>;
+  const byId = (id: string) => getInbox().items.find((x) => x.id === id)!;
+
+  beforeEach(async () => {
+    resetInboxForTests();
+    vi.mocked(toast).mockClear();
+    vi.stubGlobal("localStorage", { getItem: () => "jd_test" });
+    fetcher = vi.fn().mockResolvedValueOnce(ok({ items: [dm, group] }));
+    vi.stubGlobal("fetch", fetcher);
+    await reloadInbox();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("ignored items are a section of their own, apart from Done, history included", () => {
+    const ign = item("lark:f8:1", { done_at: at(3), done_by: "ignored" });
+    const s = sections([dm, done, ign], all);
+    expect([ids(s.done), ids(s.ignored)]).toEqual([[done.id], [ign.id]]);
+    const old = item("lark:f9:1", { done_at: at(900), done_by: "ignored" });
+    expect(ids(doneWithHistory(s.done, [old], all))).toEqual([done.id]);
+    expect(ids(doneWithHistory(s.ignored, [old], all, true))).toEqual([ign.id, old.id]);
+  });
+
+  it("moves an item at once, posts the tier, says so with 撤销 which puts it back", async () => {
+    let finish: (v: unknown) => void = () => {};
+    fetcher.mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const p = setTier(dm, "fyi");
+    expect([byId(dm.id).tier, byId(dm.id).status, byId(dm.id).user_tier]).toEqual(["fyi", "fyi", "fyi"]);
+    expect(ids(sections(getInbox().items, all).tiers.fyi)).toContain(dm.id);
+    finish(ok({ ...dm, tier: "fyi", status: "fyi", user_tier: "fyi", rule_drafting: true }));
+    expect(await p).toBe(true);
+    const [url, init] = fetcher.mock.calls[1];
+    expect([url, JSON.parse(init.body)]).toEqual(["/api/v1/inbox/lark:f1:1/tier", { tier: "fyi" }]);
+    expect(byId(dm.id)).not.toHaveProperty("rule_drafting");
+    const [text, tone, action] = vi.mocked(toast).mock.lastCall! as [string, string, { label: string; run: () => void }];
+    expect([text, tone, action.label]).toEqual(["已改为知悉即可。同类的事你改过几次了，Persona 正在起草一条规则，请在手机上确认", "ok", "撤销"]);
+    fetcher.mockResolvedValueOnce(ok({ ...dm }));
+    action.run();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({ tier: "" });
+    await vi.waitFor(() => expect(byId(dm.id).user_tier).toBeUndefined());
+  });
+
+  it("a failed move puts the item back", async () => {
+    fetcher.mockResolvedValueOnce(fail(500, "boom"));
+    expect(await setTier(group, "action")).toBe(false);
+    expect([byId(group.id).tier, byId(group.id).user_tier]).toEqual(["fyi", undefined]);
+    expect(vi.mocked(toast).mock.lastCall?.[0]).toMatch(/^没能改过去：.*boom/);
+  });
+
+  it("ignores with 撤销, which moves it back", async () => {
+    fetcher.mockResolvedValueOnce(ok({ ...group, done_at: at(0), done_by: "ignored" }));
+    expect(await ignoreItem(group)).toBe(true);
+    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ done: true, ignore: true });
+    expect(ids(sections(getInbox().items, all).ignored)).toEqual([group.id]);
+    const [text, , action] = vi.mocked(toast).mock.lastCall! as [string, string, { label: string; run: () => void }];
+    expect(text).toBe("已忽略");
+    fetcher.mockResolvedValueOnce(ok({ ...group }));
+    action.run();
+    await vi.waitFor(() => expect(JSON.parse(fetcher.mock.calls[2][1].body)).toEqual({ done: false }));
+  });
+
+  it("reads and saves the rules, one a line", async () => {
+    fetcher.mockResolvedValueOnce(ok({ rules: ["发版通知算知悉即可"] }));
+    expect(await loadInboxRules()).toEqual(["发版通知算知悉即可"]);
+    fetcher.mockResolvedValueOnce(ok({ rules: ["a", "b"] }));
+    expect(await saveInboxRules(["a", "b"])).toEqual(["a", "b"]);
+    const [url, init] = fetcher.mock.lastCall!;
+    expect([url, init.method, JSON.parse(init.body)]).toEqual(["/api/v1/inbox/rules", "PUT", { rules: ["a", "b"] }]);
   });
 });

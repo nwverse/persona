@@ -30,6 +30,7 @@ var errCannotReply = i18n.ErrEnglish("inbox-errors.cannot_reply")
 func (s *Service) inboxRoutes() {
 	s.inboxMuteRoutes()
 	s.inboxPolicyRoutes()
+	s.inboxReclassRoutes()
 	s.inboxFolderRoutes()
 	s.inboxParentRoutes()
 	s.inboxBulkRoutes()
@@ -81,13 +82,22 @@ func (s *Service) inboxRoutes() {
 		}
 		var in struct {
 			Done    bool `json:"done"`
-			Dismiss bool `json:"dismiss"` // "Ignore": filed as not for the user, done_by=dismissed
+			Dismiss bool `json:"dismiss"` // set aside (Clean up all's, one item): done_by=dismissed
+			// Ignore: the user is not interested ("Ignore" in the item's menu): done_by=ignored, listed under Ignored
+			// apart from Done, and a correction the rules learn from (inbox_reclass.go).
+			Ignore bool `json:"ignore"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		it, err := s.setInboxDone(r.Context(), r.PathValue("id"), in.Done, in.Dismiss)
+		var it InboxItem
+		var err error
+		if in.Ignore && in.Done {
+			it, err = s.ignoreInbox(r.Context(), r.PathValue("id"))
+		} else {
+			it, err = s.setInboxDone(r.Context(), r.PathValue("id"), in.Done, in.Dismiss)
+		}
 		if err != nil {
 			if errors.Is(err, errNoInboxItem) {
 				apierr.Write(w, http.StatusNotFound, err)
@@ -280,6 +290,11 @@ func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
 }
 
 func (s *Service) setInboxDone(ctx context.Context, id string, done, dismiss bool) (InboxItem, error) {
+	return s.fileInbox(ctx, id, done, doneByOf(dismiss))
+}
+
+// fileInbox files the item as done by why (done false reopens it).
+func (s *Service) fileInbox(ctx context.Context, id string, done bool, why string) (InboxItem, error) {
 	if !done {
 		s.restoreInbox(ctx, []string{id}) // done past inboxForget: its row comes back to be reopened (inbox_history.go)
 	}
@@ -290,7 +305,7 @@ func (s *Service) setInboxDone(ctx context.Context, id string, done, dismiss boo
 		b.mu.Unlock()
 		return InboxItem{}, errNoInboxItem
 	}
-	w := b.beginFiling(it, time.Now(), doneByOf(dismiss))
+	w := b.beginFiling(it, time.Now(), why)
 	if done {
 		if it.open() {
 			b.file(it, w.now, w.why)
@@ -306,7 +321,9 @@ func (s *Service) setInboxDone(ctx context.Context, id string, done, dismiss boo
 				it.done(w.now, w.why)
 			}
 		}
-	} else {
+	}
+	unignored := !done && it.DoneBy == doneByIgnored
+	if !done {
 		it.DoneAt, it.DoneBy = nil, ""
 	}
 	b.settleFiling(w)
@@ -314,6 +331,9 @@ func (s *Service) setInboxDone(ctx context.Context, id string, done, dismiss boo
 	failed := s.saveInboxFilings(ctx, []*inboxFiling{w})
 	if failed[id] {
 		return InboxItem{}, errInboxNotPersisted
+	}
+	if unignored { // the ignore was undone: it teaches nothing (inbox_reclass.go)
+		s.dropFeedback(ctx, id)
 	}
 	b.mu.Lock()
 	out := it.listed()

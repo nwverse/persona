@@ -36,5 +36,8 @@
   "suggested_handback": "助手给了建议，等你拿主意",
   "confirmed_agent": "你确认了，开了 Agent",
   "failed_agent": "Agent 没有开起来",
-  "handed_main": "交给了 Persona 主对话"
+  "handed_main": "交给了 Persona 主对话",
+  "reclassified": "你改为：{tier}",
+  "reclassified_back": "撤回了你的改动：{tier}",
+  "done_ignored": "你忽略了，不感兴趣"
 }

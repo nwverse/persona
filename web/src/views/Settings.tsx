@@ -32,6 +32,7 @@ import { AssistantSettings } from "./settings/AssistantSettings";
 import { PersonaPicker } from "./assistant/Persona";
 import { Connectors } from "./settings/Connectors";
 import { TriageSettings } from "./settings/TriageSettings";
+import { InboxRulesSettings } from "./settings/InboxRulesSettings";
 import { TranslationSettings } from "./settings/TranslationSettings";
 import { Extensions } from "./settings/Extensions";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
@@ -581,6 +582,7 @@ function AssistantProfile({ onTriageModel }: { onTriageModel: () => void }) {
     <>
       <AssistantSettings bare />
       <TriageSettings onModel={onTriageModel} />
+      <InboxRulesSettings />
     </>
   );
 }

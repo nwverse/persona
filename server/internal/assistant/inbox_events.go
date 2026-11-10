@@ -336,6 +336,8 @@ func (b *inboxBook) file(it *InboxItem, at time.Time, by string) {
 		key = "done_user"
 	case "dismissed":
 		key = "done_dismissed"
+	case doneByIgnored:
+		key = "done_ignored"
 	case "read":
 		key = "done_read"
 	case doneByManager:
@@ -435,7 +437,8 @@ func (it *InboxItem) status() string {
 	if it.Tier == TierNoise {
 		return StatusNoise
 	}
-	if s := it.Suggestion; s != nil && s.Kind != SuggestConclusion {
+	if s := it.Suggestion; s != nil && (s.Kind != SuggestConclusion || it.Progress != nil) {
+		// What the user put the AI on comes back to them with its result: they confirm it is done.
 		return StatusAction
 	}
 	if h := it.Handling; h != nil && it.Suggestion == nil {
@@ -450,6 +453,9 @@ func (it *InboxItem) status() string {
 		case HandlingFailed:
 			return StatusAction
 		}
+	}
+	if it.Progress != nil && it.Suggestion == nil {
+		return StatusWorking // the AI the user put on it is not done yet
 	}
 	if it.Tier == TierFYI {
 		return StatusFYI
