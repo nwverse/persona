@@ -127,6 +127,11 @@ final class NodeMenuUITests: XCTestCase {
         XCTAssertEqual(started?["route"], "panes/agent")
         XCTAssertEqual(started?["pane"], "w1:p2")
         XCTAssertFalse((started?["launcher"] ?? "").isEmpty)
+        // The agent it started opens, as New Session's does (#3287): its chat comes up, not the list with it idle there.
+        let title = app.buttons.matching(identifier: "chat.title").firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10), "the started agent's chat did not open")
+        XCTAssertTrue(title.label.contains("新会话"), "another chat opened: \(title.label)")
+        shot(app, "run-here-opened")
     }
 
     /// New Worktree… (#3099): the path follows the branch, git's refusal is told in the sheet, and a made worktree is

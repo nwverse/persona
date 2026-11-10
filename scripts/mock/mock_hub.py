@@ -4612,7 +4612,8 @@ def cell_width(ch):
 # POST there opens a new shell tab. A terminal addressed "pane:<id>" is a made-up shell, not the Claude screen.
 PANES_NEW = {}  # machine id -> [(workspace id, pane)] opened by POST
 # The menu actions (close / split / rename / run an agent / git), recorded at GET /mock/node_actions and applied to the
-# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell.
+# layout above: a closed pane or tab is gone, a renamed tab has its new name, a split adds a shell, an agent run in a
+# shell is a new session.
 NODE_ACTIONS = []
 CLOSED_PANES, CLOSED_TABS, TAB_NAMES, SPLIT_PANES = set(), set(), {}, {}
 # #2431 "New worktree…": worktree/create adds a workspace (with one shell pane) next to the persona one; a branch or a path
@@ -4738,6 +4739,22 @@ def node_action(h, p, body):
         return h.send_json({"op": body.get("op"), "outcome": outcome, "message": message})
     elif area == "panes" and verb == "agent":
         time.sleep(0.6)
+        # As the node answers (docs/protocol/protocol.md): the session it started, bound to that pane, idle with no first
+        # message, listed from now on; the apps open its chat (#3287). A started session's id: /mock/reset takes it away.
+        hosts = mock_panes(mid)["hosts"]
+        pane = str(body.get("pane", ""))
+        shell = next((x for x in (hosts[0]["panes"] if hosts else []) if x["pane"] == pane), None)
+        if shell:  # a pane the computer does not list starts nothing: answered as before
+            tab = next((t for t in hosts[0]["tabs"] if t["id"] == shell["tab_id"]), {})
+            ws = shell["workspace_id"]
+            mate = next((x for x in SESSIONS if x["machine_id"] == mid and x.get("workspace_id") == ws), {})  # the space it joins
+            START_IDS[0] += 1
+            s = sess(mid, "d4e6f8a0-0000-4000-8000-%012d" % START_IDS[0], "新会话", shell.get("cwd") or mate.get("cwd", ""), "idle", "idle",
+                     mate.get("space_name", ""), mate.get("space_index", 0), tab.get("label", ""), tab.get("number", 0), 0, "",
+                     pane_id=pane, tab_id=shell["tab_id"], slot_id=shell["tab_id"], workspace_id=ws, space_id=mate.get("space_id", ws))
+            s["launcher"] = body.get("launcher") or "claude"
+            SESSIONS.append(s)
+            return h.send_json({"session_id": s["session_id"]})
     return h.send_json({})
 
 
