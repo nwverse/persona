@@ -193,9 +193,12 @@ func TestWalkProjectsMatchesGlobOnGeneratedTrees(t *testing.T) {
 	t.Logf("%d transcripts, %d subagent transcripts", mains, subs)
 }
 
-// The usage meter lists its transcripts every 10 seconds, and the walk stats none that the directory says is a file:
-// over 20 projects of 20 transcripts, each with a subagent's, it made 9,106 allocations, where the two globs made
-// 11,479 and a stat per transcript adds 800. The bound is the count measured, plus 3%.
+// The usage meter lists its transcripts every 10 seconds, and the walk stats none that the directory says is a file.
+// Over 20 projects of 20 transcripts, each with a subagent's, the walk made 9,106 allocations on Linux and the two
+// globs 11,479: 2,373 fewer. With a stat per transcript put back, the walk made 9,906, only 1,573 fewer. The test
+// bounds that saving, not the walk's own count: reading a directory allocates a different amount on each system (two
+// more per read on macOS), and the globs read every directory the walk reads, so that cost cancels out. The bound
+// leaves the walk the headroom an absolute bound would: 3% of its count, about 270 allocations.
 func TestWalkProjectsAllocationBudget(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	for p := range 20 {
@@ -215,8 +218,13 @@ func TestWalkProjectsAllocationBudget(t *testing.T) {
 	if m, s := walkProjects(root); len(m) != 400 || len(s) != 400 {
 		t.Fatalf("listed %d transcripts and %d subagent transcripts, want 400 of each", len(m), len(s))
 	}
-	if a := testing.AllocsPerRun(10, func() { walkProjects(root) }); a > 9380 && !raceEnabled {
-		t.Errorf("listing 800 transcripts made %.0f allocations, want at most 9,380", a)
+	if raceEnabled {
+		t.Skip("race instrumentation allocates")
+	}
+	walk := testing.AllocsPerRun(10, func() { walkProjects(root) })
+	globs := testing.AllocsPerRun(10, func() { globProjectFiles(t, root) })
+	if saved := globs - walk; saved < 2100 {
+		t.Errorf("listing 800 transcripts made %.0f allocations and the two globs %.0f: %.0f fewer, want at least 2,100", walk, globs, saved)
 	}
 }
 
