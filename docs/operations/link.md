@@ -267,7 +267,7 @@ Both sides ignore a message type they don't know.
 
 **Forwarding**
 - Only forwards to `~/.persona/node-attach.sock` and only connects back to the hub address used by this link; stream ids may contain only letters, digits, `-`, `_`. The hub can't make it connect elsewhere.
-- Streams enable permessage-deflate compression. SSH previously used `Compression=yes`; see the comment in `devices/machine.go` (the hub-to-manager hop is local loopback and isn't compressed).
+- Streams enable permessage-deflate compression without context takeover (`link.StreamCompression`): each message is compressed on its own, so an idle stream keeps no compression state (with context takeover, about 0.8 MB per end, for about a sixth fewer bytes on the wire). Either end asking for it is enough, so it also applies when only the hub or only Persona Link is new. SSH previously used `Compression=yes`; see the comment in `devices/machine.go` (the hub-to-manager hop is local loopback and isn't compressed).
 - To the resident node, each stream is a new attach connection, replacing the previous one just as with SSH.
 
 ## Hub behind a reverse proxy
@@ -367,7 +367,7 @@ Errors are JSON: `{"error":"<code>","message":"<human-readable Chinese>"}`.
 | `GET /api/v1/connector/stream` | Same | WebSocket upgrade; optional `X-Persona-Ping` (heartbeat, below) | Authenticate, connect node-attach.sock, then upgrade: node unreachable: `503 node_unavailable` (`message` gives the reason for the hub to record as this computer's error); non-upgrade request: `400`; after upgrading, see below |
 
 - Successful pairing replaces the previously paired hub ("only trusts the hub it paired with": the group's primary; a new primary re-pairs after a switch). Old credentials stop working immediately, and streams opened with them close with code **4002**.
-- Streams are binary messages containing unchanged node bytes in both directions. Accepts permessage-deflate (context takeover, like active-mode streams and SSH's former `Compression=yes`).
+- Streams are binary messages containing unchanged node bytes in both directions. Accepts permessage-deflate without context takeover, as active-mode streams use it (SSH formerly used `Compression=yes`); a manager that still asks for context takeover gets none.
   The helper pings every 10 seconds and disconnects after 5 seconds without pong, while answering hub pings normally. When the hub closes a stream, the helper half-closes the node connection (write end), letting the node finish reading and clean up; the stream ends when the node closes.
   With a heartbeat configured in hub.json (`link`), the stream request carries `X-Persona-Ping: <interval milliseconds> <timeout milliseconds>`; the helper uses it on that stream (also clamped to 50 milliseconds–10 minutes);
   absent or not two numbers, it uses its own values. Old helpers ignore the header and retain 10 seconds / 5 seconds.
