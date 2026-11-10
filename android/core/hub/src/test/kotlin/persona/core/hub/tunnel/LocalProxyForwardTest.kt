@@ -3,9 +3,16 @@ package persona.core.hub.tunnel
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
+import java.net.ServerSocket
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -108,4 +115,78 @@ class LocalProxyForwardTest {
             }
         }
     }
+
+    @Test fun closeWaitsUntilTheListenerWorkerHasExited() {
+        val dial = LocalProxyForward.Dial("127.0.0.1", 1, "127.0.0.1", 1)
+        repeat(100) {
+            LocalProxyForward(dial).use { forward ->
+                val port = forward.listen()
+                val worker = Thread.getAllStackTraces().keys.single { it.name == "Local proxy forward $port" }
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+                while (worker.stackTrace.none { it.methodName == "accept" }) {
+                    assertTrue("Listener did not enter accept", System.nanoTime() < deadline)
+                    Thread.yield()
+                }
+                forward.close()
+                assertFalse("close returned while the listener still owned its socket", worker.isAlive)
+            }
+        }
+    }
+
+    @Test fun anOccupiedPreferredPortFallsBackWithoutTouchingItsOwner() {
+        val loopback = InetAddress.getByName("127.0.0.1")
+        ServerSocket(0, 1, loopback).use { occupied ->
+            val dial = LocalProxyForward.Dial("127.0.0.1", 1, "127.0.0.1", 1)
+            LocalProxyForward(dial).use { forward ->
+                val port = forward.listen(occupied.localPort)
+                assertTrue(port > 0 && port != occupied.localPort)
+                assertFalse(occupied.isClosed)
+            }
+        }
+    }
+
+
+    @Test fun closeCanRaceWithOpeningWithoutLeavingAListener() {
+        val dial = LocalProxyForward.Dial("127.0.0.1", 1, "127.0.0.1", 1)
+        repeat(100) {
+            val forward = LocalProxyForward(dial)
+            val start = CountDownLatch(1)
+            val port = AtomicInteger()
+            val failure = AtomicReference<Throwable?>()
+            fun worker(action: () -> Unit) = thread(isDaemon = true) {
+                try { start.await(); action() } catch (error: Throwable) { failure.set(error) }
+            }
+            val opening = worker { port.set(forward.listen()) }
+            val closing = worker { forward.close() }
+            start.countDown()
+            val workerDeadlineMillis = TimeUnit.SECONDS.toMillis(2)
+            opening.join(workerDeadlineMillis)
+            closing.join(workerDeadlineMillis)
+            assertFalse("Opening did not finish", opening.isAlive)
+            assertFalse("Closing did not finish", closing.isAlive)
+            failure.get()?.let { throw AssertionError("Concurrent lifecycle failed", it) }
+            assertFalse(forward.listening)
+            if (port.get() > 0) ServerSocket().use { released ->
+                released.reuseAddress = true
+                released.bind(InetSocketAddress("127.0.0.1", port.get()))
+            }
+        }
+    }
+
+
+    @Test fun closePreservesInterruptionWithoutThrowingToItsCaller() {
+        val dial = LocalProxyForward.Dial("127.0.0.1", 1, "127.0.0.1", 1)
+        val forward = LocalProxyForward(dial)
+        forward.listen()
+        try {
+            Thread.currentThread().interrupt()
+            forward.close()
+            assertTrue(Thread.currentThread().isInterrupted)
+            assertFalse(forward.listening)
+        } finally {
+            Thread.interrupted()
+            forward.close()
+        }
+    }
+
 }

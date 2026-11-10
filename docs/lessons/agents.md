@@ -746,3 +746,17 @@ freshness window kept such history working for hours. Working requires an owned 
 Apply that native activity before internal-metadata filtering and history limits, and discover running native summaries even
 before a brain directory or transcript is exported. Read titles, workspaces and update times from the native summary when
 the legacy JSON cache is incomplete. Cover these cases through the runtime inventory protocol.
+
+## Antigravity model directories and ACP acknowledgements (#3716)
+
+Native model availability changes independently of Persona releases. Discover the authenticated CLI catalog and use its
+settings and session metadata for defaults and current values. A fixed catalog hides new models and invents labels for
+external sessions. Treat ACP configuration responses and notifications as authoritative, publish acknowledged partial
+changes, and propagate failures. Native `auto` is distinct from full permission bypass.
+
+## Runtime availability checks need the runtime's authentication context (#3790)
+
+An SSH node and a local companion can have different credential access. A model list and session start succeeding in
+the companion do not make a login-shell health probe authenticated. Opt into runtime-owned checks, bound inference and
+cleanup, deny probe tools, and hide transcripts whose temporary probe workspace has been removed. Preserve a real
+workspace sharing the probe prefix while it still exists.

@@ -64,6 +64,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
 		return
 	}
+	if m := in.MeetingAttendanceDefault; m != nil && !slices.Contains(meetingRoles, *m) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_default_role"))
+		return
+	}
 	if p := in.ReviewSamplePercent; p != nil && (*p < 0 || *p > 100) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("review_sample_percent must be 0–100"))
 		return
@@ -129,6 +133,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.RecordingDays != nil {
 			v.RecordingDays = in.RecordingDays
+		}
+		if in.MeetingAttendanceDefault != nil {
+			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
 		}
 		if in.IdleCloseHours != nil {
 			v.IdleCloseHours = in.IdleCloseHours
