@@ -9654,7 +9654,7 @@ def sessions_read(handler, size, status):
     mode = ("lookup" if "session_id" in q else "counts" if q.get("counts", [""])[0] == "1" else "since" if "since" in q
             else "full" if not (set(q) - {"manager", "machine_id"}) else "baseline")
     if status >= 400: mode += "_%d" % status
-    client = (handler.headers.get("X-Persona-Client") or handler.headers.get("X-Jarvis-Client") or "").split("/")[0] or "unknown"
+    client = (handler.headers.get("X-Persona-Client") or "").split("/")[0] or "unknown"
     with SESSIONS_READS_LOCK:
         row = SESSIONS_READS["reads"].setdefault(client, {}).setdefault(mode, {"count": 0, "bytes": 0})
         row["count"] += 1
