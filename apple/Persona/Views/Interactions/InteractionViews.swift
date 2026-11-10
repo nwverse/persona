@@ -1700,7 +1700,11 @@ struct BUIScreenForm: View {
                     eyebrow: d.question.isEmpty ? nil : ScreenForm.eyebrow(d),
                     allowsCustom: typing != nil, customPlaceholder: String(localized: "Other answer…"))],
                 answers: shown,
-                skipLabel: nil, sendLabel: d.multi ? (d.submit == "Next" ? String(localized: "Next [Interaction Views f82c68]") : String(localized: "Submit")) : String(localized: "Send"), sentMessage: String(localized: "Sent"),
+                skipLabel: nil,
+                // A question of several goes on to the next one, as in the default style (#2970).
+                sendLabel: d.multi ? (d.submit == "Next" ? String(localized: "Next [Interaction Views f82c68]") : String(localized: "Submit"))
+                    : stepping ? String(localized: "Next [Interaction Views f82c68]") : String(localized: "Send"),
+                sentMessage: String(localized: "Sent"),
                 options: .panel(sending: sending != nil)
             ) { answers in
                 let text = (answers.custom[0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

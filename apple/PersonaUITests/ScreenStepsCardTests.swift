@@ -25,6 +25,13 @@ final class ScreenStepsCardTests: XCTestCase {
             shot(app, "first-\(scheme)")
             answer(app, "预览", next: "哪些平台要一起发？")
             shot(app, "second-\(scheme)")
+            // The multi-select card is taller than the cards' area: scrolled to its end, Previous and Next are clear of
+            // the message box.
+            app.scrollViews["pending-cards"].swipeUp()
+            XCTAssertTrue(clear(app, app.buttons["screen-step-back"]), "Previous under the message box")
+            XCTAssertTrue(clear(app, app.buttons["下一题"].firstMatch), "Next under the message box")
+            shot(app, "second-end-\(scheme)")
+            app.scrollViews["pending-cards"].swipeDown()
             // Previous: the first question again, with the answer it had.
             app.buttons["screen-step-back"].tap()
             XCTAssertTrue(app.staticTexts["先发哪个环境？"].waitForExistence(timeout: 10), "Previous did not go back")
@@ -44,6 +51,9 @@ final class ScreenStepsCardTests: XCTestCase {
             XCTAssertTrue(app.staticTexts["预览"].exists && app.staticTexts["手表"].exists && app.staticTexts["设计组"].exists,
                           "the review does not show the answers")
             XCTAssertNil(state()["done"] as? String, "submitted before the review")
+            // The whole review card is in sight: its buttons and its last row clear of the message box.
+            XCTAssertTrue(clear(app, submit), "Submit under the message box")
+            XCTAssertTrue(clear(app, app.buttons["screen-card-terminal"].firstMatch), "the card's last row under the message box")
             shot(app, "review")
             submit.tap()
             XCTAssertTrue(waitUntil(10) { self.state()["done"] as? String == "submitted" }, "Submit did not submit")
@@ -62,7 +72,8 @@ final class ScreenStepsCardTests: XCTestCase {
         let goAnswer = app.buttons["screen-review-answer"]
         XCTAssertTrue(goAnswer.waitForExistence(timeout: 20), "no review with a question left:\n\(app.debugDescription)")
         XCTAssertTrue(app.staticTexts["未回答"].exists || app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "未回答")).firstMatch.exists)
-        XCTAssertTrue(app.buttons["screen-review-submit-anyway"].exists, "no Submit Without Them")
+        XCTAssertTrue(clear(app, app.buttons["screen-review-submit-anyway"]), "Submit Without Them missing or under the message box")
+        XCTAssertTrue(clear(app, app.buttons["screen-card-terminal"].firstMatch), "the card's last row under the message box")
         shot(app, "review-incomplete")
         goAnswer.tap()
         XCTAssertTrue(app.staticTexts["发完通知谁？"].waitForExistence(timeout: 10), "did not go back to the question left")
@@ -104,6 +115,13 @@ final class ScreenStepsCardTests: XCTestCase {
         option(app, label).tap()
         if !shown.waitForExistence(timeout: 2), app.buttons["发送"].exists { app.buttons["发送"].firstMatch.tap() }
         XCTAssertTrue(shown.waitForExistence(timeout: 10), "nothing after answering \(label):\n\(app.debugDescription)")
+    }
+
+    /// On screen, tappable and above the message box (its add button's top).
+    @MainActor private func clear(_ app: XCUIApplication, _ e: XCUIElement) -> Bool {
+        guard e.waitForExistence(timeout: 5), e.isHittable else { return false }
+        let add = app.buttons["shell-composer-add"].firstMatch
+        return !add.exists || e.frame.maxY <= add.frame.minY
     }
 
     private func mock(_ path: String) { _ = try? Data(contentsOf: URL(string: hub + path)!) }
