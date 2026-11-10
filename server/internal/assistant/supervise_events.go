@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"strings"
 	"time"
@@ -72,19 +73,32 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 	if st == reviewNeedsUser {
 		return // the supervisor knows it waits for the user
 	}
-	detail := "hub 没判断出来是不是做完了"
-	if err == nil {
-		detail = verdictWords[c.Verdict]
-		if c.Reason != "" {
-			detail += "：" + c.Reason
+	if v := t.Supervision; t.DoneAt == nil && (v.State == reviewAccepted || v.State == reviewCancelled) {
+		// Closed by its review, open again only because its agent was sent more (taskWorking, #5892): what it did then
+		// is no task stopped short. Done, it waits for review again (above); else the supervisor is not told (#3111).
+		s.logf("task %s: %s before, more work since judged %s: not told", t.ID, v.State, cmp.Or(c.Verdict, "with an error"))
+		return
+	}
+	if err != nil {
+		// The judge failed (the model service, a reply that was no verdict): no word on whether it is finished, not
+		// "stopped short" (#3111). The supervisor reads the agent's reply and decides.
+		s.signal(superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: "判定模型出错"})
+		return
+	}
+	detail := verdictWords[c.Verdict]
+	if c.Reason != "" {
+		detail += "：" + c.Reason
+	}
+	if c.Verdict == verdictUnsure { // no word on it either way: not "stopped short" (#3111)
+		s.signal(superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail})
+		return
+	}
+	if d := c.Delivery; c.Verdict == verdictUndelivered && d.held() { // where it is held, to chase (delivery.go)
+		detail += "（" + deliveryLabels[d.State]
+		if d.Gate != "" {
+			detail += "，卡在「" + d.Gate + "」"
 		}
-		if d := c.Delivery; c.Verdict == verdictUndelivered && d.held() { // where it is held, to chase (delivery.go)
-			detail += "（" + deliveryLabels[d.State]
-			if d.Gate != "" {
-				detail += "，卡在「" + d.Gate + "」"
-			}
-			detail += "）"
-		}
+		detail += "）"
 	}
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigIdle, Key: key, Detail: detail})
 }

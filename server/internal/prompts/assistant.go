@@ -613,6 +613,9 @@ type TaskDoneReply struct {
 	Machine, Ask, Text string
 	From               string `json:"from,omitempty"`
 	Source             string `json:"source,omitempty"`
+	// Earlier is the agent's reply in the turn before the user's own follow-up in this session (its report of the
+	// work, when the follow-up only asks whether it is done); never set for a side-conversation turn (#3111).
+	Earlier string `json:"earlier,omitempty"`
 }
 
 func RenderTaskDoneInput(in TaskDoneInput) string { return render("assistant/task_done_input", in) }
