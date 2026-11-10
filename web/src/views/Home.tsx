@@ -18,10 +18,10 @@ import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useCounts } from "../lib/sessions";
-import { getSession, useStore } from "../lib/store";
+import { getSession, useStore, withTaskRows } from "../lib/store";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
-import { heldDelivery, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
+import { heldDelivery, makeSessionLookup, TODO_STATUS_INFO, TODO_TONE_CLASS, todoStatusLabel } from "../lib/todos";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
 import { Button, Collapse, cx, EASE, IconButton, Loading, useNow } from "../ui/atoms";
@@ -60,8 +60,9 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   const { groups, unread, markAllAt, quiet } = useMemo(() => homeOverview(sessions, interactions), [sessions, interactions]);
   // every open task with where it stands (#6450, the web side of the Lark bot's /tasks)
   const todos = useStore((s) => s.todos);
+  const taskRows = useStore((s) => s.taskRows);
   // read as the Tasks page reads them: a card answered here moves its task at once too
-  const tasks = useMemo(() => homeTasks(todos, answeredLookup(agentSessions, interactions, answered)), [todos, agentSessions, interactions, answered]);
+  const tasks = useMemo(() => homeTasks(todos, answeredLookup(withTaskRows(makeSessionLookup(agentSessions), taskRows), interactions, answered)), [todos, agentSessions, taskRows, interactions, answered]);
   const name = (mid: string) => machineWithHub(mid, machines);
   const [confirmSeen, setConfirmSeen] = useState<Session[] | null>(null);
   const markAll = <MarkAllSeen count={unread.length} onClick={() => setConfirmSeen(unread)} />;
@@ -292,7 +293,7 @@ function TaskCard({ task: { todo, status, agents } }: { task: HomeTask }) {
         </a>
         <span className={cx("inline-flex h-5 shrink-0 items-center rounded-full bg-field px-1.5 text-[11px] font-medium whitespace-nowrap", TODO_TONE_CLASS[TODO_STATUS_INFO[status].tone])}>{todoStatusLabel(todo, status)}</span>
       </div>
-      <TodoStageBar stage={todo.stage} prURL={todo.pr_url} />
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} />
       {line && <p className={cx("truncate text-[11.5px]", held ? "text-orange" : "text-ink-3")}>{line}</p>}
     </div>
   );

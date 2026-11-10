@@ -1,5 +1,20 @@
 # Lessons: hub / node and networking
 
+## Bubblewrap masks are mount views, not path-denial rules (#2977)
+
+A default-allow agent profile cannot reuse the extension sandbox's whitelist: bind the host root read-write, add
+`--dev-bind /dev /dev` (a plain root bind left `/dev/null` unusable for git, ssh and curl), and mask only the data
+directory with a view that binds back allowed entries. A bind follows the source's final symlink: an innocent-looking
+entry can import a secret target. Recreate ordinary links with `--symlink` so they resolve through the masked view, and
+close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
+backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
+old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
+claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
+while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
+with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+lifecycle cleanup.
+
 ## Runtime policy and publisher-owned node packages (#2566)
 
 A persisted node-update choice must override startup configuration everywhere:
@@ -303,6 +318,7 @@ Revocation ended pairing codes with `expires_at = now()` (Postgres's clock) whil
 ## Rolling-upgrade identity contracts (#6223)
 
 - Treat a rename as an ABI change wherever a byte reaches another process, persisted state, a cryptographic domain or an operating-system registration. Use an explicit authenticated feature, an old-safe default and exact aliases; display names and build strings do not prove compatibility. Push-to-start needs a persisted registration capability, independent of the socket's XML capability.
+- Connection capability changes must invalidate unused warm processes (#3269). The devices manager can reconnect to another hub while retaining the node connection, so a Claude spare can carry the previous MCP namespace policy. Record the policy at process start and require it to match before adopting or reusing the spare; established conversations retain their configuration. Shared generated MCP files also serve automatic resumes and cannot be narrowed using only the current hub capability.
 - A deterministic receipt or thread seed, HPKE info or grant AAD is an invariant, not copy. Keep the original output bytes; decoding can accept both explicitly known domains. A dual-key JSON payload cannot repair encryption the old receiver cannot open. Never rotate a key, token or database to hide incompatibility.
 - Normalize typed protocol fields only. Generic recursive replacements can change unrelated event sources, user text and large opaque JSON numbers. Preserve field presence (including false and null), use exact aliases, and project detached manifest validation values without rewriting signed package bytes. Both copies of forwarded headers must be removed together, or the legacy copy can resurrect a forwarding loop.
 - Keep custom JSON methods off an anonymously embedded DTO. A method promoted from the embedded launcher swallowed its surrounding health and agent-type fields on both encode and decode. Use an explicit root transport envelope and test that embedding the plain DTO preserves sibling fields.
@@ -1531,6 +1547,17 @@ When decorating a large session list, reserve the timestamp snapshot by the smal
 A Hub-only receipt requires unchanged node versions. When the user explicitly enables automatic node updates, that condition would reject legitimate guarded transfers. Require matching verified packages and unchanged machine IDs, owners and UIDs instead; report each node's observed deployment state without treating Hub confirmation as fleet completion. Never send deployment requests from the publisher. Prefer the effective policy returned by the running Hub over its bootstrap file, and retain the strict unchanged-inventory check when the policy is off.
 
 After activating matching native and downloadable packages, reapply an enabled runtime node policy through its existing settings route so managers recheck the new pointer. A filesystem pointer change has no consumer watcher. Check the current policy first so an intervening disable is respected; a failed recheck must not produce a completed publication receipt.
+
+
+
+## Manager publication needs a real inventory producer (#3353)
+
+A display session list cannot stand in for the local node's authoritative update inventory.
+Read persisted identity separately from activation-plan validation, so the first idle read
+does not require inventing the digest it is meant to produce. Keep the producer's completion
+time when binding evidence to activation: later transport, REST and validation work must not
+renew its lifetime. Test embedded publisher modules in an isolated interpreter as well as
+ordinary imports; a transitive import can be available locally and missing remotely.
 
 
 ## Release status reporting is opt-in (#2671)

@@ -164,7 +164,11 @@ final class WatchSync: NSObject, WCSessionDelegate {
         try? WCSession.default.updateApplicationContext(ctx)
     }
 
+    /// The iPhone side sets this once it can hold rolling recordings; an older phone never does, so the watch keeps to plain recordings.
+    static let phoneRollingKey = "recording.phoneRolling"
+
     private func apply(_ ctx: [String: Any]) {
+        if let rolling = ctx["recordingRolling"] as? Bool { UserDefaults.standard.set(rolling, forKey: Self.phoneRollingKey) }
         #if os(watchOS)
         if let language = ctx["language"] as? String {
             LanguageStore.shared.follow(language)
@@ -189,6 +193,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
         nonisolated(unsafe) let ctx = session.receivedApplicationContext
         Task { @MainActor in
             self.apply(ctx)
+            #if os(iOS) || os(visionOS)
+            self.update(["recordingRolling": true])
+            #endif
             self.onActivated?()
             self.onRecordingEvent?()
         }

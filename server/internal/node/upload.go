@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,7 +206,7 @@ func (u *uploads) chunk(id string, offset int64, data []byte) (got int64, err er
 // beginInto opens an upload into a folder of the home (dest=dir) under the file's own name, shortened as a numbered
 // copy's is when the file system cannot take it. With no conflict policy a taken name is refused here already, before
 // any byte is sent.
-func (n *Node) beginInto(dir, cwd, name, conflict string, size int64) (string, error) {
+func (n *Node) beginInto(dir, cwd, name, conflict string, size, limit int64) (string, error) {
 	switch conflict {
 	case "", proto.UploadConflictReplace, proto.UploadConflictKeep:
 	default:
@@ -231,7 +232,7 @@ func (n *Node) beginInto(dir, cwd, name, conflict string, size int64) (string, e
 			return "", errExists(clean)
 		}
 	}
-	id, err := n.ups.beginIn(real, clean, size, proto.MaxDirUploadBytes, false)
+	id, err := n.ups.beginIn(real, clean, size, limit, false)
 	if err != nil {
 		return "", err
 	}
@@ -241,6 +242,40 @@ func (n *Node) beginInto(dir, cwd, name, conflict string, size int64) (string, e
 		up.mu.Unlock()
 	}
 	return id, nil
+}
+
+// beginInbox opens an upload into the machine's receive folder (dest=inbox, docs/protocol/file-transfer.md): dir is the
+// folder the hub's config names for this machine ("": proto.DefaultInboxDir), "~/" or absolute, and only a folder
+// the phone may write to (writeguard.go). It is made when missing. The file keeps its name; a taken one gets " 2",
+// " 3"… (conflict keep), so nothing there is ever replaced.
+func (n *Node) beginInbox(dir, name string, size int64) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = proto.DefaultInboxDir
+	}
+	dir = strings.TrimSpace(dir)
+	if dir != "~" && !strings.HasPrefix(dir, "~/") && !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("the receive folder must be absolute or start with ~/: %q", dir)
+	}
+	if n.home == "" {
+		return "", errReadOnly(dir)
+	}
+	want := filepath.Clean(dir)
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		want = filepath.Join(n.home, strings.TrimPrefix(dir, "~"))
+	}
+	// Checked before anything is made, with the links of the part that exists resolved (realPath answers the rest
+	// as named): a folder out of bounds is never created, not even empty. writableDir checks again once it exists.
+	real, err := n.realPath(want)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", explainDenied(want, n.home, err)
+	}
+	if err := n.writable(real); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		return "", err
+	}
+	return n.beginInto(want, "", name, proto.UploadConflictKeep, size, proto.MaxInboxUploadBytes)
 }
 
 // end checks the size and gives the file its name; it returns the absolute path.
@@ -507,11 +542,11 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 	var p struct {
 		UploadID string `json:"upload_id"`
 		Name     string `json:"name"`
-		Dest     string `json:"dest"` // "terminal": a paste into a terminal (terminalUploadDir); "health": a report (healthReportsDir); "dir": Dir; "" the temp directory
+		Dest     string `json:"dest"` // "terminal": a paste into a terminal (terminalUploadDir); "health": a report (healthReportsDir); "dir": Dir; "inbox": the receive folder; "" the temp directory
 		// HealthDir: dest=health, the manager's health space ("health-<id>"; "": the built-in's), echoed back so the hub
 		// can tell a node that does not know it (and would put the report in the built-in's).
 		HealthDir string `json:"health_dir"`
-		Dir       string `json:"dir"`      // dest=dir: the folder, ~/ or relative to Cwd
+		Dir       string `json:"dir"`      // dest=dir: the folder, ~/ or relative to Cwd; dest=inbox: the receive folder ("": the default)
 		Cwd       string `json:"cwd"`      // dest=dir
 		Conflict  string `json:"conflict"` // dest=dir: proto.UploadConflict*
 		Size      int64  `json:"size"`
@@ -541,7 +576,9 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 				}
 			}
 		case proto.UploadDestDir:
-			id, err = n.beginInto(p.Dir, p.Cwd, p.Name, p.Conflict, p.Size)
+			id, err = n.beginInto(p.Dir, p.Cwd, p.Name, p.Conflict, p.Size, proto.MaxDirUploadBytes)
+		case proto.UploadDestInbox:
+			id, err = n.beginInbox(p.Dir, p.Name, p.Size)
 		default:
 			err = fmt.Errorf("unknown upload destination %q", p.Dest)
 		}
@@ -549,7 +586,7 @@ func (n *Node) uploadCall(method string, params json.RawMessage) (any, error) {
 			return nil, err
 		}
 		res := map[string]any{"upload_id": id, "chunk_bytes": proto.UploadChunkBytes}
-		if p.Dest == proto.UploadDestDir {
+		if p.Dest == proto.UploadDestDir || p.Dest == proto.UploadDestInbox {
 			res["dest"] = p.Dest // the hub checks it: a node from before dest=dir would quietly use the temp directory
 		}
 		if p.Dest == proto.UploadDestHealth && p.HealthDir != "" {

@@ -28,6 +28,7 @@
   "accept_open": "Take a look",
   "accept_reply_hint": "Reply to this: “pass” marks it verified; anything else goes into the todo's decisions and back to its agent",
   "accepted": "Checked: marked verified",
+  "accepted_by_supervisor": "The supervisor checked the evidence: marked verified",
   "accept_gone": "This task is gone",
   "accept_question": "Review feedback",
   "accept_to_agent": "What the user said when checking it (a reply in Lark):\n{feedback}\n\nChange it so, deploy again, and in your last reply say what changed, where to look and how to check.",
@@ -75,5 +76,9 @@
   "live_held_pr": "not live: stopped at a PR",
   "live_held_merged": "not live: merged, not deployed",
   "live_held_off": "deployed, off by default",
-  "goal_summary": "{title}: {tasks}"
+  "goal_summary": "{title}: {tasks}",
+  "deploy_gate_out": "Waiting for deploy: the running hub ({hub}) does not contain merge {merge} yet",
+  "deploy_gate_unmerged": "The PR is not merged, so it is not deployed",
+  "deploy_gate_unknown": "Deploy not confirmed: cannot tell whether the running hub has this merge",
+  "deploy_gate_not_in": "Waiting for deploy: the running hub ({hub}) does not have this PR's merge yet"
 }

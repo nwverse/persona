@@ -59,7 +59,7 @@
   "protocol_version": "协议版本是 {current}，hub 要 {required}",
   "wrong_id": "程序自报的 id 是「{current}」，不是「{required}」",
   "wrong_version": "程序自报的版本是「{current}」，不是「{required}」",
-  "attached_version": "独立运行的程序是 {current} 版，这个管理者批准的是 {approved} 版。在 hub 机器上（personad extension upgrade {id} <它的 remote: 来源>）批准这个版本之前不会使用它",
+  "attached_version": "独立运行的程序是 {current} 版，这个助手批准的是 {approved} 版。在 hub 机器上（personad extension upgrade {id} <它的 remote: 来源>）批准这个版本之前不会使用它",
   "attached_package_version": "独立运行的程序是 {current} 版，装着的包是 {approved} 版。版本一致之前不会使用它：运行 {approved} 版，或者先断开（personad extension detach {id}）、升级包，再重新接上",
   "attach_source": "接上要给程序的 socket：remote:rpc=<socket>,http=<socket>",
   "attach_not_installed": "扩展 {id} 不是装好的包（内置的和 manager.json 里的不能接上）",

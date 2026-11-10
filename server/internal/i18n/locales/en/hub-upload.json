@@ -1,4 +1,6 @@
 {
   "too_large": "The file is larger than {mb} MB",
-  "outdated": "personad on {name} is too old to receive files. Redeploy it"
+  "outdated": "personad on {name} is too old to receive files. Redeploy it",
+  "transfer_busy": "{n} transfers are already running. Wait for one to finish",
+  "transfer_invalid": "The computer described the file in a way Persona cannot read"
 }
