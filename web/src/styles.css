@@ -328,11 +328,20 @@ button:disabled { cursor: default; }
 .path-link { color: var(--accent-ink); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: 3px; transition: text-decoration-color .15s; }
 .path-link:hover { text-decoration-color: currentColor; }
 .prose-j strong { font-weight: 600; }
-.prose-j blockquote { margin: .7em 0; padding: .1em 0 .1em .9em; border-left: 2px solid var(--line-strong); color: var(--ink-2); }
+/* A quote as Telegram draws it (#2984, ui/ReplyBlocks.tsx ReplyQuote): the accent bar on a faint accent card, room on the right for its mark. */
+.prose-j blockquote { margin: .7em 0; padding: .45em 2em .45em .85em; border-left: 3px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--ink-2); }
+.prose-j blockquote > div > :first-child { margin-top: 0; }
+.prose-j blockquote > div > :last-child { margin-bottom: 0; }
 .prose-j hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
 .prose-j code { font-family: var(--font-mono); font-size: .86em; background: var(--field); border-radius: 5px; padding: .12em .36em; box-shadow: var(--shadow-hairline); }
 .prose-j pre { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); padding: 10px 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
 .prose-j pre code { background: none; box-shadow: none; padding: 0; font-size: inherit; }
+/* A code block with its title bar (#2984, CodeBar): the box is the wrap's, the pre sits in it. */
+.prose-j .code-block { margin: .7em 0; background: var(--inset); border-radius: 10px; box-shadow: var(--shadow-hairline); overflow: hidden; }
+.prose-j .code-block > pre { margin: 0; background: none; border-radius: 0; box-shadow: none; }
+/* Inline code a click copies (#2984): the body's color on its gray; in a link (a path that opens) the link's. */
+.prose-j code[data-copy-code] { cursor: pointer; }
+.prose-j code[data-copy-code]:hover { background: var(--hover-2); }
 .prose-j table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: separate; border-spacing: 0; margin: .8em 0; font-size: 13px; border-radius: 10px; box-shadow: var(--shadow-hairline); }
 /* The copy button's wrap is what the edge rule above sees, so pass that rule through to the table. The wrap
    adds no margin, padding or border; the table keeps its own box, scroll and margin collapse. */

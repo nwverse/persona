@@ -361,6 +361,24 @@ and told to the apps (`direction_offer`). The owner's taps:
 Each records the direction `by: "user"`, so the hub never files it under another project itself (one made without a project stays so until the owner picks one); `leader.changed` follows as for any change. The apps' strip, the ⋯ items and
 the New agent field come with W1 / I1 / A1.
 
+**New agent goes under a leader (#3608).** Work is handed to a leader three ways, and each makes the leader the task's
+`supervisor`, so its signals go to the leader (`digestTo`) and the leader reviews it:
+
+- **The main chat hands a plan to a leader**: `task_plan` with `supervisor` (main chat only, a current leader; the
+  plan's tasks carry it, `PlanTask.supervisor`). The plan card stays in the main chat and each task's card goes into
+  the leader's conversation too; a leader that ended before the owner pressed Start leaves the tasks to the main chat.
+- **The owner starts an agent by hand** (`agent_route.go`): the New agent sheet asks `POST /api/v1/assistant/route/agent`
+  for its **Under** field (the leader of the kb project that owns the directory; else the leader `assistant.route`
+  matches the prompt to, prompt `assistant/route_agent.md`, 2 s; else Persona), and once the agent runs,
+  `POST /api/v1/assistant/agents/{mid}/{sid}/supervisor` makes it that conversation's supervised task (as
+  `agent_supervise` does for the main chat; the card goes into that conversation). Called again with another
+  conversation, it moves the task there (**Move to…**) and its card follows (the old conversation keeps its history).
+- **A leader hands out its own** `task_plan`, as before.
+
+A plan of a leader's (its own, or one the main chat handed to it) that waits for the owner's Start is a `decision`
+report (`leader.report` with `plan`, told once), as the owner ruled after H1. The waiting plans are read from the plans
+themselves every 10 minutes and right after a leader's plan is made, not on every change.
+
 ## Data and APIs (hub)
 
 ### Task = to-do

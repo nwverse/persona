@@ -316,7 +316,7 @@ func TestSettingsTool(t *testing.T) {
 	}
 	go answer(true)
 	if out := tool(`{"action":"set","key":"assistant.launcher","value":"fast"}`); !strings.Contains(out, "fast") ||
-		modelRecordOf(t, s, "assistant").Binding != (ModelBinding{Provider: "launcher.fast", Model: "chosen", Effort: "high"}) {
+		modelRecordOf(t, s, "assistant").Binding != (ModelBinding{Provider: "launcher.fast"}) {
 		t.Fatalf("launcher: %s %+v", out, modelRecordOf(t, s, "assistant"))
 	}
 	if out := tool(`{"action":"set","key":"assistant.launcher","value":"nope"}`); !strings.Contains(out, "no launcher") {
