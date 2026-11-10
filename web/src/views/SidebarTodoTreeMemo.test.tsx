@@ -28,8 +28,11 @@ const link = (sid: string) => ({ machine_id: "m1", session_id: sid, linked_at: a
 const todos: Todo[] = [
   { id: "t1", title: "t1", created_at: at, updated_at: at, agents: [link("a"), link("b")] },
   { id: "t2", title: "t2", created_at: at, updated_at: at, agents: [link("c"), link("d")] },
+  // untouched by the pushes and the switch below: a second to-do in project one, and a third project
+  { id: "t3", title: "t3", created_at: at, updated_at: at, agents: [link("e")] },
+  { id: "t4", title: "t4", created_at: at, updated_at: at, agents: [link("f")] },
 ];
-const sessions = [s("a", "/code/one"), s("b", "/code/one"), s("c", "/code/two"), s("d", "/code/two")];
+const sessions = [s("a", "/code/one"), s("b", "/code/one"), s("c", "/code/two"), s("d", "/code/two"), s("e", "/code/one"), s("f", "/code/three")];
 const stable = { reg: () => () => {}, hover: () => {}, go: () => () => {}, onRowMenu: () => {} };
 
 let host: HTMLDivElement;
@@ -58,12 +61,12 @@ afterEach(() => {
 describe("the to-do tree's rows", () => {
   it("render again only where a push or the open agent changed them", () => {
     const first = show(sessions, machines, "s:m1/a");
-    expect(first).toHaveLength(8); // two projects, two to-dos, four agents
+    expect(first).toHaveLength(13); // three projects, four to-dos, six agents
     // one agent's push: its project, its to-do and its own row
     expect(show(sessions.map((x) => (x.session_id === "d" ? { ...x, state: "idle", status: "idle" } : x)), machines, "s:m1/a")).toEqual(["s:m1/d:children", "todo-tree:project:two", "todo-tree:todo:t2"]);
     // a machines push with the same names: nothing
     expect(show(sessions.map((x) => (x.session_id === "d" ? { ...x, state: "idle", status: "idle" } : x)), machines.map((m) => ({ ...m, last_seen: at })), "s:m1/a")).toEqual([]);
-    // opening c: the branch that held a and the one that holds c
+    // opening c: the branch that held a and the one that holds c (not t3 beside a, nor project three)
     expect(show(sessions.map((x) => (x.session_id === "d" ? { ...x, state: "idle", status: "idle" } : x)), machines, "s:m1/c")).toEqual([
       "s:m1/a:children", "s:m1/c:children", "todo-tree:project:one", "todo-tree:project:two", "todo-tree:todo:t1", "todo-tree:todo:t2",
     ]);
