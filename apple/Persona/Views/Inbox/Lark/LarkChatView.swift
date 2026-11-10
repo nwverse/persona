@@ -29,6 +29,27 @@ extension EnvironmentValues {
     /// The manager the chat a view is in is read through (an inbox item's, `AppModel.linkManager`): the requests, pictures
     /// and files it loads name it (docs/assistant/managers.md "Grouping"). nil: the default's, nothing named.
     @Entry var larkManager: String? = nil
+    /// The group of paired hubs the chat a view is in talks to (its page's link, docs/protocol/multi-hub.md): the requests it
+    /// makes go there. nil: the hub-level one's.
+    @Entry var larkGroup: String? = nil
+}
+
+extension AppModel {
+    /// The client of a view inside a Lark chat (a thread, the composer, a profile, a card): group `group`'s (`larkGroup`;
+    /// nil: the hub-level one's), naming the chat's manager and account as the page does (`LarkChatView.client`). nil
+    /// once that group is gone.
+    func larkAPI(group: String?, manager: String? = nil, account: Int? = nil) -> APIClient? {
+        let base: APIClient? = if let group { api(group) } else { api }
+        return LarkChatView.client(base, manager: manager, account: account)
+    }
+
+    /// Reads which messaging source manager `manager`'s Feishu requests go to on group `group`'s hub, the first time this
+    /// run asks (`APIClient.readMessagingSource`). The default's is its hub link's.
+    func readMessagingSource(group: String?, manager: String?) async {
+        let link: HubLink? = if let group { self.link(group) } else { hub }
+        guard manager != nil, let link, let api = larkAPI(group: link.group, manager: manager) else { return }
+        await api.readMessagingSource(features: link.features)
+    }
 }
 
 /// One Feishu chat, opened like Feishu: at the oldest unread message under a New Messages line (or at the latest
@@ -142,6 +163,9 @@ struct LarkChatView: View {
         _following = State(initialValue: !Self.opensAtMessage(conversation) && !Self.debugTop)
     }
 
+    /// What opens inside the chat talks to (`larkGroup`): the hub-level group until the page has its link.
+    private var chatGroup: String? { (chatLink ?? model.hub)?.group }
+
     private var chatAPI: APIClient? {
         guard let chatLink, model.link(chatLink.group) === chatLink else { return nil }
         return Self.client(model.api(chatLink.group), manager: manager, account: conversation.account)
@@ -158,6 +182,13 @@ struct LarkChatView: View {
     private var display: LarkMessageDisplayModel? { manager == nil ? chatLink?.larkDisplay : managerDisplay }
 
     private var isTopic: Bool { conversation.isTopic == true || foundTopic }
+    /// Before anything is read: a named manager's chat goes through its own messaging source, not the default's (which
+    /// is known at once), and draws its own emoji.
+    private func readManagersOwn() async {
+        await model.readMessagingSource(group: chatLink?.group, manager: manager)
+        LarkMedia.shared.loadEmojiCatalog(manager: manager, using: model.larkAPI(group: chatLink?.group))
+    }
+
     /// How the topic cards read a topic's newest replies (`LarkTopicReplies`), on the chat's account. `chatAPI` spelled
     /// out: through it the closure would hold this page, whose state holds the closure. A function of its own, not in
     /// `.task`: a closure in `body`'s modifier chain is type-checked with the whole chain (Xcode 26.0, docs/lessons/ios.md).
@@ -221,9 +252,9 @@ struct LarkChatView: View {
         .task {
             if chatLink == nil { chatLink = model.hub }
             bindTopicReplies()
+            await readManagersOwn()
             async let display: Void = refreshDisplay()
             async let restored: Void = restoreDraft()
-            LarkMedia.shared.loadEmojiCatalog()
             // The last messages seen here paint at once (offline too); the network only brings them up to date.
             // Background sync (LarkSync) keeps this cache current, so it is usually already the latest. An unread chat
             // opens at its first unread message: the cache serves when it reaches back that far.
@@ -292,6 +323,7 @@ struct LarkChatView: View {
         // Outermost, so the sheets above (a thread, a profile, a reaction picker) are about the same account and manager.
         .environment(\.larkAccount, conversation.account)
         .environment(\.larkManager, manager)
+        .environment(\.larkGroup, chatGroup)
         .environment(\.larkChatOutbox, outbox)
     }
 
@@ -1057,13 +1089,14 @@ struct LarkChatView: View {
         await LarkChatOutbox.waitForCleanup()
         guard model.link(link.group) === link else { return }
         let revision = await LarkOutboxAccounts.shared.revision
-        if !draftLoaded, let cached = await LarkOutboxAccounts.shared.cached(group: link.group, base: .applicationSupportDirectory) {
+        if !draftLoaded, let cached = await LarkOutboxAccounts.shared.cached(group: link.group, manager: manager, base: .applicationSupportDirectory) {
             await bindDraft(account: cached, link: link)
         }
         do {
             let account = try await api.larkAccountID()
             guard model.link(link.group) === link else { return }
-            try await LarkOutboxAccounts.shared.remember(account, group: link.group, base: .applicationSupportDirectory, expectedRevision: revision)
+            try await LarkOutboxAccounts.shared.remember(account, group: link.group, manager: manager, base: .applicationSupportDirectory,
+                                                         expectedRevision: revision)
             guard model.link(link.group) === link else { return }
             if outbox.identity?.account != account || !draftLoaded {
                 if draftLoaded {
@@ -1091,7 +1124,7 @@ struct LarkChatView: View {
                 return
             }
         }
-        let draft = LarkDrafts.shared[.chat(conversation.id)]
+        let draft = LarkDrafts.shared[.chat(conversation.id, manager: manager)]
         if !draft.isEmpty { legacyDraft = LarkOutboxSnapshot(draft: draft) }
     }
 
@@ -1109,7 +1142,7 @@ struct LarkChatView: View {
                 try await queue.importLegacy(legacyDraft)
                 applyDraft()
                 try await oldStore?.removeImportedLegacy()
-                LarkDrafts.shared.set(LarkDraft(), for: .chat(conversation.id))
+                LarkDrafts.shared.set(LarkDraft(), for: .chat(conversation.id, manager: manager))
                 LarkDrafts.shared.flush()
                 self.legacyDraft = nil; legacyStore = nil
             } catch { model.toast = Toast(String(localized: "The older draft wasn't restored. Check the account and this device's storage, then try again."), style: .error) }
@@ -1550,6 +1583,7 @@ struct LarkMessageRow: View {
     @Environment(\.larkReact) private var react
     @Environment(\.larkReply) private var reply
     @Environment(\.larkDisplay) private var display
+    @Environment(\.larkManager) private var manager
     @State private var showHistory = false
     @State private var showThread = false
     /// The thread sheet opens with its box focused (Reply on a topic group's thread).
@@ -1691,7 +1725,7 @@ struct LarkMessageRow: View {
 
     private var menu: some View {
         LarkMessageMenu(message: message, react: react, reply: replyAction, pickReaction: { picking = true }, addPin: addPin,
-                        showProfile: openProfile == nil ? nil : { showProfile() })
+                        showProfile: openProfile == nil ? nil : { showProfile() }, manager: manager)
     }
 
     /// Reply in the menu: the quote bar over the chat's box, the thread's box, or (a topic group's topic) its thread
@@ -1807,16 +1841,18 @@ struct LarkMessageMenu: View {
     /// Pin, where the chat can pin (`larkAddPin`).
     var addPin: ((LarkMessage) -> Void)?
     var showProfile: (() -> Void)?
+    /// The chat's manager, whose quick reactions and emoji the bar shows; nil: the default's.
+    var manager: String? = nil
 
     var body: some View {
         if let react, !message.recalled {
             ControlGroup {
-                ForEach(LarkQuickReactions.bar(LarkMedia.shared.quickReactions), id: \.self) { key in
+                ForEach(LarkQuickReactions.bar(LarkMedia.shared.catalog(manager).quickReactions), id: \.self) { key in
                     // A title with the picture: the menu takes its items' names from their text (an image alone left
                     // the item nameless, and VoiceOver and the tests found no 「爱心」).
-                    let name = LarkMedia.shared.emoji(key)?.label ?? LarkMedia.labelFallback(key, text: nil)
+                    let name = LarkMedia.shared.emoji(key, manager: manager)?.label ?? LarkMedia.labelFallback(key, text: nil)
                     Button { react(message, key) } label: {
-                        if let img = LarkMedia.shared.emojiImage(key, points: LarkMedia.barPoints) {
+                        if let img = LarkMedia.shared.emojiImage(key, points: LarkMedia.barPoints, manager: manager) {
                             Label { Text(name) } icon: { Image(uiImage: img).renderingMode(.original) }
                         } else {
                             Text(name)
@@ -1869,12 +1905,14 @@ struct LarkReplyQuote: View {
 /// A reaction: the emoji picture, then who (a few names) or how many.
 struct LarkReactionChip: View {
     var reaction: LarkReaction
+    @Environment(\.larkManager) private var manager
 
     var body: some View {
         let media = LarkMedia.shared
         let users = reaction.users ?? []
+        let emoji = media.emoji(reaction.key, manager: manager)
         HStack(spacing: Theme.Space.xs) {
-            if let url = media.emoji(reaction.key)?.url {
+            if let url = emoji?.url {
                 LarkRemoteImage(url: url, maxPixel: 64, contentMode: .fit).scaledFrame(width: Theme.Size.markL, height: Theme.Size.markL)
             } else {
                 Text(LarkMedia.labelFallback(reaction.key, text: nil)).font(Theme.Font.label)
@@ -1887,7 +1925,7 @@ struct LarkReactionChip: View {
         .padding(.horizontal, Theme.Space.s)
         .padding(.vertical, Theme.Space.xs)
         .background(reaction.mine == true ? LarkColor.blue.opacity(0.12) : Color.primary.opacity(0.05), in: .capsule)
-        .accessibilityLabel("\(media.emoji(reaction.key)?.label ?? reaction.key) \(reaction.count)")
+        .accessibilityLabel("\(emoji?.label ?? reaction.key) \(reaction.count)")
     }
 }
 

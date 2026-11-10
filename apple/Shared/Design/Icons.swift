@@ -41,6 +41,8 @@ extension Theme {
         static let workflow = "flowchart"
         static let pinned = "pin.fill"
         static let unchecked = "circle"
+        /// Some of a group picked (the inbox's Select, #2059).
+        static let partlyChecked = "minus.circle.fill"
         static let uncheckedBox = "square"
         static let todo = "checklist"
         /// Recent, or waiting to come back (reconnecting, last used).
@@ -174,6 +176,11 @@ extension Theme {
         static let translate = "translate"
         /// Settings › Appearance › Avatar.
         static let avatar = "person.crop.artframe"
+        /// Settings › Appearance › Avatar › New from Photo: make an avatar from an image of your own (#2405).
+        static let newAvatar = "photo.badge.plus"
+        /// Zoom in and out of a picture with a slider beside it (the avatar crop on the Mac).
+        static let zoomIn = "plus.magnifyingglass"
+        static let zoomOut = "minus.magnifyingglass"
         /// Settings › Appearance › Interface Style.
         static let style = "paintpalette"
         /// Settings › Appearance › Theme Color.

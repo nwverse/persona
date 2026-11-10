@@ -1,6 +1,11 @@
 package persona.core.hub
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import persona.core.contracts.api.AssistantManagerChoice
+import persona.core.contracts.api.ManagerPins
+import persona.core.contracts.api.RequestManager
 import java.net.InetAddress
 import java.security.MessageDigest
 import java.util.Base64
@@ -102,8 +107,8 @@ class HubManagerHeaderTest {
     }
 
     /**
-     * The same extension under two managers (each one's built-ins): the list notes neither, and an extension's page pins
-     * its own manager while it is open, so the default's voice keeps going to the default elsewhere.
+     * The same extension under two managers (each one's built-ins): the list notes neither, and an extension's page names
+     * its own manager on its own requests, so the default's voice keeps going to the default elsewhere.
      */
     @Test fun anExtensionsPageNamesItsOwnManager() = kotlinx.coroutines.runBlocking {
         val api = HttpExtensionManagement({ _, _, _ ->
@@ -115,27 +120,48 @@ class HubManagerHeaderTest {
         AssistantManagerChoice.choose("hub", null, "assistant")
         assertEquals(listOf("assistant", "m-3", "m-3"), api.listing().extensions.map { it.manager })
         assertNull(AssistantManagerChoice.itemHeader(listOf("extensions", "voice", "-", "config")))
-        val release = AssistantManagerChoice.pin(listOf(listOf("extensions", "voice"), listOf("plugins", "voice")), "m-3")
-        assertEquals("m-3", AssistantManagerChoice.itemHeader(listOf("extensions", "voice", "-", "config")))
-        assertNull(AssistantManagerChoice.itemHeader(listOf("extensions", "notes")))
-        // the latest page wins, and each goes with its page
-        val inner = AssistantManagerChoice.pin(listOf(listOf("extensions", "voice")), "assistant")
-        assertNull(AssistantManagerChoice.itemHeader(listOf("extensions", "voice")))
-        inner()
-        assertEquals("m-3", AssistantManagerChoice.itemHeader(listOf("extensions", "voice")))
-        release()
-        assertNull(AssistantManagerChoice.itemHeader(listOf("extensions", "voice", "-", "config")))
+        suspend fun named(path: String) = "https://example.com/hub/api/v1/$path".toHttpUrl().withRequestManager().queryParameter(ManagerQuery)
+        val page = ManagerPins.of(listOf(listOf("extensions", "voice"), listOf("plugins", "voice")), "m-3")!!
+        withContext(page) {
+            assertEquals("m-3", named("extensions/voice/-/config"))
+            assertEquals("m-3", named("plugins/voice"))
+            assertNull(named("extensions/notes"))
+            // an inbox item's request names its own, and a URL that names one keeps it
+            assertEquals("m-1", withContext(RequestManager("m-1")) { named("extensions/voice") })
+            assertEquals("m-1", named("extensions/voice?manager=m-1"))
+            // a page of the default's inside: the default, which the client takes off again
+            assertEquals("", withContext(ManagerPins.of(listOf(listOf("extensions", "voice")), "assistant")!!) { named("extensions/voice") })
+        }
+        assertNull(named("extensions/voice/-/config"))
+    }
+
+    /** A page's pins are its own requests': one made elsewhere while the page is open names nothing, on the URL or the header. */
+    @Test fun aPagesPinsDoNotReachOtherRequests() = kotlinx.coroutines.runBlocking {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        val url = "https://example.com/api/v1/extensions/voice/-/config".toHttpUrl()
+        val opened = CompletableDeferred<Unit>()
+        val closed = CompletableDeferred<Unit>()
+        val page = launch(ManagerPins.of(listOf(listOf("extensions", "voice")), "m-3")!!) {
+            assertEquals("m-3", url.withRequestManager().queryParameter(ManagerQuery))
+            opened.complete(Unit)
+            closed.await()
+        }
+        opened.await()
+        assertNull(url.withRequestManager().queryParameter(ManagerQuery))
+        assertNull(managerHeaderFor(url, "hub"))
+        closed.complete(Unit)
+        page.join()
     }
 
     /** What a hub's lists note before its roster is read is under that hub, and found once the roster lands. */
     @Test fun notesBeforeTheRosterAreTheHubs() {
         AssistantManagerChoice.atHub("hub-a")
         AssistantManagerChoice.noteItem(listOf("inbox", "x"), "m-1")
-        val release = AssistantManagerChoice.pin(listOf(listOf("extensions", "voice")), "m-3")
+        val pins = ManagerPins.of(listOf(listOf("extensions", "voice")), "m-3")!!
         AssistantManagerChoice.choose("hub-a", null, "assistant")
         assertEquals("m-1", AssistantManagerChoice.itemHeader(listOf("inbox", "x", "done"), "hub-a"))
-        assertEquals("m-3", AssistantManagerChoice.itemHeader(listOf("extensions", "voice"), "hub-a"))
-        release()
+        assertEquals("m-3", pins.manager(listOf("extensions", "voice"), "hub-a"))
+        assertNull(pins.manager(listOf("extensions", "voice"), "hub-b"))
     }
 
     /** What one hub's lists showed is that hub's: another paired hub's requests name nothing by it. */

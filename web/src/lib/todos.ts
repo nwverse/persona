@@ -78,6 +78,44 @@ export interface Todo {
   delivery?: TodoDelivery;
   /** The chat thread the todo is bound to (#5279, docs/assistant/todos.md "Chat thread"); unset while it has none. */
   thread?: TodoThread;
+  /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
+   *  and from hubs before it. */
+  ask?: TodoAsk;
+}
+
+/**
+ * The ask a to-do waits on, as GET /todos carries it: a deployed to-do's "Please verify" (no outcome), or a supervised
+ * task's conclusion — `done`, `cannot` (cannot be done) or `decide` (needs the user's decision, with the option the
+ * supervisor recommends when it has one). `verdict` is the line its Lark card says, in the request's language;
+ * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
+ */
+export interface TodoAsk {
+  outcome?: "done" | "cannot" | "decide" | string;
+  verdict: string;
+  recommend?: string;
+  asked_at: string;
+}
+
+/** What the one button of an ask does: take a decision's recommendation, acknowledge a conclusion that only tells, or
+ *  accept a deployed to-do as verified. */
+export type AskTake = "take" | "ack" | "accept";
+
+/** The ask a to-do waits on, when the hub sent a whole one (a verdict line and a round to answer). */
+export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
+  const a = todo.ask;
+  return a && a.verdict && a.asked_at ? a : undefined;
+}
+
+/** What the ask's button does; none for a decision that recommends nothing: nothing for one tap to take, so it is
+ *  answered in its conversation (or on its Lark card). */
+export function askTake(ask: TodoAsk): AskTake | undefined {
+  if (ask.outcome === "decide") return ask.recommend ? "take" : undefined;
+  return ask.outcome ? "ack" : "accept";
+}
+
+/** The tone of an ask's verdict: a decision waits on the user, what cannot be done is red, done (or deployed) is green. */
+export function askTone(ask: TodoAsk): "attention" | "red" | "green" {
+  return ask.outcome === "decide" ? "attention" : ask.outcome === "cannot" ? "red" : "green";
 }
 
 /** A chat thread a todo is bound to: the channel, the chat and the thread in it name it; the title is only a label. */
@@ -127,10 +165,11 @@ export const TODO_TONE_CLASS: Record<(typeof TODO_STATUS_INFO)[TodoStatus]["tone
   off: "text-ink-3",
 };
 
-/** A supervised task whose work was judged finished and waits for the user to accept it (#3124): nothing of it runs or
- *  asks, so it is the user's to review rather than just stopped or finished-unseen (#4896). */
+/** A task that waits for the user's review while nothing of it runs or asks, so it is the user's rather than just stopped
+ *  or finished-unseen (#4896): a supervised one whose work was judged finished (#3124), or an open one whose result
+ *  waits on them — to verify, to acknowledge, or to decide (its `ask`, #2056). */
 export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
-  return reviewState(todo) === "pending_review" && (status === "follow_up" || status === "unread" || status === "not_started");
+  return (reviewState(todo) === "pending_review" || !!openAsk(todo)) && (status === "follow_up" || status === "unread" || status === "not_started");
 }
 
 /** A task's place in the order: its status's rank, Awaiting review right after Needs you. */

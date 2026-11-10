@@ -41,6 +41,27 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - Read-only tasks always retain `permission: plan`, including after card edits and on retries. Health-space plans still wait for Start. Runtime support and the current card labels are described in [To-dos](todos.md#read-only-planned-tasks).
 - `task_plan` **does not block**: once the plan is handed to you, the turn ends immediately and you can continue talking about something else. When you tap Start, hub starts the Agents directly; Persona sees the result in the next message's live snapshot.
 
+### Progress tray: one task, one row (#2878)
+
+The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
+Planning, running, blocked progress, PR references and acceptance update that same task row in place. Tapping the row opens
+the existing task details. The dispatch answer has only "Dispatched N tasks · See Progress", which expands the tray above
+the composer. Historical plan/task/receipt/review/report cards use the same lightweight entry or are omitted from the chat.
+
+**Pending** holds plans that still require Start and acceptance decisions, alongside ordinary questions/approvals. Drafts sent
+on the user's behalf are a separate group and require their own explicit Send; Approve all never sends drafts or chooses an
+answer to a question. **Progress** also has a separate quiet supervision/scheduled-task group, with inspectable background
+records. System housekeeping notices are not conversation messages. Tools and intermediate narration stay manually
+inspectable under a single collapsed summary; source metadata, not title/emoji guesses, identifies background turns.
+
+The shared feed API adds stable `task_cards` upserts (fields and compatibility rules in
+[the protocol](../protocol/protocol.md#tasks-and-the-chat-feed)). The original event log remains unchanged. Live task/session
+state still updates the row even when no new feed event is written. Android implements the conversation projection and
+all three trays in #2878; web implements the unique Progress row, dispatch hint and relocated planning/acceptance actions,
+retaining its existing turn-source presentation. Apple's independent client work can consume the same additive contract.
+The older card-oriented descriptions below document
+the legacy presentation and the retained detail actions; they do not require duplicate cards in the simplified chat.
+
 ### Task cards
 
 - Once a plan starts, its card collapses to "Started N tasks," followed by N task cards. Task cards **update in place**: state (spinner / orange dot / green check), title,
@@ -122,7 +143,10 @@ lines, and in the user's own color and alignment they read as something the user
 - Older entries: migration `0441_feed_routed_from.sql` marks those Persona wrote before the field existed (see "Chat activity").
   Older apps ignore `from` and keep drawing the bubble.
 - Apple: `AgentSentLine`, `TaskSentList` (`apple/Persona/Views/Assistant/Tasks/SentViews.swift`), the pure rules in
-  `SentToAgents` (`apple/Shared/Tasks.swift`); web: `web/src/views/assistant/Sent.tsx`, `takenIn` / `sentTo` in `web/src/lib/feed.ts`.
+  `SentToAgents` (`apple/Shared/Tasks.swift`); web: `web/src/views/assistant/Sent.tsx`, `takenIn` / `sentTo` in `web/src/lib/feed.ts`;
+  Android (#1623): `SentLine`, `TaskSentList` in `android/feature/chat/.../AssistantTasks.kt`, the pure rules in `SentToAgents`
+  (`android/core/domain/.../tasks/SentToAgents.kt`), the chat page filtering the feed with `SentToAgents.shown`; checked by
+  `SentToAgentsTest` and `SentToAgentsShotsTest` (every style, light and dark, folded and opened).
   Mock: `MOCK_TASKS=1 MOCK_TASKS_SENT=1 MOCK_TASKS_NO_ASKS=1` (a hand-off after its card, a rework to an older task, the
   user's own word); UI test `SentToAgentTests`.
 

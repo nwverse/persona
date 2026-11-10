@@ -245,7 +245,9 @@ The main API's shared error handling keeps the `error` text and adds a stable `c
 | `conflict` | 409 | A conflict with no more specific code |
 | `input_draft` / `dialog_open` / `prompt_changed` | 409 | The send or answer was explicitly refused; `retryable: false`, `delivered: none`, see below |
 | `op_id_reused` | 409 | The operation ID was already used for a different device, target or parameters; don't blindly retry with a new ID |
-| `agent_start_stalled` | 409 | The agent opened but its session was not identified before the start deadline. Launcher health is unchanged; no automatic task retry or detour. Uses the existing RPC error `code` and message, also carried in `start_error_code` and task `error_code`. New hubs retain generic failure handling for uncoded errors from older nodes; older hubs can show the new node's message but may still count it as a launcher failure |
+| `agent_start_stalled` | 409 | The agent opened but its session was not identified before the start deadline (Codex), or Claude ran but never showed its input box (since #2570: `data.screen` holds the tab's last lines, and `pane` / `kept_until` say where the tab is kept open, as for `shell_waiting`). Launcher health is unchanged; no automatic task retry or detour. Uses the existing RPC error `code` and message, also carried in `start_error_code` and task `error_code`. New hubs retain generic failure handling for uncoded errors from older nodes; older hubs can show the new node's message but may still count it as a launcher failure |
+| `shell_waiting` | 409 | A start's new terminal tab stopped on a question from its shell's startup files (an update prompt, `[Y/n]`, "Press Enter") before the start command was typed (#2570). Nothing ran; `delivered: none`. `data`: `line` (the question), `screen` (the tab's last 12 lines), `pane` and `kept_until` (the tab stays open until then, then closes unless an agent came up in it). Launcher health is unchanged |
+| `start_line_rejected` | 409 | A start's new terminal tab did not take the typed start line twice: something before the shell's line editor ate its first characters, and the shell answered for the rest (`permission denied` for the start file, `command not found` for a cut word, a parse error, an open quote). The node types the line once more before giving up. Nothing ran; `delivered: none`; the tab is closed. `data`: `line` (the shell's answer) and `screen`. Launcher health is unchanged |
 | `node_outdated` | 409 | The node doesn't support the requested feature, e.g. file upload |
 | `too_large` | 413, or 409 mapped from node RPC | Request / file over the limit |
 | `timeout` | 408 / 504, often 502 for node calls | Timed out; the outcome can't be judged from this code alone |
@@ -597,6 +599,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "tool_use_id":"toolu_…",                             // shared by tool_use and tool_result; the App merges them into one card by it
  "tool_name":"Bash", "tool_input":{...},              // tool_use only
  "is_error":false,                                    // tool_result only
+ "outcome":{"status":"failed","exit_code":2,"tail":"…"}, // tool_result only, optional: what the call came to (status, exit code, duration, the output's end, patch, files, git, read range, answers), see "Tool outcomes"
  "full_size":4874,                                    // text was truncated (in pages and pushes, tool output is at most 4 KB, other text 24 KB): the byte size of the full text;
                                                       // truncated text ends in a note line: for tool output "…（已截断，点开看全文，共 N 字节）" ("truncated, tap to see the full text, N bytes"; the App has a "view full text" button),
                                                       // for other text "…（已截断，共 N 字节）" ("truncated, N bytes"); old Apps still understand it
@@ -1028,7 +1031,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/task-plans/{id}` | One plan (`TaskPlan`, see "Tasks and chat feed" below) → 200 `{"plan":TaskPlan}`; missing 404 |
 | POST | `/api/v1/task-plans/{id}/start` | Start a plan `{"tasks"?:[PlanTask],"remember"?:bool}`: `tasks` overrides, by index, the fields the user changed on the card (empty ones unchanged), and `remember` remembers "Start These Directly" for this kind; creates a to-do per task (`origin`, `plan_id`) and starts the Agents in the background → 200 `{"plan":TaskPlan}`; already started or dismissed 409, missing 404, read-only device 403 |
 | POST | `/api/v1/task-plans/{id}/dismiss` | Don't start → 200 `{"plan":TaskPlan}`; already started 409 |
-| GET | `/api/v1/assistant/conversations/{id}/feed?since=` | Chat feed: entries after `since` (RFC3339), oldest first, at most 500 at a time → `{"items":[FeedItem],"plans":{"plan_…":TaskPlan},"views":{"view_…":AssistantView},"view_actions":{"<key>":ViewAction},"view_blocks":["<item id>/0"]}` (plans and views are the current state of referenced objects; views, view_actions and view_blocks are always the full snapshot for the chat, not limited by since, and updates don't move the original feed position; view_blocks only holds the keys of body cards registered on the server, without resending the body) |
+| GET | `/api/v1/assistant/conversations/{id}/feed?since=` | Chat feed: entries after `since` (RFC3339), oldest first, at most 500 at a time → `{"items":[FeedItem],"plans":{"plan_…":TaskPlan},"task_cards":[TaskCard],"views":{"view_…":AssistantView},"view_actions":{"<key>":ViewAction},"view_blocks":["<item id>/0"]}` (plans and views are the current state of referenced objects; `task_cards` are stable task-row upserts for this page, not a replacement list, see "Tasks and the chat feed"; views, view_actions and view_blocks are always the full snapshot for the chat, not limited by since, and updates don't move the original feed position; view_blocks only holds the keys of body cards registered on the server, without resending the body) |
 | POST | `/api/v1/assistant/conversations/{id}/views/{key}/actions` | One reply on a live card or a registered body card (feature `assistant_views`): request body `ViewActionInput` `{action,page?,values?,client_msg_id,confirmed?,expected_version?}` → `{action:ViewAction}`. The server takes the reply text and form definition from the saved View and rejects client overrides and undeclared fields (400 `bad_request`). `expected_version` is the whole card's `AssistantView.version` at display / native confirmation time (always 1 for body cards), a JS-safe positive integer; required when the action has `confirm`, 400 if missing. Without it (only for actions without confirm), the version the hub read when validating the binding is used. A version different from the saved one returns 409 `view_changed`: `{error,code,version,view?}` (`ViewChangedError`, `version` is the current version, `view` is the `AssistantView` envelope); the client keeps the draft, refreshes and has the user confirm again, and **must not resend automatically with the new version**. The submission locks the card inside a transaction before comparing versions, so concurrent with `view_update` it can only bind to the version still saved at submit time. Another submission 409 `already_answered`, with the existing action; retrying with the same client_msg_id / action / values / version returns the original record (older records without a version stay idempotent as before). The submission is stored together with the text to send; pending / sent / failed are synced via events and the feed. The key is URL-encoded as a whole (including `/` and `#`); read-only device 403 `permission_denied`, extension token 403 `permission_denied`, `persona_view` off 403 |
 | POST | `/api/v1/assistant/conversations/{id}/views/{key}/html-actions` | Bridge for HTML components (feature `assistant_html_bridge`, present only when both `persona_view` and `html_views` are on; **it does not mean any client can run HTML safely yet**): request body `AssistantHTMLActionInput` `{kind:"reply"\|"open",component_key,page?,expected_version,text?\|url?,client_msg_id,confirmed:true}`. `component_key` must be the `key` of an `html` component saved on that page (`page` defaults to the root page); HTML without a key has no bridge; `confirmed` must be `true` (the native confirmation dialog showed the full text or url). `reply`: text of 1–2000 characters, no control characters and no `persona-action`; it shares the card's single choice and outbox with declarative replies → `{action:ViewAction}` (`kind:"html"`, `action` is the component key, `text` is the confirmed text, `version`); if any choice exists, 409 `already_answered`, and retrying the same request returns the original record. The body sent to the assistant is the text plus `<persona-action view="…" action="<component key>">{"html":true,"values":{}}</persona-action>`. `open`: url validated by `CheckAssistantOpen` (https or a supported `persona://`) → `AssistantHTMLOpenResult` `{open,version}`, doesn't lock the card or store anything; the client re-checks version before opening and opens it in the App. Different version 409 `view_changed` (as above); missing fields / invalid values 400 `bad_request`; read-only device, extension token 403 `permission_denied`; either switch off 403 |
 | POST | `/api/v1/assistant/conversations/{id}/today` | Today's "Today" card for this chat: returns the existing one, or creates one (a `today` entry, `at` is midnight of the user's day) → `{"item":FeedItem,"new":bool}`; read-only device 403 |
@@ -1861,6 +1864,53 @@ Only explicitly recorded non-negative integer milliseconds with a valid associat
 
 Android uses the associated message to locate a user turn or background wake-up segment in loaded history, and the work row shows "Took N seconds" (milliseconds rounded down). It stays hidden if the associated message isn't loaded or the association crosses a new user turn / wake-up / recap boundary; association is retried after paging fills the gap. When a new turn has no record of its own, the status row stays blank rather than reusing the previous turn's duration. A missing field / item means no usable actual record, not zero duration; old nodes or caches may also lack this information. Folded work preserves duration metadata items; expanding folds, reconnect resends and cache restoration use the same association rules.
 
+### Tool outcomes
+
+A `tool_result` item can carry `outcome` (`proto.ToolOutcome`): what the call came to, read by the node while it parses
+the transcript, so clients need not guess from `text` and `is_error` (#2912). The node reads it from the runtime's own
+record of the call (Claude Code's `toolUseResult` and the line's `toolDenialKind`; a Codex command's `exit_code`,
+`duration` and `status`) and from the fixed words a Claude result opens with. It is additive: every field is optional,
+absent means the record did not say, old nodes send none, and clients that do not read it ignore the key. It travels in
+pages, pushes and `/items/{iid}/full` like the rest of the item; folds carry no outcomes.
+
+```json
+{"id":"r1#0","seq":42,"ts":"2026-01-01T10:00:00Z","role":"user","kind":"tool_result","tool_use_id":"toolu_1","is_error":true,
+ "text":"Exit code 1\n…","full_size":9120,
+ "outcome":{"status":"failed","exit_code":1,"tail":"--- FAIL: TestX (0.01s)\nFAIL\tpkg/x\t0.012s"}}
+```
+
+| Field | Meaning | Where it comes from |
+| --- | --- | --- |
+| `status` | One of the statuses below; set on every result the node parses | See below |
+| `exit_code` | The command's exit code | Codex `exit_code` (0 included); a failed Claude Bash result's opening `Exit code N` |
+| `duration_ms` | How long the call ran, when recorded | Codex `duration` (`{secs, nanos}`); Claude WebFetch `durationMs`. Never derived from timestamps |
+| `tail` | The output's last lines, only when the page cut `text` (it keeps the first 4 KB) | At most 30 lines and 2 KB, never repeating the page's text: it picks up where that stops when it fits (so a short overflow loses no line), else from a whole line; not for a Read's file content |
+| `persisted` | `{path, size?}`: Claude Code saved an output too big for the model to a file on the agent's machine; `text` has only its preview | `persistedOutputPath` / `persistedOutputSize`, or the path in the `<persisted-output>` preview |
+| `patch`, `patch_cut` | An Edit's or Write's change as unified diff hunks (`@@ -12,7 +12,8 @@`, the file's real line numbers) for `files[0]`, at most 8 KB of whole lines; `patch_cut` when lines were left out (each hunk header counts the lines kept) | Claude Code's `structuredPatch` |
+| `files` | `[{path, adds?, dels?, created?}]`: lines added and deleted over the whole change; `created` for a new file (its lines are the adds) | `structuredPatch`; Write `type: create` and its content's line count (the content itself is not copied) |
+| `git` | `commit {sha, branch?, kind?}` (committed, amended, cherry-picked), `push {branch?}`, `pr {number?, url?, action?}` (created, edited, closed…), `branch {ref?, action?}` (merged, rebased), as recorded | Claude Code's `gitOperation` |
+| `read` | `{start?, lines?, total?, unchanged?}`: the part of the file a Read returned, or `unchanged` when it returned nothing because the file had not changed since the last Read | Read's `file.{startLine, numLines, totalLines}`, `type: file_unchanged`, or the result's "Wasted call — file unchanged since your last Read" |
+| `answers` | AskUserQuestion's answers, question → answer (at most 16, each cut to 1 KB) | `answers` |
+
+| `status` | Claude Code | Codex |
+| --- | --- | --- |
+| `ok` | Anything below does not apply | `completed` with exit code 0 |
+| `failed` | `is_error` (with `exit_code` when the result opens with `Exit code N`) | `failed` or a nonzero exit code |
+| `no_match` | `returnCodeInterpretation: "No matches found"` (a search that found nothing; not an error) | — |
+| `denied` | `toolDenialKind` `user-rejected`, `permission-rule` (a rule, the permission mode or a hook) or `automode-*`; older lines: an error opening with Claude Code's rejection or permission words, or a `PreToolUse:` hook error | `declined` |
+| `blocked` | An error opening with `<tool_use_error>` (input that failed validation, a guard) or the worktree isolation refusal: the call did not run | — |
+| `interrupted` | `toolDenialKind` `interrupted` / `cancelled`, `interrupted: true`, or `[Request interrupted by user for tool use]` | — |
+| `timed_out` | `timedOutAfterMs`: the command outran its timeout and Claude Code moved it to the background | — |
+| `background` | `backgroundTaskId`: the command goes on in the background; its task notice reports the end | — |
+
+Decoding rules: `toolUseResult` is read through a narrow struct that takes any value (a failed call records a string, an
+MCP call its content blocks); a value or field of an unexpected type leaves that part unread and never drops the line.
+Its large fields (`originalFile`, `stdout`, a Read's `content`, a Write's `content`) are never copied. `toolDenialKind`
+takes any value too: anything but a string is no kind, and the status comes from the words. A line holding
+several `tool_result` blocks takes no record (Claude Code writes one result per line with its record). A tool writes its
+own result text, so statuses read from words (any line without `toolDenialKind`) are for display only. A client that
+starts drawing outcomes must bump its item cache version: items cached from older pages have none.
+
 ### Folded work
 
 The tool calls and thinking of a turn are normally folded into one line in the chat ("Tools 502 · Thinking 81"). But in one long Codex session, the page for the last two turns had 1412 items and 1.08 MB,
@@ -2641,6 +2691,33 @@ these sessions have no `pane_id`, and the App doesn't show a terminal for them a
 
 Tasks dispatched from an assistant chat ([unified-entry.md](../assistant/unified-entry.md)). The assistant hands in a plan with `task_plan`; read-only ones and ones the user chose to remember start directly, and the rest wait for "Start" on the phone.
 
+**Stable task rows (#2878).** The feed endpoint additionally returns `task_cards`, a derived projection, without changing or
+removing its original `items` and `plans`. Android and web render a task only as its single **Progress** tray row; the chat
+shows a small "Dispatched N tasks · See Progress" entry instead of plan/task/receipt/review/report cards. Plans awaiting
+approval and acceptance decisions are handled in **Pending**. Task details and the original audit records remain accessible.
+
+`TaskCard` is `{id,todo_id?,plan_id?,index?,at,updated_at,state,receipt_id?,report_id?}`:
+
+- `id` is `plan:<plan_id>:<index>` for a plan task (zero-based `index`, including zero), stable before and after `todo_id`
+  is assigned. A task with no plan uses `todo:<todo_id>`. A reused task is projected only under its current durable plan.
+- `at` is the original plan's `created_at`, or the to-do's `created_at` when there is no plan. State changes, reports and
+  receipts never move this anchor. `updated_at` includes newer to-do, supervision, progress, session and task-feed changes.
+- `state` uses the existing task states: `not_started`, `working`, `needs_you`, `interrupted`, `usage_limit`, `unread`,
+  `followup`, `done`, `failed`, `cancelled`; `accepted` specifically means a closed task with an effective accepted
+  supervision review. Cancellation, failed starts and automatic completion are not silently relabeled accepted.
+- `receipt_id` and `report_id` name the latest corresponding original entries **in this page**, if any. Clients merge them
+  with their cached audit entries by task id; absence does not clear previously received evidence. Titles and editable
+  planning fields remain in `plans[plan_id].tasks[index]`; live progress and PR links remain on `Todo` and `Session`.
+- This is an **upsert page**, not an authoritative removal snapshot. `since` can omit the original plan event; the server
+  resolves a task's durable `plan_id` in one batch to retain its identity. `[]` means no task upserts in this page. `null`
+  means projection data could not be read; keep the prior state or legacy projection. Old hubs omit the field, and old
+  clients continue reading the unchanged events. Remove rows only through the existing task/plan lifecycle, not because
+  they were absent from a feed page.
+- Clients continue updating the same row from live to-dos and sessions, independently of new feed events. Actual
+  `supervision.progress.{kind,step,steps,text,at}` or `Session.plan.{done,total,current}` supplies progress, never elapsed
+  time or a guessed percentage. Quiet scheduled-task runs use the existing schedule fields and provenance, not a new
+  model call; `Todo.quiet` is notification policy and is not proof that a user-dispatched task is a background turn.
+
 ```jsonc
 // TaskPlan
 {"id":"plan_…","conversation":"<assistant chat id>","state":"open|started|dismissed","created_at":"...","updated_at":"...",
@@ -3077,7 +3154,7 @@ With sources, `GET /api/v1/agents` has one entry per source: `{"sources":[{"sour
 the Lark plugin picks its own source id; keeping the same id across upgrades keeps session ids unchanged.
 `setup` explains why the source is reachable but has nothing to list yet; clients turn it into a notice when the session list is empty:
 `missing` (the backend doesn't support personal Agents, such as a gateway without agent-bridge), `disabled` (supported but not enabled, such as agent-bridge being off on the gateway),
-`no_accounts` (enabled but no accounts connected yet); these states mean the source has no sessions. Other failures (such as unreachable) go in `error`, and the session endpoint still reports errors normally (when multiple sources exist and no `source` is specified, the failing source is skipped).
+`no_accounts` (enabled but no accounts connected yet); these states mean the source has no sessions. Other failures (such as unreachable, or an extension still waiting for its own settings) go in `error`, from `agentsrc.status` or from the last failed `agentsrc.sessions`, and clients show them when the session list is empty. Without `source`, listing, paging, counting and searching skip a failing source when other sources exist or when it has not listed since it was registered, and answer 200; a lone source that has listed before returns its error, so clients keep the rows they have. With `source`, the source's error is returned.
 
 ## Personal Agent list preferences
 

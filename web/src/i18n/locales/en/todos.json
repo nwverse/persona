@@ -213,5 +213,9 @@
   "calendar_undated_other": "{count} to-dos have no due date and aren't on the calendar.",
   "calendar_see_list": "See them in the list →",
   "calendar_back": "Back to calendar",
-  "calendar_close": "Close"
+  "calendar_close": "Close",
+  "ask_ok": "OK",
+  "ask_answer": "Answer in chat",
+  "ask_answer_hint": "Nothing is recommended, so answer it in the conversation it came from.",
+  "ask_failed": "Not done: {error}"
 }

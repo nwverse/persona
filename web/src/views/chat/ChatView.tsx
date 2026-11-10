@@ -100,7 +100,7 @@ import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark } from "../../ui/AgentMark";
-import { DayLine, FeedLineView, QuickResultCard, RouteChip, TaskDock, TaskQuestions } from "../assistant/Tasks";
+import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
 import { t } from "../../i18n";
 
 // The terminal view (TerminalPanel and its stream / cell parsing) loads on demand: most visits only read the chat, so it
@@ -1222,6 +1222,19 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const commands = useMemo(() => (assistant ? [] : agentCommands(AGENT_COMMANDS, session)), [assistant, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
 
+  const pendingCards = (
+    <PendingCards
+      interactions={focusedFirst(interactions, focusedCard())}
+      answered={answered}
+      delegated={delegated}
+      offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
+      narrow={compactDock}
+      short={short}
+      keyboard={keyboard}
+      onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
+    />
+  );
+
   const page = (
     <div className="flex h-full min-w-0 flex-col">
       {!readOnly && (
@@ -1295,7 +1308,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                 ? displayLines(lines, feed).flatMap((d) => [
                     ...failedBefore(d.kind === "chat" ? d.id : ""),
                     d.kind === "feed" ? (
-                      <FeedLineView key={d.id} item={d.item} />
+                      <FeedLineView key={d.id} item={d.item} simplified />
                     ) : d.kind === "quick" ? (
                       <QuickResultCard key={d.id} result={d.result} />
                     ) : d.kind === "day" ? (
@@ -1393,24 +1406,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         )}
         {assistant && (
           <>
-            <TaskQuestions conversation={sid} />
-            {/* a call keeps the footer to the cards and itself (docs/assistant/voice.md 1.2 A.2) */}
-            {voiceState !== "live" && <TaskDock conversation={sid} />}
+            {voiceState === "live" && <TaskQuestions conversation={sid} />}
+            {/* A call keeps its existing decision controls; otherwise decisions live in Pending. */}
+            {voiceState !== "live" && <AssistantActionBar key={sid} conversation={sid} ownPending={pendingCards} ownCount={interactions.length} />}
             {voiceState !== "live" && <RouteChip conversation={sid} />}
           </>
         )}
-        <PendingCards
-          interactions={focusedFirst(interactions, focusedCard())}
-          answered={answered}
-          delegated={delegated}
-          // the agent's own page only (#4091): in a side panel the link would change the page under it, and Persona's
-          // conversations list what the tasks' agents ask in TaskQuestions
-          offerNext={inPage && !readOnly && !assistant ? { mid, sid } : undefined}
-          narrow={compactDock}
-          short={short}
-          keyboard={keyboard}
-          onDismissKeyboard={() => composerBox.current?.querySelector("textarea")?.blur()}
-        />
+        {(!assistant || voiceState === "live") && pendingCards}
         {assistant && session && <CompactionStrip session={session} />}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && !refusedNoRow && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
