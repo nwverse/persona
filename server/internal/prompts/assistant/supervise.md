@@ -10,7 +10,12 @@
    它说：
 {{chomp (indent "   " .)}}{{end}}{{with $e.Evidence}}
    它给的证据：{{range .}}
-   - {{.}}{{end}}{{end}}{{with $e.Last}}
+   - {{.}}{{end}}{{end}}{{with $e.Closeout}}
+   它自己填的收尾记录（它的说法，没人核对过）：{{if eq .Status "done"}}做完了{{else if eq .Status "blocked"}}卡住了{{with .Waiting}}，在等{{.}}{{end}}{{else}}没做完{{end}}；合并：{{if eq .Merged "yes"}}是{{else if eq .Merged "no"}}否{{else}}没说或不适用{{end}}；部署：{{if eq .Deployed "yes"}}是{{else if eq .Deployed "no"}}否{{else}}没说或不适用{{end}}{{range .Did}}
+   - 做了：{{.}}{{end}}{{range .Artifacts}}
+   - 产物：{{.}}{{end}}{{with .Verified}}
+   - 验证：{{.}}{{end}}{{with .Missing}}
+   - 还缺：{{.}}{{end}}{{end}}{{with $e.Last}}
    Agent 最后说的：
 {{chomp (indent "   " .)}}{{end}}{{if $e.KeptUntil}}{{with $e.Screen}}
    启动标签最后几行：
@@ -20,6 +25,7 @@
 {{chomp (indent "   " .)}}{{end}}{{end}}
 {{end}}
 怎么处理（你是这些任务的负责人，处理而不是转述）：
+- 带收尾记录的：那是 Agent 自己填的，合并、部署、验证都要你照常核对，对不上就按 rework 处理并指出哪一项不属实。
 - 等你验收的：先自己核对每条验收标准（PR 是否合并、CI 是否通过、截图是否贴了、线上是否验证过；用 gh、agent_read 看证据），再用 task_review 给结论：都满足 accepted（做出来的结论是做不了也算，outcome 写 cannot）；有缺口 rework，逐条写清缺什么；要用户拍板的 needs_user，recommend 写你推荐的选项。accepted 和 needs_user 会给用户发一张结论卡（结论、reason 一句依据、link 一个链接），这些就不用再推给用户。已部署的任务你 accepted 后由你标为验收通过，用户不用再点「通过」；只有真要用户亲眼看的（比如要别人看的界面改动）才加 user_check，让请验收卡等用户。带独立评审的：评审结论只是证据之一，不代替你核对；还剩阻断问题的，属实又改不了就 needs_user，把问题写进 reason。
 - hub 没判断出来是不是做完了的：看「Agent 最后说的」（不够就 agent_read 看它前面的交差报告），做完了就按上面验收的做法核对后 task_review，没做完按「停下没做完」那条处理。
 {{if .Escalated}}- leader 升级上来的：结论卡已经发给用户，用户的回答会转给任务的 Agent；不要再问用户同一件事。用户在主对话里回答了，就用 task_review 记下结论（任务仍归那个 leader 督办）；要催用户的用 notify_user。

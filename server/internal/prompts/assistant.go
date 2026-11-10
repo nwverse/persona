@@ -468,6 +468,7 @@ type SuperviseEntry struct {
 	Session         string             // its agent's session id (short)
 	AgentID         string             // full id for durable deduplication; not rendered
 	Last            string             // what its agent said last
+	Closeout        *SuperviseCloseout // the closeout its agent ended the turn with (#3612), nil when it wrote none
 	Link            string             // the task's page ("" when the hub has no public_url)
 	Quiet           bool               // the user was not pushed about it
 	Review          *SuperviseReviewed // review: what the independent reviewer found (#2173), nil when none ran
@@ -701,3 +702,12 @@ func RenderWorkspaceMention(w WorkspaceMention) string {
 
 // RenderWorkoutReport describes one consented workout, never a medical diagnosis.
 func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
+
+// SuperviseCloseout is an agent's own closeout as a supervision message shows it: its claim, to be checked.
+type SuperviseCloseout struct {
+	Status, Waiting   string
+	Merged, Deployed  string // "yes", "no" or ""
+	Did               []string
+	Verified, Missing string
+	Artifacts         []string
+}

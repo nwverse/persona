@@ -81,6 +81,11 @@ func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok b
 	return c, artifacts, true
 }
 
+// Strip returns reply without its closeout blocks, for a reader that is given the closeout separately.
+func Strip(reply string) string {
+	return strings.TrimSpace(blockRe.ReplaceAllString(reply, ""))
+}
+
 // Has reports whether reply carries a closeout Parse accepts.
 func Has(reply string) bool {
 	_, _, ok := Parse(reply)

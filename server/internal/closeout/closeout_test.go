@@ -62,3 +62,9 @@ func TestParseBounds(t *testing.T) {
 		t.Fatalf("did %d lines of %d runes, %d artifacts: want 3 of 200, 5", len(c.Did), len([]rune(c.Did[0])), len(arts))
 	}
 }
+
+func TestStrip(t *testing.T) {
+	if got := Strip("Fixed.\n\n<closeout status=\"done\">\ndid: x\n</closeout>\n"); got != "Fixed." {
+		t.Fatalf("Strip = %q", got)
+	}
+}
