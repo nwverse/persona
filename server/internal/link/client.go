@@ -234,13 +234,7 @@ const modeCheck = time.Second
 
 // watchMode ends the mode being run (cancel) once link.json says another.
 func watchMode(ctx context.Context, path, mode string, cancel context.CancelFunc) {
-	stamp := func() time.Time {
-		if fi, err := os.Stat(path); err == nil {
-			return fi.ModTime()
-		}
-		return time.Time{}
-	}
-	was := stamp()
+	was := stampOf(path)
 	if currentMode(path) != mode {
 		cancel()
 		return
@@ -252,7 +246,7 @@ func watchMode(ctx context.Context, path, mode string, cancel context.CancelFunc
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			now := stamp()
+			now := stampOf(path)
 			if now.Equal(was) {
 				continue
 			}
@@ -270,6 +264,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 	rep.switchTo(ModeActive)
 	var b backoff
 	for ctx.Err() == nil {
+		was := stampOf(o.Path) // a change from here on (paired again, an address added) cuts the wait below short
 		c, err := Load(o.Path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -277,7 +272,7 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			} else {
 				rep.set(func(s *Status) { *s = Status{State: "waiting", Error: err.Error()} })
 			}
-			o.wait(ctx, time.Hour)
+			o.wait(ctx, time.Hour, was)
 			continue
 		}
 		rep.set(func(s *Status) {
@@ -296,6 +291,11 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			end = l.serve(ctx, c, o, rep)
 			if time.Since(start) > time.Minute {
 				b = backoff{}
+			}
+			// The link writes link.json itself (the hub's addresses and names): from here only a new credential, written
+			// while the link was up, counts as a change since it was read.
+			if f, err := Read(o.Path); err != nil || f.Token == c.Token {
+				was = stampOf(o.Path)
 			}
 		}
 		if ctx.Err() != nil {
@@ -324,20 +324,14 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			*s = Status{State: state, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Error: summary(end), Retry: &retry,
 				Trust: trustOf(c), Endpoints: ranked(c.Endpoints)}
 		})
-		o.wait(ctx, wait)
+		o.wait(ctx, wait, was)
 	}
 }
 
 // wait sleeps up to d, less if the network changed, a reconnect was asked for or link.json changed (paired again,
-// an address added).
-func (o Options) wait(ctx context.Context, d time.Duration) {
-	stamp := func() time.Time {
-		if fi, err := os.Stat(o.Path); err == nil {
-			return fi.ModTime()
-		}
-		return time.Time{}
-	}
-	was := stamp()
+// an address added) since was: the stamp (stampOf) from when the attempt read it, so a change that landed during the
+// attempt (a new credential written while the hub refused the old one) ends the wait at its first poll.
+func (o Options) wait(ctx context.Context, d time.Duration, was time.Time) {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	poll := time.NewTicker(2 * time.Second)
@@ -353,9 +347,17 @@ func (o Options) wait(ctx context.Context, d time.Duration) {
 		case <-o.Redial:
 			return
 		case <-poll.C:
-			if !stamp().Equal(was) {
+			if !stampOf(o.Path).Equal(was) {
 				return
 			}
 		}
 	}
+}
+
+// stampOf is when link.json at path was last written (zero when there is none): a different stamp means it changed.
+func stampOf(path string) time.Time {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.ModTime()
+	}
+	return time.Time{}
 }

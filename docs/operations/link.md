@@ -249,10 +249,11 @@ Both sides ignore a message type they don't know.
   | Case | Wait |
   | --- | --- |
   | Replaced by a new link from the same computer (4001) | 30 seconds |
-  | Credentials rejected (401 / 403) or revoked (4002) | 5 minutes, or retry immediately when link.json changes (re-pairing) |
+  | Credentials rejected (401 / 403) or revoked (4002) | 5 minutes, or retry within 2 seconds when link.json changes (re-pairing) |
   | Hub restarts (1001) | Normal backoff |
   | Manual **Reconnect now** | No wait |
 
+- Any wait ends within 2 seconds when link.json changes (re-paired, an address added). The change counts from when the attempt read link.json, so a new credential written while the hub was refusing the old one is tried at the next check, not after 5 minutes; while a link is up, only a new credential counts (the link writes the hub's addresses and names into link.json itself).
 - Only one persona-link can run per computer (`~/.persona/link.json.run` file lock), or they replace each other repeatedly.
 
 **Network changes**

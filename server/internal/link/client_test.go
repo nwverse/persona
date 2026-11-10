@@ -349,6 +349,52 @@ func TestLinkReportsARefusedCredential(t *testing.T) {
 	}
 }
 
+// A new credential written while the hub refuses the old one (persona-link pair, the tray's or the App's pairing) is
+// tried at the wait's first poll, not after refusedWait: the change counts from when the attempt read link.json.
+func TestRefusedLinkRetriesWhenLinkJSONChangedMeanwhile(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		refuse func(w http.ResponseWriter, r *http.Request)
+	}{
+		{"401", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "no", http.StatusUnauthorized) }},
+		{"4002", func(w http.ResponseWriter, r *http.Request) {
+			if c, err := websocket.Accept(w, r, nil); err == nil {
+				_ = c.Close(CloseRevoked, "revoked")
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "link.json")
+			var mu sync.Mutex
+			var tokens []string
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				tokens = append(tokens, r.Header.Get("Authorization"))
+				first := len(tokens) == 1
+				mu.Unlock()
+				if !first {
+					http.Error(w, "no", http.StatusUnauthorized)
+					return
+				}
+				// Paired again while this attempt is under way: the old credential is the one refused.
+				if err := Update(path, func(c *Config) error { c.Token = "jd_new"; return nil }); err != nil {
+					t.Error(err)
+				}
+				tc.refuse(w, r)
+			}))
+			t.Cleanup(srv.Close)
+			ch := runAgainst(t, srv, "jd_x", Options{Path: path})
+			waitFor(t, ch, func(s Status) bool { return s.State == "refused" })
+			eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(tokens) >= 2 })
+			mu.Lock()
+			defer mu.Unlock()
+			if tokens[0] != "Bearer jd_x" || tokens[1] != "Bearer jd_new" {
+				t.Fatalf("attempts carried %q", tokens)
+			}
+		})
+	}
+}
+
 func TestRedialConnectsAgainAtOnce(t *testing.T) {
 	srv, n := fakeHub(t, func(c *websocket.Conn) {
 		for {
