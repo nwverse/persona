@@ -204,6 +204,39 @@ Messages follow the request language (Chinese, English or Japanese); the CLI alw
 At or above a `<N` upper bound, the message explains the incompatibility without telling the user to update the hub. Version checks, installation restrictions and the
 `incompatible` status of installed extensions are unchanged; development builds still only produce a warning.
 
+### Translations: `l10n/` (#897)
+
+A manifest has one language. Its text in the hub's other languages (`docs/protocol/i18n.md`) goes in the package next to it, one file each:
+`l10n/en.json`, `l10n/ja.json`, `l10n/zh-Hans.json`. The manifest itself does not change: hubs read manifests strictly, so a new manifest field
+would make the extension uninstallable on older hubs, while files they do not read are harmless. Example `l10n/en.json` for a manifest written in Chinese:
+
+```json
+{"name": "Example Notes",
+ "description": "Syncs Example Notes into the knowledge base.",
+ "configuration": {
+   "base_url": {"title": "Server URL"},
+   "region": {"title": "Region", "choices": {"cn": "China", "intl": "International"}},
+   "proxy": {"title": "Proxy", "properties": {"host": {"title": "Host"}}}
+ },
+ "secrets": {"api_key": {"title": "API key", "description": "Generate one in Example Notes under Settings › Developer"}}}
+```
+
+- Every key is optional and a blank string is no translation. `configuration.<property>`: `title`, `description`, `confirm` (translates `x-confirm`,
+  never adds one), `choices` (labels by value: a string choice by the string, a number as JSON writes it; on an array, its items' choices) and
+  `properties` (an object's own properties, in the same shape). `secrets.<name>`: `title`, `description`. Keys the hub does not know are ignored.
+- **Which text**: string by string, the request's language (`X-Persona-Lang` / `Accept-Language`), then English unless the request is
+  Simplified Chinese, then the manifest's own text.
+- **Where**: the extension list and details (name, description, the settings form, secrets and the "Missing: …" line), dependency names,
+  marketplace catalog items (from the index entry's `l10n`, see "Extension marketplace"; the search also matches every translation's name and
+  description) and install / upgrade previews (the name and description of the preview's `manifest`). What gets approved and installed, the
+  permission digest and the official-provenance check do not change with the language. Contribution titles (pages, navigation entries,
+  shortcuts, themes) and built-in extensions have one language for now.
+- **Checks**: a file is at most 64 KB, `name` 1–40 characters, any other string at most 2000. A file that does not check out (not JSON, a
+  wrong type, too long, a link) is left out with a warning on the preview and on the installed extension; it never blocks an install. Files
+  of languages the hub does not have are not read.
+- `personad extension pack` packs `l10n/` and prints the index entry's `l10n` next to its `packages`; `personad extension dev` reads the files
+  too. Code: `server/internal/extension/l10n.go`.
+
 ### Configuration: the form subset
 
 The root is `{"type": "object", "properties": {…}, "required": [...]}`. Every client can draw it as a form, with fields in the order the properties appear in the file (the hub keeps the order when parsing,
@@ -960,6 +993,7 @@ personad extension dev [<dir>]                       Attach it to this hub to tr
 personad extension test [<dir>]                      Build for this machine and run it through the hub's checks
 personad extension pack [<dir>] [--platforms linux-amd64,…] [--out <dir>] [--split]
                                                      --platforms defaults to the platforms the manifest has programs for (this machine's if the manifest has none), --out defaults to <dir>/dist
+                                                     The package takes l10n/ too; the index entry printed carries its l10n
 ```
 
 ## Extension marketplace
@@ -1006,6 +1040,9 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 
 - `manifest` is the extension's whole `persona-extension.json`: its permissions and contributions can be seen without downloading. The manifest in the downloaded package must match it (id, version, permission summary), otherwise it is not installed.
 - `tags` are the labels shown in the marketplace. The extension repo generates them from the manifest's `tags` and takes them out of `manifest` when writing the index (older hubs do not recognize `tags` in a manifest and would drop the whole entry); when an entry has no `tags`, the hub uses the ones in `manifest`.
+- `l10n` (optional) is the package's translations again, `{"<language>": <its l10n/<language>.json>}` (see "Translations: `l10n/`"), so
+  the catalog can show them before anything is downloaded. Older hubs ignore the key. One that does not check out is left out with a warning,
+  and the entry stays, in its manifest's words.
 - `packages` are searched in order for the first whose `platforms` includes this hub (`GOOS-GOARCH`); one without `platforms` counts as usable anywhere. `url` is a path relative to the index (for GitHub and git marketplaces, a path in the repo; git marketplaces cannot escape the repo through links),
   an HTTPS address, an immutable `oci:<registry>/<repository>@sha256:<64 lowercase hex>` reference, or for GitHub marketplaces `release:<tag>/<asset name>` (downloads the Release asset through the API; private repos work too). `sha256` is required and checked after download; on mismatch it is not installed.
 - Broken entries (invalid manifest, no packages, non-https address, the same id twice) are dropped with a warning and the rest work as usual; a whole index whose `market_version` is not 1 or that has no `name` is rejected.
@@ -1020,10 +1057,10 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 | `DELETE /api/v1/extensions/-/markets/{id}` | Stop reading this marketplace; extensions installed from it stay, but their auto-upgrade pauses with `auto_upgrade_paused: "market_removed"`. Add its original registration address again to restore upgrades under the saved settings |
 | `POST /api/v1/extensions/-/markets/{id}/refresh` | Re-read the index now; on a bad signature returns 400 `market_signature` (the last good index is kept) |
 | `PUT /api/v1/extensions/-/markets/{id}/token` `{token}` | Replace the token (empty string removes it) and re-read |
-| `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
+| `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags and every translation's name and description (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
 | `POST /api/v1/extensions/-/catalog/preview` `{market, extension}` (the old field name `plugin` is also accepted) | Download, verify, return a preview (the same as the "Install" preview, plus `market`); if already installed it is an upgrade preview |
 
-`CatalogItem`: `market`, `market_name`, `id`, `name`, `version`, `description`, `publisher`, `homepage`, `tags`, `contributes` (extension point → id),
+`CatalogItem`: `market`, `market_name`, `id`, `name` and `description` (in the request's language, from the entry's `l10n`), `version`, `publisher`, `homepage`, `tags`, `contributes` (extension point → id),
 `permissions` (a few human-readable lines, same as before install), `problem` (why it cannot be installed: no package for this hub's platform, needs a newer hub, bad marketplace signature), `installed` (installed version),
 `installed_source`, `from_this_market`, `upgradable`.
 
