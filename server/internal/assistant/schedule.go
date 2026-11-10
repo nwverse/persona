@@ -603,6 +603,10 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 		NewConversation bool            `json:"new_conversation"`
 		Push            *string         `json:"push"` // left out: a new follow-up pushes every run, one rescheduled keeps its push
 		Until           json.RawMessage `json:"until"`
+		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
+		Launcher *string `json:"launcher"`
+		Model    *string `json:"model"`
+		Effort   *string `json:"effort"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -644,9 +648,13 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	if at.Before(now.Add(-time.Minute)) {
 		return "", fmt.Errorf("%s is in the past", at.In(loc).Format("2006-01-02 15:04"))
 	}
+	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	// A one-off ignores until, even a bad one. An interval task takes it; scheduleOwn applies it when this run is
 	// rescheduling its own task (including a one-off this call turns into an interval).
-	if out, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push, a.Until); ok || err != nil {
+	if out, id, ok, err := s.scheduleOwn(ctx, sessionID, a.Title, a.Prompt, prompt, a.At, at, every, push, a.Until, a.Launcher, a.Model, a.Effort); ok || err != nil {
+		if err == nil && id != "" {
+			err = s.setTaskModel(ctx, id, a.Launcher, a.Model, a.Effort)
+		}
 		return out, err
 	}
 	space, _ := s.selfSpace(ctx, sessionID) // not listed: the assistant's own, as before the health space
@@ -674,6 +682,9 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	if t.SessionID != "" && s.quietConversation(ctx, t.SessionID) {
 		t.SessionID = "" // asked from a quiet task's conversation: it runs in its own, where its runs are pushed (#2396)
 	}
+	if needsOwn && t.SessionID != "" { // it would run on that conversation's launcher, not its own
+		return "", errTaskModelNeedsOwnConversation
+	}
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return "", err
@@ -681,6 +692,10 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	err = s.saveLocked(sc, append(slices.Clone(sc.tasks), t))
 	sc.mu.Unlock()
 	if err != nil {
+		return "", err
+	}
+	if err := s.setTaskModel(ctx, t.ID, a.Launcher, a.Model, a.Effort); err != nil {
+		_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
 		return "", err
 	}
 	s.broadcastSchedule()
@@ -697,14 +712,14 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 // repeats stays as it is (a changed prompt is taken). A task deleted while its run was going stays deleted: the run is
 // told so, nothing is scheduled (#4792). ok is false when this conversation's latest run isn't one of the task's
 // (rawPrompt is what was asked, before stripScheduleHeader), or the title and prompt are another task's.
-func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string, untilRaw json.RawMessage) (string, bool, error) {
+func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, prompt, atArg string, at time.Time, every int, push *string, untilRaw json.RawMessage, launcher, model, effort *string) (string, string, bool, error) {
 	if sessionID == "" {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	loc := s.location(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	// Only the conversation's latest run says which task it is a run of: an older run's task is not this one (#4792).
 	last := -1
@@ -715,7 +730,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	}
 	if last < 0 {
 		sc.mu.Unlock()
-		return "", false, nil
+		return "", "", false, nil
 	}
 	r := sc.runs[last]
 	i := sc.indexLocked(r.RefID)
@@ -723,13 +738,30 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		// Deleted while this run was going: its "schedule the next one" must not bring it back (#4792).
 		sc.mu.Unlock()
 		if ranRecently(r) && copiesRun(r, title, rawPrompt) {
-			return i18n.T(s.lang(ctx), "assistant-schedule.deleted_not_again", i18n.Args{"id": r.RefID, "name": r.Title}), true, nil
+			return i18n.T(s.lang(ctx), "assistant-schedule.deleted_not_again", i18n.Args{"id": r.RefID, "name": r.Title}), "", true, nil
 		}
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if !(sameText(title, sc.tasks[i].Title) || sameText(prompt, sc.tasks[i].Prompt)) {
 		sc.mu.Unlock()
-		return "", false, nil
+		return "", "", false, nil
+	}
+	id, sourceSession := sc.tasks[i].ID, sc.tasks[i].SessionID
+	if hasTaskModel(launcher, model, effort) {
+		// A model configuration is checked before the schedule changes (the model configuration reads the task list,
+		// so the schedule lock is not held here).
+		sc.mu.Unlock()
+		if sourceSession != "" { // its runs keep that conversation's launcher
+			return "", id, true, errTaskModelNeedsOwnConversation
+		}
+		if err := s.validateTaskModel(ctx, id, launcher, model, effort); err != nil {
+			return "", id, true, err
+		}
+		sc.mu.Lock()
+		if i = sc.indexLocked(id); i < 0 {
+			sc.mu.Unlock()
+			return "", "", false, nil
+		}
 	}
 	tasks := slices.Clone(sc.tasks)
 	t := &tasks[i]
@@ -770,23 +802,23 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		end, hasUntil, clearUntil, untilErr := untilIn(untilRaw, time.Now(), loc)
 		if untilErr != nil {
 			sc.mu.Unlock()
-			return "", true, untilErr
+			return "", t.ID, true, untilErr
 		}
 		applyUntil(t, end, hasUntil, clearUntil)
 		dropStaleUntil(t, hasUntil, time.Now())
 	}
 	if err := checkUntil(t, time.Now()); err != nil {
 		sc.mu.Unlock()
-		return "", true, err
+		return "", t.ID, true, err
 	}
 	out += stopsAt(*t, loc)
 	err = s.saveLocked(sc, tasks)
 	sc.mu.Unlock()
 	if err != nil {
-		return "", true, err
+		return "", t.ID, true, err
 	}
 	s.broadcastSchedule()
-	return out, true, nil
+	return out, t.ID, true, nil
 }
 
 // ranRecently: the run started within the time its turn is followed (runWatchTimeout), so the call can be its own end.
@@ -852,6 +884,7 @@ func (s *Service) deleteTask(ctx context.Context, id string) (bool, error) {
 	delete(sc.waitTold, id)
 	sc.mu.Unlock()
 	if i >= 0 {
+		s.forgetTaskModel(ctx, id)
 		s.broadcastSchedule()
 	}
 	return i >= 0, nil
@@ -868,7 +901,7 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 	}
 	defer sc.mu.Unlock()
 	var b strings.Builder
-	b.WriteString("Scheduled tasks (the user sees and edits them in Persona › 定时任务; launcher / permission mode are theirs to set):\n")
+	b.WriteString("Scheduled tasks (the user sees and edits them in Persona › 定时任务; permission mode is theirs to set; a launcher / model / effort is the task's own when it has one, Main chat's otherwise):\n")
 	n := 0
 	for _, t := range sc.tasks {
 		if t.done() || t.Space != space {
@@ -917,6 +950,10 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 		Enabled  *bool           `json:"enabled"`
 		Push     *string         `json:"push"` // left out: a new routine pushes every run, an existing one keeps its push
 		Until    json.RawMessage `json:"until"`
+		// The task's own model configuration (schedule_model.go): nil leaves it as it is, "" clears that part.
+		Launcher *string `json:"launcher"`
+		Model    *string `json:"model"`
+		Effort   *string `json:"effort"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -935,6 +972,18 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	end, hasUntil, clearUntil, err := untilIn(a.Until, now, loc)
 	if err != nil {
 		return "", err
+	}
+	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
+	if a.ID != "" && needsOwn {
+		// Check before the save: a bad launcher must not leave the rest of the change applied.
+		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
+			if prev.SessionID != "" {
+				return "", errTaskModelNeedsOwnConversation
+			}
+			if err := s.validateTaskModel(ctx, a.ID, a.Launcher, a.Model, a.Effort); err != nil {
+				return "", err
+			}
+		}
 	}
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
@@ -989,6 +1038,12 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	err = s.saveLocked(sc, tasks)
 	sc.mu.Unlock()
 	if err != nil {
+		return "", err
+	}
+	if err := s.setTaskModel(ctx, t.ID, a.Launcher, a.Model, a.Effort); err != nil {
+		if i < 0 {
+			_, _ = s.deleteTask(ctx, t.ID) // a task that cannot run with what was asked is not left behind
+		}
 		return "", err
 	}
 	s.broadcastSchedule()
@@ -1134,6 +1189,8 @@ func (s *Service) Run(ctx context.Context) {
 	go s.kbHistoryLoop(ctx)    // importing chats' older history into it, off by default (kb_history.go)
 	go s.viewActionLoop(ctx)   // durable card reply outbox
 	go s.acceptLoop(ctx)       // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
+	// The leaders' tasks that got stuck (leader_reports.go).
+	go s.leaderReportsLoop(ctx)
 	go s.healthLoop(ctx)       // each machine's launchers (launcher_health.go)
 	go s.instructionsLoop(ctx) // the CLAUDE.md on the assistant's machine (start.go)
 	s.scheduleLoop(ctx)

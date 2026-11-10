@@ -33,6 +33,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/secretkey"
+	"github.com/nwverse/persona/server/internal/subscriptions"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -117,6 +118,7 @@ type Manager struct {
 
 	mail          Mail
 	connectors    *connector.Registry
+	subs          *subscriptions.Service // source subscriptions (subscriptions.go); nil until Run
 	connectorsOff map[string]bool
 	migrated      sync.Map
 	media         mediaCache
