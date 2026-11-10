@@ -75,6 +75,7 @@ async function fixture(t, steps, summary, options = {}) {
   if (summary) state(summary)
   const binary = join(home, 'fake-agy.mjs')
   writeFileSync(binary, `#!/usr/bin/env node
+if (process.argv.includes('models')) { console.log('test-model\\tTest Model'); process.exit(0) }
 import { createInterface } from 'node:readline'
 createInterface({ input: process.stdin }).on('line', (line) => {
   const request = JSON.parse(line)
@@ -91,7 +92,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   })
   runtime.start()
   await node.ready
-  await until('native conversation listed', () => node.last('runtime.sessions')?.sessions.length)
+  await until('native conversation listed', () => options.expectEmpty ? node.last('runtime.sessions')?.sessions.length === 0 : node.last('runtime.sessions')?.sessions.length)
   const refresh = async () => {
     const before = node.all('runtime.sessions').length
     await node.peer.call('session.rename', { session_id: SESSION, title: 'Renamed' })
@@ -186,4 +187,22 @@ test('unavailable native summary stores cannot turn narration into completion', 
   }
   db.exec('DROP TABLE conversation_summaries; CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT)')
   assert.equal(await refresh(), 'unknown', 'unsupported older schema')
+})
+
+
+test('completed availability workspaces stay hidden after a companion restart', async (t) => {
+  const missing = join(tmpdir(), 'persona-check-availability-missing')
+  const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'OK' })], {
+    ...idle, workspace_uris: JSON.stringify([`file://${missing}`]),
+  }, { expectEmpty: true })
+  assert.equal(node.last('runtime.sessions').sessions.length, 0)
+})
+
+test('a real workspace sharing the check prefix remains visible', async (t) => {
+  const real = mkdtempSync(join(tmpdir(), 'persona-check-'))
+  t.after(() => rmSync(real, { recursive: true, force: true }))
+  const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Answer' })], {
+    ...idle, workspace_uris: JSON.stringify([`file://${real}`]),
+  })
+  assert.equal(node.last('runtime.sessions').sessions.length, 1)
 })

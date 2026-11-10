@@ -620,6 +620,9 @@ private struct AttachPhotoCell: View {
                 AttachPickMark(number: number)
                     .padding(Theme.Attach.badgeInset)
             }
+            // Taps where it is drawn: the thumbnail filling the square is laid out past it (a landscape photo, wider than
+            // tall), and the cell to the right, drawn over it, took the taps on this one's ring (#3702).
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .frame(width: side, height: side)

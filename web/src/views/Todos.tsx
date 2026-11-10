@@ -25,6 +25,7 @@ import {
   isLegacySpacesRouteError,
   makeSessionLookup,
   mostUrgentAgent,
+  orphanedLine,
   sortTodos,
   TODO_STATUS_INFO,
   heldDelivery,
@@ -895,6 +896,8 @@ export type TodoRowView = {
   urgentLead: string;
   /** What the agent asks (its card) or does / last said. */
   urgentText: string;
+  /** The line says nobody is working on it (#3618): its lead is in the caution color, the reason after it. */
+  orphaned: boolean;
   /** One of its agents runs with ultracode on (#12): the Agent list row's mark after its title. */
   ultracode: boolean;
 };
@@ -916,6 +919,16 @@ const DOT_STATE: Record<TodoStatus, AgentState> = {
  *  else what its agent last reported to its supervisor (#3156). */
 export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Interaction[]): TodoRowView {
   const view = agentRowView(todo, lookup, interactions);
+  // Nobody is working on it (#3618): the hub's finding goes ahead of what a stopped agent last said (Interrupted,
+  // Follow up; docs/assistant/todos.md). A card that waits for the user still says its question.
+  const orphan = view.status !== "needs_you" ? orphanedLine(todo) : undefined;
+  if (orphan) {
+    view.urgentLine = true;
+    view.orphaned = true;
+    view.urgentLead = orphan.lead;
+    view.urgentText = orphan.reason ? ` · ${orphan.reason}` : "";
+    return view;
+  }
   if (!view.urgentLine && !todo.done_at) {
     const said = progressLine(todo.supervision);
     if (said) {
@@ -936,7 +949,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", ultracode: todoUltracode(todo, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup) };
   if (todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -1083,8 +1096,8 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Most Urgent Agent Line */}
         {view.urgentLine && (
-          <div className="mt-1 truncate text-[11.5px] text-ink-3">
-            {view.urgentLead && <span className="font-medium text-attention">{view.urgentLead}</span>}
+          <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
+            {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
             {view.urgentText}
           </div>
         )}

@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -391,6 +392,13 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	}
 
 	switch {
+	case in.HookEventName == "SessionStart":
+		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
+		if brief := n.closeoutStart(ctx, req, in); brief != nil {
+			return brief, nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "Elicitation":
 		if !elicitationInteraction(in, &ix) {
 			return nil, nil
@@ -434,6 +442,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ix.Kind, ix.Plan = proto.IxPlan, p.Plan
 		res, ok, err := n.ask(ctx, ix)
 		if err != nil || !ok || res.Approve == nil {
+			if !errors.Is(err, errNodeGone) {
+				// Not answered on the card: the terminal's own dialog decides, and with it the mode that follows.
+				n.planThenAfterTerminal(in.SessionID)
+			}
 			return nil, err
 		}
 		if !*res.Approve {
@@ -445,7 +457,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		mode := res.Mode
 		if mode == "" {
-			mode = "bypassPermissions"
+			mode = cmp.Or(n.planThen(in.SessionID), "bypassPermissions")
 		}
 		var input map[string]any
 		_ = json.Unmarshal(in.ToolInput, &input)

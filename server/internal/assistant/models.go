@@ -101,6 +101,8 @@ var modelPurposes = []ModelPurpose{
 	{ID: "assistant.route", Group: "group_processing", Kind: "api", Parent: "kb"}, // New chat: a direction or a quick chat (route.go)
 	{ID: "agent.title", Group: "group_processing", Kind: "api", Parent: "kb"},
 	{ID: "todo.title", Group: "group_processing", Kind: "api", Parent: "kb"}, // a task's todo (assistant/todo_titles.go)
+	// Drafting a source subscription's recipe, called by the manager (models.purpose_complete, #2040).
+	{ID: assistantwire.PurposeSubscriptionRecipe, Group: "group_processing", Kind: "api", Parent: "kb"},
 	// Answers to the questions asked in an attended meeting (meeting_ask.go): one call with no tools, from meeting material only.
 	{ID: purposeMeetingAnswer, Group: "group_processing", Kind: "api", Parent: "kb"},
 	// Scheduled tasks (the morning briefing…) run in the assistant's directory with its instructions, memory and tools: they are the
