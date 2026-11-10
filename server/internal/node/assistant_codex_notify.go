@@ -180,8 +180,12 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		if failure != "" {
 			n.logger.Printf("assistant codex %s: turn %s: %s", short(p.id), ev.Turn.Status, failure)
 		}
+		recovering := n.recoverAssistantResult(p, failure != "", failure, failureKind)
+		if !recovering {
+			n.clearAssistantRecovery(p.id)
+		}
 		p.mu.Lock()
-		p.busy = false
+		p.busy = recovering
 		p.turnError = failure
 		p.turnErrorKind = failureKind
 		p.lastActive = time.Now()
@@ -196,7 +200,9 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 			n.refresh(p.id, f)
 		}
 		n.emitDelta(p.id, "")
-		n.notifySessions()
+		if !recovering {
+			n.notifySessions()
+		}
 		go c.syncTasks()
 	case "error":
 		if !ev.WillRetry {

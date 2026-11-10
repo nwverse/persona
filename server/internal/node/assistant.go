@@ -197,6 +197,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if id != "" && !validID(id) && !n.runtimeAssistant(id) {
 		return "", fmt.Errorf("invalid session id %q", id)
 	}
+	if !isAssistantRecovery(ctx) {
+		n.cancelAssistantRecovery(id)
+	}
 	if err := validModes(mode, effort); err != nil {
 		return "", err
 	}
@@ -615,13 +618,17 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.emitDelta(p.id, text)
 			}
 		case "result":
+			recovering := n.recoverAssistantResult(p, ev.IsError, ev.Result)
+			if !recovering {
+				n.clearAssistantRecovery(p.id)
+			}
 			p.mu.Lock()
 			manual := p.manual
 			p.manual = false
 			window := reportedWindow(ev.ModelUsage, p.replyModel)
 			changed, idleAt := p.followWindow(window), p.compactIdleAt
 			p.compacting = false
-			p.busy = false
+			p.busy = recovering
 			p.lastActive = time.Now()
 			p.partial.Reset()
 			p.mu.Unlock()
@@ -635,8 +642,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.refresh(p.id, f)
 			}
 			n.emitDelta(p.id, "")
-			n.notifySessions()
-			go n.checkTurnUsage(p, ev.IsError && promptTooLong(ev.Result))
+			if !recovering {
+				n.notifySessions()
+				go n.checkTurnUsage(p, ev.IsError && promptTooLong(ev.Result))
+			}
 		}
 	}
 	stopUnreadAssistant(p.ownerOr(started).logger, p, short(p.id), sc.Err())
