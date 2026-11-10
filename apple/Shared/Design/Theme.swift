@@ -641,6 +641,8 @@ nonisolated enum Theme {
         /// Opening and closing things (a work card, a menu, a section): a state change, 0.25 s (it was the system's
         /// default snappy, 0.5 s, which trailed behind the finger).
         static let standard = state
+        /// Task-draft dismissal uses the same six-second Undo window as the web.
+        static let draftUndo: Duration = .seconds(6)
         /// A block of content unfolding in place, its height growing (the Feishu pinned shelf's rows): slower than a
         /// state change so the eye can follow the rows coming in. `standard` read faster than Feishu's own (2026-11-04).
         static let expand = Animation.smooth(duration: 0.4)

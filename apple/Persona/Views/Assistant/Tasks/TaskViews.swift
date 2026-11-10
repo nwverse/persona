@@ -736,11 +736,12 @@ struct MessageCard: View {
     var itemID: String
     @State private var editing = false
     @State private var text = ""
-    @State private var sending = false
     private var store: TasksStore { .shared }
 
     var body: some View {
-        let state = store.messageState(item, itemID: itemID)
+        let card = store.messageCard(item)
+        let state = store.messageState(card, itemID: itemID)
+        let filed = state == .filed || state == .dismissed
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(spacing: Theme.Space.s) {
                 ThemedIcon(item.source == "mail" ? Theme.Icon.mail : Theme.Icon.groupChat)
@@ -782,43 +783,55 @@ struct MessageCard: View {
                         .font(Theme.Font.body)
                         .lineLimit(2...8)
                 } else {
-                    let draft = text.isEmpty ? (item.draft ?? "") : text
+                    let draft = text.isEmpty ? (card.draft ?? "") : text
                     // Sent: what the hub says went out, which may have been edited on another device.
-                    Text(state == .sent ? item.sent ?? draft : draft)
+                    Text(state == .sent ? card.sent ?? draft : draft)
                         .font(Theme.Font.body)
-                        .foregroundStyle(state == .filed ? .secondary : .primary)
+                        .foregroundStyle(filed ? .secondary : .primary)
                 }
             }
             .padding(Theme.Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(state == .filed ? Theme.Fill.well : tint(state).opacity(0.12), in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+            .background(filed ? Theme.Fill.well : tint(state).opacity(0.12), in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
             .accessibilityIdentifier("messageCard.reply")
-            if state == .filed {
+            if filed {
                 Text("Already dealt with, so this reply wasn't sent.")
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("messageCard.filed")
             }
             if state == .open {
-                HStack(spacing: Theme.Space.s) {
-                    Button {
-                        sending = true
-                        Task {
-                            await store.sendMessage(item, itemID: itemID, text: text.isEmpty ? (item.draft ?? "") : text)
-                            sending = false
-                            editing = false
+                // Two rows keep all four localized labels readable on a compact iPhone and at large text sizes.
+                VStack(spacing: Theme.Space.s) {
+                    HStack(spacing: Theme.Space.s) {
+                        Button {
+                            Task {
+                                await store.sendMessage(card, itemID: itemID, text: text.isEmpty ? (card.draft ?? "") : text)
+                                editing = false
+                            }
+                        } label: { Text("Send").lineLimit(1).frame(maxWidth: .infinity) }
+                            .themedButton(prominent: true)
+                            .accessibilityIdentifier("messageCard.send")
+                        Button {
+                            if text.isEmpty { text = card.draft ?? "" }
+                            withAnimation(Theme.Motion.state) { editing.toggle() }
+                        } label: { Text(editing ? String(localized: "Done [Task Views 9b8ee8]") : String(localized: "Edit [Task Views 928324]")).lineLimit(1) }
+                            .themedButton()
+                            .accessibilityIdentifier("messageCard.edit")
+                    }
+                    HStack(spacing: Theme.Space.s) {
+                        Button { withAnimation(Theme.Motion.state) { store.later(card.id) } } label: {
+                            Text("Later [Task Views 9d2ca2]").lineLimit(1).frame(maxWidth: .infinity)
                         }
-                    } label: { Text("Send").lineLimit(1).frame(maxWidth: .infinity) }
-                        .themedButton(prominent: true)
-                        .accessibilityIdentifier("messageCard.send")
-                    Button {
-                        if text.isEmpty { text = item.draft ?? "" }
-                        withAnimation(Theme.Motion.state) { editing.toggle() }
-                    } label: { Text(editing ? String(localized: "Done [Task Views 9b8ee8]") : String(localized: "Edit [Task Views 928324]")).lineLimit(1) }
                         .themedButton()
-                    Button { withAnimation(Theme.Motion.state) { store.later(itemID) } } label: { Text("Later [Task Views 9d2ca2]").lineLimit(1) }
+                        .accessibilityIdentifier("messageCard.later")
+                        Button { Task { await store.dismissMessage(card) } } label: {
+                            Text("Do not handle [Task Draft]").lineLimit(1).frame(maxWidth: .infinity)
+                        }
                         .themedButton()
+                        .accessibilityIdentifier("messageCard.dismiss")
+                    }
                 }
-                .disabled(sending)
+                .disabled(store.busyMessages.contains(card.id))
             }
         }
         .card(padding: Theme.Space.l)
@@ -830,6 +843,7 @@ struct MessageCard: View {
         case .open: String(localized: "Reply drafted from the task's progress")
         case .sent: String(localized: "Replied as you")
         case .filed: String(localized: "Handled elsewhere, draft not sent")
+        case .dismissed: String(localized: "Draft dismissed, not sent")
         }
     }
 
@@ -837,7 +851,7 @@ struct MessageCard: View {
         switch state {
         case .open: Theme.Icon.draftReply
         case .sent: Theme.Icon.done
-        case .filed: Theme.Icon.handledElsewhere
+        case .filed, .dismissed: Theme.Icon.handledElsewhere
         }
     }
 
@@ -845,7 +859,7 @@ struct MessageCard: View {
         switch state {
         case .open: Theme.accent
         case .sent: Theme.positive
-        case .filed: .secondary
+        case .filed, .dismissed: .secondary
         }
     }
 }

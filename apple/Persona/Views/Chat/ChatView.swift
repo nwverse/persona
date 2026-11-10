@@ -629,7 +629,7 @@ struct ChatView: View {
         .task(id: workflowFolds.map(\.id)) { await unfoldWorkflowCalls(workflowFolds) }
         .task(id: key) {
             guard style == .assistant else { return }
-            TasksStore.shared.load(key.sessionID)
+            TasksStore.shared.load(key.sessionID, api: model.api(key.group)?.manager(linkManager))
             if key == model.assistantMain { TasksStore.shared.loadToday(key.sessionID) }
             #if DEBUG
             // `-showTaskDetail <todo id>` / `-showTaskBoard YES`: a task's detail or the board, for screenshots.
