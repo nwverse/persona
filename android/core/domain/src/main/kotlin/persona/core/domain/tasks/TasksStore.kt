@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
@@ -31,8 +32,10 @@ import persona.core.contracts.TodoAsk
 import persona.core.contracts.TodoSpace
 import persona.core.contracts.TodosEvent
 import persona.core.contracts.draftPlaceholder
+import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.HubConnection
+import persona.core.contracts.api.RequestManager
 import persona.core.contracts.api.TasksApi
 import persona.core.domain.views.AssistantCardActions
 import persona.core.domain.views.AssistantViewStore
@@ -386,13 +389,22 @@ class TasksStore(
 
     /** [edits] is "Edit": the plan's tasks as the user changed them, by index (null: as planned). */
     fun startPlan(plan: TaskPlan, remember: Boolean, onError: (Throwable) -> Unit, edits: List<PlanTask>? = null) = act(plan.id, onError) {
-        val p = if (edits == null) api.startPlan(plan.id, remember) else api.startPlan(plan.id, remember, edits)
+        val p = withContext(planOwner(plan)) { if (edits == null) api.startPlan(plan.id, remember) else api.startPlan(plan.id, remember, edits) }
         _plans.update { it + (p.id to p) }; reloadTodos()
     }
 
     fun dismissPlan(plan: TaskPlan, onError: (Throwable) -> Unit) = act(plan.id, onError) {
-        val p = api.dismissPlan(plan.id); _plans.update { it + (p.id to p) }
+        val p = withContext(planOwner(plan)) { api.dismissPlan(plan.id) }; _plans.update { it + (p.id to p) }
     }
+
+    /**
+     * A plan's routes (`task-plans/<id>/…`) name no conversation, so the hub would take them to the default manager: they
+     * name the manager of the plan's conversation (the one a page listed it under), whichever assistant is current, as
+     * every other request about another assistant's thing does (docs/assistant/managers.md "Clients"). None for the default's.
+     */
+    private fun planOwner(plan: TaskPlan): kotlin.coroutines.CoroutineContext =
+        AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", plan.conversation))?.let(::RequestManager)
+            ?: kotlin.coroutines.EmptyCoroutineContext
 
     /**
      * "Retry" on a task whose agent did not start (#1396): the hub starts the same task again in the same todo, which it

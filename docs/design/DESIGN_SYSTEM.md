@@ -341,6 +341,8 @@ The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home 
 
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`.
 
+An offline current assistant (several assistants): a list the hub merges leaves it out, so in place of that list's empty state or first-run hint a page shows the assistant's avatar with the offline mark, faded as in the switcher, "<name> is offline" and "Last synced <time>. This updates when it's back online." (no action). Android: `JAssistantOffline` (`JEmptyState` with its `leading` slot holding `JManagerAvatar`).
+
 ### 3.10 Loading and error states
 
 | Case | Component |
