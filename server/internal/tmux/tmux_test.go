@@ -2,7 +2,9 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -334,6 +336,117 @@ func TestLastRows(t *testing.T) {
 	} {
 		if got := lastRows(c.out, c.n, c.ansi); got != c.want {
 			t.Errorf("lastRows(%q, %d, %v) = %q, want %q", c.out, c.n, c.ansi, got, c.want)
+		}
+	}
+}
+
+// keysTmux is a tmux that records each run's argv, one line per run with every argument followed by '|'.
+func keysTmux(t *testing.T) (Client, func() []string) {
+	t.Helper()
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\nfor a in \"$@\"; do printf '%s|' \"$a\"; done >> " + calls + "\necho >> " + calls + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return Client{Bin: bin}, func() []string {
+		b, err := os.ReadFile(calls)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	}
+}
+
+// Persona's key names become tmux's: tmux types a name it does not know as text, so none goes through as is.
+func TestKeysTranslatesPersonaNames(t *testing.T) {
+	for _, c := range []struct{ key, want string }{
+		{"enter", "Enter"},
+		{"return", "Enter"},
+		{"esc", "Escape"},
+		{"Escape", "Escape"},
+		{"shift+tab", "BTab"},
+		{"backtab", "BTab"},
+		{"shift+right", "S-Right"},
+		{"alt+left", "M-Left"},
+		{"option+up", "M-Up"},
+		{"ctrl+left", "C-Left"},
+		{"control+shift+home", "C-S-Home"},
+		{"f5", "F5"},
+		{"F1", "F1"},
+		{"ctrl+shift+f5", "C-S-F5"},
+		{"meta+pageup", "M-PageUp"},
+		{"shift+delete", "S-DC"},
+		{"alt+enter", "M-Enter"},
+		{"shift+enter", "M-Enter"}, // ESC CR, as on Orca
+		{"alt+backspace", "M-BSpace"},
+		{"ctrl+backspace", "C-h"},
+		{"ctrl+space", "C-Space"},
+		{"alt+esc", "M-Escape"},
+		{"ctrl+c", "C-c"},
+		{"ctrl+shift+u", "C-u"},
+		{"ctrl+]", "C-]"},
+		{"ctrl+2", "C-@"},
+		{"alt+b", "M-b"},
+		{"alt+shift+b", "M-B"},
+		{"y", "y"},
+		{"A", "A"},
+		{"+", "+"},
+		{"-", "-"},
+		{";", `\;`}, // a bare ';' would end the tmux command
+		{"alt+;", `M-\;`},
+	} {
+		client, calls := keysTmux(t)
+		if err := client.Keys(context.Background(), "%3", c.key); err != nil {
+			t.Fatalf("Keys(%q): %v", c.key, err)
+		}
+		want := "send-keys|-t|%3|" + c.want + "|"
+		if got := calls(); len(got) != 1 || got[0] != want {
+			t.Errorf("Keys(%q) ran %q, want %q", c.key, got, want)
+		}
+	}
+}
+
+// Keys in a row go in one send-keys; ctrl+enter, which has no tmux name, goes as its CSI u bytes in a send-keys -H.
+func TestKeysSendsCtrlEnterAsBytes(t *testing.T) {
+	client, calls := keysTmux(t)
+	if err := client.Keys(context.Background(), "%3", "ctrl+u", "backspace", "ctrl+enter", "enter"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"send-keys|-t|%3|C-u|BSpace|",
+		"send-keys|-H|-t|%3|1b|5b|31|33|3b|35|75|",
+		"send-keys|-t|%3|Enter|",
+	}
+	if got := calls(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("ran %q, want %q", got, want)
+	}
+}
+
+// A name Persona does not know is refused before tmux runs at all, even after known ones.
+func TestKeysRefusesUnknownNamesBeforePressing(t *testing.T) {
+	for _, keys := range [][]string{
+		{"bogus name"},
+		{"enter", "shift+frob"},
+		{"hyper+a"},
+		{"ctrl+1"},
+		{"shift+space"},
+		{"ctrl+tab"},
+		{"ctrl+"},
+		{""},
+	} {
+		client, calls := keysTmux(t)
+		err := client.Keys(context.Background(), "%3", keys...)
+		bad := keys[len(keys)-1]
+		if err == nil || !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), `"`+bad+`"`) {
+			t.Errorf("Keys(%q) = %v, want an unknown key error naming %q", keys, err, bad)
+		}
+		if got := calls(); len(got) != 0 {
+			t.Errorf("Keys(%q) ran tmux: %q", keys, got)
 		}
 	}
 }

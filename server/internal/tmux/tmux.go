@@ -131,31 +131,144 @@ func lastRows(out string, n int, ansi bool) string {
 	return strings.Join(rows, end) + end
 }
 
-// tmuxKeys translates Persona's key names (host.Host.SendKeys) to tmux's.
-var tmuxKeys = map[string]string{
-	"enter": "Enter", "esc": "Escape", "tab": "Tab", "shift+tab": "BTab", "backspace": "BSpace", "space": "Space",
+// Persona's key names (host.Host.SendKeys: "enter", "shift+tab", "ctrl+u", "alt+left", "f5"...) become tmux's key
+// names, so that tmux sends the bytes the pane's terminal would. tmux's send-keys types a string it does not know as a
+// key as literal characters, so every name is translated here and an unknown one is refused, never passed through. The
+// vocabulary is the Orca host's (node/hostorca_keys.go): the same name presses the same key on either host.
+
+// tmuxNamedKeys take any of shift, alt and ctrl as tmux's S-, M- and C- prefixes ("shift+right" is "S-Right").
+var tmuxNamedKeys = map[string]string{
 	"up": "Up", "down": "Down", "left": "Left", "right": "Right", "home": "Home", "end": "End",
 	"pageup": "PageUp", "pagedown": "PageDown", "delete": "DC", "insert": "IC",
+	"f1": "F1", "f2": "F2", "f3": "F3", "f4": "F4", "f5": "F5", "f6": "F6",
+	"f7": "F7", "f8": "F8", "f9": "F9", "f10": "F10", "f11": "F11", "f12": "F12",
 }
 
-// Keys presses keys in the pane; an unknown name is refused before any key is pressed.
-func (c Client) Keys(ctx context.Context, pane string, keys ...string) error {
-	args := []string{"send-keys", "-t", pane}
-	for _, k := range keys {
-		name, ok := tmuxKeys[k]
-		if !ok {
-			if rest, cut := strings.CutPrefix(k, "ctrl+"); cut && len(rest) == 1 {
-				name = "C-" + rest
-			} else if rest, cut := strings.CutPrefix(k, "alt+"); cut && len(rest) == 1 {
-				name = "M-" + rest
-			} else {
-				name = k // an xterm key name tmux knows ("F1", "Escape")
-			}
-		}
-		args = append(args, name)
+// tmuxPlainKeys are keys that take only alt as a modifier ("alt+enter" is "M-Enter"), by their base name.
+var tmuxPlainKeys = map[string]string{
+	"enter": "Enter", "return": "Enter", "esc": "Escape", "escape": "Escape", "tab": "Tab",
+	"backspace": "BSpace", "space": "Space",
+}
+
+// tmuxFullKeys are keys whose tmux name does not follow from their parts, by their full name. shift+enter is ESC CR,
+// what Orca sends; tmux types C-BSpace as text, so ctrl+backspace is C-h (BS).
+var tmuxFullKeys = map[string]string{
+	"shift+tab": "BTab", "backtab": "BTab", "shift+enter": "M-Enter", "ctrl+backspace": "C-h",
+	"ctrl+space": "C-Space",
+}
+
+// tmuxHexKeys are keys tmux has no name for, as the bytes send-keys -H sends. ctrl+enter has no legacy bytes: it is
+// the CSI u form ("\x1b[13;5u", as on Orca), which Claude Code reads as its send-now (#2467).
+var tmuxHexKeys = map[string][]string{
+	"ctrl+enter": {"1b", "5b", "31", "33", "3b", "35", "75"},
+}
+
+// tmuxKey is a Persona key name as send-keys arguments: one tmux key name, or with hex the bytes for send-keys -H.
+// false for a name Persona does not know.
+func tmuxKey(k string) (args []string, hex bool, ok bool) {
+	name := strings.ToLower(strings.TrimSpace(k))
+	if b, ok := tmuxHexKeys[name]; ok {
+		return b, true, true
 	}
-	_, err := c.run(ctx, "", args...)
-	return err
+	if t, ok := tmuxFullKeys[name]; ok {
+		return []string{t}, false, true
+	}
+	if t, ok := tmuxPlainKeys[name]; ok {
+		return []string{t}, false, true
+	}
+	if r := []rune(k); len(r) == 1 && r[0] >= ' ' && r[0] != 0x7f {
+		return []string{tmuxArg(k)}, false, true // a character as itself (case kept)
+	}
+	parts := strings.Split(name, "+")
+	base := parts[len(parts)-1]
+	shift, alt, ctrl := false, false, false
+	for _, m := range parts[:len(parts)-1] {
+		switch m {
+		case "shift":
+			shift = true
+		case "alt", "option", "meta":
+			alt = true
+		case "ctrl", "control":
+			ctrl = true
+		default:
+			return nil, false, false
+		}
+	}
+	if base == "" {
+		return nil, false, false
+	}
+	prefix := ""
+	if ctrl {
+		prefix += "C-"
+	}
+	if alt {
+		prefix += "M-"
+	}
+	if t, ok := tmuxNamedKeys[base]; ok {
+		if shift {
+			prefix += "S-"
+		}
+		return []string{prefix + t}, false, true
+	}
+	if t, ok := tmuxPlainKeys[base]; ok && alt && !shift && !ctrl {
+		return []string{"M-" + t}, false, true
+	}
+	r := []rune(base)
+	if len(r) != 1 || r[0] < ' ' || r[0] == 0x7f {
+		return nil, false, false
+	}
+	c := base
+	if shift {
+		c = strings.ToUpper(c)
+	}
+	if ctrl {
+		switch {
+		case r[0] >= 'a' && r[0] <= 'z', r[0] >= '[' && r[0] <= '_', r[0] == '@':
+			c = strings.ToLower(c)
+		case r[0] == '2':
+			c = "@"
+		default:
+			return nil, false, false // no control byte, as on Orca
+		}
+	}
+	return []string{tmuxArg(prefix + c)}, false, true
+}
+
+// tmuxArg keeps a key that ends in ';' a key: tmux splits its argv into commands at an argument ending in ';', and
+// "\;" is the escaped form.
+func tmuxArg(key string) string {
+	if strings.HasSuffix(key, ";") {
+		return strings.TrimSuffix(key, ";") + `\;`
+	}
+	return key
+}
+
+// Keys presses keys in the pane; every name is checked first, and an unknown one is refused before any key is
+// pressed. Consecutive named keys go in one send-keys, a key tmux has no name for (ctrl+enter) in its own send-keys -H.
+func (c Client) Keys(ctx context.Context, pane string, keys ...string) error {
+	var calls [][]string
+	lastHex := false
+	for _, k := range keys {
+		args, hex, ok := tmuxKey(k)
+		if !ok {
+			return fmt.Errorf("tmux: unknown key %q", k)
+		}
+		if len(calls) == 0 || hex || lastHex {
+			call := []string{"send-keys", "-t", pane}
+			if hex {
+				call = []string{"send-keys", "-H", "-t", pane}
+			}
+			calls = append(calls, call)
+		}
+		calls[len(calls)-1] = append(calls[len(calls)-1], args...)
+		lastHex = hex
+	}
+	for _, args := range calls {
+		if _, err := c.run(ctx, "", args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bufferPrefix names this process's tmux buffers: another Persona on the same tmux server (a dev node next to the
