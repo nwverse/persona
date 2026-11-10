@@ -189,6 +189,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		Session proto.Session `json:"session"`
 	}
 	picked, _ := params["launcher"].(string)
+	s.setPlanThen(ctx, m.ID, params)
 	if err := s.call(ctx, m.ID, DeviceSessionStart, params, &res); err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		return "", "", err
