@@ -20,6 +20,10 @@ const (
 	// of it (devicewire MethodMachinesPut / Remove / Get) once the hub hands it MachinesOwn
 	// (docs/assistant/managers.md "Each manager's computers").
 	CapabilityMachinesOwn = "machines.own"
+	// CapabilityMeetingAttendance: the manager attends recorded meetings (the recordings' attendance fields, …/live,
+	// …/ask and meeting_attendance_default; docs/assistant/meeting-minutes.md "Attending a meeting"). The hub lists the
+	// meeting_attendance feature only while the default manager names it.
+	CapabilityMeetingAttendance = "meeting_attendance"
 )
 
 // The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
@@ -199,4 +203,8 @@ var Routes = []string{
 	"GET /api/v1/recordings",
 	"POST /api/v1/recordings/{id}/minutes",
 	"POST /api/v1/recordings/{id}/minutes/todos",
+	// Attending a meeting (meeting_live.go there, docs/assistant/meeting-minutes.md "Attending a meeting").
+	"POST /api/v1/recordings/{id}/live",
+	"GET /api/v1/recordings/{id}/live",
+	"POST /api/v1/recordings/{id}/ask",
 }
