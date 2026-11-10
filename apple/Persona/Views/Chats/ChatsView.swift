@@ -205,6 +205,8 @@ struct ChatsView: View {
     @Environment(AppModel.self) private var model
     /// The shell (docs/apple/ios.md「New shell」): its ☰ and Assistant | Agents switch take the navigation bar.
     @Environment(\.shell) private var shell
+    /// A phone's tabs (iPhone Duo open): the switch over the page column, as on Assistant (#2623).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     @State private var path = NavigationPath()
     /// Which space page sits at which depth of `path` (only this view pushes them), so a chat opened from a space
     /// page goes back to it instead of stacking another copy.
@@ -281,7 +283,7 @@ struct ChatsView: View {
         // Closing the search before a push from its results redraws the navigation with it, as when the list was
         // drawn here: drawn by the list alone, the chat came up under the system navigation bar again (SearchOpenTests).
         let _ = searching
-        SplitNavigation(path: pushing, destinations: AgentsDestinations()) {
+        SplitNavigation(path: pushing, listKey: "agents.list", destinations: AgentsDestinations(), pageSwitch: pageTabSwitch) {
             AgentsList(path: $path, spaceAt: $spaceAt, query: $query, searching: $searching,
                        searchedBeforePush: $searchedBeforePush, showNew: $showNew, menuActions: menuActions, ownsTop: ownsTop,
                        showsPersonalEntry: showsPersonalEntry, beginSearch: beginSearch)
