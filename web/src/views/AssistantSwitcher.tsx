@@ -19,8 +19,15 @@ import { cx, Menu, Spinner, toast, useMenu, useNow, type MenuItem } from "../ui/
 import { Icon, type IconName } from "../ui/icons";
 import { useDisconnect } from "./DisconnectBrowser";
 import { hubMenuItems, useHubs } from "./Hubs";
-import { CodeDialog, NewManager, type ShownCode } from "./ManagerInstall";
+import { lazyDialog } from "./LazyOverlay";
+import type { ShownCode } from "./ManagerInstall";
 import { setTheme, useTheme, type Theme } from "./theme";
+
+// New assistant and the install code open only on a click: their chunk (shared with Settings › Assistants) loads on the
+// first open, not with the first screen (src/startup-preload.ts FIRST_SCREEN_BUDGET).
+type CodeProps = { open: boolean; shown: ShownCode | null; onClose: () => void; onCode: (c: InstallCode, id: string) => void };
+const NewManager = lazyDialog(() => import("./ManagerInstall").then((m) => m.NewManager));
+const CodeDialog = lazyDialog<CodeProps>(() => import("./ManagerInstall").then(({ CodeDialog: Code }) => ({ open: _open, ...rest }: CodeProps) => <Code {...rest} />));
 
 // The install codes this page was given, by manager: a row still installing shows its code again while it lasts,
 // rather than asking for a new one (which ends the old).
@@ -162,6 +169,7 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
         }}
       />
       <CodeDialog
+        open={Boolean(shown)}
         shown={shown}
         onClose={() => setShown(null)}
         onCode={(code, id) => {

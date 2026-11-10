@@ -4,7 +4,7 @@
 // assistant and Manage assistants…, an installing one's install commands, and the same row with one assistant.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
@@ -30,9 +30,12 @@ import { chooseManager, resetManagerChoice, shownManager } from "../lib/manager-
 import { resetRoster, setRoster, type ManagerList } from "../lib/managers";
 import { getState, reset } from "../lib/store";
 import type { Interaction, Session } from "../lib/types";
+import { loadPages } from "../lib/lazy-page";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// New assistant and the install code are lazy dialogs: their chunk is loaded before the clicks that open them
+beforeAll(() => loadPages(), 60_000);
 
 function soon(min: number) {
   return new Date(Date.now() + min * 60_000).toISOString();
