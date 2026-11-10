@@ -533,3 +533,9 @@ Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where 
 ## Wait for local listener shutdown before reusing its port
 
 On the JVM, closing a server socket with a blocked accept can defer the actual descriptor close until that I/O exits. A preferred-port restart immediately after close can then collide with its own old listener and choose a fallback. Register the accept worker under the same lifecycle lock as close, close the socket first, then wait for the worker with a bounded deadline. Preserve interruption and report a shutdown deadline without adding a new exception to synchronous close callers; keep independently occupied-port fallback distinct from listener shutdown.
+
+## Keep streaming Markdown geometry stable (#3843)
+
+Keep a message's last rendered parse while its next parse runs; switching to raw text for every delta changes list and code-block geometry twice. Reset that retained state when the message identity or cache changes, and include stream completion in the parse effect keys. The Markdown renderer also defaults to a text-size spring: chat text should use its measured size immediately, without animating every line wrap.
+
+Measure pending and parsed frames with the real chat row and reverse list. A fixed scroll index and offset can still accompany visible height oscillation. Replay both Assistant and Agent styles, completion, rapid deltas, history reading and return-to-latest. Check selection and exact copied text in the APK as well. Write a PASS evidence file only after every assertion has completed; cleanup must not turn an earlier failure into a successful verdict.
