@@ -335,6 +335,15 @@ const (
 	CodeTerminalNotReady = "terminal_not_ready"
 )
 
+// Codes session.modes refuses with (node/modes.go), the text in the request's language (apierr.Call). 409.
+const (
+	// CodeModesOnComputer: a Claude outside Persona's terminals (Claude's desktop app, another terminal); its mode and
+	// effort change only there. Its row's capabilities say modes: false.
+	CodeModesOnComputer = "modes_on_computer"
+	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
+	CodeModesNotRunning = "modes_not_running"
+)
+
 // TodoRef is a session's link to an active todo (docs/assistant/todos.md).
 type TodoRef struct {
 	ID    string `json:"id"`

@@ -474,7 +474,7 @@ func (n *Node) setUltracode(ctx context.Context, id string, on *bool, dismiss bo
 	defer unlock()
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
-		return fmt.Errorf("这个 Agent 没在运行：发一条消息恢复它以后再改")
+		return n.noPaneForModes(id)
 	}
 	if a, ok := n.agent(id); !ok || a.Agent != "claude" {
 		return ultracodeUnsupported("只有 Claude Code Agent 支持 ultracode")
