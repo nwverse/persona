@@ -154,7 +154,7 @@ type Report struct {
 	Machines map[string]MachineExtras `json:"machines,omitempty"`
 	// ScreenKeepAwake: a Mac whose screen the app watches stays awake meanwhile (the plugin cua's setting).
 	ScreenKeepAwake bool `json:"screen_keep_awake,omitempty"`
-	// Looks are the looks of the extensions that are on (docs/extensions/extensions.md "Looks"), with their files: the hub serves
+	// Looks are the looks of the extensions that are on (docs/extensions/extensions.md "Avatars"), with their files: the hub serves
 	// them as persona packages beside its own.
 	Looks []LookPackage `json:"looks,omitempty"`
 	// BotIdentities identify enabled bots for cross-manager conflict warnings. Never include credentials.

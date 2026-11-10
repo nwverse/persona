@@ -1,4 +1,4 @@
--- Token usage by machine (docs/server/machines.md「Token 用量」, #4973): what the nodes meter from the transcripts
+-- Token usage by machine (docs/server/machines.md「Token usage」, #4973): what the nodes meter from the transcripts
 -- (node/usage.go), one row a machine, minute, model and launcher (step 60) for the last 27 hours, then one row each
 -- 10 minutes (step 600), nothing older than 7 days and an hour (devices/metrics.go). The four kinds of tokens and the
 -- replies are sums over the row's time.

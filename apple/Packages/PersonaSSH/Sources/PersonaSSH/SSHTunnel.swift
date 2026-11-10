@@ -5,7 +5,7 @@ import NIOSSH
 import NIOTransportServices
 import Synchronization
 
-/// The app's SSH tunnel to its hub (docs/operations/network.md「经 SSH 隧道连 hub」), in-process (no system ssh: the sandboxed
+/// The app's SSH tunnel to its hub (docs/operations/network.md「Connecting to hub through SSH」), in-process (no system ssh: the sandboxed
 /// Mac app can neither run /usr/bin/ssh nor read ~/.ssh). It listens on 127.0.0.1 (a port of its own) and carries
 /// every connection made there — HTTP requests and WebSockets alike — through one SSH session to the hub, one
 /// direct-tcpip channel each.

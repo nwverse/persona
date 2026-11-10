@@ -1,6 +1,6 @@
 {
   "name": "persona-default",
-  "description": "Default profile of scripts/app/sim-boot.sh: PersonaUITests, screenshots and everyday runs on an iPhone simulator (simslim v0.14.0, iOS 26.0 / 27.0; docs/operations/testing.md「模拟器」). Everything else off. widgets on: with widgets off LiveActivityActionTests finds no activity on the lock screen (2/2 runs, #2287). linkd kept: it runs the App Intent behind the activity's buttons; without it the tap reaches no hub (2/2 runs), with it the test passes like stock (both fail the first run after a reboot, then pass). photos on: VideoSendTests (simctl addmedia + the out-of-process PhotosPicker) and LarkAttachmentTests need assetsd; not run slim, kept to be safe. apsd kept: the pushType .token path was never run slim.",
+  "description": "Default profile of scripts/app/sim-boot.sh: PersonaUITests, screenshots and everyday runs on an iPhone simulator (simslim v0.14.0, iOS 26.0 / 27.0; docs/operations/testing.md「Simulators」). Everything else off. widgets on: with widgets off LiveActivityActionTests finds no activity on the lock screen (2/2 runs, #2287). linkd kept: it runs the App Intent behind the activity's buttons; without it the tap reaches no hub (2/2 runs), with it the test passes like stock (both fail the first run after a reboot, then pass). photos on: VideoSendTests (simctl addmedia + the out-of-process PhotosPicker) and LarkAttachmentTests need assetsd; not run slim, kept to be safe. apsd kept: the pushType .token path was never run slim.",
   "except": [
     "photos",
     "widgets"

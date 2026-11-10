@@ -53,7 +53,7 @@ const (
 	PriorityLow  = "low"
 )
 
-// DoneByAuto marks a todo the hub closed because its task's work was judged finished (docs/assistant/todos.md "Auto-complete").
+// DoneByAuto marks a todo the hub closed because its task's work was judged finished (docs/assistant/todos.md "Automatic completion").
 const DoneByAuto = "auto"
 
 // DoneByReview marks a todo its supervisor (the main conversation's assistant) accepted after reviewing the work, with

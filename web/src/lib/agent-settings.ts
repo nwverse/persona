@@ -139,7 +139,7 @@ export function valueText(v: SettingValue, key?: string): string {
   return key ? optionText(key, v) : v;
 }
 
-// ── Claude Code › blocked config directories (GET /machines/{mid}/claude-dirs, docs/integrations/claude-integration.md "Blocking config directories") ──
+// ── Claude Code › blocked config directories (GET /machines/{mid}/claude-dirs, docs/integrations/claude-integration.md "Blocking configuration directories") ──
 
 /** One config directory of a computer (CLAUDE_CONFIG_DIR), as the hub lists it. */
 export interface ClaudeDir {

@@ -2,7 +2,7 @@ import Testing
 @testable import Persona
 
 /// A Mac registers with the hub as a desktop, never as the phone: the iPhone keeps the phone_* tools and its wake
-/// pushes (docs/apple/mac.md「Mac 是桌面端，不是手机」).
+/// pushes (docs/apple/mac.md「Mac is a desktop, not a phone」).
 struct MacDesktopRegistrationTests {
     @Test func theMacRegistersAsADesktop() {
         let m = AppModel.registration(deviceName: "MacBook", tools: [["name": "phone_device_info"]], simulator: false)

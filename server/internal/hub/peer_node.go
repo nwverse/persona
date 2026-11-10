@@ -21,7 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// Node streams through a member (docs/server/mesh.md "Routes through a member"): the center's manager reaches a computer a member has in
+// Node streams through a member (docs/server/mesh.md "Paths via members"): the center's manager reaches a computer a member has in
 // hub.json by asking the center, which asks that member over the links for a stream to its node (the center's side:
 // relayThroughHub, devices_relay.go). The request is an HTTP upgrade (Upgrade: persona-node) on the peer server, passed
 // hop by hop like any other; the member's manager opens the node the way its hub.json says (its local node, ssh,

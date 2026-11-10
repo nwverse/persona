@@ -27,7 +27,7 @@ import persona.core.contracts.api.ExtensionOperation
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 
-// An install, upgrade or removal in steps (docs/protocol/protocol.md "Extension install, upgrade and removal progress", #3277): every step with its
+// An install, upgrade or removal in steps (docs/protocol/protocol.md "Extension install, upgrade and uninstall progress", #3277): every step with its
 // state, a download's bytes as a bar, where it stopped and why, and what can be done now (retry, cancel, review the
 // permissions it waits for). The words are OperationText; the hub's pushes reach it through CatalogExtensionModel.
 

@@ -20,7 +20,7 @@ extension APIClient {
     }
 }
 
-/// What the app knows of the ports links point at (docs/operations/ports.md「在 App 里」): an agent's listed ports
+/// What the app knows of the ports links point at (docs/operations/ports.md「Recognizing links in replies」): an agent's listed ports
 /// (`Session.ports`) are live; a link to any other port is asked about (GET …/ports/{port}) as its badge appears and
 /// remembered a little while, like `FilePresence`. A badge whose port is known gone is gray.
 @MainActor @Observable

@@ -58,7 +58,7 @@ describe("Persona is the front door (#1239)", () => {
   });
 });
 
-describe("an extension's page (docs/extensions/extensions.md「UI 插槽」 nav_page)", () => {
+describe("an extension's page (docs/extensions/extensions.md「UI slots」 nav_page)", () => {
   it("has its own link and lights its own sidebar row", () => {
     expect(parse("/extension/example-gateway/usage")).toEqual({ name: "extension", extension: "example-gateway", ui: "usage" });
     expect(href({ name: "extension", extension: "a b", ui: "c/d" })).toBe("/extension/a%20b/c%2Fd");

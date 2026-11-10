@@ -237,7 +237,7 @@ struct ExtensionMarketModelTests {
     }
 }
 
-/// A plugin's View (docs/extensions/extensions.md「声明式 UI」).
+/// A plugin's View (docs/extensions/extensions.md「Declarative UI」).
 @MainActor
 struct ExtensionViewModelTests {
     private static let view = #"""
@@ -264,7 +264,7 @@ struct ExtensionViewModelTests {
         #expect(v.sections[1].items[3].field?.choices?.map(\.label) == ["个人", "team"])
         #expect(page.values == ["note": "hi", "token": "", "auto": "false", "plan": "team"], "a secret is never prefilled")
         #expect(ExtensionUIStyle.tone("danger") == Theme.danger && ExtensionUIStyle.tone("bogus") == .secondary)
-        // Drawing sends no action and no values; the context says where and for whom (docs/extensions/extensions.md「UI 插槽」, context).
+        // Drawing sends no action and no values; the context says where and for whom (docs/extensions/extensions.md「UI slots」, context).
         let body = try JSON.decoder.decode(JSONValue.self, from: hub.requests.last?.body ?? Data())
         #expect(body["action"] == nil && body["values"] == nil && body["state"] == nil)
         #expect(body["context"]?["ui_version"] == .number(3) && body["context"]?["platform"] == .string("ios"))

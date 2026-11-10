@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A conversation in a window of its own (docs/apple/mac.md「窗口」: `WindowGroup(for: SessionKey.self)`): the same chat page
+/// A conversation in a window of its own (docs/apple/mac.md「Separate chat windows」: `WindowGroup(for: SessionKey.self)`): the same chat page
 /// as in Agents / Persona, so a few agents can sit side by side or on another screen. The window's title is the chat's.
 struct MacChatWindow: View {
     static let id = "chat"
@@ -60,7 +60,7 @@ struct MacWindowOpener: ViewModifier {
     }
 }
 
-/// An Agent's terminal in a window of its own (docs/apple/mac.md「窗口」: the terminal can open in its own window too), beside its chat or on another
+/// An Agent's terminal in a window of its own (docs/apple/mac.md「Separate chat windows」: the terminal can open in its own window too), beside its chat or on another
 /// screen. The same panel the chat's Terminal sheet shows; dragging it down does nothing here (the window closes with ⌘W).
 struct MacTerminalWindow: View {
     static let id = "terminal"

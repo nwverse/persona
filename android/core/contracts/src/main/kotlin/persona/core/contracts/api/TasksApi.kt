@@ -5,7 +5,7 @@ import persona.core.contracts.FeedResponse
 import persona.core.contracts.TaskPlan
 import persona.core.contracts.Todo
 
-/** Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and conversation activity"). */
+/** Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and the chat feed"). */
 interface TasksApi {
     /** Exact metadata for a bound agent, independent of the Agents list filter and page. */
     suspend fun taskAgent(key: persona.core.contracts.SessionKey): persona.core.contracts.Session? = null
@@ -56,7 +56,7 @@ interface TasksApi {
      */
     val features: kotlinx.coroutines.flow.StateFlow<Set<String>>? get() = null
 
-    /** A card's action (docs/assistant/assistant-views.md "Persisted submissions"): [key] is the card's, sent as one escaped path segment. */
+    /** A card's action (docs/assistant/assistant-views.md "Persistent submission"): [key] is the card's, sent as one escaped path segment. */
     suspend fun viewAction(conversation: String, key: String, input: persona.core.contracts.generated.ExtensionViewActionInput): AssistantViewAnswer =
         error("viewAction not implemented")
 

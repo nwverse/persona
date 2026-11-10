@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// Looks (docs/extensions/extensions.md "Looks", docs/apple/persona.md): one list of every look a user can choose — the ones the apps
+// Looks (docs/extensions/extensions.md "Avatars", docs/apple/persona.md): one list of every look a user can choose — the ones the apps
 // draw themselves (builtin), the persona packages on the hub (hub) and the ones extensions declare (extension) — and
 // which one is chosen, kept on the hub so every device of the user shows the same one.
 //

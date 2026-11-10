@@ -9,9 +9,10 @@ import (
 
 // A 16:9 deck from Markdown. A slide starts at --- (when there is one) or else at each # / ## heading; its first
 // heading is its title. A first slide that is a # heading and paragraphs only is the title slide (the paragraphs its
-// subtitle). Lists are bullets (numbered ones numbered), other paragraphs plain lines, a slide's first picture or
-// table goes beside or under its words (only one of each). Text gets smaller as there is more of it on a slide: a
-// file's viewers do not shrink it to fit the way PowerPoint does once you edit.
+// subtitle). Lists are bullets (numbered ones numbered), other paragraphs plain lines. A slide keeps its first picture
+// and its first table: the table goes under the words, and a picture next to words or a table goes on the right while
+// they share the left column. Text gets smaller as there is more of it on a slide: a file's viewers do not shrink it
+// to fit the way PowerPoint does once you edit.
 
 const (
 	slideW, slideH = 12192000, 6858000
@@ -176,22 +177,25 @@ func (w *slideWriter) slide(s slide, pic string) string {
 		x, y, cx, cy := int64(bodyX), int64(bodyY), int64(bodyW), int64(bodyH)
 		text := len(s.body) > 0
 		size := textSize(s.body, s.img != nil || s.table != nil)
+		// The words and the table share a left column, the words on top; a picture next to either takes the right.
+		colW := cx
+		if s.img != nil {
+			colW = cx * 55 / 100
+		}
 		if text {
-			tw, th := cx, cy
-			if s.img != nil {
-				tw = cx * 55 / 100
-			} else if s.table != nil {
+			th := cy
+			if s.table != nil {
 				th = cy * 35 / 100
 			}
 			xfrm := ""
-			if tw != cx || th != cy {
-				xfrm = fmt.Sprintf(`<a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>`, x, y, tw, th)
+			if colW != cx || th != cy {
+				xfrm = fmt.Sprintf(`<a:xfrm><a:off x="%d" y="%d"/><a:ext cx="%d" cy="%d"/></a:xfrm>`, x, y, colW, th)
 			}
 			tree.WriteString(placeholder(3, "Content 2", `<p:ph idx="1"/>`, xfrm, w.body(s.body, size)))
 		}
 		if s.img != nil {
 			ax, aw := x, cx
-			if text {
+			if text || s.table != nil {
 				ax, aw = x+cx*58/100, cx*42/100
 			}
 			pw, ph := fit(s.img.w, s.img.h, aw, cy)
@@ -202,14 +206,10 @@ func (w *slideWriter) slide(s slide, pic string) string {
 		}
 		if s.table != nil {
 			ty, th := y, cy
-			if text && s.img == nil {
+			if text {
 				ty, th = y+cy*38/100, cy*62/100
 			}
-			tx, tw := x, cx
-			if s.img != nil {
-				tw = cx * 55 / 100
-			}
-			tree.WriteString(w.table(s.table, tx, ty, tw, th))
+			tree.WriteString(w.table(s.table, x, ty, colW, th))
 		}
 	}
 	return xmlHead + `<p:sld ` + pptNS + `><p:cSld><p:spTree>` + groupProps + tree.String() +

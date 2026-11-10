@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """End-to-end check of the focus sync between herdr's own client (the terminal's "Full view") and the page
-(docs/integrations/terminal.md "Focus sync"), against the fake hub's made-up herdr client.
+(docs/integrations/terminal.md "Focus synchronization"), against the fake hub's made-up herdr client.
 
 Checks, one line each: choosing another session of the machine in the sidebar moves herdr's focus (one herdr_focus)
 without closing or reopening the client or rebuilding xterm, and the focus coming back does not move the page; a focus

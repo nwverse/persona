@@ -1,6 +1,6 @@
 # Lessons: macOS
 
-Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLAUDE.md`, “Lessons”; see `docs/lessons/README.md` for the index). Add new lessons to the relevant section, or create one if none fits.
+Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLAUDE.md`; see `docs/lessons/README.md` for the index). Add new lessons to the relevant section, or create one if none fits.
 
 - A profile-free ad-hoc Mac test app still has its sandbox (#2092). `macSnapshot` can exit normally but report failure
   when its output points to an external temporary directory. Keep the sandbox, render into that synthetic app's own
@@ -47,7 +47,7 @@ Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLA
   Write same-name AppKit types for UIKit views under `apple/Mac/`; add only `#if os(iOS)` to iOS files. Like the app, the Mac target defaults to MainActor isolation: Compat pure-data types and `NSImage` helpers used by decoding threads must be `nonisolated`.
 - Do not put a page's split navigation (`SplitNavigation`, the iOS Persona page's `NavigationSplitView`) inside another `NavigationSplitView`'s detail column. The inner detail column lays out as if the outer sidebar is still ahead of it,
   shifting the entire chat right by one sidebar width and clipping the composer (2026-10-31). The Mac shell's six-item sidebar is a column in an HStack.
-- When a Mac is locked, `screencapture` captures only the lock screen. Use `scripts/app/mac_shot.sh` for screenshots (the app renders its own PNG with `cacheDisplay`; `docs/apple/mac.md`, “Build, run, screenshots”).
+- When a Mac is locked, `screencapture` captures only the lock screen. Use `scripts/app/mac_shot.sh` for screenshots (the app renders its own PNG with `cacheDisplay`; `docs/apple/mac.md`, “Build, run, screenshot”).
   It cannot render frosted glass / Liquid Glass; SwiftUI `List` rows must be redrawn separately. In dark mode, List-row text uses light-scheme colors; whether this is a screenshot issue is still unconfirmed.
   Use `-macAppearance` for light/dark mode; `-AppleInterfaceStyle Dark` does not work as a launch argument.
 - Running `Persona.app/Contents/MacOS/Persona` directly accepts launch arguments (`-demo.on YES -tab dev`…); unsigned Debug builds are not sandboxed and may write `/tmp`. With `open`, use `open -n Persona.app --args -demo.on YES …` to pass arguments (without `--args` they are lost, tested 2026-11-02).
@@ -57,7 +57,7 @@ Pitfalls, unusual behavior, and the decisions made at the time (formerly in `CLA
 - Mac's push entitlement is `com.apple.developer.aps-environment`, not iOS's `aps-environment`. Enabling push on the App ID suffices (iPhone and Mac use the same UNIVERSAL App ID). The archive has `development`, changed to `production` on App Store export. Locally built unsigned versions have no entitlements in their signatures, so they receive only local notifications, not remote pushes (2026-11-02, `docs/apple/mac.md`, “Remote push (Mac)”).
 - To share keychain entries with extensions, macOS `SecItem` queries need `kSecUseDataProtectionKeychain: true`. Without it, they use the old file keychain, where `kSecAttrAccessGroup` has no effect: entries belong only to the creating app and extensions cannot read them (iOS always uses the data-protection keychain, so the same code works on the phone). This affected Mac's push private key (`PushCrypto`, #432); the app-only `Keychain.swift` still uses the file keychain and was unchanged.
 - Shared pages using scroll views such as `pin.list` get `UIScrollView` on iOS and `NSScrollView` on Mac (`ChatPin+Mac.swift`). Mac lacks `isTracking`, `isDragging`, and `isDecelerating`; isolate these with `#if os(iOS)` or add equivalents in `Mac/Compat/`.
-  On 2026-11-02, #243 added `pin.list?.isTracking` in `ChatView` and tested only iOS, breaking `PersonaMac` compilation on master (found by the terminal lane). After changing shared pages in `apple/Persona/Views`, also build `PersonaMac` before merging (`docs/apple/mac.md`, “Build, run, screenshots”).
+  On 2026-11-02, #243 added `pin.list?.isTracking` in `ChatView` and tested only iOS, breaking `PersonaMac` compilation on master (found by the terminal lane). After changing shared pages in `apple/Persona/Views`, also build `PersonaMac` before merging (`docs/apple/mac.md`, “Build, run, screenshot”).
 - Without `app.bundle_id` in build configuration (`~/.config/persona/config.json`), `PERSONA_BUNDLE_ID` in `Config.xcconfig` is empty, but xcodebuild still says BUILD SUCCEEDED.
   Info.plist then lacks `CFBundleIdentifier`, and the Mac app crashes on startup at `UNUserNotificationCenter.current()` in `applicationDidFinishLaunching` (SIGABRT, 2026-11-02).
   For a local-only Mac build that will not ship, override with `PERSONA_BUNDLE_ID=<any reverse-domain identifier>` on xcodebuild, without changing configuration.
