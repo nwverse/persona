@@ -258,7 +258,7 @@ internal class CapsuleInboxSource(
             check(currentSelection() === selected) { AppText.get(R.string.app_error_switched) }
             check(composer.state.value.canEdit) { AppText.get(R.string.app_capsule_prior_reply_check) }
             composer.update(text)
-            composer.send()
+            composer.send(context = selected.binding.context)
             val result = composer.state.first { !it.sending }
             check(result.sent || result.delivery in setOf(ReplyDelivery.Queued, ReplyDelivery.WaitingForNetwork)) {
                 AppText.get(R.string.app_capsule_send_unconfirmed_draft)

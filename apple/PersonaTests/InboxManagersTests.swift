@@ -4,7 +4,8 @@ import Testing
 
 /// The inbox with several managers (#1850): two managers' items with one id are two items (`InboxItem.key`), a bulk
 /// filing where one manager fails keeps the others' filed and puts back only the failed one's (the toast says how many
-/// and why), and the list groups under each manager's name, its sections folding apart. Made-up values.
+/// and why), the list groups under each manager's name, its sections folding apart, and a request about one item names
+/// its manager unless that is the default. Made-up values.
 @MainActor
 struct InboxManagersTests {
     private func item(_ id: String, _ manager: String?, tier: String = "action", done: Bool = false) throws -> InboxItem {
@@ -27,6 +28,40 @@ struct InboxManagersTests {
         HubManager(id: "m-1", name: "工作", online: true),
         HubManager(id: "m-2", name: "家里", online: false),
     ], defaultID: "assistant")
+
+    /// A model on one made-up hub: no socket, its requests go to `hub`.
+    private func model(_ hub: FakeHub, roster: ManagerRoster?) throws -> AppModel {
+        let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "inbox-managers-" + UUID().uuidString))
+        model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
+        model.connectOnly(.demo)
+        model.managerRosters[""] = roster
+        return model
+    }
+
+    /// A request about one item (its details, Done, Mute, a reply) names the item's manager unless that is the default,
+    /// as the web and Android do (docs/assistant/managers.md "Grouping"); once another is the default, the one before is
+    /// named.
+    @Test func anItemsRequestNamesNoneForTheDefault() throws {
+        let model = try model(FakeHub(), roster: Self.roster)
+        #expect(model.itemManager("assistant") == nil && model.itemManager(nil) == nil)
+        #expect(model.itemManager("m-1") == "m-1" && model.itemManager("gone") == "gone")
+        model.managerRosters[""] = ManagerRoster(managers: Self.roster.managers, defaultID: "m-1")
+        #expect(model.itemManager("m-1") == nil && model.itemManager("assistant") == "assistant", "the default moved")
+        model.managerRosters[""] = nil
+        #expect(model.itemManager("m-1") == "m-1" && model.itemManager("assistant") == "assistant",
+                "no roster yet: its stamp, as the default may have moved")
+    }
+
+    /// The same from an item's page: its hand-off reads the item first.
+    @Test func anItemsPageNamesNoneForTheDefault() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/inbox/x") { _ in throw APIError(status: 500, message: "stop here") }
+        let model = try model(hub, roster: Self.roster)
+        for stamp in ["assistant", "m-1", nil] {
+            _ = await InboxHandOffModel.live(try item("x", stamp), model: model).send(ask: "Reply for me")
+        }
+        #expect(hub.sent("GET", "/api/v1/inbox/x").map { $0.headers["X-Persona-Manager"] } == [nil, "m-1", nil])
+    }
 
     @Test func oneIdUnderTwoManagersIsTwoItems() throws {
         let a = try item("x", "m-1"), b = try item("x", "m-2"), old = try item("x", nil)

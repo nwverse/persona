@@ -6,6 +6,8 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.runtime.*
 import persona.core.contracts.api.ExtensionUiContext
 import persona.core.contracts.api.ExtensionUiForbidden
+import persona.core.contracts.api.ManagerPins
+import persona.core.contracts.api.pinned
 import persona.core.designsystem.*
 import persona.core.navigation.InboxItemUiRoute
 import kotlinx.coroutines.launch
@@ -65,12 +67,19 @@ class InboxItemBody internal constructor(
  * (`refresh_after`) and drawn again whenever the item changes ([revision]: new messages, done). A button that answers
  * `persona://inbox/<id>/source` calls [onSource] with that item's id; other links are https and open in the app. No
  * extensions here (demo mode): the item's own page, quietly.
+ *
+ * The extension of the item's [manager] (its stamp in the merged list; null: none) draws it, buttons and controls
+ * included: the same extension may be installed under several managers. It knows the item by its id on the hub,
+ * [hubItemId], not the app's.
  */
 @Composable
-fun rememberInboxItemBody(slots: ExtensionSlots?, route: InboxItemUiRoute, revision: Any? = null, onSource: (String) -> Unit): InboxItemBody {
-    val api = slots?.api ?: return InboxItemBody(null, false, false, InboxItemFallback.Quiet, {}, {})
-    val model = remember(api, route) {
-        ExtensionViewModel(api, route.extensionId, route.uiId, ExtensionUiContext(item = route.itemId, size = "full"), opens = InboxItemPageText::opens)
+fun rememberInboxItemBody(slots: ExtensionSlots?, route: InboxItemUiRoute, revision: Any? = null, manager: String? = null,
+    hubItemId: String = route.itemId, onSource: (String) -> Unit): InboxItemBody {
+    val shared = slots?.api ?: return InboxItemBody(null, false, false, InboxItemFallback.Quiet, {}, {})
+    val pins = remember(route.extensionId, manager) { ManagerPins.of(extensionPrefixes(route.extensionId), manager) }
+    val api = remember(shared, pins) { shared.pinned(pins) }
+    val model = remember(api, route, hubItemId) {
+        ExtensionViewModel(api, route.extensionId, route.uiId, ExtensionUiContext(item = hubItemId, size = "full"), opens = InboxItemPageText::opens)
     }
     val state by model.state.collectAsState()
     val res = androidx.compose.ui.platform.LocalResources.current
