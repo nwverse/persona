@@ -5133,6 +5133,9 @@ elif os.environ.get("MOCK_BOT") == "off":
 # hub does when Claude calls it; GET /mock/phone shows the registrations and results.
 PHONES = {}  # socket -> {"send", "registration"}
 TOOL_RESULTS = []
+# MOCK_CF_ACCESS=<client id>:<client secret>: the hub behind Cloudflare Access (docs/operations/network.md "Behind
+# Cloudflare Access"): /api/ without those CF-Access-Client-Id / CF-Access-Client-Secret headers gets Access's answers.
+MOCK_CF_ACCESS = tuple(os.environ.get("MOCK_CF_ACCESS", "").split(":", 1)) if ":" in os.environ.get("MOCK_CF_ACCESS", "") else None
 MOCK_PAIR_TOKEN = os.environ.get("MOCK_PAIR_TOKEN", "")
 MOCK_PAIR_GRACE = float(os.environ.get("MOCK_PAIR_GRACE", "10"))
 # MOCK_PAIR_TRADE_DELAY=<s>: the trade answers that late; MOCK_PAIR_DROP=<s>: the first socket on the pairing token is
@@ -14172,6 +14175,7 @@ VOICE_VOICES = {
 }
 # What --help lists after the options.
 MOCK_HELP = [
+    "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
@@ -14537,6 +14541,24 @@ class H(BaseHTTPRequestHandler):
         it opens everything until traded once on POST /api/v1/auth/tokens, then for MOCK_PAIR_GRACE seconds (default 10,
         the hub's 2 minutes made short); the device tokens it was traded for keep working (#2766)."""
         u = urlparse(self.path)
+        if MOCK_CF_ACCESS and u.path.startswith("/api/"):
+            got = (self.headers.get("CF-Access-Client-Id", ""), self.headers.get("CF-Access-Client-Secret", ""))
+            if got != MOCK_CF_ACCESS:
+                print("mock: Cloudflare Access refused %s %s (%s)" % (self.command, u.path, "wrong token" if any(got) else "no token"), flush=True)
+                self.close_connection = True
+                if any(got):  # a token Access refuses: its own HTML page
+                    page = b'<html><body>Forbidden. <a href="/cdn-cgi/access/logout">Sign out</a></body></html>'
+                    self.send_response(403)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(page)))
+                    self.end_headers()
+                    self.wfile.write(page)
+                else:  # none: a redirect to its login
+                    self.send_response(302)
+                    self.send_header("Location", "https://example-team.cloudflareaccess.com/cdn-cgi/access/login/hub.invalid?redirect_url=" + u.path)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                return True
         if MOCK_PAIR_TOKEN and u.path.startswith("/api/") and u.path != "/api/v1/health":
             got = self.headers.get("Authorization", "").removeprefix("Bearer ").strip() or (parse_qs(u.query).get("token") or [""])[0]
             ok = got in PAIR_DEVICE_TOKENS or (got == MOCK_PAIR_TOKEN and (PAIR_TRADED[0] is None or time.time() < PAIR_TRADED[0] + MOCK_PAIR_GRACE))

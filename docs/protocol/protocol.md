@@ -1936,6 +1936,8 @@ Every batch of items (WebSocket `items` events, HTTP `/items` responses, the nod
   Fill the gap with `after_seq=covered`: web (`useTranscript`) and Android (`ContinuitySync`) first wait 1.5 seconds (the resend on subscribe may still be in flight);
   iOS / Mac (`AppModel`) fetch at once (#4335), since `fill` re-reads `covered` before every page and the `filling` set collapses concurrent fills, so a late resend just de-duplicates.
   After more than 8 pages, fetch the latest page instead. A reconnect subscription carries `since_seq=covered`.
+  A catch-up read covers the gaps and `rev` moves heard when it was sent, not when it came back: one heard while it was on its way
+  reads once more after it (web `RevWatch`, Android `ContinuitySync.behind`, #3601).
 - **Pushes never silently drop one message** (#3036): when a subscriber's send queue (512 messages) fills up, the hub disconnects it (`too slow`) rather than dropping just that message. Dropping it would keep the tail of a long output (thousands of items) from reaching a page that fell behind,
   with the Agent already stopped and no next batch to reveal the gap. After reconnecting, the client subscribes again with `since_seq=covered`, and resends continue from there (web `useTranscript`, iOS `AppModel`, Android `ContinuitySync` all do this).
   The same applies to non-persisted pushes such as `delta` / `live` / `screen`. Subscriptions are recorded under the computer's own id; subscribing with an absorbed old id (an entry merged away in `hub.json`) still receives pushes.
