@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -840,7 +841,30 @@ func after(message, previous adapter.Message) bool {
 }
 
 func messageText(message adapter.Message) string {
-	return rawText(message.Content)
+	return cardText(rawText(message.Content))
+}
+
+var (
+	cardOpen  = regexp.MustCompile(`<card(?:\s+title="([^"]*)")?\s*>`)
+	cardClose = regexp.MustCompile(`</card>`)
+)
+
+// cardText turns lark-cli's rendering of an interactive card (`<card title="…">body</card>`) into plain text: the
+// title on its own line, then the body, so a bot's card reads "Merge Request Merged" rather than its markup.
+func cardText(s string) string {
+	if !strings.Contains(s, "<card") {
+		return s
+	}
+	s = cardOpen.ReplaceAllString(s, "$1\n")
+	s = cardClose.ReplaceAllString(s, "")
+	lines := strings.Split(s, "\n")
+	out := lines[:0]
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func rawText(raw json.RawMessage) string {
