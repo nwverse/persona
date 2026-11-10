@@ -678,7 +678,7 @@ func (s *Service) toolScheduleFollowup(ctx context.Context, machine, sessionID s
 	if push != nil {
 		t.Push = *push
 	}
-	ownConversationIfQuiet(&t)
+	ownConversationIfQuiet(&t, s.mayBeMainNow(ctx))
 	if t.SessionID != "" && s.quietConversation(ctx, t.SessionID) {
 		t.SessionID = "" // asked from a quiet task's conversation: it runs in its own, where its runs are pushed (#2396)
 	}
@@ -716,7 +716,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	if sessionID == "" {
 		return "", "", false, nil
 	}
-	loc := s.location(ctx)
+	loc, mayBeMain := s.location(ctx), s.mayBeMainNow(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return "", "", false, err
@@ -772,7 +772,7 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 	if push != nil { // left out: it keeps its push
 		t.Push = *push
 	}
-	ownConversationIfQuiet(t)
+	ownConversationIfQuiet(t, mayBeMain)
 	var out string
 	switch {
 	case t.Repeat != repeatOnce && !t.Enabled:
@@ -985,6 +985,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 			}
 		}
 	}
+	mayBeMain := s.mayBeMainNow(ctx)
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
 		return "", err
@@ -1024,6 +1025,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, self string, args jso
 	}
 	applyUntil(&t, end, hasUntil, clearUntil)
 	dropStaleUntil(&t, hasUntil, now)
+	ownConversationIfQuiet(&t, mayBeMain)
 	if err := checkTask(&t, now); err != nil {
 		sc.mu.Unlock()
 		return "", err
@@ -1108,7 +1110,6 @@ func checkTask(t *Task, now time.Time) error {
 	if err := checkPush(t.Push); err != nil {
 		return err
 	}
-	ownConversationIfQuiet(t)
 	if t.Launcher != "" && !launcherName.MatchString(t.Launcher) {
 		return i18n.Err("assistant-schedule.bad_launcher", i18n.Args{"launcher": strconv.Quote(t.Launcher)})
 	}
@@ -1486,15 +1487,31 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if t.Facts {
 		t.factsText = s.briefStart(ctx, t, time.Now()) // the run's facts, worked out once (briefing.go)
 	}
+	if t.SessionID != "" && t.pushesOnlyAsked() && s.mayBeMain(ctx, t.SessionID) {
+		// The conversation it came from became (or may be) the main one, which is never quiet.
+		s.logf("task %s: %s is (or may be) the main conversation, which is never quiet; running in its own", t.ID, short(t.SessionID))
+		t.SessionID = ""
+	}
 	if t.SessionID != "" {
 		if m, ok := s.device(ctx, t.MachineID); ok {
 			// A follow-up the assistant scheduled for itself is a turn of that conversation: it keeps the
 			// conversation's launcher like a message from the phone does. On the task's category launcher (Agents
 			// then) it moved the main conversation onto another one (plain claude, not logged in there) for good (#1518).
 			params := map[string]any{"session_id": t.SessionID, "text": taskPrompt(t, due, now, loc, manual, kb, false), "message_source": taskMessageSource(t), "permission_mode": t.PermissionMode}
+			// A quiet task's run there holds the conversation's pushes, as a supervision message does, until the
+			// user or anything else speaks there (schedule_push.go). Not while another turn is on there (one the user
+			// started): that turn's finish would go unpushed with it; then this run is pushed as ever.
+			hold := t.pushesOnlyAsked() && (s.supervising(t.SessionID) || !s.sessionBusy(ctx, m.ID, t.SessionID))
+			if hold {
+				params[holdPushesParam] = true
+				s.holdPushes(ctx, t.SessionID) // before the send: a quick turn can end before the call returns
+			}
 			err := s.sendModel(ctx, t.MachineID, t.SessionID, params)
 			if err == nil {
 				err = s.call(ctx, m.ID, DeviceAssistantSend, params, nil)
+			}
+			if err != nil && hold {
+				s.releasePushes(ctx, t.SessionID)
 			}
 			if err == nil {
 				run.MachineID, run.SessionID = t.MachineID, t.SessionID
@@ -2299,6 +2316,7 @@ func (s *Service) scheduleRoutes() {
 			return
 		}
 		delete(raw, "until") // not a time.Time: "30m" and a local clock time would not unmarshal
+		mayBeMain := s.mayBeMainNow(r.Context())
 		sc, err := s.lockedSchedule(r.Context())
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
@@ -2336,6 +2354,7 @@ func (s *Service) scheduleRoutes() {
 		}
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
+		ownConversationIfQuiet(&t, mayBeMain)
 		if err := checkTask(&t, now); err != nil {
 			sc.mu.Unlock()
 			apierr.Write(w, http.StatusBadRequest, err)

@@ -142,6 +142,7 @@ type Service struct {
 
 	devs          Devices // the computers (devices.go); nil: no fleet
 	agentArchives agentArchiveBook
+	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
 	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu
@@ -184,6 +185,7 @@ func New(o Options) *Service {
 	s.directionRoutes()
 	s.routeRoutes()
 	s.agentRouteRoutes()
+	s.directionNameRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()
@@ -303,7 +305,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
-	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p[holdPushesParam] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}

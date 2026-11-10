@@ -33,7 +33,8 @@ var toolNames = []string{"ask_user", "notify_user", "supervision_finish", "sched
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
 	"conversations_list", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_new", "conversation_send", "task_plan", "task_review", "task_start_screen", "task_start_keys", "task_retry",
-	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report"}
+	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
+	"direction_name", "leader_progress"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -134,6 +135,10 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return res, err
 	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
 		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
+	case "direction_name":
+		return s.toolDirectionName(ctx, self, args) // direction_progress.go
+	case "leader_progress":
+		return s.toolLeaderProgress(ctx, self, args)
 	case "concern_report":
 		return s.toolConcernReport(ctx, machine, self, args) // concerns.go
 	case "kb_search", "kb_list", "kb_get", "kb_update":
@@ -472,9 +477,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		s.recordStartSuccess(ctx, am.ID, launcher)
 		s.inboxAgentStarted(ctx, self, am.ID, res.Session.SessionID, a.Prompt) // an inbox event's conversation: its chain
-		if s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID) {
+		if told, ok := s.quietAgentTask(ctx, self, am, a.Cwd, a.Prompt, params["tab_name"], res.Session.SessionID); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s, a task of this conversation (its card is in the conversation; "+
-				"you are told here when it is done or waits for the user, nothing else notifies the user).%s", am.Name, a.Cwd, res.Session.SessionID, note), nil
+				"%s).%s", am.Name, a.Cwd, res.Session.SessionID, told, note), nil
 		}
 		return fmt.Sprintf("Started on %s in %s: session %s. It shows up in the app's Agents tab.%s", am.Name, a.Cwd, res.Session.SessionID, note), nil
 	}
@@ -512,11 +517,11 @@ func startResultUnknown(err error) bool {
 // list failed) the model gets neutral text: check the Agents list first and never start a second copy.
 func (s *Service) startedWithoutAnswer(ctx context.Context, conversation string, m Device, launcher, cwd, prompt string, tab any, note string, knownIDs map[string]bool) string {
 	if sess, ok := s.adoptStartedSession(ctx, m, launcher, cwd, knownIDs); ok {
-		if s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID) {
+		if told, ok := s.quietAgentTask(ctx, conversation, m, cwd, prompt, tab, sess.SessionID); ok {
 			return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 				"confirmed from the machine's own list), a task of this conversation (its card is in the conversation; "+
-				"you are told here when it is done or waits for the user, nothing else notifies the user).%s",
-				m.Name, cwd, sess.SessionID, note)
+				"%s).%s",
+				m.Name, cwd, sess.SessionID, told, note)
 		}
 		return fmt.Sprintf("Started on %s in %s: session %s (the start took longer than the wait; the session was "+
 			"confirmed from the machine's own list). It shows up in the app's Agents tab.%s", m.Name, cwd, sess.SessionID, note)
