@@ -361,5 +361,6 @@ func TestTopicPromptsGolden(t *testing.T) {
 		{ID: "p2", Path: []string{"搜索", "缓存"}, Kind: "fact", Text: "热搜索 85ms", When: "2026-11-01"},
 		{ID: "p3", Path: []string{"搜索"}, Kind: "pitfall", Text: "冷启动慢", Why: "要读全部文件"},
 		{ID: "p4", Path: []string{"后台整理"}, Kind: "question", Text: "要不要定时整理主题"},
+		{ID: "p5", Path: []string{"索引", "表"}, Kind: "fact", Text: "kb_entities 没有外键"}, // a subtopic with only a deeper one
 	}))
 }
