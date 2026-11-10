@@ -172,6 +172,7 @@ type todoStage struct {
 	Stage    string        `json:"stage"`
 	PR       string        `json:"pr,omitempty"`
 	Delivery *TodoDelivery `json:"delivery,omitempty"` // delivery.go
+	Deploy   *deployWatch  `json:"deploy,omitempty"`   // deploy_check.go: held until the running hub has the work
 }
 
 const reportStagesKey = "assistant.todo_stages"

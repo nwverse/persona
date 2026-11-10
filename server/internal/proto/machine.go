@@ -71,6 +71,9 @@ type Machine struct {
 	// Clipboard: sharing its clipboard with the phone (#3064, docs/operations/clipboard.md). Always set by a manager that
 	// knows the feature; nil from an older one.
 	Clipboard *MachineClipboard `json:"clipboard,omitempty"`
+	// FileTransfer: whether files may be sent to this computer to keep and between it and others (#3065,
+	// docs/protocol/file-transfer.md). Always set by a manager that knows the feature; nil (from an older one) is off.
+	FileTransfer *MachineFileTransfer `json:"file_transfer,omitempty"`
 	// Hub mesh (docs/server/mesh.md): the hub that connects to this machine (its owner), its name, the machine's own id
 	// (~/.persona/machine-uid, empty for an old node or one never reached) and how the hub the client talks to gets
 	// there. A hub without peers fills them in for its own machines too.

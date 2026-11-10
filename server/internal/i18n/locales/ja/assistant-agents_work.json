@@ -34,6 +34,7 @@
   "limit_again_line": "{n}回自動で再開しましたが、また利用上限に達しました",
   "limit_again_ask": "利用上限のリセット後に{n}回自動で再開しましたが、毎回また上限に達しました：{error}",
   "risky_line": "「{wait}」の後に「{then}」を行います。承認待ち",
+  "task_approved_line": "「{wait}」待ち。タスクで承認済みのため、完了後に「{then}」を行います",
   "risky_ask": "「{wait}」を待っていて、その後「{then}」を行います。実行させますか？",
   "header_risky": "実行する？",
   "wakes_line": "「{wait}」を{n}回確認しましたが、まだ準備ができていません",

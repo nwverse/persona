@@ -42,7 +42,7 @@ This is a reference contract, not a claim of identical platform rasterization. A
 | Android 13 and later, transparency "Auto" | Refractive glass (Haze 2's glass, `GlassLevel.Liquid`) |
 | Android 12 | Blurred glass (`GlassLevel.Frosted`) |
 | Transparency set to "Reduce transparency", or the phone is in battery saver | Opaque panels (`GlassLevel.Solid`) |
-| Sustained dropped frames while scrolling (`GlassFrameMonitor`: over 30% of 240 frames exceed 1.5× the frame budget) | Drops one level for this run: refractive → blurred → opaque |
+| Sustained dropped frames while scrolling (`GlassFrameMonitor`: over 60% slow frames after at least 120 frames, or over 30% of 240 frames exceeding 1.5× the frame budget) | Drops one level for this run: refractive → blurred → opaque |
 | Terminal page (always) | Opaque panels: the terminal changes every frame (every redraw by the program, every scrolled line), and glass over it would have to recompute the blur of the top bar, key bar and edges every frame (2026-11-01) |
 
 Only pieces floating over scrolling content (top bar, input field, decision panel) use refraction or blur; cards inside the page are a translucent fill plus a gradient stroke with no live blur, so scrolling costs nothing extra.
