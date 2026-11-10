@@ -59,7 +59,7 @@ func TestLiveIPhoneSimulator(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("not ready: %+v", s)
 		}
-		time.Sleep(2 * time.Second)
+		<-time.After(2 * time.Second)
 	}
 
 	launch := call(proto.IPhoneCall{Op: "do", Args: json.RawMessage(`{"steps":[{"action":"launch","app":"com.apple.Preferences"},{"action":"wait","ms":1500}]}`)})
