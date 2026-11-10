@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -137,6 +138,12 @@ type env struct {
 	svc   *Service
 	audit []string
 	mu    sync.Mutex
+	// The destinations' side (deliver_test.go): the subscriptions told of something new, what Forget does, the
+	// extension's own triage rules.
+	delivered []string
+	forget    func(Subscription) error
+	forgot    []Subscription
+	extRules  string
 }
 
 func newEnv(t *testing.T) *env {
@@ -155,6 +162,29 @@ func (e *env) service() *Service {
 			e.mu.Lock()
 			e.audit = append(e.audit, id+" "+action+" "+by.ID)
 			e.mu.Unlock()
+		},
+		Lang: func() i18n.Lang { return i18n.En },
+		ExtensionRules: func(ext string) string {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if ext != "examplechat" {
+				return ""
+			}
+			return e.extRules
+		},
+		Delivered: func(s Subscription) {
+			e.mu.Lock()
+			e.delivered = append(e.delivered, s.ID)
+			e.mu.Unlock()
+		},
+		Forget: func(_ context.Context, s Subscription) error {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.forgot = append(e.forgot, s)
+			if e.forget != nil {
+				return e.forget(s)
+			}
+			return nil
 		}})
 }
 

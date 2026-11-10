@@ -115,6 +115,12 @@ type Subscription struct {
 	SnapshotHash    string     `json:"-"` // the last snapshot's content hash
 	RunState        string     `json:"-"` // the state as runs left it; State is StateOff over it while both switches are off
 	Runs            []Run      `json:"-"`
+	// The destinations' marks (#2039, deliver.go): when the Inbox was turned on (its catch-up reaches a day before),
+	// the first run since (the items stored up to it are the catch-up), and when the knowledge base was turned on
+	// (it starts a day before).
+	InboxFrom    *time.Time `json:"-"`
+	InboxCatchup *time.Time `json:"-"`
+	KBFrom       *time.Time `json:"-"`
 }
 
 // Run is one execution, as the subscription's history keeps it (the newest RunsKept).
