@@ -284,6 +284,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			cfg := s.settings(ctx)
 			p["is_main"] = id != "" && cfg.Main == id && cfg.MachineID == device
 		}
+		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
+			p["interject_background"] = true // what the node does with a message that comes while it answers
+		}
 	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
 		if id, _ := p["session_id"].(string); id != "" && s.supervising(id) {

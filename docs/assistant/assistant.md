@@ -324,6 +324,24 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Statistics**: each evaluation writes `session_work_events` (`delegate_answered` / `delegate_asked` / `delegate_failed`), shown with triage statistics.
 - **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). **Not done**: Android. Questions being delegated during manager restart aren't delegated again or catch-up pushed (cards remain in the App).
 
+## Interjecting while it answers (#3278)
+
+A message sent while a Claude chat is still answering is written to the running `claude -p`, and Claude Code takes it up only at the next
+tool boundary: behind a long foreground command (a download without a timeout, a wait loop) the user waits minutes for any reaction. Codex
+merges such a message into the turn with `turn/steer` ("Codex" below); a Claude in a terminal pane has Send Now (#1097).
+
+- **Switch**: `interject_background` in the assistant's settings (`GET/PUT /api/v1/assistant`, `persona_settings` key
+  `assistant.interject_background`), **off by default**. The manager adds `interject_background: true` to `assistant.send` and to the
+  `session.send` parameters it fills in (`SendParams`) while it is on.
+- **Node** (`node/assistant_interject.go`): when such a message reaches a chat that is busy, runs Claude on the CLI (not the Agent SDK bridge
+  or a runtime) and whose `system/init` named `claude_code_version` 2.1.139 or later, the message gets `prompts/assistant/interject.md`
+  after its live snapshot, and once it is written the node sends the control request `{"subtype":"background_tasks"}` (Ctrl+B: every
+  in-flight foreground Bash command and subagent goes on in the background). The model then reads the message right after the tool that
+  was running returns; the backgrounded work reports back as a task notification, as `run_in_background` does. 2.1.139 is the first
+  release whose control protocol has `background_tasks` (Agent SDK 0.2.139).
+- **Best effort**: an older or unknown version gets no control request and no note; a refused or failed request is logged and the message
+  still waits for the next tool boundary, as before. An idle chat is unaffected.
+
 ## Main chat, knowledge base, and context flow
 
 Prompts live in `server/internal/prompts/assistant/` (`docs/assistant/prompts.md`): CLAUDE.md is `claude_md.md`, snapshots `snapshot.md` (main-chat sentence in `context.md`), due-task messages `task_run.md`, default morning briefing / evening review `routine_*.md`.
