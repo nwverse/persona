@@ -81,7 +81,9 @@ struct OnboardingChecklistView: View {
                     .padding(.top, Theme.Space.l)
                     VStack(spacing: Theme.Space.s) {
                         ForEach(OnboardingChecklistModel.rows(readiness)) { row in
-                            ChecklistRow(row: row, busy: row.id == "first_message" && store.probing, probe: row.id == "first_message" ? store.probe : nil) { action in
+                            ChecklistRow(row: row, busy: row.id == "first_message" && store.probing,
+                                         probe: row.id == "first_message" ? store.probe : nil,
+                                         probeError: row.id == "first_message" ? store.probeError : nil) { action in
                                 run(action, row: row)
                             }
                         }
@@ -153,6 +155,7 @@ private struct ChecklistRow: View {
     var row: OnboardingChecklistModel.Row
     var busy: Bool
     var probe: AssistantReadiness.Probe?
+    var probeError: String?
     var run: (String) -> Void
 
     var body: some View {
@@ -166,7 +169,11 @@ private struct ChecklistRow: View {
                 if row.look != .done, let detail = row.detail, !detail.isEmpty {
                     Text(detail).font(Theme.Font.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                if let probe {
+                if let probeError {
+                    Text("Tried a message, it didn't work: \(probeError)")
+                        .font(Theme.Font.secondary).foregroundStyle(Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let probe {
                     Text(probe.ok == true ? String(localized: "Tried it; it answered: \(probe.answer ?? "")") : String(localized: "Tried a message, it didn't work: \(probe.error ?? "")"))
                         .font(Theme.Font.secondary).foregroundStyle(probe.ok == true ? Theme.positive : Theme.danger)
                         .fixedSize(horizontal: false, vertical: true)

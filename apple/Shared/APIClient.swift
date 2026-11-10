@@ -49,6 +49,8 @@ nonisolated struct LocalRequest: Sendable {
     var body: Data?
     /// Operation semantics and anonymous caller diagnostics, matching the real request's headers.
     var headers: [String: String] = [:]
+    /// The caller's bound on the real URL request, exposed to transport-level tests.
+    var timeout: TimeInterval = 30
 }
 
 nonisolated struct APIError: LocalizedError, Sendable {
@@ -237,7 +239,7 @@ nonisolated struct APIClient: Sendable {
             .merging(routing(path, query)) { _, manager in manager }
         if let answer = transport ?? (config.isDemo ? Self.local : nil) {
             let data = try await answer(LocalRequest(method: method, path: path, query: query.filter { !$0.value.isEmpty },
-                                                     body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers))
+                                                     body: try body.map { try JSON.encoder.encode(AnyEncodable($0)) }, headers: headers, timeout: timeout))
             if opID != nil { try Self.checkReceipt(data, status: nil) }
             return data
         }
@@ -1075,10 +1077,11 @@ nonisolated struct APIClient: Sendable {
     }
 
     /// What the main conversation still needs (docs/protocol/protocol.md「Main chat readiness」). `probe`: also try one word on it
-    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」).
+    /// (costs a little; only for Try a Message and 「我已经在用 Claude Code」). The hub may spend 100 s on the check
+    /// and another 12 s on the node's self-check, so a probe waits 130 s rather than the ordinary 30 s read budget.
     func assistantReadiness(probe: Bool = false) async throws -> AssistantReadiness {
         try JSON.decoder.decode(AssistantReadiness.self, from: try await request("GET", "/api/v1/assistant/readiness",
-                                                                                 query: probe ? ["probe": "1"] : [:]))
+                                                                                 query: probe ? ["probe": "1"] : [:], timeout: probe ? 130 : 30))
     }
 
     /// Later: the checklist stops coming up by itself (the card still shows when the readiness gets worse).

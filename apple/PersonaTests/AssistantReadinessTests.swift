@@ -91,6 +91,36 @@ struct AssistantReadinessTests {
         #expect(body["dismissed"] == .bool(true) && m.current?.dismissed == true)
     }
 
+    @Test func probeUsesTheHubsWholeCheckBudget() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/assistant/readiness", json: Self.notLoggedIn)
+        _ = try await hub.client.assistantReadiness(probe: true)
+        #expect(hub.sent("GET", "/api/v1/assistant/readiness").last?.timeout == 130)
+        _ = try await hub.client.assistantReadiness()
+        #expect(hub.sent("GET", "/api/v1/assistant/readiness").last?.timeout == 30)
+    }
+
+    @Test func aFailedProbeSaysSoAndNeverReusesTheLastResult() async {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/assistant/readiness", json: Self.notLoggedIn)
+        let m = AssistantReadinessModel()
+        await m.refresh(api: hub.client, probe: true)
+        #expect(m.probe?.error == "Not logged in" && m.probeError == nil)
+
+        hub.on("GET", "/api/v1/assistant/readiness") { _ in throw URLError(.timedOut) }
+        await m.refresh(api: hub.client, probe: true)
+        #expect(m.probe == nil, "the previous try's answer cannot stand in for this one")
+        #expect(m.probeError?.isEmpty == false && !m.probing, "a timeout still says so")
+
+        hub.on("GET", "/api/v1/assistant/readiness") { _ in throw APIError(status: 502, message: "mock probe failed") }
+        await m.refresh(api: hub.client, probe: true)
+        #expect(m.probe == nil && m.probeError == "mock probe failed" && !m.probing)
+
+        hub.on("GET", "/api/v1/assistant/readiness", json: Self.notLoggedIn)
+        await m.refresh(api: hub.client, probe: true)
+        #expect(m.probeError == nil && m.probe?.error == "Not logged in" && !m.probing)
+    }
+
     @Test func anOlderHubAnswering404ShowsNothing() async {
         let hub = FakeHub() // no route: 404
         let m = AssistantReadinessModel()

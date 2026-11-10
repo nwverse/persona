@@ -13,6 +13,8 @@ final class AssistantReadinessModel {
     private(set) var probing = false
     /// The last Try a Message's result (`probe`), until the next ask without one.
     private(set) var probe: AssistantReadiness.Probe?
+    /// A try that could not get a result (timeout, offline, hub failure), shown instead of an older result.
+    private(set) var probeError: String?
     /// A coded refusal of a start or a send: a card where the send was, not a toast.
     var failure: CodedFailure?
 
@@ -32,10 +34,11 @@ final class AssistantReadinessModel {
     /// What holds the send button (nil: send as before).
     var blocking: AssistantReadiness.Step? { current?.blockingStep }
 
-    /// An answer from elsewhere (`warm`): kept unless a later ask has answered.
+    /// An answer from elsewhere (`warm`): kept unless a later ask has answered. A new answer also retires a failed try.
     func land(_ r: AssistantReadiness) {
         readiness = r
         unsupported = false
+        probeError = nil
         at = .now
     }
 
@@ -48,7 +51,11 @@ final class AssistantReadinessModel {
         asked += 1
         let mine = asked
         let gen = generation
-        if probe { probing = true }
+        if probe {
+            probing = true
+            self.probe = nil // while this try runs, an earlier result or failure cannot stand in for it
+            self.probeError = nil
+        }
         let task = Task { [weak self] in
             do {
                 let r = try await api.assistantReadiness(probe: probe)
@@ -57,11 +64,23 @@ final class AssistantReadinessModel {
                 self.land(r)
                 if probe { self.probe = r.probe } else if r.probe == nil { self.probe = nil }
             } catch {
-                // 404: an older hub. 503 assistant_offline and the rest: keep what was there, ask again next time.
-                guard let self, gen == self.generation, (error as? APIError)?.status == 404, probe || mine > self.answered else { return }
+                guard let self, gen == self.generation, probe || mine > self.answered else { return }
+                if probe, (error as? APIError)?.status != 404 {
+                    // A try has no answer to keep quiet about: show a timeout / offline / hub failure, never an older result.
+                    self.answered = max(self.answered, mine)
+                    self.probe = nil
+                    self.probeError = error.localizedDescription
+                    return
+                }
+                // 404: an older hub. 503 assistant_offline and the rest of an ordinary read: keep what was there.
+                guard (error as? APIError)?.status == 404 else { return }
                 self.answered = max(self.answered, mine)
                 self.unsupported = true
                 self.readiness = nil
+                if probe {
+                    self.probe = nil
+                    self.probeError = nil
+                }
                 self.at = .now
             }
         }
@@ -93,6 +112,7 @@ final class AssistantReadinessModel {
         readiness = r
         unsupported = false
         probe = nil
+        probeError = nil
         failure = nil
         at = r == nil ? .distantPast : .now
     }
