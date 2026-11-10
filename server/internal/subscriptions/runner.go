@@ -344,11 +344,40 @@ func (s *Service) execute(ctx context.Context, sub Subscription, asked bool, sta
 	next.Shape, next.ShapeMisses = pl.shape, 0
 	next.RunState, next.Error, next.FailCount, next.FailingSince = StateOK, nil, 0, nil
 	next.LastOKAt, next.LastNewCount = &start, len(items)
+	// The first run since the Inbox was turned on ends its catch-up: what is stored up to it (this run's items too).
+	caughtUp := false
+	if from := inboxFrom(next); from != nil && (next.InboxCatchup == nil || next.InboxCatchup.Before(*from)) {
+		next.InboxCatchup, caughtUp = &start, true
+	}
 	n := s.nextRun(next, start, false)
 	next.NextRunAt = &n
-	s.commit(ctx, sub, next, &commitData{seen: seen, items: items}, &run, start, true)
+	if !s.commit(ctx, sub, next, &commitData{seen: seen, items: items}, &run, start, true) {
+		return
+	}
 	if len(items) > 0 {
 		s.o.Logf("subscription %s: %d new of %d", sub.ID, len(items), run.Count)
+	}
+	if len(items) > 0 || caughtUp {
+		s.o.Delivered(next)
+	}
+	s.prune(ctx, next, start)
+}
+
+// Held items are kept past their destinations: the Inbox's window and a day more, and while the knowledge base takes
+// them, until kbKeep (a knowledge base that stopped reading for longer misses them).
+const (
+	inboxKeep = 8 * 24 * time.Hour
+	kbKeep    = 30 * 24 * time.Hour
+)
+
+// prune drops sub's held items its destinations are past.
+func (s *Service) prune(ctx context.Context, sub Subscription, now time.Time) {
+	keep := inboxKeep
+	if sub.ToKB {
+		keep = kbKeep
+	}
+	if err := s.o.Store.PruneItems(ctx, sub.ID, now.Add(-keep)); err != nil {
+		s.o.Logf("subscription %s: prune its items: %v", sub.ID, err)
 	}
 }
 
@@ -419,8 +448,9 @@ type commitData struct {
 	items []Item
 }
 
-// commit writes a run's outcome (a run with a Run, a skipped round without) and tells the apps.
-func (s *Service) commit(ctx context.Context, sub, next Subscription, d *commitData, run *Run, now time.Time, ran bool) {
+// commit writes a run's outcome (a run with a Run, a skipped round without) and tells the apps; false when it could
+// not be kept.
+func (s *Service) commit(ctx context.Context, sub, next Subscription, d *commitData, run *Run, now time.Time, ran bool) bool {
 	if ran {
 		next.LastRunAt = &now
 	}
@@ -440,11 +470,12 @@ func (s *Service) commit(ctx context.Context, sub, next Subscription, d *commitD
 	if err := s.o.Store.CommitRun(ctx, c); err != nil {
 		// Nothing of the run is kept; its lease runs out and the run is made again, deduplicated.
 		s.o.Logf("subscription %s: keep run: %v", sub.ID, err)
-		return
+		return false
 	}
 	if cur, err := s.o.Store.GetSubscription(ctx, sub.ID); err == nil && cur != nil {
 		s.o.Changed(shown(*cur), false)
 	}
+	return true
 }
 
 // nextRun is when sub runs next after a run at now: at its daily time, or after its interval with up to a tenth

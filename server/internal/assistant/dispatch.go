@@ -232,6 +232,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	var res struct {
 		Session proto.Session `json:"session"`
 	}
+	s.setPlanThen(ctx, am.ID, params)
 	if err := s.call(sctx, am.ID, DeviceSessionStart, params, &res); err != nil {
 		switch {
 		case errors.Is(err, apierr.ErrOffline):
