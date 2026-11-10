@@ -72,7 +72,11 @@ A waiting row with no background activity retains the clock. This changes presen
 Task rows read only their linked sessions; manual-Agent rows carry a value-only activity snapshot in `DockAgent`, which
 updates when phase or progress changes without making the composer observe every session. The opt-in mock
 `MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 MOCK_TASK_TRAY_ACTIVITY=1` supplies four deterministic rows for
-`AssistantTrayActivityUITests` on iPhone and Mac.
+`AssistantTrayActivityUITests` on iPhone and Mac. Apple also decodes the additive #3588 summary fields
+`background_tasks_count` and `workflow_progress`. Summary counts (including omitted zero subagent/workflow counts) take
+precedence over retained detail arrays; a later full detail response clears the summary hints. The newest workflow across
+linked agents supplies the phase/progress; its `phase_count` works without `phases`. Mixed workflow and job/subagent
+activity gets separate subtitle lines so the workflow cannot hide the other running counts.
 
 ### Progress tray: one task, one row (#2878)
 

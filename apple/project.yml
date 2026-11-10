@@ -762,6 +762,7 @@ targets:
       - path: PersonaTests/UsageWindowsTests.swift
       - path: PersonaTests/SessionListTests.swift
       - path: PersonaTests/AssistantTrayActivityTests.swift
+      - path: PersonaTests/AssistantEntriesFixtureTests.swift
       - path: PersonaTests/AgentListFallbackTests.swift
       - path: PersonaTests/AgentRepoTreeTests.swift
       - path: PersonaTests/AgentListOrderTests.swift

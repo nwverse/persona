@@ -575,13 +575,17 @@ struct AssistantActionBar: View {
 }
 
 extension AssistantTrayActivity {
-    /// Workflow phase first, then other active work; progress gets its own untruncated space in the row.
-    var subtitle: String {
+    /// Workflow phase first, with other work on a separate line when activity is mixed.
+    var subtitle: String { [workflowSubtitle, otherSubtitle].filter { !$0.isEmpty }.joined(separator: " · ") }
+
+    var workflowSubtitle: String {
+        guard workflowCount > 0 else { return "" }
+        return ([String(localized: "Background workflow")] + (workflows.first.map { [$0.phase ?? $0.title] } ?? []))
+            .joined(separator: " · ")
+    }
+
+    var otherSubtitle: String {
         var parts: [String] = []
-        if workflowCount > 0 {
-            parts.append(String(localized: "Background workflow"))
-            if let lead = workflows.first { parts.append(lead.phase ?? lead.title) }
-        }
         if backgroundTasks > 0 { parts.append(String(localized: "\(backgroundTasks) background tasks running")) }
         if subagents > 0 { parts.append(String(localized: "\(subagents) subagents running")) }
         return parts.joined(separator: " · ")
@@ -593,12 +597,22 @@ struct AssistantTrayActivityLine: View {
     var activity: AssistantTrayActivity
 
     var body: some View {
-        HStack(spacing: Theme.Space.xs) {
-            Text(activity.subtitle).lineLimit(1).truncationMode(.tail)
-            if let counts = activity.workflows.first?.counts {
-                Text("· " + counts).monospacedDigit().lineLimit(1).fixedSize()
-                    .layoutPriority(1)
-                    .accessibilityIdentifier("action-tray.workflow-progress")
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            if activity.workflowCount > 0 {
+                HStack(spacing: Theme.Space.xs) {
+                    Text(activity.workflowSubtitle).lineLimit(1).truncationMode(.tail)
+                    if let counts = activity.workflows.first?.counts {
+                        Text("· " + counts).monospacedDigit().lineLimit(1).fixedSize()
+                            .layoutPriority(1)
+                            .accessibilityIdentifier("action-tray.workflow-progress")
+                    }
+                    if activity.workflowCount > 1 {
+                        Text(String(localized: " · and \(activity.workflowCount - 1) more")).lineLimit(1).fixedSize()
+                    }
+                }
+            }
+            if !activity.otherSubtitle.isEmpty {
+                Text(activity.otherSubtitle).lineLimit(1)
             }
         }
         .font(Theme.Font.caption)

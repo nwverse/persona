@@ -509,6 +509,7 @@ nonisolated struct AssistantTrayActivity: Hashable, Sendable {
         var title: String
         var phase: String?
         var counts: String?
+        var startedAt: Date? = nil
     }
 
     var backgroundTasks = 0
@@ -524,6 +525,18 @@ nonisolated struct AssistantTrayActivity: Hashable, Sendable {
         var seen = Set<SessionKey>()
         for session in sessions where seen.insert(session.key).inserted {
             let background = session.background ?? []
+            // Fresh bounded-summary counts, including omitted zeros, win over retained chat arrays (#3588).
+            if session.listWaiting != nil || session.listBackgroundTasksCount != nil {
+                let count = max(0, session.listRunningWorkflows ?? 0)
+                let agents = max(0, session.listRunningSubagents ?? 0)
+                workflowCount += count
+                subagents += agents
+                backgroundTasks += max(0, session.listBackgroundTasksCount ?? ((session.listBackgroundCount ?? 0) - count - agents))
+                if count > 0, let run = session.listWorkflowProgress, run.isRunning {
+                    workflows.append(Workflow(title: run.title, phase: run.phaseLabel, counts: run.counts, startedAt: run.startedAt))
+                }
+                continue
+            }
             let runs = session.runningWorkflows
             let workflowMarkers = background.filter { task in
                 task.isWorkflow && !(session.workflows ?? []).contains { run in
@@ -532,7 +545,7 @@ nonisolated struct AssistantTrayActivity: Hashable, Sendable {
             }
             let count = max(runs.count, session.listRunningWorkflows ?? 0, workflowMarkers.count)
             workflowCount += count
-            workflows += runs.map { Workflow(title: $0.title, phase: $0.phaseLabel, counts: $0.counts) }
+            workflows += runs.map { Workflow(title: $0.title, phase: $0.phaseLabel, counts: $0.counts, startedAt: $0.startedAt) }
             let listedAgents = session.subagents ?? []
             let backgroundAgents = background.filter { task in
                 task.isAgent && !listedAgents.contains { $0.id == task.id && !$0.running }
@@ -546,6 +559,10 @@ nonisolated struct AssistantTrayActivity: Hashable, Sendable {
                 backgroundTasks += max(0, (session.listBackgroundCount ?? 0) - count)
             }
         }
+        workflows = workflows.enumerated().sorted { a, b in
+            let first = a.element.startedAt ?? .distantPast, second = b.element.startedAt ?? .distantPast
+            return first != second ? first > second : a.offset < b.offset
+        }.map(\.element)
     }
 }
 
