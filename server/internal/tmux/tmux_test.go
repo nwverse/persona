@@ -229,6 +229,9 @@ echo "TMUX=$TMUX TMUX_PANE=$TMUX_PANE args=$*" >> ` + calls + `
 // ("s1".."s50"), each row ended in \n as tmux ends them.
 func captureTmux(t *testing.T) (Client, string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake tmux is a shell script")
+	}
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
 	bin := filepath.Join(dir, "tmux")
@@ -343,6 +346,9 @@ func TestLastRows(t *testing.T) {
 // keysTmux is a tmux that records each run's argv, one line per run with every argument followed by '|'.
 func keysTmux(t *testing.T) (Client, func() []string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake tmux is a shell script")
+	}
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
 	bin := filepath.Join(dir, "tmux")

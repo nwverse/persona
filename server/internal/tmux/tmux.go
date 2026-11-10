@@ -163,9 +163,9 @@ var tmuxHexKeys = map[string][]string{
 	"ctrl+enter": {"1b", "5b", "31", "33", "3b", "35", "75"},
 }
 
-// tmuxKey is a Persona key name as send-keys arguments: one tmux key name, or with hex the bytes for send-keys -H.
+// tmuxKey is a Persona key name as send-keys arguments: one tmux key name, or with raw the bytes for send-keys -H.
 // false for a name Persona does not know.
-func tmuxKey(k string) (args []string, hex bool, ok bool) {
+func tmuxKey(k string) (args []string, raw bool, ok bool) {
 	name := strings.ToLower(strings.TrimSpace(k))
 	if b, ok := tmuxHexKeys[name]; ok {
 		return b, true, true
@@ -247,21 +247,21 @@ func tmuxArg(key string) string {
 // pressed. Consecutive named keys go in one send-keys, a key tmux has no name for (ctrl+enter) in its own send-keys -H.
 func (c Client) Keys(ctx context.Context, pane string, keys ...string) error {
 	var calls [][]string
-	lastHex := false
+	lastRaw := false
 	for _, k := range keys {
-		args, hex, ok := tmuxKey(k)
+		args, raw, ok := tmuxKey(k)
 		if !ok {
 			return fmt.Errorf("tmux: unknown key %q", k)
 		}
-		if len(calls) == 0 || hex || lastHex {
+		if len(calls) == 0 || raw || lastRaw {
 			call := []string{"send-keys", "-t", pane}
-			if hex {
+			if raw {
 				call = []string{"send-keys", "-H", "-t", pane}
 			}
 			calls = append(calls, call)
 		}
 		calls[len(calls)-1] = append(calls[len(calls)-1], args...)
-		lastHex = hex
+		lastRaw = raw
 	}
 	for _, args := range calls {
 		if _, err := c.run(ctx, "", args...); err != nil {
