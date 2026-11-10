@@ -56,8 +56,17 @@ func NewScrubber(names ...string) *Scrubber {
 }
 
 var (
-	// secrets with their name: token=x, "password": "x", api_key: x
-	namedSecret = lazyre.New(`(?i)\b(authorization|proxy-authorization|cookie|set-cookie|token|access_token|refresh_token|id_token|api[_-]?key|apikey|secret|client_secret|password|passwd|pwd|dsn|session_?id|sid|auth|key|signature|sig)(["']?\s*[:=]\s*["']?)([^\s"'&,;]+)`)
+	// secrets with their name: token=x, "password": "x", api_key: x. The names that only name a secret also count
+	// after a prefix of words ending in _ or - (db_password, aws_secret_access_key, X-Auth-Token, GITHUB_TOKEN), and
+	// the password words after plain letters too (PGPASSWORD); the name has to end in the secret's name (max_tokens,
+	// password_file are not secrets). Short or common names (key, auth, sig, sid, cookie) count only on their own:
+	// sort_key and monkey are not secrets, and neither is OLDPWD, whose pwd takes only a prefix ending in _ or -.
+	namedSecret = lazyre.New(`(?i)\b(` +
+		`(?:[a-z0-9]+[_-])*(?:[a-z0-9]*(?:password|passwd|passphrase)|pwd|secret|client_secret|secret[_-]?key|` +
+		`secret[_-]?access[_-]?key|token|access_token|refresh_token|id_token|auth[_-]?token|api[_-]?key|apikey|` +
+		`private[_-]?key|access[_-]?key(?:[_-]?id)?|credentials?|dsn|session_?id)` +
+		`|authorization|proxy-authorization|cookie|set-cookie|sid|auth|key|signature|sig)` +
+		`(["']?\s*[:=]\s*["']?)([^\s"'&,;]+)`)
 	// an auth scheme and its credential: Bearer x, Basic x
 	schemeSecret = lazyre.New(`(?i)\b(bearer|basic|token)(\s+)([A-Za-z0-9._~+/\-]{8,}=*)`)
 	// tokens by their look: well-known prefixes, JWTs, long hex

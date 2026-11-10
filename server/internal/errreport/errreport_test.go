@@ -32,6 +32,15 @@ func TestScrubText(t *testing.T) {
 		{"on build-box.example.net and Studio and studio.local", "on <machine> and <machine> and <machine>.local"},
 		{"InboxViewModelLoadMoreItemsUseCaseImpl failed", "InboxViewModelLoadMoreItemsUseCaseImpl failed"},
 		{"session expired", "session expired"},
+		// a secret's name with a prefix: db_password, PGPASSWORD, aws_secret_access_key, X-Auth-Token
+		{"db_password=hunter2 PGPASSWORD=hunter3 private_key=abc123 x_auth_token=zzz1234",
+			"db_password=" + Redacted + " PGPASSWORD=" + Redacted + " private_key=" + Redacted + " x_auth_token=" + Redacted},
+		{"aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws_secret_access_key=" + Redacted},
+		{"MYSQL_PWD=pw1 GITHUB_TOKEN: ghx1 X-Auth-Token: abc1", "MYSQL_PWD=" + Redacted + " GITHUB_TOKEN: " + Redacted + " X-Auth-Token: " + Redacted},
+		{`{"ssh_passphrase": "s3same", "aws_credentials": "c1"}`, `{"ssh_passphrase": "` + Redacted + `", "aws_credentials": "` + Redacted + `"}`},
+		// not secrets: a bare "key" inside a word or after a prefix is a name like any other, and only names that end in
+		// a secret's name count (sort_key, max_tokens and PASSWORD_FILE are not secrets)
+		{"keyboard: x monkey=3 sort_key=name max_tokens=4096 PASSWORD_FILE=/run/x", "keyboard: x monkey=3 sort_key=name max_tokens=4096 PASSWORD_FILE=/run/x"},
 	}
 	for _, c := range cases {
 		if got := s.Text(c.in); got != c.want {
