@@ -1,7 +1,7 @@
 // The one quiet line about the hub at the top of the Agents list (#2897, docs/operations/hub-update.md "In the app", the app's
 // HubNoticeRow): an update under way, one that went back, auto-update turned on (once), a newer version or Docker image.
 // Clicking the line opens Settings › hub; its buttons each do their own thing. Follows the hub's `hub_update` pushes and
-// reads again on a fresh hello (a hub that just restarted into a new version); a resumed hello replays the missed pushes.
+// reads again on a fresh hello (a hub that just restarted into a new version).
 import { useCallback, useEffect, useState } from "react";
 import { errorText } from "../../lib/api";
 import {
@@ -35,6 +35,9 @@ export function HubNoticeLine() {
       seq++;
       setStatus(m.update as HubUpdateStatus);
     });
+    // A resumed hello does not read: the hub replays the hub_update pushes it missed, which carry the update state. The
+    // auto-update settings behind the auto_on and available lines are not pushed, so a change another device made while
+    // the socket was down shows with the next push or fresh hello (Settings › hub works the same way).
     const offHello = onHubEvent("hello", (m) => !isResumed(m) && read());
     return () => {
       dead = true;
