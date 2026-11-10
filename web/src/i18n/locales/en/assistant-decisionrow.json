@@ -18,5 +18,6 @@
   "explain_first_detail": "Persona asks again with what this is and why.",
   "chosen": "Answered: {option}",
   "responded": "Sent back to Persona",
-  "failed": "Couldn't send your answer. {error}"
+  "failed": "Couldn't send your answer. {error}",
+  "confirm": "Confirm: {option}"
 }

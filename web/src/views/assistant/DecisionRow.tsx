@@ -113,11 +113,20 @@ export function DecisionRow({ todo, ask, rowKey }: { todo: Pick<Todo, "id" | "ti
       },
     );
   };
-  const choose = (o: AskOption, i: number) => answer(`option:${i}`, { option: o.label }, t("assistant-decisionrow.chosen", { option: o.label }));
+  // A step that cannot be undone, or that other people will see, takes two presses: the first arms the option.
+  const twoStep = ask.why_owner === "irreversible" || ask.why_owner === "visible_to_others";
+  const [armed, setArmed] = useState<number | null>(null);
+  const choose = (o: AskOption, i: number) => {
+    if (twoStep && armed !== i) {
+      setArmed(i);
+      return;
+    }
+    answer(`option:${i}`, { option: o.label }, t("assistant-decisionrow.chosen", { option: o.label }));
+  };
   const respond = (r: AskResponse) => answer(`response:${r}`, { response: r }, t("assistant-decisionrow.responded"));
 
   const items: MenuItem[] = [
-    ...options.slice(fit).map((o, i): MenuItem => ({ key: `option:${fit + i}`, label: o.label, detail: o.leads_to, onSelect: () => choose(o, fit + i) })),
+    ...options.slice(fit).map((o, i): MenuItem => ({ key: `option:${fit + i}`, label: armed === fit + i ? t("assistant-decisionrow.confirm", { option: o.label }) : o.label, detail: o.leads_to, onSelect: () => choose(o, fit + i) })),
     ...responses.map((r, i): MenuItem => ({ key: `response:${r}`, label: t(RESPONSE_LABEL[r]), detail: t(RESPONSE_DETAIL[r]), divider: i === 0 && fit < options.length, onSelect: () => respond(r) })),
   ];
   const fallback = defaultLine(ask);
@@ -175,8 +184,8 @@ export function DecisionRow({ todo, ask, rowKey }: { todo: Pick<Todo, "id" | "ti
               // alone and still wider than the row, the button gives way and cuts its label; it never wraps
               className={fit === 1 ? "min-w-0 shrink!" : ""}
             >
-              <span data-decision-option={i} className="truncate">
-                {o.label}
+              <span data-decision-option={i} data-decision-armed={armed === i ? "" : undefined} className="truncate">
+                {armed === i ? t("assistant-decisionrow.confirm", { option: o.label }) : o.label}
               </span>
             </Button>
           ))}

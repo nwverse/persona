@@ -18,5 +18,6 @@
   "explain_first_detail": "Persona が内容と理由を添えてもう一度尋ねます。",
   "chosen": "回答済み：{option}",
   "responded": "Persona に戻しました",
-  "failed": "回答を送信できませんでした。{error}"
+  "failed": "回答を送信できませんでした。{error}",
+  "confirm": "確認：{option}"
 }

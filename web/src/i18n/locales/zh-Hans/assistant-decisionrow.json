@@ -18,5 +18,6 @@
   "explain_first_detail": "Persona 补上这是什么、为什么做，再问一次。",
   "chosen": "已回答：{option}",
   "responded": "已交回 Persona",
-  "failed": "回答没发出去。{error}"
+  "failed": "回答没发出去。{error}",
+  "confirm": "确认：{option}"
 }

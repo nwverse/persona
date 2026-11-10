@@ -130,6 +130,19 @@ describe("a decision in the Needs you tray", () => {
     expect(row().querySelector('[data-decision-default="never"]')!.textContent).toBe(t("assistant-decisionrow.default_never"));
   });
 
+  it("takes two presses for an option of an irreversible decision", async () => {
+    ask = { ...decision, why_owner: "irreversible", default: "never", deadline: undefined };
+    await mount();
+    const [first] = optionButtons();
+    act(() => first.click());
+    await flush();
+    expect(posts).toEqual([]);
+    expect(row().querySelector("[data-decision-armed]")!.textContent).toBe(t("assistant-decisionrow.confirm", { option: "10% first" }));
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(posts).toEqual([{ path: expect.stringContaining("/todos/decision-task/accept"), body: { asked_at: at, option: "10% first" } }]);
+  });
+
   it("posts the option chosen with the round, once, and says it was answered", async () => {
     await mount();
     const [, second] = optionButtons();
