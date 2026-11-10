@@ -189,7 +189,7 @@ class HttpTasksApiTest {
         }
     }
 
-    // A card's action (docs/assistant/assistant-views.md "Persisted submits"): the key is one escaped path segment, the version goes with it.
+    // A card's action (docs/assistant/assistant-views.md "Persistent submission"): the key is one escaped path segment, the version goes with it.
     @Test fun aCardsActionEscapesItsKeyAndSendsTheVersion() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"action":{"key":"uuid#0/2","action":"choose-b","client_msg_id":"m1","status":"pending","revision":1,"at":"2026-11-05T10:00:00Z"}}"""))

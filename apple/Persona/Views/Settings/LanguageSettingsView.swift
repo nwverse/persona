@@ -3,7 +3,7 @@ import SwiftUI
 import AppKit
 #endif
 
-/// Settings › Appearance › Language (docs/protocol/i18n.md「选哪种语言」, docs/apple/ios.md「界面语言」): Match System / 「简体中文」 / English / 「日本語」.
+/// Settings › Appearance › Language (docs/protocol/i18n.md「Choosing a language」, docs/apple/ios.md「Interface language」): Match System / 「简体中文」 / English / 「日本語」.
 /// The choice is written where Foundation reads it when the app starts, so it shows the next time the app opens;
 /// until then the page says so (the Mac can reopen itself).
 struct LanguageSettingsPage: View {

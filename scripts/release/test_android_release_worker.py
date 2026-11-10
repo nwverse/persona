@@ -1,4 +1,5 @@
 """Release orchestration invariants independent of machine-specific credentials."""
+import gzip
 import hashlib
 import importlib.util
 import json
@@ -225,6 +226,39 @@ class ReleaseWorkerTest(unittest.TestCase):
             worker.atomic_json(root / "signature.json", signature)
             with patch.object(worker, "run", side_effect=["fixture", "a" * 40]):
                 self.assertEqual(worker.recovery_request(config, root, "a" * 40, root, 100001), request)
+
+    def test_build_reads_only_its_own_outputs_and_keeps_the_mapping_by_apk_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / "runs" / ("a" * 40)
+            directory.mkdir(parents=True)
+            outputs = root / "android/app/build/outputs"
+            apk = outputs / "apk/release/app-release-unsigned.apk"
+            mapping = outputs / "mapping/release/mapping.txt"
+            usage = outputs / "mapping/release/usage.txt"
+            for path in (apk, mapping, usage):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("an earlier build")
+            built = {apk: b"this build's APK", mapping: b"persona.A -> persona.A:\n"}
+
+            def run(args, cwd=None, capture=False, env=None):
+                if args[0] == "./gradlew":
+                    # A build that fails or writes no R8 output leaves nothing older behind for the check to read.
+                    self.assertFalse(apk.parent.exists() or mapping.parent.exists())
+                    for path, data in built.items():
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(data)
+
+            config = dict(repository="example/app", application_id="com.example.app")
+            with patch.object(worker, "run", side_effect=run) as calls, \
+                    patch.object(worker, "version_code", return_value=100002):
+                result = worker.build(config, root, "a" * 40, directory)
+            self.assertIn("scripts/release/check_android_shrink.py", calls.call_args_list[-1].args[0])
+            self.assertEqual(result["unsigned_sha256"], hashlib.sha256(built[apk]).hexdigest())
+            self.assertEqual((directory / "unsigned.apk").read_bytes(), built[apk])
+            archived = directory / f"mapping-{result['unsigned_sha256']}.txt.gz"
+            self.assertEqual(gzip.decompress(archived.read_bytes()), built[mapping])
+            self.assertEqual(sorted(p.name for p in directory.iterdir()), sorted(["build.json", "unsigned.apk", archived.name]))
 
     def test_new_source_cannot_decrease_version(self):
         with tempfile.TemporaryDirectory() as tmp:

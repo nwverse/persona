@@ -192,7 +192,7 @@ import UIKit
     }
 }
 
-/// Any page, measured (`-showPagePerf YES`, docs/operations/testing.md「整个 App」): 10 s after launch, 8 s on the page as it is
+/// Any page, measured (`-showPagePerf YES`, docs/operations/testing.md「Whole App」): 10 s after launch, 8 s on the page as it is
 /// (a script pushes hub updates meanwhile), then the page's main scroll view (the largest one on screen) glides
 /// down for 3 s and back up for 3 s at 2000 pt/s. Writes Documents/frames-page-idle.json and frames-page-glide.json.
 @MainActor enum PagePerf {

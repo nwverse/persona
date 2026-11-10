@@ -1,6 +1,6 @@
 import XCTest
 
-/// The shell's Assistant | Agents strip (docs/apple/ios.md「新外壳」, `ShellPager`): a drag to the left on Assistant slides to Agents, a
+/// The shell's Assistant | Agents strip (docs/apple/ios.md「New shell」, `ShellPager`): a drag to the left on Assistant slides to Agents, a
 /// drag to the right on Agents slides back, a drag to the right on Assistant is still the drawer; pushed pages keep the
 /// system's back swipe, the list scrolls up and down without paging, and Agents' rows have no swipe of their own: a drag
 /// along one pages, and the row's actions are in its long-press menu (#1244; the ⋯ that held them too went, #2530).

@@ -12,12 +12,24 @@ type ProcIdentity struct {
 }
 
 // Identify takes the identity of pid. A process that does not exist, or one
-// whose start time the platform cannot read, gives the zero value.
+// whose start time the platform cannot read, gives the zero value. On Linux,
+// exited but unreaped processes also give the zero value.
 func Identify(pid int) ProcIdentity {
 	if pid < 1 {
 		return ProcIdentity{}
 	}
 	return identify(pid)
+}
+
+// IdentifyKnown also reports whether the platform gave a conclusive reading:
+// a nonzero identity names a process instance; a zero identity with known=true
+// means it is gone (including a Linux zombie). known=false means unavailable,
+// so callers may use a weaker check. Identify alone loses that distinction.
+func IdentifyKnown(pid int) (id ProcIdentity, known bool) {
+	if pid < 1 {
+		return ProcIdentity{}, true
+	}
+	return identifyKnown(pid)
 }
 
 // StillIs says whether pid is still running and is still that exact process

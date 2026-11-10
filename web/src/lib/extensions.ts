@@ -99,7 +99,7 @@ export function channelOf(p: Pick<HubExtension, "contributes">): string | null {
   return p.contributes?.channel?.find((id) => id.trim() !== "") ?? null;
 }
 
-/** An extension's program on one machine (docs/extensions/extensions.md "Programs that run on computers"). */
+/** An extension's program on one machine (docs/extensions/extensions.md "Programs running on computers"). */
 export interface ExtensionNodeState {
   machine_id: string;
   version?: string;
@@ -121,6 +121,8 @@ export interface ExtensionUpgrade {
   detail?: string;
   /** "user" when a skipped version is one the user rolled back from (absent: it didn't start). */
   skipped_by?: string;
+  /** The new version's ID when it changes the extension's ID (`id` stays the installed one): its market lists it under this. */
+  rename_to?: string;
 }
 
 /** What happened last with an extension's upgrade. */
@@ -214,7 +216,7 @@ const base = (id: string) => `${extRoot()}/${enc(id)}/-`;
 type ListAnswer = { extensions?: HubExtension[]; plugins?: HubExtension[]; can_install?: boolean; markets?: boolean };
 
 export const listExtensions = () => api<ListAnswer>(extRoot()).then((r) => listOf(r));
-/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension markets"). */
+/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension marketplace"). */
 export const listExtensionsInfo = () =>
   api<ListAnswer>(extRoot()).then((r) => ({
     extensions: listOf(r),
@@ -334,7 +336,8 @@ export function pointText(name: string): string {
 /** The "Upgrade" group's line for a newer version: what happens to it (the App's ExtensionText.upgradeDetail). */
 export function upgradeDetail(u: ExtensionUpgrade): string {
   switch (u.state) {
-    case "needs_permission": return morePermissions(u.added_permissions ?? []);
+    // A rename is confirmed for the ID change, not for permissions (#2511).
+    case "needs_permission": return u.rename_to ? u.detail || t("lib-extension-market.rename_detail", { from: u.id, to: u.rename_to }) : morePermissions(u.added_permissions ?? []);
     case "waiting_idle": return t("lib-extensions.upgrade_waiting_idle");
     case "available": return t("lib-extensions.upgrade_available");
     case "off": return t("lib-extensions.upgrade_off");

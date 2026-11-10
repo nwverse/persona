@@ -751,7 +751,7 @@ struct PermissionForm: View {
     }
 }
 
-/// A Codex / TRAEX approval read off its TUI (docs/integrations/codex.md「提问和审批」): the command or the edits in full, the agent's
+/// A Codex / TRAEX approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
 /// reason, Deny / Approve, Always Approve naming what it would allow (only when the TUI offers it), and Deny and Explain: the reason
 /// stops the turn and goes to the agent as its next message.
 struct AgentPermissionForm: View {
@@ -1439,7 +1439,7 @@ struct BUIPlanForm: View {
 
 /// The BeautifulUI style's tool approval: an approval card with the tool and what it will run on top, then Allow /
 /// Always Allow in Session / Deny. A tap sends, as the plain form's buttons do. Typing in the field denies with that reason,
-/// which Claude reads. A Codex card (docs/integrations/codex.md「提问和审批」) offers Approve / Always Approve (what it allows, only when Codex
+/// which Claude reads. A Codex card (docs/integrations/codex.md「Questions and approvals」) offers Approve / Always Approve (what it allows, only when Codex
 /// does) / Deny, with Codex's reason over the command.
 struct BUIPermissionForm: View {
     @Environment(AppModel.self) private var model

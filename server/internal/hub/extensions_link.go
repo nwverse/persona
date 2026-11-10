@@ -482,11 +482,8 @@ func (k *keptRecorder) Write(p []byte) (int, error) {
 	return k.ResponseWriter.Write(p)
 }
 
-func (k *keptRecorder) Flush() {
-	if f, ok := k.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
+// Flush goes through http.ResponseController, as codeWriter.Flush does.
+func (k *keptRecorder) Flush() { _ = http.NewResponseController(k.ResponseWriter).Flush() }
 
 func (k *keptRecorder) Unwrap() http.ResponseWriter { return k.ResponseWriter }
 

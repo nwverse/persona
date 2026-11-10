@@ -1,4 +1,4 @@
-{{- /* What a call bound to an agent sends it (docs/assistant/voice.md「发送、门槛和 409」): the task on its first line (a run finds
+{{- /* What a call bound to an agent sends it (docs/assistant/voice.md「Sending, gates, and 409」): the task on its first line (a run finds
 the message by it when the transcript has no client_msg_id), then a context block. Not "keep the reply short": the
 agent's work is what it is, the voice says what it needs of it. */ -}}
 {{- if eq .Lang "en" -}}

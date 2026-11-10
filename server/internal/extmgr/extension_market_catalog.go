@@ -24,7 +24,7 @@ type MarketView struct {
 	AddedAt     time.Time  `json:"added_at"`
 	// Official: the market every hub has without adding it (extension.Official), listed first.
 	Official bool `json:"official,omitempty"`
-	// Signature is the index's signature (docs/extensions/extensions.md "Signatures"): signed / unsigned / invalid / key_changed,
+	// Signature is the index's signature (docs/extensions/extensions.md "Signing"): signed / unsigned / invalid / key_changed,
 	// and the key it is signed by.
 	Signature MarketSignatureView `json:"signature"`
 }
@@ -142,10 +142,11 @@ func (h *Manager) catalogIn(l i18n.Lang, q, market string) []CatalogItem {
 		for i := range s.index.Extensions {
 			e := &s.index.Extensions[i]
 			m := e.Parsed
-			if q != "" && !strings.Contains(strings.ToLower(strings.Join(append([]string{m.ID, m.Name, m.Description, m.Publisher}, e.Tags...), "\n")), q) {
+			ts := e.Translations()
+			if q != "" && !strings.Contains(strings.ToLower(strings.Join(append(append([]string{m.ID, m.Name, m.Description, m.Publisher}, translatedWords(ts)...), e.Tags...), "\n")), q) {
 				continue
 			}
-			it := CatalogItem{Replaces: e.Replaces, Market: s.rec.ID, MarketName: marketName(l, s.rec), ID: m.ID, Name: m.Name, Version: m.Version, Description: m.Description,
+			it := CatalogItem{Replaces: e.Replaces, Market: s.rec.ID, MarketName: marketName(l, s.rec), ID: m.ID, Name: ts.Name(l, m.Name), Version: m.Version, Description: ts.Description(l, m.Description),
 				Publisher: m.Publisher, Homepage: m.Homepage, Tags: append([]string{}, e.Tags...), Contributes: m.Contributions(), Permissions: extension.ExplainIn(l, m)}
 			if s.rec.Signature.Bad() || (extension.IsOfficialMarket(s.rec.Spec) && (s.rec.Signature.State != extension.SigSigned || s.rec.Signature.KeyID != keyIDOf(extension.Official.SigningKey))) {
 				it.Problem = i18n.T(l, "hub-extension_market.bad_signature", i18n.Args{"err": s.rec.Error})
@@ -166,6 +167,18 @@ func (h *Manager) catalogIn(l i18n.Lang, q, market string) []CatalogItem {
 				it.Upgradable = cur.Record.Source == extension.SourceInstalled && extension.NewerVersion(m.Version, cur.Record.Version)
 			}
 			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// translatedWords are the names and descriptions of every translation an entry carries: the catalog's search finds
+// an extension by them whatever the language shown.
+func translatedWords(ts extension.Translations) []string {
+	var out []string
+	for _, l := range i18n.Langs {
+		if t := ts[l]; t != nil {
+			out = append(out, t.Name, t.Description)
 		}
 	}
 	return out

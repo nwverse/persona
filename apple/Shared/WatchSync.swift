@@ -3,7 +3,7 @@ import Foundation
 import WatchConnectivity
 #endif
 
-/// Each group's credential the watch uses, and the groups' names (docs/protocol/multi-hub.md「手表」).
+/// Each group's credential the watch uses, and the groups' names (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」).
 nonisolated struct WatchConfigs: Codable, Sendable, Equatable {
     var configs: [String: ServerConfig]
     var names: [String: String] = [:]
@@ -74,7 +74,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
         WCSession.default.activate()
     }
 
-    /// Every group's credential for the watch (docs/protocol/multi-hub.md「手表」), what the groups are called and which have none
+    /// Every group's credential for the watch (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」), what the groups are called and which have none
     /// yet; `config` (the first group's) stays for a watch app from before several hubs. Sent with no credentials too
     /// (#1185): a watch still holding one the phone no longer gives it drops it.
     func push(_ all: WatchConfigs) {

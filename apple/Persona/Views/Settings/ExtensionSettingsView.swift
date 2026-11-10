@@ -39,7 +39,24 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
 
     var body: some View {
         Group {
+            // A Group's modifiers go to each of its sections: on the Group, the five sheets bound to one preview
+            // closed Settings when Review opened it, and the metadata was read five times. One child carries them.
             enabled
+                .task(id: detail) { await lifecycle.loadMetadata(detail: detail) }
+                .task(id: AppModel.shared.managersRevision) {
+                    if let api = AppModel.shared.api {
+                        roster = await ManagerRoster.read(api.manager(nil), keeping: roster)
+                    }
+                }
+                .sheet(isPresented: Binding(get: { lifecycle.preview != nil }, set: { if !$0 { lifecycle.dismissPreview() } })) {
+                    if let preview = lifecycle.preview {
+                        ExtensionInstallSheet(preview: preview, name: detail.plugin.name) {
+                            let succeeded = await lifecycle.confirmUpgrade()
+                            if succeeded { await page.load() }
+                            return succeeded
+                        }
+                    }
+                }
             Section {
                 if !hasConfiguration { Text("No configuration required").foregroundStyle(.secondary) }
             } header: {
@@ -51,21 +68,6 @@ struct ExtensionSettingsView<Configuration: View, AdvancedInformation: View>: Vi
             advancedInformation
             updates
             danger
-        }
-        .task(id: detail) { await lifecycle.loadMetadata(detail: detail) }
-        .task(id: AppModel.shared.managersRevision) {
-            if let api = AppModel.shared.api {
-                roster = await ManagerRoster.read(api.manager(nil), keeping: roster)
-            }
-        }
-        .sheet(isPresented: Binding(get: { lifecycle.preview != nil }, set: { if !$0 { lifecycle.dismissPreview() } })) {
-            if let preview = lifecycle.preview {
-                ExtensionInstallSheet(preview: preview, name: detail.plugin.name) {
-                    let succeeded = await lifecycle.confirmUpgrade()
-                    if succeeded { await page.load() }
-                    return succeeded
-                }
-            }
         }
     }
 

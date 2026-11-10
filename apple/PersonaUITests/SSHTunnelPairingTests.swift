@@ -1,11 +1,11 @@
 import XCTest
 
 /// Pairing a hub this device cannot reach directly, through an SSH tunnel set up on the pairing page
-/// (docs/operations/network.md「经 SSH 隧道连 hub」): the server's fingerprint is shown in an alert and only trusted when tapped,
+/// (docs/operations/network.md「Connecting to hub through SSH」): the server's fingerprint is shown in an alert and only trusted when tapped,
 /// then pairing goes through the tunnel.
 ///
 /// Needs a real sshd that takes the key passed in and forwards to a hub (the lane's end-to-end setup, see
-/// docs/operations/testing.md「SSH 隧道」); skipped without one. Environment (TEST_RUNNER_ prefix when run by xcodebuild):
+/// docs/operations/testing.md「SSH tunnels」); skipped without one. Environment (TEST_RUNNER_ prefix when run by xcodebuild):
 /// PERSONA_SSH_HOST, PERSONA_SSH_PORT, PERSONA_SSH_USER, PERSONA_SSH_TARGET_HOST, PERSONA_SSH_TARGET_PORT,
 /// PERSONA_SSH_FP (the server's `SHA256:…`), PERSONA_SSH_KEY (base64 seed of the key the server takes),
 /// PERSONA_SSH_HUB_URL (an address of the hub this simulator cannot reach), PERSONA_SSH_HUB_TOKEN.

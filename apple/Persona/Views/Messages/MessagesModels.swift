@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-// Messages (docs/plans/plan-connectors.md「五」): one Mac's Messages, read through the hub. The app shows every conversation;
+// Messages (docs/plans/plan-connectors.md「iMessage `connector`」): one Mac's Messages, read through the hub. The app shows every conversation;
 // with Hand to Persona on (the hub's switch, on by default) the real ones also go to the knowledge base, the inbox and the
 // assistant. Nothing is marked read, nothing is sent.
 

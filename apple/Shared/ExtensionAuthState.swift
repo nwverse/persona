@@ -1,6 +1,6 @@
 import Foundation
 
-// An extension's sign-in as the hub shows it (docs/extensions/extensions.md「登录（auth）」, #4507), here for the push that carries
+// An extension's sign-in as the hub shows it (docs/extensions/extensions.md「Sign-in」, #4507), here for the push that carries
 // it (`extension_auth`, LiveConnection); the page and the store are the app's (Persona/Views/Settings/ExtensionAuth.swift).
 
 /// An extension's sign-in as the hub shows it: GET …/-/auth, `ExtensionView.auth`, the `extension_auth` event.

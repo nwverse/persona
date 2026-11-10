@@ -3,7 +3,7 @@ import PersonaKit
 import Testing
 @testable import Persona
 
-/// Extensions that install command-line programs and sign in (#4507, docs/extensions/extensions.md「命令行程序（tools）」「登录（auth）」):
+/// Extensions that install command-line programs and sign in (#4507, docs/extensions/extensions.md「Command-line programs」「登录（auth）」):
 /// the sign-in decodes from the hub's views and its `extension_auth` push (a state this app does not know reads as not
 /// known), the install's `tools` step carries its programs and `next: "auth"`, the words of the list's row, the
 /// permission and the About lines, and a sign-in a step at a time against a fake hub: a QR code asked again until done,
