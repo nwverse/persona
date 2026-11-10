@@ -11,7 +11,7 @@ import {
   type Channel, type ChannelDetail, type ChannelPrompt, type ChannelTarget, type ChannelTone,
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
-import { otherManager, pinManager } from "../../lib/manager-choice";
+import { otherManager, ownedSub, pinManager, useChosenManager } from "../../lib/manager-choice";
 import { ago } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import { Button, copyText, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
@@ -77,12 +77,15 @@ export function ChannelLink({ id, manager, onOpen }: { id: string; manager?: str
 // ── the list ─────────────────────────────────────────────
 
 export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void }) {
+  // the current assistant's channels (docs/assistant/managers.md "The current assistant"), asked of it by name (none for
+  // the default); a row opens its copy (`<id>@<manager>`)
+  const owner = otherManager(useChosenManager() ?? undefined);
   const [list, setList] = useState<Channel[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const load = () => {
     setLoading(true);
-    listChannels()
+    listChannels(owner)
       .then((l) => (setList(l), setError("")))
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
@@ -121,7 +124,7 @@ export function ChannelList({ onOpen, onMarketItem }: { onOpen: (id: string) => 
             <button
               key={c.id}
               type="button"
-              onClick={() => (c.source === "market" && c.market && c.plugin ? onMarketItem(c.market, c.plugin) : onOpen(c.id))}
+              onClick={() => (c.source === "market" && c.market && c.plugin ? onMarketItem(c.market, c.plugin) : onOpen(ownedSub(c.id, owner)))}
               className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover"
               style={{ animation: `fade-up 320ms ${EASE} ${Math.min(i, 8) * 30}ms both` }}
             >
