@@ -74,8 +74,10 @@ class AssistantConversationTest {
         assertTrue(projection.foreground.none { it.id == "hint" || it.id == "u6" || it.id == "plain-system" })
         assertTrue(projection.foreground.any { it.id == "a9" })
         assertTrue(projection.foreground.any { it.id == "a5" })
-        assertTrue(projection.foreground.any { it.id == "a7" })
-        val work = projection.foreground.filterIsInstance<ChatLine.Work>().single()
+        assertFalse("Only the latest segment is an answer row", projection.foreground.filterIsInstance<ChatLine.Row>().any { it.id == "a7" })
+        assertTrue("Earlier narration remains manually inspectable", projection.foreground.filterIsInstance<ChatLine.Work>()
+            .flatMap { it.steps }.any { it is WorkItem.Narration && it.item.id == "a7" })
+        val work = projection.foreground.filterIsInstance<ChatLine.Work>().single { it.tools > 0 }
         assertEquals(1, work.tools)
         assertFalse(work.steps.any { it is WorkItem.Thought && it.item.id == "hint" })
         assertTrue(projection.background.isNotEmpty())
