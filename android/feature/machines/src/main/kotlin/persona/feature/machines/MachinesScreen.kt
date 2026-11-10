@@ -62,7 +62,8 @@ internal fun MachinesScreen(
     // The dashboard's are every manager's: only the ones of a listed computer, or of one the list doesn't know at all.
     val known = remember(allMachines) { allMachines.mapTo(HashSet()) { it.id } }
     val listed = remember(machines) { machines.mapTo(HashSet()) { it.id } }
-    val metrics = state.dashboard?.machines.orEmpty().filter { it.machineId in listed || it.machineId !in known }.associateBy { it.machineId }
+    val metrics = state.dashboard?.machines.orEmpty().filter { it.machineId in listed || it.machineId !in known }
+        .associate { it.machineId to it.live(machines.firstOrNull { m -> m.id == it.machineId }) }
     val ids = (machines.map { it.id } + metrics.keys).distinct()
     val online = ids.count { metrics[it]?.online ?: machines.firstOrNull { m -> m.id == it }?.online ?: false }
     val attention = metrics.values.count { alerts(it.current(state.now), it.system?.cores).isNotEmpty() }
@@ -123,7 +124,7 @@ internal fun MachinesScreen(
             }
             items(ids, key = { it }, contentType = { "machine" }) { card(it) }
         } else {
-            val metric = state.history?.metrics ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
+            val metric = state.history?.metrics?.live(machine) ?: MachineMetrics(machineId, machine?.online ?: false, machine?.system)
             val system = metric.system ?: machine?.system
             val current = metric.current(state.now)
             val agents = machineSessions(sessions, machineId)

@@ -21,6 +21,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import persona.core.contracts.api.ConnectionState
 import persona.core.domain.inbox.*
 import persona.core.navigation.ChatRoute
+import persona.core.navigation.ExtensionUiRoute
+import persona.core.contracts.api.SUBSCRIPTIONS_UI
 import persona.core.navigation.ConnectionSettingsRoute
 import persona.core.navigation.Navigator
 import kotlinx.coroutines.CancellationException
@@ -38,6 +40,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val onlineSince = rememberOnlineSince(connection)
     val shownConnection = rememberSettledConnection(connection)
     val savedPreferences by repository.preferences.collectAsStateWithLifecycle(InboxPreferences())
+    val subscriptionsShown by repository.subscriptionsShown.collectAsStateWithLifecycle(false)
     val feedback = persona.core.designsystem.LocalAppFeedback.current
     val res = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -265,7 +268,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     val olderManagers = if (filtering) historyManagers else historyManagers.filter { it.orEmpty() !in history.days }
     val showOlder = doneOpen && !history.counting && olderManagers.isNotEmpty() && (history.more || history.failed || history.loading)
     val scopeText = bulkScope(res, section, sources.firstOrNull { it.first == source && source.isNotEmpty() }?.second,
-        if (kind == "agent") "Agent" else kindLabel(res, kind), query)
+        if (kind == "agent") res.getString(R.string.inbox_kind_agent) else kindLabel(res, kind), query)
     var showMore by remember { mutableStateOf(false) }
     // Clean up all files every open item of the current view (filters and search) in one request, recorded as dismissed
     // (done_by=dismissed); over BULK_CONFIRM_AT items or more it asks first, for the items shown when it was asked.
@@ -279,6 +282,11 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                 JAction(bulkLabel(res, bulk.size, scopeText), PhIcons.Checks, enabled = bulk.isNotEmpty()) { cleanAll() },
                 JAction(res.getString(R.string.inbox_mutes_title), PhIcons.Prohibit, separatorBefore = true) { showMutes = true },
                 JAction(res.getString(R.string.inbox_rules_title), PhIcons.Target) { showRules = true },
+            ) + listOfNotNull(
+                // source subscriptions (#2041): every subscription, with the Inbox's other settings
+                if (subscriptionsShown) JAction(res.getString(R.string.inbox_subscriptions), PhIcons.ArrowsClockwise) {
+                    navigator.navigate(ExtensionUiRoute(SUBSCRIPTIONS_UI, "pages", res.getString(R.string.inbox_subscriptions)))
+                } else null,
             ),
             note = if (scopeText == null) stringResource(R.string.inbox_bulk_note_all) else stringResource(R.string.inbox_bulk_note_scope, scopeText))
     }
@@ -316,7 +324,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     if (showFilters) {
         JActionSheet(title = stringResource(R.string.inbox_filter_title), onDismiss = { showFilters = false }, actions = listOf(
             JAction(stringResource(R.string.inbox_filter_source, sources.firstOrNull { it.first == source }?.second ?: stringResource(R.string.inbox_all_sources)), PhIcons.Tray) { filterPage = "source" },
-            JAction(stringResource(R.string.inbox_filter_kind, kindLabel(res, kind).ifBlank { if (kind == "agent") "Agent" else res.getString(R.string.inbox_all_kinds) }), PhIcons.FunnelSimple) { filterPage = "kind" },
+            JAction(stringResource(R.string.inbox_filter_kind, kindLabel(res, kind).ifBlank { if (kind == "agent") res.getString(R.string.inbox_kind_agent) else res.getString(R.string.inbox_all_kinds) }), PhIcons.FunnelSimple) { filterPage = "kind" },
             JAction(stringResource(R.string.inbox_filter_clear), enabled = source.isNotEmpty() || kind.isNotEmpty()) {
                 filter(currentFilters.copy(source = "", kind = ""))
             },
@@ -335,7 +343,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     }
     if (filterPage == "kind") JActionSheet(title = stringResource(R.string.inbox_kind), onDismiss = { filterPage = null }, actions =
         listOf("" to res.getString(R.string.inbox_all_kinds), "mention" to res.getString(R.string.inbox_mention_me), "dm" to res.getString(R.string.inbox_kind_dm),
-            "group" to res.getString(R.string.inbox_kind_group), "mail" to res.getString(R.string.inbox_source_mail), "agent" to "Agent").map { (value, label) ->
+            "group" to res.getString(R.string.inbox_kind_group), "mail" to res.getString(R.string.inbox_source_mail), "agent" to res.getString(R.string.inbox_kind_agent)).map { (value, label) ->
             JAction(label, checked = kind == value) { filter(currentFilters.copy(kind = value)) }
         })
     // Loading shows only while there is nothing to show yet: a row put in over a shown list pushes it down, then goes.
@@ -380,7 +388,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                         composeDraft = MailDraft(accountId = "")
                     })
                 }
-                JIconButton(PhIcons.FunnelSimple, stringResource(R.string.inbox_filter), { showFilters = true }, badge = source.isNotEmpty() || kind.isNotEmpty())
+                // The dot is color only: TalkBack hears the active filter in the description (#3729).
+                val filtered = source.isNotEmpty() || kind.isNotEmpty()
+                JIconButton(PhIcons.FunnelSimple, stringResource(if (filtered) R.string.inbox_filter_on else R.string.inbox_filter),
+                    { showFilters = true }, badge = filtered)
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { showMore = true })
             }),
         ) {

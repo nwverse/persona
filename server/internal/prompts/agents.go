@@ -189,3 +189,52 @@ type DispatchTask struct {
 }
 
 func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_task", t) }
+
+// RenderTaskLeader is what follows the prompt of a task whose agent is a task leader (agents/task_leader, #3656): that it
+// can hand direct workers to task_plan and how their reports reach it.
+func RenderTaskLeader() string { return render("agents/task_leader", struct{}{}) }
+
+// RenderTaskWorker is what follows the prompt of a worker a task leader handed out (agents/task_worker).
+func RenderTaskWorker() string { return render("agents/task_worker", struct{}{}) }
+
+// RenderWorkerSupervise is the supervision message a task leader's agent gets about its workers (agents/worker_supervise,
+// assistant/task_leader.go): what each task of its own needs, from the same entries a conversation's message lists.
+func RenderWorkerSupervise(entries []SuperviseEntry) string {
+	return render("agents/worker_supervise", struct{ Entries []SuperviseEntry }{entries})
+}
+
+// AgentCloseoutRequired is what an agent is told when its stop is held for a missing closeout (#3612).
+type AgentCloseoutRequired struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutRequired(c AgentCloseoutRequired) string {
+	return render("agents/closeout_required", c)
+}
+
+// AgentCloseoutAsk is the status question to an agent nobody supervises whose turn did work and ended without a
+// closeout (#3616): the same form and rules (agents/closeout_rules), about work already done.
+type AgentCloseoutAsk struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutAsk(c AgentCloseoutAsk) string {
+	return render("agents/closeout_ask", c)
+}
+
+// AgentCloseoutBrief tells an agent the closeout's form before it works, so its turn does not cost a held stop
+// (agents/closeout_brief): after a task's prompt, or as a session's starting context.
+type AgentCloseoutBrief struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+	// AfterDelivery: the same prompt asks for the delivery line (assistant/task_delivery); the block goes after it.
+	AfterDelivery bool
+	// Session: it is a session's starting context, not part of a task's prompt: it says whose words these are.
+	Session bool
+}
+
+func RenderAgentCloseoutBrief(c AgentCloseoutBrief) string {
+	return render("agents/closeout_brief", c)
+}
