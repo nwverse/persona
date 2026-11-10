@@ -23,7 +23,8 @@ describe("the Assistant's Needs you and In progress entries (spec/fixtures/entri
       // one entry each: nothing is in both, and no agent of a listed task shows on its own
       const keys = [...got.needsYou, ...got.running, ...got.shelved].map((item) => item.key);
       expect(new Set(keys).size).toBe(keys.length);
-      const taskAgents = new Set(input.todos.flatMap((todo) => (todo.agents ?? []).map((a) => `agent:${a.machine_id}/${a.session_id}`)));
+      const taskAgents = new Set(input.todos.filter((todo) => !todo.done_at && keys.includes(`task:${todo.id}`))
+        .flatMap((todo) => (todo.agents ?? []).filter((a) => !a.released_at).map((a) => `agent:${a.machine_id}/${a.session_id}`)));
       expect(keys.filter((key) => taskAgents.has(key))).toEqual([]);
     });
   }

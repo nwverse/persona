@@ -38,6 +38,9 @@
     <string name="chat_tray_recommended">建议：%1$s</string>
     <string name="chat_tray_accept_changed">验收请求已更新，请查看最新一轮。</string>
     <string name="chat_tray_cancelled">已取消</string>
+    <string name="chat_tray_stopped_state">已停下</string>
+    <string name="chat_tray_stopped">停下了，还没完成</string>
+    <string name="chat_tray_stopped_reason">停下了，还没完成 · %1$s</string>
     <string name="chat_tray_pr_number">PR #%1$s</string>
     <string name="chat_tray_done">已完成</string>
     <string name="chat_tray_accepted">已验收</string>
