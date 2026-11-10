@@ -103,7 +103,7 @@ extension DevGrouping {
 
 /// How Develop groups its agents (the menu at the top left; remembered).
 enum DevGrouping: String, CaseIterable, Identifiable {
-    case repo, space, todo, state, machine, recent
+    case repo, space, todo, state, machine, app, recent
     /// What an app that never chose a grouping shows (#2108): machines → repositories → working trees, after Orca.
     static let standard = DevGrouping.repo
     var id: String { rawValue }
@@ -114,6 +114,7 @@ enum DevGrouping: String, CaseIterable, Identifiable {
         case .todo: String(localized: "By To-do")
         case .state: String(localized: "By Status [Chats View 5aa882]")
         case .machine: String(localized: "By Machine")
+        case .app: String(localized: "By App")
         case .recent: String(localized: "Recently Used")
         }
     }
@@ -124,6 +125,7 @@ enum DevGrouping: String, CaseIterable, Identifiable {
         case .todo: Theme.Icon.todo
         case .state: Theme.Icon.byState
         case .machine: Theme.Icon.machine
+        case .app: Theme.Icon.byApp
         case .recent: Theme.Icon.recent
         }
     }
@@ -1015,6 +1017,8 @@ private struct AgentsList: View {
                 stateSections(unpinned.filter { $0.state.isLive })
             } else if grouping == .machine {
                 machineSections(unpinned.filter { $0.state.isLive })
+            } else if grouping == .app {
+                appSections(unpinned) // offline ones too, as the apps' sidebars list them
             } else if grouping == .repo {
                 repoSections(tree, byHost: byHost)
             } else {
@@ -1296,6 +1300,7 @@ private struct AgentsList: View {
             shown = rows.todos(groups) { g in g.todoID == nil ? isFolded(g.key, otherwise: g.folded) : isFolded(g.key) }
         case .state: shown = rows.states(live)
         case .machine: shown = rows.machines(live, order: machineOrder(live).map(\.ref))
+        case .app: shown = rows.apps(AppGroups.build(unpinned))
         case .repo: shown = rows.repos(tree, byHost: byHost)
         case .space:
             let hosts = byHost ? RepoTree.hostOrder(Set((active + quiet).map(\.machineRef)), machines: machines.map(\.ref)) : nil
@@ -2201,7 +2206,9 @@ private struct AgentsList: View {
     ]
 
     /// The fold ids of the sections By Status / By Machine shows now (Collapse All).
-    private func sectionIDs(_ sessions: [Session]) -> [String] { order.sectionIDs(sessions, byMachine: grouping == .machine) }
+    private func sectionIDs(_ sessions: [Session]) -> [String] {
+        grouping == .app ? AppGroups.build(sessions).map(\.id) : order.sectionIDs(sessions, byMachine: grouping == .machine)
+    }
 
     private func stateSectionCount(_ key: String, loaded: Int) -> Int {
         let filters: [String: AgentFilter] = ["needs": .needsYou, "unread": .unread, "working": .working]
@@ -2289,6 +2296,24 @@ private struct AgentsList: View {
     }
 
     /// One section per machine, its agents by state; idle ones fold like in a space.
+    /// By App (#3756): a section per app (`AppGroups`) with its running and offline agents, the latest first; each folds
+    /// as a machine's section does, its state counts on its title.
+    @ViewBuilder private func appSections(_ sessions: [Session]) -> some View {
+        ForEach(AppGroups.build(sessions)) { app in
+            let group = SpaceGroup(id: app.id, machineID: "", spaceID: "-", name: app.title, index: 0, sessions: app.sessions)
+            listSection {
+                if !isFolded(app.id) {
+                    cappedRows(app.sessions, key: app.id) { s in slotRow(s, context: true) }
+                }
+            } header: {
+                FoldButton(title: app.title, folded: isFolded(app.id), detail: StateCounts.spoken(group)) { toggleFold(app.id) } label: {
+                    AppSectionHeader(app: app, counts: group)
+                }
+            }
+            .listSectionSpacing(isFolded(app.id) ? .custom(0) : .default)
+        }
+    }
+
     @ViewBuilder private func machineSections(_ live: [Session]) -> some View {
         ForEach(machineOrder(live), id: \.ref) { m in
             let rows = ordered(live.filter { $0.machineRef == m.ref })

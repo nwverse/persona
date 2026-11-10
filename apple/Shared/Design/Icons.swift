@@ -28,6 +28,8 @@ extension Theme {
         static let backgroundWaiting = "clock.fill"
         /// Agents grouped or ordered by their state (the Agents list's By Status / By Status).
         static let byState = "circle.grid.2x1"
+        /// Agents grouped by the app they run in (the Agents list's By App, #3756).
+        static let byApp = "macwindow"
         static let muted = "bell.slash.fill"
         static let notifications = "bell.badge"
         /// The hours this device's notifications keep quiet (Settings › Notifications).

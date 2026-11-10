@@ -22874,6 +22874,52 @@
       },
       "extractionState": "manual"
     },
+    "%@ desktop app": {
+      "comment": "By App's section of an agent's desktop app: Claude Code desktop app",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ desktop app"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ デスクトップ版"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 桌面版"
+          }
+        }
+      }
+    },
+    "By App": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By App"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アプリ別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按 App"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "By Machine": {
       "localizations": {
         "en": {

@@ -23,6 +23,20 @@ import Testing
         #expect(repo.worktrees.count == 1 && repo.flat)
     }
 
+    /// By App (#3756): Collapse All / Expand All act on the app sections, offline agents' apps included.
+    @Test func byAppSectionsAreWhatCollapseAllFolds() throws {
+        var desktop = try session("desktop", state: "offline")
+        desktop.agent = "claude"
+        desktop.agentSurface = "desktop"
+        var terminal = try session("terminal", state: "working")
+        terminal.agent = "codex"
+        terminal.agentSurface = "cli"
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "app"
+        let result = AgentListProjection.build(input([desktop, terminal], settings: settings))
+        #expect(result.menuSections == ["app/desktop/claude code", AppGroups.terminalID])
+    }
+
     @Test func pinMuteAndHeldUnreadRulesKeepTheirExistingMeaning() throws {
         let pinned = try session("pinned")
         let muted = try session("muted", state: "unread")
