@@ -589,9 +589,11 @@ main chat (`ownConversationIfQuiet`: selecting `asked` clears a `session_id` tha
 but still finish through `settle`. Channel forwarding (Lark, plugin sync and task pushes) skips under the same `quietTaskTurn` rule.
 
 **In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run writes `push: "asked"` into its persisted
-message source. A normal completion is quiet when the turn's input (its last user text that is neither queued nor a wake) has that source and nothing of the
-user's follows it (`quietTurnItems`):
+message source. A normal completion is quiet when the turn's input (its last user text that is neither queued nor a wake) has that source, the run answered
+after it, and nothing of the user's follows it (`quietTurnItems`):
 
+- The run answered when it wrote text after its input, or made tool calls after it and the transcript has that turn's end (`turn_duration`, #3934).
+  A patrol that only calls tools, `notify_user` among them, is therefore quiet. A turn with no output at all, or whose end is not written yet, pushes.
 - A user message absorbed mid-turn (a queued text or image item before the final answer) makes the answer the user's too, so it pushes and mirrors.
 - A user message held until the turn ends starts the next turn. That turn's input has no scheduled push mode, so its answer pushes and mirrors.
 - A background wake after the patrol input stays quiet only when the patrol's own turn launched that task (its call id, or its task id in a call's result).
