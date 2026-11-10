@@ -201,8 +201,7 @@ func TestAssistantLauncherMessagesProviderScope(t *testing.T) {
 	f.launcherList = []proto.Launcher{{Name: "claude", Source: "zshrc"}}
 	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{
 		Name: "restricted-messages", Kind: "api", API: "messages", BaseURL: "https://api.example.com", Model: "restricted-default",
-		Share: shareSelected, ScopeMachines: []string{"other"},
-	}})
+	}, Share: shareSelected, ScopeMachines: []string{"other"}})
 	if p := purposeOf(t, s, "assistant"); slices.Contains(p.ProviderIDs, "launcher.restricted-messages") {
 		t.Fatal("assistant purpose accepted a provider outside its machine scope")
 	}
