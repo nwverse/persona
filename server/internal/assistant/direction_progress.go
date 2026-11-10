@@ -84,7 +84,7 @@ func (s *Service) toolDirectionName(ctx context.Context, self string, args json.
 	if strings.TrimSpace(a.Name) == "" {
 		return fmt.Sprintf("Direction %s has no name of its own now: it shows its project's name, else its title.", a.ID), nil
 	}
-	return fmt.Sprintf("Direction %s is called 「%s」 now (the app and the work-log extension show it).", a.ID, clip(oneLine(a.Name), directionNameMost)), nil
+	return fmt.Sprintf("Direction %s is called 「%s」 now (the app and the work-log extension show it).", a.ID, clip(oneLine(a.Name), directionNameMost)), nil // i18n-ignore: direction_name tool result, read by the model
 }
 
 // toolLeaderProgress is leader_progress: a leader reports its direction's progress at the goal level.
