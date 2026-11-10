@@ -561,3 +561,16 @@ func TestMessageTimeReadsLarkCLIWallClockMinutes(t *testing.T) {
 		t.Fatalf("garbage = %v", got)
 	}
 }
+
+func TestCardTextReadsAsPlainText(t *testing.T) {
+	in := "<card title=\"Merge Request Merged\">\n  Example change was merged\n</card>"
+	if got := cardText(in); got != "Merge Request Merged\nExample change was merged" {
+		t.Fatalf("card = %q", got)
+	}
+	if got := cardText("<card>\n:OK:\n</card>"); got != ":OK:" {
+		t.Fatalf("untitled card = %q", got)
+	}
+	if got := cardText("plain <b>text</b>"); got != "plain <b>text</b>" {
+		t.Fatalf("plain text changed: %q", got)
+	}
+}
