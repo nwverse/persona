@@ -62,7 +62,7 @@ func (n *Node) findTranscriptPath(id string, pass *codexListPass) string {
 		if p := rolloutPath(src.home, src.thread); p != "" {
 			return p
 		}
-		return n.codexAppHistoryPath(src) // the App's chat with no rollout: its history as written (codex_apphistory.go)
+		return n.codexAppHistoryPath(src, pass) // the App's chat with no rollout: its history as written (codex_apphistory.go)
 	}
 	if strings.HasPrefix(id, "c0de-") {
 		return n.oldCodexTranscript(id)
