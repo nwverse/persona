@@ -1,5 +1,6 @@
 import BeautifulUI
 import MarkdownUI
+import PersonaKit
 import SwiftUI
 
 /// How each Claude Code tool is named and summarized in the chat.
@@ -858,13 +859,17 @@ struct FullOutputSheet: View {
     }
 }
 
-/// The chat's one diff: Edit / MultiEdit / Write (old and new text) and Codex's patches (a unified diff), on the Git
-/// page's line model (`DiffText.Line`, `DiffText.parse`; the Git page draws whole files with MonoTextView). Only the
-/// sign and the line's background are colored, the code stays label; long lines scroll sideways and a fade on the
-/// right says there is more. Long diffs show their start and Expand All.
+/// The chat's one diff: Edit / MultiEdit / Write (old and new text, compared line by line and word by word with
+/// `LineDiff`, #2915) and Codex's patches (a unified diff), on the Git page's line model (`DiffText.Line`,
+/// `DiffText.parse`; the Git page draws whole files with MonoTextView). Only the sign and the line's background are
+/// colored, and the words that changed in a changed line; the code stays label. Long lines scroll sideways and a fade
+/// on the right says there is more. Long diffs show their start (an edit's long stretches of unchanged lines folded)
+/// and Show All.
 nonisolated enum ToolDiffMemo {
     struct Content: Sendable {
         var lines: [DiffText.Line]
+        /// What shows until Show All: an edit's long stretches of unchanged lines folded into one row each.
+        var short: [DiffText.Line]
         var adds: Int
         var dels: Int
     }
@@ -887,11 +892,25 @@ nonisolated enum ToolDiffMemo {
 
     static func edit(old: String, new: String) -> Content {
         cached(.edit(old, new)) {
-            let removed = old.isEmpty ? [] : old.components(separatedBy: "\n")
-            let added = new.isEmpty ? [] : new.components(separatedBy: "\n")
-            let lines = removed.enumerated().map { DiffText.Line(id: $0.offset, kind: .del, text: $0.element) }
-                + added.enumerated().map { DiffText.Line(id: removed.count + $0.offset, kind: .add, text: $0.element) }
-            return Content(lines: lines, adds: added.count, dels: removed.count)
+            let diff = LineDiff(old: old, new: new)
+            var lines: [DiffText.Line] = []
+            lines.reserveCapacity(diff.lines.count)
+            for (n, l) in diff.lines.enumerated() {
+                let kind: DiffText.Line.Kind = switch l.kind {
+                case .add: .add
+                case .del: .del
+                case .context: .context
+                }
+                lines.append(DiffText.Line(id: n, kind: kind, text: l.text, old: l.oldLine, new: l.newLine, changed: l.changed))
+            }
+            // A folded stretch takes the id of its first line, which it does not show.
+            let short: [DiffText.Line] = diff.shown().map { shown in
+                switch shown {
+                case .line(let n): lines[n]
+                case .folded(let r): DiffText.Line(id: r.lowerBound, kind: .hunk, text: String(localized: "… \(r.count) unchanged lines"))
+                }
+            }
+            return Content(lines: lines, short: short, adds: diff.adds, dels: diff.dels)
         }
     }
 
@@ -903,7 +922,7 @@ nonisolated enum ToolDiffMemo {
                 if line.kind == .add { adds += 1 }
                 if line.kind == .del { dels += 1 }
             }
-            return Content(lines: lines, adds: adds, dels: dels)
+            return Content(lines: lines, short: lines, adds: adds, dels: dels)
         }
     }
 
@@ -925,33 +944,41 @@ nonisolated enum ToolDiffMemo {
 
 struct DiffView: View {
     var lines: [DiffText.Line]
+    /// Until Show All (`ToolDiffMemo.Content.short`), at most `maxLines` of it.
+    var short: [DiffText.Line]
     var adds: Int
     var dels: Int
     @State private var full = false
     @State private var moreRight = false
     private static let maxLines = 40
 
-    /// All of old removed, then all of new added (Claude's Edit has no line numbers or context).
+    /// Old and new text compared (`LineDiff`): unchanged lines as context, a stretch of more than a few of them folded
+    /// into one row until Show All, removed lines before added ones, and in a line changed rather than rewritten, the
+    /// words that changed. Claude's Edit carries no line numbers, so none are shown. Past `LineDiff`'s budget, all of
+    /// old removed, then all of new added.
     init(old: String, new: String) {
-        let content = ToolDiffMemo.edit(old: old, new: new)
-        lines = content.lines
-        adds = content.adds
-        dels = content.dels
+        self.init(ToolDiffMemo.edit(old: old, new: new))
     }
 
     init(unified diff: String) {
-        let content = ToolDiffMemo.unified(diff)
+        self.init(ToolDiffMemo.unified(diff))
+    }
+
+    private init(_ content: ToolDiffMemo.Content) {
         lines = content.lines
+        short = content.short
         adds = content.adds
         dels = content.dels
     }
 
     var body: some View {
-        let clipped = !full && lines.count > Self.maxLines
+        let shown = full ? lines : Array(short.prefix(Self.maxLines))
+        // Something is left out: lines past the cap, or a folded stretch (folding always takes away a row).
+        let clipped = shown.count < lines.count
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             ScrollView(.horizontal, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(clipped ? Array(lines.prefix(Self.maxLines)) : lines) { line($0) }
+                    ForEach(shown) { line($0) }
                 }
                 .padding(.vertical, Theme.Space.sm)
             }
@@ -975,15 +1002,15 @@ struct DiffView: View {
     }
 
     private func line(_ l: DiffText.Line) -> some View {
-        let (sign, color, fill): (String, Color, Color) = switch l.kind {
-        case .add: ("+", Theme.Diff.add, Theme.Diff.addFill)
-        case .del: ("−", Theme.Diff.del, Theme.Diff.delFill)
-        default: (" ", .secondary, .clear)
+        let (sign, color, fill, emphasis): (String, Color, Color, Color) = switch l.kind {
+        case .add: ("+", Theme.Diff.add, Theme.Diff.addFill, Theme.Diff.addEmphasis)
+        case .del: ("−", Theme.Diff.del, Theme.Diff.delFill, Theme.Diff.delEmphasis)
+        default: (" ", .secondary, .clear, .clear)
         }
         let quiet = l.kind == .hunk || l.kind == .info
         return HStack(spacing: Theme.Space.sm) {
             Text(sign).foregroundStyle(color).scaledFrame(width: Theme.Size.dotXL)
-            Text(l.text.isEmpty ? " " : l.text).foregroundStyle(quiet ? Color.secondary : .primary)
+            Self.text(l, emphasis: emphasis).foregroundStyle(quiet ? Color.secondary : .primary)
                 #if os(macOS)
                 .textSelection(.enabled) // the text, not the +/− column, as on the web
                 #endif
@@ -993,6 +1020,18 @@ struct DiffView: View {
         .padding(.vertical, 1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(fill)
+    }
+
+    /// The line's code, the words that changed (`DiffText.Line.changed`) on `emphasis` over the row's own fill.
+    private static func text(_ l: DiffText.Line, emphasis: Color) -> Text {
+        guard !l.changed.isEmpty else { return Text(l.text.isEmpty ? " " : l.text) }
+        var out = AttributedString()
+        for piece in LineDiff.pieces(l.text, changed: l.changed) {
+            var run = AttributedString(piece.text)
+            if piece.changed { run.backgroundColor = emphasis }
+            out += run
+        }
+        return Text(out)
     }
 }
 

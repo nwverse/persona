@@ -530,6 +530,9 @@ struct DiffText: View {
         var text: String
         var old: Int?
         var new: Int?
+        /// The words that changed, as UTF-16 offsets into `text` (`LineDiff.Line.changed`): an edit's in the chat's
+        /// `DiffView`; none from a unified diff.
+        var changed: [Range<Int>] = []
     }
 
     var body: some View {

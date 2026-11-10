@@ -321,6 +321,9 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
   - The shell assistant drawer (`AssistantDrawerLayout`) continuously recomputed views on the main thread, starving queued work: avatar lists never refreshed and runtime CLI answered ping once only. Reproduce and fix the default tree; changing navigation for screenshots hides the user's failure.
 - **Uninstalling does not clear keychain**: simulator pairing survives reinstall, so the app launches paired directly into the new shell and the runner reports "timed out while preparing". First `xcrun simctl keychain <udid> reset`.
 - **Mac app deployment target is macOS 26**: macOS 15 can build only, not run the app or `PersonaMacTests`.
+- **PersonaKit's `swift test` builds on macOS 15 but its test bundle does not load** (2026-11-10, #2915): `Symbol not found: _$ss18EnumeratedSequenceVyxGSlsSlRzrlMc`,
+  `EnumeratedSequence`'s `Collection` conformance, which only the macOS 26 runtime has (`DocumentText`, `Notebook` use it). To run one suite there, copy its source and test files
+  into a scratch package outside the repository with `platforms: [.macOS(.v15)]`; the package itself still needs a macOS 26 run (or CI) before merging.
 
 ## Web grouping and collapse
 
