@@ -78,12 +78,6 @@ async function askInfo(id: string): Promise<VoiceInfoState> {
   }
 }
 
-/** Forgets what the hub said (a setting changed): the button waits for the next answer. */
-export function forgetVoice() {
-  askedAt = 0;
-  publish({});
-}
-
 /** What the hub said last; asks again when it is old. */
 export function useVoiceProbe(): VoiceProbe {
   const p = useSyncExternalStore(subscribe, () => probe, () => probe);

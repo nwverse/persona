@@ -91,11 +91,6 @@ func normalizeFolder(s string) string {
 	return strings.Join(segs, "/")
 }
 
-// inFolder says whether path is folder or under it ("" is every path).
-func inFolder(path, folder string) bool {
-	return folder == "" || path == folder || strings.HasPrefix(path, folder+"/")
-}
-
 // loadInboxFolders reads the folder settings; false when the database could not be read.
 func (s *Service) loadInboxFolders(ctx context.Context) bool {
 	st := s.store()

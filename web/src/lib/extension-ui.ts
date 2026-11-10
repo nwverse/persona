@@ -10,9 +10,12 @@ import { api, ApiError, enc } from "./api";
 import { itemHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
+import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
 import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
+
+export { isHttps };
 
 /** The UI version the web draws (context.ui_version). */
 export const UI_VERSION = 6;
@@ -383,16 +386,6 @@ export function percent(ratio?: number): number {
   return Math.round(Math.min(1, Math.max(0, ratio)) * 1000) / 10;
 }
 
-/** Only https links open (the hub checks too). */
-export function isHttps(url?: string): boolean {
-  if (!url) return false;
-  try {
-    return new URL(url).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 /** The fields of a view, by name, as they start: what the extension filled in (never a secret's), toggles "true" / "false". */
 export function fieldValues(view: UIView | null | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -567,8 +560,6 @@ export const KNOWN_ITEMS: readonly string[] = [
   "image", "grid", "carousel", // UI version 6
 ];
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-
 /** An item the web can draw: a known type with what it needs to be drawn at all (a chart with points, a grid with stats). */
 function drawable(it: unknown): it is UIItem {
   if (!isObject(it) || typeof it.type !== "string" || !KNOWN_ITEMS.includes(it.type)) return false;
@@ -682,33 +673,6 @@ export function readView(raw: unknown): UIView {
     }
   }
   return view;
-}
-
-/** An action as the web uses it (an id at least), its push read too; undefined when it is not one. */
-export function readAction(raw: unknown): UIAction | undefined {
-  if (!isObject(raw) || typeof raw.id !== "string" || !raw.id) return undefined;
-  const a: UIAction = { id: raw.id };
-  if (typeof raw.confirm === "string") a.confirm = raw.confirm;
-  if (raw.submit === true) a.submit = true;
-  const p = readPush(raw.push);
-  if (p) a.push = p;
-  if (isObject(raw.values)) {
-    const values = Object.fromEntries(Object.entries(raw.values).filter((e): e is [string, string] => typeof e[1] === "string"));
-    if (Object.keys(values).length) a.values = values;
-  }
-  return a;
-}
-
-/** A push as the web keeps it: the state as text (an extension may send an object: it gets it back as JSON). */
-export function readPush(raw: unknown): UIPush | undefined {
-  if (raw === true) return {};
-  if (!isObject(raw)) return undefined;
-  const p: UIPush = {};
-  if (typeof raw.state === "string") p.state = raw.state;
-  else if (raw.state !== undefined && raw.state !== null) p.state = JSON.stringify(raw.state);
-  if (typeof raw.title === "string" && raw.title) p.title = raw.title;
-  if (typeof raw.ui === "string" && raw.ui) p.ui = raw.ui;
-  return p;
 }
 
 /** An item with its actions read; an empty's button (`action: {title, action}`) under `button`. */

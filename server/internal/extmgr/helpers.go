@@ -29,9 +29,13 @@ import (
 
 var (
 	clip          = textfmt.Clip
+	cutRunes      = textfmt.Cut
 	oneLine       = textfmt.OneLine
 	firstNonEmpty = textfmt.FirstNonEmpty
 )
+
+// convID is the start of a conversation's id: the Cua Driver session label of its calls, and how the log names it.
+var convID = textfmt.Short
 
 func writeJSON(w http.ResponseWriter, v any) { apierr.WriteJSON(w, v) }
 
