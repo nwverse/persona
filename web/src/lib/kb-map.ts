@@ -6,7 +6,8 @@
 //   has them all.
 // Pure: the data in, a tree of nodes and its layout out.
 import { t } from "../i18n";
-import { groupPoints, type KBDetail, type KBEntry, type PointGroup, type TopicPoint } from "./kb";
+import { type KBDetail, type KBEntry } from "./kb";
+import { groupPoints, type PointGroup, type TopicPoint } from "./kb-points";
 
 export type MapKind = "root" | "branch" | "group" | "project" | "section" | "text" | "link" | "day" | "topic" | "point";
 export type MapTone = "accent" | "green" | "orange";

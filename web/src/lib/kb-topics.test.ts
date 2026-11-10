@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { entryFromDetail, groupEntries, groupPoints, pointDay, pointKindLabel, pointSources, pointWarns, topicPointCount, type KBEntry, type TopicPoint } from "./kb";
+import { entryFromDetail, groupEntries, topicPointCount, type KBEntry } from "./kb";
+import { groupPoints, pointDay, pointSources, pointWarns, type TopicPoint, pointKindLabel } from "./kb-points";
 
 const entry = (id: string, extra: Partial<KBEntry> = {}): KBEntry => ({ kind: "topics", id, name: id, relevance: 0, ...extra });
 const point = (id: string, path?: string[]): TopicPoint => ({ id, path, kind: "fact", text: `Point ${id}` });

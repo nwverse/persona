@@ -2,7 +2,8 @@
 // one section per subtopic, a subtopic's own subtopics as headings inside its card. Each point shows its kind, its text,
 // its reason or cause, where it came from (by name, opening that entry) and when it was last confirmed.
 import { t } from "../../i18n";
-import { groupPoints, pointDay, pointKindLabel, pointSources, pointWarns, type KBDetail, type KBEntry, type PointGroup, type TopicPoint } from "../../lib/kb";
+import { type KBDetail, type KBEntry } from "../../lib/kb";
+import { groupPoints, pointDay, pointSources, pointWarns, type PointGroup, type TopicPoint, pointKindLabel } from "../../lib/kb-points";
 import { href } from "../../lib/router";
 import { Card, onPlainClick, SectionTitle, TonePill } from "./KBParts";
 

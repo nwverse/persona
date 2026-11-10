@@ -63,9 +63,5 @@
   "invalid_fields": "Days must be whole numbers from 1 to 36500, or blank. Context must be a whole number from 0 to 200, or blank.",
   "store_all_doc": "Store all content. Blank days follows document rules and creates no default deletion deadline.",
   "topics_title": "Knowledge points",
-  "topics_switch": "Organize knowledge points by topic",
-  "topics_footer": "In the background, Persona pulls durable knowledge (concepts, decisions, how-tos, pitfalls, facts) out of your project timelines and chats and files it under topics. It uses the knowledge base model. Turning it off stops new curation; topics already organized stay.",
-  "topics_load_failed": "Couldn’t read the setting: {error}",
-  "topics_save_failed": "Couldn’t save: {error}",
-  "topics_open_map": "Open the knowledge map"
+  "topics_switch": "Organize knowledge points by topic"
 }

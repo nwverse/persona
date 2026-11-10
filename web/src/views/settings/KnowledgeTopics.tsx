@@ -34,18 +34,18 @@ export function KnowledgeTopicsSwitch({ manager }: { manager: string }) {
       setOn(r.kb_topics ?? next);
     } catch (e) {
       setOn(!next);
-      toast(t("settings-knowledge.topics_save_failed", { error: errorText(e) }), "error");
+      toast(t("settings-knowledgetopics.save_failed", { error: errorText(e) }), "error");
     } finally {
       setBusy(false);
     }
   };
   return (
-    <Group title={t("settings-knowledge.topics_title")} anchor="knowledge-topics" footer={t("settings-knowledge.topics_footer")}>
-      <Row label={t("settings-knowledge.topics_switch")} hint={error ? t("settings-knowledge.topics_load_failed", { error }) : undefined}>
+    <Group title={t("settings-knowledge.topics_title")} anchor="knowledge-topics" footer={t("settings-knowledgetopics.footer")}>
+      <Row label={t("settings-knowledge.topics_switch")} hint={error ? t("settings-knowledgetopics.load_failed", { error }) : undefined}>
         <Switch on={on ?? true} onChange={(v) => void change(v)} disabled={on === null || busy} label={t("settings-knowledge.topics_switch")} />
       </Row>
       <button type="button" onClick={() => navigate({ name: "kb", kind: "map" })} className="flex w-full items-center justify-between px-4 py-3 text-left text-[13px] text-ink hover:bg-hover">
-        <span>{t("settings-knowledge.topics_open_map")}</span>
+        <span>{t("settings-knowledgetopics.open_map")}</span>
         <Icon name="chevronRight" size={12} className="text-ink-3" />
       </button>
     </Group>

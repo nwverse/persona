@@ -6,7 +6,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { t } from "../../i18n";
 import { api, enc, errorText, isAbort } from "../../lib/api";
 import { BASE } from "../../lib/base";
-import { pointDay, pointKindLabel, pointSources, pointWarns, POINT_KINDS, type KBDetail, type KBDetailResponse, type KBEntry, type KBList } from "../../lib/kb";
+import { type KBDetail, type KBDetailResponse, type KBEntry, type KBList } from "../../lib/kb";
+import { pointDay, pointSources, pointWarns, POINT_KINDS, pointKindLabel } from "../../lib/kb-points";
 import { buildProjectMap, buildTopicMap, layout, pointsUnder, walk, type Box, type MapNode, type Placed, type SummaryItem, type TopicData } from "../../lib/kb-map";
 import { navigate } from "../../lib/router";
 import { Button, cx, IconButton, Loading } from "../../ui/atoms";

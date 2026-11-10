@@ -90,10 +90,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * The most a cold first screen of the client page may send, in bytes, as sentBytes counts it over the page's own files,
  * the shared and App groups and one language's startup catalog (vite.config.ts startupPreload fails the build past
  * it): the heaviest language's at #2689 (ja, 559,565 B) plus 3%, and 2,560 B for the sidebar's assistant switcher
- * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws. Raise it on
- * purpose, in the change that needs it.
+ * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws, and 800 B for the
+ * Topics kind (#3783: its tab and name, the shared stylesheet's classes for the topic page and the knowledge map, and
+ * its switch in Settings' search; the pages, their code and words load on demand). Raise it on purpose, in the change
+ * that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 578_912;
+export const FIRST_SCREEN_BUDGET = 579_712;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

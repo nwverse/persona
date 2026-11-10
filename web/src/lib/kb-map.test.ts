@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
-import type { KBDetail, KBEntry, TopicPoint } from "./kb";
+import { type KBDetail, type KBEntry } from "./kb";
+import { type TopicPoint } from "./kb-points";
 import { buildProjectMap, buildTopicMap, layout, parseSummary, personaLine, pointsUnder, walk, type MapNode } from "./kb-map";
 
 beforeAll(async () => {
