@@ -234,9 +234,9 @@ type Meta struct {
 	beforeLocal [2]bool // TurnOpen, TurnClosed
 	// bashInput is the last "! cmd" typed in Claude Code, for the Bash call its output line turns into.
 	bashInput string
-	// notified holds the background-task notifications already shown: one is often recorded twice (as a user line and
-	// as a queued_command attachment). The same task reporting again with other content is a new event and shows.
-	notified map[string]bool
+	// notified holds the background-task notifications already shown, by digest: one is often recorded twice (as a user
+	// line and as a queued_command attachment). The same task reporting again with other content is a new event and shows.
+	notified map[noticeKey]bool
 	// taskCalls: a background task's id → the call that started it, from its notifications that name both, for a
 	// later one that names only the task (noteCall). It grows like notified.
 	taskCalls map[string]string
