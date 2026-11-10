@@ -29,7 +29,8 @@ import (
 // keeps its name in that folder, which must be in the home; a taken name is 409 exists unless conflict says what
 // to do, up to proto.MaxDirUploadBytes.
 // dest=inbox (a file sent to the computer to keep, docs/protocol/file-transfer.md): it keeps its name in the machine's
-// receive folder (hub.json machines[].inbox_dir), a taken name gets " 2"; up to proto.MaxInboxUploadBytes.
+// receive folder (hub.json machines[].inbox_dir), a taken name gets " 2"; up to proto.MaxInboxUploadBytes; only while
+// the machine's file transfer switch is on (403 file_transfer_disabled otherwise).
 func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
 	size := r.ContentLength
@@ -60,6 +61,13 @@ func (h *Hub) uploadFile(w http.ResponseWriter, r *http.Request, m *Machine) {
 	case size > limit:
 		writeCode(w, http.StatusRequestEntityTooLarge, proto.CodeTooLarge,
 			i18n.T(h.requestLang(r), "hub-upload.too_large", i18n.Args{"mb": limit >> 20}), map[string]any{"limit": limit})
+		return
+	}
+	// A file sent to keep needs the machine's file transfer switch on, as its manager reports it (internal/devices
+	// transfer_settings.go): off, never set, or a manager that does not know the switch is 403, before any byte.
+	if dest == proto.UploadDestInbox && !m.fileTransferOn() {
+		writeCode(w, http.StatusForbidden, proto.CodeFileTransferDisabled,
+			i18n.T(h.requestLang(r), "devices-file_transfer.disabled", i18n.Args{"name": m.name()}), map[string]any{"machine": m.cfg.ID})
 		return
 	}
 	ctx := r.Context()
@@ -166,4 +174,12 @@ func writeCode(w http.ResponseWriter, status int, code, msg string, extra map[st
 		body[k] = v
 	}
 	apierr.WriteBody(w, status, body)
+}
+
+// fileTransferOn is the machine's file transfer switch as its manager last reported it (proto.Machine.FileTransfer);
+// off until a report says it is on.
+func (m *Machine) fileTransferOn() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.snap != nil && m.snap.FileTransfer != nil && m.snap.FileTransfer.Enabled
 }
