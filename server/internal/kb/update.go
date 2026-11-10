@@ -415,14 +415,15 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		p.Dirs = addUnique(p.Dirs, u.Dirs...)
 		p.People = addUnique(p.People, u.People...)
 		for _, pid := range u.People {
-			if person, ok := e.Store.Person(pid); ok {
+			_, _, err := e.Store.updatePerson(pid, true, nil, func(person *Person) bool {
 				person.Projects = addUnique(person.Projects, p.Slug)
 				if u.Lock == nil || *u.Lock {
 					person.LockedFields = addUnique(person.LockedFields, "projects")
 				}
-				if err := e.Store.putEntity(KindPerson, person.ID, person, &person.Tagging, true); err != nil {
-					return "", err
-				}
+				return true
+			})
+			if err != nil {
+				return "", err
 			}
 		}
 		for _, cid := range u.Chats {
@@ -519,14 +520,10 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 		if !ok {
 			return "", ErrNotFound
 		}
-		tagUpdate(u, &p.Tagging)
-		protectUpdate(u, &p.Tagging)
-		if u.Note != "" {
-			p.Note = oneLine(u.Note)
-		}
+		var linked []string
 		for _, slug := range u.Projects {
 			if pr, ok := e.Store.Project(slug); ok {
-				p.Projects = addUnique(p.Projects, pr.Slug)
+				linked = append(linked, pr.Slug)
 				pr.People = addUnique(pr.People, p.ID)
 				if u.Lock == nil || *u.Lock {
 					pr.LockedFields = addUnique(pr.LockedFields, "people")
@@ -536,10 +533,23 @@ func (e *Engine) apply(kind, id string, u Update) (string, error) {
 				}
 			}
 		}
-		p.Chats = removeStrings(p.Chats, u.RemoveChats)
-		p.Projects = removeStrings(p.Projects, u.RemoveProjects)
-		if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, true); err != nil {
+		// Changed on the person as read again under personMu: what the pipeline linked meanwhile stays.
+		p, _, err := e.Store.updatePerson(id, true, nil, func(p *Person) bool {
+			tagUpdate(u, &p.Tagging)
+			protectUpdate(u, &p.Tagging)
+			if u.Note != "" {
+				p.Note = oneLine(u.Note)
+			}
+			p.Projects = addUnique(p.Projects, linked...)
+			p.Chats = removeStrings(p.Chats, u.RemoveChats)
+			p.Projects = removeStrings(p.Projects, u.RemoveProjects)
+			return true
+		})
+		if err != nil {
 			return "", err
+		}
+		if p == nil {
+			return "", ErrNotFound // forgotten meanwhile
 		}
 		if err := e.unlink(KindPerson, p.ID, u); err != nil {
 			return "", err

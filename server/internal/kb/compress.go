@@ -231,11 +231,14 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	// A DM is mostly about the other person: their profile follows it.
 	if c.Kind == "dm" || c.Kind == "mail" {
 		for _, pid := range c.People {
-			if p, ok := e.Store.Person(pid); ok && !p.Locked {
+			_, _, _ = e.Store.updatePerson(pid, false, nil, func(p *Person) bool {
+				if p.Locked {
+					return false
+				}
 				p.Importance, p.Relevance = c.Importance, c.Relevance
 				p.Tags = c.Tags
-				_ = e.Store.PutPerson(p)
-			}
+				return true
+			})
 		}
 	}
 	for _, pid := range c.People {

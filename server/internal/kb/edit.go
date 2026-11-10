@@ -269,12 +269,15 @@ func (e *Engine) unlink(kind, id string, u Update) error {
 	}
 	if kind == KindProject {
 		for _, pid := range u.RemovePeople {
-			if p, ok := e.Store.Person(pid); ok {
+			p, _, err := e.Store.updatePerson(pid, true, nil, func(p *Person) bool {
 				p.Projects = removeStrings(p.Projects, []string{id})
 				lock(&p.Tagging, "projects")
-				if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, true); err != nil {
-					return err
-				}
+				return true
+			})
+			if err != nil {
+				return err
+			}
+			if p != nil {
 				e.WritePersonSummary(p.ID)
 			}
 		}
@@ -289,12 +292,15 @@ func (e *Engine) unlink(kind, id string, u Update) error {
 	}
 	if kind == KindChat {
 		for _, pid := range u.RemovePeople {
-			if p, ok := e.Store.Person(pid); ok {
+			p, _, err := e.Store.updatePerson(pid, true, nil, func(p *Person) bool {
 				p.Chats = removeStrings(p.Chats, []string{id})
 				lock(&p.Tagging, "chats")
-				if err := e.Store.putEntity(KindPerson, p.ID, p, &p.Tagging, true); err != nil {
-					return err
-				}
+				return true
+			})
+			if err != nil {
+				return err
+			}
+			if p != nil {
 				e.WritePersonSummary(p.ID)
 			}
 		}

@@ -208,7 +208,11 @@ type Store struct {
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
 	// reads the chat again under it and changes only the fields it owns. Hand edits (Apply, unlink) take it through
 	// editChat (edit.go).
-	chatMu    sync.Mutex
+	chatMu sync.Mutex
+	// personMu: a person's read-modify-write of meta.json and handles.json (updatePerson), by archiving and history
+	// imports (notePerson), compression, edits and forgetting alike. Lock order: chatMu, then personMu, then metaMu;
+	// nothing holding metaMu takes personMu.
+	personMu  sync.Mutex
 	observeMu sync.RWMutex
 	changed   func(Change)
 	zone      *time.Location // the user's zone, the archive's days and times are written in (zone.go); nil: time.Local
