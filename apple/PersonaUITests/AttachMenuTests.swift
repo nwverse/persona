@@ -85,6 +85,24 @@ final class AttachMenuTests: XCTestCase {
         }
     }
 
+    /// The largest accessibility text size: the menu and the Quick Commands submenu still read (screenshots only).
+    @MainActor func testTheMenuAtTheLargestTextSize() throws {
+        guard ProcessInfo.processInfo.environment["PERSONA_SHOTS"] != nil else { throw XCTSkip("screenshots only") }
+        let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        let app = launch(Self.persona + largest, scheme: "light")
+        openMenu(app)
+        XCTAssertTrue(item(app, "composer-menu-mention").waitForExistence(timeout: 5), "no menu:\n\(app.debugDescription)")
+        shot("attach-menu-persona-largest-text", "light")
+        app.terminate()
+        let agent = launch(Self.agent + largest, scheme: "light")
+        openMenu(agent)
+        let quick = commands(agent)
+        XCTAssertTrue(quick.waitForExistence(timeout: 5), "no Quick Commands:\n\(agent.debugDescription)")
+        quick.tap()
+        shot("attach-menu-agent-commands-largest-text", "light")
+        agent.terminate()
+    }
+
     @MainActor private func plusButton(_ app: XCUIApplication) -> XCUIElement {
         let plus = app.descendants(matching: .any).matching(identifier: "shell-composer-add").firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 40), "no + button:\n\(app.debugDescription)")
