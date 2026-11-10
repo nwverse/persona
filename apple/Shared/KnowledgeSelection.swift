@@ -47,7 +47,9 @@ nonisolated struct KBSelection: Codable, Hashable, Sendable {
         }
         let raw = try JSON.decoder.decode(JSONValue.self, from: data)
         let back = try JSON.decoder.decode(JSONValue.self, from: JSON.encoder.encode(selection))
-        guard selection.version == supportedVersion, raw.withoutNulls == back.withoutNulls else { throw KBSelectionUnsupported() }
+        guard raw.hasKnownSelectionFields, selection.version == supportedVersion, raw.withoutNulls == back.withoutNulls else {
+            throw KBSelectionUnsupported()
+        }
         return selection
     }
 
@@ -183,6 +185,45 @@ nonisolated struct KBSelectionHistory: Codable, Hashable, Sendable {
 }
 
 private extension JSONValue {
+    /// Unknown members stay significant even when their value is null: a later PUT must never silently delete them.
+    nonisolated var hasKnownSelectionFields: Bool {
+        guard hasOnly(["version", "messages", "docs", "items", "history"]) else { return false }
+        for part in ["messages", "docs"] {
+            if let rules = self[part], rules != .null, !rules.hasKnownRuleContainerFields { return false }
+        }
+        if let items = self["items"], items != .null {
+            guard case .array(let list) = items, list.allSatisfy({ $0.hasKnownItemFields }) else { return false }
+        }
+        if let history = self["history"], history != .null {
+            guard case .object(let entries) = history, entries.values.allSatisfy({ $0.hasKnownHistoryFields }) else { return false }
+        }
+        return true
+    }
+
+    nonisolated var hasKnownRuleContainerFields: Bool {
+        guard hasOnly(["order", "rules"]) else { return false }
+        guard let rawRules = self["rules"], rawRules != .null else { return true }
+        guard case .object(let rules) = rawRules else { return false }
+        return rules.values.allSatisfy { $0.hasKnownRuleFields }
+    }
+
+    nonisolated var hasKnownRuleFields: Bool {
+        hasOnly(["on", "days", "attachment_days", "include_all", "context"])
+    }
+
+    nonisolated var hasKnownItemFields: Bool {
+        hasOnly(["source", "kind", "id", "name", "read", "store", "days"])
+    }
+
+    nonisolated var hasKnownHistoryFields: Bool {
+        hasOnly(["back_days"])
+    }
+
+    nonisolated func hasOnly(_ keys: Set<String>) -> Bool {
+        guard case .object(let object) = self else { return false }
+        return Set(object.keys).isSubset(of: keys)
+    }
+
     /// Without null members, so a field left out compares equal to one sent as null.
     nonisolated var withoutNulls: JSONValue {
         switch self {

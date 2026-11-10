@@ -29,12 +29,23 @@ import Observation
     private(set) var error: String?
     private(set) var unsupported: Unsupported?
     @ObservationIgnored private let deps: Deps
+    /// Reads and edits are independent Tasks. Only the latest read may draw, and an edit retires every read around it.
+    @ObservationIgnored private var generation = 0
 
     init(deps: Deps) { self.deps = deps }
 
     func load() async {
+        generation += 1
+        let read = generation
+        let result: Result<KBSelection, Error>
         do {
-            selection = try await deps.load()
+            result = .success(try await deps.load())
+        } catch {
+            result = .failure(error)
+        }
+        guard read == generation, !saving else { return }
+        do {
+            selection = try result.get()
             error = nil
             unsupported = nil
         } catch let e as APIError where e.status == 404 {
@@ -65,10 +76,14 @@ import Observation
             error = String(localized: "That setting isn't valid, so nothing was saved.")
             return false
         }
+        generation += 1
         selection = shown
         saving = true
         error = nil
-        defer { saving = false }
+        defer {
+            saving = false
+            generation += 1
+        }
         do {
             let current = try await deps.load()
             var next = current
@@ -80,6 +95,11 @@ import Observation
             }
             if next == current { selection = current } else { selection = try await deps.save(next) }
             return true
+        } catch let e as APIError where e.status == 404 {
+            selection = nil
+            unsupported = .hub
+            error = nil
+            return false
         } catch is KBSelectionUnsupported {
             selection = nil
             unsupported = .document

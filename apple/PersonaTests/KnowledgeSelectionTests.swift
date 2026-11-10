@@ -84,6 +84,16 @@ import Testing
         let extraOption = Self.defaults.replacingOccurrences(of: #""context":50"#, with: #""context":50,"threads":true"#)
         #expect(throws: KBSelectionUnsupported.self) { try KBSelection.read(Data(extraOption.utf8)) }
         #expect(throws: KBSelectionUnsupported.self) { try KBSelection.read(Data(#"{"items":[],"tags":[]}"#.utf8)) }
+        let nullField = Self.defaults.replacingOccurrences(of: #""items":[]"#, with: #""items":[],"sources":null"#)
+        #expect(throws: KBSelectionUnsupported.self) { try KBSelection.read(Data(nullField.utf8)) }
+        let nullOption = Self.defaults.replacingOccurrences(of: #""context":50"#, with: #""context":50,"threads":null"#)
+        #expect(throws: KBSelectionUnsupported.self) { try KBSelection.read(Data(nullOption.utf8)) }
+        let nullItemOption = Self.defaults.replacingOccurrences(
+            of: #""items":[]"#,
+            with: #""items":[{"source":"lark","kind":"chat","id":"oc_1","read":true,"store":false,"later":null}]"#)
+        #expect(throws: KBSelectionUnsupported.self) { try KBSelection.read(Data(nullItemOption.utf8)) }
+        let nullHistoryOption = Self.defaults.replacingOccurrences(of: #""history":{}"#, with: #""history":{"lark":{"back_days":null,"days":null}}"#)
+        #expect(throws: KBSelectionUnsupported.self) { try KBSelection.read(Data(nullHistoryOption.utf8)) }
     }
 
     @Test func validatesWhatTheHubWould() throws {
@@ -222,6 +232,49 @@ import Testing
         let now = try #require(saved.last)
         #expect(now.messages.rules["bot"]?.on == true && now.items?.count == 1)
         #expect(Array(now.messages.order.prefix(3)) == [["mentions", "mine"], ["group"], ["dm"]] && m.selection == now)
+    }
+
+    @Test func aLateRefreshCannotReplaceANewerSave() async throws {
+        let start = try selection()
+        var loads = 0
+        var refreshStarted: CheckedContinuation<Void, Never>?
+        var finishRefresh: CheckedContinuation<KBSelection, Never>?
+        let m = KnowledgeSelectionModel(deps: .init(load: {
+            loads += 1
+            if loads == 2 {
+                refreshStarted?.resume()
+                return await withCheckedContinuation { finishRefresh = $0 }
+            }
+            return start
+        }, save: { $0 }, entries: { _ in [] }, meta: { _, _ in nil }))
+        await m.load()
+        let refreshing = Task { await m.load() }
+        await withCheckedContinuation { (started: CheckedContinuation<Void, Never>) in refreshStarted = started }
+        await m.setRule("group", in: .messages, on: true)
+        #expect(m.selection?.messages.rules["group"]?.on == true)
+        finishRefresh?.resume(returning: start)
+        await refreshing.value
+        #expect(m.selection?.messages.rules["group"]?.on == true)
+    }
+
+    @Test func anOldHubDuringAnEditRetiresTheEditor() async throws {
+        let start = try selection()
+        var loads = 0
+        let duringRead = KnowledgeSelectionModel(deps: .init(load: {
+            loads += 1
+            if loads == 1 { return start }
+            throw APIError(status: 404, message: "unknown kind")
+        }, save: { $0 }, entries: { _ in [] }, meta: { _, _ in nil }))
+        await duringRead.load()
+        await duringRead.setRule("group", in: .messages, on: true)
+        #expect(duringRead.selection == nil && duringRead.unsupported == .hub && duringRead.error == nil)
+
+        let duringSave = KnowledgeSelectionModel(deps: .init(load: { start }, save: { _ in
+            throw APIError(status: 404, message: "unknown kind")
+        }, entries: { _ in [] }, meta: { _, _ in nil }))
+        await duringSave.load()
+        await duringSave.setRule("group", in: .messages, on: true)
+        #expect(duringSave.selection == nil && duringSave.unsupported == .hub && duringSave.error == nil)
     }
 
     @Test func aFailedSavePutsTheOldValueBack() async throws {
