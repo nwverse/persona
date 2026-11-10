@@ -241,8 +241,10 @@ func (h *Manager) setExtensionSettings(id, title string, v json.RawMessage) (*se
 	if p == nil {
 		return nil, fmt.Errorf("no extension %s", id)
 	}
-	if _, ok := patch[iphonePhonesField]; ok && id == iphoneExtensionID {
-		return nil, errors.New("phones is each iPhone's own consent: only that iPhone's Persona app changes it (Settings › Connectors › This iPhone)")
+	for _, f := range iphoneOwnFields {
+		if _, ok := patch[f]; ok && id == iphoneExtensionID {
+			return nil, errors.New(f + " is set by each iPhone's own consent: only that iPhone's Persona app changes it (Settings › Connectors › This iPhone)")
+		}
 	}
 	if p.ReadOnly() {
 		return nil, fmt.Errorf("%s is set in manager.json: change it there (or in the admin page)", id)

@@ -39,9 +39,11 @@ func iphoneConfig(l i18n.Lang) json.RawMessage {
 	phones, _ := json.Marshal(field{"type": "array", "title": t("phones_title"), "description": t("phones_description"),
 		"items": field{"type": "string"}, "uniqueItems": true})
 	confirm, _ := json.Marshal(field{"type": "boolean", "title": t("confirm_title"), "description": t("confirm_description"), "default": false})
+	selfApps, _ := json.Marshal(field{"type": "array", "title": t("self_apps_title"), "items": field{"type": "string", "maxLength": 200}, "uniqueItems": true, "maxItems": 16})
+	selfNames, _ := json.Marshal(field{"type": "array", "title": t("self_names_title"), "items": field{"type": "string", "maxLength": 200}, "uniqueItems": true, "maxItems": 16})
 	// Joined by hand to keep the properties in this order: the form follows it.
 	return json.RawMessage(`{"type":"object","properties":{"machines":` + string(machines) + `,"phones":` + string(phones) +
-		`,"confirm":` + string(confirm) + `}}`)
+		`,"confirm":` + string(confirm) + `,"self_apps":` + string(selfApps) + `,"self_names":` + string(selfNames) + `}}`)
 }
 
 // iphoneManifest is the extension's manifest in English, with iphoneTranslations for the other languages.
@@ -58,9 +60,11 @@ func iphoneTranslations() extension.Translations {
 	for _, l := range []i18n.Lang{i18n.ZhHans, i18n.Ja} {
 		t := func(key string) string { return i18n.T(l, "hub-iphone.manifest_"+key) }
 		out[l] = &extension.Translation{Name: t("name"), Description: t("description"), Configuration: map[string]*extension.FieldText{
-			"machines": {Title: t("machines_title"), Description: t("machines_description")},
-			"phones":   {Title: t("phones_title"), Description: t("phones_description")},
-			"confirm":  {Title: t("confirm_title"), Description: t("confirm_description")},
+			"machines":   {Title: t("machines_title"), Description: t("machines_description")},
+			"phones":     {Title: t("phones_title"), Description: t("phones_description")},
+			"self_apps":  {Title: t("self_apps_title")},
+			"self_names": {Title: t("self_names_title")},
+			"confirm":    {Title: t("confirm_title"), Description: t("confirm_description")},
 		}}
 	}
 	return out
@@ -71,7 +75,11 @@ type iphoneSettings struct {
 	On       bool     `json:"-"`
 	Machines []string `json:"machines"`
 	Phones   []string `json:"phones"`
-	Confirm  bool     `json:"confirm"`
+	// SelfApps, SelfNames: Persona's own app on the phones (bundle ids, display names, as each app said when it
+	// consented), which the core never operates.
+	SelfApps  []string `json:"self_apps"`
+	SelfNames []string `json:"self_names"`
+	Confirm   bool     `json:"confirm"`
 }
 
 func (h *Manager) iphone() iphoneSettings {
@@ -87,10 +95,13 @@ func (h *Manager) iphone() iphoneSettings {
 	return s
 }
 
-// iphonePhonesField is the settings field of the iPhones that consented. Only PUT /api/v1/iphone/consent changes it
-// (from the user's own signed-in app); the general settings routes keep what is stored (keepIPhonePhones) and the
-// settings form does not show it, so nothing else can consent for an iPhone.
+// iphonePhonesField is the settings field of the iPhones that consented; iphoneOwnFields are it and Persona's own app's
+// identity on the phones. Only PUT /api/v1/iphone/consent changes them (from the user's own signed-in app); the general
+// settings routes keep what is stored (keepIPhonePhones) and the settings form does not show them, so nothing else can
+// consent for an iPhone, or make the core's "never operate Persona's own app" miss it.
 const iphonePhonesField = "phones"
+
+var iphoneOwnFields = []string{iphonePhonesField, "self_apps", "self_names"}
 
 // keepIPhonePhones is raw, a whole new configuration of extension p, with the iPhone extension's phones put back to
 // what is stored; any other extension's raw as it is.
@@ -106,21 +117,24 @@ func (h *Manager) keepIPhonePhones(p *extension.Extension, raw json.RawMessage) 
 	}
 	stored := map[string]json.RawMessage{}
 	_ = json.Unmarshal(h.extensions.reg.Config(p), &stored)
-	if v, ok := stored[iphonePhonesField]; ok {
-		next[iphonePhonesField] = v
-	} else {
-		delete(next, iphonePhonesField)
+	for _, f := range iphoneOwnFields {
+		if v, ok := stored[f]; ok {
+			next[f] = v
+		} else {
+			delete(next, f)
+		}
 	}
 	return json.Marshal(next)
 }
 
-// withoutIPhonePhones is the iPhone extension's settings form without phones (only each iPhone's own app changes it).
+// withoutIPhonePhones is the iPhone extension's settings form without phones and Persona's own app's identity (only
+// each iPhone's own app changes them).
 func withoutIPhonePhones(p *extension.Extension, form *extension.Schema) *extension.Schema {
 	if p == nil || p.Record.ID != iphoneExtensionID || form == nil {
 		return form
 	}
 	out := *form
-	out.Fields = slices.DeleteFunc(slices.Clone(form.Fields), func(f extension.Field) bool { return f.Name == iphonePhonesField })
+	out.Fields = slices.DeleteFunc(slices.Clone(form.Fields), func(f extension.Field) bool { return slices.Contains(iphoneOwnFields, f.Name) })
 	return &out
 }
 
@@ -398,13 +412,29 @@ func (h *Manager) getIPhoneList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// putIPhoneConsent: PUT /api/v1/iphone/consent {"device": id, "allowed": bool}, an iPhone's own "Allow the assistant
-// to operate this iPhone". Only from the user's own signed-in app (never a master token or an extension): the
-// consent is that iPhone's.
+// iphoneOwn is field (self_apps, self_names) as stored, whether the extension is on or not.
+func (h *Manager) iphoneOwn(field string) []string {
+	p := h.extensions.reg.Snapshot(iphoneExtensionID)
+	if p == nil {
+		return nil
+	}
+	cfg := map[string][]string{}
+	_ = json.Unmarshal(h.extensions.reg.Config(p), &cfg)
+	return cfg[field]
+}
+
+// putIPhoneConsent: PUT /api/v1/iphone/consent {"device": id, "allowed": bool, "app"?: {"bundle_id", "name"}}, an
+// iPhone's own "Allow the assistant to operate this iPhone". Only from the user's own signed-in app (never a master
+// token or an extension): the consent is that iPhone's. app is that Persona app itself, kept so the core never operates
+// it (self_apps, self_names).
 func (h *Manager) putIPhoneConsent(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Device  string `json:"device"`
 		Allowed bool   `json:"allowed"`
+		App     struct {
+			BundleID string `json:"bundle_id"`
+			Name     string `json:"name"`
+		} `json:"app"`
 	}
 	if err := decodeJSONBody(w, r, &in, 4<<10); err != nil {
 		h.writeComputerBodyErr(w, r, err)
@@ -422,6 +452,15 @@ func (h *Manager) putIPhoneConsent(w http.ResponseWriter, r *http.Request) {
 	if in.Device == "" || len(in.Device) > 200 {
 		writeErr(w, http.StatusBadRequest, i18n.Err("hub-iphone.err_no_device"))
 		return
+	}
+	for field, v := range map[string]string{"self_apps": strings.TrimSpace(in.App.BundleID), "self_names": strings.TrimSpace(in.App.Name)} {
+		if v == "" || len(v) > 200 || slices.Contains(h.iphoneOwn(field), v) {
+			continue
+		}
+		if err := h.setExtensionList(r.Context(), iphoneExtensionID, field, v, true); err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	if err := h.setExtensionList(r.Context(), iphoneExtensionID, "phones", in.Device, in.Allowed); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -503,9 +542,19 @@ func (h *Manager) callIPhoneTool(ctx context.Context, sessionID, name string, ar
 	raw, _ := json.Marshal(in)
 	by := h.assistantAsker(sessionID, m.cfg.ID)
 	what := iphoneLogWhat(op, a.Steps)
+	if op == "do" {
+		// One do at a time on this iPhone, held until its approvals are answered and it is done: while a card waits
+		// (it may show on that very iPhone), no other input reaches it, so the automation can never tap its own approval.
+		release, err := h.iphoneTurn(ctx, d.ID)
+		if err != nil {
+			return proto.TextResult("waited for another action on "+d.Name+" to finish and gave up: nothing was sent", true)
+		}
+		defer release()
+	}
 	// "Ask before every action" goes down with the call: the node asks step by step, with the screen in view; the
 	// manager only shows its approvals and waits for the answer.
-	call := proto.IPhoneCall{Device: d.ID, Session: session, Op: op, Args: raw, TimeoutMS: a.TimeoutMS, Confirm: h.iphone().Confirm}
+	call := proto.IPhoneCall{Device: d.ID, Session: session, Op: op, Args: raw, TimeoutMS: a.TimeoutMS, Confirm: h.iphone().Confirm,
+		SelfApps: h.iphone().SelfApps, SelfNames: h.iphone().SelfNames}
 	start := time.Now()
 	res, err := h.iphoneCall(ctx, m, call)
 	resumed := false
@@ -533,6 +582,18 @@ func (h *Manager) callIPhoneTool(ctx context.Context, sessionID, name string, ar
 		return iphoneFailure(err)
 	}
 	return computerResult(&proto.ComputerResult{Output: res.Output, Text: res.Text, Image: res.Image})
+}
+
+// iphoneTurn waits for device's turn: the do before it on that iPhone done, or ctx over. release ends the turn.
+func (h *Manager) iphoneTurn(ctx context.Context, device string) (release func(), err error) {
+	v, _ := h.iphoneTurns.LoadOrStore(device, make(chan struct{}, 1))
+	turn := v.(chan struct{})
+	select {
+	case turn <- struct{}{}:
+		return func() { <-turn }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // iphoneStatus is iphone_status: each allowed iPhone as its Macs see it now, with what its node says of it (op status).

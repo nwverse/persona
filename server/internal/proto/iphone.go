@@ -63,6 +63,10 @@ type IPhoneCall struct {
 	// Confirm is the extension's "ask before every action": the node asks step by step (the manager does not ask
 	// again first).
 	Confirm bool `json:"confirm,omitempty"`
+	// SelfApps, SelfNames: Persona's own app on the phones (bundle ids, display names, as each app said with its
+	// consent), which the core never operates: its approval cards show there.
+	SelfApps  []string `json:"self_apps,omitempty"`
+	SelfNames []string `json:"self_names,omitempty"`
 }
 
 // IPhoneResult is what an iphone call answered: its JSON (Output), or Text, and a screenshot; or that a step needs the

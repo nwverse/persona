@@ -68,5 +68,7 @@
   "card_act_launch": "Open {app}",
   "card_act_terminate": "Close {app}",
   "card_act_wait": "Wait",
-  "card_act_type_count": "Type {count} characters"
+  "card_act_type_count": "Type {count} characters",
+  "manifest_self_apps_title": "Persona's app on the iPhones",
+  "manifest_self_names_title": "Persona's app name on the iPhones"
 }
