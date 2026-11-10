@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 // Machine detail, live screen (#3247): one "View screen" link in the top bar while Screen Sharing answers, whatever Cua Driver's
-// state; "Computer control" keeps no link of its own, and says how to turn Screen Sharing on while it is off.
+// state; "Computer control" keeps no link of its own, says how to turn Screen Sharing on while it is off, and points to the
+// top bar while macOS asks for access. Both read Screen Sharing from the machine list.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
 import { NO_SCREEN_SHARING } from "../../lib/computer";
 import type { Machine } from "../../lib/types";
 
@@ -31,6 +33,8 @@ const flush = async () => {
 };
 const screenLinks = () => [...host.querySelectorAll<HTMLAnchorElement>('a[href="/screen/mac"]')];
 const section = () => host.querySelector('[data-testid="computer-section"]')!;
+const ALLOW_HERE = t("machines-computersection.allow_from_here");
+const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { "Content-Type": "application/json" } });
 
 // What the node reports while Cua Driver's daemon is not running (computer.status: permissions unknown, the hub's note).
 const NOTE = "Cua Driver 没在运行，助手要用时会自动打开它"; // i18n-ignore: the hub's note, shown as it comes
@@ -69,10 +73,30 @@ describe("MachineDetail live screen", () => {
     expect(section().textContent).not.toContain(NO_SCREEN_SHARING);
   });
 
-  it("keeps the one entry when Cua Driver is ready: the section has no VNC button", async () => {
+  it("keeps the one entry when Cua Driver is ready: the section has no screen link or button", async () => {
     await open(mac({ enabled: true, installed: true, daemon: true, ready: true, accessibility: "granted", screen_recording: "granted", screen_sharing: true }));
     expect(screenLinks()).toHaveLength(1);
-    expect(section().textContent).not.toContain("VNC");
+    expect(section().querySelector('a[href*="/screen/"]')).toBeNull();
+    expect(section().textContent).not.toMatch(/VNC|查看屏幕/);
+  });
+
+  it("points to the top bar to click Allow while macOS's permission dialogs are up", async () => {
+    const granted = { enabled: true, installed: true, daemon: true, ready: false, accessibility: "missing", screen_recording: "granted", job: { kind: "grant", state: "done" } };
+    await open(mac({ ...granted, screen_sharing: true }));
+    expect(screenLinks()).toHaveLength(1);
+    expect(section().textContent).toContain(ALLOW_HERE);
+    await open(mac({ ...granted, screen_sharing: false }));
+    expect(section().textContent).not.toContain(ALLOW_HERE);
+    expect(section().textContent).toContain(NO_SCREEN_SHARING);
+  });
+
+  it("reads Screen Sharing from the machine list for both the link and the hint", async () => {
+    // the section's own read is older than the list's answer: the link and the hint still agree
+    vi.stubGlobal("fetch", vi.fn((url: string) =>
+      Promise.resolve(String(url).endsWith("/machines/mac/computer") ? json({ ...daemonDown, screen_sharing: false }) : new Response(JSON.stringify({ error: "not found" }), { status: 404 }))));
+    await open(mac({ ...daemonDown, screen_sharing: true }));
+    expect(screenLinks()).toHaveLength(1);
+    expect(section().textContent).not.toContain(NO_SCREEN_SHARING);
   });
 
   it("says how to turn on Screen Sharing while it is off, with no link", async () => {
@@ -89,5 +113,7 @@ describe("MachineDetail live screen", () => {
   it("offers nothing while the Mac is offline", async () => {
     await open(mac({ ...daemonDown, screen_sharing: true }, { online: false }));
     expect(screenLinks()).toHaveLength(0);
+    await open(mac({ ...daemonDown, screen_sharing: false }, { online: false }));
+    expect(section().textContent).not.toContain(NO_SCREEN_SHARING);
   });
 });

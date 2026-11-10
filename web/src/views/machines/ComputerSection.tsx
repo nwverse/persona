@@ -2,7 +2,8 @@
 // lets the assistant operate it through Cua Driver, and whether it can now. What is missing comes with what to do:
 // "Install Cua Driver" (after a confirmation) when it is not there, "Grant access" when a permission is missing (macOS asks on the
 // Mac's own screen), the node's progress while it works, and how to turn on Screen Sharing while it is off. The live screen
-// itself (/screen/<mid>) is the page's "View screen" button (MachineDetail), whatever Cua Driver's state. The hub is asked again
+// itself (/screen/<mid>) is the page's "View screen" button (MachineDetail), whatever Cua Driver's state; while macOS asks
+// for access, the section points to it to click Allow from here. The hub is asked again
 // when the page opens, and every 2 s while a job runs and the tab is shown.
 import { useEffect, useRef, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
@@ -91,6 +92,10 @@ export function ComputerSection({ mid, computer, online, manager }: { mid: strin
   };
 
   const v = computerView(shown, online);
+  // Screen Sharing as the machine list has it: the top bar's "View screen" reads the same answer (showsScreen), so the
+  // section never says to turn it on while that link is up, nor the other way round.
+  const sharing = !!computer.screen_sharing;
+  const allowing = v.kind === "granted" || (v.kind === "running" && shown.job?.kind === "grant");
   const action = (title: string, what: ComputerAction, prominent = false) => (
     <Button tone={prominent ? "primary" : "secondary"} busy={asking} onClick={() => (what === "install" ? setConfirmInstall(true) : void run(what))}>
       {title}
@@ -154,7 +159,8 @@ export function ComputerSection({ mid, computer, online, manager }: { mid: strin
             )}
             {v.kind === "ready" && <Line text={v.text} ok />}
             {v.kind === "unknown" && <Line text={v.text} />}
-            {v.kind !== "offline" && !shown.screen_sharing && <p className="text-[11.5px] leading-relaxed text-ink-3">{NO_SCREEN_SHARING}</p>}
+            {v.kind !== "offline" && !sharing && <p className="text-[11.5px] leading-relaxed text-ink-3">{NO_SCREEN_SHARING}</p>}
+            {allowing && sharing && <p className="text-[11.5px] leading-relaxed text-ink-3">{t("machines-computersection.allow_from_here")}</p>}
           </div>
         )}
         <AllowedComputerApps mid={mid} manager={manager} />
