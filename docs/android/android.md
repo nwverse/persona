@@ -135,7 +135,7 @@ Ported 2026-11-02 from the old App on the main line (inventory items C1–C4, D1
 
 Ported 2026-11-02 from the old App on the main line (inventory items C5–C7, C9, D2–D5). The rules match iOS; the logic is in `core:domain`: `sort/SessionSource.kt` (capabilities, origin wording, resume commands), `sort/AgentClose.kt` (close confirmation), `answer/RequestPresentation.kt` ("Always allow").
 
-- Session origin and capabilities (`docs/protocol/protocol.md` ("Codex origin and capabilities")): `Session` carries `source_kind` (`codex_app_server` / `codex_history` / `identity_conflict` / `runtime`), `source_thread_id`, `read_only_reason`, `capabilities` (read / send / interrupt / approve / terminal / attach), `attached`, `agent_label`. Old sessions without `source_kind` can do everything; sessions with an origin only get capabilities that are explicitly true (a missing field means no); `canAttach` = has an origin, `attach` is true, and not yet `attached`. Before session metadata arrives the phone doesn't block anything (the hub / node will still refuse); read-only and capability checks use the metadata that is known.
+- Session origin and capabilities (`docs/protocol/protocol.md` ("Codex sources and capabilities")): `Session` carries `source_kind` (`codex_app_server` / `codex_history` / `identity_conflict` / `runtime`), `source_thread_id`, `read_only_reason`, `capabilities` (read / send / interrupt / approve / terminal / attach), `attached`, `agent_label`. Old sessions without `source_kind` can do everything; sessions with an origin only get capabilities that are explicitly true (a missing field means no); `canAttach` = has an origin, `attach` is true, and not yet `attached`. Before session metadata arrives the phone doesn't block anything (the hub / node will still refuse); read-only and capability checks use the metadata that is known.
   - Chat page: when it can't send, the composer is disabled with the placeholder **This session is view only**, and a line above shows the origin (`JTag`) and the reason (the node's "View only:" prefix isn't doubled); the web card's "Use as context / AI edit" are not accepted either. Without the terminal capability there is no terminal button or entry; without interrupt there's no **Stop** and no **Interrupt** menu item; without approve, the interaction panel still shows the request but no button can be pressed (not even **Leave to computer**), and the note says "Attach live to answer this request on the phone…" (when live attach is possible) or "This session can't be approved on the phone. Approve it on the computer." The top bar subtitle starts with the origin ("Codex live / server / directory").
   - ⋯ menu: **Join live** (`canAttach`, `ChatAction.Attach` → `POST …/attach`; when the result is unclear it checks `attached` in the session list; once attached the node lets it approve). **Rename** and **Close agent** need a terminal; **Copy resume command** is only for sessions with a terminal (Codex uses `codex resume <source_thread_id>`).
   - Agents list: rows with an origin show it in their facts ("Codex live / codex-desk"), plus **View only** when read-only; Agents the App doesn't know show the hub's `agent_label` ("DSH") instead of always calling them Claude. The long-press menu gains **Join live** (`AgentOperations.attachSession`); rename, close and resume command need a terminal, and **Stop loop** needs send. Request cards, request details and `AgentsViewModel.answer` never answer on behalf of sessions that can't approve, and request details offer no **Open terminal** without a terminal. Origin sessions opened from History don't offer **Continue this session**, and the read-only reason is shown.
@@ -314,39 +314,43 @@ The app's crashes and ANRs go to the hub's `error_reports` (format and rules: [p
 
 ## Release shrinking
 
-The release build runs R8 in shrink-only mode (`android/app/build.gradle.kts`, `android/app/proguard-rules.pro`, #2441): it
-removes the classes and members nothing reaches, and with `-dontobfuscate` and `-dontoptimize` it obfuscates, optimizes
-and merges nothing; only lambda bodies' method names change ("Error reports" below). Resource shrinking stays off, and
-debug builds are not shrunk.
+The release build runs R8 with shrinking and optimization but without obfuscation (`android/app/build.gradle.kts`,
+`android/app/proguard-rules.pro`, #2441, #2840): it removes the classes and members nothing reaches, then inlines,
+merges and outlines code; with `-dontobfuscate` the classes and members that are left keep their source names. Resource
+shrinking stays off (below), and debug builds are not shrunk.
 
-- **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it is 32,358,397
-  bytes, 3 dex files and 32,796 classes (-65%). Most of the removed code is library code. The build's
-  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member; by that list, 1,090 of persona's
-  own classes went whole (unused contract models, generated factories, `R` classes).
-- **Error reports** ("Error reports" above): class and source file names are the source's, so frames keep `in_app`
-  for `persona.*`, and breadcrumbs keep route type names. Method names are the source's except in lambda bodies: when a
-  lambda is desugared, its implementation method may be renamed `$r8$lambda$<hash>` (in one build,
-  `PersonaApp.onCreate$lambda$0` became `$r8$lambda$Dco_yZEW5o_ibRoRPfpTRYJvUSI`). D8 already does this in an unshrunk build (5,027 of persona's
-  15,484 lambda methods, 32%); R8 does it to more (7,899 of 15,194, 52%), so a frame inside a Compose callback or a
-  coroutine block more often carries a hashed `function`, which `mapping.txt` maps back. Lines are the source's too,
-  except inside bodies kotlinc inlined from an `inline` function (Compose's `remember` and `Layout`, collection
-  helpers): an unshrunk build already numbers those past the end of the file, and R8 gives them new numbers that its
-  `mapping.txt` resolves to the inlined function and the calling line. In `:feature:settings`, 13,501 methods keep
-  exactly the unshrunk lines, 985 differ only inside such bodies, and 5 lost a line no instruction was left on. The
-  release worker does not keep `mapping.txt` yet, but the release build is reproducible: the same commit and toolchain
-  give a byte-identical APK (six rebuilds of one commit matched). Running `:app:assembleRelease` at the commit in a
-  report's release (`0.1.<versionCode>-<commit>`) regenerates its `mapping.txt`, and `retrace` from the SDK
-  command-line tools applies it.
-  R8 also adds `$$ExternalSyntheticApiModelOutline` / `$$ExternalSyntheticBUOutline` classes (source file
-  `R8$$SyntheticClass`), which put one extra frame between app code and a newer platform API or a backport.
+- **Size**: at 0fabb8556 the release APK was 92,979,891 bytes, 6 dex files and 61,136 classes; shrunk it was 32,358,397
+  bytes. At 02202d070 the shrunk APK is 33,222,269 bytes, 3 dex files, 33,625 classes and 179,195 method references;
+  optimized it is 19,476,047 bytes (-41%), one dex file, 13,451 classes and 59,922 method references, and an update
+  download, which the hub sends gzipped ([protocol.md](../protocol/protocol.md) "Android packages"), is about 10.3 MB
+  instead of 33.2 MB. Most of the removed code is library code. The build's
+  `app/build/outputs/mapping/release/usage.txt` lists every removed class and member. Optimizing costs build time:
+  `:app:minifyReleaseWithR8 --rerun` took a median 130.7 s instead of 85.7 s (five alternating runs on a shared
+  machine, paired difference +43.8 s).
+- **Error reports** ("Error reports" above): exception types and breadcrumbs keep their source names. Class merging folded
+  exceptions into other classes, `CoreTextException` and four of its subclasses and 25 library ones (a lateinit crash
+  came out as `coil3.network.HttpException`), so `-keepnames class * extends java.lang.Throwable` keeps every
+  Throwable's name, the libraries' too: reports, and messages that fall back to the simple name, print whatever was
+  thrown. R8 keeps the InnerClass annotation that gives a nested exception its simple name only when it keeps the names
+  of both the exception and its outer class (seven persona nested exceptions lost theirs), so the rules also keep those
+  five outer classes' names. Library exceptions nested in a class that is no Throwable (11, such as
+  `FrameworkSQLiteOpenHelper$OpenHelper$CallbackException`) report their simple name as `Outer$Inner`. All 45 route
+  classes keep their names without a rule. Frames are another matter: an
+  inlined method runs inside its caller, a merged class's code under the class it went into, and outlined or desugared
+  code under R8's names (`$r8$lambda$<hash>`, `$$ExternalSyntheticApiModelOutline`, source file `R8$$SyntheticClass`),
+  so a frame's class, method and line can differ from the source. `retrace` from the SDK command-line tools maps them
+  back with the build's `mapping.txt`, which the release worker keeps gzipped next to the unsigned APK it belongs to
+  (`mapping-<unsigned sha256>.txt.gz`, about 12 MB; [release.md](../operations/release.md)).
 - **Reached by name**: R8 keeps what code references, the libraries' own rules (AndroidX, WorkManager, Room, Hilt,
   kotlinx.serialization) and the default `@JavascriptInterface` rule. What the app itself reaches only by name needs a
   rule in `proguard-rules.pro`; today that is `HubFailure.getStatus` / `getCode`, which the tasks store looks up on a
   failed call. `scripts/release/check_android_shrink.py` checks a release APK for manifest components and App Startup
   initializers with their no-argument constructors, workers' `(Context, WorkerParameters)` constructors, Room's
   generated `_Impl` classes, the Markdown bridge's `done` / `fail`, those getters, the InnerClass annotations that give
-  persona exceptions and routes their simple names, and an empty `missing_rules.txt`. The release worker runs it before
-  signing ([release.md](../operations/release.md) "Android publisher repository migration and status retries"):
+  persona exceptions and routes their simple names, an empty `missing_rules.txt`, every class R8's `seeds.txt` lists
+  either in the dex or removed in `usage.txt`, never merged, and every Throwable in the dex among those seeds (the
+  `-keepnames` rule matches them all). The release worker runs it before signing ([release.md](../operations/release.md) "Android publisher
+  repository migration and status retries"):
 
   ```bash
   cd android && ./gradlew :app:assembleRelease
@@ -354,10 +358,18 @@ debug builds are not shrunk.
     app/build/outputs/mapping/release
   ```
 
-- **Rollback**: set `isMinifyEnabled = false` in `android/app/build.gradle.kts` and change the assertion that pins it in
-  `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
-  release worker before it builds, so a merge or an edit that turns shrinking off by mistake stops there instead of
-  publishing a 93 MB APK. After a rollback the rules file is unused, and the check reads only the APK.
+- **Rollback**: `-dontoptimize` in `proguard-rules.pro` goes back to shrinking only (a 33 MB APK; the name rules can
+  stay). `isMinifyEnabled = false` in `android/app/build.gradle.kts` turns R8 off. Either way, change the assertion that
+  pins it in `scripts/release/test_check_android_shrink.py` in the same commit. The test runs in the scripts CI shard and in the
+  release worker before it builds, so a merge or an edit that turns shrinking off or drops a name rule by mistake stops
+  there instead of publishing a 93 MB APK or renamed exceptions. After `isMinifyEnabled = false` the rules file is
+  unused, and the check reads only the APK.
+- **Compose trace markers**: optimized R8 already removes them (no `traceEventStart` call or trace string is left in the
+  dex, against 1,528 trace strings in the shrunk APK), so `includeTraceMarkers = false` in the Compose compiler options
+  saves nothing (the APK size did not change) and is not set.
+- **Resource shrinking**: `isShrinkResources = true` takes 67,422 bytes off the optimized APK but removes 98 of
+  persona's own resources from the table (strings and plurals that no code left after R8 references, such as
+  `chat_composer_placeholder` and `notify_stopped_title`), so it stays off.
 - **Icons**: icons come from `PhIcons` ([android-design.md](android-design.md)); `material-icons-extended`, whose only
   use was a button nothing called, is no longer a dependency. The debug APK went from 123,355,666 to 91,537,359 bytes
   (-31.8 MB, 29 to 28 dex files); R8 had already dropped the library from the release APK.
@@ -698,7 +710,7 @@ Unit tests: `InboxHandOffTest` in `feature/inbox` (iOS-matching handoff message,
 
 ## Inbox: new items waiting for triage (#1773)
 
-The shared three-client specification (placement, wording, fallback, source naming, setup navigation, mock hub `MOCK_INBOX_TRIAGE`) is in [inbox.md](../assistant/inbox.md), "Triage state" → "Waiting-for-triage banner". Android specifics:
+The shared three-client specification (placement, wording, fallback, source naming, setup navigation, mock hub `MOCK_INBOX_TRIAGE`) is in [inbox.md](../assistant/inbox.md), "AI triage" → "Waiting-for-triage banner". Android specifics:
 
 - **Data**: on every Inbox refresh `RealInboxRepository` reads `triage` into `InboxSnapshot.triage` (`InboxTriage.kt` in `feature/inbox`); old hubs without the field produce null and no banner.
 - **Banner**: a separate list item after the filter/search item (`item("triage")` in `InboxScreen`), using design system `JNotice`, the needs-you state color (amber border in Glass, amber strip in Board, Brief's own notice style), and `Clock` icon (waiting, like web). Copy in `InboxTriageText.banner` matches web `triageBanner` case by case.
@@ -730,7 +742,7 @@ Behavior and API follow the first-phase Inbox specification shared by all four c
 
 ## Inbox: cloud document items (#2323)
 
-Notifications that @mention you or comment on your Lark documents, sheets and bases (`kind: "doc"`, with a `doc` block and no `lark.feed_id`; specification in [inbox.md](../assistant/inbox.md) ("Cloud documents")) previously opened the mail page and showed "Mail failed to load".
+Notifications that @mention you or comment on your Lark documents, sheets and bases (`kind: "doc"`, with a `doc` block and no `lark.feed_id`; specification in [inbox.md](../assistant/inbox.md) ("Docs: mentions in sheets, bases, and documents")) previously opened the mail page and showed "Mail failed to load".
 
 - **Data**: `RealInboxRepository` uses `inboxDocRef` (`InboxDocDetail.kt` in `feature/inbox`) to read `doc` into `InboxRecord.doc`: `url` (fallback `link`), `type`, `notice`, `reply.label`, `error`, `rows` (title, table name, fields, status-column names and values); other fields ignored. Local cache (`CachedInboxRecord`) also stores `source` and `doc`, so opening after cold start still gives a document.
 - **Routing** (`inboxItemPage`): Moments post → Lark chat (has `feed_id`) → mail (`mail` block, `source: "mail"` or `kind: "mail"`, without `doc`) → everything else to `InboxItemDetailRoute`. Connector items and unknown shapes no longer open mail.
@@ -1251,7 +1263,7 @@ Behavior ported 2026-11-02 from old single-module App (batch E: machine, engine,
   - To-do **Hand to Agent › Start a new one** starts from the same memory: the last machine New Agent started on if it is online (else the first online one), with that machine's folder, launcher (following the configuration when that is what it remembers) and mode; a machine with nothing remembered still gets `~`, claude and the default mode. Picking another machine loads its memory.
 - **Devices** (Settings › Devices): revoked credentials separate dim section Revoked at…; unused devices Added at…, explains credentials. Unsupported 404/no database 503 explained directly.
 - Debug `--es debug.openPage machine:<id>`, `engine:<id>`, `purpose:<id>`, `new-agent`, `new-agent:<id>:<directory>`; creation `--es debug.newAgent '<step>'`, applied after load: `launcher:<name>`, `effort:<level>`, `model:<id>`, `models[:<search>]`, comma-separated. Post-pair engine step needs pairing-link page; silent `debug.mockAddress` doesn't show it.
-- **Add model provider** (#1331, `docs/integrations/launchers.md` ("From extension")): model-config top + or provider picker Add model provider…; `NewProviderScreen.kt`, `NewProviderState.kt` `NewProviderModel`: manual name, type Claude Code launcher / Direct API (Messages/Responses), Base URL, non-echoed Key, default model; launchers also small/sub-Agent models/extra args. Extension presets `GET /api/v1/launchers/presets` (legacy 404 empty) add Manual/From extension tabs; extension fills name/key, preset model picker, `POST /api/v1/launchers` name/api_key/preset plus model only if changed. Name validates by hub rules locally; hub refusal shown without losing inputs. Save reloads model config; adding from purpose auto-selects while retaining edits, still Save required. `ProviderSetup` (`core:contracts`), `HttpProviderSetup` (`core:hub`), selected-group DI `MachineManagementModule.providers`. Debug `--es debug.openLink 'persona://open?target=settings&page=modelconfig' --es debug.newProvider manual|preset`; batch shots `settings-modelconfig`, `new-provider-manual`, `new-provider-preset`. Tests `HttpProviderSetupTest` (`core:hub`), `NewProviderStateTest` (`feature:settings`).
+- **Add model provider** (#1331, `docs/integrations/launchers.md` ("Adding from extensions")): model-config top + or provider picker Add model provider…; `NewProviderScreen.kt`, `NewProviderState.kt` `NewProviderModel`: manual name, type Claude Code launcher / Direct API (Messages/Responses), Base URL, non-echoed Key, default model; launchers also small/sub-Agent models/extra args. Extension presets `GET /api/v1/launchers/presets` (legacy 404 empty) add Manual/From extension tabs; extension fills name/key, preset model picker, `POST /api/v1/launchers` name/api_key/preset plus model only if changed. Name validates by hub rules locally; hub refusal shown without losing inputs. Save reloads model config; adding from purpose auto-selects while retaining edits, still Save required. `ProviderSetup` (`core:contracts`), `HttpProviderSetup` (`core:hub`), selected-group DI `MachineManagementModule.providers`. Debug `--es debug.openLink 'persona://open?target=settings&page=modelconfig' --es debug.newProvider manual|preset`; batch shots `settings-modelconfig`, `new-provider-manual`, `new-provider-preset`. Tests `HttpProviderSetupTest` (`core:hub`), `NewProviderStateTest` (`feature:settings`).
 - Mock `MOCK_NODE_MISMATCH=1` (Mac Studio personad differs from hub), `MOCK_DEPLOY_ERROR=<reason>`, `MOCK_ENGINE_ERROR=1` (503), `MOCK_MODEL_CONFLICT=1` (409), `MOCK_START_SECONDS=<seconds>`, `MOCK_START_ERROR=<reason>` after delay, `MOCK_MACHINES=1` offline lab machine brought online by reconnect.
 - Tests `MachineManagementContractTest` (`core:contracts`); `HttpMachineManagementTest`, `HttpModelConfigurationTest`, `AgentCreationModelTest`, `DeviceCredentialsTest` (`core:hub`); `SessionsAdoptTest` (`core:data`); `EnginesTest` (`core:domain`); `MachineActionsTest` (`feature:machines`); `SettingsMachinesTest` (engine/Claude/models), `DeviceCredentialsStateTest` (`feature:settings`); `NewAgentAsyncTest` (first message once, model inheritance, Codex, prefill, `feature:agents`); `RecentSetupsFixtureTest` (every case of `spec/fixtures/recents`), `NewAgentRecentTest` (a card fills every field and never starts, offline cards, a machine's model, recording, the to-do hand-off's defaults), `NewAgentRecentShotsTest` (two starts then a fresh form and a tap; three styles × light / dark of the cards, a tapped card, the long-press menu and the hand-off sheet, `build/recent-setups-shots/`, `feature:agents`); `ChatStartingNoteTest` (`feature:chat`); `GroupRoutingTest.anotherGroupsMachineIsManagedOnItsOwnHub` (`app`, target-group mock).
 
@@ -1392,7 +1404,7 @@ not emulator, physical-device or production deployment evidence. Images go to th
 
 ### Extension model and declarative contributions (#2226)
 
-Specification [extensions.md](../extensions/extensions.md) ("Contribution toggles", "Dependencies, exports and bundles", "Declarative contributions", "Sandbox"). Android UI/HTTP only, no extension program execution or generated `ExtensionWire.kt` edits.
+Specification [extensions.md](../extensions/extensions.md) ("Turning contributions on and off", "Dependencies, exports and bundles", "Declarative contributions", "Sandbox"). Android UI/HTTP only, no extension program execution or generated `ExtensionWire.kt` edits.
 
 - **Contribution toggles**: detail contributions listed individually, disableable via `setContribution` `PUT …/-/contributions/{point}/{id}`, update from detail response; unsaved settings retained, failure preserves state/reason. can_disable false status-only; via connector says controlled in connector settings; manager.json read-only. Legacy absent field uses contributes/Provides list.
 - **Dependencies/bundles**: preview depends/bundle/unresolved, manifest extension_pack. `BundlePreview` confirmation lists dependency status/members/every extension installed-upgraded/permissions/additions/warnings. Disabled/unknown dependencies or missing members block confirmation; flattened bundle evaluates member dependencies as group. Confirm returns all `{preview_id, permissions_digest}` in original order, never installs only main silently. Legacy previews unchanged.
@@ -1511,7 +1523,7 @@ Full-duplex chat with hub voice extension ([extensions.md](../extensions/extensi
 
 - Entry: two public APIs. `voiceEntries(navigator, extensions, identity, onModelConfiguration = null)` registers route (purpose-id callback, Root like monitoring; demo no service/explanation). `rememberVoiceExtension(extensions, active)` when active reads first running voice extension, failures404 treated none, re-pair reload; host decides Voice chat menu. `ShellSession.voice` like metrics rebuilds transport per current route/pinned client/token, pairing change cancels.
 - Permission RECORD_AUDIO first visit, declares MODIFY_AUDIO_SETTINGS. Missing empty state Voice chat needs microphone / Listens only here, leaving ends, no background recording. Denied says No microphone permission / Enable Persona microphone in system settings. Allow microphone asks again if possible, after two denials opens App system settings, rechecks on return.
-- Model: purpose plugin.id via modelChoice and extension /models. Non-unverified status error shows unavailable/reason; missing configured model says choose again; old404 uses extension default or omits model; other read error only Retry, never treated no config ([model-config.md](../assistant/model-config.md) ("Effective boundaries")). Read only start/restart. Host onModelConfiguration(purposeId), `voicePurposeId`, enables menu/error-page Model configuration; absent top-right directly Voice, error page only Retry.
+- Model: purpose plugin.id via modelChoice and extension /models. Non-unverified status error shows unavailable/reason; missing configured model says choose again; old404 uses extension default or omits model; other read error only Retry, never treated no config ([model-config.md](../assistant/model-config.md) ("When changes take effect")). Read only start/restart. Host onModelConfiguration(purposeId), `voicePurposeId`, enables menu/error-page Model configuration; absent top-right directly Voice, error page only Retry.
 - Voice picker lists model voices (Female/Male · Chinese, English · Default), check current, tap closes. Failed list notice, chat uses prior voice. Saved per pairing `hub-data/<pairing>/voice.json`, each extension, deleted unpair; absent voice falls back without deleting preference (other models may restore). Voice/model change restarts chat.
 - Page top extension/model·voice; `VoiceOrb` fast pulse speaking, slow breathing/volume listening, spinner connecting, gray mute/end; Glass glowing orb, Brief ink disk with highlighter speaking ring, Board state square/five levels. `VoiceStatus` Connecting / Listening / Speaking—start talking to interrupt / Muted / tool… / Ended, errors red. `VoiceCaption` user right bubble, Persona body, provisional dim, latest auto-scroll. `VoiceControl` three labeled round Mute/Unmute, Interrupt only speaking, Hang up; ended left Restart. Glass glow blue listening/mint speaking.
 - `VoiceProtocol.kt`: start frame with optional model/voice once connected; ready before recording/playback, sample rates from ready with defaults16000/24000 for missing/invalid. Uplink20 ms PCM16 mono binary, zeros when muted; binary downlink plays immediately. Transcript same-id replace, blank new lines ignored; multiple tools show latest unfinished; clear flushes playback; error shown, fatal ends; Interrupt sends type interrupt and flushes. WS no read timeout,15 sec ping.

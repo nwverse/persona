@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// Pages keep no hold of their own (docs/apple/ios-state.md「第 4 步」): how long a change waits while the user scrolls or
+/// Pages keep no hold of their own (docs/apple/ios-state.md「Step 4」): how long a change waits while the user scrolls or
 /// cannot see the page, and when it lands, is `Hold`'s; a page only says what it is doing (`Hold.set`). Each page used
 /// to wait out its scrolls and cap its waits itself (#131, #178, #215), and one left out came back as a bug. Reads the
 /// sources next to this file, like `BackgroundCallbackTests`.

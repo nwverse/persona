@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// What the app looks like, in one value, made of three choices in Settings (docs/apple/ios.md「设计语言」): the style (`AppStyle`,
+/// What the app looks like, in one value, made of three choices in Settings (docs/apple/ios.md「Design language」): the style (`AppStyle`,
 /// Interface Style: how panels, cards and buttons are drawn, the type, the components), the colors (`ThemeColor`, Theme Color: what
 /// can be tapped, the user's bubble, Lark's links, the wash of a colored canvas), and the persona, of which only its own
 /// primary is here (`Theme.persona`, its face's glow). Theme, Styling, Lark's chrome and the BeautifulUI bridge read

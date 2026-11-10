@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Localization checks for the Apple apps (docs/apple/ios.md "UI languages", docs/protocol/i18n.md).
+"""Localization checks for the Apple apps (docs/apple/ios.md "Interface language", docs/protocol/i18n.md).
 
   apple_l10n.py check                 English-source catalogs have translated en / zh-Hans / ja units, compatible
                                       numbered format arguments, and no Chinese or Japanese keys; Chinese source

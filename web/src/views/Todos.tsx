@@ -251,6 +251,16 @@ export function TodosView({
     }
   }, []);
 
+  // a to-do dragged to another time or day on the calendar (#2045): saved at once, said when it fails (it goes back)
+  const moveTodo = useCallback(async (id: string, patch: TodoPatch) => {
+    try {
+      await updateTodo(id, patch);
+      await refreshTodos();
+    } catch (e) {
+      toast(t("todos.calendar_move_failed", { error: errorText(e) }), "error");
+    }
+  }, []);
+
   const retryTodos = async () => {
     if (retrying) return;
     setRetrying(true);
@@ -346,6 +356,7 @@ export function TodosView({
                 setNewOpen(true);
               }}
               onShowList={() => showView("list")}
+              onMove={moveTodo}
             />
           </div>
           {selectedTodo && (

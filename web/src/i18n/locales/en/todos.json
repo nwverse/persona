@@ -205,6 +205,7 @@
   "calendar_next": "Next",
   "calendar_show_done": "Show done",
   "calendar_all_day": "All day",
+  "calendar_move_failed": "Couldn't reschedule it: {error}",
   "calendar_was_due": "Was due {when}",
   "calendar_more_one": "{count} more",
   "calendar_more_other": "{count} more",

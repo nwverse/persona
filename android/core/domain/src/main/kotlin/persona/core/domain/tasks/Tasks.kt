@@ -36,7 +36,7 @@ class DraftPlaceholderLeft(val placeholder: String) : IllegalStateException("dra
     override val message: String get() = CoreText.words(text)
 }
 
-/** Where a task is, from its todo and its agents' states (docs/assistant/todos.md "State rules"). */
+/** Where a task is, from its todo and its agents' states (docs/assistant/todos.md "State calculation rules"). */
 enum class TaskState(val label: CoreText, val rank: Int) {
     NeedsYou(CoreText.of(Key.TaskNeedsYou), 0),
     /** An agent's turn was cut off by the model service (#1516): not done; "Continue" tells it to go on. */
@@ -79,7 +79,7 @@ data class Interruption(val reason: CoreText, val canContinue: Boolean) {
     }
 }
 
-/** What a task's lead agent says or does now (iOS TaskNow, web taskNow; docs/assistant/unified-entry.md "Task card progress", #1583). */
+/** What a task's lead agent says or does now (iOS TaskNow, web taskNow; docs/assistant/unified-entry.md "Task cards", #1583). */
 sealed interface TaskNow {
     val text: String
 

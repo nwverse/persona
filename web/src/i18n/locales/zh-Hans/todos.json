@@ -205,6 +205,7 @@
   "calendar_next": "下一页",
   "calendar_show_done": "显示已完成",
   "calendar_all_day": "全天",
+  "calendar_move_failed": "没能改期：{error}",
   "calendar_was_due": "已过截止 {when}",
   "calendar_more_one": "还有 {count} 条",
   "calendar_more_other": "还有 {count} 条",

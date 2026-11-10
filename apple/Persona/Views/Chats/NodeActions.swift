@@ -1,6 +1,6 @@
 import SwiftUI
 
-// The node menu of the Agents list (docs/integrations/terminal.md「节点菜单」, the web's #2329): what changes a computer's terminals from
+// The node menu of the Agents list (docs/integrations/terminal.md「Node menus」, the web's #2329): what changes a computer's terminals from
 // a space's ⋯ and an agent row's long press — split the agent's pane, close its tab, run an agent in a plain shell of the
 // space, fetch / pull / push. Each is a hub route only a full device may call (server/internal/hub/panes.go); the
 // request names a pane, tab or workspace the host lists and never a directory or a command.
@@ -604,7 +604,7 @@ nonisolated struct WorktreeCreated: Decodable, Sendable, Equatable {
     func resolvedParent(sourceID: String) -> String { parentWorkspaceID ?? sourceID }
 }
 
-/// The dialog's logic, as the web's `lib/worktree.ts` (docs/integrations/terminal.md「新建 worktree…」): the path follows the branch
+/// The dialog's logic, as the web's `lib/worktree.ts` (docs/integrations/terminal.md「New worktree…」): the path follows the branch
 /// until it is typed by hand; the computer checks everything again.
 nonisolated enum WorktreeForm: Sendable {
     /// A retry of the same creation intent reuses its receipt, including a lost success response.

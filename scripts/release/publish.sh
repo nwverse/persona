@@ -2,7 +2,7 @@
 # Publish personad for anyone to install (docs/operations/release.md "Publishing personad"): build the four binaries with the web client
 # inside (no skills in them: those live in each machine's ~/.persona/skills), and the connector persona-link for the
 # same four (the node service, docs/operations/link.md), check them for private values, write the release manifest latest.json
-# (every file's sha256, docs/operations/hub-update.md "Publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
+# (every file's sha256, docs/operations/hub-update.md "Public publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
 # config's publish.site_url. Every hub of the release channel updates itself to it. The worker also runs the push
 # relay (/relay/*): it is deployed with it.
 #
@@ -142,7 +142,7 @@ BUILD="$(date -u +%Y%m%d%H%M)"
 VERSION="${VERSION:-$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD}"
 COMMIT="$(git rev-parse HEAD)"
 # A release is the committed code: latest.json says which commit and lists every one it contains, and a hub
-# installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No rollback"). Published with
+# installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No regression"). Published with
 # changes not committed, every hub running it would wait for a person from then on. The binaries say which commit
 # they are (STAMP, "-dirty" only in a NO_DEPLOY build).
 STAMP="$COMMIT"

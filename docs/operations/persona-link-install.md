@@ -85,7 +85,7 @@ If the web client says "Secure connection isn't enabled on the hub yet", the old
 | **Needs You** and a count beside the icon | Sessions waiting on you (newer hubs only). Click one to open it in the web app; **And N More…** opens the web app |
 | **Set Web Address…** | Where the web app opens. Needed when the hub has no https public URL, or when you use the web app at another address |
 
-See [link.md](link.md), "Menu-bar app", for the icon states.
+See [link.md](link.md), "Menu bar App or command-line Link", for the icon states.
 
 ## Upgrade
 

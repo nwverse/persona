@@ -1,4 +1,4 @@
-// A task's detail beside the assistant's conversation (docs/assistant/unified-entry.md "Task detail"; iOS TaskDetailSheet): its
+// A task's detail beside the assistant's conversation (docs/assistant/unified-entry.md "Task details"; iOS TaskDetailSheet): its
 // agent's own chat — everything the Agents page does works here — and, with several agents, a switch between them.
 import { useState } from "react";
 import { isRemovable, openAsk, TODO_STATUS_INFO } from "../../lib/todos";

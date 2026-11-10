@@ -182,7 +182,7 @@ def tunnel_core(cfg: dict) -> tuple[str, str]:
     d = os.path.abspath(os.path.expanduser(raw))
     missing = [n for n in ("libpersonatunnel.a", "module.modulemap") if not os.path.isfile(os.path.join(d, n))]
     if missing:
-        sys.exit(f"app.tunnel_core {d}: missing {', '.join(missing)} (docs/operations/network.md「经 App 内隧道连 hub」)")
+        sys.exit(f"app.tunnel_core {d}: missing {', '.join(missing)} (docs/operations/network.md「Connecting to hub through an in-app tunnel」)")
     q = '"%s"' % d
     return q, f"-L{q} -lpersonatunnel -lresolv -framework Security -framework CoreFoundation"
 

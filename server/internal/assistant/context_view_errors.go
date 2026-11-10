@@ -13,7 +13,7 @@ import (
 )
 
 // The problems of the rich views a reply drew (views_inline.go) reach the assistant with its next message, in a
-// <persona-view-errors> block after the <persona-context> one (docs/assistant/assistant-views.md "Feedback in the next turn"). Reading them
+// <persona-view-errors> block after the <persona-context> one (docs/assistant/assistant-views.md "Next-turn feedback"). Reading them
 // for a message consumes nothing: the node acks the receipts once the message is delivered, so a read for a message
 // that fails to go out (or a debug read) tells nobody, and problems recorded after the read stay for the next one.
 // Everything is scoped to the conversation on the machine the hub says asked, never to what the node passed.
