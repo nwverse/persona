@@ -10,12 +10,13 @@ import (
 // adapter accepts. Keep this pinned and raise it only with fixture updates.
 const MinimumVersion = "1.0.72"
 
-// AuthStatus is the user identity reported by `lark-cli auth status --json`.
+// AuthStatus is the user identity and bound app reported by `lark-cli auth status --json`.
 // GrantedScopes and MissingScopes are best-effort because older CLI releases did
 // not include both fields.
 type AuthStatus struct {
 	LoggedIn         bool      `json:"logged_in"`
 	Expired          bool      `json:"expired"`
+	AppID            string    `json:"app_id,omitempty"`
 	UserName         string    `json:"user_name,omitempty"`
 	OpenID           string    `json:"open_id,omitempty"`
 	TokenStatus      string    `json:"token_status,omitempty"`
@@ -90,6 +91,7 @@ type Sender struct {
 	ID              string            `json:"id,omitempty"`
 	IDType          string            `json:"id_type,omitempty"`
 	SenderType      string            `json:"sender_type,omitempty"`
+	AppID           string            `json:"app_id,omitempty"`
 	Name            string            `json:"name,omitempty"`
 	OpenBotID       string            `json:"open_bot_id,omitempty"`
 	SenderI18nNames map[string]string `json:"sender_i18n_names,omitempty"`

@@ -220,7 +220,9 @@ func TestInboxPollKeepsRulesGroupsAndDetectsOwnReply(t *testing.T) {
 	if dm := items["larkcli:chat:oc_example_dm"]; dm.Tier != connector.TierAction || dm.Done != "" {
 		t.Fatalf("direct item = %+v", dm)
 	}
-	if group.Title != "Example Group" || len(group.Tags) != 1 || group.Tags[0].Name != "Example Group" {
+	if group.Kind != "mention" || group.Title != "Example Group" || len(group.Tags) != 2 ||
+		group.Tags[0].Key != connector.TagChat || group.Tags[0].Name != "Example Group" ||
+		group.Tags[1].Key != connector.TagSender || group.Tags[1].Value != "ou_example_peer" || group.Tags[1].Name != "Example Peer" {
 		t.Fatalf("group title/tag changed = %+v", group)
 	}
 	if topic := items["larkcli:chat:oc_example_group:thread:omt_topic_two"]; topic.Thread == "" {
@@ -241,11 +243,51 @@ func TestInboxP2PTitleUsesOtherSender(t *testing.T) {
 	if !ok {
 		t.Fatalf("direct item missing: %#v", items)
 	}
-	if dm.Title != "Example Peer" || len(dm.Tags) != 1 || dm.Tags[0].Name != "Example Peer" {
+	if dm.Kind != "dm" || dm.Title != "Example Peer" || len(dm.Tags) != 2 || dm.Tags[0].Name != "Example Peer" ||
+		dm.Tags[1].Key != connector.TagSender || dm.Tags[1].Value != "ou_example_peer" || dm.Tags[1].Name != "Example Peer" {
 		t.Fatalf("direct title/tag = %+v", dm)
 	}
 	if dm.Done != connector.DoneReplied {
 		t.Fatalf("own reply was not observed = %+v", dm)
+	}
+}
+
+func TestInboxDropsBoundAppMessagesButKeepsOtherBots(t *testing.T) {
+	c := inboxTestConnector(t, "inbox_bot_loop")
+	moved, err := c.Poll(context.Background())
+	if err != nil || !moved {
+		t.Fatalf("poll = moved=%v err=%v", moved, err)
+	}
+	items := inboxThings(t, c)
+	if _, ok := items["larkcli:chat:oc_example_bound_dm"]; ok {
+		t.Fatalf("bound app message entered Inbox: %#v", items)
+	}
+	bot, ok := items["larkcli:chat:oc_example_other_dm"]
+	if !ok || bot.Kind != "bot" || bot.Tier != connector.TierAction {
+		t.Fatalf("other app bot = %+v", bot)
+	}
+	if bot.Tags[1].Key != connector.TagSender || bot.Tags[1].Value != "cli_other" {
+		t.Fatalf("other app sender tag = %+v", bot.Tags)
+	}
+	c.inboxMu.Lock()
+	_, seen := c.inboxSeen["om_example_bound_app"]
+	c.inboxMu.Unlock()
+	if !seen {
+		t.Fatal("bound app message was not marked seen")
+	}
+	moved, err = c.Poll(context.Background())
+	if err != nil || moved {
+		t.Fatalf("second poll = moved=%v err=%v", moved, err)
+	}
+}
+
+func TestP2PTitleUsesChatPartnerWhenBatchHasOnlyOwnMessages(t *testing.T) {
+	partner := json.RawMessage(`{"open_id":"ou_example_peer","name":"Example Partner","sender_type":"user"}`)
+	group := &inboxGroup{chatID: "oc_example_dm", messages: []adapter.Message{{
+		MessageID: "om_example_mine", ChatID: "oc_example_dm", ChatType: "p2p", Sender: adapter.Sender{ID: "ou_example_user", Name: "Example User"}, ChatPartner: partner,
+	}}}
+	if got := p2pTitle(group, nil, "ou_example_user"); got != "Example Partner" {
+		t.Fatalf("title = %q", got)
 	}
 }
 
