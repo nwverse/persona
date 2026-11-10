@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,15 +30,19 @@ import (
 // <state dir>/codex-app-history/<home hash>-<thread>.jsonl. It grows as a rollout does: the turns finished since it was
 // last written are appended (the last turn while it still runs is left for later; one that never finished but has turns
 // after it is written as interrupted), so a reader goes on where it was. <file>.mark records what was written; a file
-// unlike its mark, or whose last turn is no longer in the database as it was, is written again from the start. It is
-// brought up to date when the transcript is read (file) and, while the chat is watched, about once a second (pumpWatch),
-// never by the list; one writer at a time, across processes too (<file>.lock). The database is read while the App has it
-// closed too (codexDBTarget). Without sqlite3 or the history database there is none, as before.
+// unlike its mark, or whose last turn is no longer in the database as it was, is written again from the start (and
+// removed when no turn is left finished). It is brought up to date when the transcript is read (file) and, while the chat
+// is watched, about once a second (pumpWatch), never by the list; one writer at a time, across processes too
+// (<file>.lock: the others wait for its write). The database is read while the App has it closed too (codexDBTarget).
+// Without sqlite3 or the history database there is none, as before.
 
 // codexAppHistoryWait bounds one read of the history database; a long chat's turns stream in well under it.
 const codexAppHistoryWait = 30 * time.Second
 
-// codexAppHistoryRetry: after a failed write, the same change of the chat is not tried again for this long.
+// codexAppHistoryLockWait bounds the wait for another writer of a chat's transcript (a variable: tests shorten it).
+var codexAppHistoryLockWait = codexAppHistoryWait
+
+// codexAppHistoryRetry: after a failed write, the chat is not tried again for this long unless the App changes it.
 const codexAppHistoryRetry = 5 * time.Minute
 
 var codexAppHistoryFailed = struct {
@@ -46,21 +51,21 @@ var codexAppHistoryFailed = struct {
 }{byPath: map[string]codexHistoryFailure{}}
 
 type codexHistoryFailure struct {
-	key string // the change it failed for: updated_at_ms and the history database's files
-	at  time.Time
+	updated int64 // the chat's updated_at_ms it failed at
+	at      time.Time
 }
 
-// codexHistoryMark is what <file>.mark says: the last turn written (its rollout_ordinal and turn_id; -1 and "" for none),
-// the App's change (updated_at_ms) it is up to date with, the size the file had then (-1: no file, the chat has no
-// finished turn), and, when the last turn still ran, the history database's files then (Pending, History): the App may
-// finish the turn without changing updated_at_ms again.
+// codexHistoryMark is what <file>.mark says: the last turn written (its rollout_ordinal, turn_id and status in the
+// database then; -1 and "" for none), what it is up to date with — the chat's updated_at_ms and the history database's
+// files (the App may write a turn's rows after updating the chat, and finish a turn without updating it) — and the size
+// the file had then (-1: no file, the chat has no finished turn).
 type codexHistoryMark struct {
 	Turn    int64  `json:"turn"`
 	TurnID  string `json:"turn_id"`
+	Status  string `json:"status"`
 	Updated int64  `json:"updated"`
+	History string `json:"history"`
 	Size    int64  `json:"size"`
-	Pending bool   `json:"pending,omitempty"`
-	History string `json:"history,omitempty"`
 }
 
 // codexHistoryDBPath is the newest history database in home (thread_history_1.sqlite in 2026-11).
@@ -140,8 +145,9 @@ func (n *Node) codexAppHistoryChat(id string) (codexSource, codexAppThread, bool
 }
 
 // refreshCodexAppHistory brings the transcript of session id up to date when it is an App chat with no rollout and the
-// App's databases changed it since: the turns finished since are appended, or the file is written anew. One writer at a
-// time, across processes too (two nodes on one computer share the state directory); another's write is not waited for.
+// App's databases changed since: the turns finished since are appended, or the file is written anew. One writer at a
+// time, across processes too (two nodes on one computer share the state directory): the others wait for its write (up to
+// codexAppHistoryLockWait), so a chat opened by several requests at once has its transcript for each.
 func (n *Node) refreshCodexAppHistory(id string) {
 	src, t, ok := n.codexAppHistoryChat(id)
 	if !ok {
@@ -154,9 +160,10 @@ func (n *Node) refreshCodexAppHistory(id string) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return
 	}
-	release, err := link.LockFile(p+".lock", false)
+	release, err := lockCodexAppHistory(p + ".lock")
 	if err != nil {
-		return // another process writes it now
+		n.logf("codex app history %s: %v", src.thread, err)
+		return
 	}
 	defer release()
 	mark, size := readCodexHistoryMark(p)
@@ -165,17 +172,16 @@ func (n *Node) refreshCodexAppHistory(id string) {
 	if db != "" {
 		history = fileStamp(db) + fileStamp(db+"-wal")
 	}
-	if mark.Updated == t.UpdatedAtMs && mark.Size == size && (!mark.Pending || mark.History == history) {
+	if mark.Updated == t.UpdatedAtMs && mark.History == history && mark.Size == size {
 		return // up to date
 	}
 	if db == "" {
 		return
 	}
-	key := fmt.Sprintf("%d %s", t.UpdatedAtMs, history)
 	codexAppHistoryFailed.Lock()
 	f, failed := codexAppHistoryFailed.byPath[p]
 	codexAppHistoryFailed.Unlock()
-	if failed && f.key == key && time.Since(f.at) < codexAppHistoryRetry {
+	if failed && f.updated == t.UpdatedAtMs && time.Since(f.at) < codexAppHistoryRetry {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), codexAppHistoryWait)
@@ -187,15 +193,12 @@ func (n *Node) refreshCodexAppHistory(id string) {
 	}
 	if err == nil {
 		_, size = readCodexHistoryMark(p)
-		m := codexHistoryMark{Turn: res.turn, TurnID: res.turnID, Updated: t.UpdatedAtMs, Size: size, Pending: res.pending}
-		if res.pending {
-			m.History = history
-		}
-		err = writeCodexHistoryMark(p, m)
+		err = writeCodexHistoryMark(p, codexHistoryMark{Turn: res.turn, TurnID: res.turnID, Status: res.status,
+			Updated: t.UpdatedAtMs, History: history, Size: size})
 	}
 	codexAppHistoryFailed.Lock()
 	if err != nil {
-		codexAppHistoryFailed.byPath[p] = codexHistoryFailure{key, time.Now()}
+		codexAppHistoryFailed.byPath[p] = codexHistoryFailure{t.UpdatedAtMs, time.Now()}
 	} else {
 		delete(codexAppHistoryFailed.byPath, p)
 	}
@@ -205,6 +208,19 @@ func (n *Node) refreshCodexAppHistory(id string) {
 		return
 	}
 	pruneCodexAppHistory(filepath.Dir(p), codexHomeTag(src.home), codexAppThreads(src.home))
+}
+
+// lockCodexAppHistory takes the lock at path, waiting up to codexAppHistoryLockWait for another writer (of this process
+// or another) to finish.
+func lockCodexAppHistory(path string) (func(), error) {
+	deadline := time.Now().Add(codexAppHistoryLockWait)
+	for {
+		release, err := link.LockFile(path, false)
+		if err == nil || time.Now().After(deadline) {
+			return release, err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // readCodexHistoryMark is p's mark and p's size now (-1 when there is no file).
@@ -254,20 +270,19 @@ func pruneCodexAppHistory(dir, tag string, live map[string]codexAppThread) {
 var errCodexHistoryChanged = errors.New("a written turn changed")
 
 type codexHistoryWrite struct {
-	turn    int64  // the last turn written (rollout_ordinal); the mark's when none was
-	turnID  string // its turn_id
-	pending bool   // the last turn still runs: not written
+	turn           int64  // the last turn written (rollout_ordinal); the mark's when none was
+	turnID, status string // its turn_id, and its status in the database ("inProgress" for one written as interrupted)
 }
 
 // writeCodexAppHistory writes thread t's turns to path: when grow, those after the mark's last turn, appended (that turn
-// must still be the first the database gives, else errCodexHistoryChanged); else all of them, as a new file (through a
-// temporary one renamed over it) beginning with session_meta, none written when no turn finished. A finished turn is
-// written as it streams in; the last turn while it still runs is left for later (pending); one that never finished but
-// has turns after it is written as interrupted.
+// must still be the first the database gives, as it was: else errCodexHistoryChanged); else all of them, as a new file
+// (through a temporary one renamed over it) beginning with session_meta, and no file when no turn finished. A finished
+// turn is written as it streams in; the last turn while it still runs is left for later; one that never finished but has
+// turns after it is written as interrupted.
 func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path string, mark codexHistoryMark, grow bool) (codexHistoryWrite, error) {
 	res := codexHistoryWrite{turn: -1}
 	if grow {
-		res = codexHistoryWrite{turn: mark.Turn, turnID: mark.TurnID}
+		res = codexHistoryWrite{turn: mark.Turn, turnID: mark.TurnID, status: mark.Status}
 	}
 	sqlite, err := exec.LookPath("sqlite3")
 	if err != nil {
@@ -303,12 +318,16 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	// One query, one snapshot: each turn (in order) with its items (in order). Every value is one line: JSON escapes
-	// control characters, so neither the separator nor a newline appears in one.
-	q := fmt.Sprintf(`SELECT t.rollout_ordinal, t.turn_id, t.status, COALESCE(t.duration_ms, -1), COALESCE(t.error_json, ''), `+
-		`COALESCE(i.created_at_ms, 0), COALESCE(i.item_type, ''), COALESCE(i.item_json, '') FROM thread_turns t `+
-		`LEFT JOIN thread_items i ON i.thread_id = t.thread_id AND i.turn_id = t.turn_id `+
-		`WHERE t.thread_id = '%s' AND t.rollout_ordinal >= %d ORDER BY t.rollout_ordinal, i.rollout_ordinal`, t.ID, from)
+	// One query, one snapshot: each turn (in order) with its items (in order); the mark's turn, read again only to see it
+	// is as it was, without its items. Every value is one line: JSON escapes control characters within its strings, so
+	// neither the separator nor a newline appears in one, and the line breaks it may have between values are blanked.
+	oneLine := func(col string) string {
+		return `REPLACE(REPLACE(COALESCE(` + col + `, ''), char(10), ' '), char(13), ' ')`
+	}
+	q := fmt.Sprintf(`SELECT t.rollout_ordinal, t.turn_id, t.status, COALESCE(t.duration_ms, -1), `+oneLine("t.error_json")+`, `+
+		`COALESCE(i.created_at_ms, 0), COALESCE(i.item_type, ''), `+oneLine("i.item_json")+` FROM thread_turns t `+
+		`LEFT JOIN thread_items i ON i.thread_id = t.thread_id AND i.turn_id = t.turn_id AND t.rollout_ordinal > %d `+
+		`WHERE t.thread_id = '%s' AND t.rollout_ordinal >= %d ORDER BY t.rollout_ordinal, i.rollout_ordinal`, from, t.ID, from)
 	cmd := exec.CommandContext(ctx, sqlite, "-readonly", "-bail", "-noheader", "-list", "-separator", "\x1f", "-cmd", ".timeout 2000", codexDBTarget(db), q)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -354,7 +373,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 			closing["duration_ms"] = c.durationMs
 		}
 		line(c.last, "event_msg", closing)
-		res.turn, res.turnID = c.ordinal, c.id
+		res.turn, res.turnID, res.status = c.ordinal, c.id, c.status
 	}
 	// ended: c is followed by a later turn, so it is over.
 	ended := func(c *turn) {
@@ -383,7 +402,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 				at = time.UnixMilli(ms)
 			}
 			if cur == nil || cur.ordinal != ordinal {
-				if grow && cur == nil && (ordinal != mark.Turn || parts[1] != mark.TurnID) {
+				if grow && cur == nil && (ordinal != mark.Turn || parts[1] != mark.TurnID || parts[2] != mark.Status) {
 					changed = true
 					continue
 				}
@@ -412,7 +431,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 			break
 		}
 	}
-	if changed {
+	if changed || readErr != nil {
 		cancel() // the rest of the query is not needed
 	}
 	waitErr := cmd.Wait()
@@ -426,12 +445,8 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	case grow && cur == nil:
 		return res, errCodexHistoryChanged // the mark's turn is gone
 	}
-	if cur != nil && !cur.done {
-		if cur.final {
-			closeTurn(cur, false)
-		} else {
-			res.pending = true // the last turn still runs
-		}
+	if cur != nil && !cur.done && cur.final {
+		closeTurn(cur, false) // the last turn while it still runs is left for later
 	}
 	if err := w.Flush(); err != nil {
 		return res, err
@@ -439,7 +454,13 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	if err := file.Close(); err != nil {
 		return res, err
 	}
-	if grow || res.turn < 0 { // appended; or no finished turn: no transcript, as before
+	switch {
+	case grow: // appended
+		return res, nil
+	case res.turn < 0: // no finished turn: no transcript, as before (one written before the App rolled back goes)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return res, err
+		}
 		return res, nil
 	}
 	return res, os.Rename(file.Name(), path)
@@ -450,7 +471,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 // one shell word, unquoted as a POSIX shell does; one that is not (several words, an open quote) is kept whole.
 func codexShellArgv(command string) []string {
 	fields := strings.SplitN(command, " ", 3)
-	if len(fields) != 3 || (fields[1] != "-lc" && fields[1] != "-c") || !strings.HasPrefix(fields[0], "/") && !strings.HasSuffix(fields[0], "sh") {
+	if len(fields) != 3 || (fields[1] != "-lc" && fields[1] != "-c") || !codexShells[path.Base(fields[0])] {
 		return []string{command}
 	}
 	if inner, ok := shellWord(fields[2]); ok {
@@ -458,6 +479,9 @@ func codexShellArgv(command string) []string {
 	}
 	return []string{command}
 }
+
+// codexShells are the shells whose "-c"/"-lc" the App puts around a command.
+var codexShells = map[string]bool{"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true}
 
 // shellWord unquotes s as one POSIX shell word: '…' as it is, "…" with \\ \" \$ \` and a backslashed newline, a
 // backslash outside quotes escaping the next character. false when s is not one whole word.

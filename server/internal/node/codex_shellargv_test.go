@@ -17,6 +17,9 @@ func TestCodexShellArgv(t *testing.T) {
 		`/usr/bin/env python3 -c 'print(1)'`: `/usr/bin/env python3 -c 'print(1)'`,
 		`/bin/bash -lc 'unterminated`:        `/bin/bash -lc 'unterminated`,
 		`/bin/bash -lc 'two' words`:          `/bin/bash -lc 'two' words`,
+		`/usr/bin/python3 -c 'print(1)'`:     `/usr/bin/python3 -c 'print(1)'`,
+		`ssh -c aes256-ctr`:                  `ssh -c aes256-ctr`,
+		`/opt/homebrew/bin/fish -c 'ls'`:     `ls`,
 	} {
 		argv := codexShellArgv(in)
 		if got := argv[len(argv)-1]; got != want {

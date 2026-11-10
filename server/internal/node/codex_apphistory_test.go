@@ -218,6 +218,10 @@ func TestCodexAppChatHistoryComesFromTheAppsDatabase(t *testing.T) {
 	if err := os.Chmod(db, 0); err != nil {
 		t.Fatal(err)
 	}
+	if f, err := os.Open(db); err == nil { // root, or a system without these modes: a query would not fail
+		f.Close()
+		t.Log("the database stays readable here: whether it was asked is not seen")
+	}
 	if _, err := n.file(id); err != nil {
 		t.Fatal(err)
 	}
@@ -472,9 +476,11 @@ func TestCodexAppChatHistoryFollowsTheDatabase(t *testing.T) {
 	}
 }
 
-// Another process writing the chat's transcript holds its lock: this one does not write meanwhile. A chat the App no
-// longer lists has its file removed when another of the home's chats is written.
+// Another process writing the chat's transcript holds its lock: this one waits, and does not write meanwhile. A chat the
+// App no longer lists has its file removed when another of the home's chats is written.
 func TestCodexAppChatHistoryLockAndPrune(t *testing.T) {
+	defer func(w time.Duration) { codexAppHistoryLockWait = w }(codexAppHistoryLockWait)
+	codexAppHistoryLockWait = 300 * time.Millisecond
 	n := remoteTestNode(t)
 	home := n.codexHome()
 	project := t.TempDir()
@@ -586,4 +592,119 @@ func TestCodexDBTargetIsThePathUnlessClosedInWALMode(t *testing.T) {
 	if got := codexDBTarget(filepath.Join(dir, "missing.sqlite")); got != filepath.Join(dir, "missing.sqlite") {
 		t.Fatalf("missing: %q", got)
 	}
+}
+
+// Several requests opening a chat at once (session.items, session.watch, session.info): each gets its transcript, the
+// others waiting for the one writing it.
+func TestCodexAppChatOpenedByManyAtOnce(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Alpha chat", time.Now(), 0))
+	var turns []historyTurn
+	for i := 0; i < 50; i++ {
+		turns = append(turns, historyTurn{thread: appChat, id: fmt.Sprintf("t%d", i), status: "completed", ordinal: i,
+			items: [][2]string{userItem(fmt.Sprintf("u%d", i), fmt.Sprintf("question %d", i)), answerItem(fmt.Sprintf("a%d", i), "answer")}})
+	}
+	writeCodexHistory(t, home, turns)
+	var id string
+	for _, s := range n.codexSessions(map[string]bool{}) {
+		if s.SourceThreadID == appChat {
+			id = s.SessionID
+		}
+	}
+	errs := make(chan error, 4)
+	for range 4 {
+		go func() { _, err := n.file(id); errs <- err }()
+	}
+	for range 4 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The App's database as it may be met mid-change: the chat updated before its new turn's rows are written; a turn left
+// in progress before the next one was started (written as interrupted), then finished; a turn rolled back with none left
+// finished; an item whose JSON has line breaks between its values.
+func TestCodexAppChatHistoryMidChange(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	updated := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Alpha chat", updated, 0))
+	turns := []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0,
+		items: [][2]string{userItem("u0", "first"), {"agentMessage", "{\"type\":\"agentMessage\",\n\"id\":\"a0\",\r\n\"text\":\"over lines\",\"phase\":\"final_answer\"}"}}}}
+	writeCodexHistory(t, home, turns)
+	id, s := readChat(t, n, appChat)
+	if !strings.Contains(s, "assistant:text:over lines") {
+		t.Fatalf("first read = %s", s)
+	}
+
+	// The chat is updated; its new turn's rows come later, the chat's updated_at_ms unchanged.
+	writeCodexApp(t, home, project, "DELETE FROM threads;"+codexAppRow(appChat, "", project, "Alpha chat", updated.Add(time.Minute), 0))
+	readChat(t, n, appChat)
+	turns = append(turns, historyTurn{thread: appChat, id: "t1", status: "completed", ordinal: 1, items: [][2]string{userItem("u1", "rows came late")}})
+	writeCodexHistory(t, home, turns)
+	if _, s := readChat(t, n, appChat); !strings.Contains(s, "rows came late") {
+		t.Fatalf("after the late rows = %s", s)
+	}
+
+	// t2 still runs when t3 is started: t2 is written as interrupted; once the App finishes it, it is written as it is.
+	turns = append(turns,
+		historyTurn{thread: appChat, id: "t2", status: "inProgress", ordinal: 2, items: [][2]string{userItem("u2", "slow one")}},
+		historyTurn{thread: appChat, id: "t3", status: "inProgress", ordinal: 3, items: [][2]string{userItem("u3", "next one")}})
+	writeCodexHistory(t, home, turns)
+	if _, s := readChat(t, n, appChat); !strings.Contains(s, "slow one") || !strings.Contains(s, transcript.InterruptedNotice) || strings.Contains(s, "next one") {
+		t.Fatalf("with t2 left running = %s", s)
+	}
+	turns[2].status = "completed"
+	turns[2].items = append(turns[2].items, answerItem("a2", "slow answer"))
+	writeCodexHistory(t, home, turns)
+	if _, s := readChat(t, n, appChat); !strings.Contains(s, "slow answer") || strings.Contains(s, transcript.InterruptedNotice) {
+		t.Fatalf("after t2 finished = %s", s)
+	}
+
+	// Rolled back to its first message, asked again and still running: no finished turn, no transcript.
+	writeCodexHistory(t, home, []historyTurn{{thread: appChat, id: "t0b", status: "inProgress", ordinal: 0, items: [][2]string{userItem("u0b", "asked again")}}})
+	p := n.transcriptPath(id)
+	n.file(id)
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("the rolled back turns' file stays: %v", err)
+	}
+	if got := n.transcriptPath(id); got != "" {
+		t.Fatalf("transcript at %q with no finished turn", got)
+	}
+}
+
+// A watched chat whose rollout the App deletes, having moved its history into its database: the turns it finishes
+// next are pushed from the database.
+func TestAWatchedCodexAppChatWhoseRolloutGoes(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	rollout := writeAppRollout(t, home, appChat, project, time.Now().Add(-time.Hour))
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, rollout, project, "Alpha chat", time.Now().Add(-time.Hour), 0))
+	turns := []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{userItem("u0", "first")}}}
+	writeCodexHistory(t, home, turns)
+	id, _ := readChat(t, n, appChat)
+	if src, _ := n.codexSource(id); src.path != rollout {
+		t.Fatalf("registered with %q, want its rollout", src.path)
+	}
+	hub := withHub(t, n)
+	if err := n.watch(id, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer n.unwatch(id)
+	if err := os.Remove(rollout); err != nil {
+		t.Fatal(err)
+	}
+	expireRollouts(home, true)
+	turns = append(turns, historyTurn{thread: appChat, id: "t1", status: "completed", ordinal: 1,
+		items: [][2]string{userItem("u1", "second"), answerItem("a1", "after the rollout went")}})
+	writeCodexHistory(t, home, turns)
+	writeCodexApp(t, home, project, "DELETE FROM threads;"+codexAppRow(appChat, "", project, "Alpha chat", time.Now(), 0))
+	waitFor(t, "the App's new turn", func() bool {
+		return slices.ContainsFunc(hub.got(), func(it proto.Item) bool { return it.Text == "after the rollout went" })
+	})
 }
