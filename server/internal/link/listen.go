@@ -660,9 +660,10 @@ func (s *passive) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer node.Close()
-	// Compressed like active mode's streams and the ssh connections before them: node traffic is JSON. No Origin check
-	// (InsecureSkipVerify): the credential is a header no browser page can set, as on the hub's own link endpoints.
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true, CompressionMode: websocket.CompressionContextTakeover})
+	// Compressed like active mode's streams and the ssh connections before them: node traffic is JSON, each message on
+	// its own (StreamCompression). No Origin check (InsecureSkipVerify): the credential is a header no browser page can
+	// set, as on the hub's own link endpoints.
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true, CompressionMode: StreamCompression})
 	if err != nil {
 		return
 	}

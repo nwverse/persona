@@ -25,6 +25,7 @@
   "filter_empty": "No agents in \"{filter}\"",
   "show_all": "Show all",
   "pinned_section": "Pinned",
+  "leader": "Leader",
   "launching": "Starting",
   "launch_untitled": "New agent",
   "launch_failed": "Couldn't start",
