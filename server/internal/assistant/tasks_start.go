@@ -96,8 +96,16 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		}
 		t.TodoID = todo.ID
 		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
-		if s.supervises(ctx, p.Conversation) { // the main conversation or a leader follows up what it hands out (supervise.go)
-			s.superviseTodo(ctx, todo.ID, p.Conversation, t.DoneWhen, t.ExpectMinutes)
+		// The main conversation or a leader follows up what it hands out (supervise.go); a task the main conversation
+		// handed to a leader is that leader's, while it still is one (else the main conversation's again).
+		if sup := p.Conversation; s.supervises(ctx, sup) {
+			if t.Supervisor != "" && s.isLeader(ctx, t.Supervisor) {
+				sup = t.Supervisor
+				if t.ReuseTodo == "" {
+					s.taskCard(ctx, sup, todo.ID) // the leader sees its task's card too; the plan's stays where it was made
+				}
+			}
+			s.superviseTodo(ctx, todo.ID, sup, t.DoneWhen, t.ExpectMinutes)
 		}
 		if t.ReuseTodo != "" || t.Parent != "" { // a worker's has no conversation to show a card in (task_leader.go)
 			continue

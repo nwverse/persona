@@ -740,3 +740,7 @@ type RouteInput struct {
 }
 
 func RenderRouteInput(in RouteInput) string { return render("assistant/route_input", in) }
+
+// RenderRouteAgent is the system prompt of assistant.route for a new agent (assistant/route_agent): which leader's
+// direction its work belongs to; it reads RouteInput (the agent's first message as the sentence, no projects).
+func RenderRouteAgent() string { return render("assistant/route_agent", nil) }
