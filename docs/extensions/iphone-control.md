@@ -12,8 +12,10 @@ tool call is one hub ↔ node round trip.
 | **Core**: element numbers, results, limits, approval rules (#3449) | `server/internal/iphonectl` |
 | The assistant's tools, waiting for the owner's approval and its wording | the manager |
 
-Status: the core is logic with unit tests against a fake bridge and the bridge's documented wire shapes; it is not
-wired to the node yet. **Not verified on a real iPhone.**
+Status: the core is logic with unit tests against a fake bridge and the bridge's documented wire shapes. The node's
+`iphone` program runs its looks and dos through it (`server/internal/node/iphone_core.go`), checked end to end against
+a simulator ([iphone-pairing.md](iphone-pairing.md), "The node program `iphone` (#3450)"). **Not verified on a real
+iPhone.**
 
 ## The core's interface
 
@@ -25,7 +27,9 @@ wired to the node yet. **Not verified on a real iPhone.**
   step waiting for the owner `needs_approval`, `approval_summary` (data, below) and `approval_id`. The approval fields
   are for the manager only: neither is in `text` or `output`.
 - `bridge` is the phone: `iphonectl.Wire` turns the bridge's JSON wire into the `Bridge` interface, given a function
-  that sends one operation to the phone and returns its result or its error (`*iphonectl.Error` with the bridge's code).
+  that sends one operation to the phone and returns its result or its error (`*iphonectl.Error` with the bridge's code;
+  the caller sets `NotSent` when its session refused before writing anything, `MaybeSent` when it handed the operation
+  over and lost the answer, whatever the code).
   With a `TempDir`, screenshots are written to a file (`out_file`) and `image.file` names it instead of carrying bytes.
 
 | Op | `args` | Does |

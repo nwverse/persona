@@ -92,7 +92,8 @@ which the hub hands to the app ([phone-tools.md](../apple/phone-tools.md)).
 
 ### Approval
 
-`iphone.call` answers `{output?, text?, image?, needs_approval?, approval_summary?, approval_id?}` (`proto.IPhoneResult`). When
+`iphone.call` answers `{output?, text?, image?, needs_approval?, approval?, approval_id?}` (`proto.IPhoneResult`; `approval`
+is the step waiting for the owner as data, [iphone-control.md](iphone-control.md) "Approval"). When
 `needs_approval` is set, the manager shows the usual permission card (`iphone_do`, "On “<iPhone>”: <approval_summary>") and,
 once allowed, makes the same call again with `approved: <approval_id>`. A refusal (or 15 minutes without an answer) tells
 the assistant the user declined and not to retry. One call asks at most 8 times. Which steps need approval is the node's
@@ -109,7 +110,7 @@ decision (block D); the manager only asks and passes the answer on.
 - `PUT /api/v1/iphone/consent` `{"device", "allowed"}` → that device as above. Not the user's own app → 403; extension off → 404.
 - `proto.Machine.iphone` is the computer's `IPhone` while the extension is on (the manager's report, like `computer`).
 - Node: `iphone.status` → `IPhone` (the manager sets `enabled` and `allowed` itself, never taking the node's word);
-  `iphone.call` `{device, session, op: status|look|do, args, approved?, timeout_ms?}` (`proto.IPhoneCall`) → `IPhoneResult`;
+  `iphone.call` `{device, session, op: status|look|do, args, approved?, confirm?, timeout_ms?}` (`proto.IPhoneCall`) → `IPhoneResult`;
   `iphone.pair` / `iphone.forget` / `iphone.cancel` `{device}` → `IPhone`. Through `plugin.node.call` to the built-in
   program `iphone` (methods `status`, `call`, `pair`, `forget`, `cancel`) on a node that lists it, by these names otherwise.
   `op: status` is the node's own answer; `look` and `do` go to block D's package.

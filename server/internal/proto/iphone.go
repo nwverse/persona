@@ -52,23 +52,30 @@ type IPhoneDevice struct {
 
 // IPhoneCall is one call of the iphone program: op status | look | do on a device ("" the only paired one), in the
 // assistant's conversation session, with the tool's arguments. Approved is the approval id the user allowed (passed
-// back as the node gave it). TimeoutMS bounds the node's answer (it clamps it to 1–120 s, 30 s when 0).
+// back as the node gave it; the node does not interpret it). Confirm is the owner's setting to approve every input of
+// a do, on top of the steps the rules always ask about. TimeoutMS bounds the node's answer (it clamps it to 1–120 s,
+// 30 s when 0).
 type IPhoneCall struct {
 	Device    string          `json:"device,omitempty"`
 	Session   string          `json:"session,omitempty"`
 	Op        string          `json:"op"`
 	Args      json.RawMessage `json:"args,omitempty"`
 	Approved  string          `json:"approved,omitempty"`
+	Confirm   bool            `json:"confirm,omitempty"`
 	TimeoutMS int             `json:"timeout_ms,omitempty"`
 }
 
 // IPhoneResult is what an iphone call answered: its JSON (Output), or Text, and a screenshot; or that the step needs the
-// user's approval first (ApprovalSummary says what for; the call is made again with Approved = ApprovalID once given).
+// user's approval first: Approval says what for, as data (the step, its action, needs, app, target, text or its
+// length, evidence; docs/extensions/iphone-control.md, "Approval") the manager words in the owner's language, and the
+// call is made again with Approved = ApprovalID once given. ApprovalSummary is the older sentence, no longer filled
+// by the node.
 type IPhoneResult struct {
 	Output          json.RawMessage `json:"output,omitempty"`
 	Text            string          `json:"text,omitempty"`
 	Image           *Image          `json:"image,omitempty"`
 	NeedsApproval   bool            `json:"needs_approval,omitempty"`
+	Approval        json.RawMessage `json:"approval,omitempty"`
 	ApprovalSummary string          `json:"approval_summary,omitempty"`
 	ApprovalID      string          `json:"approval_id,omitempty"`
 }

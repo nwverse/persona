@@ -41,10 +41,14 @@ type AppInfo struct {
 	Type     string `json:"type,omitempty"` // user | system
 }
 
-// Error is a bridge error: its code and its English message.
+// Error is a bridge error: its code and its English message. The caller's session may know more than the code says:
+// NotSent, the operation certainly did not reach the phone (refused before anything was written); MaybeSent, it may
+// have, whatever the code (handed over, then the answer was lost). MaybeSent wins.
 type Error struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	NotSent   bool   `json:"not_sent,omitempty"`
+	MaybeSent bool   `json:"maybe_sent,omitempty"`
 }
 
 func (e *Error) Error() string {
@@ -87,4 +91,10 @@ func code(err error) string {
 }
 
 // refused says the bridge failed before sending anything.
-func refused(err error) bool { return slices.Contains(refusedCodes, code(err)) }
+func refused(err error) bool {
+	var e *Error
+	if errors.As(err, &e) && (e.MaybeSent || e.NotSent) {
+		return !e.MaybeSent
+	}
+	return slices.Contains(refusedCodes, code(err))
+}

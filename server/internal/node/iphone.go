@@ -76,6 +76,7 @@ type iphoneRun struct {
 	Device, Session, Op string // Op: look | do; Device is an opaque id to the driver
 	Args                json.RawMessage
 	Approved            string // the approval id the driver gave earlier, as the user allowed it
+	Confirm             bool   // the owner asks to approve every input, on top of the steps the rules always ask about
 	// Bridge runs one of the bridge's operations on this iPhone.
 	Bridge func(ctx context.Context, op string, args json.RawMessage) (json.RawMessage, error)
 	// TempDir is where a screenshot is written (the bridge's out_file); it is removed after the call.
@@ -83,21 +84,21 @@ type iphoneRun struct {
 }
 
 // iphoneOutcome is what the driver answered: its result, a screenshot it had written into TempDir, or that the step
-// needs approval first.
+// needs approval first: Approval is what for, as data the manager words for the owner (proto.IPhoneResult.Approval).
 type iphoneOutcome struct {
-	Output          json.RawMessage
-	Text            string
-	ImageFile       string
-	NeedsApproval   bool
-	ApprovalSummary string
-	ApprovalID      string
+	Output        json.RawMessage
+	Text          string
+	ImageFile     string
+	NeedsApproval bool
+	Approval      json.RawMessage
+	ApprovalID    string
 }
 
-// iphones and iphoneCore are this computer's host and driver. Until those are built in, there is no bridge here and
-// no look or do (tests set their own).
+// iphones and iphoneCore are this computer's host and driver: the host is set by iphone_host.go and the driver is
+// iphonectl's core (iphone_core.go); tests set their own.
 var (
 	iphones    iphoneHost   = noIPhones{}
-	iphoneCore iphoneDriver = noIPhoneCore{}
+	iphoneCore iphoneDriver = &iphoneControl{}
 )
 
 type noIPhones struct{}
@@ -114,12 +115,6 @@ func (noIPhones) Call(context.Context, string, string, json.RawMessage) (json.Ra
 }
 
 var errNoIPhoneBridge = &rpc.Error{Code: "bridge_missing", Message: "the iPhone device bridge is not installed on this computer"}
-
-type noIPhoneCore struct{}
-
-func (noIPhoneCore) Run(context.Context, iphoneRun) (iphoneOutcome, error) {
-	return iphoneOutcome{}, &rpc.Error{Code: "unsupported", Message: "this personad cannot look at or act on an iPhone yet"}
-}
 
 // The notes the app shows for an iPhone, by the bridge's or the session's code. The hub translates them by their
 // original (hub-iphone.json's rpc_*), so each must stay exactly as the catalog has it.
@@ -334,12 +329,12 @@ func iphoneCall(ctx context.Context, params json.RawMessage) (*proto.IPhoneResul
 		return out, err
 	}
 	out, err := iphoneCore.Run(cctx, iphoneRun{Device: link.ID, Session: p.Session, Op: p.Op, Args: args, Approved: p.Approved,
-		Bridge: bridge, TempDir: dir})
+		Confirm: p.Confirm, Bridge: bridge, TempDir: dir})
 	if err != nil {
 		return nil, iphoneStepErr(ctx, cctx, p.Op, err, timeout, acted.Load())
 	}
 	res := &proto.IPhoneResult{Output: out.Output, Text: out.Text, NeedsApproval: out.NeedsApproval,
-		ApprovalSummary: out.ApprovalSummary, ApprovalID: out.ApprovalID}
+		Approval: out.Approval, ApprovalID: out.ApprovalID}
 	if f := iphoneImageIn(dir, out.ImageFile); f != "" {
 		res.Image = screenshotImage(f)
 	}

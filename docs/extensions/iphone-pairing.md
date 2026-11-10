@@ -147,13 +147,13 @@ Errors are `*iphone.Error{Code, Message}`: the bridge's codes, plus `not_paired`
 The manager reaches the paired phones through the node's built-in program `iphone` (`server/internal/node/iphone.go`,
 listed in `node.info`'s `builtin_programs`), over `plugin.node.call {id: "iphone", method, params}` only: it has no old
 method names, and a node without it answers the manager's `iphone.*` with "unknown method". It reads the phones through
-the sessions above (`node/iphone_host.go`) and hands looks and steps to the phone control core; types are in
-`proto/iphone.go`.
+the sessions above (`node/iphone_host.go`) and hands looks and steps to the phone control core (`node/iphone_core.go`:
+one `iphonectl.Controller` for the node process, [iphone-control.md](iphone-control.md)); types are in `proto/iphone.go`.
 
 | Method | Params → result | What it does |
 | --- | --- | --- |
 | `status` | `{}` → `IPhone` | The bridge (installed, version, kept 30 s), the paired phones and those on USB with their session's state, and for a connected one its latest `device_info`: `connected`, `locked`, `capabilities`, `ready` (connected, unlocked, screenshot, accessibility tree and input available) and `note`. An idle paired phone's session is started. `enabled` and `allowed` are the manager's to fill |
-| `call` | `IPhoneCall {device?, session?, op, args?, approved?, timeout_ms?}` → `IPhoneResult {output?, text?, image?, needs_approval?, approval_summary?, approval_id?}` | `op` is `status` (answered here, with a fresh `device_info`), `look` or `do` (the core's, with the bridge's operations on that phone). `device` empty is the only paired phone. The wait is clamped to 1–120 s (30 s by default). A screenshot the core wrote into the call's temporary directory becomes `image`; the directory is removed after the call |
+| `call` | `IPhoneCall {device?, session?, op, args?, approved?, confirm?, timeout_ms?}` → `IPhoneResult {output?, text?, image?, needs_approval?, approval?, approval_id?}` | `op` is `status` (answered here, with a fresh `device_info`), `look` or `do` (the core's, with the bridge's operations on that phone; `approved` and `confirm` go to it as they came). `device` empty is the only paired phone. The wait is clamped to 1–120 s (30 s by default). A screenshot the core wrote into the call's temporary directory (or answered inline, then written there) becomes `image`; the directory is removed after the call. `approval` is the core's approval summary as data ([iphone-control.md](iphone-control.md), "Approval"), passed on for the manager to word; the node never phrases it. `approval_summary`, a sentence in older versions, is no longer filled |
 | `pair` / `forget` | `{device}` → `IPhone` | Start the pairing job above, or forget a phone; its state is `job` |
 | `cancel` | `{}` → `IPhone` | Stop the job |
 
@@ -163,6 +163,15 @@ the sessions above (`node/iphone_host.go`) and hands looks and steps to the phon
   before acting (`locked`, `developer_mode_off`, `ddi_not_mounted`, `unreachable`, …). Once an operation that changes the
   phone went out during the step, the whole step is `unknown`, as are `uncertain`, `timeout`, `cancelled` (the manager
   gave up) and anything without a code.
+- **Whether each step reached the phone** is the core's: it answers a failed step inside the result (`sent`,
+  `not_sent`, `unknown` per step) rather than as an error. The session's errors reach it as `*iphonectl.Error` with
+  their code, marked `NotSent` when the session or the code says nothing was written and `MaybeSent` when the session
+  says the operation was handed over and its answer lost, whatever the code; the core never counts such an input as
+  refused and never sends it again.
+- **Checked against a simulator**: `go test -tags iphonesimlive -run TestLiveIPhoneSimulator ./internal/node` with
+  `PERSONA_IPHONE_SIM=<udid>` and `PERSONA_IPHONE_SIM_HOME`, the state directory where the bridge is installed and
+  `personad iphone pair <udid>` wrote the record: status, a look (elements and a screenshot), and a do with `confirm`
+  that waits for approval and runs only when called again with `approved`. Not verified on a real device.
 - **Notes**: the computer's note, each phone's and a job's error are fixed Simplified Chinese strings chosen by the
   bridge's or the session's code (`iphoneNotes`); the hub translates them by their original from its catalog
   (`hub-iphone.json`, `rpc_*`), so the two must stay identical. A code without a note shows a generic failure (a job keeps
