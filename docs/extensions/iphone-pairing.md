@@ -142,6 +142,32 @@ What the node capability calls (`server/internal/iphone/manager.go`):
 Errors are `*iphone.Error{Code, Message}`: the bridge's codes, plus `not_paired`, `bridge_missing`, `unreachable`,
 `uncertain` and `busy`. Messages are English, for logs and the assistant; the app maps codes to its own text.
 
+## The node program `iphone` (#3450)
+
+The manager reaches the paired phones through the node's built-in program `iphone` (`server/internal/node/iphone.go`,
+listed in `node.info`'s `builtin_programs`), over `plugin.node.call {id: "iphone", method, params}` only: it has no old
+method names, and a node without it answers the manager's `iphone.*` with "unknown method". It reads the phones through
+the sessions above (`node/iphone_host.go`) and hands looks and steps to the phone control core; types are in
+`proto/iphone.go`.
+
+| Method | Params → result | What it does |
+| --- | --- | --- |
+| `status` | `{}` → `IPhone` | The bridge (installed, version, kept 30 s), the paired phones and those on USB with their session's state, and for a connected one its latest `device_info`: `connected`, `locked`, `capabilities`, `ready` (connected, unlocked, screenshot, accessibility tree and input available) and `note`. An idle paired phone's session is started. `enabled` and `allowed` are the manager's to fill |
+| `call` | `IPhoneCall {device?, session?, op, args?, approved?, timeout_ms?}` → `IPhoneResult {output?, text?, image?, needs_approval?, approval_summary?, approval_id?}` | `op` is `status` (answered here, with a fresh `device_info`), `look` or `do` (the core's, with the bridge's operations on that phone). `device` empty is the only paired phone. The wait is clamped to 1–120 s (30 s by default). A screenshot the core wrote into the call's temporary directory becomes `image`; the directory is removed after the call |
+| `pair` / `forget` | `{device}` → `IPhone` | Start the pairing job above, or forget a phone; its state is `job` |
+| `cancel` | `{}` → `IPhone` | Stop the job |
+
+- **Whether a failed step reached the phone**: every `call` error is an RPC error with a code and `data: {"sent": "no" | "unknown"}`.
+  `no` only when nothing that changes the phone was handed to it: the node's own checks (`bad_op`, `bad_args`,
+  `not_paired`, `ambiguous_device`, `bridge_missing`), the session's refusals before sending, and the bridge's refusals
+  before acting (`locked`, `developer_mode_off`, `ddi_not_mounted`, `unreachable`, …). Once an operation that changes the
+  phone went out during the step, the whole step is `unknown`, as are `uncertain`, `timeout`, `cancelled` (the manager
+  gave up) and anything without a code.
+- **Notes**: the computer's note, each phone's and a job's error are fixed Simplified Chinese strings chosen by the
+  bridge's or the session's code (`iphoneNotes`); the hub translates them by their original from its catalog
+  (`hub-iphone.json`, `rpc_*`), so the two must stay identical. A code without a note shows a generic failure (a job keeps
+  its own words).
+
 ## Security
 
 - Addresses are only hints. Anything on the network can answer the Bonjour query, and a manual address can be wrong;

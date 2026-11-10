@@ -2114,7 +2114,7 @@ trade-offs in `docs/plans/plan-orca-support.md` ("herdr-core host")).
   the ids as opaque, as before (`docs/integrations/engines.md` "Named herdr sessions").
 - `herdr_running` / `herdr_running_known` in `node.info`: whether the classic herdr server answers right now, and whether the node can tell (a machine using herdr-core
   has no such socket and sends neither). Old nodes send neither; the hub uses this to tell "not running" from "unknown" (`docs/integrations/engines.md`).
-- `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;
+- `builtin_programs` in `node.info`: the extension programs built into personad (`["cua", "ego", "imessage", "iphone"]`, #1830 steps 5 and 6; imessage's method names are still `connector.*`; iphone, #3450, answers only `plugin.node.call`: `status`, `call`, `pair`, `forget`, `cancel`, see `docs/extensions/iphone-pairing.md` ("The node program `iphone` (#3450)")). For nodes that report it, the hub calls them via `plugin.node.call {id, method, params}`;
   old nodes don't send it, and the hub keeps using `computer.*`, `browser.*` (new nodes still answer those). See `docs/extensions/extensions.md` ("Built-in node programs").
 - `herdr.server.start` (hub → node, no params, returns `{running}`): the user tapped "Start" in the Agents list. Not bound by `herdr_autostart`;
   if it can't start, the reason is returned the same way as `engine_missing`. Old nodes don't have this method, and the hub returns 502 rather than claiming herdr can't start.
