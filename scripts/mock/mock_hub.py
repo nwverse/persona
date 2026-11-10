@@ -2179,6 +2179,33 @@ RECORDINGS = {}
 RECORDINGS_DELETED = set()
 RECORDING_PUTS = [0]  # every PUT, stored or refused
 RECORDING_DAYS = int(os.environ.get("MOCK_RECORDING_DAYS", "14"))
+# Meeting minutes (#2710, docs/assistant/meeting-minutes.md): MOCK_RECORDING_MINUTES=ready writes them for a complete meeting
+# recording (`kind: meeting`) as soon as it is stored, from its own sentences; pending leaves them being written; failed says
+# writing them failed; POST /mock/recording_minutes {"mode": …} switches it and forgets the recordings stored so far (a UI
+# test's fresh start on a shared mock).
+# POST /api/v1/recordings/{id}/minutes (write them again) counts in /mock/recordings ("minutes_asked").
+RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
+RECORDING_MINUTES_ASKED = []
+
+
+def recording_minutes(body):
+    """Made-up minutes in the contract's shape (docs/assistant/meeting-minutes.md) from a recording's own sentences: the
+    first two are points, those that decide / assign / leave something open are decisions / actions / open questions.
+    Each item's `at` is its sentence's start (seconds into the recording)."""
+    segs = [x for x in body.get("segments", []) if x.get("text")]
+    cal = body.get("calendar") or {}
+    item = lambda x: {"text": x["text"].rstrip("。"), "at": x["start"]}
+    out = {
+        "title": cal.get("title") or body.get("title") or None,
+        "when": "2027-01-15 16:00–17:00",
+        "where": cal.get("location"),
+        "attendees": cal.get("attendees"),
+        "points": [item(x) for x in segs[:2]],
+        "decisions": [item(x) for x in segs if "决定" in x["text"]],
+        "actions": [{"who": "张三", "what": x["text"].rstrip("。"), "by": "周五前", "at": x["start"]} for x in segs if "负责" in x["text"]],
+        "open": [item(x) for x in segs if "没定" in x["text"]],
+    }
+    return {k: v for k, v in out.items() if v}
 
 
 # The managers' roster (docs/assistant/managers.md): the hub's own assistant (the default), one on another computer, one offline,
@@ -2493,8 +2520,16 @@ def managers_route(h, method, p):
 
 def recordings_route(h, method, p):
     """The hub's recording sync, and its copy in the knowledge base (KB["recordings"])."""
+    if p == "/mock/recording_minutes" and method == "POST":
+        # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
+        RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
+        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear()
+        KB["recordings"] = []
+        for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
+        return h.send_json({"mode": RECORDING_MINUTES[0]}) or True
     if p == "/mock/recordings" and method == "GET":
-        return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0]}) or True
+        return h.send_json({"recordings": RECORDINGS, "deleted": sorted(RECORDINGS_DELETED), "puts": RECORDING_PUTS[0],
+                            "minutes_asked": RECORDING_MINUTES_ASKED}) or True
     if not (p == "/api/v1/recordings" or p.startswith("/api/v1/recordings/")): return False
     if os.environ.get("MOCK_RECORDINGS_DOWN") == "1":
         return h.send_json({"error": "知识库暂时不可用", "code": "kb_unavailable"}, 503) or True
@@ -2505,6 +2540,13 @@ def recordings_route(h, method, p):
     rid = p.split("/")[4].lower()
     if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
+    if p.endswith("/minutes") and method == "POST":
+        if rid not in RECORDINGS: return h.send_json({"error": "没有这条录音"}, 404) or True
+        if not RECORDINGS[rid].get("complete"): return h.send_json({"error": "转写还没完成"}, 409) or True
+        RECORDING_MINUTES_ASKED.append(rid)
+        detail = KB_DETAIL.setdefault(("recordings", rid), {})
+        detail.pop("minutes", None); detail.setdefault("meta", {})["minutes_state"] = "pending"
+        return h.send_json({"state": "pending"}, 202) or True
     kb = KB.setdefault("recordings", [])
     if method == "DELETE":
         existed = rid in RECORDINGS
@@ -2526,8 +2568,13 @@ def recordings_route(h, method, p):
     entry = {"kind": "recordings", "id": rid, "name": body.get("title") or "录音", "relevance": 0, "tags": [],
              "one_line": (body.get("segments") or [{"text": ""}])[0]["text"], "updated": body["started_at"]}
     kb[:] = [e for e in kb if e["id"] != rid] + [entry]
-    KB_DETAIL[("recordings", rid)] = {"meta": {k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete")},
-                                      "summary": text, "segments": body.get("segments", [])}
+    detail = {"meta": {k: body.get(k) for k in ("started_at", "ended_at", "duration", "language", "device", "complete", "kind", "calendar")},
+              "summary": text, "segments": body.get("segments", [])}
+    if body.get("kind") == "meeting":
+        ready = body.get("complete") and RECORDING_MINUTES[0] == "ready"
+        detail["meta"]["minutes_state"] = "ready" if ready else ("failed" if body.get("complete") and RECORDING_MINUTES[0] == "failed" else "pending")
+        if ready: detail["minutes"] = recording_minutes(body)
+    KB_DETAIL[("recordings", rid)] = detail
     return h.send_json({"id": rid, "revision": body["revision"], "status": "stored"}) or True
 KB_DETAIL = {
     ("projects", "weather-app"): {"summary": "# 天气 App\n\n给自己用的天气 App 和桌面小组件。\n\n- **现在**：小组件按小时刷新\n- **下一步**：中号布局的降雨条",
@@ -3282,6 +3329,27 @@ if MOCK_TASKS:
         _base = min(x["seq"] for x in ITEMS[ASK1])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _base + _i
+    # MOCK_MARKDOWN=1 (with MOCK_TASKS=1, and MOCK_EXCHANGES=1 for the exchanges): the words as Agents and Persona write them,
+    # with **bold**, `code` and a heading (#2363), in Persona's message to the task, the task's report and the release
+    # notes receipt: drawn rendered, never as raw marks.
+    if os.environ.get("MOCK_MARKDOWN") == "1":
+        _markdown = {
+            "feed_x1": ("text", "**先别动缓存层。**\n1. 网络层的重试和超时先补测试，用 `LocalStubServer`；\n2. 覆盖率按 **80%** 算，生成的代码不算；\n"
+                                "3. 每补完一块就跑一次全量测试。"),
+            "feed_x2": ("text", "## 结果\n**网络层测试补完了**，PR 在 https://github.com/example/weather/pull/45 。\n"
+                                "重试、超时和断网三块都有用例，用 `LocalStubServer` 跑。\n覆盖率从 **52%** 到 **83%**。"),
+            "feed_m7": ("summary", "**整理好了**：这周合并了 7 个 PR，分成新功能、修复和其他三组，写在 `docs/release-notes.md` 里，等你过目。"),
+        }
+        for _f in TASK_FEED.get(ASK1, []):
+            if _f["id"] in _markdown and isinstance(_f.get("body"), dict):
+                _key, _text = _markdown[_f["id"]]
+                _f["body"][_key] = _text
+    # MOCK_TASK_RENAMED=1 (with MOCK_TASKS=1): the release notes task was renamed after its receipt was written (#3036):
+    # the receipt keeps the old name in its body, and is drawn with the to-do's name now.
+    if os.environ.get("MOCK_TASK_RENAMED") == "1":
+        for _t in TODOS_INIT + TODOS:  # TODOS was copied from TODOS_INIT already; a reset copies it again
+            if _t.get("id") == "todo_task_release":
+                _t["title"] = "写本周发布说明"
     # MOCK_SUPERVISION=1: native quiet-round coverage, with synthetic audit and visible promotion receipts only.
     if os.environ.get("MOCK_SUPERVISION") == "1":
         TASK_FEED[ASK1] = []
@@ -6165,6 +6233,17 @@ if MOCK_INBOX_EVENTS:
     if MOCK_INBOX_EVENTS == "legacy":
         for _x in INBOX:
             for _k in EVENT_FIELDS: _x.pop(_k, None)
+    # MOCK_EVENT_MUTES=1: some events carry their mute options, so Hand to AI remembers per source (#2121): the two system
+    # notifications (a build failure, a room change) come from one sender, so handing one off preselects that target for the other.
+    # lark:oc_demo1:100 keeps none: InboxHandOffBarTests checks the bar's own last target on it.
+    if os.environ.get("MOCK_EVENT_MUTES") == "1":
+        _event_mutes = {
+            "lark:oc_demo2:200": [{"tag": "chat", "value": "oc_demo2", "name": "发布群"}],
+            "mail:a1:ci:77": [{"tag": "sender", "value": "noreply@example.com", "name": "系统通知"}],
+            "mail:a1:notice:110": [{"tag": "sender", "value": "noreply@example.com", "name": "系统通知"}],
+        }
+        for _x in INBOX:
+            if _x["id"] in _event_mutes: _x["mutes"] = _event_mutes[_x["id"]]
 
 
 def _chain_add(x, kind, text, **more):
@@ -16818,6 +16897,8 @@ MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件�
 MOCK_HELP.append("MOCK_INBOX_EXTRA=<n>  收件箱多 n 封知悉即可的示例通知，试「全部清理」的「将清理 N 件」确认")
 MOCK_HELP.append("MOCK_CHANNELS=1  设置 › 插件 › 渠道：App、飞书机器人和微信已连接、飞书 /agent 只读、一个待绑定（令牌 example-token）、一个出错、一个在市场里；主对话第一条来自微信")
 MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Persona 发给任务的长消息、任务带链接和证据的长汇报、督办消息")
+MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
+MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
 
 
