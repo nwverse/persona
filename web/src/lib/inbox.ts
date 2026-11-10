@@ -466,6 +466,7 @@ export const KIND_FILTERS: { key: string; label: string }[] = [
   { key: "mention", label: AT_ME },
   { key: "dm", label: t("lib-inbox.kind_dm") },
   { key: "group", label: t("lib-inbox.kind_group") },
+  { key: "bot", label: t("lib-inbox.kind_bot") },
   { key: "doc", label: t("lib-inbox.filter_doc") },
   { key: "mail", label: t("lib-inbox.kind_mail") },
   { key: "agent", label: "Agent" },
@@ -482,7 +483,7 @@ export function matches(it: InboxItem, f: InboxFilter): boolean {
   if (f.kind === "agent") return false; // only the waiting agents
   if (f.folder && !inFolderFilter(it, f.folder)) return false;
   if (f.kind) {
-    const ok = it.kind === f.kind || (f.kind === "group" && it.kind === "bot") || (f.kind === "mention" && (it.kind === "doc" || (it.kind === "moment" && kindLabel(it) === AT_ME)));
+    const ok = it.kind === f.kind || (f.kind === "mention" && (it.kind === "doc" || (it.kind === "moment" && kindLabel(it) === AT_ME)));
     if (!ok) return false;
   }
   return hasText([it.title, it.sender, it.preview, it.summary], f.query);
