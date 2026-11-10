@@ -177,10 +177,10 @@ type Node struct {
 	runtimeHost *RuntimeHost
 	// keeper: a resident node's conversations between hub connections (assistant_keep.go); nil without one.
 	keeper *assistantKeeper
-	// replayed is closed once what standby took while no manager was connected went to this one (spool.go): new
+	// replayed is closed once what standby took while no manager was connected went to this one (spool_replay.go): new
 	// hooks wait for it, so the manager hears them after the older ones. nil (tests' Nodes): nothing waits.
 	replayed chan struct{}
-	// ahead: the sessions and panes of live hooks that went before the replay (spool.go).
+	// ahead: the sessions and panes of live hooks that went before the replay (spool_replay.go).
 	ahead replayAhead
 	// spool is the resident node's (Attach), nil elsewhere: a node that serves by itself neither keeps nor replays.
 	spool *spool
@@ -377,8 +377,8 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 }
 
 // startState loads the session state for this connection and, on a resident node's, replays what its standby took
-// (spool.go): the replay waits for the state, and new hooks for the replay (serveSock). A first try that fails is
-// tried again on this connection (reloadState).
+// (spool_replay.go): the replay waits for the state, and new hooks for the replay (serveSock). A first try that
+// fails is tried again on this connection (reloadState).
 func (n *Node) startState(ctx context.Context, adopted []*assistantProc) {
 	n.stateReady, n.stateMissed = make(chan struct{}), make(chan struct{})
 	// Before anything lists or takes a hook: nothing is written or cached on a guess about a session not loaded yet.
