@@ -55,14 +55,26 @@ func firstLine(b []byte) string {
 	return strings.TrimSpace(line)
 }
 
-// httpClient reaches the provider: directly, or through its SSH machine. Both GET /models and the session's WebSocket
-// use it.
+// httpClient reaches the provider: directly, or through its SSH machine. GET /models, GET /voices and the session's
+// WebSocket use it. One client per SSH machine: its lists reuse one `ssh -W` connection, closed after 90 s idle (a
+// client per call left every list's ssh process open for good). An upgraded WebSocket is taken out of the pool.
 func (p *Provider) httpClient() *http.Client {
 	if p.SSH == "" {
 		return directClient
 	}
-	return &http.Client{Transport: &http.Transport{DialContext: sshDialer(p.SSH), TLSHandshakeTimeout: 15 * time.Second}}
+	if c, ok := sshClients.Load(p.SSH); ok {
+		return c.(*http.Client)
+	}
+	c, _ := sshClients.LoadOrStore(p.SSH, &http.Client{Transport: &http.Transport{
+		DialContext:         sshDialer(p.SSH),
+		TLSHandshakeTimeout: 15 * time.Second,
+		IdleConnTimeout:     90 * time.Second,
+	}})
+	return c.(*http.Client)
 }
+
+// sshClients is, per SSH machine, the client that reaches providers through it.
+var sshClients sync.Map
 
 // directClient reaches providers without an SSH machine: HTTPS through dialTLS; plain HTTP, and HTTPS through a proxy
 // set in the environment, as Go's default transport does. One shared pool.
