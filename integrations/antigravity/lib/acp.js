@@ -22,6 +22,9 @@ export class AgyAcpClient extends EventEmitter {
     this.initTimeoutMs = options.initTimeoutMs ?? 60_000
     // How long a stopped agy gets to exit on SIGTERM before it is killed.
     this.killGraceMs = options.killGraceMs ?? 3_000
+    // Kills in flight: each resolves once its agy is gone. stop() waits for all of them, so an agy dropped earlier (a
+    // failed initialize, a stdin error) that ignores SIGTERM cannot outlive the companion.
+    this.dying = new Set()
   }
 
   async ensureStarted() {
@@ -113,7 +116,7 @@ export class AgyAcpClient extends EventEmitter {
     } catch {}
     // No pid: the spawn failed, there is nothing to signal.
     if (!child.pid || child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-    return new Promise((resolve) => {
+    const gone = new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (child.exitCode !== null || child.signalCode !== null) return
         this.log(`agy acp did not exit ${this.killGraceMs}ms after SIGTERM, killing it`)
@@ -130,6 +133,9 @@ export class AgyAcpClient extends EventEmitter {
         child.kill('SIGTERM')
       } catch {}
     })
+    this.dying.add(gone)
+    void gone.then(() => this.dying.delete(gone))
+    return gone
   }
 
   _send(obj) {
@@ -312,14 +318,17 @@ export class AgyAcpClient extends EventEmitter {
 
   /**
    * Stop for good: pending and later calls fail at once and agy is never started again. agy gets its stdin closed and
-   * SIGTERM, and SIGKILL when it is still running after the grace period. Resolves once it is gone.
+   * SIGTERM, and SIGKILL when it is still running after the grace period. Resolves once it is gone, and so is every agy
+   * dropped earlier that was still inside its grace period.
    */
   stop() {
     this.closed = true
     const child = this.proc
-    if (!child) return Promise.resolve()
-    this._forget(child, stoppedError())
-    return this._kill(child)
+    if (child) {
+      this._forget(child, stoppedError())
+      void this._kill(child)
+    }
+    return Promise.all([...this.dying]).then(() => {})
   }
 }
 

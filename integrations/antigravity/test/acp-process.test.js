@@ -142,6 +142,18 @@ describe('agy acp process lifecycle', () => {
     await waitFor(() => !alive(pid), grace + 1000, `agy ${pid} to be gone`)
   })
 
+  it('stop() also waits for an agy that a failed initialize is still ending', TIMEOUT, async (t) => {
+    const grace = 300
+    const { client } = fakeClient(t, 'silent-once', { initTimeoutMs: 200, killGraceMs: grace })
+    const starting = client.ensureStarted()
+    const stale = client.proc.pid
+    await assert.rejects(starting, /initialize timed out/)
+    assert.equal(client.proc, null)
+    assert.equal(alive(stale), true) // it ignores SIGTERM and is inside its grace period
+    await client.stop()
+    assert.equal(alive(stale), false)
+  })
+
   for (const [mode, why] of [
     ['silent-once', /initialize timed out/],
     ['fail-once', /initialize failed/],
