@@ -391,7 +391,7 @@ def check_settings(browser, base, width, theme, shots, single):
     """Settings' three groups (docs/assistant/managers.md "The current assistant"): "<name>'s settings" with the current
     assistant's avatar and Switch, This device and Hub, in that order with their lines; Switch opens the sidebar's list
     and the first group then follows the new assistant (its pages' requests name it, Connectors and Extensions list its
-    copies only); one assistant shows the title and Switch too."""
+    copies only), and with an offline one Connectors says it is offline; one assistant shows the title and Switch too."""
     context = browser.new_context(viewport={"width": width, "height": 900}, color_scheme=theme, locale="zh-CN")
     context.add_init_script("localStorage.setItem('persona.theme', " + repr(theme) + ")")
     page = context.new_page()
@@ -474,6 +474,16 @@ def check_settings(browser, base, width, theme, shots, single):
         # a page of this device's names nobody
         opened("general")
         assert all(m is None for p, m in named if not p.startswith("/api/v1/assistant")), [x for x in named if x[1]][:5]
+        # 家里, offline: the hub's merged list leaves its connectors out, so Connectors says it is offline instead of none
+        go(page, base + "/settings")
+        page.locator(groups_of).nth(0).locator("[data-settings-switch]").click()
+        page.get_by_role("menu").get_by_role("menuitemradio").filter(has_text="家里").click()
+        expect(page.locator(groups_of).nth(0)).to_contain_text("家里 的设置")
+        opened("connectors")
+        expect(page.locator(f'main [data-assistant-offline="{MANAGERS["家里"]}"]')).to_be_visible()
+        expect(page.locator("main [data-connector-row]")).to_have_count(0)
+        if shots:
+            page.screenshot(path=name("connectors-offline"))
         # back to 助手, from the same Switch (the list the sidebar shows)
         go(page, base + "/settings")
         page.locator(groups_of).nth(0).locator("[data-settings-switch]").click()

@@ -27,6 +27,7 @@ import { ChannelLink } from "./Channels";
 import { QRLinkStep, QRStep, UnsupportedStep, useStepPolling } from "./LoginSteps";
 import { Group, Row, Switch } from "./SettingsParts";
 import { scoped, useScope } from "../../lib/current-assistant";
+import { OfflineState, useShownOffline } from "../ManagerParts";
 
 const DOT: Record<ConnectorTone, string> = { green: "bg-green", orange: "bg-orange", red: "bg-red", idle: "bg-line-strong" };
 const fieldClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -62,7 +63,15 @@ export function ConnectorList({ onOpen }: { onOpen: (id: string) => void }) {
   // assistant"); a row opens that assistant's copy. With one assistant, the list as it is.
   const scope = useScope();
   const list = useMemo(() => all && scoped(otherConnectors(all, lark), scope), [all, lark, scope]);
-  if (list?.length === 0) return null;
+  // an offline current assistant: the hub's merged list leaves it out, so an empty list says it is offline (as the inbox does)
+  const offline = useShownOffline();
+  if (list?.length === 0) {
+    return offline ? (
+      <Group title={t("settings-hubconnector.more_title")}>
+        <OfflineState offline={offline} ring="ring-surface" className="py-8" />
+      </Group>
+    ) : null;
+  }
   return (
     <Group title={t("settings-hubconnector.more_title")} footer={t("settings-hubconnector.more_footer")}>
       {!list && !error && <div className="px-4 py-3"><Loading /></div>}

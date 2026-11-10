@@ -206,6 +206,19 @@ describe("Settings › Connectors' rows", () => {
     expect(onOpen).toHaveBeenLastCalledWith("wechat@m-1");
   });
 
+  it("says the current assistant is offline rather than listing nothing", async () => {
+    setRoster({ ...ROSTER, managers: [...ROSTER.managers, { id: "m-2", name: "家里", online: false }] });
+    act(() => chooseManager("m-2"));
+    act(() => root.render(<ConnectorList onOpen={() => {}} />));
+    await flush();
+    expect(rows()).toHaveLength(0);
+    expect(host.querySelector('[data-assistant-offline="m-2"]')?.textContent).toContain(t("settings-managers.offline_page_title", { name: "家里" }));
+    // an online one: its list, no offline state
+    act(() => chooseManager("m-1"));
+    await flush();
+    expect(host.querySelector("[data-assistant-offline]")).toBeNull();
+  });
+
   it("one manager: no headings, a row opens by id", async () => {
     setRoster({ default: "assistant", managers: [ROSTER.managers[0]] });
     const onOpen = vi.fn();
