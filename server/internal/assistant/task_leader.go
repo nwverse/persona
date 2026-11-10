@@ -717,6 +717,12 @@ func (s *Service) rehomeWorker(ctx context.Context, t Todo) (cur Todo, cancelled
 		s.logf("task %s: rehome: origin: %v", t.ID, err)
 		return t, false // nothing changed yet: tried again at the next pass
 	}
+	s.todos.mu.Lock() // the stored row moved; memory follows (setTodoRow leaves the origin alone for every other writer)
+	if m := s.todos.todos[t.ID]; m != nil {
+		m.Origin = up
+	}
+	s.todos.mu.Unlock()
+	s.todosChanged(ctx)
 	var pending bool
 	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		v.Supervisor = up

@@ -1382,3 +1382,21 @@ func TestPlanTaskStartHoldsTheWritablePermissionRule(t *testing.T) {
 		}
 	}
 }
+
+// A rehomed worker's supervisor and origin are stored: a restarted manager reads both back.
+func TestRehomedWorkerSurvivesARestart(t *testing.T) {
+	ctx := context.Background()
+	database := taskRecoveryDatabase(t)
+	s, f := newQuietServiceOn(t, database)
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	if ok, err := s.autoDoneTodo(ctx, todo.ID, "done", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("closing the leader's task: %v %v", ok, err)
+	}
+	s.rehomeLeaderlessWorkers(ctx)
+	restarted, _ := newQuietServiceOn(t, database)
+	cur := todoNow(restarted, w.ID)
+	if cur.Origin != "conv1" || cur.Supervision == nil || cur.Supervision.Supervisor != "conv1" || cur.DoneAt != nil {
+		t.Fatalf("the rehomed worker after a restart: origin %q %+v", cur.Origin, cur.Supervision)
+	}
+}

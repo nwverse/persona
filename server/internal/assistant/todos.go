@@ -1196,7 +1196,6 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	}
 	t.Title = row.Title
 	t.Notes = row.Notes
-	t.Origin = row.Origin // moves only when a worker is rehomed (task_leader.go): every other writer reads it from the same row
 	becameDone := t.DoneAt == nil && row.DoneAt != nil
 	reopened := t.DoneAt != nil && row.DoneAt == nil
 	t.DoneAt = row.DoneAt
