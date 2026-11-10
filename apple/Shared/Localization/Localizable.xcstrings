@@ -3948,6 +3948,30 @@
       },
       "extractionState": "manual"
     },
+    "%@ desktop app": {
+      "comment": "By App's section of another agent's desktop app: TRAE desktop app",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ desktop app"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@デスクトップ版"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 桌面版"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "%@, desktop app": {
       "comment": "An agent's mark: the agent, run in its desktop app",
       "localizations": {
@@ -23220,6 +23244,29 @@
       },
       "extractionState": "manual"
     },
+    "By App": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By App"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アプリ別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按 App"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "By Machine": {
       "localizations": {
         "en": {
@@ -31124,6 +31171,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Codex 设置"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Codex App": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex App"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex App"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Codex App"
           }
         }
       },

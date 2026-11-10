@@ -62,8 +62,10 @@ class HubChatTransport internal constructor(
         counts: Boolean = false,
     ): String {
         val url = path("sessions").apply {
-            addQueryParameter("summary", "1")
-            addQueryParameter("limit", "50")
+            // A complete-membership view holds whole rows (`summary=0`), read in the largest pages the hub allows.
+            val complete = filter.requiresCompleteMembership && !counts
+            addQueryParameter("summary", if (complete) "0" else "1")
+            addQueryParameter("limit", if (complete) "200" else "50")
             if (counts) addQueryParameter("counts", "1")
             filter.state?.let { addQueryParameter("state", it) }
             filter.machineId?.let { addQueryParameter("machine_id", it) }
