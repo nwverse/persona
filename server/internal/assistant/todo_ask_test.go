@@ -99,7 +99,7 @@ func TestTodoListCarriesAConclusionWithoutRecommendation(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitsForReview(t, s, f, todo.ID, "查了，做不了")
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "outcome": "cannot", "reason": "对方接口不对外开放", "link": "https://docs.example.com/api"})
+	judgeConcluded(t, s, todo.ID)
 	ask := listedAsk(t, s, todo.ID)
 	if ask == nil || ask["outcome"] != "cannot" || ask["verdict"] != "⛔ 做不了：对方接口不对外开放" || ask["asked_at"] == nil {
 		t.Fatalf("ask %v", ask)

@@ -298,9 +298,8 @@ fun ChatComposer(
     val canSend = enabled && state.ready && !sending
     val homeAssistant = LocalHomeChrome.current?.let { it.items.firstOrNull()?.key == it.selected } == true
     val fullToolbar = !homeAssistant || state.focused || hasContent
-    // iOS ShellComposerBar's `expanded`: the field takes the card's top line while it is being typed in or holds a
-    // draft, and only the + stays beside it; @ and the modes move to the row under it. Collapsed, one line — one + on
-    // the left, not three buttons crowding the field.
+    // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
+    // this change, so moving the controls cannot dispose the field and cancel the tap or the IME.
     val expanded = state.focused || hasContent
     val composerPlaceholder = if (homeAssistant) stringResource(R.string.chat_composer_ask_persona, LocalPersonaName.current) else placeholder
 

@@ -387,6 +387,10 @@ extension Theme {
         static let pointerCenter = "scope"
         /// The Mac's clipboard and the phone's, both ways.
         static let clipboard = "clipboard"
+        /// Send Clipboard: the phone's clipboard to a computer (#3064).
+        static let clipboardSend = "arrow.up.doc.on.clipboard"
+        /// Get Clipboard: a computer's clipboard onto the phone.
+        static let clipboardGet = "square.and.arrow.down.on.square"
         /// How to use it (Help).
         static let help = "questionmark.circle"
         /// I'm Done: the Mac handed back to the agent.
