@@ -61,11 +61,13 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 	}
 	got := read("assistant")
 	for _, name := range got {
-		if !slices.Contains(p.ProviderIDs, "launcher."+name) {
+		// A machine-local configured wrapper is not in the global provider catalog; its setting is checked against
+		// the same current picker below and by TestAssistantLauncherSwitchUsesDefault.
+		if name != "configured-only" && !slices.Contains(p.ProviderIDs, "launcher."+name) {
 			t.Errorf("assistant picker offers %q without a compatible provider: %v", name, p.ProviderIDs)
 		}
 	}
-	for _, name := range []string{"claude", "fast", "codex", "direct-messages"} {
+	for _, name := range []string{"claude", "fast", "codex", "configured-only", "direct-messages"} {
 		if !slices.Contains(got, name) {
 			t.Errorf("supported launcher %q missing from %v", name, got)
 		}
@@ -82,7 +84,7 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 		t.Fatalf("get launcher: %+v", r)
 	}
 	text := r.Content[0].Text
-	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "direct-responses", "traex"} {
+	for _, name := range []string{"engine-claude", "engine-codex", "direct-responses", "traex"} {
 		if strings.Contains(text, "- "+name+" ") {
 			t.Errorf("settings offers unsupported launcher %q: %s", name, text)
 		}
@@ -95,7 +97,7 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 }
 
 func TestAssistantLauncherRejectsUnsupported(t *testing.T) {
-	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "traex"} {
+	for _, name := range []string{"engine-claude", "engine-codex", "traex"} {
 		t.Run(name, func(t *testing.T) {
 			s := assistantLauncherFixture(t)
 			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "old-model", Effort: "high"})
@@ -121,7 +123,7 @@ func TestAssistantLauncherRejectsUnsupported(t *testing.T) {
 }
 
 func TestAssistantLauncherSwitchUsesDefault(t *testing.T) {
-	for _, tc := range []struct{ name, model string }{{"fast", "fast-default"}, {"direct-messages", "direct-default"}} {
+	for _, tc := range []struct{ name, model string }{{"fast", "fast-default"}, {"configured-only", ""}, {"direct-messages", "direct-default"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := assistantLauncherFixture(t)
 			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "old-model", Effort: "high", Runtime: proto.AssistantRuntimeAgentSDK})

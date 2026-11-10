@@ -118,7 +118,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-004 Swipe-to-delete with no confirmation and no Undo
 - **Severity**: P1. **Platform**: iOS, iPadOS.
-- **Location**: `apple/Persona/Views/Todos/TodosView.swift:125`, `apple/Persona/Views/Todos/TodosView.swift:157`, `apple/Persona/App/TodoStore.swift:248`, `apple/Persona/Views/Settings/SavedPlacesView.swift:56`, `apple/Persona/Views/Settings/AssistantProactiveViews.swift:280`.
+- **Location**: `apple/Persona/Views/Todos/TodosView.swift:125`, `apple/Persona/Views/Todos/TodosView.swift:157`, `apple/Persona/App/TodoStore.swift:250`, `apple/Persona/Views/Settings/SavedPlacesView.swift:56`, `apple/Persona/Views/Settings/AssistantProactiveViews.swift:280`.
 - **Violates**: [Undo and redo][undo], [Alerts][alerts], [Design principles][dp] ("help people recover from mistakes"): a destructive action should be undoable or confirmed.
 - **Problem**: the trailing swipe deletes on first tap; to-dos allow full swipe. The store calls the server and removes the item, with no restore. The same items are confirmed on their detail screens, and memory entries confirm, so the behavior is inconsistent. Context-menu Delete in `apple/Persona/Views/Settings/SavedPlacesView.swift:61` and `apple/Persona/Views/Settings/AssistantProactiveViews.swift:286` is also unconfirmed. Repeating scheduled tasks need a deliberate tap, which lowers risk there.
 - **Evidence**: `.swipeActions(edge: .trailing) { Button(role: .destructive) { Task { try await store.delete(id: todo.id) } } ... }`.

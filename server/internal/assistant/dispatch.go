@@ -215,7 +215,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	}
 	title := s.tabName(sctx, a.Prompt)
 	params := map[string]any{"cwd": a.Cwd, "launcher": strings.TrimSpace(a.Launcher), "model": "", "effort": "",
-		"tab_name": title, "prompt": prompts.RenderDispatchTask(from)}
+		"tab_name": title, "prompt": s.withCloseoutBrief(sctx, prompts.RenderDispatchTask(from), false)}
 	if err := s.applyModel(sctx, "agent.new", params); err != nil {
 		return "", fmt.Errorf("%w; nothing was started", err)
 	}
@@ -232,6 +232,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	var res struct {
 		Session proto.Session `json:"session"`
 	}
+	s.setPlanThen(ctx, am.ID, params)
 	if err := s.call(sctx, am.ID, DeviceSessionStart, params, &res); err != nil {
 		switch {
 		case errors.Is(err, apierr.ErrOffline):

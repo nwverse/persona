@@ -25,6 +25,19 @@ class InboxUnreadBadgeTest {
         assertFalse(pending.item.isDone)
     }
 
+    @Test fun sharedItemIdsStayWithinTheirManager() {
+        val read = record("shared", read = true).copy(manager = "first", feedId = "room")
+        val unread = record("shared").copy(manager = "second", feedId = "room")
+        val grouped = buildInboxConversations("paired", InboxSnapshot(records = listOf(read, unread)))
+        assertEquals(0, inboxUnreadCount(listOf(read), grouped))
+        assertEquals(1, inboxUnreadCount(listOf(unread), grouped))
+        assertEquals(1, inboxUnreadCount(listOf(read, unread), grouped))
+        val standalone = unread.copy(feedId = null)
+        val readOnly = buildInboxConversations("paired", InboxSnapshot(records = listOf(read)))
+        assertEquals(1, inboxUnreadCount(listOf(read, standalone), readOnly))
+        assertFalse(read.item.isDone)
+    }
+
     @Test fun standaloneEntriesUseTheCurrentActionSection() {
         val excluded = listOf(record("fyi", tier = "fyi"), record("noise", tier = "noise"),
             record("working", status = "working"), record("reclassified-fyi", status = "fyi"))

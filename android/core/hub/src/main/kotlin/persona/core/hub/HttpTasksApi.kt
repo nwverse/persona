@@ -20,6 +20,7 @@ import persona.core.contracts.Todo
 import persona.core.contracts.TodoDecision
 import persona.core.contracts.TodoDecisionResponse
 import persona.core.contracts.TodoDecisionsResponse
+import persona.core.contracts.TodoDue
 import persona.core.contracts.TodosResponse
 import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.AssistantViewAnswer
@@ -86,6 +87,14 @@ class HttpTasksApi internal constructor(
             title?.let { put("title", it) }
             notes?.let { put("notes", it) }
             done?.let { put("done", it) }
+        })["todo"] ?: error("no todo in the answer")))
+
+    override suspend fun setTodoDue(id: String, due: TodoDue): Todo =
+        stamped(JsonCodec.decodeFromJsonElement(call(path("todos", id), "PATCH", buildJsonObject {
+            when (due) {
+                is TodoDue.At -> put("due_at", due.at.toString())
+                is TodoDue.Day -> put("due_date", due.day.toString())
+            }
         })["todo"] ?: error("no todo in the answer")))
 
     /** One to-do's answer comes from its manager unstamped: it keeps the manager its list showed it under. */

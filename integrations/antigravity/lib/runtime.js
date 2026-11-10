@@ -44,6 +44,7 @@ export function createAgyRuntime(options = {}) {
   const archived = new Set() // agyId
   const lastPushedSeq = new Map() // personaId -> number
   const assistants = new Set() // personaId
+  const checkTurns = new Map() // availability probes collect text without appearing in user conversations
   const permissionAsks = new Map() // agyId -> Set of AbortControllers, one per permission card still on the phone
   const cancelling = new Set() // agyId: interrupted, its turn has not ended yet
 
@@ -121,6 +122,7 @@ export function createAgyRuntime(options = {}) {
       close,
       modes,
       models,
+      check,
     },
     {
       runtime: RUNTIME,
@@ -165,6 +167,8 @@ export function createAgyRuntime(options = {}) {
       case 'agent_message_chunk': {
         const chunk = upd.content?.text
         if (typeof chunk === 'string' && chunk) {
+          const probe = checkTurns.get(rawId)
+          if (probe) probe.text += chunk
           const turn = activeTurns.get(pid)
           if (turn) {
             turn.streamingText += chunk
@@ -196,6 +200,13 @@ export function createAgyRuntime(options = {}) {
     const cur = sessionModes.get(rawId)
     if (cur?.mode) return cur.mode
     return configuredMode()
+  }
+
+  function configuredModel() {
+    const value = readAgySettings().model
+    if (typeof value !== 'string' || !value.trim()) return undefined
+    const model = value.trim()
+    return catalog.find((entry) => entry.id === model || entry.name === model)?.id || model
   }
 
   function configuredMode() {
@@ -388,6 +399,8 @@ export function createAgyRuntime(options = {}) {
       if (!mtimeMs) mtimeMs = createdAt.get(rawId) || Date.now()
 
       const cwd = sessionCwds.get(rawId) || workspacePathOf(native, workspacePathOf(summary, cwdByConv[rawId] || home))
+      // The node removes its temporary probe directory when the check ends. Keep those transcripts out after restarts.
+      if (basename(cwd).startsWith('persona-check-') && !existsSync(cwd)) continue
       if (cwd) sessionCwds.set(rawId, cwd)
       if (isAssistantDir(cwd)) assistants.add(pid)
 
@@ -470,6 +483,40 @@ export function createAgyRuntime(options = {}) {
     return mcpServers(personadBin, pid, isAsst)
   }
 
+  async function check(params) {
+    if (!params.cwd || !params.prompt) throw new Error('Availability checks require a temporary workspace and prompt')
+    const started = Date.now()
+    const deadline = started + (options.checkTimeoutMs ?? 75_000)
+    const remaining = () => Math.max(1, deadline - Date.now())
+    let rawId
+    try {
+      await acp.ensureStarted()
+      const session = await acp.call('session/new', { cwd: params.cwd, mcpServers: [] }, remaining())
+      rawId = session.sessionId
+      if (!rawId) throw new Error('Antigravity returned no check session')
+      // Probes have no tools or phone permission cards. The existing archived-session guard cancels their requests.
+      archived.add(rawId)
+      const probe = { text: '' }
+      checkTurns.set(rawId, probe)
+      if (session.models?.availableModels) publishModels(session.models.availableModels)
+      const model = configuredModel()
+      if (model) await acp.call('session/set_model', { sessionId: rawId, modelId: model }, remaining())
+      await acp.call('session/set_mode', { sessionId: rawId, modeId: 'default' }, remaining())
+      const result = await acp.call('session/prompt', { sessionId: rawId, prompt: [{ type: 'text', text: params.prompt }] }, remaining())
+      if (result?.stopReason !== 'end_turn') throw new Error(`Antigravity availability check ended with ${result?.stopReason || 'no stop reason'}`)
+      if (!probe.text.trim()) throw new Error('Antigravity availability check returned no answer')
+      return { ok: true, agent: RUNTIME, model: model || session.models?.currentModelId, answer: probe.text.trim().slice(0, 400), millis: Date.now() - started }
+    } finally {
+      if (rawId) {
+        await acp.cancel(rawId)
+        await acp.closeSession(rawId)
+        checkTurns.delete(rawId)
+        sessionModels.delete(rawId)
+        sessionModes.delete(rawId)
+      }
+    }
+  }
+
   async function applySessionOptions(rawId, { model, permission_mode, effort }) {
     try {
       if (model) {
@@ -516,7 +563,7 @@ export function createAgyRuntime(options = {}) {
     try {
       await loadSession(rawId, cwd, mcpServersFor(pid, isAsst))
       await applySessionOptions(rawId, {
-        model: params.model,
+        model: params.model || configuredModel(),
         permission_mode: params.permission_mode || configuredMode(),
         effort: params.effort,
       })

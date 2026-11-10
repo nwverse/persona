@@ -151,10 +151,16 @@ func taskLine(h *Hub, todo Todo) string {
 }
 
 func planArgs(readonly bool) json.RawMessage {
-	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
+	task := map[string]any{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
 		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "acceptEdits",
-	}}})
+		// What task_plan requires of a brief (#3822): a read-only task's goal and how long it should take.
+		"goal": "登录页横屏不再崩溃", "expect_minutes": 10,
+	}
+	if !readonly { // a writable task also says what done means
+		task["done_when"] = []string{"修好并补了测试"}
+	}
+	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{task}})
 	return raw
 }
 

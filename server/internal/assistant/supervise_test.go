@@ -255,8 +255,16 @@ func TestSupervisedTaskRound(t *testing.T) {
 		agentTurn(s, f, proto.StatusDone, "补了深色截图", 0)
 		waitFor(t, "the review again", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
 	}
-	if res := review("rework", "还是不对"); !strings.Contains(res, "waits for the user") {
-		t.Fatalf("third rework: %s", res)
+	// A third rework goes to the owner, and only as a decision they can answer (#3804): without one it is refused.
+	raw3, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "还是不对"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw3); err == nil || !strings.Contains(err.Error(), "sent back 2 times") {
+		t.Fatalf("third rework with no decision: %v", err)
+	}
+	raw3, _ = json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "还是不对", "why_owner": "priority",
+		"reason": "两轮返工后截图还是不对，怎么办", "recommend": "再返工一轮", "cost_of_waiting": "PR 一直开着",
+		"options": []map[string]string{{"label": "再返工一轮", "leads_to": "再等半小时"}, {"label": "不做了", "leads_to": "关掉任务"}}})
+	if res, err := s.runTool(ctx, "server", "conv1", "task_review", raw3); err != nil || !strings.Contains(res, "waits for the user") {
+		t.Fatalf("third rework: %s %v", res, err)
 	}
 	if v := todoNow(s, todo.ID).Supervision; v.State != reviewNeedsUser || v.Round != maxReworkRounds || len(sentToAgent(f)) != maxReworkRounds {
 		t.Fatalf("after the third: %+v, sent %d", v, len(sentToAgent(f)))

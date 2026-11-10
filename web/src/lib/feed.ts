@@ -252,6 +252,50 @@ export function receiptState(it: FeedItem): "done" | "failed" | "interrupted" {
   return parseAPIError(field(it, "summary")) ? "interrupted" : "done";
 }
 
+/** How an interrupted receipt's task was dealt with, as the hub worked it out (#3834): pending until it was. */
+export type InterruptResolution = "pending" | "cancelled" | "rerouted" | "resumed" | "accepted" | "done";
+
+/** One task of a batch of interruptions (`batch.tasks`). */
+export interface InterruptBatchTask {
+  receipt: string;
+  todo_id: string;
+  title: string;
+  resolution: InterruptResolution;
+  at: string;
+}
+
+/** What a batch's head says of the batch: interruptions with the same cause in one chat within ten minutes. */
+export interface InterruptBatch {
+  cause: string;
+  machine?: string;
+  total: number;
+  pending: number;
+  resolved: number;
+  tasks: InterruptBatchTask[];
+}
+
+/** How the chat draws an interrupted receipt, from what the hub sent (#3834): `hidden` inside its batch's head, `batch`
+ *  the head of several, `resolved` one dealt with (a grey line), `pending` still to deal with. undefined: a hub from before
+ *  it (no `resolution`), drawn as ever. */
+export type InterruptLook =
+  | { kind: "hidden" }
+  | { kind: "batch"; batch: InterruptBatch }
+  | { kind: "resolved"; resolution: Exclude<InterruptResolution, "pending"> }
+  | { kind: "pending" };
+
+const RESOLUTIONS: ReadonlySet<string> = new Set(["pending", "cancelled", "rerouted", "resumed", "accepted", "done"]);
+
+export function interruptLook(it: FeedItem): InterruptLook | undefined {
+  if (it.kind !== "receipt" || field(it, "state") !== "interrupted") return undefined;
+  const resolution = field(it, "resolution");
+  if (!resolution || !RESOLUTIONS.has(resolution)) return undefined;
+  const group = field(it, "group");
+  if (group && group !== it.id) return { kind: "hidden" };
+  const batch = it.body?.batch as InterruptBatch | undefined;
+  if (batch && Array.isArray(batch.tasks) && batch.tasks.length > 1) return { kind: "batch", batch };
+  return resolution === "pending" ? { kind: "pending" } : { kind: "resolved", resolution: resolution as Exclude<InterruptResolution, "pending"> };
+}
+
 /** One question of an answered card and what the user answered. */
 export interface AnsweredItem {
   question: string;
@@ -552,11 +596,16 @@ export async function retryTask(todo: Todo) {
   }
 }
 
+/** How a decision is answered other than by taking its recommendation (#3804): one of its options by its label, or one
+ *  of the fixed responses that say the owner cannot answer it as asked. */
+export type AskAnswer = { option: string } | { response: string };
+
 /** The Accept button of a `brief` item's task to verify: "accepted", or "handled" when the hub says that round is over
- *  (asked again since, or already verified). Any other failure throws. */
-export async function acceptBrief(todoId: string, askedAt: string): Promise<"accepted" | "handled"> {
+ *  (asked again since, or already verified). Any other failure throws. `answer`: a decision's option or fixed response
+ *  instead of its recommendation. */
+export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "handled"> {
   try {
-    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt } });
+    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) return "handled";
     throw e;
