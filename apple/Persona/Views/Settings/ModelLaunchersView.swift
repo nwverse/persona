@@ -441,7 +441,7 @@ struct ModelLauncherDetailView: View {
                         if let d = l.customModelDescription, !d.isEmpty { LabeledContent("Custom Model Description", value: d) }
                     }
                     if let o = l.origin, o.hasPrefix("zshrc:") { mono("Imported From", "~/.zshrc · " + o.dropFirst("zshrc:".count)) }
-                    if let ms = l.models, ms.count > 1 { mono("Available Models", ms.map(\.id).joined(separator: "、")) }
+                    if let ms = l.models, ms.count > 1 { mono("Available Models", ms.map(\.id).joined(separator: String(localized: "、", comment: "Separator between computer names in a list"))) }
                     if l.hasHeaders == true { LabeledContent("Headers", value: String(localized: "Set (hidden)")) }
                     if l.managed { LabeledContent("API Key", value: l.hasKey == true ? String(localized: "Set (hidden)") : String(localized: "Not set")) }
                     if l.managed, l.api != "responses" { LabeledContent("Authentication [Model Launchers View d1ff8f]", value: l.bearerAuth ? "Bearer" : "x-api-key") }
