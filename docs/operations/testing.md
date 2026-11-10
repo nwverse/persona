@@ -322,6 +322,11 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   `GET /mock/say?text=…&user=…&stream=1` pushes replies to all open chats. App `-showScrollState YES` reports list state via accessibility
   `chat.scrollState`: bottom / follows / frozen / arrow / newestShown / withheld… (`visible` draws it). XCUITest misreads inverted-list row positions.
   `testRealHubChats` captures real-hub before/after (`TEST_RUNNER_PERSONA_REAL_PAIR`, etc., skip if absent; only own sessions, opening marks read).
+- Half-written Markdown in a streaming reply (#2916, `docs/apple/ios.md` "Streaming"): `GET /mock/say?preset=repair&stream=1&steps=1&ms=0&upto=<n>`
+  streams that reply into every open chat only to its first n characters and leaves it open there (no transcript line), so a moment can be
+  photographed for as long as needed; the same without `upto` writes it. With the preset as written, `upto` 175 is inside a numbered list
+  item's code fence, 277 a table's header row just ended, 333 a half-written row, 443 an open `**` with half a link in it, 524 inside a
+  ```` ```mermaid ```` fence. A short Persona chat shows it best: `-tab assistant -openAssistant server/b2e4d6f8-0000-4000-8000-000000000002`.
 - Terminal stream: `MOCK_TERMINAL_STREAM=1` (hello `terminal_stream`) sends a fake Claude full frame after subscription, then one frame/second advancing spinner;
   `MOCK_TERMINAL_FIXTURE=apple/PersonaTests/Fixtures/terminal-observe.jsonl` replays real herdr frames (colors, boxed Chinese, emoji, links, 200-character line).
   `-openPane terminal`, `-terminalWrap NO` disables wrapping, `-terminalPages 1` loads one page (mock `/screen/before` gives colored history).
