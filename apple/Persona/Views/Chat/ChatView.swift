@@ -6002,6 +6002,9 @@ private struct ChatRegion<Content: View>: View {
         #if PERF_SIGNPOST
         let _ = PerfTrace.event(name)
         #endif
+        #if DEBUG
+        let _ = PerfCount.body("\(name)")
+        #endif
         content()
     }
 }
