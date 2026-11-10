@@ -574,6 +574,13 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
   - Settings entry points all use values (`SettingsPage`); view-based `NavigationLink { page }` pushes the left column's own stack and opens in the narrow column.
 - **Persona**: in regular width, the sidebar is `NavigationSplitView`'s left column (the shell's places and Settings at its foot), with the top-left button showing / hiding it; on iPhone Duo open the
   column's own button at its top hides it and the top-left one only brings it back (#2623, below); compact still uses a drawer.
+- **The line between the list and the page** (#2624, `SplitDividerHandle`, Persona's history and the Agents list; iPad and open Duo), as Feishu's:
+  - A short handle on the line drags the list column wider or narrower. The bounds are iPad 340–480 pt and Duo from 200 pt, and the page keeps at least 300 pt; the page takes the rest.
+  - Dragged more than 80 pt past the least, the list closes and the handle waits at the page's leading edge; dragged right from there, the list comes back.
+  - Width and closing are remembered per list: `agents.list.width` / `.closed`, `assistant.list.width` / `.closed`. Until dragged, the column is the system's.
+  - The column's own button closes and opens it too, remembered the same. A double tap on the handle gives the column back to the system.
+  - VoiceOver: adjusting the handle resizes the list by 40 pt, Hide List / Show List close and open it.
+  - `SplitDividerTests` (`-openSplitFresh YES` starts both lists at the system's width).
 - **Readable width**: chats and the Persona home page are at most 760pt wide (`ChatView.readableWidth`), centered when wider; the top bar still spans the full width.
 - **No screen dimensions**: the screens have different sizes and ratios; never use `UIScreen.main`. The long-press message action bar stays within the chat area (`MessageMenu.area`
   coordinate space); interaction forms have a maximum height of 55% of their container (`containerRelativeFrame`); image scaling uses the view's `traitCollection.displayScale`.
@@ -699,7 +706,7 @@ Two small labels above the chat input: permission mode (Manual approval / Auto-e
 like Claude Code's terminal bottom bar; tap to change (`SessionModeBar`, wording and icons in `SessionModes`). The new shell moves these into the input's bottom-right
 "Model · Effort" button (#1091, see the input under "New shell" above). New Agent forms and the assistant home page above its input
 also offer selection (unset means "Follow launcher"). Codex / the internal Codex fork sessions do not show them; app-server-driven Codex sessions (hub supplies `efforts`, `Session.setsEffortOnly`)
-show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")).
+show effort only, with levels supported by their model (`SessionModes.effortOptions`, `docs/integrations/codex.md` ("Effort")). When the row carries `capabilities.modes`, that Boolean decides instead: `false` hides the controls for Claude outside Persona's terminals, and `true` enables them for a compatible runtime such as Orca or agy. An older hub that omits the field keeps the agent-based behavior (`Session.canChangeModes`; `docs/protocol/protocol.md` "Codex sources and capabilities").
 For Claude Code sessions in herdr, the effort menu also has a Model section (#3119, matching web #2434; `SessionModes.switchesModel`):
 Default / Opus / Sonnet / Haiku; choosing sends `POST …/modes {"model"}`, and the node enters `/model <id>` with message-sending safeguards and checks the screen; failure explains why.
 While working, waiting for your answer or not running, this section is disabled and its title explains why; the title notes that the model also becomes the default for new sessions (Claude Code behavior).
