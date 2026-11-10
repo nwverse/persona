@@ -68,5 +68,7 @@
   "card_act_launch": "{app} を開く",
   "card_act_terminate": "{app} を終了",
   "card_act_wait": "待機",
-  "card_act_type_count": "{count} 文字を入力"
+  "card_act_type_count": "{count} 文字を入力",
+  "manifest_self_apps_title": "iPhone上のPersonaアプリ",
+  "manifest_self_names_title": "iPhone上のPersonaアプリの名前"
 }
