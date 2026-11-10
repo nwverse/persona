@@ -38,7 +38,7 @@ func meetingUpload(rev int64, start time.Time, texts ...string) RecordingUpload 
 
 func putRecording(t *testing.T, e *Engine, id string, u RecordingUpload, now time.Time) {
 	t.Helper()
-	if st, err := e.PutRecording(id, u, now); err != nil || st != RecordingStored {
+	if st, err := e.PutRecording(id, u, now); err != nil || st.Status != RecordingStored {
 		t.Fatalf("put %s: %v %v", id, st, err)
 	}
 }
@@ -537,20 +537,6 @@ func TestMinutesRemade(t *testing.T) {
 		if !unusableAnswer(unusable) {
 			t.Errorf("%v should count", unusable)
 		}
-	}
-}
-
-// A part the model takes too long for counts as a failure, so it can't hold the queue for ever.
-func TestMinutesCallTimeoutCounts(t *testing.T) {
-	model := &funcModel{f: func(int, string, string) (string, error) { return "", context.DeadlineExceeded }}
-	e := goldenEngine(t, model)
-	now := time.Now()
-	putRecording(t, e, recID, meetingUpload(1, now.Add(-time.Hour), "一句"), now)
-	for range minutesTries {
-		e.WriteMinutes(context.Background(), 2)
-	}
-	if r := recordingNow(t, e, recID); r.MinutesState != MinutesFailed {
-		t.Fatalf("%q after %d timeouts", r.MinutesState, minutesTries)
 	}
 }
 

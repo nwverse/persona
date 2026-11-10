@@ -29,6 +29,7 @@ func (h *Manager) readInbox(ctx context.Context, round inboxRound) assistantwire
 	if round != roundChats {
 		r.Sources = h.readConnectors(ctx)
 	}
+	h.readSubscriptions(ctx, &r, round != roundChats)
 	return r
 }
 

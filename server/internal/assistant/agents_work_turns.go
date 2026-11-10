@@ -2,12 +2,12 @@ package assistant
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -191,6 +191,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if s.isReviewer(machine, c.SessionID) {
 		return // a review's reviewer: its turn is the review's (supervise_autoreview.go), never the user's to decide
 	}
+	if s.meetingTurnNow(machine, c.SessionID) {
+		return // a meeting's batch started it: a side exchange, no work state (meeting_turns.go)
+	}
 	k := [2]string{machine, c.SessionID}
 	s.work.mu.Lock()
 	s.work.init()
@@ -248,6 +251,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 			return
 		}
 		by = "model"
+		if w.By != "" {
+			by = w.By // decided from the agent's closeout, without the model
+		}
 	}
 	s.applyApproval(k, w, same)
 	w.TurnAt, w.At, w.By = c.UpdatedAt, time.Now().UTC(), by
@@ -264,6 +270,15 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	}
 	if !closed {
 		s.actOn(ctx, v, machine, c, &e)
+	}
+	// The turn after a status question is its answer (agents_closeout_ask.go): never asked again, whatever it says.
+	answersAsk := had && last.Work.CloseoutAsk == closeoutAskSent && !sameTurn(c, last.TurnAt)
+	switch {
+	case answersAsk && continues(e.Work):
+		// Cut off before it answered: the turn that goes on from here is the answer.
+		e.Work.CloseoutAsk, answersAsk = closeoutAskSent, false
+	case !answersAsk && !closed:
+		s.planCloseoutAsk(ctx, machine, c, &e)
 	}
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
 		if ciWaitIntent(&e.Work) {
@@ -296,10 +311,13 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	} else {
 		s.putWork(ctx, e)
 	}
-	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), w.Phase, orEmpty("/", e.Work.On), by,
+	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), e.Work.Phase, orEmpty("/", e.Work.On), by,
 		time.Since(start).Seconds(), e.Work.Line)
-	s.workEvent(machine, c.SessionID, "triaged", map[string]any{"phase": w.Phase, "on": e.Work.On, "by": by,
+	s.workEvent(machine, c.SessionID, "triaged", map[string]any{"phase": e.Work.Phase, "on": e.Work.On, "by": by,
 		"line": e.Work.Line, "ms": time.Since(start).Milliseconds()})
+	if answersAsk {
+		s.workEvent(machine, c.SessionID, closeoutAskOutcome(e.Work), map[string]any{"phase": e.Work.Phase})
+	}
 }
 
 // carryCounts: the same wait goes on (the manager woke or continued it, it still waits), so e's counts are last's
@@ -483,11 +501,11 @@ func rateLimitError(text string) bool {
 var (
 	// userErrorStatus: HTTP statuses a "Continue" cannot fix: a bad request (400), sign-in or permission (401, 403),
 	// a request too large (413).
-	userErrorStatus = regexp.MustCompile(`\b(400|401|403|413)\b`)
+	userErrorStatus = lazyre.New(`\b(400|401|403|413)\b`)
 	// transientStatus: HTTP statuses of a service failing for a moment: a timeout (408), a rate limit (429), a server
 	// error (500, 502, 503, 504) or overloaded (529).
-	transientStatus = regexp.MustCompile(`\b(408|429|500|502|503|504|529)\b`)
-	rateLimitStatus = regexp.MustCompile(`\b429\b`)
+	transientStatus = lazyre.New(`\b(408|429|500|502|503|504|529)\b`)
+	rateLimitStatus = lazyre.New(`\b429\b`)
 	userErrorWords  = []string{"failed to authenticate", "oauth token has expired", "invalid api key", "not logged in", "please run /login",
 		"issue with the selected model", "permission_error", "authentication_error", "credit balance", "billing",
 		"ssl certificate", "self-signed certificate", "certificate verif",
@@ -504,7 +522,8 @@ var (
 // riskyWords mark a next step the manager must not set off itself (docs/assistant/agent-work.md "Safety boundary"): it is only ever a
 // card.
 var riskyWords = []string{"push", "deploy", "部署", "发布", "上线", "merge", "合并", "合入", "发消息", "回复", "评论", "testflight",
-	"release", "推送", "推到", "comment", "发版", "提审", "send"}
+	"release", "推送", "推到", "comment", "发版", "提审", "send",
+	"发送", "删除", "delete", "购买", "付费", "续费", "充值", "生产", "production"} // i18n-ignore: matched against what the agent said
 
 func risky(texts ...string) bool {
 	for _, t := range texts {

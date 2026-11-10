@@ -2,6 +2,7 @@ package node
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -135,7 +136,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}()
 
 	switch req.Kind {
-	case "hook", "ask", "notify": // after what standby took while the manager was away (spool.go)
+	case "hook", "ask", "notify": // after what standby took while the manager was away (spool_replay.go)
 		if n.replayed != nil {
 			// Not for ever: a report-only hook gives up after 3 s (nodeclient.ReportHook), and a replay that takes long
 			// (a manager slow to answer) must not hold the others past what they wait for. Out of order beats lost.
@@ -151,7 +152,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 				return
 			}
 			if req.Kind == "hook" {
-				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool.go)
+				n.ahead.note(req) // before the replay is done: it leaves what this one moved on alone (spool_replay.go)
 			}
 		}
 	}
@@ -328,6 +329,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	if repair := n.assistantViewStop(ctx, req, in); repair != nil {
 		return repair, nil
 	}
+	if hold := n.closeoutStop(ctx, req, in); hold != nil {
+		return hold, nil
+	}
 	stopSig := n.recordHookTurn(req, in, time.Now())
 	if !req.ReportOnly && !req.Resume {
 		n.liveTurnHook(in) // a prompt or a Stop ends the live text of the turn before (livereply.go)
@@ -388,6 +392,13 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 	}
 
 	switch {
+	case in.HookEventName == "SessionStart":
+		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
+		if brief := n.closeoutStart(ctx, req, in); brief != nil {
+			return brief, nil
+		}
+		return nil, nil
+
 	case in.HookEventName == "Elicitation":
 		if !elicitationInteraction(in, &ix) {
 			return nil, nil
@@ -431,6 +442,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ix.Kind, ix.Plan = proto.IxPlan, p.Plan
 		res, ok, err := n.ask(ctx, ix)
 		if err != nil || !ok || res.Approve == nil {
+			if !errors.Is(err, errNodeGone) {
+				// Not answered on the card: the terminal's own dialog decides, and with it the mode that follows.
+				n.planThenAfterTerminal(in.SessionID)
+			}
 			return nil, err
 		}
 		if !*res.Approve {
@@ -442,7 +457,7 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		mode := res.Mode
 		if mode == "" {
-			mode = "bypassPermissions"
+			mode = cmp.Or(n.planThen(in.SessionID), "bypassPermissions")
 		}
 		var input map[string]any
 		_ = json.Unmarshal(in.ToolInput, &input)
@@ -581,9 +596,16 @@ func (n *Node) notifyHookEvent(in hookInput, stopSig string, reportOnly bool) {
 	_ = n.peer.Notify("hook.event", hookEventParams(in, stopSig, reportOnly))
 }
 
-// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca pane only where the set enables Orca).
+// paneKindOK: a hook's pane is one this machine's hosts can drive (an Orca or Tern pane only where the set enables
+// that host: both name the pane in every terminal of theirs, driven or not).
 func paneKindOK(n *Node, pane string) bool {
-	return host.ParsePane(pane).Kind != host.Orca || n.hostEnabled(proto.EngineOrca)
+	switch host.ParsePane(pane).Kind {
+	case host.Orca:
+		return n.hostEnabled(proto.EngineOrca)
+	case host.Tern:
+		return n.hostEnabled(proto.EngineTern)
+	}
+	return true
 }
 
 // hookEventParams is hook.event's params for what a hook saw.
@@ -596,7 +618,23 @@ func hookEventParams(in hookInput, stopSig string, reportOnly bool) map[string]a
 	if reportOnly {
 		p["report_only"] = true
 	}
+	if in.HookEventName == "UserPromptSubmit" {
+		p["prompt_source"] = promptSource(in.Prompt) // never the prompt itself: the apps see the event too
+	}
 	return p
+}
+
+// promptSource says who a UserPromptSubmit's prompt is from, for the manager (a meeting's batch is not the user's own
+// message: docs/assistant/meeting-minutes.md "Feeding the attending session"): the kind of message source it carries
+// (meeting, conversation, task…), "notification" for a background task reporting back, else "user".
+func promptSource(prompt string) string {
+	if src := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: prompt}); src != nil && src.Kind != "" {
+		return src.Kind
+	}
+	if strings.Contains(prompt, "<task-notification>") {
+		return "notification"
+	}
+	return "user"
 }
 
 // reportedEvent: what a global report-only hook (globalhooks.go) may tell the hub; the tools are the cards.
@@ -789,8 +827,8 @@ func toolSummary(name string, input json.RawMessage) string {
 
 // callerTools are the agents' own tools that act for the agent calling them (assistant/agent_control.go
 // agentToolNames): reporting to its supervisor, reading and noting the decisions of the todo it works on, binding
-// that todo to a chat thread.
-var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread"}
+// that todo to a chat thread, handing a subtask to another computer and reading it back (assistant/dispatch.go).
+var callerTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "dispatch_start", "dispatch_read"}
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

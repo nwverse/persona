@@ -1,5 +1,29 @@
 # Lessons: Android
 
+## Late receipts must settle manual review (#3748)
+
+The review timeout does not invalidate the hub's later operation receipt. Include the manual-review state in the
+compare-and-set sources for a confirmed successful receipt, without resending the message or accepting an unknown
+outcome. Keep discarded messages outside that source set so a lookup that finishes later cannot undo the user's choice.
+
+
+## Large-font screenshots need Compose density, not just configuration (#3588)
+
+Setting `LocalConfiguration.fontScale` alone can leave the rendered Compose text at the original size. Override
+`LocalDensity` with the same font scale, assert that default/large pixels differ, and inspect the real page's capture.
+A decorative mark inside a clickable row may be merged into that row's semantics: assert its test tag with the
+unmerged tree, not by dropping the visual assertion. With a frozen Compose clock, a Robolectric `performScrollTo`
+can keep waiting for a choreographer frame and fill the trace-recording heap; keep the requested rows visible in a
+bounded real-page fixture and test state transitions on the same row instead of hiding the failure with more heap.
+
+## Snapshot subscriptions are not page visibility
+
+The shell, badges and floating capsule can collect a repository snapshot without its page being visible. Do not use subscriber
+counts to activate a fast full-list network poller when the hub already pushes invalidations and refreshes on reconnect; a slow poll is enough to back up a missed event. Likewise,
+session-list metadata updates should not prefetch every recent chat's message bodies. Keep message synchronization tied to
+observers and reuse immutable transcript projections across metadata-only events; background allocation can make the UI
+thread wait for garbage collection even when parsing itself runs on an IO dispatcher.
+
 ## Installed extension details need their own dependency metadata (#1315)
 
 Decoding dependency and pack fields in an installation preview does not retain them in the installed detail's separate
@@ -333,7 +357,8 @@ Stable task-card upserts are identity hints, not newer than live to-dos by defin
 - Codex file changes become `Edit` with only `diff` in hub (`server/internal/transcript/codex.go`), but `diff` is not always unified diff. When FileChange has no `unified_diff` (new files), hub supplies the entire file body without `@@`. Unified-diff parsing discards it all (lines not starting with `+`, `-`, or space are treated as headers). Check for `@@` first; without it, render all-added / all-deleted according to `change` (`patchDiff`).
 - The chat page's per-row capabilities (`LocalChatRowActions`) must keep the same object during streaming. Every reader (nearly every row) recomposes when the object changes. Message-dependent data (the chat's image list) should be a function read when opened, not a `remember` key (`pictures` in `ChatScreen`).
 - An LRU exactly as large as the set that is warmed into it in order misses every entry once anything else is put in (#3050). The chat's Markdown cache held 80 entries and the page's prewarm parsed the latest 80 replies in order, on every snapshot. One extra key (a thinking block, a card segment, a plan, a recap, a row scrolled into view) evicted the oldest reply; the next cycle parsed that reply again and so evicted the next one, all the way round: 80 of 80 misses per cycle, about 272 ms at 16 KB replies on a desktop JVM. Keep the warmed set apart from what else comes in: the prewarm names its ids (`ChatMarkdownCache.keep`) and every other id shares a budget of its own, so no number of other keys evicts a warmed one; test the miss count after one and after many extra keys, not only the hit after a single prewarm. Two callers of the same key must also agree on its value: the row parsed `PathLinks.markdown(text, linkable)` while the prewarm parsed the raw text under the same key, so they replaced each other's entry and both parsed on every update.
-- A streaming Markdown reply can reuse the parse of its start only up to a block nothing after it can change (#3050, `ChatMarkdownStream`). A paragraph followed by `===` becomes a heading, a list or a block quote goes on (or lazily on) after a blank line, an indented line after a blank line can continue a list item, and a reference-link definition anywhere turns `[text][label]` earlier into a link. So only a paragraph, a heading, a rule or a closed code fence followed by a blank line is settled, a definition parses the whole text, and the test compares the tree (each node's type and offsets) and the links with a whole parse at every prefix and every cut of a corpus, not just the rendered text.
+- A streaming Markdown reply can reuse the parse of its start only up to a block nothing after it can change (#3050, `ChatMarkdownStream`). A paragraph followed by `===` becomes a heading, a list or a block quote goes on (or lazily on) after a blank line, an indented line after a blank line can continue a list item, and a reference-link definition anywhere turns `[text][label]` earlier into a link. So only a paragraph, a heading, a rule or a closed code fence followed by a blank line is settled, a definition parses the whole text, and the test compares the tree (each node's type and offsets) and the links with a whole parse at every prefix and at many cuts of a corpus, not just the rendered text.
+- A test named for a cost rule has to count that cost, not only check the result (#3282). The stream tests counted only whole parses: a change that left `ChatMarkdownStream`'s boundary where the first parse put it made every step parse nearly the whole reply again as its tail, and all 11 stream and cache tests still passed while the bench lost its gain. Count what the rule saves (here, the characters each step parses again: from its first top-level node that is not one the step before kept), and check a kept result by identity (`assertSame`), since doing all the work again returns equal values. Try the change that undoes the gain before trusting the test, and the change that breaks the rule: letting a list settle, or letting a single line feed settle a paragraph, also passed the every-prefix gate until its corpus held a list that goes on after a blank line and a paragraph with a rule-like line under it.
 
 - Pixel-by-pixel screenshots (`SHOTS_*` in `android.sh shots`; `docs/android/android.md`, "Pixel-exact before/after comparison"): after SystemUI demo mode hides mobile networking on Android 15, a satellite icon appears about 5 seconds later. Neither demo commands nor `icon_blacklist` removes it; wait for it before every capture. `adb root` restarts adbd and loses existing `adb reverse`; root before forwarding. macOS `sips -Z` changes the original image; copy first before viewing. macOS bash 3.2 with `set -u` errors on empty-array expansion; use `${arr[@]+"${arr[@]}"}`.
 - Homebrew Android SDK is at `/opt/homebrew/share/android-commandlinetools`, not `~/Library/Android/sdk`, and default Java is JDK 8. Before `android.sh`, set `ANDROID_HOME` to it and `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`. Custom AVDs need a separate `ANDROID_AVD_HOME`; do not touch other running emulators. If the first-launch readiness checklist blocks access, run `android.sh shots` once to clear data, pair, and skip readiness, then switch to your mock with `DebugEntryActivity --es debug.mockAddress …`.
@@ -486,3 +511,20 @@ Separate metadata, download, verification, permission and installer failures. Lo
 ## Preserve business failures at the HTTP boundary (#1915)
 
 Normalize a narrowly identified legacy knowledge refusal in `HubFailure`, where the response's request path is still known. Keep disabled/read-only recovery non-retryable and map shared feedback by code, not an arbitrary server sentence. Knowledge list/search/detail and edit feedback must agree. Preserve request IDs for reports; resource checks do not prove that JVM tests, native rendering or all-style screenshots passed.
+
+- A committed PackageInstaller session may remain sealed after its confirmation page disappears, including across an APK upgrade. Only its installer UID can abandon it. Offer an explicit, confirmed recovery action from Settings even when no newer APK is available; recheck ownership, package and the confirmed session IDs before cancellation. Do not cancel a new session that appeared after confirmation or clear pairing data to recover an installer task.
+
+- PackageInstaller deliberately withholds its sender's background Activity launch privileges. An activity PendingIntent callback must opt in on the creator side for current targets; without it, a task record may exist with no resumed Activity and the sealed session never reaches system confirmation. Use API 36's visible-only creator mode, the compatible explicit mode on API 34/35, and guard the API on older devices. Do not grant always-background launch just to save a final toast. If the user leaves before confirmation, retain the explicit pending-session cancellation path in Settings; verify success using the installed package version.
+
+## Hidden tabs and unread windows still own work
+
+- A composed but unplaced tab still inherits the activity lifecycle: lifecycle-aware collectors and pollers keep running after switching away. Give each primary tab its own lifecycle capped at CREATED while hidden; keep composition for navigation and scroll restoration.
+- Three unread chat windows can still hold tens of thousands of messages if older snapshots contain full histories. Skip oversized window snapshots before reading/decoding them, preserving the file and server history cursors, and trim new snapshots under the same limit so a fresh cache is never one the reader skips.
+- Bounding one cache does not bound another: the inbox has a repository window snapshot and a feature-side Lark window cache. Turning the three-window unread prefetch back on after bounding only the first one brought back main-thread GC waits of about 15 s per two minutes and an out-of-memory crash in the second. Measure a prefetch change on a device with real data before shipping it.
+- Stopping a closed chat's sync at once makes every tab switch a cold open, and a message sent from a chat the user then left never sees its echo. Release a closed chat after a delay, keep the most recently closed idle entries, and keep syncing chats the outbox still waits on.
+- A capsule started on Main must move catalog transformations off Main explicitly; conflate alone only removes queued inputs, not main-thread work.
+- Full adb meminfo can invoke app-side Explicit GC and amplify the stall being measured. Compare natural GC with meminfo --local and exclude profiling/dumpheap intervals from acceptance readings.
+
+## Wait for local listener shutdown before reusing its port
+
+On the JVM, closing a server socket with a blocked accept can defer the actual descriptor close until that I/O exits. A preferred-port restart immediately after close can then collide with its own old listener and choose a fallback. Register the accept worker under the same lifecycle lock as close, close the socket first, then wait for the worker with a bounded deadline. Preserve interruption and report a shutdown deadline without adding a new exception to synchronous close callers; keep independently occupied-port fallback distinct from listener shutdown.

@@ -256,19 +256,22 @@ export function readTranscriptSteps(brainDir, full = false) {
   }
 }
 
-/** Native tool results are intermediate work. A completed assistant reply closes the turn. */
-export function transcriptStatus(steps, now = Date.now()) {
+export function nativeWorking(summary) {
+  return !summary?.killed && (summary?.status === 'CASCADE_RUN_STATUS_RUNNING' || Boolean(summary?.not_fully_idle))
+}
+
+/** Working requires live execution evidence. A completed planner message can be progress narration. */
+export function transcriptStatus(steps, summary) {
+  if (summary?.killed) return 'idle'
+  if (nativeWorking(summary)) return 'working'
   const last = steps.findLast((step) => ['USER_INPUT', 'PLANNER_RESPONSE', 'GENERIC', 'ERROR_MESSAGE'].includes(step?.type))
   if (!last) return 'unknown'
   if (last.type === 'ERROR_MESSAGE' || ['ERROR', 'CANCELLED', 'CANCELED'].includes(last.status)) return 'idle'
-  if (last.type === 'PLANNER_RESPONSE' && last.status === 'DONE' && typeof last.content === 'string' && last.content.trim() && !last.tool_calls?.length) {
-    return 'done'
-  }
-  if (!['RUNNING', 'PENDING', 'CREATED', 'DONE'].includes(last.status)) return 'unknown'
-  // Only recent unfinished steps establish external activity. Older history remains uncertain.
-  const started = Date.parse(last.created_at)
-  if (!Number.isFinite(started) || now - started > 24 * 60 * 60 * 1000) return 'unknown'
-  return 'working'
+  // A summary from before a newly exported step cannot close that newer work.
+  const idle = summary?.status === 'CASCADE_RUN_STATUS_IDLE' && Number.isInteger(last.step_index) && summary.step_count > last.step_index
+  const reply = last.type === 'PLANNER_RESPONSE' && last.status === 'DONE' && typeof last.content === 'string' && last.content.trim() && !last.tool_calls?.length
+  if (idle) return reply ? 'done' : 'idle'
+  return 'unknown'
 }
 
 export function workspacePathOf(summary, fallbackCwd = '') {
@@ -286,31 +289,14 @@ export function workspacePathOf(summary, fallbackCwd = '') {
   return fallbackCwd
 }
 
-export function defaultModelsList() {
-  const efforts = ['low', 'medium', 'high']
-  return [
-    { id: 'gemini-4-argon-high', name: 'Gemini 4 Argon (High)', default: true, efforts, default_effort: 'high' },
-    { id: 'gemini-4-argon-medium', name: 'Gemini 4 Argon (Medium)', efforts, default_effort: 'medium' },
-    { id: 'gemini-4-argon-low', name: 'Gemini 4 Argon (Low)', efforts, default_effort: 'low' },
-    { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)', efforts, default_effort: 'high' },
-    { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)', efforts, default_effort: 'medium' },
-    { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)', efforts, default_effort: 'low' },
-    { id: 'claude-opus-5-5-high', name: 'Claude Opus 5.5 (High)', efforts, default_effort: 'high' },
-    { id: 'claude-opus-5-5-medium', name: 'Claude Opus 5.5 (Medium)', efforts, default_effort: 'medium' },
-    { id: 'claude-opus-5-5-low', name: 'Claude Opus 5.5 (Low)', efforts, default_effort: 'low' },
-    { id: 'claude-sonnet-5-5-high', name: 'Claude Sonnet 5.5 (High)', efforts, default_effort: 'high' },
-    { id: 'claude-sonnet-5-5-medium', name: 'Claude Sonnet 5.5 (Medium)', efforts, default_effort: 'medium' },
-    { id: 'claude-sonnet-5-5-low', name: 'Claude Sonnet 5.5 (Low)', efforts, default_effort: 'low' },
-    { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)', efforts: ['medium'], default_effort: 'medium' },
-  ]
-}
-
 export function personaModeToAgy(mode) {
   switch (mode) {
     case 'plan':
       return 'plan'
     case 'acceptEdits':
+      return 'accept-edits'
     case 'auto':
+      return 'auto'
     case 'bypassPermissions':
       return 'accept-edits'
     case 'default':
@@ -321,6 +307,8 @@ export function personaModeToAgy(mode) {
 
 export function agyModeToPersona(mode) {
   switch (mode) {
+    case 'auto':
+      return 'auto'
     case 'plan':
       return 'plan'
     case 'accept-edits':

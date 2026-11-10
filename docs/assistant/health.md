@@ -164,7 +164,7 @@ Checkup reports are usually PDFs dozens of pages long. If only the chat history 
   photos are still sent as images, and videos still go to the temporary directory. A hub / node older than #4546 returns 400 / "unknown upload destination"; the App reports the upload failed, which goes away after updating the hub.
 - **Entry point (#4656)**: with only the input box's `+`, it is not obvious you can upload, so the Health page has an explicit **Upload a Checkup Report**: on the web below the home input box, on iOS / Mac at the front of **Try Asking**.
   Tapping it picks a PDF or images (images are also uploaded as files, with the original kept in `reports/` as well). Once everything is uploaded, a health chat starts automatically (`views/health/reports.ts`, `FileUploads.startAll`) with the paths in the first message;
-  it still starts if you leave the page mid-upload. To test the whole path: iOS launch argument `-showReportUpload <file name>` (on the mock hub, look for `POST …/files?dest=health` and `POST /api/v1/assistant/conversations`).
+  it still starts if you leave the page mid-upload. To test the whole path: iOS launch argument `-showReportUpload <file name>[,<file name>…]` (on the mock hub, look for `POST …/files?dest=health` and `POST /api/v1/assistant/conversations`); with `-showReportUploadMB <n>` each file is that big and stays on its way a while.
 - **View and delete (#4998)**: **Checkup Reports** on the Health page lists reports in `reports/` (`server/internal/node/healthreports.go`): an original and its same-named `.md` record count as one report; record-only reports (photos sent in chat) count too.
   View the structured record, open the original or delete. Deletion is permanent and removes both original and record; **content already mentioned in chats and health memory is not deleted with them**, as the confirmation explains. Names must identify a single regular file in `reports/`; symlinks, directories and `../` are rejected.
   On the web it is on the home page (`views/health/HealthReports.tsx`); iOS / Mac use a separate page (`HealthReportsView.swift`). An old node returns 409 `node_outdated`, which the page displays. APIs live in `server/internal/devices/healthreports.go`, forwarded by hub (`devicewire.Routes`).
@@ -215,7 +215,12 @@ measurements are omitted; route coordinates are not uploaded. Pace charts requir
 measured splits and are not generated from the aggregate-only payload.
 
 The device atomically stores its HealthKit cursor with a bounded upload outbox.
-Failed uploads are retried on the next foreground visit. The assistant stores a
+Failed uploads are retried on the next foreground visit, except a report the hub
+rejects as invalid (HTTP 400, 413 or 422): the same data gets the same answer, so
+the device drops it and keeps going, and Settings → Health says some workouts were
+skipped. Without that, one bad report would hold back every later workout. The hub
+accepts end times up to a day past its own clock, so ordinary clock drift between
+the phone and the hub is never a rejection. The assistant stores a
 workout UUID receipt in PostgreSQL so retries, restarts, and deletion of an old task
 do not recreate it. Turning the switch off clears the local pending uploads; already
 accepted reports may still complete. Re-enabling starts a new consent window.

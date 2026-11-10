@@ -8,12 +8,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
@@ -128,16 +130,20 @@ class ExtensionShowcaseShotsTest {
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
         rule.setContent {
-            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
-                val view = pages.getValue(name)
-                val state = ExtensionViewState(view, values = ExtensionViewText.fields(view), loadingMore = null)
-                // each page its own composition, as each page of the app is (the search box keeps what was typed)
-                key(name) { Box(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
-                    if (compact(name)) JCard(Modifier.padding(Tokens.Space.l)) { ExtensionCardContent(state, handle) }
-                    else LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = Tokens.Space.l, vertical = Tokens.Space.l)) {
-                        extensionViewItems(name, state, handle)
-                    }
-                } }
+            // Parse the changing Markdown snapshots on the composition thread. Its background result can otherwise
+            // race a snapshot advance and apply that composition on a dispatcher worker (see #3318).
+            CompositionLocalProvider(LocalInspectionMode provides true) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    val view = pages.getValue(name)
+                    val state = ExtensionViewState(view, values = ExtensionViewText.fields(view), loadingMore = null)
+                    // each page its own composition, as each page of the app is (the search box keeps what was typed)
+                    key(name) { Box(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background)) {
+                        if (compact(name)) JCard(Modifier.padding(Tokens.Space.l)) { ExtensionCardContent(state, handle) }
+                        else LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = Tokens.Space.l, vertical = Tokens.Space.l)) {
+                            extensionViewItems(name, state, handle)
+                        }
+                    } }
+                }
             }
         }
         for (s in AppStyle.entries) for (d in listOf(false, true)) for (p in pages.keys) {
