@@ -31,7 +31,10 @@ final class PersonaStore {
     @ObservationIgnored private let defaults: UserDefaults
     /// The refresh under way: another caller waits for it instead of starting a second one (connecting to the hub
     /// and Settings opening come together; a second refresh used to clean away the package the first was downloading).
-    @ObservationIgnored private var refreshing: Task<Void, Never>?
+    /// `n` counts them, so `reload` can tell one that began after it was called. It is cleared as the load ends, before
+    /// anyone waiting on it carries on: a caller that then asks again gets a new one, not the one just finished.
+    @ObservationIgnored private var refreshing: (n: Int, task: Task<Void, Never>)?
+    @ObservationIgnored private var refreshes = 0
     @ObservationIgnored private let frameCache = NSCache<NSString, PersonaFrames>()
     @ObservationIgnored private let imageCache = NSCache<NSString, UIImage>()
 
@@ -86,11 +89,30 @@ final class PersonaStore {
     /// What the hub offers now; the chosen one is downloaded when its rev is new, and revs nobody uses are removed.
     func refresh(_ api: APIClient?) async {
         guard let api, !api.config.isDemo else { return }
-        if let running = refreshing { return await running.value }
-        let task = Task { await load(api) }
-        refreshing = task
-        await task.value
-        refreshing = nil
+        if let running = refreshing { return await running.task.value }
+        await startRefresh(api).value
+    }
+
+    /// The list as the hub has it now, read after this call: for what was just made or deleted there (#2405). A refresh
+    /// already under way may have asked before that, so it is waited for and the list read again, unless another one
+    /// began meanwhile (that one asked later). Never two at once, as for `refresh`.
+    func reload(_ api: APIClient?) async {
+        guard let api, !api.config.isDemo else { return }
+        let asked = refreshes
+        if let running = refreshing { await running.task.value }
+        if let next = refreshing, next.n > asked { return await next.task.value }
+        await startRefresh(api).value
+    }
+
+    private func startRefresh(_ api: APIClient) -> Task<Void, Never> {
+        refreshes += 1
+        let n = refreshes
+        let task = Task {
+            await load(api)
+            if refreshing?.n == n { refreshing = nil }
+        }
+        refreshing = (n, task)
+        return task
     }
 
     private func load(_ api: APIClient) async {
