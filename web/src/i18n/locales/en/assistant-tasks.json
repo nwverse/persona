@@ -1,6 +1,9 @@
 {
   "tray_needs_you": "Needs you",
   "tray_running": "In progress",
+  "background_tasks_running": "Background tasks running: {count}",
+  "subagents_count_running": "Subagents running: {count}",
+  "background_running": "Background work is running",
   "tray_empty_pending": "Nothing waiting for you",
   "tray_shelved_other": "Shelved {count}",
   "tray_shelved_one": "Shelved {count}",

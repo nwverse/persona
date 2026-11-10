@@ -614,6 +614,12 @@ Send/terminal-dialog safety (`SendSafetyTests`) uses mock:
 tap dialog option, hub gets `option` not keys and Dialog changed notice; existing computer draft, Clear and send retry carries
 `clear_draft` under a new `client_msg_id`, and Resend after Not Now reaches the computer again under a new one (#6425; `GET /mock/resolved`, `GET /mock/sent`). Screenshot `-openSendMessage <text>` sends after 3 seconds (`-openSendDelay <seconds>` overrides).
 
+Terminal questions of several (`ScreenStepsCardTests`, #2970): `MOCK_SCREEN_STEPS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`,
+`TEST_RUNNER_PERSONA_STEPS_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/ScreenStepsCardTests`. The mock's three-question dialog moves as the terminal does
+(← / →, an answer moves on, the node submits the review tab after an answer that names its option): Previous back to the first question with its answer marked, Next on,
+the last answer as keys and the review card before Submit, in light and dark; and a review with a question left (`GET /mock/screen-steps?reset=review`) whose button goes back to it.
+`GET /mock/screen-steps` shows where the dialog is, the answers and every resolution; `TEST_RUNNER_PERSONA_SHOTS=<dir>` writes `steps-*.png`.
+
 New Persona chat from elsewhere (`NewConversationEntryTests`, #527): Inbox Hand to AI immediately shows sent message, not No messages yet;
 late transcript shows it once. `PORT=18927 MOCK_SOURCES=1 MOCK_TODO_OFFLINE=1 MOCK_ASSISTANT_TRANSCRIPT_SECONDS=8 python3 scripts/mock/mock_hub.py &`,
 `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18927 xcodebuild test … -only-testing:PersonaUITests/NewConversationEntryTests` (main chat and new chat in supported navigation; Agent targets require those two fixture flags, and the test checks they are present).

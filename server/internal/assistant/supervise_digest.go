@@ -309,6 +309,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if st != reviewNeedsUser && len(g.Cards) == 0 { // a leader's escalated cards are told as they were
 			return prompts.SuperviseEntry{}, false // decided meanwhile
 		}
+	case sigOrphaned:
+		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
+			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
+		}
 	}
 	var asks []prompts.SuperviseAsk
 	if g.Kind == sigAsk {
@@ -330,6 +334,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	if g.Kind == sigReport { // what it said is the report itself, not a reason in brackets
 		e.Detail, e.Report, e.Said, e.Evidence, e.Step, e.Steps = "", g.Report, g.Detail, g.Evidence, g.Step, g.Steps
+	}
+	if g.Kind == sigOrphaned {
+		e.Orphan = g.Orphan
 	}
 	if g.Kind == sigFailed {
 		s.remedyEntry(ctx, t, &e) // its kept tab, and the turn that hears of it (start_remedy.go)
@@ -383,7 +390,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigReview: 5, sigStalled: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:
@@ -411,6 +418,10 @@ func (s *Service) holdPushes(ctx context.Context, id string) {
 	b.mu.Unlock()
 	s.publish(ctx)
 }
+
+// holdPushesParam marks an assistant.send whose turn holds the conversation's pushes (holdPushes): a supervision
+// message, or a quiet task's run in a conversation it came from (runTask). Any other send releases them (call).
+const holdPushesParam = "hold_pushes"
 
 // releasePushes: someone else speaks in conversation id: its turns are pushed as ever.
 func (s *Service) releasePushes(ctx context.Context, id string) {
