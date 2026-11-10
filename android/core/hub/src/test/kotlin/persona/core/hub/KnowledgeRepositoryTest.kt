@@ -124,6 +124,28 @@ class KnowledgeRepositoryTest {
         }
     }
 
+    /** An entry's page pins the assistant it was opened for: its reads and saves name it, whatever is current. */
+    @Test fun aPagesPinNamesItsAssistantOnReadsAndSaves() = runBlocking {
+        try {
+            persona.core.contracts.api.AssistantManagerChoice.choose("hub", null, "assistant")
+            MockWebServer().use { server ->
+                val repository = HttpKnowledgeRepository(HubScope("demo", "generation"), server.url("/").toString(),
+                    "fixture-token", OkHttpClient(), { true })
+                val pins = persona.core.contracts.api.ManagerPins.of(listOf(listOf("kb"), listOf("kb-search")), "m-work", "hub")!!
+                server.enqueue(MockResponse().setBody("""{"detail":{"kind":"projects","id":"weather","path":"data/projects/weather"}}"""))
+                kotlinx.coroutines.withContext(pins) { repository.entry(KnowledgeKind.Projects, "weather") }
+                assertEquals("/api/v1/kb/projects/weather?manager=m-work", server.takeRequest().path)
+                server.enqueue(MockResponse().setBody("{}"))
+                kotlinx.coroutines.withContext(pins) { repository.update(KnowledgeKind.Projects, "weather", KnowledgeUpdate(tags = emptyList())) }
+                assertEquals("/api/v1/kb/projects/weather?manager=m-work", server.takeRequest().path)
+                // Outside the page nothing is pinned: the hub client names the current assistant as before.
+                server.enqueue(MockResponse().setBody("""{"items":[]}"""))
+                repository.list(KnowledgeKind.Projects)
+                assertEquals("/api/v1/kb/projects", server.takeRequest().path)
+            }
+        } finally { persona.core.contracts.api.AssistantManagerChoice.reset() }
+    }
+
     @Test fun recordingDetailKeepsItsSegments() = runBlocking {
         MockWebServer().use { server ->
             val repository = HttpKnowledgeRepository(HubScope("demo", "generation"), server.url("/").toString(),

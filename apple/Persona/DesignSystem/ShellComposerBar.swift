@@ -665,7 +665,7 @@ private struct ComposerLinesProbe: View {
 
     var body: some View {
         Color.clear
-            .frame(width: 0, height: 0)
+            .scaledFrame(width: Theme.Size.nonvisualProbe, height: Theme.Size.nonvisualProbe)
             .task {
                 while !Task.isCancelled {
                     if let view = FirstResponder.current as? UITextView, let read = ComposerLines(view) { lines = read }

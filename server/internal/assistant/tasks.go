@@ -95,7 +95,8 @@ type PlanTask struct {
 	Attachments []string `json:"attachments,omitempty"`
 	Mentioned   []string `json:"mentioned,omitempty"`
 	AttachFrom  string   `json:"attach_from,omitempty"`
-	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
+	// Set once started: the todo the task is, and why its agent did not start. TodoID is cleared when another plan
+	// takes over that to-do; ReuseTodo keeps the historical target. ErrorCode and ErrorArgs: the start's
 	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
 	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
 	TodoID    string            `json:"todo_id,omitempty"`
@@ -257,6 +258,31 @@ func (s *Service) loadPlan(ctx context.Context, id string) (*TaskPlan, error) {
 	return planFromRow(*row), nil
 }
 
+// conversationPlans reads persisted plans, or snapshots the storeless plans, without relying on list order.
+func (s *Service) conversationPlans(ctx context.Context, conversation string) ([]*TaskPlan, error) {
+	var plans []*TaskPlan
+	if st := s.store(); st != nil {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			plans = append(plans, planFromRow(row))
+		}
+	} else {
+		s.tasks.mu.Lock()
+		defer s.tasks.mu.Unlock()
+		for _, plan := range s.tasks.plans {
+			if plan.Conversation == conversation {
+				cp := *plan
+				cp.Tasks = append([]PlanTask(nil), plan.Tasks...)
+				plans = append(plans, &cp)
+			}
+		}
+	}
+	return plans, nil
+}
+
 func planFromRow(row db.TaskPlanRow) *TaskPlan {
 	p := &TaskPlan{ID: row.ID, Conversation: row.Conversation, State: row.State, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 	_ = json.Unmarshal(row.Tasks, &p.Tasks)
@@ -326,10 +352,22 @@ func (s *Service) appendFeedAt(ctx context.Context, conversation, kind, ref stri
 	}
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
+		if kind == feedMessage && s.duplicateDismissedDraft(it) {
+			s.tasks.mu.Unlock()
+			return FeedItem{}, nil
+		}
 		s.tasks.feed[conversation] = append(s.tasks.feed[conversation], it)
 		s.tasks.mu.Unlock()
-	} else if err := st.AppendFeed(ctx, db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}); err != nil {
-		return FeedItem{}, err
+	} else {
+		row := db.FeedRow{ID: it.ID, Conversation: conversation, At: it.At, Kind: kind, Ref: ref, Body: it.Body}
+		if ds, ok := st.(draftFeedStore); kind == feedMessage && ok {
+			inserted, err := ds.AppendDraftFeed(ctx, row)
+			if err != nil || !inserted {
+				return FeedItem{}, err
+			}
+		} else if err := st.AppendFeed(ctx, row); err != nil {
+			return FeedItem{}, err
+		}
 	}
 	s.event(ctx, map[string]any{"type": "assistant_feed", "conversation": conversation, "item": it})
 	if kind == feedReceipt {
@@ -358,7 +396,8 @@ func (s *Service) rawFeed(ctx context.Context, conversation string, since time.T
 	if st := s.store(); st == nil {
 		s.tasks.mu.Lock()
 		for _, it := range s.tasks.feed[conversation] {
-			if at := cardSentAt(it); it.At.After(since) || it.Kind == feedMessage && at != nil && at.After(since) {
+			at, changed := cardSentAt(it), cardChangedAt(it)
+			if it.At.After(since) || it.Kind == feedMessage && (at != nil && at.After(since) || changed != nil && changed.After(since)) {
 				items = append(items, it)
 			}
 		}
@@ -503,6 +542,7 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 // ---- HTTP ----
 
 func (s *Service) taskRoutes() {
+	s.draftDecisionRoutes()
 	s.doneCheckRoute()
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
@@ -573,11 +613,29 @@ func (s *Service) taskRoutes() {
 			}
 			since = t
 		}
-		items, plans, err := s.feed(r.Context(), r.PathValue("id"), since)
-		if err != nil {
-			apierr.Write(w, http.StatusServiceUnavailable, err)
+		query := r.URL.Query()
+		paginated := query.Get("paginate") == "1" || query.Has("cursor")
+		if query.Has("cursor") && (query.Get("cursor") == "" || query.Has("since")) {
+			apierr.Write(w, http.StatusBadRequest, errFeedCursor)
 			return
 		}
+		var items []FeedItem
+		var nextCursor string
+		var err error
+		if paginated {
+			items, nextCursor, err = s.pagedFeed(r.Context(), r.PathValue("id"), since, query.Get("cursor"))
+		} else {
+			items, err = s.feedItems(r.Context(), r.PathValue("id"), since)
+		}
+		if err != nil {
+			status := http.StatusServiceUnavailable
+			if errors.Is(err, errFeedCursor) {
+				status = http.StatusBadRequest
+			}
+			apierr.Write(w, status, err)
+			return
+		}
+		plans := s.feedPlans(r.Context(), items)
 		if items == nil {
 			items = []FeedItem{}
 		}
@@ -600,7 +658,11 @@ func (s *Service) taskRoutes() {
 		if cardErr != nil {
 			s.logf("feed: task card projection: %v", cardErr)
 		}
-		apierr.WriteJSON(w, map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks})
+		out := map[string]any{"items": items, "plans": plans, "task_cards": cards, "views": views, "view_actions": actions, "view_blocks": blocks}
+		if paginated {
+			out["next_cursor"] = nextCursor
+		}
+		apierr.WriteJSON(w, out)
 	})
 	s.handle("POST /api/v1/assistant/conversations/{id}/route", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {

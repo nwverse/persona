@@ -1,5 +1,12 @@
 # Lessons: testing and validation
 
+- Bulk Postgres fixtures need physical isolation, not just row deletion (#3743). Deleting 500 feed rows left a larger
+  unsent B-tree than the sent index; a controlled statistics refresh then changed a later index-choice assertion even
+  though no fixture rows remained. Use the existing migrated-database clone for bulk fixtures so table, index and
+  catalog state stay private. Preserve the original planner assertion; an isolated passing test alone does not prove
+  that the complete package is unaffected. The controlled reproducer shows the mechanism, not which background
+  statistics event happened in a particular failed run.
+
 - Bound cold simulator compilation separately from test execution (#2671). A combined `xcodebuild test` can spend
   most of its deadline compiling before the first test starts. Build for testing, then test without building against
   the same derived data and suite selection; preserve failure propagation, integration exclusions and result-bundle

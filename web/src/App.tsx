@@ -327,7 +327,7 @@ function Shell() {
         : <ChatView key={`${pane.mid}/${pane.sid}`} mid={pane.mid} sid={pane.sid} starting={starting} onToggleSidebar={toggle} inPage />;
       break;
     case "persona":
-      main = <PersonaAssistant sid={route.sid} onToggleSidebar={toggle} />;
+      main = <PersonaAssistant sid={route.sid} routed={route.mid || route.manager ? { mid: route.mid, manager: route.manager } : undefined} onToggleSidebar={toggle} />;
       break;
     case "persona-new":
       main = <PersonaAssistant fresh onToggleSidebar={toggle} />;

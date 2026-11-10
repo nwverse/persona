@@ -14,6 +14,21 @@ The review timeout does not invalidate the hub's later operation receipt. Includ
 compare-and-set sources for a confirmed successful receipt, without resending the message or accepting an unknown
 outcome. Keep discarded messages outside that source set so a lookup that finishes later cannot undo the user's choice.
 
+## Reply-draft dismissal is a card decision, not task completion (#3743)
+
+Use the feed card's id and its exact original `body.draft` for dismissal; edited text belongs only to Send. Never mark the
+Inbox item done, remove the task or close its Agent to hide a draft. Later is local and card-scoped too, so new progress on
+the same source item remains visible. Apply the hub's complete returned item, rather than merging body fields: Undo removes
+`dismissed_at` and `dismissal_id`. Fence reads captured before a mutation, and reject a late Undo receipt when newer progress
+already changed that card. Retain its captured assistant manager across selection changes. Use the shell's existing Undo
+snackbar, with only Send primary; large-text and narrow action groups stack primary-first through `DraftDecisionButtons`.
+Exclude persistently dismissed cards from the oldest-unsent read anchor, but retain dynamically filed cards. Undo catch-up
+uses the retained `dismissal_updated_at`. Stable pagination starts with `paginate=1` and continues with only the opaque
+`cursor`, never a newer `since`; a captured-owner reader pins the whole range. `next_cursor` alone decides completion
+(missing means an older hub, empty means EOF), not the number of items. Bound the range to 64 pages and reject repeated
+cursors. Publish only a complete range under its original mutation fence, and restart incomplete reads without advancing.
+A snackbar action can pass semantic visibility assertions while its text is invisible. `JAppSnackbarHost` uses the inverse
+message-text role for its action, not the accent; inspect light/dark images and test contrast on the actual inverse surface.
 
 ## Large-font screenshots need Compose density, not just configuration (#3588)
 
