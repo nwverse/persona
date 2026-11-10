@@ -93,11 +93,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * (views/AssistantSwitcher.tsx and the current assistant's scope), which every first screen draws, and 512 B for the
  * launcher chips' stale-pick check and its toast (views/assistant/AssistantChat.tsx, #3895), and 1,024 B for the
  * interrupted receipts' text and handling (#3903 added 883 B, #3917), and 512 B for adding a computer to the current
- * assistant (views/machines/AddComputer.tsx's words and its add.manager handling, #3508), and 1,024 B for the Agent
- * header's permission mode (#3956 added 708 B: its button and tones, the mode menu's question on leaving Allow all and
- * its disabled Allow all row, their words). Raise it on purpose, in the change that needs it.
+ * assistant (views/machines/AddComputer.tsx's words and its add.manager handling, #3508), and 512 B for the address's manager that conversation requests fall back on (lib/manager-choice.ts routedConversationManager, #3670),
+ * and 1,024 B for the Agent header's permission mode (#3956 added 708 B: its button and tones, the mode menu's question
+ * on leaving Allow all and its disabled Allow all row, their words). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 581_984;
+export const FIRST_SCREEN_BUDGET = 582_496;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */

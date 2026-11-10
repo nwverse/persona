@@ -38,9 +38,11 @@ class HttpKnowledgeRepository(
         if (!isCurrent()) throw CancellationException("Pairing changed")
     }
 
+    // The knowledge base is the current assistant's (the hub client names it), unless the calling page pinned its own
+    // (an entry's page keeps the assistant it was opened for, docs/assistant/managers.md "Clients"): put on the URL here.
     private suspend inline fun <reified T> get(url: HttpUrl): T {
         checkScope()
-        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
+        val request = Request.Builder().url(url.withRequestManager()).header("Authorization", "Bearer $token").build()
         val body = http.newCall(request).awaitResponse().use { response ->
             checkScope()
             if (!response.isSuccessful) throw HubFailure.from(response)
@@ -74,7 +76,7 @@ class HttpKnowledgeRepository(
         require(id.isNotBlank() && id != "." && id != "..")
         checkScope()
         val body = JsonCodec.encodeToString(KnowledgeUpdate.serializer(), update)
-        val request = Request.Builder().url(url("kb", kind.wire, id)).header("Authorization", "Bearer $token")
+        val request = Request.Builder().url(url("kb", kind.wire, id).withRequestManager()).header("Authorization", "Bearer $token")
             .put(body.toRequestBody("application/json".toMediaType())).build()
         http.newCall(request).awaitResponse().use { response ->
             checkScope()

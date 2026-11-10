@@ -105,6 +105,8 @@ fun TodosScreen(
     pending: List<Interaction> = emptyList(),
     /** The launcher's "New to-do": each request brings the sheet up, also on a list kept from an earlier use (#5718). */
     newTodoRequests: NewTodoRequests? = null,
+    /** The assistant whose to-dos [todos] are: while it is offline its list is out of reach, not empty (JAssistantOffline). */
+    assistant: persona.core.contracts.api.CurrentAssistant? = null,
 ) {
     val cards = remember(pending) { pending.firstBySession() }
     var query by rememberSaveable { mutableStateOf("") }
@@ -349,7 +351,10 @@ fun TodosScreen(
                     )
                 }
             } else if (filtered.isEmpty()) {
-                item(key = "empty") {
+                // The hub's list leaves out an assistant that is offline: its to-dos are out of reach, not none (a search that
+                // finds nothing among kept ones is "no match").
+                if (assistant?.offline != null && todos.isEmpty()) item(key = "offline") { JAssistantOffline(assistant) }
+                else item(key = "empty") {
                     JEmptyState(
                         title = stringResource(if (query.isBlank()) R.string.agents_todos_empty else R.string.agents_todos_no_match),
                         description = stringResource(if (query.isBlank()) R.string.agents_todos_empty_hint else R.string.agents_todos_no_match_hint),
