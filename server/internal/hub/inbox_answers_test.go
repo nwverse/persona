@@ -26,12 +26,13 @@ import (
 // countingInbox is a manager on the bus whose inbox list is body (status, when set), counting how often it is listed;
 // a list waits for gate when one is set. Every other request is answered {}.
 type countingInbox struct {
-	mu     sync.Mutex
-	body   []byte
-	status int
-	gate   chan struct{}
-	listed atomic.Int32
-	asked  chan struct{} // a list was asked for (buffered)
+	mu         sync.Mutex
+	body       []byte
+	status     int
+	gate       chan struct{}
+	listed     atomic.Int32
+	validators atomic.Int32  // lists asked with If-None-Match
+	asked      chan struct{} // a list was asked for (buffered)
 }
 
 func (c *countingInbox) serve(ctx context.Context, r assistantwire.HTTPRequest) (any, error) {
@@ -39,6 +40,9 @@ func (c *countingInbox) serve(ctx context.Context, r assistantwire.HTTPRequest) 
 		return assistantwire.HTTPResponse{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: json.RawMessage("{}\n")}, nil
 	}
 	c.listed.Add(1)
+	if len(r.Header["If-None-Match"]) > 0 {
+		c.validators.Add(1)
+	}
 	select {
 	case c.asked <- struct{}{}:
 	default:
@@ -536,6 +540,11 @@ func TestMergedInboxValidator(t *testing.T) {
 	plain := getInbox(t.Context(), h, routes, "/api/v1/inbox?sources=all", i18n.En, false)
 	if rec := get(i18n.En, false, `W/"i1-"`); rec.Code != 200 || rec.Header().Get("ETag") == "" || !bytes.Equal(rec.Body.Bytes(), plain.Body.Bytes()) {
 		t.Fatalf("%d, ETag %q, %q; without If-None-Match %d %q", rec.Code, rec.Header().Get("ETag"), rec.Body, plain.Code, plain.Body)
+	}
+
+	// The validator is the hub's: the managers never see If-None-Match.
+	if n := m.validators.Load(); n != 0 {
+		t.Fatalf("the manager was asked with If-None-Match %d times", n)
 	}
 }
 

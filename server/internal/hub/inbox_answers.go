@@ -289,7 +289,9 @@ func (h *Hub) leadInbox(r *http.Request, key string, k inboxAnswerKey, ids []str
 	return a
 }
 
-// mergedAnswer is what mergeList writes when it asks ids (none named, no body), as one answer.
+// mergedAnswer is what mergeList writes when it asks ids (none named, no body), as one answer. The managers are not
+// sent the request's If-None-Match: the merged list's validator is the hub's (write), and a manager's 304 would leave
+// its items out of the merge.
 func (h *Hub) mergedAnswer(r *http.Request, key string, ids []string, ask func(w http.ResponseWriter, r *http.Request, id string)) *inboxAnswer {
 	out := newBufferedWriter()
 	if len(ids) == 0 { // listManagers always has the default; as mergeList, should it not
@@ -300,7 +302,9 @@ func (h *Hub) mergedAnswer(r *http.Request, key string, ids []string, ask func(w
 	answers := make([]listAnswer, 0, len(ids))
 	for _, id := range ids {
 		bw := newBufferedWriter()
-		ask(bw, withBody(r, nil), id)
+		asked := withBody(r, nil) // a copy of r's headers
+		asked.Header.Del("If-None-Match")
+		ask(bw, asked, id)
 		ans := listAnswer{id: id, status: cmp.Or(bw.status, http.StatusOK), header: bw.header, body: bw.body.Bytes(), localize: bw.localize}
 		shared = shared && ans.ok()
 		answers = append(answers, ans)
