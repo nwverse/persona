@@ -66,11 +66,11 @@ struct SSHTunnelRouteTests {
     @Test func throughTheInAppTunnelIsKeptWithTheRoute() throws {
         // Saved before the switch: off.
         #expect(try !JSONDecoder().decode(SSHRoute.self, from: Data(#"{"host":"h","user":"u"}"#.utf8)).viaInAppTunnel)
-        let route = SSHRoute(host: " devbox.example.com", port: 2222, user: "u", hostKey: "SHA256:x", viaInAppTunnel: true)
+        let route = SSHRoute(host: " test-host.example.com", port: 2222, user: "u", hostKey: "SHA256:x", viaInAppTunnel: true)
         let back = try JSONDecoder().decode(SSHRoute.self, from: JSONEncoder().encode(route))
         #expect(back == route && back.viaInAppTunnel)
         // What the core forwards to is the real server (IPv6 in brackets); the key stays this server's.
-        #expect(route.server == "devbox.example.com:2222")
+        #expect(route.server == "test-host.example.com:2222")
         #expect(SSHRoute(host: "fd00::1", user: "u").server == "[fd00::1]:22")
         var other = route
         other.viaInAppTunnel = false
