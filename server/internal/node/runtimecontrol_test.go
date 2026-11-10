@@ -34,6 +34,9 @@ func paseoEngineHello() map[string]any {
 func TestRuntimeLaunchers(t *testing.T) {
 	n, _ := runtimeNode(t)
 	host := dialRuntime(t, n, paseoEngineHello())
+	n.eng.mu.Lock() // Paseo's providers are offered where it is an enabled host (TestEngineRuntimeProvidersNeedTheHostEnabled)
+	n.eng.set = &proto.EngineChoice{Hosts: []string{proto.EngineHerdr, proto.EnginePaseo}, Default: proto.EngineHerdr}
+	n.eng.mu.Unlock()
 	raw, err := nodeCall(t, n, "launchers.list", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
