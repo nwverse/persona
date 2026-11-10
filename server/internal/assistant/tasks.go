@@ -61,6 +61,18 @@ type PlanTask struct {
 	// should take (#3124, supervise.go). Both optional; the agent is told the criteria with its prompt.
 	DoneWhen      []string `json:"done_when,omitempty"`
 	ExpectMinutes int      `json:"expect_minutes,omitempty"`
+	// The brief (#3822, task_brief.go): Goal is the work in one sentence (the title when left out), OutOfBounds what
+	// the agent must not do. Continues: the to-do this task takes over from (a retry on another computer, a rework
+	// round, a task split off it), for ContinuesWhy: it then works for that to-do's brief instead of a new one. Brief is
+	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
+	// call or a card's edit says.
+	Goal         string   `json:"goal,omitempty"`
+	OutOfBounds  []string `json:"out_of_bounds,omitempty"`
+	Continues    string   `json:"continues,omitempty"`
+	ContinuesWhy string   `json:"continues_why,omitempty"`
+	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
+	StartedWhy string     `json:"started_why,omitempty"`
+	Brief      *TaskBrief `json:"brief,omitempty"`
 	// Supervisor: the leader conversation the main conversation handed the task to (task_plan's supervisor, #3608);
 	// "" the plan's own conversation supervises it, as before.
 	Supervisor string `json:"supervisor,omitempty"`

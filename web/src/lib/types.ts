@@ -235,6 +235,9 @@ export interface Session {
   context_window?: number;
   /** The levels `effort` may be set to when they are not Claude Code's: a Codex thread driven through its app-server (only its effort changes; docs/protocol/protocol.md). */
   efforts?: string[];
+  /** Native Codex speed. Absent while the current setting is unknown. */
+  service_tier?: string;
+  service_tiers?: { id: string; name: string; description?: string }[];
   /** Claude Code's session-only ultracode switch as the node last saw it (docs/protocol/protocol.md "Claude Code ultracode"):
    *  absent is unknown, not off. */
   ultracode?: boolean;
