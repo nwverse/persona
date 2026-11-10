@@ -68,6 +68,35 @@ func (m *Machine) claudeDirs(ctx context.Context) []string {
 	return slices.DeleteFunc(dirs, func(d string) bool { return proto.ClaudeDirBlocked(d, home, blocked) })
 }
 
+// withClaudeDirs is a node.configure's params with the config directories added when they name neither claude_dirs
+// nor keep_sessions: the node takes such a call's (absent) directories as none (node/node.go node.configure), so a
+// per-machine switch (botmux, herdr autostart) or an extension's agent filters would make it forget them until it
+// reconnects. Params that are not a JSON object go as they are.
+func (m *Machine) withClaudeDirs(ctx context.Context, params any) any {
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return params
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return params
+	}
+	_, dirs := fields["claude_dirs"]
+	_, keep := fields["keep_sessions"]
+	if dirs || keep {
+		return params
+	}
+	list, err := json.Marshal(m.claudeDirs(ctx))
+	if err != nil {
+		return params
+	}
+	if fields == nil { // null: the node reads it as {}
+		fields = map[string]json.RawMessage{}
+	}
+	fields["claude_dirs"] = list
+	return fields
+}
+
 // usageWindows is hub.json's machines[].usage_windows: the machine's node reads the agents' subscription rate-limit
 // windows unless it says false (#2432).
 func (m *Machine) usageWindows() bool { return m.cfg.UsageWindows == nil || *m.cfg.UsageWindows }

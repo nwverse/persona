@@ -508,6 +508,9 @@ func (m *Machine) call(ctx context.Context, method string, params any, out any) 
 		return fmt.Errorf("%s: %w", m.name(), errOffline)
 	default:
 	}
+	if method == "node.configure" {
+		params = m.withClaudeDirs(ctx, params)
+	}
 	return p.Call(ctx, method, params, out)
 }
 
