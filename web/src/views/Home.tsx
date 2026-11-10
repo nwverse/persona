@@ -4,6 +4,7 @@ import { ago, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, s
 import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
+import { interactionKicker } from "../lib/row-line";
 import { answerLines, type Resolution } from "../lib/answered";
 import { quickAnswers, withHeld, type HeldRow, type QuickChoice } from "../lib/quick-answers";
 import { optionDisplay, permissionDetail } from "../lib/tool-detail";
@@ -35,8 +36,6 @@ import { OverviewCards } from "./extensions/ExtensionSlots";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
-
-const KIND: Record<Interaction["kind"], string> = { question: t("home.kind_question"), plan: t("home.kind_plan"), permission: t("home.kind_permission"), screen: t("home.kind_screen"), elicitation: t("home.kind_elicitation") };
 
 function greeting() {
   const h = new Date().getHours();
@@ -146,7 +145,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
                         title={title}
                         tags={rowTags(title, [name(ix.machine_id), s?.space_name, s && tabLabel(s)])}
                         detail={(tool && ask && ask !== tool ? t("home.permission_detail", { tool, what: ask }) : ask) || undefined}
-                        pill={!done && <Pill>{KIND[ix.kind]}</Pill>}
+                        pill={!done && <Pill>{interactionKicker(ix)}</Pill>}
                         entry={cardState(ix.id)}
                         actions={done ? <AnsweredLine ix={ix} body={h.body} /> : quick && <QuickAnswers ix={ix} choices={quick} sending={h?.pick} onPick={(c) => void answer(ix, i, rows[i + 1]?.ix.id, c)} />}
                       />

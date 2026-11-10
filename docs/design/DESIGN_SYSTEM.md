@@ -582,7 +582,7 @@ Full glossary: `docs/protocol/i18n.md`. Languages: en, zh-Hans, ja. Apple string
 | Inbox item | message, mail | the Inbox | the sender or group, and a summary |
 | Computer | computer | the Machines page | the user's name for it |
 
-Request titles, the same on every client and screen that names a pending request (cards, list rows, the Inbox, the chat panel's label, the hub's push titles). iOS writes them in title case, the web, Android and the hub in sentence case. A notification may put the agent's name in front; a label that cannot name the agent reads "Has a question" (在问你, 質問があります). The line under a title says what is asked (the command, the plan's title, the question) and keeps its own words.
+Titles of plans, permissions, questions and terminal prompts, the same on every client and screen that names one (cards, list rows, the Inbox, the chat panel's label, the hub's push titles). iOS writes them in title case, the web, Android and the hub in sentence case. A notification may put the agent's name in front; a label that cannot name the agent reads "Has a question" (在问你, 質問があります). The line under a title says what is asked (the command, the plan's title, the question) and keeps its own words; a row with one line puts the title first ("Needs your permission: swift test").
 
 | Request | en | zh-Hans | ja |
 | --- | --- | --- | --- |
@@ -590,8 +590,7 @@ Request titles, the same on every client and screen that names a pending request
 | Tool or command | Needs your permission; {agent} needs your permission | 需要你授权；{agent} 需要你授权 | 許可が必要です；{agent}に許可が必要です |
 | Question | {agent} has a question (Claude by default, Persona for its own) | {agent} 在问你 | {agent}から質問があります |
 | Terminal prompt | Terminal needs you | 终端等你处理 | ターミナルで対応が必要です |
-| MCP form, MCP link | MCP form needs you; MCP link needs you | MCP 表单等你填写；MCP 链接等你确认 | MCPフォームの入力待ち；MCPリンクの確認待ち |
-| Anything else | Needs you | 需要你 | 要対応 |
+| A kind the client does not know | Needs you | 需要你 | 要対応 |
 
 - A session's title is its top-bar title and its row's first line.
 - Primary screens (list rows, top-bar titles, the Assistant home and notifications) never show raw model IDs, session IDs, paths or engine names (herdr, Orca, Paseo); this is principle 2 applied to Agent work. A row may name the model by its short name.

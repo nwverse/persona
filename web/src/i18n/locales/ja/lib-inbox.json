@@ -26,7 +26,7 @@
   "yesterday": "昨日",
   "ix_persona_asks": "Personaから質問があります",
   "ix_named_asks": "{name}から質問があります",
-  "ix_named_permission": "{name}が承認を待っています",
+  "ix_named_permission": "{name}に許可が必要です",
   "ix_claude_asks": "Claudeから質問があります",
   "ix_plan": "プランの承認待ち",
   "ix_permission": "許可が必要です",

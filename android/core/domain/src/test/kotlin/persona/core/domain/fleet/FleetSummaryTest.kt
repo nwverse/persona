@@ -26,7 +26,7 @@ class FleetSummaryTest {
         assertEquals("1 个做完了", (FleetText.rest(FleetState("working", working = 2, unread = 1)).zh()).zhAny())
         assertEquals("4 个做完了", (FleetText.headline(FleetState("done", unread = 4)).zh()).zhAny())
         assertEquals("授权：Bash: ls", (FleetText.line(FleetItem("a/b", kind = "permission", detail = "Bash: ls")).zh()).zhAny())
-        assertEquals("等你授权", (FleetText.line(FleetItem("a/b", kind = "permission")).zh()).zhAny())
+        assertEquals("需要你授权", (FleetText.line(FleetItem("a/b", kind = "permission")).zh()).zhAny())
         assertEquals("计划等你审批", (FleetText.line(FleetItem("a/b", kind = "plan")).zh()).zhAny())
         assertEquals("计划：支持 HEIC", (FleetText.line(FleetItem("a/b", kind = "plan", detail = "支持 HEIC")).zh()).zhAny())
         assertEquals("在问你", (FleetText.line(FleetItem("a/b", kind = "question")).zh()).zhAny())

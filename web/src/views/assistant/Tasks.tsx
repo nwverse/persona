@@ -250,7 +250,7 @@ export function taskInteraction(todo: Todo, interactions: Interaction[], lead?: 
   return (lead && interactions.find((ix) => ix.machine_id === lead.machine_id && ix.session_id === lead.session_id)) ?? interactions.find(mine);
 }
 
-/** What a waiting task needs, in a line (#3301): "Asking you: which framework?", "Needs permission: swift test", "Plan to approve", the words
+/** What a waiting task needs, in a line (#3301): "Has a question: which framework?", "Needs your permission: swift test", "Plan awaiting approval", the words
  *  the to-dos page's agent rows use; undefined without a card. */
 export function taskAsk(ix: Interaction | undefined): string | undefined {
   if (!ix) return undefined;
@@ -933,7 +933,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
 // ── Today ──
 
 /** The "Today" card's "Needs you" row's lines under its title (#4478), one per task, each truncated on its own: what its task
- *  waits on ("Asking you: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
+ *  waits on ("Has a question: …"), or for several, up to three "<title>: <what it waits on>" (the title alone when the store
  *  has no card) and "N more" past them. A card just answered here is not one it waits on (answeredLookup). */
 const TODAY_WAITING_MAX = 3;
 function todayWaitingLines(s: State, waiting: { id: string; title: string }[]): string[] {
