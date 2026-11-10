@@ -11380,7 +11380,7 @@ if MOCK_MESSAGING:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import lark_messaging
 
-# MOCK_SENT=1|empty|nodb|forbidden|old (#5278, scripts/mock/sent_ledger_mock.py): GET /api/v1/connectors/sent, the ledger of
+# MOCK_SENT=1|empty|nodb|forbidden|old (#5278, scripts/mock/sent_ledger_mock.py): GET /api/v1/connectors/sent and POST …/{id}/recall, the ledger of
 # what was sent as the user (Settings › Sent as you).
 _sent = None
 if os.environ.get("MOCK_SENT"):
@@ -12527,7 +12527,7 @@ for _m in MACHINES:
 # engine_hosts / engine_default; the MacBook enables herdr + Herdr App, the Mac Studio herdr + Orca (Paseo found there
 # too); the widget session on the MacBook is live in Herdr App as well (also_open_in). PUT …/engine takes {hosts, default}.
 ENGINE_SETS = os.environ.get("MOCK_ENGINE_SETS") == "1"
-ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "paseo"]
+ENGINE_HOST_IDS = ["herdr", "herdr-core", "orca", "paseo", "cindy"]
 
 
 def legacy_engine(hosts, default):
@@ -12543,6 +12543,7 @@ if ENGINE_SETS:
         _m["engine"] = legacy_engine(_m["engine_hosts"], _m["engine_default"])
         if _m.get("online"):
             _m["engines"].append({"id": "paseo", "name": "Paseo", "available": _m["id"] == "studio", "version": "0.9"})
+            _m["engines"].append({"id": "cindy", "name": "Cindy", "available": _m["id"] == "studio", "version": "0.1.128"})
             found = [h for h in ENGINE_HOST_IDS if any(e["id"] == h and e["available"] for e in _m["engines"])] or ["herdr"]
             _m["engine_suggested"] = {"hosts": found, "default": found[0]}
     for _s in SESSIONS:
@@ -15253,6 +15254,7 @@ class H(BaseHTTPRequestHandler):
         if CASE and case_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
         if preview_route and preview_route(self, self.command, p, parse_qs(urlparse(self.path).query)): return
         if custom_models_route(self, self.command, p, parse_qs(urlparse(self.path).query), self.last_body): return
+        if _sent and _sent.route(self, self.command, p, {}, self.last_body): return
         if PERSONAL_AGENTS and p.startswith("/api/v1/agents/sessions/") and p.rsplit("/", 1)[-1] in ("hide", "unhide"):
             sid, op = unquote(p[len("/api/v1/agents/sessions/"):].rsplit("/", 1)[0]), p.rsplit("/", 1)[-1]
             if sid not in [r["id"] for r in personal_rows()]: return self.send_json({"error": "no such session"}, 404)
@@ -15763,7 +15765,7 @@ class H(BaseHTTPRequestHandler):
                     except Exception: pass
                 return self.send_json(out_machine(machine))
             engine = body.get("engine")
-            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "paseo") and not any(
+            if engine not in ("herdr", "herdr-core", "herdr-both", "orca", "paseo", "cindy") and not any(
                     e["id"] == engine and e["available"] for e in machine["engines"]):
                 return self.send_json({"error": "未知引擎"}, 400)
             if os.environ.get("MOCK_ENGINE_ERROR"): return self.send_json({"error": "暂时无法保存"}, 503)
@@ -17178,7 +17180,7 @@ MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」�
 MOCK_HELP.append("MOCK_MANAGERS=1  只有 hub 自己的管理者（没有切换、不分组，电脑、会话、卡片和合并的列表照样带 manager）；默认三个装好的（一个离线）：电脑、收件箱、扩展带 manager，会话和卡片跟它的电脑走；默认管理者换成别的时，模拟助手发的实时消息带它的 manager；助手页按 X-Persona-Manager 切换（工作：还没有主对话、有自己的说明，PUT 改它的；家里：503 assistant_offline；不认识的 404 no_manager）；POST /api/v1/managers/{id}/machines、…/sources 移电脑 / 邮箱，删掉的管理者的电脑回到 hub 自己的")
 MOCK_HELP.append("MOCK_MANAGER_EXPIRED=1  设置 › 管理者：多一个安装码过期了还没装的（码已过期，可以拿新的安装码），和一个过期超过 7 天的（像 hub 一样不在名册里）")
 MOCK_HELP.append("MOCK_MANAGER_COMMANDS=1  设置 › 管理者：新建 / 换个地方装的回答带安装命令（commands.service / docker）；MOCK_MANAGERS=0 是还没有名册的旧 hub（/api/v1/managers 404）")
-MOCK_HELP.append("MOCK_SENT=1|empty|nodb|forbidden|old  Settings > Sent as you (#5278, scripts/mock/sent_ledger_mock.py): 1 is about 70 made-up rows (four ways through the gate, one text of 4000 characters), empty has none, nodb is 503 no_database, forbidden 403, old a hub from before the ledger (404 with no code)")
+MOCK_HELP.append("MOCK_SENT=1|empty|nodb|forbidden|old  Settings > Sent as you (#5278, scripts/mock/sent_ledger_mock.py): 1 is about 70 made-up rows (four ways through the gate, one text of 4000 characters), empty has none, nodb is 503 no_database, forbidden 403, old a hub from before the ledger (404 with no code); POST …/sent/{id}/recall takes back row 66 and refuses row 60 (502 recall_refused), row 54 is already recalled")
 MOCK_HELP.append("MOCK_SHARED_BOTS=1  Settings > Managers: two managers share a Feishu app and a WeChat account (#5826)")
 MOCK_HELP.append("MOCK_REWIND=1|safeguards  检查 PR 的对话里有四条你的消息（两条同样的「继续」），试「回退到这里」（#2436）；safeguards 显示安全拦截；POST …/rewind 记在 REWINDS，MOCK_REWIND_ERROR=<code>:<提示> 让它像节点一样拒绝，MOCK_REWIND_DELAY=<秒> 调等待")
 MOCK_HELP.append("MOCK_INBOX_SOURCES=none  还没接任何消息来源：收件箱空、没有邮箱账号、飞书没设置、GitHub 没登录（#4480）")

@@ -97,6 +97,17 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(at(todo("t", { ...old, pr_url: "https://example.com/pull/1", delivery: { state: "merged" } })).section).toBe("shelved");
   });
 
+  it("a PR the stage says is merged is not PR to merge, whatever the delivery (#3205)", () => {
+    const fresh = { updated_at: hoursAgo(1), agents: [agent("old")] };
+    for (const stage of ["merge", "deploy", "verify"]) {
+      expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage })).rule).not.toBe("pr_open");
+    }
+    expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage: "review" })).rule).toBe("pr_open");
+    // merged, not deployed: Other open; deployed: Just finished
+    expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage: "merge", delivery: { state: "merged" } })).section).toBe("other");
+    expect(at(todo("t", { ...fresh, pr_url: "https://example.com/pull/1", stage: "deploy", delivery: { state: "live", at: hoursAgo(1) } })).section).toBe("just_done");
+  });
+
   it("a task with no move for 48 hours is Shelved; a newer move of its agent keeps it", () => {
     expect(at(todo("t", { updated_at: hoursAgo(100), agents: [agent("old")] }))).toMatchObject({ section: "shelved", rule: "stale" });
     expect(at(todo("t", { updated_at: hoursAgo(100), agents: [agent("idle")] })).section).toBe("other");

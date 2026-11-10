@@ -336,6 +336,7 @@ struct AssistantView: View {
             }
             #endif
         }
+        .environment(\.pushInboxChat, shell == nil ? nil : { path.append($0) })
         #if os(macOS)
         // Its pushed pages (Knowledge, Scheduled Tasks, To-dos…) go back from the title row, not the system's button (#2318).
         .environment(\.macSectionStack, true)

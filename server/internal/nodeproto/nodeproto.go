@@ -61,6 +61,8 @@ const (
 	// SecretRun: secret.run, commands the user approved on the password card run with the password they typed on
 	// their stdin (docs/assistant/assistant.md "Password card"). A node on Windows announces it and refuses the run.
 	SecretRun = "secret_run"
+	// Clipboard: clipboard.get / clipboard.set and node.info's clipboard (docs/operations/clipboard.md).
+	Clipboard = "clipboard"
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -85,4 +87,4 @@ const (
 )
 
 // Announced is what a node built from this code announces.
-var Announced = []string{PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun}
+var Announced = []string{PersonaContracts, ManagerUpdateInventory, Sessions, ModelConfiguration, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard}
