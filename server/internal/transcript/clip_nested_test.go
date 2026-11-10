@@ -159,6 +159,32 @@ func TestStringsJustOverTheShareStayWhole(t *testing.T) {
 	}
 }
 
+// Whether a cut pays is decided by the JSON it leaves, not by raw bytes: json.Marshal writes < > & as six bytes each, so the
+// tail of an HTML string a little over the share costs more than the note that replaces it, and that string is cut.
+func TestEscapedStringsJustOverTheShareAreCut(t *testing.T) {
+	html := strings.Repeat(`<a href="x">&lt;</a>`, 15)[:minInputShare+30] // 286 raw bytes, about 670 as JSON
+	items := make([]map[string]string, 200)
+	for i := range items {
+		items[i] = map[string]string{"text": html}
+	}
+	in, _ := json.Marshal(map[string]any{"items": items})
+	out := clipJSON(in)
+	var got struct {
+		Items []map[string]string `json:"items"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil || len(got.Items) != len(items) {
+		t.Fatalf("lost its shape: %v", err)
+	}
+	for i, it := range got.Items {
+		if !strings.HasPrefix(it["text"], html[:minInputShare]) || !strings.Contains(it["text"], "已截断") {
+			t.Fatalf("items[%d] = %d bytes, want the first %d bytes and a note", i, len(it["text"]), minInputShare)
+		}
+	}
+	if len(out) >= len(in) {
+		t.Errorf("clipped input is %d bytes, not shorter than the %d it came from", len(out), len(in))
+	}
+}
+
 // BenchmarkClipJSONNested clips the push_files input; bytes/item is what every page and push carries for it.
 func BenchmarkClipJSONNested(b *testing.B) {
 	raw := json.RawMessage(pushFilesInput())

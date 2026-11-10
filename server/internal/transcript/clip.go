@@ -103,13 +103,29 @@ func clipJSON(raw json.RawMessage) json.RawMessage {
 	// JSON escapes make a kept byte cost more than one: scale the share by what the first pass's strings cost.
 	share := (maxInputLen - len(rest)) * kept / (len(b) - len(rest)) / long
 	share = min(max(share-clipNoteRoom, minInputShare), maxInputLen/2)
-	b, _ = json.Marshal(mapStrings(m, func(s string) string {
-		if len(s) <= share+clipNoteRoom {
-			return s // within a note of the share: cut, it would come out about as long, or longer
-		}
-		return clipTo(s, share)
-	}))
+	b, _ = json.Marshal(mapStrings(m, func(s string) string { return clipIfShorter(s, share) }))
 	return b
+}
+
+// clipIfShorter is clipTo(s, n) if that is shorter as JSON, which is what a tool input carries, and s if not. A string
+// more than clipNoteRoom over n always is: every byte cut costs at least one byte of JSON and the note at most
+// clipNoteRoom. Closer to n it depends on escapes: a plain-text tail costs less than the note, but json.Marshal writes
+// < > & as six bytes each, so an HTML tail of the same length may cost more.
+func clipIfShorter(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	c := clipTo(s, n)
+	if len(s) > n+clipNoteRoom || jsonLen(c) < jsonLen(s) {
+		return c
+	}
+	return s
+}
+
+// jsonLen is the length of s written as a JSON string.
+func jsonLen(s string) int {
+	b, _ := json.Marshal(s)
+	return len(b)
 }
 
 // mapStrings is a copy of v, a decoded JSON value, with f applied to every string in it (object keys are kept).
