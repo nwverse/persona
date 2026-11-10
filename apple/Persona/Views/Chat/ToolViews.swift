@@ -22,6 +22,7 @@ enum ToolPresentation {
         case "computer_state", "computer_run": return Theme.Icon.machine
         case SecretRun.tool: return Theme.Icon.credentials
         case "browser_run", "browser_look": return Theme.Icon.web
+        case "iphone_status", "iphone_look", "iphone_do": return Theme.Icon.phoneControl
         case "Bash", "BashOutput", "KillShell", "KillBash": return Theme.Icon.terminal
         case "Read": return Theme.Icon.document
         case "Edit", "MultiEdit", "NotebookEdit": return Theme.Icon.editFile
@@ -61,6 +62,10 @@ enum ToolPresentation {
         case "computer_run": return String(localized: "Control Computer")
         case "browser_run": return String(localized: "Use Browser")
         case "browser_look": return String(localized: "View Browser")
+        // Operating an iPhone through a Mac it is paired with (docs/extensions/iphone.md).
+        case "iphone_status": return String(localized: "Check iPhones")
+        case "iphone_look": return String(localized: "View iPhone")
+        case "iphone_do": return String(localized: "Operate iPhone")
         case "Bash": return String(localized: "Run")
         case "Read": return String(localized: "Read [Tool Views 534cb3]")
         case "Edit", "MultiEdit": return String(localized: "Edit [Message Menu 051836]")
@@ -85,7 +90,7 @@ enum ToolPresentation {
     /// Where a tool's subject gives way when it does not fit: a path keeps its file name (the middle goes), a Mac's
     /// steps, a browser script or a plan (which step it is on) read from their start (the end goes).
     static func truncation(_ name: String) -> Text.TruncationMode {
-        ComputerSteps.isComputerTool(name) || ["browser_run", "browser_look", "TodoWrite"].contains(baseName(name)) ? .tail : .middle
+        ComputerSteps.isComputerTool(name) || ["browser_run", "browser_look", "iphone_look", "iphone_do", "TodoWrite"].contains(baseName(name)) ? .tail : .middle
     }
 
     /// `machines`: who the computer tools' `machine` is (AppModel's when nil).
@@ -117,6 +122,9 @@ enum ToolPresentation {
         case "browser_look": return mac() ?? ""
         case "browser_run": return [mac(), s("script").map { firstLine($0.trimmingCharacters(in: .whitespacesAndNewlines)) }].compactMap { $0 }.joined(separator: " · ")
         case "computer_run": return [mac(), ComputerSteps.describe(call.name, input: i)].compactMap { $0 }.joined(separator: " · ")
+        case "iphone_status": return ""
+        case "iphone_look": return s("phone") ?? s("query") ?? ""
+        case "iphone_do": return [s("phone"), IPhoneSteps.describe(i)].compactMap { $0 }.joined(separator: " · ")
         // ask_user is the Persona assistant's own question tool (docs/assistant/assistant.md); it takes the same questions.
         case "AskUserQuestion", "ask_user": return i["questions"]?.array?.first?["question"]?.string ?? ""
         case "ExitPlanMode": return PlanText.title(s("plan") ?? "")

@@ -466,9 +466,8 @@ func (h *Manager) callIPhoneTool(ctx context.Context, sessionID, name string, ar
 	var a struct {
 		Phone      string          `json:"phone"`
 		Screenshot *bool           `json:"screenshot"`
-		Query      string          `json:"query"`
 		Steps      json.RawMessage `json:"steps"`
-		Observe    json.RawMessage `json:"observe"`
+		Numbering  int             `json:"numbering"`
 		TimeoutMS  int             `json:"timeout_ms"`
 	}
 	if len(args) > 0 {
@@ -488,47 +487,49 @@ func (h *Manager) callIPhoneTool(ctx context.Context, sessionID, name string, ar
 	op := "look"
 	if name == "iphone_look" {
 		in["screenshot"] = a.Screenshot == nil || *a.Screenshot
-		if a.Query != "" {
-			in["query"] = a.Query
-		}
 	} else {
 		var steps []map[string]any
 		if json.Unmarshal(a.Steps, &steps) != nil || len(steps) == 0 {
-			return proto.TextResult(`give steps: [{"action": "tap", "target": 3}, {"action": "type", "text": "…"}], in order`, true)
+			return proto.TextResult(`give steps: [{"action": "tap", "target": {"n": 3}}, {"action": "type", "text": "…"}], in order`, true)
 		}
 		op, in["steps"] = "do", a.Steps
-		if len(a.Observe) > 0 {
-			in["observe"] = a.Observe
+		if a.Numbering > 0 {
+			in["numbering"] = a.Numbering
+		}
+		if a.Screenshot != nil {
+			in["screenshot"] = *a.Screenshot
 		}
 	}
 	raw, _ := json.Marshal(in)
 	by := h.assistantAsker(sessionID, m.cfg.ID)
 	what := iphoneLogWhat(op, a.Steps)
-	declined := func() proto.ToolResult {
-		h.logf("[%s] %s declined on the phone (%s)", m.cfg.ID, name, what)
-		return proto.TextResult("The user declined this on the phone. Do not retry it unless they ask.", true)
-	}
-	if op == "do" && h.iphone().Confirm && !h.approve(ctx, by, name, iphoneSummary(h.userLang(), d.Name, a.Steps), args) {
-		return declined()
-	}
-	call := proto.IPhoneCall{Device: d.ID, Session: session, Op: op, Args: raw, TimeoutMS: a.TimeoutMS}
+	// "Ask before every action" goes down with the call: the node asks step by step, with the screen in view; the
+	// manager only shows its approvals and waits for the answer.
+	call := proto.IPhoneCall{Device: d.ID, Session: session, Op: op, Args: raw, TimeoutMS: a.TimeoutMS, Confirm: h.iphone().Confirm}
 	start := time.Now()
 	res, err := h.iphoneCall(ctx, m, call)
+	resumed := false
 	for n := 0; err == nil && res.NeedsApproval; n++ {
-		if n == iphoneApprovals || res.ApprovalID == "" {
+		if n == iphoneApprovals || res.ApprovalID == "" || res.Approval == nil {
 			err = errors.New("the iPhone asked for approval again and again: stop and tell the user what is left to do")
 			break
 		}
-		summary := i18n.T(h.userLang(), "hub-iphone.confirm_sensitive", i18n.Args{"phone": d.Name, "summary": res.ApprovalSummary})
-		if !h.approve(ctx, by, name, summary, args) {
-			return declined()
+		card, input := iphoneCard(h.userLang(), d.Name, res.Approval)
+		if !h.approve(ctx, by, name, card, input) {
+			h.logf("[%s] %s declined on the phone (%s, step %d %s)", m.cfg.ID, name, what, res.Approval.Step, res.Approval.Action)
+			return proto.TextResult("The user declined this on the phone. Do not retry it unless they ask.", true)
 		}
-		call.Approved = res.ApprovalID
+		// Resumed with the approval alone: the node holds the pending do.
+		call.Args, call.Approved, resumed = nil, res.ApprovalID, true
 		res, err = h.iphoneCall(ctx, m, call)
 	}
 	h.logf("[%s] %s for %s: %s, %v, %s", m.cfg.ID, name, convID(sessionID), what, time.Since(start).Round(time.Millisecond),
 		map[bool]string{true: "failed (sent " + iphoneSentOf(err) + ")", false: "ok"}[err != nil])
 	if err != nil {
+		if resumed && iphoneSentOf(err) == proto.IPhoneNotSent {
+			// The approval was not used (used before, replaced by a newer do, too old, the node restarted).
+			return proto.TextResult(err.Error()+" (the approved step was not done: tell the user, and do not try it again without asking them)", true)
+		}
 		return iphoneFailure(err)
 	}
 	return computerResult(&proto.ComputerResult{Output: res.Output, Text: res.Text, Image: res.Image})
@@ -767,12 +768,6 @@ func iphoneFailure(err error) proto.ToolResult {
 		return proto.TextResult(err.Error()+" (nothing was sent to the iPhone)", true)
 	}
 	return proto.TextResult(err.Error()+" (some of it may have happened on the iPhone: look at its screen with iphone_look before anything else, and do not repeat the steps blindly)", true)
-}
-
-// iphoneSummary is the card of "ask before every action", in l: on which iPhone, the steps' actions.
-func iphoneSummary(l i18n.Lang, phone string, steps json.RawMessage) string {
-	return i18n.T(l, "hub-iphone.confirm_steps", i18n.Args{"phone": phone,
-		"steps": strings.Join(iphoneActions(steps), i18n.T(l, "hub-computer.list_sep"))})
 }
 
 // iphoneLogWhat is the log's account of a call: look, or the steps' actions, never what is typed or tapped.

@@ -4125,6 +4125,13 @@ if os.environ.get("MOCK_ASSISTANT_CARDS"):
          "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=14),
          "tool_name": "mail_send", "tool_input": {"to": "me@example.com"}, "summary": "给 me@example.com 发一封邮件"})
 
+if os.environ.get("MOCK_IPHONE_ASK") == "1":  # an iphone_do step the node says needs approval (docs/extensions/iphone.md)
+    INTERACTIONS.append(
+        {"id": "ix_iphone_do", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+         "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=14),
+         "tool_name": "iphone_do", "tool_input": {"steps": [{"action": "tap", "target": 7}]},
+         "summary": "在「我的 iPhone」上：在「钱包」里点「支付 ¥ 36.00」"})
+
 # MOCK_SECRET_RUN=pending|ran|withheld|long: the password card (secret_run, #1137) in Persona's main conversation.
 # `pending`: the assistant asked to run two commands on the Mac Studio, its call waits and the card asks for the
 # password; `ran`: the card was answered, the call's result (the tool's JSON) says every command exited 0, and no card is
@@ -12697,6 +12704,84 @@ if MOCK_BROWSER:
         if _m.get("os") == "darwin":
             _m["browser"] = browser_of(_m["id"], _m["id"] == "macbook")
 
+# MOCK_IPHONE=one|several|none|off (docs/extensions/iphone.md): the extension iphone is on and every Mac lists the
+# iPhones it reaches; MacBook is turned on. `one`: one of them is this simulator (MOCK_IPHONE_MODEL / MOCK_IPHONE_IOS,
+# what the app reads of itself: `xcrun simctl getenv <udid> SIMULATOR_MODEL_IDENTIFIER` and the runtime's version);
+# `several`: two alike, the user picks; `none`: none is this one; `pair`: this simulator is plugged into MacBook but not
+# paired (Pair moves on through Trust to paired every MOCK_COMPUTER_STEP seconds); `off`: the extension is off.
+# MOCK_IPHONE_CONSENT=1 starts with this iPhone consented. PUT …/iphone and PUT /api/v1/iphone/consent are kept in
+# memory. MOCK_IPHONE_ASK=1 puts an iphone_do approval card in Persona's main conversation.
+MOCK_IPHONE = os.environ.get("MOCK_IPHONE", "")
+IPHONE_MODEL = os.environ.get("MOCK_IPHONE_MODEL", "iPhone18,1")
+IPHONE_IOS = os.environ.get("MOCK_IPHONE_IOS", "26.1")
+IPHONE_CONSENT = {"dev-mock-1"} if os.environ.get("MOCK_IPHONE_CONSENT") == "1" else set()
+IPHONE_ON = {"macbook"}
+IPHONE_JOBS = {}  # machine id -> {"at", "started", "cancelled"}: a pairing from the app (MOCK_IPHONE=pair)
+IPHONE_MODES = ("one", "several", "none", "pair")
+
+
+def iphone_devices(machine_id):
+    me = {"id": "dev-mock-1", "name": "我的 iPhone", "product_type": IPHONE_MODEL, "ios": IPHONE_IOS, "paired": True, "connected": True,
+          "transport": "network", "locked": False, "ready": True}
+    other = {"id": "dev-mock-2", "name": "家里的 iPhone", "product_type": "iPhone14,5", "ios": "18.6", "paired": True, "connected": False,
+             "locked": False, "ready": False, "note": "没有连上：放在 Mac 旁边并解锁"}
+    if MOCK_IPHONE == "several":
+        twin = {**me, "id": "dev-mock-3", "name": "工作用 iPhone", "locked": True, "ready": False}
+        return [me, twin] if machine_id == "macbook" else [twin]
+    if MOCK_IPHONE == "none":
+        return [other]
+    if MOCK_IPHONE == "pair":
+        job = IPHONE_JOBS.get(machine_id)
+        done = job and not job.get("cancelled") and time.time() - job["at"] > 2 * COMPUTER_STEP
+        if machine_id != "macbook":
+            return []
+        return [me] if done else [{**me, "paired": False, "usb": True, "connected": False, "ready": False, "transport": None}]
+    return [me, other] if machine_id == "macbook" else [me]
+
+
+def iphone_of(machine):
+    enabled = machine["id"] in IPHONE_ON
+    devices = [{**d, "allowed": enabled and d["id"] in IPHONE_CONSENT} for d in iphone_devices(machine["id"])]
+    out = {"enabled": enabled, "installed": True, "version": "0.1.0", "devices": devices}
+    job = IPHONE_JOBS.get(machine["id"])
+    if job:
+        t = time.time() - job["at"]
+        state = "cancelled" if job.get("cancelled") else ("running" if t <= 2 * COMPUTER_STEP else "done")
+        out["job"] = {"kind": "pair", "state": state, "started": job["started"],
+                      **({"step": "在 iPhone 上点「信任」"} if state == "running" else {})}
+    return out
+
+
+def iphone_list():
+    if MOCK_IPHONE not in IPHONE_MODES:
+        return {"on": False, "devices": []}
+    seen = {}
+    for m in MACHINES:
+        if m.get("os") != "darwin":
+            continue
+        p = iphone_of(m)
+        for d in p["devices"]:
+            row = seen.setdefault(d["id"], {**d, "machines": [], "consented": d["id"] in IPHONE_CONSENT})
+            row["machines"].append({"id": m["id"], "name": m["name"], "enabled": p["enabled"]})
+            if d["allowed"]: row["allowed"] = True
+    return {"on": True, "devices": list(seen.values())}
+
+
+def refresh_iphones():
+    if MOCK_IPHONE in IPHONE_MODES:
+        for m in MACHINES:
+            if m.get("os") == "darwin":
+                m["iphone"] = iphone_of(m)
+    for send, _ in list(LIVE):
+        try: send({"type": "machines", "machines": out_machines()})
+        except Exception: pass
+
+
+if MOCK_IPHONE in IPHONE_MODES:
+    for _m in MACHINES:
+        if _m.get("os") == "darwin":
+            _m["iphone"] = iphone_of(_m)
+
 # Every fixture, including machines added by optional modes, follows the engine contract.
 for _m in MACHINES:
     _m["engine"] = "herdr"
@@ -14678,6 +14763,14 @@ class H(BaseHTTPRequestHandler):
             if machine is None or "browser" not in machine:
                 return self.send_json({"error": "浏览器插件没打开，或这台不是 Mac"}, 404)
             return self.send_json(browser_now(machine))
+        if p == "/api/v1/iphone":  # the extension iphone (MOCK_IPHONE)
+            return self.send_json(iphone_list())
+        if p.startswith("/api/v1/machines/") and p.endswith("/iphone"):
+            machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
+            if machine is None or "iphone" not in machine:
+                return self.send_json({"error": "操控手机的扩展没打开，或这台不是 Mac"}, 404)
+            machine["iphone"] = iphone_of(machine)
+            return self.send_json(machine["iphone"])
         if p == "/mock/herdr":
             if "stopped" in q:
                 HERDR_STOPPED.clear()
@@ -15882,6 +15975,36 @@ class H(BaseHTTPRequestHandler):
             if status == 204:
                 self.send_response(204); self.end_headers(); return
             return self.send_json(answer, status)
+        if self.command == "PUT" and p == "/api/v1/iphone/consent":  # this iPhone's own consent (MOCK_IPHONE)
+            if MOCK_IPHONE not in IPHONE_MODES:
+                return self.send_json({"error": "操控手机的扩展没打开"}, 404)
+            body = json.loads(self.last_body or b"{}")
+            device = (body.get("device") or "").strip()
+            if not device: return self.send_json({"error": "没说是哪台 iPhone"}, 400)
+            (IPHONE_CONSENT.add if body.get("allowed") else IPHONE_CONSENT.discard)(device)
+            refresh_iphones()
+            row = next((d for d in iphone_list()["devices"] if d["id"] == device), {"id": device, "name": "", "machines": [], "consented": device in IPHONE_CONSENT})
+            return self.send_json(row)
+        if self.command == "POST" and p.startswith("/api/v1/machines/") and "/iphone/" in p:  # Pair / Forget / Cancel
+            machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
+            if machine is None or "iphone" not in machine:
+                return self.send_json({"error": "操控手机的扩展没打开，或这台电脑连不了 iPhone"}, 404)
+            action = p.rsplit("/", 1)[1]
+            if action == "pair":
+                IPHONE_JOBS[machine["id"]] = {"at": time.time(), "started": ago()}
+            elif action == "cancel":
+                if machine["id"] in IPHONE_JOBS: IPHONE_JOBS[machine["id"]]["cancelled"] = True
+            elif action != "forget":
+                return self.send_json({"error": "unknown action"}, 404)
+            refresh_iphones()
+            return self.send_json(iphone_of(machine))
+        if self.command == "PUT" and p.startswith("/api/v1/machines/") and p.endswith("/iphone"):
+            machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
+            if machine is None or "iphone" not in machine:
+                return self.send_json({"error": "操控手机的扩展没打开，或这台不是 Mac"}, 404)
+            (IPHONE_ON.add if json.loads(self.last_body or b"{}").get("enabled") else IPHONE_ON.discard)(machine["id"])
+            refresh_iphones()
+            return self.send_json(iphone_of(machine))
         if p.startswith("/api/v1/machines/") and (p.endswith("/browser") or "/browser/" in p):  # the plugin ego (MOCK_BROWSER)
             machine = next((m for m in MACHINES if m["id"] == p.split("/")[4]), None)
             if machine is None or "browser" not in machine:

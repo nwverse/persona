@@ -22,10 +22,14 @@ iPhone.**
 `iphonectl.Controller` (one per node) answers `Handle(ctx, bridge, Request) Response`:
 
 - **Request**: `device` (opaque to the core), `session` (the conversation), `op`, `args`, `approved` (resume a do the
-  owner approved) and `confirm` (the owner's setting to be asked before any input).
+  owner approved), `confirm` (the owner's setting to be asked before any input) and `self_apps` / `self_names`
+  (Persona's own apps, added to `Rules.SelfApps` / `Rules.SelfNames` for as long as the controller runs: a call
+  without them never lifts the rule).
 - **Response**: `output` (the result as JSON), `text` (the result for the model), `image` (a screenshot), and for a
   step waiting for the owner `needs_approval`, `approval_summary` (data, below) and `approval_id`. The approval fields
-  are for the manager only: neither is in `text` or `output`.
+  are for the manager only: neither is in `text` or `output`. `refused` says the call was turned down as a whole
+  before anything was sent, as a code: `bad_args`, `not_pending` (an approval it no longer holds) or `busy` (a resume
+  while the phone is busy: the approval stays pending); `text` says why.
 - `bridge` is the phone: `iphonectl.Wire` turns the bridge's JSON wire into the `Bridge` interface, given a function
   that sends one operation to the phone and returns its result or its error (`*iphonectl.Error` with the bridge's code;
   the caller sets `NotSent` when its session refused before writing anything, `MaybeSent` when it handed the operation
@@ -233,14 +237,15 @@ list of the do's steps from there; one answer covers the do, though a step the r
   manager never hands it to the model.
 - An id resumes one waiting step of one conversation, once. A newer do in that conversation, an expired wait
   (`Pending`) or a node restart discards it, and the call answers that nothing was sent.
-- No step touches or types into Persona's own app on the phone (`Rules.SelfApps`, bundle ids from config, compared
-  ignoring case and spaces; `Rules.SelfNames` for a front app reported without a bundle id), where approval cards and
-  their buttons appear, and launching it is refused; leaving it (home, another app) is fine.
+- No step touches or types into Persona's own app on the phone (`Rules.SelfApps`, bundle ids the hub sends with each
+  call, never written in code, compared ignoring case and spaces; `Rules.SelfNames` for a front app reported without a
+  bundle id), where approval cards and their buttons appear, and launching it is refused; leaving it (home, another
+  app) is fine.
 
 ## Not covered yet
 
-- Wiring: the node's `iphone` program calling `Handle` with a `Wire` over the bridge, `SelfApps` from config, the
-  manager's tools and approval card.
+- The manager filling in `self_apps` / `self_names` from what the hub knows of Persona's app; until it does, the
+  rule has nothing to match.
 - Notification banners from Persona shown over another app are not recognized as Persona's own UI; only the app in
   front is.
 - Real-device checks of the bridge's roles and labels against the identity rules, the 30% threshold and the 400 ms

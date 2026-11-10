@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,6 +30,11 @@ type Request struct {
 	Approved string `json:"approved,omitempty"`
 	// Confirm is the owner's setting to be asked before any input, on top of the steps the rules always ask about.
 	Confirm bool `json:"confirm,omitempty"`
+	// SelfApps and SelfNames are Persona's own apps (Rules.SelfApps, Rules.SelfNames) as the hub knows them. They add
+	// to the controller's rules for as long as it runs: a later call without them never lets the automation into
+	// Persona's app.
+	SelfApps  []string `json:"self_apps,omitempty"`
+	SelfNames []string `json:"self_names,omitempty"`
 }
 
 // LookArgs are a look's arguments.
@@ -45,7 +52,8 @@ type DoArgs struct {
 
 // Response is the answer: the result for the model (Text), the same as data (Output), a screenshot, and, when a
 // step waits for the owner, what to ask them and the id to resume with. Approval and ApprovalID are for the hub
-// only: neither is in Text or Output.
+// only: neither is in Text or Output. Refused says the call was turned down as a whole before anything was sent, and
+// why, as a code (RefusedArgs, RefusedNotPending, RefusedBusy); Text says it in words.
 type Response struct {
 	Output        json.RawMessage `json:"output"`
 	Text          string          `json:"text"`
@@ -53,7 +61,15 @@ type Response struct {
 	NeedsApproval bool            `json:"needs_approval,omitempty"`
 	Approval      *Approval       `json:"approval_summary,omitempty"`
 	ApprovalID    string          `json:"approval_id,omitempty"`
+	Refused       string          `json:"refused,omitempty"`
 }
+
+// Why a call was turned down as a whole (Response.Refused).
+const (
+	RefusedArgs       = "bad_args"    // arguments or steps it can't read
+	RefusedNotPending = "not_pending" // a resume of an approval it no longer holds (used, replaced, expired, node restarted)
+	RefusedBusy       = "busy"        // a resume while another call runs on the phone: the approval is still pending
+)
 
 // Options shape a controller.
 type Options struct {
@@ -66,10 +82,32 @@ type Options struct {
 // says so instead of guessing.
 type Controller struct {
 	limits Limits
-	rules  Rules
 
 	mu      sync.Mutex
+	rules   Rules // grows by the requests' SelfApps and SelfNames; read with ruleSet
 	devices map[string]*phone
+}
+
+// ruleSet is the rules now.
+func (c *Controller) ruleSet() Rules {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rules
+}
+
+// addSelf adds Persona's own apps a request names to the rules; none is ever removed.
+func (c *Controller) addSelf(apps, names []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	add := func(list []string, vs []string) []string {
+		for _, v := range vs {
+			if v = strings.TrimSpace(v); v != "" && !listed(list, v) {
+				list = append(slices.Clip(list), v)
+			}
+		}
+		return list
+	}
+	c.rules.SelfApps, c.rules.SelfNames = add(c.rules.SelfApps, apps), add(c.rules.SelfNames, names)
 }
 
 // NewController is a controller; one per node.
@@ -207,6 +245,7 @@ func (c *Controller) Handle(ctx context.Context, b Bridge, req Request) Response
 	if req.Device == "" {
 		return errResponse("no device")
 	}
+	c.addSelf(req.SelfApps, req.SelfNames)
 	switch req.Op {
 	case OpLook:
 		var args LookArgs
@@ -246,7 +285,14 @@ func decodeArgs(raw json.RawMessage, v any) error {
 	return json.Unmarshal(raw, v)
 }
 
+// errResponse is a call refused before anything was sent, for its arguments.
 func errResponse(msg string) Response {
+	r := failed(msg)
+	r.Refused = RefusedArgs
+	return r
+}
+
+func failed(msg string) Response {
 	out, _ := json.Marshal(map[string]string{"error": msg})
 	return Response{Output: out, Text: msg + "."}
 }
@@ -254,7 +300,7 @@ func errResponse(msg string) Response {
 func response(v any, text string, img *Image) Response {
 	out, err := json.Marshal(v)
 	if err != nil {
-		return errResponse("encoding the result: " + err.Error())
+		return failed("encoding the result: " + err.Error())
 	}
 	return Response{Output: out, Text: text, Image: img}
 }

@@ -222,7 +222,7 @@ func TestIPhoneNotesAreFixedText(t *testing.T) {
 
 func TestIPhoneCallLookGoesToTheCoreOnTheOnlyPairedDevice(t *testing.T) {
 	f := &fakeIPhones{installed: true, links: []iphoneLink{{ID: "usb", USB: true}, {ID: "d1", Paired: true, State: "connected"}}}
-	c := &fakeCore{ops: []string{"tap"}, out: iphoneOutcome{Output: json.RawMessage(`{"elements":[]}`), NeedsApproval: true, Approval: json.RawMessage(`{"step":1,"needs":["payment"]}`), ApprovalID: "a1"}, shot: "full"}
+	c := &fakeCore{ops: []string{"tap"}, out: iphoneOutcome{Output: json.RawMessage(`{"elements":[]}`), NeedsApproval: true, Approval: &proto.IPhoneApproval{Step: 1, Action: "tap", Needs: []string{"payment"}}, ApprovalID: "a1"}, shot: "full"}
 	useIPhones(t, f, c)
 	params := `{"session":"s1","op":"do","args":{"tap":3},"approved":"a0","confirm":true}`
 	res, err := builtinCall(context.Background(), "iphone", "call", json.RawMessage(params), nil)
@@ -230,8 +230,7 @@ func TestIPhoneCallLookGoesToTheCoreOnTheOnlyPairedDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := res.(*proto.IPhoneResult)
-	if string(r.Output) != `{"elements":[]}` || !r.NeedsApproval || string(r.Approval) != `{"step":1,"needs":["payment"]}` ||
-		r.ApprovalSummary != "" || r.ApprovalID != "a1" {
+	if string(r.Output) != `{"elements":[]}` || !r.NeedsApproval || r.Approval == nil || r.Approval.Needs[0] != "payment" || r.ApprovalID != "a1" {
 		t.Fatalf("result %+v", r)
 	}
 	if r.Image == nil || r.Image.Mime == "" || r.Image.Data == "" || r.Image.Width != 1 {

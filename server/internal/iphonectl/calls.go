@@ -132,6 +132,8 @@ type DoResult struct {
 	ReadError string `json:"read_error,omitempty"`
 	// Note is about the call as a whole: why nothing was resumed.
 	Note string `json:"note,omitempty"`
+	// refused is Response.Refused: the resume was turned down before anything was sent.
+	refused string
 
 	image      *Image
 	approval   *Approval
@@ -143,6 +145,7 @@ func (r DoResult) response() Response {
 	if r.approval != nil {
 		resp.NeedsApproval, resp.Approval, resp.ApprovalID = true, r.approval, r.approvalID
 	}
+	resp.Refused = r.refused
 	return resp
 }
 
@@ -206,7 +209,8 @@ func (c *Controller) do(ctx context.Context, b Bridge, device, sessionID string,
 	p := c.phone(device)
 	if !p.acquire(ctx, c.limits.Busy) {
 		if r.resume != "" {
-			return DoResult{Note: "nothing was sent: " + busyNote + "; the approval is still pending", Elapsed: time.Since(start)}
+			return DoResult{Note: "nothing was sent: " + busyNote + "; the approval is still pending", Elapsed: time.Since(start),
+				refused: RefusedBusy}
 		}
 		r.notSent(&res, 0, "not attempted: "+busyNote)
 		res.Elapsed = time.Since(start)
@@ -225,10 +229,10 @@ func (c *Controller) do(ctx context.Context, b Bridge, device, sessionID string,
 		switch {
 		case w == nil:
 			return DoResult{Note: "nothing was sent: that approval is not pending (already used, replaced by a newer do, " +
-				"or the node restarted)", Elapsed: time.Since(start)}
+				"or the node restarted)", Elapsed: time.Since(start), refused: RefusedNotPending}
 		case time.Now().After(w.expires):
 			return DoResult{Note: fmt.Sprintf("nothing was sent: the approval expired (steps wait at most %s)",
-				round(c.limits.Pending)), Elapsed: time.Since(start)}
+				round(c.limits.Pending)), Elapsed: time.Since(start), refused: RefusedNotPending}
 		}
 		r = run{steps: w.steps, offset: w.offset, view: w.view, screenshot: w.screenshot, confirm: w.confirm,
 			approved: w.print, approvedShot: w.shot, confirmed: w.confirmed}

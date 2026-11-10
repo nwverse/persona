@@ -189,19 +189,19 @@ func TestIPhoneExtension(t *testing.T) {
 	}
 
 	// The one allowed is the default; the other one is never operated, by id or name.
-	res := h.callIPhoneTool(ctx, "conv1234x", "iphone_look", json.RawMessage(`{"query": "set"}`))
+	res := h.callIPhoneTool(ctx, "conv1234x", "iphone_look", json.RawMessage(`{}`))
 	if res.IsError || len(res.Content) != 2 || res.Content[1].Type != "image" || !strings.Contains(res.Content[0].Text, "Settings") {
 		t.Fatalf("%+v", res)
 	}
 	last := lastIPhoneCall(t, seen())
 	var args map[string]any
 	_ = json.Unmarshal(last.Call.Args, &args)
-	if last.Call.Device != "dev-a1" || last.Call.Op != "look" || last.Call.Session != "persona-conv1234" || args["query"] != "set" || args["screenshot"] != true {
+	if last.Call.Device != "dev-a1" || last.Call.Op != "look" || last.Call.Session != "persona-conv1234" || len(args) != 1 || args["screenshot"] != true {
 		t.Fatalf("%+v %v", last, args)
 	}
 	for _, name := range []string{"dev-b2", "Other iPhone"} {
 		before := len(seen())
-		res := h.callIPhoneTool(ctx, "c", "iphone_do", json.RawMessage(`{"phone": "`+name+`", "steps": [{"action": "tap", "target": 1}]}`))
+		res := h.callIPhoneTool(ctx, "c", "iphone_do", json.RawMessage(`{"phone": "`+name+`", "steps": [{"action": "tap", "target": {"n": 1}}]}`))
 		if !res.IsError || !strings.Contains(res.Content[0].Text, "Test iPhone (dev-a1)") {
 			t.Fatalf("%s: %+v", name, res)
 		}
@@ -244,14 +244,17 @@ func TestIPhoneExtension(t *testing.T) {
 	}
 }
 
-// A step the node says needs approval is asked on the phone with the node's words; once allowed it is called again
-// with the approval's id, a refusal ends it. "Ask before every action" asks first, and a refusal runs nothing.
+// A step the node says needs approval is asked on the phone in the manager's words, from the node's data; once
+// allowed, the do is resumed with the approval alone. The card's input is that data without the evidence, never the
+// model's arguments (a typed password). A refusal ends it.
 func TestIPhoneApprovals(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	ctx := context.Background()
+	pay := &proto.IPhoneApproval{Step: 1, Action: "tap", Needs: []string{"payment"}, App: proto.IPhoneApp{Name: "Wallet", BundleID: "com.example.wallet"},
+		Target: &proto.IPhoneElementRef{N: 4, Role: "button", Label: "Pay ¥36.00"}, Evidence: []string{"label matches pay"}}
 	answer := func(p proto.IPhoneCall) (proto.IPhoneResult, error) {
 		if p.Op == "do" && p.Approved != "ap1" {
-			return proto.IPhoneResult{NeedsApproval: true, ApprovalID: "ap1", ApprovalSummary: "Tap Pay"}, nil
+			return proto.IPhoneResult{NeedsApproval: true, ApprovalID: "ap1", Approval: pay}, nil
 		}
 		return proto.IPhoneResult{Text: "paid"}, nil
 	}
@@ -263,25 +266,32 @@ func TestIPhoneApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.refreshIPhoneMacs(ctx)
-	steps := json.RawMessage(`{"steps": [{"action": "tap", "target": 4}, {"action": "type", "text": "secret words"}]}`)
+	steps := json.RawMessage(`{"steps": [{"action": "tap", "target": {"n": 4}}, {"action": "type", "text": "secret words"}], "numbering": 7}`)
 
 	done := make(chan proto.ToolResult, 1)
 	go func() { done <- h.callIPhoneTool(ctx, "c", "iphone_do", steps) }()
 	card := answerCard(t, h, true, false)
-	if card.ToolName != "iphone_do" || card.Summary != i18n.T(h.userLang(), "hub-iphone.confirm_sensitive", i18n.Args{"phone": "Test iPhone", "summary": "Tap Pay"}) {
-		t.Fatalf("%+v", card)
+	l := h.userLang()
+	want := i18n.T(l, "hub-iphone.card_on_in", i18n.Args{"phone": "Test iPhone", "app": "Wallet",
+		"action": i18n.T(l, "hub-iphone.card_act_tap_on", i18n.Args{"target": i18n.T(l, "hub-iphone.card_target_label", i18n.Args{"label": "Pay ¥36.00"})})})
+	if card.ToolName != "iphone_do" || !strings.HasPrefix(card.Summary, want+"\n") || !strings.Contains(card.Summary, i18n.T(l, "hub-iphone.card_need_payment")) {
+		t.Fatalf("%q", card.Summary)
+	}
+	if in := string(card.ToolInput); strings.Contains(in, "secret") || strings.Contains(in, "evidence") || !strings.Contains(in, "Pay ¥36.00") {
+		t.Fatalf("card input: %s", in)
 	}
 	if res := <-done; res.IsError || res.Content[0].Text != "paid" {
 		t.Fatalf("%+v", res)
 	}
-	var approved []string
+	var calls []proto.IPhoneCall
 	for _, c := range seen() {
 		if c.Method == "iphone.call" {
-			approved = append(approved, c.Call.Approved)
+			calls = append(calls, c.Call)
 		}
 	}
-	if strings.Join(approved, ",") != ",ap1" {
-		t.Fatalf("called again with the approval: %v", approved)
+	if len(calls) != 2 || calls[0].Approved != "" || !strings.Contains(string(calls[0].Args), `"numbering":7`) ||
+		calls[1].Approved != "ap1" || len(calls[1].Args) != 0 || calls[1].Op != "do" {
+		t.Fatalf("resumed with the approval alone: %+v", calls)
 	}
 
 	go func() { done <- h.callIPhoneTool(ctx, "c", "iphone_do", steps) }()
@@ -290,22 +300,21 @@ func TestIPhoneApprovals(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 
-	// Ask before every action: the card names the actions only, never what is typed.
+	// Ask before every action: it goes down with the call; the manager asks nothing before the node does.
 	if err := h.extensions.reg.SetConfig(ctx, iphoneExtensionID, json.RawMessage(`{"machines": ["mac"], "phones": ["dev-a1"], "confirm": true}`), "test"); err != nil {
 		t.Fatal(err)
 	}
 	before := len(seen())
 	go func() { done <- h.callIPhoneTool(ctx, "c", "iphone_do", steps) }()
-	card = answerCard(t, h, false, false)
-	if !strings.Contains(card.Summary, "tap") || !strings.Contains(card.Summary, "type") || strings.Contains(card.Summary, "secret") {
-		t.Fatalf("%q", card.Summary)
-	}
-	if res := <-done; !res.IsError {
-		t.Fatalf("%+v", res)
-	}
+	answerCard(t, h, true, false)
+	<-done
+	first := true
 	for _, c := range seen()[before:] {
-		if c.Method == "iphone.call" {
-			t.Fatal("declined before: nothing runs")
+		if c.Method == "iphone.call" && first {
+			first = false
+			if !c.Call.Confirm || c.Call.Approved != "" {
+				t.Fatalf("the first call carries confirm, before any card: %+v", c.Call)
+			}
 		}
 	}
 	// Looking is never asked.
@@ -314,12 +323,45 @@ func TestIPhoneApprovals(t *testing.T) {
 	}
 }
 
-// A node that asks again and again ends the call instead of asking forever.
+// The card's words: a password never shown (only its length), a point when the target can't be identified, and the
+// steps one "ask before every action" answer covers.
+func TestIPhoneCard(t *testing.T) {
+	l := i18n.En
+	text, input := iphoneCard(l, "My iPhone", &proto.IPhoneApproval{Step: 2, Action: "type", Needs: []string{"password"}, TextLen: 8,
+		Target: &proto.IPhoneElementRef{N: 3, Role: "secure_text_field"}})
+	if !strings.Contains(text, "8 characters") || !strings.Contains(text, "item 3") || strings.Contains(string(input), `"text"`) {
+		t.Fatalf("%q %s", text, input)
+	}
+	text, _ = iphoneCard(l, "My iPhone", &proto.IPhoneApproval{Step: 1, Action: "tap", Needs: []string{"unchecked"}, At: &proto.IPhonePoint{X: 119.6, Y: 640}})
+	if !strings.Contains(text, "(120, 640)") || !strings.Contains(text, i18n.T(l, "hub-iphone.card_need_unchecked")) || strings.Contains(text, " in ") {
+		t.Fatalf("%q", text)
+	}
+	text, _ = iphoneCard(l, "My iPhone", &proto.IPhoneApproval{Step: 1, Action: "tap", Needs: []string{"confirm"}, App: proto.IPhoneApp{BundleID: "com.example.notes"},
+		Target: &proto.IPhoneElementRef{N: 2, Role: "button", Label: "New"},
+		Steps: []proto.IPhoneStepSummary{{Action: "tap", Target: &proto.IPhoneElementRef{N: 2, Label: "New"}}, {Action: "type", TextLen: 5},
+			{Action: "button", Button: "home"}, {Action: "launch", App: "com.example.mail"}}})
+	if !strings.Contains(text, "com.example.notes") || !strings.Contains(text, "Type 5 characters → Go to the Home Screen → Open com.example.mail") {
+		t.Fatalf("%q", text)
+	}
+	long := strings.Repeat("字", 300)
+	text, _ = iphoneCard(i18n.ZhHans, "我的 iPhone", &proto.IPhoneApproval{Action: "type", Needs: []string{"send_message"}, Text: long, TextLen: 300})
+	if strings.Contains(text, long) || !strings.Contains(text, "…") {
+		t.Fatal("a long text is cut")
+	}
+}
+
+// A node that asks again and again ends the call instead of asking forever; a resume the node no longer takes (the
+// approval used, replaced, too old, the node restarted) is said as it is, and not tried again.
 func TestIPhoneApprovalsEnd(t *testing.T) {
 	h, _ := extensionTestHub(t)
 	ctx := context.Background()
-	iphoneMac(t, h, "mac", []proto.IPhoneDevice{testIPhone}, func(proto.IPhoneCall) (proto.IPhoneResult, error) {
-		return proto.IPhoneResult{NeedsApproval: true, ApprovalID: "again", ApprovalSummary: "Tap"}, nil
+	stale := false
+	iphoneMac(t, h, "mac", []proto.IPhoneDevice{testIPhone}, func(p proto.IPhoneCall) (proto.IPhoneResult, error) {
+		if stale && p.Approved != "" {
+			data, _ := json.Marshal(proto.IPhoneErrorData{Sent: proto.IPhoneNotSent})
+			return proto.IPhoneResult{}, &rpc.Error{Code: "approval_unknown", Message: "nothing was sent: that approval is no longer pending", Data: data}
+		}
+		return proto.IPhoneResult{NeedsApproval: true, ApprovalID: "again", Approval: &proto.IPhoneApproval{Step: 1, Action: "tap", Needs: []string{"payment"}}}, nil
 	})
 	if err := h.extensions.reg.SetEnabled(ctx, iphoneExtensionID, true, "test"); err != nil {
 		t.Fatal(err)
@@ -328,7 +370,14 @@ func TestIPhoneApprovalsEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.refreshIPhoneMacs(ctx) // the default desk allows every card
-	if res := h.callIPhoneTool(ctx, "c", "iphone_do", json.RawMessage(`{"steps": [{"action": "tap", "x": 1, "y": 2}]}`)); !res.IsError || !strings.Contains(res.Content[0].Text, "again and again") {
+	do := json.RawMessage(`{"steps": [{"action": "tap", "target": {"x": 1, "y": 2}}]}`)
+	if res := h.callIPhoneTool(ctx, "c", "iphone_do", do); !res.IsError || !strings.Contains(res.Content[0].Text, "again and again") {
+		t.Fatalf("%+v", res)
+	}
+	stale = true
+	res := h.callIPhoneTool(ctx, "c", "iphone_do", do)
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "nothing was sent: that approval is no longer pending") ||
+		!strings.Contains(res.Content[0].Text, "do not try it again without asking") {
 		t.Fatalf("%+v", res)
 	}
 }

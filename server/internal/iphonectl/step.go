@@ -259,7 +259,7 @@ func (c *Controller) step(ctx context.Context, cl *call, i int, st Step, resume 
 	if sized == nil {
 		sized = &Screen{Size: cl.info.Size}
 	}
-	v := c.rules.Check(st, touchOf(st, tg, sized), scr)
+	v := c.ruleSet().Check(st, touchOf(st, tg, sized), scr)
 	if v.Refused != "" {
 		return fail(DeliveryNotSent, "refused: "+v.Refused)
 	}

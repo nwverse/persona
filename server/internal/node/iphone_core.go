@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/nwverse/persona/server/internal/iphonectl"
@@ -28,25 +29,31 @@ func (d *iphoneControl) controller() *iphonectl.Controller {
 	return d.c
 }
 
-// iphoneRules are the rules the core checks every step against.
+// iphoneRules are the rules the core starts with. Persona's own apps come with the calls (proto.IPhoneCall.SelfApps):
+// the hub knows them, the node has no config of its own that does.
 func iphoneRules() iphonectl.Rules {
 	return iphonectl.Rules{}
 }
 
 // Run is one look or do: the core answers within the call's context whatever the bridge does, so a failure of the
-// iPhone or of a step is in the answer (what was sent, what was not), never an error.
+// iPhone or of a step is in the answer (what was sent, what was not). Only a call the core turned down as a whole
+// before sending anything is an error, with the core's code for why (bad_args, not_pending, busy: the approval still
+// pending), saying nothing was sent, in the core's words.
 func (d *iphoneControl) Run(ctx context.Context, r iphoneRun) (iphoneOutcome, error) {
 	w := &iphonectl.Wire{Call: iphoneWireCall(r.Bridge), TempDir: r.TempDir}
 	resp := d.controller().Handle(ctx, w, iphonectl.Request{Device: r.Device, Session: r.Session, Op: r.Op, Args: r.Args,
-		Approved: r.Approved, Confirm: r.Confirm})
+		Approved: r.Approved, Confirm: r.Confirm, SelfApps: r.SelfApps, SelfNames: r.SelfNames})
+	if resp.Refused != "" {
+		return iphoneOutcome{}, iphoneErr(resp.Refused, strings.TrimSpace(resp.Text), proto.IPhoneNotSent)
+	}
 	out := iphoneOutcome{Output: resp.Output, Text: resp.Text, NeedsApproval: resp.NeedsApproval, ApprovalID: resp.ApprovalID}
 	if resp.Approval != nil {
 		// Data for the manager, which words it in the owner's language; the node never phrases it.
-		raw, err := json.Marshal(resp.Approval)
+		a, err := iphoneApproval(resp.Approval)
 		if err != nil {
 			return iphoneOutcome{}, err
 		}
-		out.Approval = raw
+		out.Approval = a
 	}
 	if img := resp.Image; img != nil {
 		out.ImageFile = img.File
@@ -55,6 +62,20 @@ func (d *iphoneControl) Run(ctx context.Context, r iphoneRun) (iphoneOutcome, er
 		}
 	}
 	return out, nil
+}
+
+// iphoneApproval is the core's approval as the manager reads it: proto.IPhoneApproval mirrors iphonectl.Approval
+// field by field under the same JSON names (TestIPhoneApprovalMirrorsTheCore keeps the two in step).
+func iphoneApproval(a *iphonectl.Approval) (*proto.IPhoneApproval, error) {
+	raw, err := json.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+	var out proto.IPhoneApproval
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // iphoneSaysMaybeSent: err's data says the operation may have reached the iPhone (the session handed it over and lost

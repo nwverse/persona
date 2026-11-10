@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -132,13 +133,12 @@ func TestIPhoneCoreAsksBeforeAPaymentAndResumesWithTheApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.NeedsApproval || res.ApprovalID == "" || res.ApprovalSummary != "" {
+	if !res.NeedsApproval || res.ApprovalID == "" {
 		t.Fatalf("a payment goes ahead: %+v", res)
 	}
-	var a iphonectl.Approval
-	if err := json.Unmarshal(res.Approval, &a); err != nil || a.Step != 1 || a.Action != "tap" ||
-		!slices.Contains(a.Needs, iphonectl.Payment) || a.App.BundleID != "com.example.shop" || a.Target == nil {
-		t.Fatalf("approval %s (%v)", res.Approval, err)
+	if a := res.Approval; a == nil || a.Step != 1 || a.Action != "tap" || !slices.Contains(a.Needs, "payment") ||
+		a.App.BundleID != "com.example.shop" || a.Target == nil || a.Target.Label != "Pay" {
+		t.Fatalf("approval %+v", a)
 	}
 	if strings.Contains(res.Text, res.ApprovalID) || strings.Contains(string(res.Output), res.ApprovalID) {
 		t.Fatal("the approval id reaches the model")
@@ -147,22 +147,113 @@ func TestIPhoneCoreAsksBeforeAPaymentAndResumesWithTheApproval(t *testing.T) {
 		t.Fatalf("sent before approval: %v", b.inputs())
 	}
 
-	// The manager comes back with the id once the owner approved: the step is sent, once.
-	var call proto.IPhoneCall
-	_ = json.Unmarshal([]byte(do), &call)
-	call.Approved = res.ApprovalID
-	raw, _ := json.Marshal(call)
-	res, err = iphoneCall(ctx, raw)
+	// The manager comes back once the owner approved, with only the id: the step is sent, once.
+	resume := json.RawMessage(`{"device":"d1","session":"s1","op":"do","approved":"` + res.ApprovalID + `"}`)
+	res, err = iphoneCall(ctx, resume)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.NeedsApproval || strings.Join(b.inputs(), ",") != "tap" {
 		t.Fatalf("after approval: %+v, inputs %v", res, b.inputs())
 	}
-	// The id is spent.
-	if res, err = iphoneCall(ctx, raw); err != nil || strings.Join(b.inputs(), ",") != "tap" {
-		t.Fatalf("approved twice: %+v %v, inputs %v", res, err, b.inputs())
+	// The id is spent: nothing is sent, and the error says so in the core's words.
+	_, err = iphoneCall(ctx, resume)
+	if code, sent := iphoneCallErr(t, err); code != "not_pending" || sent != proto.IPhoneNotSent ||
+		!strings.Contains(err.Error(), "not pending") || strings.Join(b.inputs(), ",") != "tap" {
+		t.Fatalf("approved twice: %s %s %v, inputs %v", code, sent, err, b.inputs())
 	}
+	// So are steps the core can't read.
+	_, err = iphoneCall(ctx, json.RawMessage(`{"device":"d1","session":"s1","op":"do","args":{"steps":[{"action":"fly"}]}}`))
+	if code, sent := iphoneCallErr(t, err); code != "bad_args" || sent != proto.IPhoneNotSent {
+		t.Fatalf("bad steps: %s %s %v", code, sent, err)
+	}
+}
+
+func TestIPhoneCoreNeverOperatesPersonasOwnApp(t *testing.T) {
+	b := newBridgePhone()
+	useCore(t, b)
+	ctx := context.Background()
+	self := `"self_apps":["com.example.shop"],"self_names":["Shop"]`
+	if _, err := iphoneCall(ctx, json.RawMessage(`{"session":"s1","op":"look","args":{"screenshot":false},`+self+`}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, params := range []string{
+		`{"session":"s1","op":"do","args":{"steps":[{"action":"tap","target":{"label":"Search"}}]},` + self + `}`,
+		// A call without them keeps the rule: the node holds them while it runs.
+		`{"session":"s1","op":"do","args":{"steps":[{"action":"tap","target":{"label":"Search"}}]}}`,
+		`{"session":"s1","op":"do","args":{"steps":[{"action":"launch","app":"com.example.shop"}]}}`,
+	} {
+		res, err := iphoneCall(ctx, json.RawMessage(params))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out iphonectl.DoResult
+		if json.Unmarshal(res.Output, &out) != nil || len(out.Steps) != 1 || out.Steps[0].Delivery != iphonectl.DeliveryNotSent ||
+			!strings.Contains(out.Steps[0].Detail, "Persona's own app") {
+			t.Fatalf("%s:\n%s", params, res.Text)
+		}
+	}
+	if len(b.inputs()) != 0 {
+		t.Fatalf("operated Persona's app: %v", b.inputs())
+	}
+}
+
+// TestIPhoneApprovalMirrorsTheCore: proto.IPhoneApproval mirrors iphonectl.Approval by hand. Every field of the core's,
+// filled in, goes through it and back unchanged; a field added on one side only turns this red.
+func TestIPhoneApprovalMirrorsTheCore(t *testing.T) {
+	core := &iphonectl.Approval{Step: 2, Action: "type", Needs: []iphonectl.Sensitivity{iphonectl.Payment, iphonectl.Confirm},
+		App: iphonectl.App{BundleID: "com.example.shop", Name: "Shop"}, Target: &iphonectl.ElementRef{N: 4, Role: "button", Label: "Pay"},
+		Text: "hello", TextLen: 5, Key: "return", Button: "home", LaunchApp: "com.example.other", Evidence: []string{`button "Pay"`},
+		Steps: []iphonectl.StepSummary{{Action: "tap", Target: &iphonectl.ElementRef{N: 4, Role: "button", Label: "Pay"},
+			At: &iphonectl.Point{X: 1.5, Y: 2}, TextLen: 3, Key: "tab", Button: "lock", App: "com.example.other"}},
+		At: &iphonectl.Point{X: 10, Y: 20.5}}
+	want, _ := json.Marshal(core)
+	for _, field := range []string{"step", "action", "needs", "app", "target", "text", "text_len", "key", "button", "launch_app",
+		"evidence", "steps", "at"} {
+		if !strings.Contains(string(want), `"`+field+`":`) {
+			t.Fatalf("the test leaves %s empty: %s", field, want)
+		}
+	}
+	mirrored, err := iphoneApproval(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := json.Marshal(mirrored)
+	var w, g any
+	_ = json.Unmarshal(want, &w)
+	_ = json.Unmarshal(got, &g)
+	if !reflect.DeepEqual(w, g) {
+		t.Fatalf("lost on the way:\ncore  %s\nproto %s", want, got)
+	}
+	// Strictly: no field of the core's is unknown to the proto type.
+	dec := json.NewDecoder(strings.NewReader(string(want)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(new(proto.IPhoneApproval)); err != nil {
+		t.Fatal(err)
+	}
+	// And field by field, each type and the one it mirrors: the same JSON names and options, so a field added to
+	// either side alone (even one left empty here) shows.
+	for _, pair := range [][2]any{{iphonectl.Approval{}, proto.IPhoneApproval{}}, {iphonectl.StepSummary{}, proto.IPhoneStepSummary{}},
+		{iphonectl.App{}, proto.IPhoneApp{}}, {iphonectl.ElementRef{}, proto.IPhoneElementRef{}}, {iphonectl.Point{}, proto.IPhonePoint{}}} {
+		c, p := jsonTags(reflect.TypeOf(pair[0])), jsonTags(reflect.TypeOf(pair[1]))
+		if !slices.Equal(c, p) {
+			t.Errorf("%T %v\n%T %v", pair[0], c, pair[1], p)
+		}
+	}
+}
+
+// jsonTags are a struct's fields as JSON writes them: name and options, with whether it is a list or a pointer.
+func jsonTags(t reflect.Type) []string {
+	var out []string
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		out = append(out, f.Tag.Get("json")+" "+f.Type.Kind().String())
+	}
+	slices.Sort(out)
+	return out
 }
 
 func TestIPhoneCoreConfirmAsksBeforeAnyInput(t *testing.T) {
@@ -177,9 +268,8 @@ func TestIPhoneCoreConfirmAsksBeforeAnyInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var a iphonectl.Approval
-	if !res.NeedsApproval || json.Unmarshal(res.Approval, &a) != nil || !slices.Contains(a.Needs, iphonectl.Confirm) || len(a.Steps) != 2 {
-		t.Fatalf("confirm: %+v %s", res, res.Approval)
+	if a := res.Approval; !res.NeedsApproval || a == nil || !slices.Contains(a.Needs, "confirm") || len(a.Steps) != 2 {
+		t.Fatalf("confirm: %+v %+v", res, a)
 	}
 	if len(b.inputs()) != 0 {
 		t.Fatalf("sent before approval: %v", b.inputs())

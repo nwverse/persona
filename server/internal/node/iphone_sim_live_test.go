@@ -88,12 +88,13 @@ func TestLiveIPhoneSimulator(t *testing.T) {
 	do := proto.IPhoneCall{Op: "do", Confirm: true, Args: json.RawMessage(`{"numbering":` + jsonInt(read.Screen.Numbering) +
 		`,"steps":[{"action":"tap","target":{"n":` + jsonInt(field) + `}},{"action":"type","text":"Wi-Fi"}]}`)}
 	asked := call(do)
-	t.Logf("do (confirm on):\nneeds_approval=%v approval=%s\n%s", asked.NeedsApproval, asked.Approval, asked.Text)
-	if !asked.NeedsApproval || asked.ApprovalID == "" || len(asked.Approval) == 0 {
+	summary, _ := json.Marshal(asked.Approval)
+	t.Logf("do (confirm on):\nneeds_approval=%v approval_summary=%s\n%s", asked.NeedsApproval, summary, asked.Text)
+	if !asked.NeedsApproval || asked.ApprovalID == "" || asked.Approval == nil {
 		t.Fatal("the input did not wait for approval")
 	}
-	do.Approved = asked.ApprovalID
-	done := call(do)
+	// The manager resumes with only the approval id, as it does once the owner allowed it.
+	done := call(proto.IPhoneCall{Op: "do", Approved: asked.ApprovalID})
 	t.Logf("do (approved):\nneeds_approval=%v\n%s", done.NeedsApproval, done.Text)
 	var res iphonectl.DoResult
 	if err := json.Unmarshal(done.Output, &res); err != nil || len(res.Steps) != 2 {
@@ -109,6 +110,14 @@ func TestLiveIPhoneSimulator(t *testing.T) {
 		t.Fatalf("the typed text is not on the screen:\n%s", after.Text)
 	}
 	t.Logf("look after:\n%s", after.Text)
+
+	// Persona's own app as the hub names it (here Settings stands in for it): no step operates it.
+	self := call(proto.IPhoneCall{Op: "do", SelfApps: []string{"com.apple.Preferences"},
+		Args: json.RawMessage(`{"steps":[{"action":"key","key":"backspace"}]}`)})
+	t.Logf("do in the app named as Persona's own:\n%s", self.Text)
+	if err := json.Unmarshal(self.Output, &res); err != nil || len(res.Steps) != 1 || res.Steps[0].Delivery != iphonectl.DeliveryNotSent {
+		t.Fatalf("operated the app named as Persona's own: %s", self.Output)
+	}
 }
 
 func jsonInt(n int) string { b, _ := json.Marshal(n); return string(b) }

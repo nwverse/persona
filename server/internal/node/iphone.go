@@ -77,6 +77,8 @@ type iphoneRun struct {
 	Args                json.RawMessage
 	Approved            string // the approval id the driver gave earlier, as the user allowed it
 	Confirm             bool   // the owner asks to approve every input, on top of the steps the rules always ask about
+	// SelfApps and SelfNames are Persona's own apps on the iPhone (proto.IPhoneCall), which no step may operate.
+	SelfApps, SelfNames []string
 	// Bridge runs one of the bridge's operations on this iPhone.
 	Bridge func(ctx context.Context, op string, args json.RawMessage) (json.RawMessage, error)
 	// TempDir is where a screenshot is written (the bridge's out_file); it is removed after the call.
@@ -90,7 +92,7 @@ type iphoneOutcome struct {
 	Text          string
 	ImageFile     string
 	NeedsApproval bool
-	Approval      json.RawMessage
+	Approval      *proto.IPhoneApproval
 	ApprovalID    string
 }
 
@@ -329,7 +331,7 @@ func iphoneCall(ctx context.Context, params json.RawMessage) (*proto.IPhoneResul
 		return out, err
 	}
 	out, err := iphoneCore.Run(cctx, iphoneRun{Device: link.ID, Session: p.Session, Op: p.Op, Args: args, Approved: p.Approved,
-		Confirm: p.Confirm, Bridge: bridge, TempDir: dir})
+		Confirm: p.Confirm, SelfApps: p.SelfApps, SelfNames: p.SelfNames, Bridge: bridge, TempDir: dir})
 	if err != nil {
 		return nil, iphoneStepErr(ctx, cctx, p.Op, err, timeout, acted.Load())
 	}

@@ -263,9 +263,12 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 			}
 		}
 		// The iPhones that consented are each iPhone's own word, kept as stored (iphone.go).
-		if kept, err := h.keepIPhonePhones(p, in.Config); err == nil {
-			in.Config = kept
+		kept, err := h.keepIPhonePhones(p, in.Config)
+		if err != nil { // never the request's own phones: refused, not passed on
+			writeExtensionResponseError(w, r, http.StatusInternalServerError, "internal", err)
+			return
 		}
+		in.Config = kept
 		// Secrets bound to the old configuration go first (the voice extension's key, moved to another host:
 		// voice_extension.go); said in the answer, an error's too.
 		cleared, err := ps().reg.SetConfigClearing(r.Context(), p.Record.ID, in.Config, actor(r))
