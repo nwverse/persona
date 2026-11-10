@@ -606,17 +606,19 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	kind := "group"
 	lang := i18n.From(ctx).Or(i18n.Default)
 	label := i18n.T(lang, "hub-connectors.larkcli_message")
-	tier := connector.TierFYI
+	// No tier: the Inbox's triage model decides Needs you / FYI / Collapsed, with the user's triage rules and policies
+	// (docs/assistant/inbox.md "AI triage", "Policies"). A fixed tier here would skip triage and put every bot's
+	// direct message in Needs you.
 	switch {
 	case latest.ChatType == "p2p" && p2pIsBot(group, contextMessages, me):
 		kind = "bot"
-		label, tier = i18n.T(lang, "hub-connectors.larkcli_direct_message"), connector.TierAction
+		label = i18n.T(lang, "hub-connectors.larkcli_direct_message")
 	case latest.ChatType == "p2p":
 		kind = "dm"
-		label, tier = i18n.T(lang, "hub-connectors.larkcli_direct_message"), connector.TierAction
+		label = i18n.T(lang, "hub-connectors.larkcli_direct_message")
 	case group.mentioned:
 		kind = "mention"
-		label, tier = i18n.T(lang, "hub-connectors.larkcli_mention"), connector.TierAction
+		label = i18n.T(lang, "hub-connectors.larkcli_mention")
 	}
 	title := firstNonEmpty(group.chatName, group.chatID)
 	if latest.ChatType == "p2p" {
@@ -641,8 +643,6 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		Last:     latest.MessageID,
 		ReplyTo:  latest.MessageID,
 		CanReply: latest.MessageID != "",
-		Tier:     tier,
-		Why:      i18n.T(lang, "assistant-inbox.by_rules"),
 		Tags:     tags,
 	}
 	if thing.At.IsZero() {
