@@ -17,6 +17,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import persona.core.contracts.InboxEventFields
+import persona.core.contracts.api.HubManager
+import persona.core.contracts.api.ManagerRoster
 import persona.core.domain.inbox.InboxItem
 
 @RunWith(RobolectricTestRunner::class)
@@ -131,12 +133,19 @@ class InboxPoliciesTest {
         var failRemove: Exception? = null
         var removeGate: CompletableDeferred<Unit>? = null
         val read = mutableListOf<InboxRecord?>()
+        /** Each read's manager, when one was named ("Rules" with several managers). */
+        val readFrom = mutableListOf<String?>()
+        /** A manager whose rules can't be read (offline). */
+        var away: String? = null
+        var byManager: Map<String, List<InboxPolicy>> = emptyMap()
         val saved = mutableListOf<Triple<InboxPolicyTarget, InboxPolicyTier, InboxPolicyTwin>>()
         val removed = mutableListOf<String>()
-        override suspend fun inboxPolicies(record: InboxRecord?): List<InboxPolicy> {
+        override suspend fun inboxPolicies(record: InboxRecord?, manager: String?): List<InboxPolicy> {
             read += record
+            readFrom += manager
             failRead?.let { throw it }
-            return policies
+            if (manager != null && manager == away) throw IllegalStateException("503")
+            return manager?.let { byManager[it].orEmpty() } ?: policies
         }
         override suspend fun savePolicy(target: InboxPolicyTarget, tier: InboxPolicyTier, twin: InboxPolicyTwin): InboxPolicy? {
             saved += Triple(target, tier, twin)
@@ -144,8 +153,8 @@ class InboxPoliciesTest {
             return InboxPolicy(target.policy?.id ?: "new", target.source, tag = target.option.tag, value = target.option.value,
                 name = target.option.name, tier = tier, twin = twin)
         }
-        override suspend fun removePolicy(id: String) {
-            removed += id
+        override suspend fun removePolicy(id: String, manager: String?) {
+            removed += manager?.let { "$it:$id" } ?: id
             removeGate?.await()
             failRemove?.let { throw it }
         }
@@ -255,5 +264,47 @@ class InboxPoliciesTest {
         try { model.load(); fail("a later failure throws") } catch (e: IllegalStateException) { assertEquals("again", e.message) }
         assertEquals(listOf("a"), model.rules?.map { it.id })
         assertNull(model.failed)
+    }
+
+    private val managers = ManagerRoster(listOf(HubManager("assistant", "Assistant", online = true, isDefault = true),
+        HubManager("m-2", "Work", online = true), HubManager("m-3", "Home")), "assistant")
+
+    @Test fun withSeveralManagersEachOnesRulesAreReadUnderItsNameAndRemovedOnIt() = runBlocking {
+        val mine = policy("p1", "repo", "o/r").copy(createdAt = "2026-01-01T00:00:00Z")
+        val theirs = policy("p1", "sender", "u1").copy(createdAt = "2026-02-01T00:00:00Z")
+        val repository = PolicyRepository().apply { byManager = mapOf("assistant" to listOf(mine), "m-2" to listOf(theirs)); away = "m-3" }
+        val model = InboxRulesModel(repository)
+        model.load(managers)
+        assertEquals(setOf("assistant", "m-2", "m-3"), repository.readFrom.toSet())
+        val shares = checkNotNull(model.shares)
+        assertEquals(listOf("assistant", "m-2", "m-3"), shares.map { it.group.id })
+        assertEquals(listOf(listOf(mine.copy(manager = "assistant")), listOf(theirs.copy(manager = "m-2")), emptyList()), shares.map { it.group.items })
+        assertEquals("503", shares[2].failed?.message)
+        assertEquals(listOf("m-2", "assistant"), model.rules?.map { it.manager })
+        assertFalse(model.isEmpty)
+
+        // Edit from a manager's list saves on it; one from an item, on the item's ("": the default's).
+        assertEquals("m-2", InboxPolicyTarget.of(shares[1].group.items.single()).manager)
+        assertEquals("", InboxPolicyTarget.of(InboxRecord(InboxItem("1"), source = "github", mutes = listOf(repo)), repo).manager)
+        assertNull(InboxPolicyTarget.of(theirs).manager)
+
+        model.remove(shares[1].group.items.single())
+        assertEquals(listOf("m-2:p1"), repository.removed)
+        assertEquals(listOf("assistant", "m-3"), model.shares?.filter { it.shown }?.map { it.group.id })
+        assertEquals(listOf("assistant"), model.rules?.map { it.manager }) // the default's rule with the same id stays
+
+        repository.failRemove = IllegalStateException("offline")
+        val left = checkNotNull(model.shares)[0].group.items.single()
+        try { model.remove(left); fail("a failed remove throws") } catch (e: IllegalStateException) { assertEquals("offline", e.message) }
+        assertEquals(listOf(listOf(left), emptyList(), emptyList()), model.shares?.map { it.group.items })
+    }
+
+    @Test fun withOneManagerTheRulesAreOneListAsBefore() = runBlocking {
+        val repository = PolicyRepository(listOf(policy("a", "repo", "o/r")))
+        val model = InboxRulesModel(repository)
+        model.load(ManagerRoster(listOf(managers.managers.first()), "assistant"))
+        assertNull(model.shares)
+        assertEquals(listOf<String?>(null), repository.readFrom)
+        assertEquals(listOf("a"), model.rules?.map { it.id })
     }
 }

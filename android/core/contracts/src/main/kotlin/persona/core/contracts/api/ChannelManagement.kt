@@ -225,7 +225,7 @@ data class BindField(val name: String = "", val label: String = "", val secret: 
 @Serializable
 data class BindQrCode(val size: Int = 0, val rows: List<String> = emptyList())
 
-/** Which channel a message or a conversation came from (docs/extensions/channels.md "Source marks"). */
+/** Which channel a message or a conversation came from (docs/extensions/channels.md "Source markers"). */
 object ChannelSources {
     /**
      * The channel a message came from, by its `client_msg_id`: `<channel id>-<message id>`. The app's own messages

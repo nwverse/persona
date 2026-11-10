@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Where the chat stands with its newest end: the one truth ↓ (Jump to Latest), following new content and holding it back
-/// come from (docs/apple/ios-state.md「回到最新」, #1046). There used to be two: ↓ looked at a 1 pt sentinel at the newest end,
+/// come from (docs/apple/ios-state.md「Back to latest」, #1046). There used to be two: ↓ looked at a 1 pt sentinel at the newest end,
 /// following was a flag set and cleared in a dozen places, kept in step by patches (#597, #754); a drag of 40 pt
 /// while a reply streamed stopped following and held the stream back, and opening the running turn's work line froze it.
 ///

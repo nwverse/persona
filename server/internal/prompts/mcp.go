@@ -63,12 +63,3 @@ func Tool(name string) MCPTool {
 	}
 	return t
 }
-
-// ToolNames lists every MCP tool defined here (for tests).
-func ToolNames() []string {
-	out := make([]string, 0, len(mcpTools()))
-	for n := range mcpTools() {
-		out = append(out, n)
-	}
-	return out
-}

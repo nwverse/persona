@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Persona
 
-/// 「Mac 上的 Persona 已登录」(docs/protocol/protocol.md「桌面端」): the hub says which desktops are connected; a phone may
+/// 「Mac 上的 Persona 已登录」(docs/protocol/protocol.md「WebSocket `/api/v1/ws`」): the hub says which desktops are connected; a phone may
 /// choose Phone Muted while one is.
 struct DesktopPresenceTests {
     private static func link(_ name: String, _ machine: String) -> DesktopDevice {

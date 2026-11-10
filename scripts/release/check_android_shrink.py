@@ -7,8 +7,11 @@ R8 keeps only what code references. Android also reaches classes by name: manife
 initializers, WorkManager workers (rebuilt from their class name with a (Context, WorkerParameters) constructor), Room
 databases (whose generated <name>_Impl is loaded by name), JavaScript bridge methods and the getters the tasks store
 looks up on a hub failure. Error reports and breadcrumbs print simple class names, which come from InnerClass
-annotations. This reads the merged manifest with aapt2 and every classes*.dex directly, and exits 1 with one line per
-problem when anything is missing, so a release stops before signing.
+annotations, and the class names themselves, which class merging would replace: every class a keep rule listed in
+R8's seeds.txt must still be in the dex or be listed as removed in usage.txt, and every Throwable in the dex must be
+listed there (proguard-rules.pro keeps all their names). This reads the merged manifest with aapt2 and every
+classes*.dex directly, and exits 1 with one line per problem when anything is missing, so a release stops before
+signing.
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ WORKER_INIT = ("<init>", "(Landroid/content/Context;Landroidx/work/WorkerParamet
 NAV_KEY = "androidx.navigation3.runtime.NavKey"
 INNER_CLASS = "dalvik.annotation.InnerClass"
 ROOM_DATABASE = "androidx.room.RoomDatabase"
+PLATFORM = ("android.", "java.", "javax.")
 REQUIRED_MEMBERS = {
     # Reached only from JavaScript (MarkdownRenderer.page: addJavascriptInterface(Bridge, "PersonaRender")).
     "persona.core.designsystem.MarkdownRenderer$Bridge": {("done", "(ILjava/lang/String;)V"),
@@ -193,7 +197,40 @@ def member_class(name):
     return "$" in tail and re.fullmatch(r"[A-Za-z_][\w]*", tail.rsplit("$", 1)[1]) is not None and "$$" not in tail
 
 
-def problems(classes, manifest, missing_rules=""):
+def seed_classes(seeds):
+    """Classes (not members) R8's seeds.txt lists: those a keep rule matched and the first tree shaking kept."""
+    return {line.strip() for line in seeds.splitlines() if line.strip() and ":" not in line}
+
+
+def removed_classes(usage):
+    """Whole classes R8's usage.txt lists as removed (`Name`; `Name:` heads the members removed from a kept class)."""
+    return {line.strip() for line in usage.splitlines()
+            if line.strip() and not line[0].isspace() and not line.rstrip().endswith(":")}
+
+
+def merged_seeds(classes, seeds, usage):
+    """Problems with the classes a keep rule listed in seeds.txt. One that is neither in the dex nor removed was merged
+    into another class, so a report would name that class instead. proguard-rules.pro keeps every Throwable's name, the
+    libraries' too, which lists them all as seeds for this check; a Throwable in the dex that is not a seed means that
+    rule is gone or narrower, and the merged ones it no longer lists would pass unseen."""
+    listed = seed_classes(seeds)
+    removed = removed_classes(usage)
+    found = [f"{name}: merged into another class, so reports name that class (keep its name in proguard-rules.pro)"
+             for name in sorted(listed) if name not in classes and name not in removed]
+    # R8 adds stubs of platform exceptions newer than minSdk (android.app.ServiceStartNotAllowedException): no program
+    # class, so no keep rule lists them.
+    unlisted = sorted(n for n in classes if n not in listed and not n.startswith(PLATFORM)
+                      and is_throwable(classes, n))
+    if unlisted:
+        examples = ", ".join(unlisted[:3]) + (", ..." if len(unlisted) > 3 else "")
+        found.append(f"Throwables in the dex missing from seeds.txt ({len(unlisted)}: {examples}): "
+                     "proguard-rules.pro lost the rule that keeps every Throwable's name")
+    return found
+
+
+def problems(classes, manifest, missing_rules="", seeds=None, usage=""):
+    """Everything reached by name that R8 removed or renamed. seeds and usage are R8's seeds.txt and usage.txt (None:
+    no R8 output, an unshrunk APK)."""
     found = []
     if missing_rules.strip():
         found.append("R8 reported missing classes (missing_rules.txt is not empty)")
@@ -223,6 +260,8 @@ def problems(classes, manifest, missing_rules=""):
         if (name.startswith("persona.") and member_class(name) and INNER_CLASS not in item.annotations
                 and (is_throwable(classes, name) or implements(classes, name, NAV_KEY))):
             found.append(f"{name}: InnerClass annotation removed, so its simple name in reports changes")
+    if seeds is not None:
+        found += merged_seeds(classes, seeds, usage)
     return found
 
 
@@ -256,8 +295,14 @@ def main(argv=None):
     aapt2 = build_tools(args.build_tools) / "aapt2"
     xmltree = subprocess.run([str(aapt2), "dump", "xmltree", "--file", "AndroidManifest.xml", str(args.apk)],
                              check=True, capture_output=True, text=True).stdout
-    missing = args.mapping / "missing_rules.txt"
-    found = problems(read_apk(args.apk), manifest_classes(xmltree), missing.read_text() if missing.exists() else "")
+    def output(name, default):
+        path = args.mapping / name
+        return path.read_text() if path.exists() else default
+
+    shrunk = (args.mapping / "usage.txt").exists()
+    found = problems(read_apk(args.apk), manifest_classes(xmltree), output("missing_rules.txt", ""),
+                     # R8 always writes seeds.txt next to usage.txt; an empty one fails the Throwable listing check.
+                     output("seeds.txt", "") if shrunk else None, output("usage.txt", ""))
     for line in found:
         print("check_android_shrink: " + line, file=sys.stderr)
     print(f"check_android_shrink: {'FAIL' if found else 'PASS'} {args.apk.name}")

@@ -2,12 +2,12 @@ import AppKit
 import Foundation
 import UserNotifications
 
-/// What the Mac does outside its window when an agent needs you or finishes (docs/apple/mac.md「和 iOS 的对应」):
+/// What the Mac does outside its window when an agent needs you or finishes (docs/apple/mac.md「Mapping from iOS」):
 /// the Dock badge (how many cards wait on you) and a system notification for each agent that just turned Needs You /
 /// Done, plus one for every newly arrived card while it is already in Needs You (#4081, a sub-agent's authorization
 /// or a second confirmation for the same agent).
 /// While the app runs it watches its own session list (the WebSocket stays open) and follows the same Settings › Notifications
-/// choices (`NotifyPrefs`); the hub pushes these to the Mac only while it is not connected (docs/apple/mac.md「远程推送（Mac）」).
+/// choices (`NotifyPrefs`); the hub pushes these to the Mac only while it is not connected (docs/apple/mac.md「Remote push」).
 enum MacAttention {
     /// The notifications to post for a session-list change: agents that turned needs-you or finished. Not for the
     /// chat on screen while the app is in front, a muted agent, a session the list just learned about, or a finish
@@ -110,7 +110,7 @@ enum MacAttention {
     /// the first.
     static func identifier(_ s: Session, _ state: AgentState) -> String { "\(s.machineID)/\(s.sessionID)#\(state.rawValue)" }
 
-    /// The banner of one card (`newInteractions`), named by its uid like the hub push's collapse id.
+    /// The banner of one card (`newInteractions`), named by its uid.
     static func identifier(_ ix: Interaction) -> String { "interaction/\(ix.uid)" }
 
     /// The banners to take back (#3513): the Needs You one of an agent no longer waiting on you (answered here or
@@ -257,8 +257,8 @@ extension MacAttention {
                                   content: MacAttention.content(s, state, interaction: interactions.first { $0.sessionKey == s.key }, hushed: hushed),
                                   trigger: nil)
         }
-        // One banner per new card, identified by the card's uid like the hub push's collapse id: answering removes
-        // the card and a later card (a different uid) pings again, even for the same agent.
+        // One banner per new card, identified by the card's uid: answering removes the card and a later card
+        // (a different uid) pings again, even for the same agent.
         requests += cards.compactMap { ix -> UNNotificationRequest? in
             guard let s = MacAttention.session(for: ix, in: sessions) else { return nil }
             return UNNotificationRequest(identifier: MacAttention.identifier(ix),

@@ -439,6 +439,9 @@ function agentRowItems(s: AgentSession, p: AgentPrefs): MenuItem[] {
 const personalIdentity = (s: AgentSession) => s.id;
 export const PersonalAgents = memo(function PersonalAgents(props: { reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  const { loaded, sources } = useAgentList();
+  // Keep the subscription mounted while hidden so setup changes can reveal the section without a reload.
+  if (!loaded || !sources?.length || sources.some((s) => !s.enabled || ["missing", "disabled", "no_accounts"].includes(s.setup ?? "") || s.accounts?.length === 0)) return null;
   return bounded ? <BoundedPersonalAgents {...props} /> : <LegacyPersonalAgents {...props} />;
 });
 
@@ -449,7 +452,7 @@ function BoundedPersonalAgents({ reg, hover, activeKey, go }: { reg: RegFn; hove
   const [folded, toggle] = useFolded("personal-agents", false, { holds: activeKey.startsWith("a:") });
   const page = useSyncExternalStore(personalSessions.subscribe, personalSessions.getSnapshot, personalSessions.getSnapshot);
   const going = useGoingIds();
-  if (page.loaded && !page.total && !page.error) return null;
+  if (!page.loaded || !page.rows.some((s) => !going.has(s.id))) return null;
   return <Section title={t("sidebar.personal_agents")} folded={folded} onToggle={toggle} right={<GroupCount n={page.total} label={t("sidebar.agent_count", { count: page.total })} />}>
     {!folded && <PagedSessionList root={personalSessions} path="/agents/sessions" identity={personalIdentity} compare={personalOrder} event="agents" personal
       renderRow={(s) => (going.has(s.id) ? null : <AgentRow s={s} reg={reg} hover={hover} active={activeKey === `a:${s.id}`} go={go} pinned={prefs.pins.includes(s.id)} onMenu={onMenu} />)} />}
@@ -482,7 +485,7 @@ const LegacyPersonalAgents = memo(function LegacyPersonalAgents({ reg, hover, ac
   const [rowMenu, setRowMenu] = useState<{ s: AgentSession; el: HTMLElement } | null>(null);
   // the same function on every render, so the memoized rows skip a re-render
   const onRowMenu = useCallback((s: AgentSession, el: HTMLElement) => setRowMenu({ s, el }), []);
-  if (loaded && !sessions.length && !error) return null;
+  if (!loaded || !sessions.length) return null;
   const groups = arrangeSessions(sessions, prefs, q);
   const unread = totalUnread(sessions);
   const providers = [...new Set(sessions.map((s) => s.provider))];

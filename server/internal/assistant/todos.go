@@ -574,7 +574,8 @@ func (s *Service) todoNow(id string) (Todo, bool) {
 }
 
 // todosOf are the todos opened from conversation ("*": from any) as tasks; none when they can't be read. A question's
-// to-do (ask_todo.go) is no task: it has its own line in the snapshot and its own row in the briefing.
+// to-do (ask_todo.go) is no task: it has its own line in the snapshot and its own row in the briefing. It has no origin;
+// the skip still keeps one out that carries an old origin, from a database 0453_ask_todo_no_origin.sql hasn't reached.
 func (s *Service) todosOf(ctx context.Context, conversation string) []Todo {
 	if s.ensureTodosLoaded(ctx) != nil {
 		return nil

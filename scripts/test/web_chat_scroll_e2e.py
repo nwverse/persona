@@ -8,19 +8,26 @@ the event sees the end far away and used to take it as the reader leaving. The c
 (one piece per task, faster than a frame), like images decoding one after another.
 
 Needs a running web page against the fake hub with the long conversations, and Playwright for Python (it drives the
-installed Chrome):
+installed Chrome, or the browser PERSONA_E2E_CHROMIUM points at):
 
     MOCK_TASKS=1 MOCK_LONG_ASSISTANT=1 MOCK_LONG_HISTORY=1 PORT=18792 python3 scripts/mock/mock_hub.py &
     (cd web && PERSONA_HUB_URL=http://127.0.0.1:18792 npx vite --port 5292 --strictPort &)
     python3 scripts/test/web_chat_scroll_e2e.py http://127.0.0.1:5292 [--hub http://127.0.0.1:18792] [--shots <dir>]
 
+Finished exchanges before the last two skip drawing while off screen (#2485): in the agent chat, what is on screen
+holds still while they are drawn on the way up, the browser's find reaches their words, and a rail jump and a search
+jump land on their row and stay there.
+
 Prints one line per check and a verdict; exits 1 on the first failure. --shots saves light / dark / narrow screenshots.
---hub turns on the fake hub's paging and a slow network for one more reload (then resets it).
+--hub lets the fake hub push a new exchange while the reader is up inside the last one (the exchange being read stays
+in place), then turns on its paging and a slow network: the earlier pages come in two exchanges at a time while the
+reader scrolls up, and the rows on screen move by no more than the loading row, as before (then it resets the fake hub).
 """
 import argparse
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 
 from playwright.sync_api import expect, sync_playwright
@@ -141,6 +148,205 @@ def scrolled_up_stays(page, what):
     at_end(page, what + ", 跳到底部")
 
 
+OFFSCREEN = """() => {
+  const cv = [...document.querySelectorAll('[data-chat-scroll] section.seg-cv')];
+  return { cv: cv.length, skipped: cv.filter((s) => !s.firstElementChild?.checkVisibility({ contentVisibilityAuto: true })).length };
+}"""
+
+# Scrolls up by script, a step a frame; per frame, how far the row at the view's middle moved beyond the step.
+DRIFT = """async () => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const r = sc.getBoundingClientRect();
+  const frame = () => new Promise((f) => requestAnimationFrame(() => f()));
+  const probe = () => {
+    let el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    while (el && el !== sc && el.getBoundingClientRect().height < 4) el = el.parentElement;
+    return el;
+  };
+  let worst = 0, frames = 0;
+  while (sc.scrollTop > 0 && frames < 100) {
+    const el = probe(), top = el.getBoundingClientRect().top, was = sc.scrollTop;
+    sc.scrollTop -= 120;
+    const step = was - sc.scrollTop;
+    await frame();
+    await frame();
+    if (el.isConnected) worst = Math.max(worst, Math.abs(el.getBoundingClientRect().top - top - step));
+    frames++;
+  }
+  return { worst, frames };
+}"""
+
+# Where a row sits under the view's top, frame by frame until it has held still for 30 frames (or 4 s).
+HOLDS = """async (sel) => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const frame = () => new Promise((f) => requestAnimationFrame(() => f()));
+  const tops = [];
+  for (let i = 0, still = 0; i < 240 && still < 30; i++) {
+    await frame();
+    const el = typeof sel === 'string' ? document.querySelector(sel) : null;
+    const top = el ? el.getBoundingClientRect().top - sc.getBoundingClientRect().top : NaN;
+    still = tops.length && Math.abs(top - tops[tops.length - 1]) < 0.5 ? still + 1 : 0;
+    tops.push(top);
+  }
+  const last = tops.slice(-30);
+  return { top: tops[tops.length - 1], spread: Math.max(...last) - Math.min(...last), view: sc.clientHeight };
+}"""
+
+
+def offscreen_exchanges(page, what):
+    page.reload()
+    at_end(page, what + ", reload")
+    s = page.evaluate(OFFSCREEN)
+    if s["cv"] < 3 or s["skipped"] < 1:
+        fail(f"{what}: earlier exchanges do not skip drawing off screen ({s})")
+    ok(f"{what}: {s['skipped']} of {s['cv']} earlier exchanges skip drawing off screen")
+
+    page.locator(SCROLL).hover()
+    page.mouse.wheel(0, -200)  # leave the end as a reader does (a script's scroll is not the reader leaving)
+    page.wait_for_timeout(800)
+    d = page.evaluate(DRIFT)
+    if d["worst"] > 1:
+        fail(f"{what}: scrolling up, what is on screen moved {d['worst']:.1f} px in a frame ({d})")
+    ok(f"{what}: scrolling up, what is on screen moves at most {d['worst']:.1f} px a frame beyond the scroll")
+
+    page.locator("[data-jump-pill]").click()
+    at_end(page, what + ", back to the end")
+    if not page.evaluate("() => !document.querySelector('[data-chat-scroll] section.seg-cv')?.firstElementChild?.checkVisibility({ contentVisibilityAuto: true })"):
+        fail(f"{what}: the first exchange is drawn while off screen")
+    # wrapping around as Ctrl+F does: the search starts where the pill was clicked, below the words
+    if not page.evaluate("() => window.find('第 1 个问题', false, false, true) && String(getSelection()) === '第 1 个问题'"):
+        fail(f"{what}: the browser's find does not reach an exchange that skipped drawing")
+    page.evaluate("() => getSelection().removeAllRanges()")
+    ok(f"{what}: the browser's find reaches an exchange that skipped drawing")
+
+    tick = page.locator("[data-nav-rail] button").nth(1)
+    tick.click()
+    page.evaluate("""() => {
+      const b = [...document.querySelectorAll('[data-chat-scroll] [data-user-bubble]')].find((el) => el.textContent.includes('第 2 个问题'));
+      document.querySelectorAll('[data-e2e-row]').forEach((el) => el.removeAttribute('data-e2e-row'));
+      b.closest('[data-line] > *').setAttribute('data-e2e-row', '');
+    }""")
+    h = page.evaluate(HOLDS, "[data-e2e-row]")
+    if abs(h["top"] - 12) > 1 or h["spread"] > 1:
+        fail(f"{what}: a rail jump left its question {h['top']:.1f} px under the top (12 wanted) or still moving ({h})")
+    ok(f"{what}: a rail jump lands its question {h['top']:.1f} px under the top and it stays")
+
+    page.locator("[data-jump-pill]").click()
+    at_end(page, what + ", back to the end again")
+    page.locator("header").get_by_role("button", name="更多", exact=True).click()  # the chat's menu, not a message's
+    page.get_by_role("menuitem", name="会话内搜索").click()
+    page.locator("[data-chat-search] input").fill("第 3 个问题")
+    page.locator("[data-search-result]").first.click()
+    h = page.evaluate(HOLDS, "[data-search-hit]")
+    if not (0 <= h["top"] <= h["view"] - 20) or h["spread"] > 1:
+        fail(f"{what}: a search jump left its hit out of view or moving ({h})")
+    ok(f"{what}: a search jump brings its hit into view and it stays")
+    page.locator("[data-jump-pill]").click()
+    at_end(page, what + ", back to the end after the search")
+
+
+# The last exchange (the one being read) and the one before it, marked to be found again.
+MARK = """() => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const r = sc.getBoundingClientRect();
+  const segs = sc.querySelectorAll('section[data-segment]');
+  const [prev, last] = [segs[segs.length - 2], segs[segs.length - 1]];
+  prev.setAttribute('data-e2e-prev', '');
+  last.setAttribute('data-e2e-read', '');
+  return { top: last.getBoundingClientRect().top - r.top, segs: segs.length, prevBottom: prev.getBoundingClientRect().bottom - r.top };
+}"""
+
+# Once one more exchange is in, over 30 frames: how far the marked exchange being read moved, and whether the one
+# before it skips drawing now (it was the last but one, and is off screen).
+MOVED = """async ({ top, segs }) => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const frame = () => new Promise((f) => requestAnimationFrame(() => f()));
+  for (let i = 0; i < 600 && sc.querySelectorAll('section[data-segment]').length <= segs; i++) await frame();
+  const tops = [];
+  for (let i = 0; i < 30; i++) {
+    await frame();
+    tops.push(document.querySelector('[data-e2e-read]').getBoundingClientRect().top - sc.getBoundingClientRect().top - top);
+  }
+  const prev = document.querySelector('[data-e2e-prev]');
+  return { arrived: sc.querySelectorAll('section[data-segment]').length > segs, worst: Math.max(...tops.map(Math.abs)),
+           skipped: !prev.firstElementChild?.checkVisibility({ contentVisibilityAuto: true }) };
+}"""
+
+
+def new_exchange_holds(page, hub, what):
+    """The reader is up inside a long last exchange when a new one comes in from elsewhere (another device, a channel):
+    the exchange before it starts skipping drawing off screen and keeps the height it was drawn at, so the exchange
+    being read stays where it was. (Inside it, the live row at its top goes to the new exchange, as before #2485.)"""
+    long = "\n\n".join(["The cache layer reads each session once and keeps the decoded rows, so a push only touches the changed entries. " * 6] * 40)
+    hub_get(hub, "/mock/say?" + urllib.parse.urlencode({"user": "How does the cache work, in detail?", "text": long}))
+    page.wait_for_function("() => [...document.querySelectorAll('[data-chat-scroll] section[data-segment]')].pop()?.textContent.includes('cache layer')")
+    at_end(page, what + ", a long reply came in")
+    page.locator(SCROLL).hover()
+    for _ in range(10):
+        page.mouse.wheel(0, -240)
+        page.wait_for_timeout(60)
+    m = settled(page, what + " scrolled up inside the long reply")
+    before = page.evaluate(MARK)
+    if m["gap"] < 1500 or before["top"] > 0 or before["prevBottom"] > -m["view"]:
+        fail(f"{what}: the view is not inside the long reply, or the exchange before it is not off screen ({m}, {before})")
+    hub_get(hub, "/mock/say?" + urllib.parse.urlencode({"user": "A new question from another device", "text": "Done."}))
+    after = page.evaluate(MOVED, before)
+    if not after["arrived"] or not after["skipped"]:
+        fail(f"{what}: the new exchange did not come in, or the one before the long reply did not start skipping ({after})")
+    if after["worst"] > 1:
+        fail(f"{what}: a new exchange coming in moved the exchange being read {after['worst']:.1f} px ({after})")
+    ok(f"{what}: a new exchange coming in moves the exchange being read {after['worst']:.1f} px")
+
+
+# Scrolls up by script (as DRIFT does) while the earlier pages come in; per page, how far the row at the view's middle
+# moved from the frame before the page landed to 20 frames after it. A page goes where the loading row stood, which
+# moves what is under it up by that row, as it did before #2485: the row's share (from its top to the next one's) is
+# taken out on both sides.
+PAGED = """async () => {
+  const sc = document.querySelector('[data-chat-scroll]');
+  const r = sc.getBoundingClientRect();
+  const frame = () => new Promise((f) => requestAnimationFrame(() => f()));
+  const probe = () => {
+    let el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    while (el && el !== sc && el.getBoundingClientRect().height < 4) el = el.parentElement;
+    return el;
+  };
+  const loading = () => {
+    const row = [...sc.firstElementChild.children].find((c) => c.firstElementChild?.getAttribute('role') === 'status');
+    let next = row?.nextElementSibling;
+    while (next && getComputedStyle(next).display === 'contents') next = next.firstElementChild; // a line's wrapper
+    return next ? next.getBoundingClientRect().top - row.getBoundingClientRect().top : 0;
+  };
+  const count = () => sc.querySelectorAll('section[data-segment]').length;
+  const moves = [];
+  for (let k = 0; k < 20; k++) {
+    for (let n = 0; n < 400 && sc.scrollTop >= 300; n++) { sc.scrollTop -= 120; await frame(); await frame(); }
+    const el = probe(), n0 = count(), t0 = performance.now();
+    let at = el.getBoundingClientRect().top - loading(), landed = -1;
+    for (let i = 0; performance.now() - t0 < 5000 && (landed < 0 || i - landed < 20); i++) {
+      await frame();
+      if (landed < 0 && count() > n0) landed = i;
+      else if (landed < 0) at = el.getBoundingClientRect().top - loading();
+    }
+    if (landed < 0) break;
+    moves.push(Math.round((el.getBoundingClientRect().top - loading() - at) * 10) / 10);
+  }
+  return { pages: moves.length, worst: Math.max(0, ...moves.map(Math.abs)), moves, segs: count() };
+}"""
+
+
+def paged_up_holds(page, what):
+    page.locator(SCROLL).hover()
+    page.mouse.wheel(0, -200)  # leave the end as a reader does
+    page.wait_for_timeout(800)
+    d = page.evaluate(PAGED)
+    if d["pages"] < 3:
+        fail(f"{what}: scrolling up brought in {d['pages']} earlier pages, 3 or more wanted ({d})")
+    if d["worst"] > 1:
+        fail(f"{what}: an earlier page landing moved what is on screen {d['worst']:.1f} px beyond the loading row ({d})")
+    ok(f"{what}: {d['pages']} earlier pages landed, what is on screen moved at most {d['worst']:.1f} px beyond the loading row")
+
+
 def shot(page, shots, name):
     if shots:
         page.wait_for_timeout(300)
@@ -171,7 +377,8 @@ def main():
         os.makedirs(a.shots, exist_ok=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel="chrome")
+        exe = os.environ.get("PERSONA_E2E_CHROMIUM")
+        browser = p.chromium.launch(executable_path=exe) if exe else p.chromium.launch(channel="chrome")
         try:
             wide(browser, base, a, other)
             narrow(browser, base, a)
@@ -217,7 +424,8 @@ def wide(browser, base, a, other):
     link = page.locator(f'aside a[href="{path}"]')
     if link.count():
         link.first.click()
-        page.wait_for_function(f"location.pathname === '{path}'")
+        # an agent's chat opens in its terminal tab (/t/<machine>/<workspace>/<tab>/<session>)
+        page.wait_for_function(f"location.pathname.endsWith('/{AGENT[1]}')")
     else:
         page.goto(base + path)
     at_end(page, "wide agent chat, from the sidebar")
@@ -226,21 +434,24 @@ def wide(browser, base, a, other):
     burst_stays(page, "wide agent chat")
     composer_grows(page, "wide agent chat")
     scrolled_up_stays(page, "wide agent chat")
+    offscreen_exchanges(page, "wide agent chat")
     if a.shots:
         # without the empty blocks the bursts added
         page.reload()
         at_end(page, "wide agent chat, reload before the screenshot")
     shot(page, a.shots, "wide-agent-light.png")
 
-    # The newest page first, more over a slow network.
     if a.hub:
+        new_exchange_holds(page, a.hub, "wide agent chat")
+        # The newest page first, more over a slow network. The long reply stays, so the agent chat's newest page fills
+        # the view and scrolling up asks for the earlier ones.
         hub_get(a.hub, "/mock/paging?on=1")
         hub_get(a.hub, "/mock/delay?s=0.4")
         page.goto(base + "/")
         at_end(page, "wide / over a slow network, paged")
         page.goto(base + path)
-        # its newest page (two exchanges) may fit in the view
-        at_end(page, "wide agent chat over a slow network, paged", short_ok=True)
+        at_end(page, "wide agent chat over a slow network, paged")
+        paged_up_holds(page, "wide agent chat over a slow network, paged")
         hub_get(a.hub, "/mock/reset")
     ctx.close()
 

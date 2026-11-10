@@ -1,6 +1,6 @@
 # The routes the hub answers itself (registered here, not relayed to the manager). Kept by TestHubAnswersOnlyItsOwnRoutes
 # (hub/architecture_guard_test.go): only the hub's own belong here (connections, pairing / auth, admin, push delivery,
-# relays); business routes are the manager's, see docs/server/architecture.md「hub 只做沟通中心」. Edit by hand, one pattern a line.
+# relays); business routes are the manager's, see docs/server/architecture.md「The hub is only a communication center」. Edit by hand, one pattern a line.
 /
 /api/
 /api/v1/admin/

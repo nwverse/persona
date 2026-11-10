@@ -52,6 +52,7 @@
   "space_no_agent": "当前没有 Agent",
   "space_remove": "移出",
   "no_agents": "还没把这件事交给 Agent 执行，点击下方按钮开始",
+  "no_agents_done": "现在没有 Agent 在做。要交给 Agent，先重新打开。",
   "ended": "已结束",
   "start_failed": "启动失败：{error}",
   "remove": "移除",
@@ -98,7 +99,6 @@
   "notes_optional": "说明（选填）",
   "new_notes_placeholder": "详细内容，交给 Agent 时作为上下文一起发出…",
   "create": "创建",
-  "launched": "已启动并交给 Agent",
   "launch_failed": "启动失败：{error}",
   "sent": "已发送并交给 Agent",
   "send_failed": "发送失败：{error}",
@@ -205,6 +205,7 @@
   "calendar_next": "下一页",
   "calendar_show_done": "显示已完成",
   "calendar_all_day": "全天",
+  "calendar_move_failed": "没能改期：{error}",
   "calendar_was_due": "已过截止 {when}",
   "calendar_more_one": "还有 {count} 条",
   "calendar_more_other": "还有 {count} 条",
@@ -212,5 +213,9 @@
   "calendar_undated_other": "{count} 条待办没有截止，不在日历上。",
   "calendar_see_list": "在列表里看 →",
   "calendar_back": "返回日历",
-  "calendar_close": "关闭"
+  "calendar_close": "关闭",
+  "ask_ok": "就这样",
+  "ask_answer": "去对话里回答",
+  "ask_answer_hint": "没有推荐方案，请到它来自的对话里回答。",
+  "ask_failed": "没有成功：{error}"
 }

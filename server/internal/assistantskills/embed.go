@@ -1,5 +1,5 @@
 // Package assistantskills puts the assistant's skills in its directory (<assistant dir>/.claude/skills,
-// docs/operations/hub-update.md "Skills out of the binary"): the user's own, kept in ~/.persona/skills/<name> on the machine that runs
+// docs/operations/hub-update.md "Skills move out of the binary"): the user's own, kept in ~/.persona/skills/<name> on the machine that runs
 // the assistant and linked in, and the built-in ones this binary carries, copied in. Built-in skills are only those
 // Persona may redistribute (persona-office, personad office's): a copied one, like an extension's skill a user put
 // there by hand, lives in the user's space. personad never writes that space, so an update cannot touch the user's skills.

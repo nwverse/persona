@@ -1,7 +1,7 @@
 import Charts
 import SwiftUI
 
-/// Colors of the machine charts (docs/server/machines.md「图」): one hue per measure, the same on the dashboard and the
+/// Colors of the machine charts (docs/server/machines.md「Charts」): one hue per measure, the same on the dashboard and the
 /// detail page; light and dark are separate steps checked against their surfaces, not one color flipped.
 enum MetricColor {
     static let cpu = Color(light: 0x2A78D6, dark: 0x3987E5)

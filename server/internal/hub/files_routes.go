@@ -32,7 +32,7 @@ func (h *Hub) fileRoutes(api *http.ServeMux) {
 		return map[string]any{"path": r.URL.Query().Get("path"), "cwd": r.URL.Query().Get("cwd")}
 	}))
 	// #2438 files-find: every file under cwd (git-aware), for the web palette's file search. Read like /fs: full
-	// credentials only (an answer-only device has no machines/{mid}/ route, routeScopes has no entry for it).
+	// credentials only (an answer-only device has no machines/{mid}/ route, answerReads does not match it).
 	api.HandleFunc("GET /api/v1/machines/{mid}/fs/find", h.proxy("fs.find", func(r *http.Request) any {
 		return map[string]any{"cwd": r.URL.Query().Get("cwd"), "limit": atoi(r.URL.Query().Get("limit"))}
 	}))

@@ -109,8 +109,8 @@ struct InboxRuleButtons: View {
     }
 }
 
-/// Rules (the Inbox's More menu, beside Muted): every source's rules, newest first. A tap edits one; a swipe or a long
-/// press removes it.
+/// Rules (the Inbox's More menu, beside Muted): every source's rules, newest first; with several managers, under each
+/// one's name. A tap edits one; a swipe or a long press removes it.
 struct InboxRulesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: InboxRulesModel
@@ -122,11 +122,24 @@ struct InboxRulesView: View {
         NavigationStack {
             LoadableContent(state: model.state, retry: { Task { await model.load() } }) { rules in
                 List {
-                    ForEach(rules) { p in row(p).themedRow() }
+                    if let shares = model.shownShares {
+                        ForEach(shares) { share in
+                            Section {
+                                ManagerHeading(manager: share.manager, count: share.failed == nil ? share.items.count : nil).listRow()
+                                if let failed = share.failed {
+                                    Text(failed).font(Theme.Font.label).foregroundStyle(.secondary).themedRow()
+                                } else {
+                                    ForEach(share.items) { p in row(p).themedRow() }
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(rules) { p in row(p).themedRow() }
+                    }
                 }
                 .listStyle(.plain)
                 .overlay {
-                    if rules.isEmpty {
+                    if model.isEmpty {
                         EmptyStateView(symbol: Theme.Icon.inboxRule, title: String(localized: "No Rules [Inbox Policy]"), message: Self.hint)
                     }
                 }
@@ -145,7 +158,7 @@ struct InboxRulesView: View {
                 }
             }
             #endif
-            .task {
+            .task(id: model.rosterKey) {
                 await model.load()
                 #if DEBUG
                 // `-openInboxRule edit`: Edit on the newest rule, prefilled (screenshots).

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The menu bar item: the Mac's stand-in for the Live Activity / Dynamic Island (docs/apple/mac.md「和 iOS 的对应」).
+/// The menu bar item: the Mac's stand-in for the Live Activity / Dynamic Island (docs/apple/mac.md「Mapping from iOS」).
 /// The icon carries how many agents need you; the menu lists them (answer, allow or approve right there), what is
 /// working, and what finished and is still unread. It stays when the main window is closed.
 enum MacMenuBar {

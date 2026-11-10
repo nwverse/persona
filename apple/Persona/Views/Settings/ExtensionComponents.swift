@@ -1,7 +1,7 @@
 import MarkdownUI
 import SwiftUI
 
-// The components of an extension's View (docs/extensions/extensions.md「声明式 UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
+// The components of an extension's View (docs/extensions/extensions.md「Declarative UI」「UI 版本 3」), drawn by `ExtensionItemRow`.
 
 /// A row's look: what leads it (an icon, an avatar or a thumbnail), its title and subtitle, its value and badge, and a
 /// chevron when it can be used (a spinner while it runs).

@@ -156,7 +156,7 @@ internal sealed interface VoiceSetup {
     /** The model configuration says the voice model cannot be used as it stands: [reason] says why. */
     data class Unavailable(val reason: String) : VoiceSetup
 
-    /** The configuration could not be read: not the same as having none (docs/assistant/model-config.md "Where it takes effect"). */
+    /** The configuration could not be read: not the same as having none (docs/assistant/model-config.md "When changes take effect"). */
     data class Failed(val message: String) : VoiceSetup
 
     /** Ready to talk with [model]; null: the extension's own default. */

@@ -73,7 +73,7 @@ internal fun readSheets(file: SessionFileContent, whole: java.io.File? = null): 
 }
 
 /**
- * A table file as a grid (docs/android/android.md "File viewer", iOS `TableFileView`): column letters across the top and row
+ * A table file as a grid (docs/android/android.md "Files and Git in chat", iOS `TableFileView`): column letters across the top and row
  * numbers down the side stay put while the cells scroll both ways; a workbook with several sheets has a chip per sheet.
  * Tap a cell to see all of it in the bar below (with a copy button); long-press to copy the cell or its row.
  */

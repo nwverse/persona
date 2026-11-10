@@ -3,7 +3,7 @@ import Testing
 import UniformTypeIdentifiers
 @testable import Persona
 
-/// Files pasted or dropped into a terminal the app drives (docs/integrations/terminal.md「第十八节」): the same escaping, names and
+/// Files pasted or dropped into a terminal the app drives (docs/integrations/terminal.md「Web clipboard: paste images/files, copy, OSC 52」): the same escaping, names and
 /// guards as the web's `lib/terminal-clipboard.ts`.
 struct TerminalFilesTests {
     /// Every path is one shell word: the same characters as the web's `escapePastePath` get a backslash.

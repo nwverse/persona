@@ -1,7 +1,7 @@
 # 扩展 SDK
 
 写 Persona 扩展用的官方 SDK（#1843、#1853）。零依赖、自成一体：扩展仓库按版本拷一份（`scripts/gen/sync-sdk.sh`），不需要拉主仓库。
-怎么用见 `docs/extensions/extensions.md`「写扩展：SDK、模板和命令行」。
+怎么用见 `docs/extensions/extensions.md`「Writing extensions: SDK, templates and command line」。
 
 | 目录 | 内容 |
 | --- | --- |

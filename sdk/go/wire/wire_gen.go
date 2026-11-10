@@ -450,7 +450,7 @@ type LookAvatar struct {
 	Dark *LookAvatarDark `json:"dark,omitempty"`
 }
 
-// LookPalette: an appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+// LookPalette: an appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
 type LookPalette struct {
 	Primary    string `json:"primary,omitempty"`
 	Secondary  string `json:"secondary,omitempty"`
@@ -486,8 +486,8 @@ type LookDot struct {
 	States LookDotStates `json:"states"`
 }
 
-// LookItem: A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona
-// package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+// LookItem: A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a
+// persona package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
 type LookItem struct {
 	ID              string      `json:"id"`
 	Name            string      `json:"name"`
@@ -4410,12 +4410,22 @@ type KBDayResult struct {
 	Messages []KBDayMessage `json:"messages"`
 	Prev     string         `json:"prev"`
 	Next     string         `json:"next"`
+	// available means ledger matching ran, not that unmarked messages are human-authored. missing_scope requires
+	// sent.read; unavailable means the service cannot provide provenance. Older hosts omit this field: treat absence as
+	// unavailable.
+	SentOrigin string `json:"sent_origin"`
 }
 
 type KBDayMessage struct {
 	// The message's first line in the day's file, from 1.
 	N    int    `json:"n"`
 	Text string `json:"text"`
+	// Present only for a unique match in the sent-as-user ledger, with sent.read.
+	SentBy string `json:"sent_by,omitempty"`
+	// The matching ledger row.
+	SentLedgerID int64 `json:"sent_ledger_id,omitempty"`
+	// When this matched send was recalled; the archive may still contain its text.
+	RecalledAt time.Time `json:"recalled_at,omitzero"`
 }
 
 // KBSearchParams: kb.search: lines that match, messages too unless messages is false.

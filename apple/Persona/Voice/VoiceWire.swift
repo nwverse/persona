@@ -1,7 +1,7 @@
 import Foundation
 
-// The app's side of the voice extension's socket (docs/assistant/voice.md「协议变更」: protocol 2; protocol 1 is in
-// docs/extensions/extensions.md「语音（kind = voice）」). Pure data and parsing: it builds for every platform the Persona folder is
+// The app's side of the voice extension's socket (docs/assistant/voice.md「Protocol changes」: protocol 2; protocol 1 is in
+// docs/extensions/extensions.md「Voice」). Pure data and parsing: it builds for every platform the Persona folder is
 // compiled for (iOS, Mac, visionOS) and its tests need neither audio nor a hub.
 //
 // Parsing follows the frame reader of PR #1931 (CarPlay voice conversations, by another contributor): an unknown frame

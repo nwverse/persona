@@ -17,7 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/streams"
 )
 
-// The computers are the manager's (internal/devices, docs/server/machines.md "Who connects the computers"): the code moved
+// The computers are the manager's (internal/devices, docs/server/machines.md "Who connects to computers"): the code moved
 // here from the hub reaches them as it did, through a Machine per computer; its calls go to the devices in this
 // process. A Machine keeps what this code keeps of a computer (Cua's and ego's state) across the devices' reconnects.
 

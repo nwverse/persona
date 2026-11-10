@@ -34,6 +34,7 @@ import persona.feature.inbox.LarkLinkPicks
 import persona.feature.inbox.LarkMomentsLink
 import persona.feature.inbox.LarkNativeLink
 import persona.feature.inbox.LarkTextPick
+import persona.feature.inbox.ManagerUriHandler
 import persona.feature.inbox.larkNativeLink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -59,6 +60,11 @@ fun ChatLinkHost(
     onVisibilityChanged: (Boolean) -> Unit = {},
     /** Sends a whole message to Persona's main conversation (and shows it); the sheet closes once it went. */
     onHandToPersona: (suspend (String) -> Unit)? = null,
+    /**
+     * The conversation's manager (docs/assistant/managers.md "Clients"): the documents and posts its links open natively, and
+     * those read ahead, are read through it, as are links tapped in them; null: none named.
+     */
+    manager: String? = null,
     content: @Composable (bottomInset: Dp) -> Unit,
 ) {
     val context = LocalContext.current
@@ -72,6 +78,8 @@ fun ChatLinkHost(
     val hubLinks by rememberUpdatedState(LocalChatHubLinks.current)
     val lark = LocalLarkFeatures.current
     var url by remember { mutableStateOf<String?>(null) }
+    /** The manager the page that opened [url] named (ManagerUriHandler); null: [manager]. */
+    var linkManager by remember { mutableStateOf<String?>(null) }
     /** "machine name :port" while the sheet shows one of the machine's ports (docs/operations/ports.md "Forwarding"). */
     var forwarded by remember { mutableStateOf<String?>(null) }
     val ports by rememberUpdatedState(LocalChatPorts.current)
@@ -79,8 +87,9 @@ fun ChatLinkHost(
     var external by remember { mutableStateOf<String?>(null) }
     var opening by remember { mutableIntStateOf(0) }
     var closeRequest by remember { mutableIntStateOf(0) }
-    val uriHandler = remember { object : UriHandler {
-        override fun openUri(uri: String) {
+    val uriHandler = remember { object : ManagerUriHandler {
+        override fun openUri(uri: String) = openUri(uri, null)
+        override fun openUri(uri: String, manager: String?) {
             when (ChatLinks.kind(uri)) {
                 ChatLinkKind.Web -> {
                     val target = ChatLinks.webUrl(uri)
@@ -93,13 +102,13 @@ fun ChatLinkHost(
                         target == null -> unsupported = true
                         machine != null && port != null -> scope.launch {
                             runCatching { machine.opener.open(machine.machineId, port.port, port.path, port.secure, port.port in machine.listed) }
-                                .onSuccess { local -> pool.forget(local); url = local; forwarded = "${machine.name} :${port.port}"; opening++ }
+                                .onSuccess { local -> pool.forget(local); url = local; linkManager = null; forwarded = "${machine.name} :${port.port}"; opening++ }
                                 .onFailure { error ->
                                     if (error is persona.core.contracts.api.PortGone) machine.presence?.noteGone(port.port)
                                     if (error !is kotlinx.coroutines.CancellationException) feedback?.notice(error.message ?: resources.getString(R.string.chat_link_port_failed, port.port))
                                 }
                         }
-                        else -> { url = target; forwarded = null; opening++ }
+                        else -> { url = target; linkManager = manager; forwarded = null; opening++ }
                     }
                 }
                 ChatLinkKind.App -> {
@@ -149,7 +158,7 @@ fun ChatLinkHost(
     val documentsAhead = remember(preloadUrls, lark) {
         preloadUrls.mapNotNull { ChatLinks.webUrl(it) }.filter { larkNativeLink(it, lark) is LarkNativeLink.Document }.take(3)
     }
-    if (documentsAhead.isNotEmpty() && !isScrolling && lifecycleState.isAtLeast(Lifecycle.State.STARTED)) LarkDocumentPrefetch(documentsAhead)
+    if (documentsAhead.isNotEmpty() && !isScrolling && lifecycleState.isAtLeast(Lifecycle.State.STARTED)) LarkDocumentPrefetch(documentsAhead, manager)
     val picks = if (onHandToPersona != null) listOf(ChatLinkPick.HandToPersona)
         else listOfNotNull(ChatLinkPick.Edit.takeIf { onEdit != null }, ChatLinkPick.Context.takeIf { onContext != null })
     // A web page is over the page: the page's glass goes opaque and the dock makes way (LocalWebSheets).
@@ -299,10 +308,18 @@ fun ChatLinkHost(
                                 AndroidView(factory = { view }, modifier = Modifier.fillMaxSize(), onRelease = { pool.release(it) })
                             }
                         }
-                        if (native is LarkNativeLink.Document)
-                            LarkDocumentLink(target, Modifier.fillMaxWidth().weight(1f), nativePicks, nativeRefresh, page)
-                        else if (native is LarkNativeLink.MomentsPost)
-                            LarkMomentsLink(native.postId, target, Modifier.fillMaxWidth().weight(1f), nativePicks, nativeRefresh, page)
+                        val read = linkManager ?: manager
+                        // A link inside it (another document, a post) opens as the manager it is read as.
+                        val nested = remember(uriHandler, read) { object : ManagerUriHandler {
+                            override fun openUri(uri: String) = uriHandler.openUri(uri, read)
+                            override fun openUri(uri: String, manager: String?) = uriHandler.openUri(uri, manager ?: read)
+                        } }
+                        CompositionLocalProvider(LocalUriHandler provides nested) {
+                            if (native is LarkNativeLink.Document)
+                                LarkDocumentLink(target, Modifier.fillMaxWidth().weight(1f), nativePicks, nativeRefresh, read, page)
+                            else if (native is LarkNativeLink.MomentsPost)
+                                LarkMomentsLink(native.postId, target, Modifier.fillMaxWidth().weight(1f), nativePicks, nativeRefresh, read, page)
+                        }
                     } else if (view != null && !view.gone) key(view) {
                         JPage(title = stringResource(R.string.chat_link_page), modifier = Modifier.fillMaxWidth().weight(1f), topBar = {}) { padding ->
                             AndroidView(factory = { view },

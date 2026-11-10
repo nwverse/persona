@@ -38,7 +38,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Formulas (KaTeX) and diagrams (Mermaid) drawn into pictures (docs/android/android.md "File viewer" › "Formulas and diagrams", iOS `RenderedMarkdown.swift`):
+ * Formulas (KaTeX) and diagrams (Mermaid) drawn into pictures (docs/android/android.md "Files and Git in chat" › "Formulas and diagrams", iOS `RenderedMarkdown.swift`):
  * one hidden WebView loads the bundled `assets/render/render.html` (its CSP lets in only the bundle's scripts, styles and
  * fonts; every other request is answered empty), draws one thing at a time and is captured into a bitmap. What to draw
  * goes in as an argument of `renderMath` / `renderMermaid`, never as markup. Pictures are kept by (kind, source,

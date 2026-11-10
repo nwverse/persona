@@ -1,7 +1,7 @@
 import BeautifulUI
 import SwiftUI
 
-/// One machine (docs/server/machines.md「机器详情」), most used first: how it is (the card of Machines, without its numbers), its
+/// One machine (docs/server/machines.md「App」), most used first: how it is (the card of Machines, without its numbers), its
 /// agents (a tap opens the chat), its values now and CPU / memory / network / load over 1, 6 or 24 hours (hold a chart
 /// to read a moment, all charts follow), the system, the launchers, how the hub reaches it (offline: right under the
 /// card, with Reconnect). The metrics refresh while on screen and the app is in front: every 10 s for the hour, every
@@ -104,7 +104,7 @@ struct MachineDetailView: View {
                         }
                     }
                     launchersSection(machine)
-                    // What plugins draw for this machine (docs/extensions/extensions.md「UI 插槽」machine_section).
+                    // What plugins draw for this machine (docs/extensions/extensions.md「UI slots」machine_section).
                     ExtensionMachineSections(page: plugins, link: $pluginLink)
                     VStack(alignment: .leading, spacing: Theme.Space.m) {
                         if online { connection(machine) }
