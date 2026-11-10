@@ -6,7 +6,6 @@ import { formatDate } from "../i18n";
 import { isOverdue, todoDueDay, todoStatus, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 
 export type CalendarMode = "day" | "week" | "month";
-export const CALENDAR_MODES: CalendarMode[] = ["day", "week", "month"];
 
 /** One thing on the calendar. */
 export interface CalendarEntry {

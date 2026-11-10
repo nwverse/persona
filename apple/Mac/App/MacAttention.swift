@@ -110,7 +110,7 @@ enum MacAttention {
     /// the first.
     static func identifier(_ s: Session, _ state: AgentState) -> String { "\(s.machineID)/\(s.sessionID)#\(state.rawValue)" }
 
-    /// The banner of one card (`newInteractions`), named by its uid like the hub push's collapse id.
+    /// The banner of one card (`newInteractions`), named by its uid.
     static func identifier(_ ix: Interaction) -> String { "interaction/\(ix.uid)" }
 
     /// The banners to take back (#3513): the Needs You one of an agent no longer waiting on you (answered here or
@@ -257,8 +257,8 @@ extension MacAttention {
                                   content: MacAttention.content(s, state, interaction: interactions.first { $0.sessionKey == s.key }, hushed: hushed),
                                   trigger: nil)
         }
-        // One banner per new card, identified by the card's uid like the hub push's collapse id: answering removes
-        // the card and a later card (a different uid) pings again, even for the same agent.
+        // One banner per new card, identified by the card's uid: answering removes the card and a later card
+        // (a different uid) pings again, even for the same agent.
         requests += cards.compactMap { ix -> UNNotificationRequest? in
             guard let s = MacAttention.session(for: ix, in: sessions) else { return nil }
             return UNNotificationRequest(identifier: MacAttention.identifier(ix),

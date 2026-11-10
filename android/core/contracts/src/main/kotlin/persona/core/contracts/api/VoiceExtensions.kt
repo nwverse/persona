@@ -64,7 +64,12 @@ data class ExtensionUpgrade(
     val detail: String? = null,
     /** `"user"` when a skipped version is one the user rolled back from (null: it didn't start). */
     @SerialName("skipped_by") val skippedBy: String? = null,
-)
+    /** The new version's ID when it changes the extension's ID ([id] stays the installed one). */
+    @SerialName("rename_to") val renameTo: String? = null,
+) {
+    /** The ID its market lists the new version under: the market page to open for it (#2511). */
+    val marketId: String get() = renameTo ?: id
+}
 
 /** What happened last with an extension's upgrade: `upgraded | rolled_back | needs_permission | failed`. */
 @Serializable
