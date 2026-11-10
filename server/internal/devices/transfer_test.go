@@ -309,13 +309,10 @@ func TestTransferCancel(t *testing.T) {
 	dst := &targetNode{}
 	d, _, _, _, mux := transferDevices(t, src, dst)
 	tr := started(t, postTransfer(t, mux, transferBody))
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if got, _ := d.getTransfer(tr.ID); got.Bytes > 0 || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	eventually(t, 5*time.Second, "the first transfer chunk", func() bool {
+		got, _ := d.getTransfer(tr.ID)
+		return got.Bytes > 0
+	})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("DELETE", "/api/v1/files/transfer/"+tr.ID, nil))
 	close(release)

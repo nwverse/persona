@@ -37,7 +37,7 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { runningWorkflows, workflowLine } from "../../lib/workflows";
-import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, taskNow, todoRank, todoStatus, TODO_STATUS_INFO, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, type DockAgent, interruption, isRemovable, mostUrgentAgent, openAsk, runningSubagents, taskNow, todoRank, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { TodoAskLine } from "../TodoAsk";
 import { usageLimitContinues, usageLimitLabel } from "../../lib/usage-limit";
 import { parseAPIError } from "../../lib/api-errors";
@@ -48,7 +48,7 @@ import { plainMarkdown } from "../../lib/plain-markdown";
 import { Markdown } from "../../ui/Markdown";
 import { LiveCard } from "../../ui/AssistantCard";
 import type { AssistantView } from "../../lib/extension-wire";
-import { getState, hubHas, useStore, type State } from "../../lib/store";
+import { getState, hubHas, taskSessionLookup, useStore, type State } from "../../lib/store";
 import type { AgentState, Interaction, Machine, Session } from "../../lib/types";
 import { Button, Collapse, cx, Dialog, IconButton, Menu, toast, useNow } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
@@ -76,9 +76,12 @@ import { stateName } from "../../lib/state-labels";
 
 function useTaskLookup() {
   const sessions = useStore((s) => s.sessions);
+  const sessionSummaries = useStore((s) => s.sessionSummaries);
+  const taskRows = useStore((s) => s.taskRows);
   const interactions = useStore((s) => s.interactions);
   const answered = useStore((s) => s.answered);
-  return useMemo(() => answeredLookup(sessions, interactions, answered), [sessions, interactions, answered]);
+  return useMemo(() => answeredLookup(taskSessionLookup({ sessions, sessionSummaries, taskRows }), interactions, answered),
+    [sessions, sessionSummaries, taskRows, interactions, answered]);
 }
 
 // The cards in the conversation do not take the whole session list, the pending cards or the machines: their store
@@ -88,14 +91,14 @@ function useTaskLookup() {
 
 /** What a task is now, from the store: its status and its lead agent. */
 function taskNowIn(s: State, todo: Todo, plans: Record<string, TaskPlan>): { status: TodoStatus; lead?: Session } {
-  const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
+  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   return { status: statusOf(todo, lookup, plans), lead: mostUrgentAgent(todo, lookup)?.session };
 }
 
 /** A task's status (undefined without the task). */
 function useTaskStatus(todo: Todo | undefined): TodoStatus | undefined {
   const plans = useFeed((s) => s.plans);
-  return useStore((s) => (todo ? statusOf(todo, answeredLookup(s.sessions, s.interactions, s.answered), plans) : undefined));
+  return useStore((s) => (todo ? statusOf(todo, answeredLookup(taskSessionLookup(s), s.interactions, s.answered), plans) : undefined));
 }
 
 /** A task's status and lead agent (undefined without the task). */
@@ -109,7 +112,7 @@ function useTaskNow(todo: Todo | undefined): { status: TodoStatus; lead?: Sessio
 function useTaskUltracode(todo: Todo | undefined): boolean {
   const plans = useFeed((s) => s.plans);
   const planned = todo?.plan_id ? plans[todo.plan_id]?.tasks.find((p) => p.todo_id === todo.id) : undefined;
-  return useStore((s) => (todo ? todoUltracode(todo, answeredLookup(s.sessions, s.interactions, s.answered), planned) : false));
+  return useStore((s) => (todo ? todoUltracode(todo, answeredLookup(taskSessionLookup(s), s.interactions, s.answered), planned) : false));
 }
 
 /** A task's title on its card and its folded line, with the Agent list row's ultracode mark right after it while on
@@ -184,7 +187,7 @@ function useTaskMenu(todo: Todo | undefined, status: TodoStatus | undefined) {
 
 /** The task's state as an agent state, for its dot and tone. */
 function dotState(st: TodoStatus): AgentState {
-  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
+  return st === "needs_you" || st === "interrupted" ? "needs_you" : st === "usage_limit" ? "idle" : st === "working" || st === "waiting" || st === "not_started" ? "working" : st === "unread" ? "unread" : st === "follow_up" ? "idle" : "offline"; // done, failed
 }
 
 const TONE: Record<string, string> = {
@@ -197,6 +200,7 @@ const TONE: Record<string, string> = {
 
 function TaskMark({ status, size = 9 }: { status: TodoStatus; size?: number }) {
   if (status === "usage_limit") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-orange" />;
+  if (status === "waiting") return <Icon name="clock" size={size + 4} stroke={2.4} className="text-ink-2" />;
   if (status === "failed" || status === "interrupted") return <Icon name="info" size={size + 4} stroke={2.4} className="text-red" />;
   if (status === "done" || status === "unread")
     return <Icon name="check" size={size + 4} stroke={2.4} className={status === "done" ? "text-ink-3" : "text-green"} />;
@@ -455,8 +459,8 @@ export function TaskCard({ todoId, conversation }: { todoId: string; conversatio
         : progress?.text || (startError ? t("assistant-tasks.start_failed", { error: startError }) : status === "not_started" ? t("assistant-tasks.starting_agent") : t("assistant-tasks.no_activity"));
   const stepFor = now === progress?.text ? progress.for : undefined;
   // Its subagents add to its own progress, below it, and never stand in for it.
-  const subagents = status === "working" || status === "needs_you" ? runningSubagents(lead) : [];
-  const workflow = status === "working" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
+  const subagents = status === "working" || status === "waiting" || status === "needs_you" ? runningSubagents(lead) : [];
+  const workflow = status === "working" || status === "waiting" || status === "needs_you" ? workflowLine(lead, wfNow) : "";
   // what its agent last told Persona (report_to_supervisor): while the task is open
   const reported = status !== "done" && status !== "failed" ? progressLine(todo.supervision) : undefined;
   // its agent's own task list (#5302), unless a report to Persona came after it: the report says more
@@ -930,7 +934,7 @@ export function QuickResultCard({ result }: { result: QuickResult }) {
  *  has no card) and "N more" past them. A card just answered here is not one it waits on (answeredLookup). */
 const TODAY_WAITING_MAX = 3;
 function todayWaitingLines(s: State, waiting: { id: string; title: string }[]): string[] {
-  const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
+  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   const askOf = (id: string) => {
     const todo = s.todos.find((x) => x.id === id);
     return todo ? taskAsk(taskInteraction(todo, s.interactions, mostUrgentAgent(todo, lookup)?.session)) : undefined;
@@ -1143,11 +1147,11 @@ export const DOCK_CAPSULE = "inline-flex h-8 shrink-0 items-center whitespace-no
 /** The dock: "All N" held at its left edge (it does not scroll), then a pill for each task going on (waiting first) and,
  * in the main conversation, each agent going on that no task stands for (#1113), scrolling on their own (iOS TaskDock). */
 // Failed, done and stopped tasks are not in the dock.
-const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, not_started: 1, unread: 2 };
+const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, waiting: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
 function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
-  const lookup = answeredLookup(s.sessions, s.interactions, s.answered);
+  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   return s.todos
     .filter((t) => t.origin === conversation)
     .map((t) => ({ t, st: statusOf(t, lookup, plans) }))
@@ -1226,9 +1230,11 @@ function ProgressTaskRow({ card, conversation }: { card: TaskCardMetadata; conve
   // the mark tells the state at a glance, in the colors the dock and the board use (TaskMark)
   const mark: TodoStatus = accepted || state === "accepted" ? "done" : state === "cancelled" ? "done" : toStart ? "needs_you" : (TODO_STATUS_INFO[state as TodoStatus] ? state as TodoStatus : "not_started");
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
+  // what a waiting task waits for (#3274): its agent's own line for it
+  const waits = useStore((s) => (todo && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : waits ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   return (
     <button type="button" data-task-slot={card.id} disabled={!todo && !card.plan_id} onClick={() => card.todo_id ? openTask(card.todo_id) : window.dispatchEvent(new CustomEvent("persona:task-start", { detail: conversation }))} className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left hover:bg-hover disabled:cursor-default">
       <span data-task-mark={mark} className="flex w-4 shrink-0 justify-center"><TaskMark status={mark} size={8} /></span>

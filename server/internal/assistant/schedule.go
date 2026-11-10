@@ -1117,6 +1117,11 @@ func weekdayText(ds []int) string {
 // knowledge base.
 func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
+	recoverCtx, cancel := context.WithTimeout(ctx, taskFailTimeout)
+	if err := s.recoverTaskStarts(recoverCtx, s.tasks.recoverBefore); err != nil {
+		s.logf("recover interrupted task starts: %v", err)
+	}
+	cancel()
 	go s.taskCloseLoop(ctx)    // the agents of finished tasks (tasks_close.go)
 	go s.superviseLoop(ctx)    // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)         // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)

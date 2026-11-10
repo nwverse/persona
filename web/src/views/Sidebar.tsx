@@ -542,6 +542,12 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     });
     hover(null);
   };
+  // Stable, so the memoized grouping bar skips store pushes that leave its props equal.
+  const chooseGroupingOutOfChatList = useCallback((g: AgentGrouping) => {
+    setChatList(false);
+    localStorage.setItem("persona.agentChatList", "0");
+    chooseGrouping(g);
+  }, [chooseGrouping]);
   const availableGroupings = useMemo(() => {
     if (todosSupported === false) return AGENT_GROUPINGS.filter((g) => g.key !== "todo");
     return AGENT_GROUPINGS;
@@ -723,7 +729,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       <FoldScope.Provider value={AGENTS_FOLD}>
       <Collapse open={!folded}>
       <div inert={folded || undefined}>
-      <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={(g) => { setChatList(false); localStorage.setItem("persona.agentChatList", "0"); chooseGrouping(g); }} />
+      <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={chooseGroupingOutOfChatList} />
       <FilterBar selection={filter} counts={filterTotals} onChoose={choose} botmux={botmux} />
       <AgentDimensionFilterBar filters={dimFilters} onChange={setDimFilters} facets={facets} plan={searchPlan} chatList={chatList} onToggleChatList={toggleChatList} />
       {/* "herdr is not running on <computer>" with "Start" (#1916): before a message to an agent there fails */}
