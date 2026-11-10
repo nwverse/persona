@@ -265,6 +265,7 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("PUT /api/v1/machines/{mid}/clipboard", d.putClipboard)
 	route("GET /api/v1/machines/{mid}/clipboard/settings", d.getClipboardSettings)
 	route("PUT /api/v1/machines/{mid}/clipboard/settings", d.putClipboardSettings)
+	d.transferRoutes(mux)
 	d.metricsRoutes(mux)
 	d.usageRoutes(mux)
 	d.usageWindowRoutes(mux)

@@ -384,6 +384,15 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/clipboard/settings",
 }
 
+// TransferRoutes are computer to computer file transfers (internal/devices transfer.go, docs/protocol/file-transfer.md),
+// relayed the same way: a POST to the manager of its source computer (from.machine in the body), GET and DELETE to the
+// one the request names (?manager=, as the transfer's events say), else the default.
+var TransferRoutes = []string{
+	"POST /api/v1/files/transfer",
+	"GET /api/v1/files/transfer/{id}",
+	"DELETE /api/v1/files/transfer/{id}",
+}
+
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
 // machine's latest sample and its last hour, one machine's history, the token usage (all, and one machine's range).
 var MetricsRoutes = []string{
