@@ -421,6 +421,12 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
   Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
   (`splitPush`), or give each link its own row.
+- A `.sheet` or `.task` that belongs to a whole `List` page goes on the `List`, never on its rows (2026-11-10, #2988). Modifiers on a `Group` of
+  sections go to every section: an extension page's Update sheet was presented five times over, and once it rose the whole Settings sheet (the
+  shell's) closed under it. Moving it to the first section (#2547) still failed on a long page: that row is lazily built and taken down once it
+  scrolls off, so Review tapped at the bottom closed Settings the same way, and its `.task(id:)` ran again every time the row came back. A page
+  made of a child view's rows puts its page-wide modifiers in a `ViewModifier` the page applies to its `List` (`ExtensionSettingsPageWork`).
+  Test it with the largest text, which pushes the first rows off screen.
 - If `x` in `NavigationPath([x])` is `AnyHashable`, the recorded type is `AnyHashable` and a concrete `navigationDestination(for:)` cannot match,
   producing a yellow warning. Append concrete types (`SettingsView.openDebugPage`).
 - `NavigationSplitView` detail pages use destinations registered in the sidebar and are built in its environment. Put detail environment values
