@@ -105,6 +105,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
+leaders.read         GET /api/v1/assistant/leaders
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
@@ -194,6 +195,7 @@ machines.read        GET /api/v1/machines/{id}/usage
 -                    GET /api/v1/machines/{mid}/dirs
 -                    GET /api/v1/machines/{mid}/doctor
 -                    GET /api/v1/machines/{mid}/file
+-                    GET /api/v1/machines/{mid}/file-transfer/settings
 -                    GET /api/v1/machines/{mid}/file/convert
 -                    GET /api/v1/machines/{mid}/file/download
 -                    GET /api/v1/machines/{mid}/file/thumb
@@ -506,6 +508,7 @@ kb.write             PUT /api/v1/kb/{kind}/{id}
 -                    PUT /api/v1/machines/{mid}/codex-settings
 -                    PUT /api/v1/machines/{mid}/computer
 -                    PUT /api/v1/machines/{mid}/engine
+-                    PUT /api/v1/machines/{mid}/file-transfer/settings
 -                    PUT /api/v1/machines/{mid}/herdr
 -                    PUT /api/v1/machines/{mid}/omp-settings
 -                    PUT /api/v1/model-config/purposes/{id}

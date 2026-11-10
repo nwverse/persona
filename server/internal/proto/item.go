@@ -160,7 +160,7 @@ type Item struct {
 	// Unknown nonempty kinds are still not user-authored input.
 	Source *MessageSource `json:"source,omitempty"`
 	Fold   *Fold          `json:"fold,omitempty"`
-	// Task: this notice is a background task reporting back (a command, a Monitor, a subagent, or a workflow).
+	// Task: a background task notice, or a subagent tool result associated with its launching call.
 	Task         *TaskNote     `json:"task,omitempty"`
 	TurnDuration *TurnDuration `json:"turn_duration,omitempty"`
 	// Compact: this notice is where the context was compacted (Claude Code's compact_boundary).
@@ -271,7 +271,7 @@ type TurnDuration struct {
 // subagent finishing. Title, Detail and Text come decoded (Claude Code writes &gt; &lt; &amp; in them).
 type TaskNote struct {
 	Kind   string `json:"kind"`             // shell | monitor | agent | workflow | task (anything else)
-	Status string `json:"status,omitempty"` // completed | failed | killed | stopped | event | ended | waiting
+	Status string `json:"status,omitempty"` // running | completed | failed | killed | stopped | event | ended | waiting
 	// Title: the call's description, or the first line of its command when it had none.
 	Title      string `json:"title"`
 	TaskID     string `json:"task_id,omitempty"`

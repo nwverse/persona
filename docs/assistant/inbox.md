@@ -3,6 +3,8 @@
 The Inbox tab is Persona's information entry point: Lark messages and mail from all email accounts share **one list**, grouped into items. AI triages first; people see only the conclusions.
 (Requested direction 2026-10-27: no group-by-group browsing, no second Lark client; see `docs/extensions/feishu.md`.)
 
+Navigation badges count unread open inbox entries across pending sections; read-but-pending items remain in their sections and keep their completion state. Android counts each native conversation once using its reconciled source receipts, plus unread non-conversation items. Web and Apple count inbox items. Zero keeps the existing hidden-badge behavior. The roster's `inbox_needs_you` and the home page's pending count retain their separate meaning: open items requiring action, including ones already read. A receipt can precede the next item-list update, so Android's badge reads `InboxConversations` rather than only the cached item flags.
+
 ## Ownership: the manager owns the Inbox (2026-11-04)
 
 The Inbox belongs to the **manager** (assistant process `personad assistant`; `docs/assistant/assistant.md`, "Boundary with hub"): items and their state (pre-admission triage,
@@ -349,7 +351,7 @@ awaiting response → Working; failure → Needs you; otherwise `tier` (FYI / Ne
 
 | kind | Recorded when | Tap destination |
 | --- | --- | --- |
-| `received` | New messages enter this item, **one entry per batch**: "Received 3 messages · A contact" (mail: "Received 2 emails · …"), with `count`, `sender`; `messages` is this batch (up to 10, 200 characters each; Lark from plugin context lines, omitted if unreadable, preview for one message; mail uses summaries). Replies from others also go here. Messages outside this item are not recorded | First batch message's source position: Lark first batch `start_position`, later batches by chat sequence (count backward by new-message count, never earlier than previous batch's last message); mail first uid; others source page |
+| `received` | New messages enter this item, **one entry per batch**: "Received 3 messages · A contact" (mail: "Received 2 emails · …"), with `count`, `sender`; `messages` is this batch (up to 10, 200 characters each; Lark from plugin context lines without their trailing notes for the AI (`(id=…, …)`), omitted if unreadable, preview for one message; mail uses summaries). Replies from others also go here. Messages outside this item are not recorded | First batch message's source position: Lark first batch `start_position`, later batches by chat sequence (count backward by new-message count, never earlier than previous batch's last message); mail first uid; others source page |
 | `triaged` | Triage: "Triaged: Needs you" / "Triaged: Needs you (urgent)," `detail` = tier · reason. Same-tier retriage with unchanged urgency is not recorded | Expand inline |
 | `handling` | A handling chat takes over this item (once per chat) | That chat |
 | `sent` | Persona sends on your behalf (`/reply`, confirmed reply suggestion): "Sent a Lark message" / "Sent an email" / "Posted a comment" | Lark chat tail (where reply lands); replied mail; others source page |

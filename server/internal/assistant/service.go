@@ -48,6 +48,8 @@ type Service struct {
 	id string
 	// nodeAnswering: the computers' requests being answered now, but the ones that wait on a person (idle.go).
 	nodeAnswering atomic.Int64
+	// taskStarting counts queued and running task starts through linking or failure bookkeeping (idle.go).
+	taskStarting atomic.Int64
 	// ext is the extensions' tools in this process (extensions.go SetExtensions); nil: none (tests).
 	ext ExtensionTools
 
@@ -126,6 +128,8 @@ type Service struct {
 	fbot       feishuBook        // feishu.go
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
+	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
+	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
@@ -175,6 +179,7 @@ func New(o Options) *Service {
 	s.agentArchiveRoutes()
 	s.alwaysRoutes()
 	s.reporterRoutes()
+	s.directionRoutes()
 	s.originRoutes()
 	s.profileRoutes()
 	s.readinessRoutes()
@@ -273,6 +278,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			}
 		}
 	}
+	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
+		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
+		if name, _ := p["launcher"].(string); name != "" {
+			if err := s.launcherScopeErr(ctx, device, name); err != nil {
+				return err
+			}
+		}
+	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
 		// The node reads a missing is_main as false, and is_main is part of what a process runs: a relay into the main
 		// conversation (deliverRelay) without it started that conversation, or restarted it when idle, on the ordinary
@@ -281,6 +294,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			id, _ := p["session_id"].(string)
 			cfg := s.settings(ctx)
 			p["is_main"] = id != "" && cfg.Main == id && cfg.MachineID == device
+		}
+		if _, set := p["interject_background"]; !set && s.interjectBackground(ctx) {
+			p["interject_background"] = true // what the node does with a message that comes while it answers
 		}
 	}
 	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && p["supervision"] != true {
@@ -431,6 +447,7 @@ func (s *Service) publish(ctx context.Context) {
 	if _, err := s.hub.Snapshot(ctx, snap); err != nil && !errors.Is(err, ErrStaleSnapshot) {
 		s.logf("assistant: snapshot: %v", err)
 	}
+	s.directionsSoon() // a leader, its title or its tasks may have changed (directions.go)
 }
 
 func (s *Service) Resync(ctx context.Context) { s.publish(ctx) }
@@ -462,6 +479,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	}
 	for id, machine := range archived {
 		view(id, machine).Archived = true
+	}
+	directions, ok := s.directionViews(ctx)
+	snap.Partial = snap.Partial || !ok
+	leadersAt := s.settings(ctx).MachineID // a leader conversation is on the assistant's machine
+	for id, d := range directions {
+		view(id, leadersAt).Direction = d
 	}
 	snap.Tasks = s.taskViews(ctx)
 	snap.Partial = snap.Partial || snap.Tasks == nil
@@ -549,6 +572,7 @@ func (s *Service) InteractionResolved(ctx context.Context, r InteractionResolved
 	if f := s.ixResolved; f != nil {
 		f(r)
 	}
+	s.taskPlanApproval()
 	s.taskAnswered(ctx, r.Interaction, r.Resolution, r.Status)
 	s.cardDecisions(ctx, r.Interaction, r.Resolution, r.Status)
 	// A quiet task's waiting notice may still be in its delay window or queued behind a turn: drop it now unless the
@@ -573,6 +597,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.drainRelays(d.MachineID, d.Sessions)
 	s.originsChanged(d.MachineID, d.Sessions) // conversations from before origins were noted (origins.go)
 	s.todosSessionsChanged(ctx, d)
+	s.taskStageSessions(ctx, d)
 	s.nativeArchivesListed(d.MachineID) // agent_archive_native.go
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 }

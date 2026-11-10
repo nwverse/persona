@@ -256,14 +256,18 @@ export function readTranscriptSteps(brainDir, full = false) {
   }
 }
 
-/** Native tool results are intermediate work. A completed assistant reply closes the turn. */
-export function transcriptStatus(steps, now = Date.now()) {
+/** A completed planner message can be progress narration. Only native idle state establishes turn completion. */
+export function transcriptStatus(steps, now = Date.now(), summary) {
+  if (summary?.killed) return 'idle'
+  if (summary?.status === 'CASCADE_RUN_STATUS_RUNNING' || summary?.not_fully_idle) return 'working'
   const last = steps.findLast((step) => ['USER_INPUT', 'PLANNER_RESPONSE', 'GENERIC', 'ERROR_MESSAGE'].includes(step?.type))
   if (!last) return 'unknown'
   if (last.type === 'ERROR_MESSAGE' || ['ERROR', 'CANCELLED', 'CANCELED'].includes(last.status)) return 'idle'
-  if (last.type === 'PLANNER_RESPONSE' && last.status === 'DONE' && typeof last.content === 'string' && last.content.trim() && !last.tool_calls?.length) {
-    return 'done'
-  }
+  // A summary from before a newly exported step cannot close that newer work.
+  const idle = summary?.status === 'CASCADE_RUN_STATUS_IDLE' && Number.isInteger(last.step_index) && summary.step_count > last.step_index
+  const reply = last.type === 'PLANNER_RESPONSE' && last.status === 'DONE' && typeof last.content === 'string' && last.content.trim() && !last.tool_calls?.length
+  if (idle) return reply ? 'done' : 'idle'
+  if (reply) return 'unknown'
   if (!['RUNNING', 'PENDING', 'CREATED', 'DONE'].includes(last.status)) return 'unknown'
   // Only recent unfinished steps establish external activity. Older history remains uncertain.
   const started = Date.parse(last.created_at)

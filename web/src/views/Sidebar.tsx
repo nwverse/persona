@@ -20,18 +20,15 @@ import { firstAndCurrent } from "../lib/persona-nav";
 import { sidebarConversations, usePinnedConversations } from "../lib/conversation-pins";
 import { autoConversations, autoOrigin, isAutoConversation, originLabel, type AutoOrigin, type OriginTally } from "../lib/conversation-origins";
 import { ConversationRowMenu, pinnedSectionItems } from "./ConversationMenu";
-import { useDisconnect } from "./DisconnectBrowser";
 import { href, navigate, type Route } from "../lib/router";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { refresh, useStore } from "../lib/store";
 import { conversationTitle } from "./assistant/conversations";
-import { BREATHING, connStatus, phaseTone, type ConnPhase } from "../lib/connection";
 import { buildTodoTree, shareTree, type TodoTree } from "../lib/todo-tree";
 import { openTodoFromTag, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
-import { Collapse, cx, EASE, Kbd, Menu, Spinner, useMenu, type MenuItem } from "../ui/atoms";
+import { Collapse, cx, EASE, Kbd, Menu, useMenu, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
-import { AppMark } from "../ui/AppMark";
 import { Icon, type IconName } from "../ui/icons";
 import { HerdrNotices as HerdrNoticesContent } from "./agents/HerdrNotices";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
@@ -47,9 +44,7 @@ import type { MenuAt } from "../ui/menu-model";
 import { useSidebarTerminals } from "../lib/sidebar-terminals";
 import { usePanes } from "../lib/terminal-panes";
 import { buildTerminalTree, shellsOnly, type TermSpace } from "../lib/terminals";
-import { setTheme, useTheme, type Theme } from "./theme";
 import { LinkTodoDialog as LinkTodoDialogContent, type LinkTargetSpace } from "./LinkTodoDialog";
-import { hubMenuItems, useHubs } from "./Hubs";
 import { FoldScope, useFolded } from "../lib/use-folded";
 import { clipsOverflow, glideBox, glideStyle, sameBox, type GlideBox, type Span } from "../lib/glide";
 import { AGENTS_FOLD, onGrouping, setAgentsFolded } from "../lib/sidebar-api";
@@ -64,6 +59,8 @@ import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu,
 import { NavRow, PersonalAgents, PersonaRow, PinnedHeading, SessionRow } from "./SidebarRows";
 import { LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
+import { scoped, useScope, useScoped, useScopedTodos } from "../lib/current-assistant";
+import { AssistantSwitcher } from "./AssistantSwitcher";
 // Declared in the files split out of this one; re-exported so the files that import them from here stay as they are.
 export { useNavPages, type NavPage } from "./SidebarParts";
 export { AgentRow, PersonaRow, PinnedHeading, SessionRow } from "./SidebarRows";
@@ -275,7 +272,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
     <aside className="flex h-full w-full flex-col bg-canvas">
       <div className="px-2.5 pt-2.5">
         <div className="mb-2 flex items-center gap-1">
-          <div className="min-w-0 flex-1"><AccountRow phase={phase} online={online} total={total} /></div>
+          <div className="min-w-0 flex-1"><AssistantSwitcher phase={phase} online={online} total={total} route={route} /></div>
           {/* folds the column to the rail of icons (a wide screen; the drawer closes by its scrim) */}
           {!narrow && <CollapseButton collapsed={false} chord={bindings["left-sidebar"]} />}
         </div>
@@ -456,7 +453,10 @@ function AgentsBlock(props: AgentsBlockProps) {
   useEffect(() => onGrouping(setGrouping), []);
   // A saved grouping (including an explicitly selected default) is a view preference the paged API cannot express.
   const grouped = AGENT_GROUPINGS.some((g) => g.key === grouping);
-  const full = pins.sessions.length > 0 || pins.spaces.length > 0 || grouped;
+  // several assistants: the list is the current one's (docs/assistant/managers.md "Clients"), which the hub's paged list
+  // cannot ask for, so the complete list is read and filtered here
+  const several = useScope().several;
+  const full = pins.sessions.length > 0 || pins.spaces.length > 0 || grouped || several;
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
     setGrouping(g);
@@ -469,7 +469,7 @@ function AgentsBlock(props: AgentsBlockProps) {
   }, [props.hover]);
   // Back to the paged list: forget the saved grouping. Offered only where the paged list exists and nothing is pinned
   // (pins keep the full list either way).
-  const pagedList = bounded && grouped && pins.sessions.length === 0 && pins.spaces.length === 0
+  const pagedList = bounded && grouped && !several && pins.sessions.length === 0 && pins.spaces.length === 0
     ? returnToPagedList
     : undefined;
   return bounded && !full ? <BoundedAgentsBlock {...props} chooseGrouping={chooseGrouping} /> : <LegacyAgentsBlock {...props} grouping={agentGrouping(grouping)} chooseGrouping={chooseGrouping} pagedList={pagedList} />;
@@ -507,12 +507,23 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, add = true,
 }
 
 function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, foldable = false, grouping, chooseGrouping, pagedList }: AgentsBlockProps & { grouping: AgentGrouping; chooseGrouping: (g: AgentGrouping) => void; pagedList?: () => void }) {
-  const machines = useStore(selectSidebarMachines);
-  const { sessions: all, loaded } = useFullAgentSessions();
+  // the current assistant's computers, agents and to-dos (all of them with one assistant)
+  const scope = useScope();
+  const sidebarMachines = useStore(selectSidebarMachines);
+  // the ids of the current assistant's computers (null with one assistant): strings, so a push of a computer's load or
+  // memory leaves them equal and doesn't draw the block again
+  const ownIds = useStore((s) => (scope.several ? scoped(s.machines, scope).map((m) => m.id) : null));
+  const machines = useMemo(() => {
+    if (!ownIds) return sidebarMachines;
+    const own = new Set(ownIds);
+    return sidebarMachines.filter((m) => own.has(m.id));
+  }, [ownIds, sidebarMachines]);
+  const { sessions: every, loaded } = useFullAgentSessions();
+  const all = useScoped(every);
   const mutes = useStore((s) => s.mutes);
   const pins = useStore((s) => s.pins);
   const interactions = useStore((s) => s.interactions);
-  const todos = useStore((s) => s.todos);
+  const todos = useScopedTodos();
   const todosSupported = useStore((s) => s.todosSupported);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const launches = useStore((s) => Object.values(s.launches).filter((launch) => launch.phase !== "ready"));
@@ -531,6 +542,12 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     });
     hover(null);
   };
+  // Stable, so the memoized grouping bar skips store pushes that leave its props equal.
+  const chooseGroupingOutOfChatList = useCallback((g: AgentGrouping) => {
+    setChatList(false);
+    localStorage.setItem("persona.agentChatList", "0");
+    chooseGrouping(g);
+  }, [chooseGrouping]);
   const availableGroupings = useMemo(() => {
     if (todosSupported === false) return AGENT_GROUPINGS.filter((g) => g.key !== "todo");
     return AGENT_GROUPINGS;
@@ -712,7 +729,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
       <FoldScope.Provider value={AGENTS_FOLD}>
       <Collapse open={!folded}>
       <div inert={folded || undefined}>
-      <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={(g) => { setChatList(false); localStorage.setItem("persona.agentChatList", "0"); chooseGrouping(g); }} />
+      <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={chooseGroupingOutOfChatList} />
       <FilterBar selection={filter} counts={filterTotals} onChoose={choose} botmux={botmux} />
       <AgentDimensionFilterBar filters={dimFilters} onChange={setDimFilters} facets={facets} plan={searchPlan} chatList={chatList} onToggleChatList={toggleChatList} />
       {/* "herdr is not running on <computer>" with "Start" (#1916): before a message to an agent there fails */}
@@ -911,50 +928,6 @@ const FilterBar = memo(function FilterBar({ selection, counts, onChoose, botmux 
         </button>
       )}
     </div>
-  );
-});
-
-const AccountRow = memo(function AccountRow({ phase, online, total }: { phase: ConnPhase; online: number; total: number }) {
-  const menu = useMenu();
-  const theme = useTheme();
-  const otherHubs = hubMenuItems(useHubs());
-  const themes: { k: Theme; label: string; icon: IconName }[] = [
-    { k: "system", label: t("sidebar.theme_system"), icon: "monitor" },
-    { k: "light", label: t("sidebar.theme_light"), icon: "sun" },
-    { k: "dark", label: t("sidebar.theme_dark"), icon: "moon" },
-  ];
-  const disconnect = useDisconnect();
-  return (
-    <>
-      <button type="button" onClick={menu.open} className="flex w-full items-center gap-2.5 rounded-control p-1.5 text-left transition-[background-color,transform] duration-100 hover:bg-hover active:scale-[0.98]">
-        <AppMark size={32} radius={8} className="shadow-hairline" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] leading-tight font-medium text-ink">Persona</span>
-          <span className="flex items-center gap-1.5 truncate text-[11px] leading-tight text-ink-3">
-            <span aria-hidden data-conn-dot className={cx("size-1.5 rounded-full", phaseTone(phase).color)} style={phaseTone(phase).breathing ? BREATHING : undefined} />
-            {connStatus(phase, online, total)}
-          </span>
-        </span>
-        {/* the menu is gone while the hub revokes this browser's token: the row it opened from says it is busy */}
-        {disconnect.busy ? <Spinner size={12} /> : <Icon name="chevron" size={12} stroke={2} className="text-ink-3" />}
-      </button>
-      {menu.anchor && (
-        <Menu
-          anchor={menu.anchor}
-          onClose={menu.close}
-          width={220}
-          header={t("sidebar.appearance")}
-          items={[
-            ...themes.map((t) => ({ key: t.k, label: t.label, icon: t.icon, checked: theme === t.k, onSelect: () => setTheme(t.k) })),
-            // the other hubs in this browser's list (#1014); none, and the menu is as before
-            ...otherHubs,
-            { key: "settings", label: t("sidebar.nav_settings"), icon: "gear", divider: otherHubs.length > 0, onSelect: () => navigate({ name: "settings" }) },
-            { key: "logout", label: t("sidebar.disconnect"), icon: "logout", danger: true, onSelect: disconnect.start },
-          ]}
-        />
-      )}
-      {disconnect.dialog}
-    </>
   );
 });
 
