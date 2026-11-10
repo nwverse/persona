@@ -70,6 +70,8 @@ type inboxBook struct {
 	cfgAt time.Time
 
 	purgedAt time.Time // the last purge of the done items past inboxKeepHistory (purgeInboxHistory), under mu
+
+	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 }
 
 func (b *inboxBook) init() {
@@ -147,6 +149,7 @@ func (b *inboxBook) sourceName(source string) string {
 // hub. A delivery holding or waiting for the lock finds the item gone and stops (deliverNotes).
 func (b *inboxBook) drop(id string) {
 	delete(b.items, id)
+	delete(b.listMemo.kept, id)
 	delete(b.filing, id)
 	b.replies.Delete(id)
 	b.telling.Delete(id)
@@ -154,8 +157,10 @@ func (b *inboxBook) drop(id string) {
 }
 
 // touched stamps a new per-id parent/done mutation generation under b.mu: a rollback checks its stamp to tell its
-// own write apart from a concurrent same-valued one (two reopens, two unlinks), which value equality cannot.
+// own write apart from a concurrent same-valued one (two reopens, two unlinks), which value equality cannot. The item
+// changed, so GET /api/v1/inbox encodes it again (inbox_list_memo.go).
 func (b *inboxBook) touched(id string) uint64 {
+	delete(b.listMemo.kept, id)
 	if b.mark == nil {
 		b.mark = map[string]uint64{}
 	}

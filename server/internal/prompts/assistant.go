@@ -568,6 +568,9 @@ type TaskDone struct {
 	// Delivery: also say how far the work was delivered (assistant.done_needs_delivery, docs/assistant/todos.md "Delivery"): only
 	// live or nothing to ship closes the task.
 	Delivery bool
+	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
+	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
+	Checks bool
 	// Language: the user's language for the reason, which the apps show on the task ("" for Chinese, the prompt's own).
 	Language string
 }
@@ -615,6 +618,9 @@ type TaskDoneReply struct {
 	Machine, Ask, Text string
 	From               string `json:"from,omitempty"`
 	Source             string `json:"source,omitempty"`
+	// Earlier is the agent's reply in the turn before the user's own follow-up in this session (its report of the
+	// work, when the follow-up only asks whether it is done); never set for a side-conversation turn (#3111).
+	Earlier string `json:"earlier,omitempty"`
 }
 
 func RenderTaskDoneInput(in TaskDoneInput) string { return render("assistant/task_done_input", in) }
