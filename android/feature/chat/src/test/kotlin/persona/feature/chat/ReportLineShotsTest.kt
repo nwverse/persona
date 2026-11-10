@@ -109,7 +109,7 @@ class ReportLineShotsTest {
                 val host = AssistantTaskHost(store, "main", listOf(worker), { id -> machines.first { it.id == id }.name }, {}, {}, {},
                     sheet = sheet, machines = machines)
                 Column(Modifier.testTag("shot").width(400.dp).background(PersonaTheme.palette.background).padding(vertical = Tokens.Space.l)) {
-                    AssistantTrays(host, remember { AssistantTrayState().apply { expanded = AssistantTray.Progress } },
+                    AssistantTrays(host, remember { AssistantTrayState().apply { expanded = AssistantTray.Running } },
                         emptyList(), emptyList(), emptyList(), persona.core.designsystem.AssistantTrayTokens.maximumHeight,
                         busy = false, enabled = true, onApprove = {}, onReview = {}, onSend = {}, onSchedule = {})
                 }
