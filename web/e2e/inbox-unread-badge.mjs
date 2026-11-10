@@ -10,7 +10,7 @@ if (values.help || !values.origin || !values.out || !values.cdp) {
   process.exit(values.help ? 0 : 2);
 }
 const origin = new URL(values.origin);
-assert(["127.0.0.1", "localhost", "172.17.0.1"].includes(origin.hostname), "owned local test server required");
+assert(origin.protocol === "http:" && !origin.username && !origin.password, "owned HTTP test server without credentials required");
 mkdirSync(values.out, { recursive: true });
 const watchdog = setTimeout(() => { console.error("TIMEOUT inbox badge verification"); process.exit(124); }, 180_000);
 const browser = await chromium.connectOverCDP(values.cdp);

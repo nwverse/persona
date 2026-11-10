@@ -444,8 +444,8 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
     val inboxConversationList by (inboxConversations?.state ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow(persona.feature.inbox.InboxConversationList())
     }).collectAsStateWithLifecycle()
-    val inboxUnread = remember(inbox.records, inboxConversationList) {
-        inboxUnreadCount(inbox.records, inboxConversationList)
+    val inboxUnread = remember(shownRecords, inboxConversationList) {
+        inboxUnreadCount(shownRecords, inboxConversationList)
     }
     val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size)
     // "Needs you now" on the Persona home: the agents waiting (not Persona's own, not muted), then the inbox's "Needs you".

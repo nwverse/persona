@@ -23,7 +23,8 @@ fun needsYouCount(list: InboxListResult, records: List<InboxRecord>): Int {
 
 /** Use reconciled conversation reads, including receipts not yet reflected by the hub's item list. */
 fun inboxUnreadCount(records: List<InboxRecord>, conversations: InboxConversationList? = null): Int {
-    val grouped = conversations?.rows.orEmpty()
+    val ids = records.map { it.item.id }.toSet()
+    val grouped = conversations?.rows.orEmpty().filter { row -> row.records.any { it.item.id in ids } }
     val groupedIds = grouped.flatMap { it.records }.map { it.item.id }.toSet()
     return grouped.count { it.unread } + records.count { it.item.id !in groupedIds && !it.read && !it.item.isDone }
 }

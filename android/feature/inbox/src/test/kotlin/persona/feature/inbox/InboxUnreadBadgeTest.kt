@@ -29,6 +29,8 @@ class InboxUnreadBadgeTest {
         val records = listOf(record("a").copy(feedId = "room"), record("b").copy(feedId = "room"), record("document"))
         val grouped = buildInboxConversations("paired", InboxSnapshot(records = records))
         assertEquals(2, inboxUnreadCount(records, grouped))
+        assertEquals(1, inboxUnreadCount(records.filter { it.item.id == "document" }, grouped))
+        assertEquals(0, inboxUnreadCount(emptyList(), grouped))
         val read = buildInboxConversations("paired", InboxSnapshot(records = records),
             setOf(InboxReadVersion("a", null), InboxReadVersion("b", null)))
         assertEquals(1, inboxUnreadCount(records, read))
