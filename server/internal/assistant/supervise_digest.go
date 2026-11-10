@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"slices"
 	"sort"
 	"strings"
@@ -144,7 +145,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	leader := to != here.Main
 	render := func(list []prompts.SuperviseEntry) string {
 		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Escalated: escalatedIn(list),
-			Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes())})
+			LeaderStuck: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
+			Asked:       askedIn(list), AskMinutes: int(askHoldFor.Minutes())})
 	}
 	b.mu.Lock()
 	queued := b.queued[to]
@@ -308,6 +310,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if st != reviewNeedsUser && len(g.Cards) == 0 { // a leader's escalated cards are told as they were
 			return prompts.SuperviseEntry{}, false // decided meanwhile
 		}
+	case sigOrphaned:
+		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
+			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
+		}
 	}
 	var asks []prompts.SuperviseAsk
 	if g.Kind == sigAsk {
@@ -329,6 +335,9 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	}
 	if g.Kind == sigReport { // what it said is the report itself, not a reason in brackets
 		e.Detail, e.Report, e.Said, e.Evidence, e.Step, e.Steps = "", g.Report, g.Detail, g.Evidence, g.Step, g.Steps
+	}
+	if g.Kind == sigOrphaned {
+		e.Orphan = g.Orphan
 	}
 	if g.Kind == sigFailed {
 		s.remedyEntry(ctx, t, &e) // its kept tab, and the turn that hears of it (start_remedy.go)
@@ -362,6 +371,17 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 				text = answer
 			}
 		}
+		if c, arts, ok := closeout.Parse(text); ok {
+			e.Closeout = &prompts.SuperviseCloseout{Status: c.Status, Waiting: c.Waiting, Merged: c.Merged, Deployed: c.Deployed,
+				Did: c.Did, Verified: c.Verified, Missing: c.Missing}
+			if s.checkCloseout(ctx, &c, arts); c.Checked != nil {
+				e.Closeout.CheckedMerged, e.Closeout.CheckedDeployed = c.Checked.Merged, c.Checked.Deployed
+			}
+			for _, a := range arts {
+				e.Closeout.Artifacts = append(e.Closeout.Artifacts, a.Kind+" "+a.Ref)
+			}
+			text = closeout.Strip(text) // told above, in a form that cannot be cut in the middle
+		}
 		e.Last = clipMiddle(text, 600)
 	} else if g.Machine != "" {
 		e.Machine = g.Machine
@@ -371,7 +391,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigReview: 5, sigStalled: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:
@@ -399,6 +419,10 @@ func (s *Service) holdPushes(ctx context.Context, id string) {
 	b.mu.Unlock()
 	s.publish(ctx)
 }
+
+// holdPushesParam marks an assistant.send whose turn holds the conversation's pushes (holdPushes): a supervision
+// message, or a quiet task's run in a conversation it came from (runTask). Any other send releases them (call).
+const holdPushesParam = "hold_pushes"
 
 // releasePushes: someone else speaks in conversation id: its turns are pushed as ever.
 func (s *Service) releasePushes(ctx context.Context, id string) {

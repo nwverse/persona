@@ -2434,18 +2434,26 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
 ```
 
 - **Who is told**: as for the to-do events, with `leaders.read` (or the legacy full access); `todos.read` is not enough.
-- **`leader.changed {id, title, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
-  record by; `title` its title as the apps show it; `project` the knowledge-base project's slug it is filed under (left
+- **`leader.changed {id, title, name, project?, ended?}`**: `id` is the leader conversation's session id, the key to keep a
+  record by; `title` its title as the apps show it; `name` what the direction is called, **the one to show** (#3679): the
+  name the owner (`PUT /api/v1/assistant/directions/{id}/name`) or the secretary (`direction_name`) gave it, else its
+  knowledge-base project's name, else `title` without its `MMDD | kind | ` prefix (and when that starts `你是「X」`, a role given in the first message, just `X`, #3744); a new name is a change, told once; `project` the knowledge-base project's slug it is filed under (left
   out while none; the hub files a new direction under the project most of its tasks are filed under); `ended: true`
   once it left `assistant.leaders` (nothing is deleted; made a leader again, it is sent without `ended`). Sent once per
   change: what was last told is kept in the hub's store, so a restart or a replay of the same state sends nothing.
-- **`leader.report {id, leader, kind, todo, plan?, text, link?, at}`**: written by the hub from the task's ledger, never by a
+- **`leader.report {id, leader, kind, todo, plan?, text, link?, at, reached?, doing?, needs_you?, links?}`**: written by the hub from the task's ledger, never by a
   model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner, or a plan of the
   leader's waits for the owner's Start: then `plan` is the plan's id and `todo` is `""`, as a plan has no to-do until
   it starts; #3608) or `stuck` (in Waiting
   on you, or stopped unfinished, for 24 hours; at most once per 24 hours). `id` names the report and is never sent
   twice; `text` is at most 300 characters in the owner's language; `link` the task's PR when it has one. Progress is
-  never reported.
+  never reported. Besides those, `kind: "progress"` (#3679) is the
+  leader's own summary of its direction at the goal level, sent with its `leader_progress` tool (each reached task, each
+  report cycle): `reached` (what was reached), `doing` (what is being done, and where it is stuck), `needs_you` (what the
+  owner has to do) and `links` (evidence, at most 5; `link` is the first), each part at most 200 characters; `text` puts
+  the parts together in the owner's language (「达成：…」「在做：…」「要你做：…」, one per line); `todo` is `""`. A work-log
+  card renders one line per direction from the day's latest `progress`. `GET /api/v1/assistant/leaders` lists each
+  direction's `name` and latest `progress` (`{reached?, doing?, needs_you?, links?, at}`).
 - **Leaders made before the extension**: `GET /api/v1/assistant/leaders` (`leaders.read`) lists every direction as
   `leader.changed` would tell it now, with `by` (`assistant` or `user`), `at` and `ended_at?`; current leaders first.
 - They share the to-do events' queue and its limits.
