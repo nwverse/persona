@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -129,7 +130,7 @@ func NewBusHub(o BusOptions) *BusHub {
 		HelloParams: func() any {
 			return map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
 				"deploy": o.Deploy, "version": o.Version, "capabilities": []string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
-					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityMachinesOwn}}
+					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityMachinesOwn, devicewire.SharingCapability}}
 		},
 		OnHello: b.onHello,
 		// A node's tool call that its caller stopped waiting for ends at the hub too (fleet_tools.go).
@@ -622,6 +623,12 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if p.Query != "" {
 		target += "?" + p.Query
 	}
+	if p.Caller != nil {
+		ctx = devicewire.WithCaller(ctx, *p.Caller)
+	}
+	if p.ShareAuthority != nil {
+		ctx = devicewire.WithShareAuthority(ctx, *p.ShareAuthority)
+	}
 	r, err := http.NewRequestWithContext(ctx, p.Method, target, bytes.NewReader(p.Body))
 	if err != nil {
 		return assistantwire.HTTPResponse{}, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
@@ -645,15 +652,16 @@ func serveHTTP(ctx context.Context, s http.Handler, p assistantwire.HTTPRequest,
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return assistantwire.HTTPResponse{Status: w.status, Header: w.header, Body: w.body.Bytes()}, nil
+	return assistantwire.HTTPResponse{ShareAuthority: w.shareAuthority, Status: w.status, Header: w.header, Body: w.body.Bytes()}, nil
 }
 
 // recorder keeps a response to send back whole.
 type recorder struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
-	lang   func() i18n.Lang // the request's language, read only when an error is written (i18n.Carrier)
+	shareAuthority *devicewire.ShareAuthority
+	header         http.Header
+	status         int
+	body           bytes.Buffer
+	lang           func() i18n.Lang // the request's language, read only when an error is written (i18n.Carrier)
 }
 
 // Lang is the language apierr writes an i18n.Message in.
@@ -664,7 +672,8 @@ func (w *recorder) Lang() i18n.Lang {
 	return w.lang()
 }
 
-func (w *recorder) Header() http.Header { return w.header }
+func (w *recorder) SetShareAuthority(a devicewire.ShareAuthority) { w.shareAuthority = &a }
+func (w *recorder) Header() http.Header                           { return w.header }
 
 // Grow makes room for n more bytes of body: a route that knows its answer's size and writes it in pieces
 // (writeInboxItems) then fills one buffer instead of growing it step by step.

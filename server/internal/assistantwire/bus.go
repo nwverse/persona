@@ -1,5 +1,7 @@
 package assistantwire
 
+import "github.com/nwverse/persona/server/internal/devicewire"
+
 // ---- the bus ----
 
 // AssistantID is the bus identity the assistant connects as (a manager's token, hub/bustokens.go).
@@ -73,18 +75,21 @@ const (
 // HTTPRequest is http.request's params: an app's request on one of Routes, with an escaped URL path (header without
 // the hub's credentials and hop-by-hop headers, the asking device's role in RoleHeader; body as base64).
 type HTTPRequest struct {
-	Method string              `json:"method"`
-	Path   string              `json:"path"`
-	Query  string              `json:"query,omitempty"`
-	Header map[string][]string `json:"header,omitempty"`
-	Body   []byte              `json:"body,omitempty"`
+	Caller         *devicewire.Caller         `json:"caller,omitempty"`
+	ShareAuthority *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	Method         string                     `json:"method"`
+	Path           string                     `json:"path"`
+	Query          string                     `json:"query,omitempty"`
+	Header         map[string][]string        `json:"header,omitempty"`
+	Body           []byte                     `json:"body,omitempty"`
 }
 
 // HTTPResponse is http.request's answer, written back to the app unchanged.
 type HTTPResponse struct {
-	Status int                 `json:"status"`
-	Header map[string][]string `json:"header,omitempty"`
-	Body   []byte              `json:"body,omitempty"`
+	ShareAuthority *devicewire.ShareAuthority `json:"share_authority,omitempty"`
+	Status         int                        `json:"status"`
+	Header         map[string][]string        `json:"header,omitempty"`
+	Body           []byte                     `json:"body,omitempty"`
 }
 
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as

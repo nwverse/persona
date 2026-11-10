@@ -26,6 +26,18 @@ The web client may send `"replaces":"<this browser's previous device id>"`: once
 - Requests may send `Accept-Language: zh-Hans|en|ja` (the full list a browser sends is also accepted; the first entry is taken and falls back per [i18n.md](i18n.md)): human-readable text in that response (`error`, status descriptions) uses that language. `code` does not change; clients still branch on `code`. Without it, the user's language is used (see `client_hello.locale` in "Client capabilities and heartbeat").
 - Every response carries `X-Request-Id`. A request may send `X-Client-Request-Id` (4–32 hex characters / `-`), and the hub then uses it (`docs/server/server.md`, "Operations").
 
+### Agent session sharing
+
+The trusted ownership, catalog/selection/preview, one-time capability, tokenless
+management and independent anonymous HTTP contract is in
+[Agent session sharing](../server/agent-sharing.md). Manager hello capability
+`agent_sharing.v1` negotiates these routes; node capabilities `share_projection.v1`
+and `creation_receipt.v1` negotiate complete source projection and durable new-start
+receipts. Unlike ordinary legacy API routes, sharing management never accepts URL
+tokens or a default manager, and the public route never inherits login credentials.
+An explicitly configured independent HTTP **or** HTTPS origin is supported; HTTP
+requires the localized transport warning and explicit risk acknowledgement.
+
 ### Agent session archives
 
 Hubs advertising `agent_session_archives` in hello / health relay recoverable archives for Agent sessions to their owning manager: every runtime the lists show (Claude Code, Codex, the Codex App, Orca, Paseo, DSH, opencode, pi…), since the record is the manager's own. Persona's own conversations use their existing assistant API. Archiving does not move or delete the source transcript.

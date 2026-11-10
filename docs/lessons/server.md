@@ -1,5 +1,19 @@
 # Lessons: hub / node and networking
 
+## Sharing frontiers and migration lanes (#3604)
+
+- Migration numbers are global across the hub and manager sets, even though their
+  files live in separate directories. Inventory both sets in every worktree;
+  distinct filenames with the same numeric prefix still collide. Renumber only
+  unpublished migrations, never an applied migration or the guard.
+- Future publication needs an immutable enable-window frontier **and** a moving
+  verified scan checkpoint. Using the previous scan's EOF as the window boundary
+  drops a new pending turn when it completes on a later scan. Preserve first-seen
+  eligibility and partial-record EOF evidence while advancing the checkpoint.
+- A raw asynchronous start registration is not successful prompt delivery. Keep
+  the sanitized submission unknown until authoritative evidence resolves it; never
+  publish the original app input as delivered solely because a session ID returned.
+
 ## Bubblewrap masks are mount views, not path-denial rules (#2977)
 
 A default-allow agent profile cannot reuse the extension sandbox's whitelist: bind the host root read-write, add
