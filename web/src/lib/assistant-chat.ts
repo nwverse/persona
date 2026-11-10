@@ -5,6 +5,7 @@
 // The new-conversation page has its own pick under NEW_CONVERSATION, sent with POST /assistant/conversations.
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
+import { managedProvider } from "./compatibility";
 import { shellPath } from "./format";
 import { modelName } from "./launcher-models";
 
@@ -17,11 +18,26 @@ export interface AssistantLauncher {
   agent?: string;
   base_url?: string;
   assistant?: boolean;
+  source?: string;
 }
 
-/** Runs Claude Code, Codex, or an assistant-capable runtime (such as Antigravity): what the assistant can use. a compatible CLI is left out. */
+/** Runs Claude Code, Codex, or an assistant-capable runtime (such as Antigravity): what the assistant can use, as the hub's
+ *  `?purpose=assistant` list (assistant/launcher_mainchat.go). A compatible CLI is left out; so are a runtime's launcher that
+ *  doesn't say it runs the assistant (a Paseo provider is no shell command) and a managed Codex launcher (`personad launch`
+ *  runs codex past the app-server the assistant needs). */
 export function runsAssistant(l: AssistantLauncher): boolean {
-  return l.base_url !== "(traex)" && (Boolean(l.assistant) || !l.agent || l.agent === "claude" || l.agent === "codex" || l.agent === "agy");
+  if (l.assistant) return true;
+  if (l.base_url === "(traex)") return false;
+  const machine = !l.source || l.source === "zshrc" || l.source === "path" || l.source === "builtin";
+  if (!machine && !managedProvider(l.source)) return false;
+  if (managedProvider(l.source) && l.agent === "codex") return false;
+  return !l.agent || l.agent === "claude" || l.agent === "codex" || l.agent === "agy";
+}
+
+/** Whether the assistant's launcher list offers name: plain claude and an unknown or empty list always do (nothing is
+ *  dropped on a guess). A pick it doesn't offer would be refused, and a conversation left on one moves to the main chat's. */
+export function launcherOffered(list: AssistantLauncher[] | null | undefined, name?: string): boolean {
+  return !name || name === "claude" || !list?.length || list.some((l) => l.name === name);
 }
 
 /**

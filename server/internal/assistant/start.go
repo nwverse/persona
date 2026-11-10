@@ -753,6 +753,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		p["model"], picked = m, true
 	}
 	l, _ := p["launcher"].(string)
+	asked := l != "" // picked in the chat's menu for this message
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
 			l = c.Launcher // no launcher picked: the one this conversation runs
@@ -765,14 +766,18 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped) fails every turn:
-	// fall back to the assistant's launcher and its default.
+	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped), or a launcher that
+	// can't run the assistant (a Paseo provider, a managed Codex one: launcher_mainchat.go) fails every turn: fall back
+	// to the assistant's launcher and its default. One picked for this message that can't run it is refused, saying why.
 	if l != "" {
 		model, _ := p["model"].(string)
+		fit, refusal := s.mainChatFit(ctx, machine, l)
 		switch {
-		case !s.launcherAvailable(ctx, machine, l): // true when it can't be told
+		case fit == mainChatRefused && asked:
+			return refusal
+		case fit != mainChatFits:
 			l = s.launcherNow(ctx)
-			s.logf("[%s] %s: its launcher is gone, using %s", machine, short(sid), l)
+			s.logf("[%s] %s: its launcher can't run it any more, using %s", machine, short(sid), l)
 			p["launcher"] = l
 			delete(p, "model")
 		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):

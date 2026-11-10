@@ -36,5 +36,6 @@
   "other_model": "Other model…",
   "model_id_placeholder": "Model ID, e.g. vendor/model-name",
   "forget_typed": "Forget a typed model",
-  "forget_failed": "Couldn't forget “{id}”: {error}"
+  "forget_failed": "Couldn't forget “{id}”: {error}",
+  "pick_dropped": "{launcher} can’t run assistant chats, so this is back on the default launcher"
 }

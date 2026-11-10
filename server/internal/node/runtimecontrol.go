@@ -122,12 +122,9 @@ func (h *runtimeConn) setLaunchers(list []runtimeLauncher) {
 }
 
 // runtimeLauncherModels is launchers.models for a runtime's launcher: the models it said (none: an empty list, the
-// form offers no choice); false for a launcher no runtime offers, or the login shell's of that name.
+// form offers no choice); false for a launcher no runtime runs (runtimeOf).
 func (n *Node) runtimeLauncherModels(name string) (proto.LauncherModels, bool) {
-	if shellLauncherNames()[name] {
-		return proto.LauncherModels{}, false
-	}
-	h := n.runtimes.launcherRuntime(name)
+	h := n.runtimeOf(name)
 	if h == nil {
 		return proto.LauncherModels{}, false
 	}

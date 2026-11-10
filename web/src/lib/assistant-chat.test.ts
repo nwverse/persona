@@ -11,6 +11,16 @@ describe("the assistant's launchers", () => {
     expect(runsAssistant({ name: "dsh", agent: "dsh" })).toBe(false);
   });
 
+  it("leaves out a runtime's provider that doesn't run the assistant and a managed Codex launcher", () => {
+    expect(runsAssistant({ name: "cc-relay", source: "paseo" })).toBe(false);
+    expect(runsAssistant({ name: "agy-rt", source: "agy", agent: "agy", assistant: true })).toBe(true);
+    expect(runsAssistant({ name: "codex-gw", source: "jarvis", agent: "codex" })).toBe(false);
+    expect(runsAssistant({ name: "codex-gw", source: "persona", agent: "codex" })).toBe(false);
+    expect(runsAssistant({ name: "gw-claude", source: "jarvis" })).toBe(true);
+    expect(runsAssistant({ name: "codex", source: "zshrc", agent: "codex" })).toBe(true);
+    expect(runsAssistant({ name: "claude", source: "builtin" })).toBe(true);
+  });
+
   it("follows 设置 on the main conversation, the conversation's own elsewhere, a pick over both", () => {
     expect(effectiveLauncher({ isMain: true, session: "old", config: "claude-fast" })).toBe("claude-fast");
     expect(effectiveLauncher({ isMain: true, picked: "codex", session: "old", config: "claude-fast" })).toBe("codex");

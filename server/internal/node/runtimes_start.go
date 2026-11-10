@@ -8,9 +8,33 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// runtimeOf is the runtime that runs launcher name: the one offering it, unless the login shell or a launcher kept in
+// Persona has that name. Those run instead, as the pickers list them under the name: a managed launcher made from a
+// Paseo provider of the same name is started with personad launch, not through Paseo. nil when no runtime runs it.
+func (n *Node) runtimeOf(name string) *runtimeConn {
+	if shellLauncherNames()[name] {
+		return nil
+	}
+	if _, managed := n.managedLauncher(name); managed {
+		return nil
+	}
+	h := n.runtimes.launcherRuntime(name)
+	if h != nil && n.engineHostOff(h.id()) {
+		return nil
+	}
+	return h
+}
+
+// engineHostOff: runtime is an engine host (Paseo, Cindy) this machine does not enable. Its providers start nothing
+// here and are not listed (launchers.list), even while its runtime is connected.
+func (n *Node) engineHostOff(runtime string) bool {
+	_, engine := engineRuntimes[runtime]
+	return engine && !n.hostEnabled(runtime)
+}
+
 // runtimeStart starts a session in the runtime offering the launcher; nil when no runtime does.
 func (n *Node) runtimeStart(ctx context.Context, p runtimeStartParams) (*proto.Session, error, bool) {
-	h := n.runtimes.launcherRuntime(p.Launcher)
+	h := n.runtimeOf(p.Launcher)
 	if h == nil {
 		if m, ok := n.managedLauncher(p.Launcher); ok && m.AgentType() == "agy" {
 			h = n.runtimes.launcherRuntime("agy")

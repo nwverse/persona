@@ -223,3 +223,30 @@ func TestLaunchArgsEffort(t *testing.T) {
 		t.Fatalf("with launcher arg effort: got %v, want [claude --effort low]", withLauncherArgEffort)
 	}
 }
+
+// A managed Codex launcher's gateway reaches codex as a model provider of its own: Codex 0.16x reads neither
+// OPENAI_BASE_URL nor OPENAI_API_KEY for its built-in provider, and went to api.openai.com instead.
+func TestLaunchArgsCodexGateway(t *testing.T) {
+	env := []string{"OPENAI_BASE_URL=http://127.0.0.1:9/v1", "OPENAI_API_KEY=k"}
+	provider := []string{"-c", `model_provider="persona-launcher"`,
+		"-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses",env_key="OPENAI_API_KEY"}`}
+	got := launchArgv("codex", []string{"exec", "--ephemeral", "hi"}, nil, "", "gpt-x", env)
+	if want := append(append([]string{"codex"}, provider...), "-m", "gpt-x", "exec", "--ephemeral", "hi"); !slices.Equal(got, want) {
+		t.Fatalf("gateway: got %v, want %v", got, want)
+	}
+	keyless := launchArgv("codex", nil, nil, "", "", env[:1])
+	if want := []string{"codex", "-c", `model_provider="persona-launcher"`, "-c", `model_providers.persona-launcher={name="Persona launcher",base_url="http://127.0.0.1:9/v1",wire_api="responses"}`}; !slices.Equal(keyless, want) {
+		t.Fatalf("no key: got %v", keyless)
+	}
+	for _, own := range [][]string{{"-c", "model_provider=mine"}, {"--config=model_provider=\"mine\""}, {"-p", "work"}, {"--oss"}} {
+		if got := launchArgv("codex", own, nil, "", "", env); !slices.Equal(got, append([]string{"codex"}, own...)) {
+			t.Fatalf("own provider %v: got %v", own, got)
+		}
+	}
+	if got := launchArgv("codex", nil, []string{"-c", "model_provider=mine"}, "", "", env); !slices.Equal(got, []string{"codex", "-c", "model_provider=mine"}) {
+		t.Fatalf("the launcher's own provider: got %v", got)
+	}
+	if got := launchArgv("codex", nil, nil, "", "gpt-x", nil); !slices.Equal(got, []string{"codex", "-m", "gpt-x"}) {
+		t.Fatalf("no gateway: got %v", got)
+	}
+}
