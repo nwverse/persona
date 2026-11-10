@@ -150,6 +150,9 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 			return 0
 		}
 		fmt.Fprintf(stdout, "Paired %s. The node finds it on the same Wi-Fi by Bonjour; elsewhere set its address with: %s iphone address %s <host>\n", name, clitext.CommandName(), rec.UDID)
+		if rec.DeveloperMode != nil && !*rec.DeveloperMode {
+			fmt.Fprintln(stdout, developerModeHint)
+		}
 		return 0
 	case "forget":
 		if len(rest) != 1 {
@@ -294,6 +297,9 @@ func command(ctx context.Context, m *Manager, args []string, stdout, stderr io.W
 	return usage(fmt.Sprintf("unknown phone command %q", sub))
 }
 
+// developerModeHint is what to do when the phone's Developer Mode is off.
+const developerModeHint = "Developer Mode is off on the phone, so it can't be reached over the network: turn it on in Settings › Privacy & Security › Developer Mode, let the phone restart, then run pair again."
+
 // explain is err for people, with what to do about the session's own codes.
 func explain(err error) string {
 	switch Code(err) {
@@ -310,7 +316,7 @@ func explain(err error) string {
 	case "tss_failed":
 		return "Apple's signing server didn't personalize the image: check this computer's internet connection and try again. (" + err.Error() + ")"
 	case "developer_mode_off":
-		return "Developer Mode is off on the phone: turn it on in Settings › Privacy & Security › Developer Mode, then try again."
+		return developerModeHint
 	}
 	return err.Error()
 }

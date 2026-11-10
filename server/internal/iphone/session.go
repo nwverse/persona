@@ -317,6 +317,10 @@ func (s *session) connect(rec Record) (*conn, Endpoint, error) {
 	if lastErr == nil {
 		lastErr = &Error{Code: CodeUnreachable, Message: "the phone wasn't found on the network (it advertises itself over Bonjour on the same Wi-Fi; elsewhere set its address with personad iphone address)"}
 	}
+	if rec.DeveloperMode != nil && !*rec.DeveloperMode && Code(lastErr) == CodeUnreachable {
+		// With Developer Mode off the phone pairs, then neither advertises nor answers on the network: say why.
+		lastErr = &Error{Code: "developer_mode_off", Message: developerModeHint}
+	}
 	return nil, Endpoint{}, lastErr
 }
 

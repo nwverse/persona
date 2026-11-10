@@ -373,7 +373,7 @@ func (m *Manager) Pair(ctx context.Context, udid string, step func(string)) (Rec
 		cleanup()
 		return Record{}, err
 	}
-	rec := Record{UDID: udid, Name: info.Name, ProductType: info.ProductType, OSVersion: info.ProductVersion, PairedAt: m.now().UTC()}
+	rec := Record{UDID: udid, Name: info.Name, ProductType: info.ProductType, OSVersion: info.ProductVersion, DeveloperMode: info.DeveloperMode, PairedAt: m.now().UTC()}
 	if info.Transport == TransportSimulator {
 		rec.Transport = TransportSimulator
 	}
