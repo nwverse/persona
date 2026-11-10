@@ -47,7 +47,7 @@
     <string name="designsystem_decision_tool">需要你授权</string>
     <string name="designsystem_decision_plan">计划等你审批</string>
     <string name="designsystem_decision_question">在问你</string>
-    <string name="designsystem_decision_form">MCP 表单等你填写</string>
+    <string name="designsystem_decision_form">要你填几项</string>
     <string name="designsystem_decision_screen">终端等你处理</string>
     <string name="designsystem_decision_other">需要你</string>
     <string name="designsystem_decision_open_chat">打开对话</string>

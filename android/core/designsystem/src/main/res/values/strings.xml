@@ -54,7 +54,7 @@
     <string name="designsystem_decision_tool">Needs your permission</string>
     <string name="designsystem_decision_plan">Plan awaiting approval</string>
     <string name="designsystem_decision_question">Has a question</string>
-    <string name="designsystem_decision_form">MCP form needs you</string>
+    <string name="designsystem_decision_form">Needs a few answers</string>
     <string name="designsystem_decision_screen">Terminal needs you</string>
     <string name="designsystem_decision_other">Needs you</string>
     <string name="designsystem_decision_open_chat">Open chat</string>

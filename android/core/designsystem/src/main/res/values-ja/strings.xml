@@ -47,7 +47,7 @@
     <string name="designsystem_decision_tool">許可が必要です</string>
     <string name="designsystem_decision_plan">プランの承認待ち</string>
     <string name="designsystem_decision_question">質問があります</string>
-    <string name="designsystem_decision_form">MCPフォームの入力待ち</string>
+    <string name="designsystem_decision_form">いくつかの入力が必要です</string>
     <string name="designsystem_decision_screen">ターミナルで対応が必要です</string>
     <string name="designsystem_decision_other">要対応</string>
     <string name="designsystem_decision_open_chat">チャットを開く</string>
