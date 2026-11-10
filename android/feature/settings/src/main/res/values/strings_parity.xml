@@ -27,7 +27,7 @@
     <string name="settings_providers_fold">Fold</string>
     <string name="settings_providers_unfold">Show</string>
     <string name="settings_providers_hidden_note">Only hidden in Persona; ~/.zshrc is not changed. Open one to bring it back.</string>
-    <string name="settings_providers_list_sep">, </string>
+    <string name="settings_providers_list_sep">", "</string>
     <string name="settings_providers_api_tag">API</string>
     <string name="settings_providers_delete">Delete provider</string>
     <string name="settings_providers_delete_title">Delete “%1$s”?</string>

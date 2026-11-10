@@ -632,7 +632,13 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
-	s.noteProgress(ctx, t.ID, TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()})
+	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
+	if text != progress.Text {
+		progress.Detail = text
+	}
+	if s.noteProgress(ctx, t.ID, progress) {
+		s.goReportLine(t, progress.At, kind, text) // off the tool call: it answers right away
+	}
 	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
 	// the handoff; progress reports only update the card (the stream stays quiet).

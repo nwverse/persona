@@ -10,7 +10,8 @@ import (
 )
 
 // What the extensions are told of the todos (#5279, docs/extensions/extensions.md "Events"): todo.changed when a todo is created,
-// deleted, or its title, whether it is done, its supervisor (#3484) or its chat thread changes, and todo.decision for every decision written on
+// deleted, or its title, whether it is done, its supervisor (#3484) or its chat thread changes (each carries its kind:
+// concern for one of the owner's concerns, #3561), and todo.decision for every decision written on
 // one. The hub hands them only to the extensions that subscribed and were granted todos.read (extmgr/todo_events.go);
 // this side only says what happened, and nothing is sent while the hub carries no extensions (todoEventPublisher).
 
@@ -37,10 +38,11 @@ type todoMark struct {
 	bound      bool
 	thread     TodoThread
 	supervisor string
+	kind       string
 }
 
 func markOf(t *Todo) todoMark {
-	m := todoMark{title: t.Title, done: t.DoneAt != nil, failed: t.StartError != ""}
+	m := todoMark{title: t.Title, done: t.DoneAt != nil, failed: t.StartError != "", kind: t.Kind}
 	if t.Supervision != nil {
 		m.supervisor = t.Supervision.Supervisor
 	}
@@ -157,13 +159,13 @@ func (s *Service) todoChangedFlush() {
 		switch {
 		case there && !known:
 			s.todoQueue(todoNotice{assistantwire.EventTodoChanged, assistantwire.TodoChangedEvent{
-				ID: id, Title: now.title, Thread: now.eventThread(), Done: now.done, Supervisor: now.supervisor, What: assistantwire.TodoCreated}})
+				ID: id, Title: now.title, Thread: now.eventThread(), Done: now.done, Supervisor: now.supervisor, Kind: now.kind, What: assistantwire.TodoCreated}})
 		case there && now != was:
 			s.todoQueue(todoNotice{assistantwire.EventTodoChanged, assistantwire.TodoChangedEvent{
-				ID: id, Title: now.title, Thread: now.eventThread(), Done: now.done, Supervisor: now.supervisor, What: assistantwire.TodoUpdated}})
+				ID: id, Title: now.title, Thread: now.eventThread(), Done: now.done, Supervisor: now.supervisor, Kind: now.kind, What: assistantwire.TodoUpdated}})
 		case !there:
 			s.todoQueue(todoNotice{assistantwire.EventTodoChanged, assistantwire.TodoChangedEvent{
-				ID: id, Title: was.title, Thread: was.eventThread(), Done: was.done, Supervisor: was.supervisor, What: assistantwire.TodoDeleted}})
+				ID: id, Title: was.title, Thread: was.eventThread(), Done: was.done, Supervisor: was.supervisor, Kind: was.kind, What: assistantwire.TodoDeleted}})
 		}
 	}
 }
