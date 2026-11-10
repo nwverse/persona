@@ -9,6 +9,9 @@ final class QuickActionsTests: XCTestCase {
     private static let review = "macbook/a1f3c2d4-0000-4000-8000-000000000006"
     private static let reviewTitle = "检查 PR #42 的改动"
     private static let reviewMessage = "看一下 PR #42"
+    /// Another demo Agent's chat and its title.
+    private static let widget = "macbook/a1f3c2d4-0000-4000-8000-000000000001"
+    private static let widgetTitle = "给天气 App 加主屏幕小组件"
 
     override func setUp() {
         continueAfterFailure = false
@@ -49,10 +52,34 @@ final class QuickActionsTests: XCTestCase {
         pick(Self.reviewTitle, absent: "Agents")
         XCTAssertTrue(app.staticTexts[Self.reviewMessage].firstMatch.waitForExistence(timeout: 10), "the recent chat did not open")
         pick("收件箱")
-        XCTAssertTrue(app.navigationBars["收件箱"].firstMatch.waitForExistence(timeout: 5), "the inbox did not open")
+        // from an Agent's chat the inbox takes longer to come than from the shell's root
+        XCTAssertTrue(app.navigationBars["收件箱"].firstMatch.waitForExistence(timeout: 10), "the inbox did not open")
         pick("新对话")
         XCTAssertTrue(app.waitAgentsDrawn(false), "助手 is not in front: \(app.shellTrace)")
         XCTAssertTrue(app.navigationBars["收件箱"].firstMatch.waitForNonExistence(timeout: 5), "the inbox stayed over 助手: \(app.shellTrace)")
         XCTAssertTrue(app.descendants(matching: .any)["shell-composer-field"].firstMatch.waitForExistence(timeout: 5), "no composer")
+    }
+
+    /// The last two opened, newest first, above New Chat (#2191): two chats opened in turn, then the menu (its screenshot
+    /// is attached, "two recent").
+    @MainActor func testMenuListsTheLastTwoOpened() {
+        launch(opening: Self.widget)
+        sleep(4) // the chat comes on screen: it is recorded
+        app.terminate()
+        launch(opening: Self.review)
+        XCTAssertTrue(app.staticTexts[Self.reviewMessage].firstMatch.waitForExistence(timeout: 20), "the chat did not open")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCUIDevice.shared.press(.home)
+        let icon = springboard.icons["Persona"].firstMatch
+        XCTAssertTrue(icon.waitForExistence(timeout: 10), "no Persona icon on the home screen")
+        icon.press(forDuration: 1.5)
+        let item = { (title: String) in springboard.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch }
+        let newest = item(Self.reviewTitle), before = item(Self.widgetTitle), new = item("新对话")
+        XCTAssertTrue(newest.waitForExistence(timeout: 5) && before.exists && new.exists, "the menu lacks a recent conversation")
+        XCTAssertLessThan(newest.frame.minY, before.frame.minY, "the newest opened is not first")
+        XCTAssertLessThan(before.frame.minY, new.frame.minY, "the recent conversations are not above New Chat")
+        let shot = XCTAttachment(screenshot: springboard.screenshot())
+        shot.name = "two recent"; shot.lifetime = .keepAlways; add(shot)
+        XCUIDevice.shared.press(.home)
     }
 }
