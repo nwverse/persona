@@ -1,9 +1,9 @@
 // One knowledge entry (/kb/<kind>/<id>): its tile, name, badges, one line and tags, "Ask Persona"; then the places a
 // search found, the Agents on a project, the timeline, the profile, Moments, related entries by kind, code directories,
 // a chat's last 7 days and the folder (docs/apple/ios.md "Information architecture", knowledge base). "Tag" in the header.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, getToken, isAbort, subscribeCredentialOwner } from "../../lib/api";
-import { defaultManager, MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
+import { MANAGER_HEADER, shownManager, useChosenManager, useKnownDefault } from "../../lib/manager-choice";
 import { ConfirmedFacts } from "./ConfirmedFacts";
 import { RecordingMinutes } from "./RecordingMinutes";
 import { scrollBehavior } from "../../ui/stream/motion";
@@ -85,15 +85,22 @@ type EntryDetailProps = {
 
 export function EntryDetail(props: EntryDetailProps) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  const manager = useKnownDefault();
+  // the current assistant's entry (an address names no assistant: docs/assistant/managers.md "Clients"): a kept pick is
+  // known at once, the default once the roster says which it is
+  const picked = useChosenManager();
+  const knownDefault = useKnownDefault();
+  const manager = picked ?? knownDefault;
   if (!manager || !getToken()) return <Loading />;
-  // Retained detail and editors belong to the requested route and owner, including the default manager.
+  // Retained detail and editors belong to the requested route, owner and assistant: whatever is read and written here
+  // (the tags, confirmed facts, relationships, minutes, a chat's days, a post) names that one assistant, and another
+  // made current opens it again.
   return <OwnedEntryDetail key={JSON.stringify([props.kind, props.id, owner, manager])} {...props} owner={owner} manager={manager} />;
 }
 
 function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack, onOpen, onSaved, owner, manager }: EntryDetailProps & { owner: string; manager: string }) {
   const [token] = useState(getToken);
-  const current = useCallback(() => credentialOwner() === owner && defaultManager() === manager, [owner, manager]);
+  const current = useCallback(() => credentialOwner() === owner && shownManager() === manager, [owner, manager]);
+  const auth = useMemo(() => ({ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }), [token, owner, manager]);
   const request = useRef(0);
   const [resp, setResp] = useState<KBDetailResponse | null>(null);
   const [error, setError] = useState("");
@@ -127,9 +134,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
     const version = ++request.current;
     const valid = () => current() && version === request.current && !signal?.aborted;
     try {
-      const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, {
-        signal, token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager },
-      });
+      const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, { signal, ...auth });
       if (!valid()) return false;
       // The server canonicalizes source IDs (including recording UUID case); the request owns this response.
       if (r.detail.kind !== kind) throw new Error(t("knowledge-confirmedfacts.entry_changed"));
@@ -142,7 +147,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
       if (!isAbort(err)) setError(errorText(err));
       throw err;
     }
-  }, [kind, id, query, token, owner, manager, current]);
+  }, [kind, id, query, auth, current]);
 
   useEffect(() => {
     setError("");
@@ -265,7 +270,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
               {rec && <RecordingMinutes
                 detail={d}
                 rec={rec}
-                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                auth={auth}
                 current={current}
                 refresh={load}
                 onSaved={onSaved}
@@ -322,7 +327,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
                 kind={kind}
                 id={id}
                 value={typeof d.meta?.pinned === "string" ? d.meta.pinned : ""}
-                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                auth={auth}
                 current={current}
                 refresh={load}
                 onSaved={onSaved}
@@ -386,7 +391,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
               <Relationships
                 detail={d}
                 name={e.name}
-                auth={{ token, tokenOwner: owner, headers: { [MANAGER_HEADER]: manager } }}
+                auth={auth}
                 current={current}
                 onOpen={onOpen}
                 onRefreshed={(r) => {
@@ -455,9 +460,9 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
         </div>
       </div>
 
-      {d && <TagEditor entry={e} open={editing} onClose={() => setEditing(false)} onSaved={onSaved} />}
-      {d?.kind === "chats" && <DayDialog chat={d.id} chatName={e.name} day={day?.day ?? null} focus={day?.focus} query={day?.query} onClose={() => setDay(null)} />}
-      <MomentDialog moment={moment} onClose={() => setMoment(null)} />
+      {d && <TagEditor entry={e} auth={auth} open={editing} onClose={() => setEditing(false)} onSaved={onSaved} />}
+      {d?.kind === "chats" && <DayDialog chat={d.id} chatName={e.name} auth={auth} day={day?.day ?? null} focus={day?.focus} query={day?.query} onClose={() => setDay(null)} />}
+      <MomentDialog moment={moment} auth={auth} onClose={() => setMoment(null)} />
     </div>
   );
 }
