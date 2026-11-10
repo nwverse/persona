@@ -35,6 +35,9 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
     var system: MachineSystem?
     var engine: MachineEngine = .herdr
     var engines: [DetectedEngine] = []
+    /// The set of engine hosts the computer runs (docs/integrations/engines.md "Host sets"); nil from a hub before sets.
+    /// `[]` is no terminal engine: `engine` still says herdr then, for older clients.
+    var engineHosts: [String]? = nil
     /// Operating it through Cua Driver; nil while the hub's plugin cua is off or it is not a Mac.
     var computer: MachineComputer? = nil
     /// Its ego lite for the assistant; nil while the hub's plugin ego is off or it is not a Mac.
@@ -64,6 +67,7 @@ nonisolated struct Machine: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, icon, online, error, hostname, os, arch, home, system, engine, engines, computer, browser, clipboard, route, trust, manager
+        case engineHosts = "engine_hosts"
         case errorCode = "error_code"
         case sshHost = "ssh_host", herdrVersion = "herdr_version", claudeVersion = "claude_version", lastSeen = "last_seen"
         case nodeMismatch = "node_mismatch", nodeVersion = "node_version", deploying, deployError = "deploy_error"
@@ -109,6 +113,7 @@ extension Machine {
         system = try c.decodeIfPresent(MachineSystem.self, forKey: .system)
         engine = try c.decodeIfPresent(MachineEngine.self, forKey: .engine) ?? .herdr
         engines = try c.decodeIfPresent([DetectedEngine].self, forKey: .engines) ?? []
+        engineHosts = try? c.decodeIfPresent([String].self, forKey: .engineHosts)
         computer = try? c.decodeIfPresent(MachineComputer.self, forKey: .computer)
         browser = try? c.decodeIfPresent(MachineBrowser.self, forKey: .browser)
         clipboard = try? c.decodeIfPresent(MachineClipboard.self, forKey: .clipboard)
@@ -202,6 +207,9 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
     static let paseo = Self(rawValue: "paseo")
     /// Cindy's agents (docs/integrations/engines.md): no terminal; the node runs a bridge to Cindy.
     static let cindy = Self(rawValue: "cindy")
+    /// No terminal engine: the empty host set (docs/integrations/engines.md "Host sets"), for a computer whose sessions
+    /// are only the desktop apps' (#3302). Not a hub engine id: saved as `{"hosts": []}`, and not in `allCases`.
+    static let noEngine = Self(rawValue: "none")
     static let allCases: [Self] = [.herdr, .herdrApp, .herdrBoth, .orca, .paseo, .cindy]
     var id: String { rawValue }
     var name: String {
@@ -212,6 +220,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .orca: "Orca"
         case .paseo: "Paseo"
         case .cindy: "Cindy"
+        case .noEngine: String(localized: "No Terminal Engine")
         default: rawValue
         }
     }
@@ -223,6 +232,7 @@ nonisolated struct MachineEngine: RawRepresentable, Codable, Hashable, CaseItera
         case .orca: String(localized: "Terminals in Orca")
         case .paseo: String(localized: "Agents in Paseo")
         case .cindy: String(localized: "Agents in Cindy")
+        case .noEngine: String(localized: "Sessions of the desktop apps only")
         default: nil
         }
     }
@@ -436,7 +446,9 @@ nonisolated struct ComputerJob: Codable, Hashable, Sendable {
 }
 
 extension Machine {
-    var engineName: String { engines.first { $0.id == engine.rawValue }?.name ?? engine.name }
+    var engineName: String {
+        engineHosts?.isEmpty == true ? MachineEngine.noEngine.name : engines.first { $0.id == engine.rawValue }?.name ?? engine.name
+    }
 }
 
 nonisolated struct Launcher: Codable, Identifiable, Hashable, Sendable {
@@ -747,6 +759,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// hub's `background_waiting`, #6045): set only with `state` working, never while a subagent or workflow runs. False
     /// from older hubs. The rule is `waitsInBackground`.
     var backgroundWaiting: Bool = false
+    /// Its turn has ended while background commands, subagents, Monitors or workflows it started still run (the hub's
+    /// `background_working`, #2935): set only with `state` working. False from older hubs. A task counts it as waiting
+    /// (`waitsToBeWoken`, #3274).
+    var backgroundWorking: Bool = false
     /// What it is doing when its latest step is a tool call no words came after (「在跑测试」「在读 tasks.go」), and since
     /// when; nil once it writes again. The hub's `activity` / `activity_at` (docs/protocol/protocol.md); older hubs send neither.
     var activity: String? = nil
@@ -813,6 +829,20 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
     var waitsInBackground: Bool { state == .working && backgroundWaiting }
+    /// Its turn ended, yet something brings it back, so its task waits rather than stopped (#3274; the hub's agentWaits):
+    /// only its background work runs and will report back, or the hub waits out another agent, a deploy / CI / a time,
+    /// or a moment's model failure for it and wakes it (work blocked on anything but the user).
+    var waitsToBeWoken: Bool {
+        if state == .working { return backgroundWorking || backgroundWaiting }
+        guard state != .needsYou, state != .unread, let work, work.phase == "blocked" else { return false }
+        return work.on == "agent" || work.on == "external" || work.on == "transient"
+    }
+    /// What it waits for, in its own words, while it waits to be woken.
+    var waitLine: String? {
+        guard waitsToBeWoken, let work, work.phase == "blocked" else { return nil }
+        let line = (work.line ?? work.wait ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return line.isEmpty ? nil : line
+    }
     /// The state counts and the quick filters go by: one that only waits in the background is counted with the quiet
     /// ones, not as Working (#6045).
     var countedState: AgentState { waitsInBackground ? .idle : state }
@@ -933,7 +963,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
              assistantSpace = "space",
              spaceKind = "space_kind", spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
-             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
+             updatedAt = "updated_at", lastText = "last_text", asks, awaitsReply = "awaits_reply", backgroundWaiting = "background_waiting", backgroundWorking = "background_working", activity, activityAt = "activity_at", pendingInteractions = "pending_interactions", rev, suggestion,
              starting, startError = "start_error", startErrorCode = "start_error_code", startErrorArgs = "start_error_args", todo, quiet, hubGroup = "app_hub_group",
              attentionReason = "attention_reason", failureReason = "failure_reason",
              turnError = "turn_error", turnErrorKind = "turn_error_kind", turnErrorCode = "turn_error_code", externalURL = "external_url", channels, origin, compaction, work,
@@ -1017,6 +1047,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         asks = (try? c.decodeIfPresent(String.self, forKey: .asks)).flatMap { $0 } // an odd one never drops the session
         awaitsReply = (try? c.decodeIfPresent(Bool.self, forKey: .awaitsReply)).flatMap { $0 } ?? false
         backgroundWaiting = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundWaiting)).flatMap { $0 } ?? false
+        backgroundWorking = (try? c.decodeIfPresent(Bool.self, forKey: .backgroundWorking)).flatMap { $0 } ?? false
         activity = try c.decodeIfPresent(String.self, forKey: .activity)
         activityAt = try c.decodeIfPresent(Date.self, forKey: .activityAt)
         pendingInteractions = try c.decodeIfPresent(Int.self, forKey: .pendingInteractions) ?? 0

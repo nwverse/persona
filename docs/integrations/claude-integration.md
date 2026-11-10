@@ -152,6 +152,12 @@ Test results:
 ### Self-check: `personad node doctor`
 
 Hooks, MCP, and skill-plugin files are generated at node startup; damage gives no warning (hook cannot connect to node and falls back to TUI; see the deleted `node.sock` entry in `docs/lessons/server.md`).
+
+The generated `mcp.json` retains both built-in compatibility namespaces: ordinary Agent starts and resumes share this
+file, and generation precedes the hub handshake. Doctor checks and repairs that same configuration. The
+`persona_contracts_v1` optimization applies to per-process assistant configurations instead ("Headless assistant"
+below; [rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), "MCP namespace / tools").
+
 `personad node doctor [--json] [--fix]` performs read-only checks on this computer (`node/doctor.go`). One line per check (`正常｜名字：发现了什么；怎么办`—“OK | Name: finding; remedy”), same format as hub doctor; `正常` / `注意` / `有问题` (“OK” / “Attention” / “Problem”) correspond to JSON `ok` / `warn` / `fail`. Any fail yields a nonzero exit code (hub doctor has no `--json` and does not use exit status):
 
 | Check | Content | Status |
@@ -356,6 +362,7 @@ Assistant does not enter herdr: node directly launches `zsh -ic '<launcher> "$@"
 - `stream_event` `content_block_delta/text_delta` supplies word-by-word output → WS delta; result ends the turn. Structured messages still read from transcript.
 - Hooks trigger normally, but **AskUserQuestion is unavailable in -p mode** (No such tool available … nobody in this session can answer it; PreToolUse cannot run). Assistant uses MCP `ask_user` (`docs/assistant/assistant.md`).
 - Per-process inline MCP JSON (`--mcp-config '{…}'`), carrying `PERSONA_ASSISTANT=1` and PERSONA_SESSION_ID. Process env `ENABLE_TOOL_SEARCH=false` (few, frequently used tools, no ToolSearch); `--append-system-prompt` is hub's live snapshot.
+- New assistant and guest sessions register only the `persona` MCP namespace when the hub advertises `persona_contracts_v1`; old or unknown hubs and resumed sessions keep both compatibility namespaces. The allow list uses the same selection. Agent SDK assistants follow this policy too; historical tool-name readers continue accepting both names ([rolling-upgrade-compatibility.md](../protocol/rolling-upgrade-compatibility.md), "MCP namespace / tools").
 - Spare: Claude waits on stdin for first message, so can launch ahead; new chats use its session ID.
 - Launcher change kills process and resumes with new launcher. Idle 20-minute processes are reclaimed; next message resumes automatically.
 - Interrupt: no stdin interrupt in -p; terminate process, resume next message.
