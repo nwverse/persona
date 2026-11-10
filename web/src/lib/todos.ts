@@ -72,7 +72,9 @@ export interface Todo {
   /** How far the work got (`plan` / `develop` / `review` / `merge` / `deploy` / `verify`, #2776); unset on hubs that
    * don't send it, and unknown values draw nothing (lib/todo-stage.ts). */
   stage?: string;
-  /** The pull request the work is in, when the hub knows one (#2776). */
+  /** "code" uses the six stages; "general" hides them. Unset or unknown kinds keep the existing stage behavior. */
+  stage_kind?: string;
+  /** The pull or merge request the work is in, when the hub knows one. */
   pr_url?: string;
   /** How far its finished work went out; short of live, where it is held and who can unhold it (docs/assistant/todos.md "Delivery"). */
   delivery?: TodoDelivery;
