@@ -1,5 +1,7 @@
 package persona.feature.settings
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import persona.core.navigation.SettingsPage
 
 /** Stable page names shared by standalone settings and the navigation shell. */
@@ -60,4 +62,31 @@ fun isAssistantSettingsDestination(key: androidx.navigation3.runtime.NavKey): Bo
     is persona.core.navigation.ExtensionCatalogRoute, persona.core.navigation.ExtensionMarketsRoute, is persona.core.navigation.ConnectorRoute,
     is persona.core.navigation.ChannelRoute -> true
     else -> false
+}
+
+/**
+ * What a switch of assistant does to a back stack (the Settings sheet's, and each tab's, which a link or a readiness card
+ * may have pushed settings onto): everything from its first page of the current assistant's settings on is closed, so no
+ * page shows one assistant's settings, or sends what it holds, once another is current. Its root stays.
+ * Whether anything was closed.
+ */
+fun closeAssistantSettings(stack: MutableList<androidx.navigation3.runtime.NavKey>): Boolean {
+    val first = stack.indexOfFirst(::isAssistantSettingsDestination)
+    if (first <= 0) return false
+    while (stack.size > first) stack.removeAt(stack.lastIndex)
+    return true
+}
+
+/**
+ * [closeAssistantSettings] on each of [stacks] whenever [assistantId] (the current assistant) changes; not when first
+ * shown. The shell's: the Settings sheet's stack and each tab's.
+ */
+@androidx.compose.runtime.Composable
+fun CloseAssistantSettingsOnSwitch(assistantId: String, stacks: () -> List<MutableList<androidx.navigation3.runtime.NavKey>>) {
+    var shown by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(assistantId) }
+    androidx.compose.runtime.LaunchedEffect(assistantId) {
+        if (shown == assistantId) return@LaunchedEffect
+        shown = assistantId
+        stacks().forEach { closeAssistantSettings(it) }
+    }
 }

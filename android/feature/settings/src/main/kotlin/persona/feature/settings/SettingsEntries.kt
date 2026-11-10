@@ -116,8 +116,10 @@ internal fun SettingsServices.bound(): SettingsServices {
  * (older, one assistant) gets the requests it always got.
  */
 internal fun SettingsServices.forAssistant(assistant: persona.core.contracts.api.CurrentAssistant): SettingsServices {
-    if (assistant.roster == null) return this
+    // The default assistant's (one assistant too) and an older hub's (no roster) name none: the requests they always sent.
+    val roster = assistant.roster ?: return this
     val id = assistant.id
+    if (id.isBlank() || id == roster.defaultManagerId) return this
     return copy(
         providers = providers?.forManager(id),
         models = models?.forManager(id),
@@ -126,7 +128,8 @@ internal fun SettingsServices.forAssistant(assistant: persona.core.contracts.api
         channels = channels?.forManager(id),
         feishuBot = feishuBot?.forManager(id),
         sent = sent?.forManager(id),
-        extensions = extensions?.pinned(ManagerPins.of(listOf(listOf("extensions"), listOf("plugins")), id)),
+        // Its extensions and their source subscriptions (`/api/v1/subscriptions…`, answered by its own extension manager).
+        extensions = extensions?.pinned(ManagerPins.of(listOf(listOf("extensions"), listOf("plugins"), listOf("subscriptions")), id)),
     )
 }
 
@@ -134,5 +137,5 @@ internal fun SettingsServices.forAssistant(assistant: persona.core.contracts.api
 @Composable
 internal fun SettingsServices.forCurrentAssistant(): SettingsServices {
     val assistant = persona.core.designsystem.currentAssistant()
-    return remember(this, assistant.id, assistant.roster != null) { forAssistant(assistant) }
+    return remember(this, assistant.id, assistant.roster?.defaultManagerId, assistant.roster != null) { forAssistant(assistant) }
 }

@@ -86,6 +86,8 @@ private fun SettingsContent(
     // The first group's pages read and write the current assistant's settings alone (docs/assistant/managers.md "Clients").
     val assistant = currentAssistant()
     val mine = services.forCurrentAssistant()
+    // The assistant the first group's pages are of, for the pages they open (null: a hub without a roster, the default's).
+    val owner = assistant.takeIf { it.roster != null }?.id
     // A switch while one of its pages is open here goes back to the list: no page shows one assistant's settings once
     // another is current (the shell closes such pages it opened itself).
     var shownFor by rememberSaveable(initialPage) { mutableStateOf(assistant.id) }
@@ -124,10 +126,11 @@ private fun SettingsContent(
     }
     val extensionService = mine.extensions.takeUnless { services.demo }
     val extensionsAvailable by remember(extensionService) { extensionService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
-    var extensionSummary by remember { mutableStateOf<String?>(null) }
+    // Each assistant's own: a switch never shows the last one's count, not even while the new one's is read (or fails).
+    var extensionSummary by remember(assistant.id) { mutableStateOf<String?>(null) }
     val connectorsService = mine.connectors.takeUnless { services.demo }
-    var mailAccounts by remember { mutableStateOf<List<MailAccount>?>(null) }
-    var larkStatus by remember { mutableStateOf<LarkStatus?>(null) }
+    var mailAccounts by remember(assistant.id) { mutableStateOf<List<MailAccount>?>(null) }
+    var larkStatus by remember(assistant.id) { mutableStateOf<LarkStatus?>(null) }
     val larkChats = LocalLarkFeatures.current.chats
     val translationPrefs = services.translation?.prefs?.collectAsState()?.value
     val translationValue = when {
@@ -135,7 +138,7 @@ private fun SettingsContent(
         translationPrefs.enabled -> TranslationPrefs.languageName(translationPrefs.target)
         else -> stringResource(R.string.settings_off)
     }
-    var hubConnectors by remember { mutableStateOf<List<HubConnector>>(emptyList()) }
+    var hubConnectors by remember(assistant.id) { mutableStateOf<List<HubConnector>>(emptyList()) }
     val phoneOn = remember(page) {
         listOf(
             Manifest.permission.READ_CONTACTS,
@@ -160,7 +163,7 @@ private fun SettingsContent(
     }
     val channelService = mine.channels.takeUnless { services.demo }
     val channelsAvailable by remember(channelService) { channelService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
-    var channelList by remember { mutableStateOf<List<HubChannel>?>(null) }
+    var channelList by remember(assistant.id) { mutableStateOf<List<HubChannel>?>(null) }
     // Like "Extensions"': read again whenever the settings list is shown or the hub reconnects.
     LaunchedEffect(channelService, channelsAvailable, page, connection, assistant.id) {
         if (channelService == null || !channelsAvailable || page != "settings" || connection != ConnectionState.Online) return@LaunchedEffect
@@ -276,7 +279,9 @@ private fun SettingsContent(
             }
         }
     }
-    when (page) {
+    // The first group's pages while the current assistant is offline (several assistants): what it has can't be read or
+    // changed now, so they say so, as its inbox and to-dos do, rather than look empty or failed (docs/assistant/managers.md).
+    if (assistant.offline != null && isAssistantSettingsPage(page)) AssistantOfflinePage(page, assistant, back) else when (page) {
         "connectors" -> JListPage(title = stringResource(R.string.settings_section_connectors), onBack = back, content = connectorItems)
         "pair" -> PairingScreen(services.pairing, services.sessions, onReady = back,
             onDiagnostics = { open(SettingsPage.Diagnostics) }, diagnostics = services.diagnostics, onBack = back,
@@ -297,14 +302,15 @@ private fun SettingsContent(
                 manager = extensionManager,
                 machines = services.sessions.machines,
                 launchers = services.providers.takeUnless { services.demo }?.let { p -> { p.launchers() } },
-                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext)) } }) }
+                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext, manager = extensionManager)) } }) }
             ?: ExtensionsPage(mine.extensions.takeUnless { services.demo }, back,
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
                 onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } })
         "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate) }
             ?: ChannelsPage(channelService, back,
                 onChannel = { id -> onNavigate?.invoke(persona.core.navigation.ChannelRoute(id)) ?: run { channel = id } },
-                onMarketExtension = onNavigate?.let { navigate -> { market, id -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, id)) } })
+                // Installed for the current assistant, whose channels these are.
+                onMarketExtension = onNavigate?.let { navigate -> { market, id -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, id, manager = owner)) } })
         "ready", "notify" -> {
             val preferences: LazyListScope.() -> Unit =
                 if (page == "notify") NotificationPreferences(deviceController, paired && services.deviceSettings != null,
@@ -376,15 +382,16 @@ private fun SettingsContent(
         }
         "translate" -> TranslationSettingsPage(services.translation.takeUnless { services.demo }, services.models.takeUnless { services.demo },
             services.connectors.takeUnless { services.demo }, onBack = back, pickingAtStart = TranslationPreview.take(),
-            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("translate")) ?: run { purpose = "translate"; page = "models" } })
+            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("translate")) ?: run { purposeManager = null; purpose = "translate"; page = "models" } })
         "triage" -> TriageSettingsPage(mine.triage.takeUnless { services.demo }, mine.models.takeUnless { services.demo }, onBack = back,
-            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage", assistant.id)) ?: run {
-                purposeManager = assistant.id; purpose = "agent.triage"; page = "models" } })
+            onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage", owner)) ?: run {
+                purposeManager = owner; purpose = "agent.triage"; page = "models" } })
         "mail" -> MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
         "feishu-bot" -> FeishuBotPage(mine.feishuBot.takeUnless { services.demo }, back)
         "mail-add" -> AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
         "feishu" -> FeishuConnectorPage(connectorsService, onBack = back, onAgentModel = {
-            onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("lark.agent")) ?: run { purpose = "lark.agent"; page = "models" }
+            // The model of the current assistant's agent there, as the page's connector is that one's.
+            onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("lark.agent", owner)) ?: run { purposeManager = owner; purpose = "lark.agent"; page = "models" }
         })
         // "Messages" has its own page, as on iOS: "Hand to Persona", its steps on the Mac, "Conversations" (MessagesConnector.kt).
         else -> if (page == "connector/imessage") {
@@ -421,7 +428,8 @@ private fun SettingsContent(
                 AssistantSwitcher(services.managers.takeUnless { services.demo }, LocalAssistantWaiting.current,
                     hubOnline = connection == ConnectionState.Online || connection == ConnectionState.Updating,
                     onManage = { open(SettingsPage.Managers) },
-                    fallback = { JAssistantSettingsHeader(stringResource(R.string.settings_group_assistant, LocalPersonaName.current), null, false,
+                    // No roster (an older hub, demo mode): no assistants to name or switch, so a plain heading and no footer.
+                    fallback = { JAssistantSettingsHeader(stringResource(persona.core.designsystem.R.string.designsystem_brand_persona), null, false,
                         switchLabel, onSwitch = null) },
                     head = { current, isDefault, _, toggle ->
                         JAssistantSettingsHeader(stringResource(R.string.settings_group_assistant, current.shownName), current, isDefault,
@@ -461,8 +469,10 @@ private fun SettingsContent(
                 row(SettingsPage.ClaudeCode, R.string.settings_row_claude, PhIcons.TerminalWindow, R.string.settings_row_claude_subtitle),
                 row(SettingsPage.Codex, R.string.settings_row_codex, PhIcons.Code, R.string.settings_row_codex_subtitle),
             ))
-            item("assistant-footer") {
-                SettingsCaption(stringResource(R.string.settings_group_assistant_footer, assistant.manager?.shownName ?: LocalPersonaName.current),
+            // Its footer names the assistant its head does; without a roster there is none to name.
+            val named = assistant.manager?.takeIf { services.managers != null && !services.demo && assistant.roster?.installed?.isNotEmpty() == true }
+            if (named != null) item("assistant-footer") {
+                SettingsCaption(stringResource(R.string.settings_group_assistant_footer, named.shownName),
                     Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
             }
             // 2. This device's.
@@ -470,9 +480,6 @@ private fun SettingsContent(
             val desktopRow = desktops.isNotEmpty() && !services.demo
             group(listOfNotNull(
                 row(SettingsPage.Appearance, R.string.settings_style_title, PhIcons.SquaresFour) { PersonaTheme.style.label },
-                row(SettingsPage.Persona, R.string.settings_avatar_title, PhIcons.Robot) {
-                    if (LocalPersonaPack.current != null) LocalPersonaName.current else LocalPersonaDesign.current.title
-                },
                 custom { position ->
                     JGroupItem(position) { LanguageRow(selected = detailKey == SettingsPageRoute(SettingsPage.Language), onClick = { open(SettingsPage.Language) }) }
                 },
@@ -557,6 +564,10 @@ private fun SettingsContent(
                     }
                 },
                 row(SettingsPage.Pairing, R.string.settings_row_pairing, PhIcons.QrCode, R.string.settings_row_pairing_subtitle),
+                // The avatar is the hub's (`/api/v1/looks`: every device shows the one picked, whichever assistant is current).
+                row(SettingsPage.Persona, R.string.settings_avatar_title, PhIcons.Robot) {
+                    if (LocalPersonaPack.current != null) LocalPersonaName.current else LocalPersonaDesign.current.title
+                },
                 row(SettingsPage.Devices, R.string.settings_devices_title, PhIcons.DeviceMobile, R.string.settings_row_devices_subtitle),
                 row(SettingsPage.Diagnostics, R.string.settings_diag_title, PhIcons.Gauge, R.string.settings_row_diag_subtitle),
             ))
@@ -817,4 +828,24 @@ private fun OnboardingContent(services: SettingsServices, onDone: () -> Unit) {
         DiagnosticsScreen(services, onBack = { diagnostics = false })
     } else ReadinessScreen(services.sessions, services.diagnostics, notificationsOnly = false, showTitle = false,
         onDiagnostics = { diagnostics = true }, onDone = onDone, onBack = onDone, readiness = services.readiness.takeUnless { services.demo })
+}
+
+/** One of the first group's pages ([page]) while [assistant] is offline: its title and [JAssistantOffline]. */
+@Composable
+private fun AssistantOfflinePage(page: String, assistant: persona.core.contracts.api.CurrentAssistant, onBack: () -> Unit) {
+    val title = when (settingsPageFromInitialPage(page)) {
+        SettingsPage.Providers -> R.string.settings_providers_title
+        SettingsPage.ModelConfig -> R.string.settings_row_models
+        SettingsPage.Triage -> R.string.settings_triage_title
+        SettingsPage.Extensions -> R.string.settings_section_extensions
+        SettingsPage.Channels -> R.string.settings_src_channels_title
+        SettingsPage.ClaudeCode -> R.string.settings_row_claude
+        SettingsPage.Codex -> R.string.settings_row_codex
+        SettingsPage.Mail -> R.string.settings_src_mail_title
+        SettingsPage.Feishu -> R.string.settings_src_lark_title
+        SettingsPage.FeishuBot -> R.string.settings_feishu_bot_title
+        SettingsPage.Sent -> R.string.settings_sent_title
+        else -> R.string.settings_section_connectors
+    }
+    JListPage(title = stringResource(title), onBack = onBack) { item("offline") { JAssistantOffline(assistant) } }
 }

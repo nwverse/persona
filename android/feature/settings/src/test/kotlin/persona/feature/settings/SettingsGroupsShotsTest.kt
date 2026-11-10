@@ -16,6 +16,9 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -116,13 +119,14 @@ class SettingsGroupsShotsTest {
 
     private fun top(text: String) = rule.onAllNodesWithText(text)[0].fetchSemanticsNode().boundsInRoot.top
 
-    private fun show(style: () -> AppStyle = { AppStyle.Glass }, dark: () -> Boolean = { false }) {
+    private fun show(style: () -> AppStyle = { AppStyle.Glass }, dark: () -> Boolean = { false }, roster: ManagerRoster? = this.roster,
+                     page: String = "settings") {
         val services = services()
         rule.setContent {
             PersonaTheme(darkTheme = dark(), reduceMotion = true, style = style()) {
                 CompositionLocalProvider(LocalManagerRoster provides roster, LocalAssistantWaiting provides mapOf("m-3fa21c" to 3)) {
                     Box(Modifier.testTag("shot").fillMaxSize().background(PersonaTheme.palette.background)) {
-                        SettingsScreen(services, onNavigate = {})
+                        SettingsScreen(services, initialPage = page, onNavigate = {})
                     }
                 }
             }
@@ -145,7 +149,7 @@ class SettingsGroupsShotsTest {
         val device = listOf("这台设备", "界面风格", "通知", "翻译", "存储空间")
         device.zipWithNext().forEach { (a, b) -> assertTrue("$a before $b", top(a) < top(b)) }
         assertTrue(top("存储空间") < top("Hub"))
-        val hub = listOf("Hub", "hub", "hub 版本", "助手", "配对")
+        val hub = listOf("Hub", "hub", "hub 版本", "助手", "配对", "形象", "设备")
         hub.zipWithNext().forEach { (a, b) -> assertTrue("$a before $b", top(a) < top(b)) }
         rule.onNodeWithText("这两组和当前是哪个助手无关。").assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
@@ -195,6 +199,45 @@ class SettingsGroupsShotsTest {
         rule.runOnIdle { AssistantManagerChoice.pick(null) }
         rule.waitForIdle()
         assertEquals(0, rule.onAllNodesWithText("助手 的设置").fetchSemanticsNodes().size)
+    }
+
+    /** One assistant: the group still names it, with its monogram, Switch (its roster: it, New assistant, Manage assistants…) and footer. */
+    @Test fun oneAssistantKeepsItsGroupAndSwitch() {
+        AssistantManagerChoice.choose("hub", null, "assistant")
+        show(roster = ManagerRoster(ManagersSample.filter { it.id == "assistant" }, "assistant"))
+        rule.onNodeWithText("助手 的设置").assertExists()
+        rule.onNodeWithText("只显示「助手」自己的内容。要改别的助手，先切换过去。").assertExists()
+        capture("settings-one-glass-light")
+        rule.onNode(hasText("切换") and hasClickAction()).performSemanticsAction(SemanticsActions.OnClick)
+        rule.onNodeWithText("新建助手").assertExists()
+        rule.onNodeWithText("管理助手…").assertExists()
+        capture("settings-one-switch-open-glass-light")
+    }
+
+    /** No roster (an older hub): no assistant to name, so a plain heading, no Switch and no footer. */
+    @Test fun withoutARosterThereIsNoAssistantToName() {
+        show(roster = null)
+        assertEquals(0, rule.onAllNodesWithText("切换").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("的设置", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("只显示", substring = true).fetchSemanticsNodes().size)
+        assertTrue(top("Persona") < top("模型供应商"))
+        rule.onNodeWithText("这两组和当前是哪个助手无关。").assertExists()
+    }
+
+    /** The current assistant offline: its pages say so, as its inbox does, instead of looking empty. */
+    @Test fun anOfflineAssistantsPagesSayItIsOffline() {
+        AssistantManagerChoice.choose("hub", "m-8b04d2", "assistant")
+        var dark by mutableStateOf(false)
+        show(dark = { dark }, page = "connectors")
+        rule.onNodeWithText("家里 离线").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("这台手机").fetchSemanticsNodes().size)
+        // A page's own bar is blurred glass, which only the compose capture draws (no popup on this page).
+        for (d in listOf(false, true)) {
+            dark = d
+            rule.waitForIdle()
+            val image = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
+            File(out(), "settings-offline-connectors-glass-${if (d) "dark" else "light"}.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
     }
 
     @Config(qualifiers = "en-w400dp-h2800dp-xhdpi")

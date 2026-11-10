@@ -754,14 +754,9 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
               }
           }
           // A switch of assistant closes the current assistant's settings pages over the list (docs/assistant/managers.md
-          // "Clients"): none shows one assistant's settings once another is current; the list shows the new one's.
-          var settingsAssistant by remember { mutableStateOf(currentAssistant.id) }
-          LaunchedEffect(currentAssistant.id) {
-              if (settingsAssistant == currentAssistant.id) return@LaunchedEffect
-              settingsAssistant = currentAssistant.id
-              val first = settingsSheetStack.indexOfFirst { persona.feature.settings.isAssistantSettingsDestination(it) }
-              if (first > 0) while (settingsSheetStack.size > first) settingsSheetStack.removeAt(settingsSheetStack.lastIndex)
-          }
+          // "Clients"), in the Settings sheet and on each tab (a link or a readiness card opens them there): none shows one
+          // assistant's settings, or sends what it holds, once another is current; the list shows the new one's.
+          persona.feature.settings.CloseAssistantSettingsOnSwitch(currentAssistant.id) { listOf(settingsSheetStack) + stacks.values }
           if (settingsOpened) {
               val settingsNavigator = remember(navigator, settingsSheetStack) {
                   SettingsSheetNavigator(settingsSheetStack, close = { settingsOpened = false }, outside = navigator)
