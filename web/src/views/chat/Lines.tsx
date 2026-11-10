@@ -166,7 +166,7 @@ function RecapChip({ items }: { items: Item[] }) {
 function RecapDrawer({ items, open, onClose }: { items: Item[]; open: boolean; onClose: () => void }) {
   return (
     <Dialog open={open} onClose={onClose} title={items.length > 1 ? t("chat-lines.recap_title_many", { count: items.length }) : t("chat-lines.recap")} width={600}>
-      <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1">
+      <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1" data-scroll-box>
         {[...items].reverse().map((it, n) => (
           <section key={it.id} className={cx("flex flex-col gap-2", n > 0 && "border-t border-line pt-4")}>
             {it.ts && (

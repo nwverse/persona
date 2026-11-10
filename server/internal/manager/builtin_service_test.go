@@ -35,7 +35,7 @@ func TestBuiltinServiceNames(t *testing.T) {
 			t.Errorf("unit has no %q:\n%s", line, unit)
 		}
 	}
-	plist := builtinPlist("/Users/someone/.persona/bin/personad", "/Users/someone/.persona", "/Users/someone")
+	plist := builtinPlist("/Users/someone/.persona/bin/personad", "/Users/someone/.persona", "/Users/someone", false)
 	for _, part := range []string{"<string>" + managerconf.BuiltinLabel + "</string>",
 		"<string>/Users/someone/.persona/bin/personad</string><string>assistant</string>",
 		"<key>PERSONA_ASSISTANT_DEPLOY</key><string>service</string>", "<key>PERSONA_HOME</key><string>/Users/someone/.persona</string>",
