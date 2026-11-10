@@ -68,6 +68,8 @@ import { interactionAsk } from "../../lib/inbox";
 import { answeredLookup, answeredSessions } from "./answered-lookup";
 import { Empty } from "./parts";
 import { PlanEditDialog } from "./PlanEdit";
+import { TaskWorkspaceEditor, TaskWorkspaceLine } from "./TaskWorkspace";
+import type { TaskWorkspace } from "../../lib/feed";
 import { machineStartBlocked, todoUltracode, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltraMark, UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
@@ -324,6 +326,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   const [remember, setRemember] = useState(false);
   const [editing, setEditing] = useState(false);
   const [ultraChoice, setUltraChoice] = useState<Record<number, boolean>>({});
+  const [workspaceChoice, setWorkspaceChoice] = useState<Record<number, TaskWorkspace>>({});
   const blocked = usePlanUltracodeBlocked(plan);
   if (plan.state !== "open") {
     const failed = plan.tasks.filter((t) => t.error);
@@ -336,6 +339,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
         {failed.map((task) => (
           <PlanTaskFailed key={task.title} task={task} conversation={plan.conversation} />
         ))}
+        {plan.tasks.map((task, i) => <TaskWorkspaceLine key={i} task={task} />)}
       </div>
     );
   }
@@ -343,21 +347,30 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
   // each task's choice, the card's own else the assistant's: the chip draws it (off where the computer can't), "Edit"
   // opens with it (so a task moved there to a computer that can has it again), and Start sends it, off where it can't
   const ultracode = plan.tasks.map((task, i) => ultraChoice[i] ?? task.ultracode === true);
+  const editedPlan = { ...plan, tasks: plan.tasks.map((task, i) => workspaceChoice[i] === undefined ? task : { ...task, workspace: workspaceChoice[i], workspace_resolved: undefined }) };
+  const startEdits = () => {
+    const edits = planUltracodeToSend(plan, ultracode, ultracodeBlockedNow) ?? plan.tasks.map(() => ({}));
+    const all = edits.map((e, i) => workspaceChoice[i] === undefined ? e : { ...e, workspace: workspaceChoice[i] });
+    return all.some((e) => Object.keys(e).length) ? all : undefined;
+  };
   return (
     <div className="flex flex-col gap-3 rounded-card bg-surface p-4 shadow-card">
       <div className="flex items-center gap-1.5 text-[12px] font-medium text-ink-2">
         <Icon name="list" size={13} />
         {plan.tasks.length > 1 ? t("assistant-tasks.plan_split", { count: plan.tasks.length }) : t("assistant-tasks.plan_single")}
       </div>
-      {plan.tasks.map((t, i) => (
-        <PlanTaskRow key={i} n={i + 1} task={t} numbered={plan.tasks.length > 1} ultra={blocked && { on: ultracode[i], blocked: blocked[i] }} busy={busy} onUltra={(on) => setUltraChoice((c) => ({ ...c, [i]: on }))} />
+      {editedPlan.tasks.map((t, i) => (
+        <div key={i} className="flex min-w-0 flex-col gap-2">
+          <PlanTaskRow n={i + 1} task={t} numbered={plan.tasks.length > 1} ultra={blocked && { on: ultracode[i], blocked: blocked[i] }} busy={busy} onUltra={(on) => setUltraChoice((c) => ({ ...c, [i]: on }))} />
+          <TaskWorkspaceEditor plan={editedPlan} index={i} disabled={busy} onChange={(workspace) => setWorkspaceChoice((c) => ({ ...c, [i]: workspace }))} />
+        </div>
       ))}
       <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-2">
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--accent)]" />
         {t("assistant-tasks.plan_remember")}
       </label>
       <div className="flex gap-2">
-        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, planUltracodeToSend(plan, ultracode, ultracodeBlockedNow)))} className="flex-1">
+        <Button tone="accent" busy={busy} onClick={() => run(() => startPlan(plan, remember, startEdits()))} className="flex-1">
           {plan.tasks.length > 1 ? t("assistant-tasks.plan_start_n", { count: plan.tasks.length }) : t("assistant-tasks.plan_start")}
         </Button>
         <Button disabled={busy} onClick={() => setEditing(true)}>
@@ -369,7 +382,7 @@ export function PlanCard({ plan }: { plan: TaskPlan }) {
       </div>
       {editing && (
         <PlanEditDialog
-          plan={plan}
+          plan={editedPlan}
           ultracode={ultracode}
           onClose={() => setEditing(false)}
           onStart={(edits) => {

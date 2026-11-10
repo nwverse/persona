@@ -48,6 +48,7 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		t := &a.Tasks[i]
 		t.normalizeReadonlyPermission()
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs = "", "", "", nil
+		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a
 		// real health detour and its first-detour guard keeps the true original machine (#2271).
 		t.Reroute = nil
@@ -103,6 +104,9 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 		// Unset: settled on the computer it lands on, so the card shows what will run (tasks_permission.go).
 		if t.Permission == "" {
 			t.Permission = s.taskPermission(ctx, t.Machine, modes)
+		}
+		if err := s.resolveTaskWorkspace(ctx, t); err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
@@ -182,6 +186,9 @@ func (s *Service) toolTaskPlanFrom(ctx context.Context, machine, sessionID strin
 
 // applyPlanEdit takes what the user changed on the card; an empty field keeps the assistant's.
 func applyPlanEdit(t *PlanTask, e PlanTask) {
+	if e.Workspace != nil {
+		t.Workspace, t.WorkspaceResolved, t.WorkspaceInferred = e.Workspace, nil, false
+	}
 	if s := strings.TrimSpace(e.Title); s != "" {
 		t.Title = s
 	}

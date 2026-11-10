@@ -292,6 +292,13 @@ For every component: use the design-system one, not a lookalike. Counts are appr
 
 `.card()` uses the system grouped background, not the style's card color, so it does not follow Clay, Island or Lark (DS-07). Inset wells (`Fill.well`) are rebuilt by hand in 24+ places. Web has no shared card outside the admin app.
 
+The web task plan's workspace row (#3659) reuses the assistant form `fieldClass`, native labelled selects/inputs, and
+the existing plan Edit dialog. The compact policy choice stays on the plan card because it authorizes where a task
+will write; the optional branch and existing checkout picker are contextual fields. A server-backed, live-announced
+path preview uses no browser path convention. Settings › Assistant reuses `Group`/`Row` and the manager-scoped
+save-confirmation pattern for the default. Task details reuse the same read-only policy/path line. No new look,
+theme, motion, primary navigation, or destructive action is introduced.
+
 ### 3.4 Lists and rows
 
 - Page chrome: `.themedPage()`, `.themedGroupedPage()`, `.themedRow()` (`apple/Persona/DesignSystem/Styling.swift:13-22`). Settings uses `SettingsForm` and `SettingsRow`.

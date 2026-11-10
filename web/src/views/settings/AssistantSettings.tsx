@@ -38,6 +38,7 @@ interface AssistantState {
   main_tasks_quiet?: boolean;
   /** "Start what I asked for in the chat right away" (#2559): on by default; tasks the user asked for start without the plan card's "Start". */
   start_requested_tasks?: boolean;
+  task_workspace_preference?: "prefer-existing" | "prefer-new";
 }
 
 export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
@@ -59,6 +60,17 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const [quietBusy, setQuietBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [permissionBusy, setPermissionBusy] = useState(false);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const setWorkspacePreference = async (value: "prefer-existing" | "prefer-new") => {
+    setWorkspaceBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { task_workspace_preference: value } });
+      if (r.manager !== manager || r.task_workspace_preference !== value) throw new Error(t("settings-assistantsettings.workspace_unconfirmed"));
+      setInfo((i) => i ? { ...i, task_workspace_preference: r.task_workspace_preference } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setWorkspaceBusy(false); }
+  };
   const setPermission = async (mode: string) => {
     setPermissionBusy(true);
     try {
@@ -167,6 +179,15 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       <Group title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
         <Row label={t("settings-assistantsettings.start_requested")}>
           <Switch on={info?.start_requested_tasks ?? true} onChange={(on) => void setStartRequested(on)} disabled={!info || startBusy} label={t("settings-assistantsettings.start_requested")} />
+        </Row>
+        <Row label={t("settings-assistantsettings.workspace_preference")} hint={t("settings-assistantsettings.workspace_hint")} wrapHint stackOnNarrow>
+          <select aria-label={t("settings-assistantsettings.workspace_preference")} value={info?.task_workspace_preference ?? "prefer-existing"}
+            disabled={!info || info.manager !== manager || workspaceBusy}
+            className="w-full min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field sm:w-auto [@media(pointer:coarse)]:min-h-11"
+            onChange={(e) => void setWorkspacePreference(e.target.value as "prefer-existing" | "prefer-new")}>
+            <option value="prefer-existing">{t("settings-assistantsettings.workspace_prefer_existing")}</option>
+            <option value="prefer-new">{t("settings-assistantsettings.workspace_prefer_new")}</option>
+          </select>
         </Row>
       </Group>
 

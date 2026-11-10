@@ -1589,7 +1589,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.",
+    "description": "Hand the user a plan of one or more tasks for agents on their computers, instead of starting agents yourself. Use it for any work that takes an agent (code, research in a repo, anything longer than a few tool calls); one task per independent piece of work. Check machines_list for current machine resources and availability before choosing a machine. Fill in every field from what you know (the knowledge base, agents_list: which machine works in which directory, the user's habits); the user sees each choice as a chip they can change, with your one-line reason. Read-only tasks, tasks the user asked for themselves (user_requested), and kinds the user told you to start without asking, start at once; the rest wait as a card for the user's 开始. Either way this returns at once: don't wait, carry on. Each queued task is a todo (todo id) whose progress shows in your context snapshot; send to a task's agent with agent_send. Quick things you can do with a tool yourself (a reminder, an event) are not tasks. A task stays on its requested machine by default (machine_policy=fixed), including retries. An unavailable launcher fails there; do not reroute machine-local work. Use machine_policy=flexible only when the task may run on another computer: a failed health check can then move it, and its why says so. The response confirms queued dispatch, not a successful Agent start; inspect the task outcome. From the main conversation or a leader conversation (assistant.leaders) you supervise what you hand out: give each task done_when (results you can check) and expect_minutes; you get a 督办 message when one needs you, and you close it with task_review, not by repeating its agent's words. The answer lists work already going on that looks like the same task: check it before you let both go on. A todo this conversation opened that has no agent yet (one opened from a Lark topic: the message that handed it to you names its id) is the task's own: give that id as the task's todo_id and the agent works on it, instead of a new todo being made; any other todo_id is refused with why.\n\nWorkspace policy: set workspace=\"new\" for an isolated checkout, {\"new\":{\"branch\":\"task/my-change\"}} for an explicit branch, {\"existing\":\"\u003ccwd or workspace_id\u003e\"} for a named checkout, or \"none\" for no managed workspace. If omitted, readonly defaults to none; writable Git tasks use assistant.task_workspace_preference (prefer-existing by default, prefer-new for isolation); an occupied directory defaults to new. Explicit existing is never silently switched and is refused with the occupying task's id/title. The machine's herdr/Orca engine chooses the new path and registers it; never run git worktree add yourself. The plan card previews the resolved path and lets the user change the policy before Start. New branches default to task/\u003ctodo id\u003e. A creation failure starts no agent. Workspaces are silently retained after acceptance.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -1635,6 +1635,49 @@
               "cwd": {
                 "type": "string",
                 "description": "the project directory: absolute path or ~/…"
+              },
+              "workspace": {
+                "description": "Task workspace policy. Omit to use the assistant preference and readonly/busy exceptions. new uses the machine engine and default branch task/\u003ctodo id\u003e; existing accepts an absolute/~/ path or a workspace id on that machine; none creates nothing. To choose a branch use {new:{branch:...}}. No custom worktree root.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "new",
+                      "none"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "existing"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "existing": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "new"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "new": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "branch": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
               },
               "launcher": {
                 "type": "string",

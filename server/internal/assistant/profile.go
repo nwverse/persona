@@ -64,7 +64,8 @@ type Settings struct {
 	MainTasksQuiet *bool `json:"main_tasks_quiet,omitempty"`
 	// StartRequestedTasks: a task_plan task the user asked for in so many words starts without the card's "Start"
 	// (#2559). nil is on (the default).
-	StartRequestedTasks *bool `json:"start_requested_tasks,omitempty"`
+	StartRequestedTasks     *bool  `json:"start_requested_tasks,omitempty"`
+	TaskWorkspacePreference string `json:"task_workspace_preference,omitempty"`
 	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
 	RecordingDays *int `json:"recording_days,omitempty"`
 	// DoneNeedsDelivery: a finished task closes only once its work is live and checked; stopped at a PR, merged or
@@ -346,7 +347,8 @@ type assistantView struct {
 	NotesEffective     string             `json:"notes_effective"`  // what the assistant is told about the user
 	MainTasksQuiet     bool               `json:"main_tasks_quiet"` // in effect (the setting's own is left out while unset)
 	// StartRequestedTasks is in effect, like MainTasksQuiet.
-	StartRequestedTasks bool `json:"start_requested_tasks"`
+	StartRequestedTasks     bool   `json:"start_requested_tasks"`
+	TaskWorkspacePreference string `json:"task_workspace_preference"`
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
@@ -370,7 +372,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
-		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
+		DoneNeedsDelivery:       v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
 		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground}
 	if d, ok := s.device(ctx, v.MachineID); ok {
