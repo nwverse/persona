@@ -3269,6 +3269,7 @@ struct Toast: Identifiable, Equatable {
 /// No taptic engine on Apple Vision Pro: the system's own sounds and the hover effect are the feedback.
 enum Haptics {
     static func tap() {}
+    static func selection() {}
     static func success() {}
     static func error() {}
     static func attention() {}
@@ -3276,6 +3277,8 @@ enum Haptics {
 #else
 enum Haptics {
     static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    /// A tick as something dragged reaches a new place (a to-do on the calendar at the next quarter hour or day).
+    static func selection() { UISelectionFeedbackGenerator().selectionChanged() }
     static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
     static func error() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
     static func attention() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }

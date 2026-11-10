@@ -239,10 +239,20 @@ struct TodoCalendarTimeline: View {
     var open: (CalendarEntry) -> Void
     var pickDay: (Date) -> Void
     var add: (TodoCalendarSlot) -> Void
+    /// Moving a to-do to another time or day (#2045); nil: nothing is dragged (the Mac).
+    var moves: CalendarMoves? = nil
 
     @Environment(\.displayScale) private var displayScale
     private let calendar = TodoCalendar.userCalendar
     private let hour = Theme.CalendarGrid.hour
+    /// A to-do being dragged, and the parts' frames and the axis's scroll that say where it would land.
+    @State private var dragging: CalendarDragging?
+    @State private var width: CGFloat = 0
+    @State private var allDayFrame = CGRect.zero
+    @State private var axisFrame = CGRect.zero
+    @State private var scrolled: CGFloat = 0
+    @State private var scroll = ScrollPosition()
+    private static let space = "todo.calendar.timeline"
     /// One device pixel: the grid's lines (0.5 pt is nothing on a 1x screen).
     private var pixel: CGFloat { 1 / displayScale }
     private var gutter: CGFloat { narrow ? Theme.CalendarGrid.gutterNarrow : Theme.CalendarGrid.gutter }
@@ -253,6 +263,7 @@ struct TodoCalendarTimeline: View {
         VStack(spacing: Theme.Space.flush) {
             if showsDayHeader { dayHeader }
             allDayRow
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { allDayFrame = $0 }
             Rectangle().fill(Theme.CalendarGrid.lineStrong).frame(height: pixel)
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
@@ -261,12 +272,80 @@ struct TodoCalendarTimeline: View {
                     }
                 }
                 .scrollIndicators(.hidden)
+                // a carried to-do moves, not the axis under it (near its edges it scrolls by itself)
+                .scrollDisabled(dragging != nil)
+                .scrollPosition($scroll)
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrolled = y }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { axisFrame = $0 }
                 .onAppear { proxy.scrollTo(firstHour, anchor: .top) }
                 .onChange(of: days.first) { proxy.scrollTo(firstHour, anchor: .top) }
                 // the page may open before the to-dos are read: once they are, the morning's come into sight
                 .onChange(of: timed.isEmpty) { _, empty in if !empty { proxy.scrollTo(firstHour, anchor: .top) } }
             }
         }
+        .coordinateSpace(.named(Self.space))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        // a tick at each new quarter hour or day it would land on
+        .onChange(of: landing) { old, new in if old != nil, new != nil { Haptics.selection() } }
+        .task(id: autoscroll) { await scrollWhileHeld(autoscroll) }
+    }
+
+    // MARK: Moving a to-do (#2045)
+
+    private var dropMap: TimelineDropMap {
+        TimelineDropMap(width: width, gutter: gutter, days: days.count, allDay: allDayFrame, axis: axisFrame,
+                        scrolled: scrolled, hour: hour)
+    }
+
+    /// Where the dragged to-do would land now: nowhere until it has moved.
+    private var landing: CalendarDrop? {
+        guard let d = dragging, d.moved, !days.isEmpty, let spot = dropMap.spot(d.point, grab: d.grab) else { return nil }
+        switch spot {
+        case .allDay(let i): return TodoCalendar.dropOnDay(d.entry, day: days[i], allDay: true, calendar: calendar)
+        case .axis(let i, let minutes): return TodoCalendar.dropOnAxis(day: days[i], minutes: minutes, calendar: calendar)
+        }
+    }
+
+    /// The dragged to-do as it would be drawn where it would land.
+    private var landed: CalendarEntry? {
+        guard let d = dragging, let landing else { return nil }
+        return TodoCalendar.landed(d.entry, at: landing, calendar: calendar, now: .now)
+    }
+
+    private var autoscroll: Int {
+        dragging.map { dropMap.autoscroll($0.point, edge: Theme.Size.tapTarget) } ?? 0
+    }
+
+    /// Scrolls the axis a step each frame while the dragged to-do is held near its edge `way` (-1 up, 1 down).
+    private func scrollWhileHeld(_ way: Int) async {
+        guard way != 0 else { return }
+        while !Task.isCancelled {
+            let bottom = max(0, hour * 24 - axisFrame.height)
+            let y = min(max(scrolled + CGFloat(way) * Theme.CalendarGrid.autoscrollStep, 0), bottom)
+            if y != scrolled { scroll.scrollTo(y: y) }
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+    }
+
+    /// An entry's block or chip, picked up and carried on this timeline.
+    private func carried(_ content: some View, _ e: CalendarEntry) -> some View {
+        content.calendarDraggable(e, in: Self.space, moves: moves, lifted: dragging?.entry.id == e.id,
+                                  began: { p, grab in
+                                      dragging = CalendarDragging(entry: e, point: p, grab: grab)
+                                      moves?.carrying(true)
+                                      Haptics.tap()
+                                  },
+                                  moved: { p in
+                                      dragging?.point = p
+                                      dragging?.moved = true
+                                  },
+                                  ended: { dropped in
+                                      guard let d = dragging else { return }
+                                      let drop = dropped ? landing : nil
+                                      dragging = nil
+                                      moves?.carrying(false)
+                                      if let drop { moves?.drop(d.entry, drop) }
+                                  })
     }
 
     private var timed: [CalendarEntry] { entries.filter { !$0.allDay } }
@@ -329,10 +408,15 @@ struct TodoCalendarTimeline: View {
             ForEach(Array(days.enumerated()), id: \.offset) { _, day in
                 let all = TodoCalendar.on(day, entries, calendar: calendar).filter(\.allDay)
                 let fit: (shown: [CalendarEntry], more: Int) = narrow ? TodoCalendar.fit(all, lines: 2) : (all, 0)
+                let ghost = landed.flatMap { $0.allDay && calendar.isDate($0.start, inSameDayAs: day) ? $0 : nil }
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    if let ghost {
+                        CalendarEntryChip(entry: ghost, compact: narrow)
+                            .calendarLanding()
+                    }
                     ForEach(fit.shown) { e in
-                        Button { open(e) } label: { CalendarEntryChip(entry: e, compact: narrow) }
-                            .buttonStyle(.plain)
+                        carried(Button { open(e) } label: { CalendarEntryChip(entry: e, compact: narrow) }
+                            .buttonStyle(.plain), e)
                     }
                     if fit.more > 0 {
                         Text(verbatim: "+\(fit.more)")
@@ -343,6 +427,7 @@ struct TodoCalendarTimeline: View {
                 .padding(.horizontal, Theme.Space.xxs)
                 .padding(.vertical, Theme.Space.xs)
                 .frame(maxWidth: .infinity, minHeight: Theme.Size.iconS, alignment: .topLeading)
+                .background(ghost != nil ? Theme.accent.opacity(Theme.CalendarGrid.tint) : .clear)
                 .contentShape(.rect)
                 .onTapGesture { add(TodoCalendarSlot(day: day, time: nil)) }
             }
@@ -354,10 +439,16 @@ struct TodoCalendarTimeline: View {
     private func axis(now: Date) -> some View {
         let todayShown = days.contains { calendar.isDate($0, inSameDayAs: now) }
         let nowMinutes = TodoCalendar.minutes(now, in: now, calendar: calendar)
+        // where a dragged to-do would land on the axis: its time in the gutter, over the hour's
+        let dropAt = landed.flatMap { $0.allDay ? nil : $0.start }
+        let dropMinutes = dropAt.map { TodoCalendar.minutes($0, in: $0, calendar: calendar) }
+        func near(_ minutes: Double?, _ h: Int) -> Bool {
+            minutes.map { abs(Double(h * 60) - $0) < Double(TodoCalendar.nowLabelRoom) } ?? false
+        }
         return ZStack(alignment: .topLeading) {
             VStack(spacing: Theme.Space.flush) {
                 ForEach(0..<24, id: \.self) { h in
-                    hourRow(h, hideLabel: todayShown && abs(Double(h * 60) - nowMinutes) < Double(TodoCalendar.nowLabelRoom))
+                    hourRow(h, hideLabel: (todayShown && near(nowMinutes, h)) || near(dropMinutes, h))
                         .id(h)
                 }
             }
@@ -373,17 +464,30 @@ struct TodoCalendarTimeline: View {
         .frame(height: hour * 24)
         // over the axis, so its height (half above the line) moves nothing under it
         .overlay(alignment: .topLeading) {
-            if todayShown {
-                Text(now.formatted(date: .omitted, time: .shortened))
-                    .font(Theme.Font.labelHeavy)
-                    .foregroundStyle(Theme.danger)
-                    .lineLimit(1)
-                    .padding(.trailing, Theme.Space.xs)
-                    .frame(width: gutter, alignment: .trailing)
-                    .alignmentGuide(.top) { d in d[VerticalAlignment.center] }
+            // a dragged to-do's time near it takes its place
+            if todayShown && !(dropMinutes.map { abs($0 - nowMinutes) < Double(TodoCalendar.nowLabelRoom) } ?? false) {
+                gutterLabel(now, color: Theme.danger)
                     .offset(y: y(nowMinutes))
             }
         }
+        .overlay(alignment: .topLeading) {
+            if let dropAt, let dropMinutes {
+                gutterLabel(dropAt, color: Theme.accent)
+                    .offset(y: y(dropMinutes))
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    /// A moment's time in the hours' column, centered on its line: the now line's, a dragged to-do's.
+    private func gutterLabel(_ date: Date, color: Color) -> some View {
+        Text(date.formatted(date: .omitted, time: .shortened))
+            .font(Theme.Font.labelHeavy)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .padding(.trailing, Theme.Space.xs)
+            .frame(width: gutter, alignment: .trailing)
+            .alignmentGuide(.top) { d in d[VerticalAlignment.center] }
     }
 
     /// An hour of the axis: its line at the top, its time centered on the line. Both over the row, so the hour's line is
@@ -436,24 +540,34 @@ struct TodoCalendarTimeline: View {
                     let start = TodoCalendar.minutes(group[0].start, in: day, calendar: calendar)
                     Group {
                         if group.count == 1 {
-                            Button { open(group[0]) } label: { CalendarEntryBlock(entry: group[0], narrow: true) }
+                            // one to-do can be moved; several sharing a block open their day
+                            carried(Button { open(group[0]) } label: { CalendarEntryBlock(entry: group[0], narrow: true) }
+                                .buttonStyle(.plain)
+                                .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs), group[0])
                         } else {
                             Button { pickDay(day) } label: { CalendarGroupBlock(entries: group) }
+                                .buttonStyle(.plain)
+                                .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs)
                         }
                     }
-                    .buttonStyle(.plain)
-                    .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs)
                     .offset(x: Theme.Space.xxs, y: y(start) + pixel)
                 }
             } else {
                 ForEach(TodoCalendar.lanes(mine, minutes: blockMinutes)) { placed in
                     let lane = (width - Theme.Space.xs) / CGFloat(placed.lanes)
                     let start = TodoCalendar.minutes(placed.entry.start, in: day, calendar: calendar)
-                    Button { open(placed.entry) } label: { CalendarEntryBlock(entry: placed.entry) }
+                    carried(Button { open(placed.entry) } label: { CalendarEntryBlock(entry: placed.entry) }
                         .buttonStyle(.plain)
-                        .frame(width: lane - Theme.Space.xxs, height: Theme.Size.tapTarget - Theme.Space.xxs)
+                        .frame(width: lane - Theme.Space.xxs, height: Theme.Size.tapTarget - Theme.Space.xxs), placed.entry)
                         .offset(x: Theme.Space.xxs + lane * CGFloat(placed.lane), y: y(start) + pixel)
                 }
+            }
+            // where a dragged to-do would land, over what is there, the whole column wide
+            if let landed, !landed.allDay, calendar.isDate(landed.start, inSameDayAs: day) {
+                CalendarEntryBlock(entry: landed, narrow: narrow)
+                    .calendarLanding()
+                    .frame(width: width - Theme.Space.xs, height: Theme.Size.tapTarget - Theme.Space.xxs)
+                    .offset(x: Theme.Space.xxs, y: y(TodoCalendar.minutes(landed.start, in: day, calendar: calendar)) + pixel)
             }
             if calendar.isDate(now, inSameDayAs: day) {
                 let at = y(TodoCalendar.minutes(now, in: day, calendar: calendar))
@@ -477,14 +591,56 @@ struct TodoCalendarMonth: View {
     var wide: Bool
     var open: (CalendarEntry) -> Void
     var pickDay: (Date) -> Void
+    /// Moving a to-do to another day (#2045); nil: nothing is dragged (the Mac).
+    var moves: CalendarMoves? = nil
 
     @Environment(\.displayScale) private var displayScale
     private let calendar = TodoCalendar.userCalendar
     /// One device pixel: the grid's lines.
     private var pixel: CGFloat { 1 / displayScale }
+    /// A to-do being dragged, and the grid's frame, scroll and day height that say which day it is over.
+    @State private var dragging: CalendarDragging?
+    @State private var dropMap = MonthDropMap()
+    private static let space = "todo.calendar.month"
+
+    private var shownDays: [Date] { TodoCalendar.days(.month, anchor: anchor, calendar: calendar) }
+
+    /// The day the dragged to-do would land on, at its time there: nowhere until it has moved.
+    private var landing: CalendarDrop? {
+        guard let d = dragging, d.moved, let i = dropMap.day(d.point) else { return nil }
+        let days = shownDays
+        guard i < days.count else { return nil }
+        return TodoCalendar.dropOnDay(d.entry, day: days[i], calendar: calendar)
+    }
+
+    private var landed: CalendarEntry? {
+        guard let d = dragging, let landing else { return nil }
+        return TodoCalendar.landed(d.entry, at: landing, calendar: calendar, now: .now)
+    }
+
+    /// An entry's chip, picked up and carried on this month.
+    private func carried(_ content: some View, _ e: CalendarEntry) -> some View {
+        content.calendarDraggable(e, in: Self.space, moves: moves, lifted: dragging?.entry.id == e.id, accessible: wide,
+                                  began: { p, grab in
+                                      dragging = CalendarDragging(entry: e, point: p, grab: grab)
+                                      moves?.carrying(true)
+                                      Haptics.tap()
+                                  },
+                                  moved: { p in
+                                      dragging?.point = p
+                                      dragging?.moved = true
+                                  },
+                                  ended: { dropped in
+                                      guard let d = dragging else { return }
+                                      let drop = dropped ? landing : nil
+                                      dragging = nil
+                                      moves?.carrying(false)
+                                      if let drop { moves?.drop(d.entry, drop) }
+                                  })
+    }
 
     var body: some View {
-        let days = TodoCalendar.days(.month, anchor: anchor, calendar: calendar)
+        let days = shownDays
         let rows = max(days.count / 7, 1)
         let names = TodoCalendar.weekdaySymbols(calendar: calendar, narrow: !wide)
         VStack(spacing: Theme.Space.flush) {
@@ -520,15 +676,25 @@ struct TodoCalendarMonth: View {
                     }
                 }
                 .scrollIndicators(.hidden)
-                .scrollDisabled(cell * CGFloat(rows) <= geo.size.height)
+                .scrollDisabled(cell * CGFloat(rows) <= geo.size.height || dragging != nil)
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in dropMap.scrolled = y }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { dropMap.grid = $0 }
+                .onChange(of: cell, initial: true) { _, c in dropMap.cell = c }
+                .onChange(of: rows, initial: true) { _, r in dropMap.rows = r }
             }
         }
+        .coordinateSpace(.named(Self.space))
+        // a tick at each new day it would land on
+        .onChange(of: landing) { old, new in if old != nil, new != nil { Haptics.selection() } }
     }
 
     private func dayCell(_ day: Date) -> some View {
         let inMonth = calendar.isDate(day, equalTo: anchor, toGranularity: .month)
         let today = calendar.isDateInToday(day)
-        let fit = TodoCalendar.fit(TodoCalendar.on(day, entries, calendar: calendar), lines: Theme.CalendarGrid.monthLines)
+        // where a dragged to-do would land, first in its day, which then shows a line fewer
+        let ghost = landed.flatMap { calendar.isDate($0.start, inSameDayAs: day) ? $0 : nil }
+        let lines = Theme.CalendarGrid.monthLines - (ghost == nil ? 0 : 1)
+        let fit = TodoCalendar.fit(TodoCalendar.on(day, entries, calendar: calendar), lines: lines)
         return VStack(alignment: wide ? .leading : .center, spacing: Theme.Space.xxs) {
             Text(verbatim: String(calendar.component(.day, from: day)))
                 .font(today ? Theme.Font.captionHeavy : Theme.Font.caption)
@@ -539,12 +705,16 @@ struct TodoCalendarMonth: View {
                 }
                 .frame(maxWidth: .infinity, alignment: wide ? .leading : .center)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                if let ghost {
+                    CalendarEntryChip(entry: ghost, compact: !wide, showsTime: wide)
+                        .calendarLanding()
+                }
                 ForEach(fit.shown) { e in
                     if wide {
-                        Button { open(e) } label: { CalendarEntryChip(entry: e, showsTime: true) }
-                            .buttonStyle(.plain)
+                        carried(Button { open(e) } label: { CalendarEntryChip(entry: e, showsTime: true) }
+                            .buttonStyle(.plain), e)
                     } else {
-                        CalendarEntryChip(entry: e, compact: true)
+                        carried(CalendarEntryChip(entry: e, compact: true), e)
                     }
                 }
                 if fit.more > 0 {
@@ -558,7 +728,8 @@ struct TodoCalendarMonth: View {
         .padding(.horizontal, Theme.Space.xxs)
         .padding(.top, Theme.Space.xs)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .opacity(inMonth ? 1 : Theme.CalendarGrid.outsideFade)
+        .opacity(inMonth || ghost != nil ? 1 : Theme.CalendarGrid.outsideFade)
+        .background(ghost != nil ? Theme.accent.opacity(Theme.CalendarGrid.tint) : .clear)
         .contentShape(.rect)
         .onTapGesture { pickDay(day) }
         .accessibilityElement(children: wide ? .contain : .combine)

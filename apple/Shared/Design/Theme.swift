@@ -619,6 +619,10 @@ nonisolated enum Theme {
         static let doneFade: Double = 0.5
         /// A day of the month grid that belongs to the month before or after.
         static let outsideFade: Double = 0.45
+        /// A to-do being dragged, where it was (#2045): where it would land is drawn in full.
+        static let liftedFade: Double = 0.3
+        /// How far the axis scrolls each frame while a dragged to-do is held near its top or bottom edge.
+        static let autoscrollStep: CGFloat = 4
         /// Lines a day of the month grid shows: its entries, or one fewer and "N more".
         static let monthLines = 3
         /// Where a new to-do's time snaps to when the empty axis is tapped, in minutes.

@@ -459,14 +459,15 @@ Drawn as Telegram draws them (#2984), with one look on every platform: the web a
 | Long press on a message | lifted menu with an action bar |
 | Hold the mic | cancel by sliding left, lock by sliding up |
 | Link card drag | to 0.6 it stops blocking the chat; further down it closes |
+| Hold a to-do on the calendar | after 0.35 s held still it follows the finger (a pointer: once it moves) to another time, day or All Day row; saved on release with Undo in the toast; "Change Due Date…" for VoiceOver (`docs/assistant/todos.md`, "Calendar") |
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
 ### 4.3 Feedback and haptics
 
-`Haptics` (`apple/Persona/App/AppModel.swift:3228-3241`): `tap` (light impact), `success`, `error`, `attention` (warning). About 393 call sites; no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift:174`).
+`Haptics` (`apple/Persona/App/AppModel.swift:3270-3286`): `tap` (light impact), `selection`, `success`, `error`, `attention` (warning). About 393 call sites; no-op on visionOS; generators are created per call. One direct UIKit use remains (`apple/Persona/Views/Chat/ChatEdgeScrub.swift:174`).
 
-Suggested mapping, which the code mostly follows: tap for selection and toggles, success for copy, save and completed send, error for a failure paired with an error toast, attention for a refused or newly arrived request. Gaps: copy sometimes gives tap or nothing; plain approval buttons have no haptic; archive has no haptic; there is no documented policy (DS-23). Watch maps success, failure, notification, stop and retry consistently. Android has the same four kinds with far fewer call sites. Web has none.
+Suggested mapping, which the code mostly follows: tap for selection and toggles (and picking something up to drag it), selection for each new place something dragged would land (a to-do on the calendar at the next quarter hour or day), success for copy, save and completed send, error for a failure paired with an error toast, attention for a refused or newly arrived request. Gaps: copy sometimes gives tap or nothing; plain approval buttons have no haptic; archive has no haptic; there is no documented policy (DS-23). Watch maps success, failure, notification, stop and retry consistently. Android has the same four kinds with far fewer call sites. Web has none.
 
 ### 4.4 Confirmation and undo
 

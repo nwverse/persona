@@ -102,7 +102,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-002 Tap gestures used as buttons on agent cards and other rows
 - **Severity**: P1. **Platform**: iOS.
-- **Location**: agent question and permission card, loop bar, calendar. `apple/Persona/Views/Interactions/InteractionViews.swift:373`, `apple/Persona/Views/Interactions/InteractionViews.swift:545`, `apple/Persona/Views/Interactions/InteractionViews.swift:1113`, `apple/Persona/Views/Session/SessionPanes.swift:1221`, `apple/Persona/Views/Todos/Calendar/TodoCalendarGrids.swift:347`.
+- **Location**: agent question and permission card, loop bar, calendar. `apple/Persona/Views/Interactions/InteractionViews.swift:373`, `apple/Persona/Views/Interactions/InteractionViews.swift:545`, `apple/Persona/Views/Interactions/InteractionViews.swift:1113`, `apple/Persona/Views/Session/SessionPanes.swift:1221`, `apple/Persona/Views/Todos/Calendar/TodoCalendarGrids.swift:432`.
 - **Violates**: [VoiceOver][vo]: label all key and custom elements; [Accessibility][a11y]: label elements so Voice Control and Switch Control work.
 - **Problem**: `onTapGesture` on a non-Button view with no `isButton` trait, label or action, so VoiceOver reads static text. The "Other answer" rows are the only route to the free-text answer on the Needs You flow. Other sites do it right (`apple/Persona/Views/Assistant/AssistantSidebar.swift:370`). A repo grep shows 42 `onTapGesture` uses; the exact count of unlabeled ones was not established (one cited site, `apple/Persona/Views/Chat/ToolViews.swift:1099`, is fine).
 - **Evidence**: `.contentShape(.rect).onTapGesture { withAnimation(Theme.Motion.standard) { collapsed.toggle() } }`.
@@ -118,7 +118,7 @@ Each block lists: Severity, Platform, Location, Violates, Problem, Evidence, Fix
 
 #### HIG-004 Swipe-to-delete with no confirmation and no Undo
 - **Severity**: P1. **Platform**: iOS, iPadOS.
-- **Location**: `apple/Persona/Views/Todos/TodosView.swift:125`, `apple/Persona/Views/Todos/TodosView.swift:157`, `apple/Persona/App/TodoStore.swift:216`, `apple/Persona/Views/Settings/SavedPlacesView.swift:56`, `apple/Persona/Views/Settings/AssistantProactiveViews.swift:280`.
+- **Location**: `apple/Persona/Views/Todos/TodosView.swift:125`, `apple/Persona/Views/Todos/TodosView.swift:157`, `apple/Persona/App/TodoStore.swift:248`, `apple/Persona/Views/Settings/SavedPlacesView.swift:56`, `apple/Persona/Views/Settings/AssistantProactiveViews.swift:280`.
 - **Violates**: [Undo and redo][undo], [Alerts][alerts], [Design principles][dp] ("help people recover from mistakes"): a destructive action should be undoable or confirmed.
 - **Problem**: the trailing swipe deletes on first tap; to-dos allow full swipe. The store calls the server and removes the item, with no restore. The same items are confirmed on their detail screens, and memory entries confirm, so the behavior is inconsistent. Context-menu Delete in `apple/Persona/Views/Settings/SavedPlacesView.swift:61` and `apple/Persona/Views/Settings/AssistantProactiveViews.swift:286` is also unconfirmed. Repeating scheduled tasks need a deliberate tap, which lowers risk there.
 - **Evidence**: `.swipeActions(edge: .trailing) { Button(role: .destructive) { Task { try await store.delete(id: todo.id) } } ... }`.

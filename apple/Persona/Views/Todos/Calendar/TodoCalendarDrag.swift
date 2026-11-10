@@ -1,0 +1,305 @@
+import SwiftUI
+#if os(iOS)
+import UIKit.UIGestureRecognizerSubclass
+#endif
+
+// Moving a to-do on the calendar (#2045, docs/assistant/todos.md "Calendar", "Moving one"): picked up by a finger held
+// still or by a pointer that moves, carried to another time, day or All Day row, and saved when it is let go, with Undo
+// in the toast that says where it went. What a drop means is `TodoCalendar` (Shared); here are the gesture, where on
+// the grids a finger is, the save, and the way without dragging (VoiceOver's "Change Due Date…"). iOS and iPadOS
+// only: the Mac app is frozen.
+
+/// A to-do being dragged: which, where the finger is (in the grid's coordinate space), and how far below the top edge
+/// of its block or chip it was picked up: the block keeps that offset as it moves, so it stays under the finger.
+struct CalendarDragging: Equatable {
+    var entry: CalendarEntry
+    var point: CGPoint
+    var grab: CGFloat
+    /// It has moved since it was picked up: until then it lands nowhere, so letting go of a held one changes nothing
+    /// (as on the web).
+    var moved = false
+}
+
+/// What the grids do with a to-do that is moved (`TodoCalendarView`); without it nothing is dragged.
+struct CalendarMoves {
+    /// Let go somewhere it can land.
+    var drop: (CalendarEntry, CalendarDrop) -> Void
+    /// The way without dragging: VoiceOver's and Switch Control's "Change Due Date…".
+    var reschedule: (CalendarEntry) -> Void
+    /// A drag starts (true) or ends: while one is carried, a sideways move doesn't turn the page.
+    var carrying: (Bool) -> Void
+}
+
+/// Where on a day or week's time axis a dragged to-do would land, from the parts' frames in the timeline's coordinate
+/// space: on the axis its top edge `grab` above the finger, in the day's column under the finger; on a day's All Day
+/// row, all day; nowhere above the row or below the axis.
+struct TimelineDropMap: Equatable {
+    /// The timeline's width, the hours' column at its left, how many days.
+    var width: CGFloat = 0
+    var gutter: CGFloat = 0
+    var days = 1
+    /// The All Day row, and the part of the axis in sight (the scroll view), and how far the axis is scrolled.
+    var allDay = CGRect.zero
+    var axis = CGRect.zero
+    var scrolled: CGFloat = 0
+    /// An hour's height on the axis.
+    var hour: CGFloat = 1
+
+    enum Spot: Equatable {
+        case allDay(day: Int)
+        case axis(day: Int, minutes: Double)
+    }
+
+    /// The day column under `x`: the nearest one when it is over the hours.
+    func day(_ x: CGFloat) -> Int {
+        let n = max(days, 1)
+        let column = (width - gutter) / CGFloat(n)
+        guard column > 0 else { return 0 }
+        return min(max(Int(((x - gutter) / column).rounded(.down)), 0), n - 1)
+    }
+
+    func spot(_ p: CGPoint, grab: CGFloat) -> Spot? {
+        if p.y > axis.maxY { return nil }
+        if p.y >= axis.minY {
+            let top = p.y - grab - axis.minY + scrolled
+            return .axis(day: day(p.x), minutes: Double(top / hour) * 60)
+        }
+        if p.y >= allDay.minY { return .allDay(day: day(p.x)) }
+        return nil
+    }
+
+    /// Which way the axis scrolls while a finger is near its top or bottom edge (within `edge`): -1 up, 1 down, 0 not.
+    /// Below the axis it keeps going down; over the All Day row it stays.
+    func autoscroll(_ p: CGPoint, edge: CGFloat) -> Int {
+        guard axis.height > edge * 2 else { return 0 }
+        if p.y > axis.maxY - edge { return 1 }
+        if p.y >= axis.minY && p.y < axis.minY + edge { return -1 }
+        return 0
+    }
+}
+
+/// Where on a month a dragged to-do would land: the day under the finger, from the grid's part in sight (the scroll
+/// view, in the month's coordinate space), how far it is scrolled and a day's height.
+struct MonthDropMap: Equatable {
+    var grid = CGRect.zero
+    var scrolled: CGFloat = 0
+    var cell: CGFloat = 1
+    var rows = 1
+
+    /// The index of the day under `p` (0 is the first day shown), nil off the grid.
+    func day(_ p: CGPoint) -> Int? {
+        guard grid.contains(p), grid.width > 0, cell > 0 else { return nil }
+        let column = min(Int(((p.x - grid.minX) / (grid.width / 7)).rounded(.down)), 6)
+        let row = Int(((p.y - grid.minY + scrolled) / cell).rounded(.down))
+        guard row >= 0, row < rows, column >= 0 else { return nil }
+        return row * 7 + column
+    }
+}
+
+/// Saving a moved to-do: drawn there at once (the store), a toast that says where it went with Undo, and a failed save
+/// put back with its error.
+@MainActor enum TodoCalendarMove {
+    static func save(_ id: String, to due: APIClient.TodoPlanChange.Due, store: TodoStore = .shared) {
+        guard let todo = store.todo(id: id) else { return }
+        let back = TodoCalendar.due(of: todo)
+        guard back != due else { return }
+        let words = TodoPlanText.due(TodoCalendar.moved(todo, to: due)) ?? ""
+        let saving = store.reschedule(id, to: due)
+        Task {
+            guard await saving.value else { return }
+            Haptics.success()
+            AppModel.shared.toast = Toast(String(localized: "Moved to \(words)"), style: .success,
+                                          action: Toast.Action(title: String(localized: "Undo")) { _ = store.reschedule(id, to: back) })
+        }
+    }
+}
+
+extension View {
+    /// A to-do on the calendar that can be moved (#2045): picked up and carried in the grid's coordinate space `space`,
+    /// faded while it is (`lifted`), and "Change Due Date…" for VoiceOver and Switch Control (not on a phone's month,
+    /// whose day is one element that opens the day). Nothing without `moves`, and nothing on the Mac (frozen).
+    @ViewBuilder
+    func calendarDraggable(_ entry: CalendarEntry, in space: String, moves: CalendarMoves?, lifted: Bool,
+                           accessible: Bool = true,
+                           began: @escaping (CGPoint, CGFloat) -> Void, moved: @escaping (CGPoint) -> Void,
+                           ended: @escaping (Bool) -> Void) -> some View {
+        #if os(iOS)
+        if let moves {
+            let carried = self
+                .opacity(lifted ? Theme.CalendarGrid.liftedFade : 1)
+                .gesture(CalendarHold(space: space, began: began, moved: moved, ended: ended))
+            if accessible {
+                carried.accessibilityAction(named: Text("Change Due Date…")) { moves.reschedule(entry) }
+            } else {
+                carried
+            }
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+
+    /// The block or chip drawn where a dragged to-do would land: on the calendar's ground, ringed in the accent.
+    func calendarLanding() -> some View {
+        self
+            .background(Theme.CalendarGrid.ground, in: .rect(cornerRadius: Theme.Radius.badge))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.badge)
+                    .strokeBorder(Theme.accent, lineWidth: Theme.Size.lineMedium)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+#if os(iOS)
+/// Picks a to-do up (#2045): a finger once it has been held still `hold` seconds (moving first is a swipe, the page's:
+/// it scrolls the axis or turns the page), a pointer (an iPad's trackpad or mouse) once it has moved a few points (a
+/// click still opens the to-do). Then it follows the finger or pointer until it is let go.
+final class CalendarHoldRecognizer: UIGestureRecognizer {
+    /// As the web's touch (`HOLD_MS`) and the chat's long press.
+    static let hold: TimeInterval = 0.35
+    /// How far a held finger may wander before it is a swipe, and how far a pointer moves before it drags.
+    static let wander = Theme.Space.s
+    static let pointerMove = Theme.Space.xs
+
+    private var start: CGPoint?
+    private var pointer = false
+    private var timer: Timer?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        // A second finger is a pinch or a scroll, not a drag.
+        guard start == nil, touches.count == 1, let touch = touches.first else {
+            if state == .began || state == .changed { state = .cancelled } else if state == .possible { state = .failed }
+            return
+        }
+        start = touch.location(in: nil)
+        pointer = touch.type == .indirectPointer
+        guard !pointer else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.hold, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if self?.state == .possible { self?.state = .began }
+            }
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesMoved(touches, with: event)
+        guard let start, let p = touches.first?.location(in: nil) else { return }
+        switch state {
+        case .possible:
+            let moved = hypot(p.x - start.x, p.y - start.y)
+            if pointer, moved > Self.pointerMove {
+                state = .began
+            } else if !pointer, moved > Self.wander {
+                state = .failed
+            }
+        case .began, .changed:
+            state = .changed
+        default:
+            break
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesEnded(touches, with: event)
+        state = state == .began || state == .changed ? .ended : .failed
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesCancelled(touches, with: event)
+        state = state == .began || state == .changed ? .cancelled : .failed
+    }
+
+    override func reset() {
+        super.reset()
+        timer?.invalidate()
+        timer = nil
+        start = nil
+        pointer = false
+    }
+}
+
+/// The pick-up as SwiftUI sees it: where it began in `space` and how far below the view's top edge, where it moves,
+/// and whether it ended let go (true) or cancelled.
+struct CalendarHold: UIGestureRecognizerRepresentable {
+    var space: String
+    var began: (CGPoint, CGFloat) -> Void
+    var moved: (CGPoint) -> Void
+    var ended: (Bool) -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> CalendarHoldRecognizer { CalendarHoldRecognizer() }
+
+    func handleUIGestureRecognizerAction(_ recognizer: CalendarHoldRecognizer, context: Context) {
+        let point = context.converter.location(in: .named(space))
+        switch recognizer.state {
+        case .began:
+            began(point, context.converter.localLocation.y)
+        case .changed:
+            moved(point)
+        case .ended:
+            ended(true)
+        case .cancelled, .failed:
+            ended(false)
+        default:
+            break
+        }
+    }
+}
+#endif
+
+/// A to-do's due date set without dragging it (#2045): VoiceOver's and Switch Control's "Change Due Date…" on the
+/// calendar, saved as a drop is, with Undo.
+struct TodoRescheduleSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    var todo: TodoItem
+    @State private var allDay: Bool
+    @State private var due: Date
+
+    init(todo: TodoItem) {
+        self.todo = todo
+        // As the to-do's page starts its due date: an all-day one at 18:00 should it become a moment.
+        let draft = TodoPlanDraft(todo)
+        _allDay = State(initialValue: draft.allDay)
+        _due = State(initialValue: draft.due)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    DatePicker(String(localized: "Due"), selection: $due, displayedComponents: allDay ? [.date] : [.date, .hourAndMinute])
+                        .accessibilityIdentifier("todo.calendar.rescheduleDue")
+                    Toggle(String(localized: "All Day"), isOn: $allDay)
+                        .accessibilityIdentifier("todo.calendar.rescheduleAllDay")
+                } header: {
+                    Text(verbatim: todo.title)
+                        .lineLimit(1)
+                }
+            }
+            .themedPage()
+            .navigationTitle("Change Due Date")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .lineLimit(1)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        TodoCalendarMove.save(todo.id, to: allDay ? .day(TodosLogic.dayKey(due)) : .at(due))
+                        dismiss()
+                    }
+                    .lineLimit(1)
+                    .accessibilityIdentifier("todo.calendar.rescheduleSave")
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+}
