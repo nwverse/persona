@@ -2,7 +2,9 @@ package errreport
 
 import (
 	"bytes"
+	"fmt"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -121,6 +123,85 @@ func TestFingerprintAndGate(t *testing.T) {
 	}
 	if !g.Admit(mk("other", "other"), "hub") {
 		t.Fatal("another sender has its own")
+	}
+}
+
+// An id seen again after IDWindow is remembered once from then on: its old entry neither holds back the ones after
+// it nor, when it goes, takes the new one with it.
+func TestGateReSeenID(t *testing.T) {
+	now := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	g := NewGate(func() time.Time { return now })
+	mk := func(id, fp string) *wire.ErrorReport { return &wire.ErrorReport{ID: id, Fingerprint: fp, Count: 1} }
+	if !g.Admit(mk("x", "f1"), "d") {
+		t.Fatal("x first")
+	}
+	now = now.Add(IDWindow + time.Minute)
+	if !g.Admit(mk("x", "f2"), "d") || !g.Admit(mk("y", "f3"), "d") {
+		t.Fatal("x again after its window, then y")
+	}
+	if !slices.Equal(g.order, []string{"x", "y"}) {
+		t.Fatalf("x once: %v", g.order)
+	}
+	now = now.Add(time.Hour)
+	for i := range idsMost - 2 { // up to the most ids: none goes yet, x and y among them
+		g.Admit(mk(fmt.Sprintf("z%d", i), "z"), "d")
+	}
+	if g.Admit(mk("x", "f4"), "d") {
+		t.Fatal("a retry of x inside its new window")
+	}
+}
+
+// An occurrence the rate limits refuse after its problem's fold window is folded, so the next one let on counts it.
+func TestGateRateLimitedOccurrenceIsFolded(t *testing.T) {
+	now := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	g := NewGate(func() time.Time { return now })
+	mk := func(id, fp string) *wire.ErrorReport { return &wire.ErrorReport{ID: id, Fingerprint: fp, Count: 1} }
+	if !g.Admit(mk("f0", "F"), "d") {
+		t.Fatal("F first")
+	}
+	now = now.Add(FoldWindow)
+	for i := range DeviceRate {
+		if !g.Admit(mk(fmt.Sprintf("p%d", i), fmt.Sprintf("P%d", i)), "d") {
+			t.Fatalf("within the rate: %d", i)
+		}
+	}
+	if g.Admit(mk("f1", "F"), "d") {
+		t.Fatal("over the device's rate")
+	}
+	if got := g.folds["F"].folded; got != 1 {
+		t.Fatalf("the refused one is folded: %d", got)
+	}
+	now = now.Add(time.Minute)
+	r := mk("f2", "F")
+	if !g.Admit(r, "d") || r.Count != 2 {
+		t.Fatalf("the next one carries it: %d", r.Count)
+	}
+}
+
+// Unsent gives an admitted report's count back to its problem: the next one is not folded into it and carries it.
+func TestGateUnsent(t *testing.T) {
+	now := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	g := NewGate(func() time.Time { return now })
+	mk := func(id, fp string) *wire.ErrorReport { return &wire.ErrorReport{ID: id, Fingerprint: fp, Count: 1} }
+	if !g.Admit(mk("1", "F"), "d") || g.Admit(mk("2", "F"), "d") {
+		t.Fatal("one let on, one folded")
+	}
+	now = now.Add(FoldWindow)
+	r := mk("3", "F")
+	if !g.Admit(r, "d") || r.Count != 2 {
+		t.Fatalf("with the folded one: %d", r.Count)
+	}
+	g.Unsent(r)
+	if g.Admit(mk("3", "F"), "d") {
+		t.Fatal("its id stays: a retry of an occurrence already counted would count it twice")
+	}
+	next := mk("4", "F")
+	if !g.Admit(next, "d") || next.Count != 3 {
+		t.Fatalf("the next one carries the unsent one's count: %d", next.Count)
+	}
+	g.Unsent(&wire.ErrorReport{ID: "5", Fingerprint: "unknown", Count: 1})
+	if got := g.folds["unknown"]; got == nil || got.folded != 1 {
+		t.Fatalf("a problem the gate no longer holds starts its fold again: %+v", got)
 	}
 }
 
