@@ -1210,6 +1210,7 @@ nonisolated extension Subagent {
     /// loaded lines: the list's word.
     func running(in tasks: TaskIndex, sessionWorks: Bool = false) -> Bool {
         guard let call = toolUseID else { return running }
+        if let status = tasks.agentStatuses[call] { return !SubagentDelivery.isTerminal(status) }
         if tasks.started.contains(call) { return running && !tasks.notes[call, default: []].contains { $0.status != "event" } }
         if tasks.answered.contains(call) { return false }
         return running || (sessionWorks && tasks.asked.contains(call))
@@ -1766,7 +1767,7 @@ nonisolated struct Item: Codable, Identifiable, Hashable, Sendable {
     var wake: Bool?
     /// kind == .fold: the work this item stands for.
     var fold: Fold?
-    /// kind == .notice: a background task reporting back.
+    /// kind == .notice or .toolResult: a background task reporting back.
     var task: TaskNote?
     /// The id the app sent the message this item came from with (`PendingMessage.id`): on every item of it — its text,
     /// its images, a queued copy, or the notice it became (`/compact`). Nil from older hubs, or when the node could not

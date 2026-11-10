@@ -1,8 +1,5 @@
 import XCTest
 
-/// Subagents' reports read as one line until opened, against scripts/mock/mock_hub.py with MOCK_REPORT_FOLD=1: a
-/// foreground subagent's result in its card, a background one's notice, and its report again as another session's
-/// message (its handback); a real peer's message stays whole. Opened stays open when the chat is opened again.
 final class ReportFoldUITests: XCTestCase {
     private var app: XCUIApplication!
     private var hub = ""
@@ -40,12 +37,10 @@ final class ReportFoldUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", s)).firstMatch
     }
 
-    /// "Collapse" under an open report (by its words: in a card, the card's id is on everything in it).
-    private var collapse: XCUIElement { app.buttons.matching(NSPredicate(format: "label == %@", "收起")).firstMatch }
-
     @MainActor func testCompletedToolResultsAreCollapsedUntilOpened() throws {
         launch(fresh: true)
-        let result = see(app.buttons.matching(identifier: "chat.subagent-result").firstMatch, "the collapsed subagent result", timeout: 20)
+        let result = see(app.buttons.matching(identifier: "chat.subagent-result")
+            .matching(NSPredicate(format: "label CONTAINS %@", "结算流程")).firstMatch, "the collapsed subagent result", timeout: 20)
         XCTAssertFalse(text("用时 1 分 48 秒").exists)
         see(text("来自 release-bot"), "the peer's message", timeout: 5)
         XCTAssertTrue(text("发版分支已经切好了").exists)
@@ -56,6 +51,7 @@ final class ReportFoldUITests: XCTestCase {
         see(text("结算回归：42 个用例全部通过"), "the report's heading")
         see(text("用时 1 分 48 秒"), "the tool result")
         shot("open")
+        app.swipeDown()
         result.tap()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: text("用时 1 分 48 秒"))
         waitForExpectations(timeout: 5)

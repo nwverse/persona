@@ -40,7 +40,8 @@ final class SubagentResultUITests: XCTestCase {
 
     @MainActor func testCompletedResultsFoldWhileTheRunningAgentKeepsItsProgress() throws {
         launch()
-        let finished = app.buttons.matching(identifier: "chat.subagent-result").firstMatch
+        let finished = app.buttons.matching(identifier: "chat.subagent-result")
+            .matching(NSPredicate(format: "label CONTAINS %@", "结算流程")).firstMatch
         XCTAssertTrue(finished.waitForExistence(timeout: 25))
         let running = app.descendants(matching: .any).matching(identifier: "chat.subagent-card").firstMatch
         XCTAssertTrue(running.waitForExistence(timeout: 10))
@@ -52,8 +53,10 @@ final class SubagentResultUITests: XCTestCase {
         finished.tap()
         XCTAssertTrue(text("结算流程 42 个用例全部通过").waitForExistence(timeout: 10))
         try shot("subagent-result-open")
+        app.swipeDown()
         finished.tap()
-        XCTAssertFalse(text("结算流程 42 个用例全部通过").exists)
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: text("结算流程 42 个用例全部通过"))
+        waitForExpectations(timeout: 5)
         XCTAssertTrue(running.exists)
     }
 }

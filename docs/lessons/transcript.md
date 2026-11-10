@@ -136,10 +136,14 @@ The node now gives such a notification the call an earlier notification of the t
 ## Apple subagent results (#3377)
 
 A background Agent launch receipt is not a completion result. Keep its progress card until authoritative terminal
-state arrives, then use the ordinary collapsed tool-result row. Preserve exact tool-use IDs; a shared subagent type
+state arrives, then use the ordinary collapsed tool-result row. Keep report deliveries separately from lifecycle
+state: an empty completion pointer must not erase earlier report bodies, and `running`, `waiting` or unknown
+statuses must not stop the progress bar. Preserve exact tool-use IDs; a shared subagent type
 or title cannot safely identify a report's call. Legacy notice detail and notice text are separate payloads: do not
 reuse a notice's text-truncation metadata for its report detail. When the hub changes peer input into tool results,
-bump the Apple chat cache so old peer cards are not retained. Run the shared result tests in both Apple app targets.
+bump the Apple chat cache so old peer cards are not retained. Retain referenced launch exchanges when trimming
+cached tails, and treat `wake` as turn evidence without drawing another message card. Run the shared result tests
+in both Apple app targets.
 
 ## Work opened in the App folded again by the same page (2026-11-07, #6038)
 
