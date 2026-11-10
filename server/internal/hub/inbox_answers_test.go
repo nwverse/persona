@@ -26,12 +26,13 @@ import (
 // countingInbox is a manager on the bus whose inbox list is body (status, when set), counting how often it is listed;
 // a list waits for gate when one is set. Every other request is answered {}.
 type countingInbox struct {
-	mu     sync.Mutex
-	body   []byte
-	status int
-	gate   chan struct{}
-	listed atomic.Int32
-	asked  chan struct{} // a list was asked for (buffered)
+	mu         sync.Mutex
+	body       []byte
+	status     int
+	gate       chan struct{}
+	listed     atomic.Int32
+	validators atomic.Int32  // lists asked with If-None-Match
+	asked      chan struct{} // a list was asked for (buffered)
 }
 
 func (c *countingInbox) serve(ctx context.Context, r assistantwire.HTTPRequest) (any, error) {
@@ -39,6 +40,9 @@ func (c *countingInbox) serve(ctx context.Context, r assistantwire.HTTPRequest) 
 		return assistantwire.HTTPResponse{Status: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: json.RawMessage("{}\n")}, nil
 	}
 	c.listed.Add(1)
+	if len(r.Header["If-None-Match"]) > 0 {
+		c.validators.Add(1)
+	}
 	select {
 	case c.asked <- struct{}{}:
 	default:
@@ -289,6 +293,48 @@ func TestMergedInboxFailuresNotShared(t *testing.T) {
 	}
 }
 
+// A fetch that panics is answered 500 as any handler's panic (recoverPanics) and leaves nobody waiting on it: the
+// request that joined it fetches for itself, and no fetch stays under way for the next ones to join.
+func TestMergedInboxLeaderPanics(t *testing.T) {
+	h := newTestHub(t)
+	newCountingInbox(t, h, 4)
+	gate := make(chan struct{})
+	var asks atomic.Int32
+	ask := func(w http.ResponseWriter, r *http.Request, id string) {
+		if asks.Add(1) == 1 {
+			<-gate
+			panic("the list broke")
+		}
+		h.forwardInboxList(w, r, id)
+	}
+	srv := recoverPanics(h, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.mergedInbox(w, r, "items", ask) }))
+	get := func(ctx context.Context, code chan<- int) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, localRequest("GET", "/api/v1/inbox?sources=all").WithContext(ctx))
+		code <- rec.Code
+	}
+	first, second := make(chan int), make(chan int)
+	go get(t.Context(), first)
+	eventually(t, 5*time.Second, "the first is asking", func() bool { return asks.Load() == 1 })
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second) // waiting it out would end in a 502
+	defer cancel()
+	go get(ctx, second)
+	eventually(t, 5*time.Second, "the second waits for the first", func() bool { return h.inboxAnswers.waiting() == 1 })
+	close(gate)
+	if code := <-first; code != http.StatusInternalServerError {
+		t.Fatalf("the request that panicked: %d", code)
+	}
+	if code := <-second; code != http.StatusOK {
+		t.Fatalf("the request waiting for it: %d", code)
+	}
+	h.inboxAnswers.mu.Lock()
+	under := len(h.inboxAnswers.calls)
+	h.inboxAnswers.mu.Unlock()
+	if under != 0 {
+		t.Fatalf("%d fetches still under way", under)
+	}
+}
+
 // One manager's failure makes the merge nobody else's too, though the merge (the default's list) is a 200.
 func TestMergedInboxOtherManagerFailing(t *testing.T) {
 	h := newTestHub(t)
@@ -487,6 +533,19 @@ func TestMergedInboxValidator(t *testing.T) {
 	if rec := get(i18n.En, false, "*"); rec.Code != 503 || rec.Header().Get("ETag") != "" {
 		t.Fatalf("%d, ETag %q", rec.Code, rec.Header().Get("ETag"))
 	}
+
+	// A 2xx that is no object goes on as it is (writeDecoded), with a tag of its bytes, as it goes without one.
+	m.set(func(c *countingInbox) { c.status, c.body = 0, json.RawMessage(`{"as_of" }`) })
+	h.inboxAnswers.changedAll()
+	plain := getInbox(t.Context(), h, routes, "/api/v1/inbox?sources=all", i18n.En, false)
+	if rec := get(i18n.En, false, `W/"i1-"`); rec.Code != 200 || rec.Header().Get("ETag") == "" || !bytes.Equal(rec.Body.Bytes(), plain.Body.Bytes()) {
+		t.Fatalf("%d, ETag %q, %q; without If-None-Match %d %q", rec.Code, rec.Header().Get("ETag"), rec.Body, plain.Code, plain.Body)
+	}
+
+	// The validator is the hub's: the managers never see If-None-Match.
+	if n := m.validators.Load(); n != 0 {
+		t.Fatalf("the manager was asked with If-None-Match %d times", n)
+	}
 }
 
 // The tag leaves out the top-level as_of's value, wherever it is; If-None-Match compares weakly, in lists.
@@ -504,6 +563,12 @@ func TestInboxAnswerTag(t *testing.T) {
 	} {
 		if (tagOf(tc.a) == tagOf(tc.b)) != tc.same {
 			t.Errorf("%s and %s: tags %s and %s", tc.a, tc.b, tagOf(tc.a), tagOf(tc.b))
+		}
+	}
+	// A body cut short (the default's answer passed on as it is) has no as_of to leave out: it is hashed whole.
+	for _, body := range []string{`{"`, `{"as_of`, `{"as_of"`, `{"as_of" }`, `{"as_of":`, `{"as_of":"1`, `{"a":1,"`, `{"items":`, `{"a"`, `{"\`} {
+		if from, to, ok := topLevelValue([]byte(body), "as_of"); ok {
+			t.Errorf("%s: as_of at %d:%d", body, from, to)
 		}
 	}
 	for _, tc := range []struct {

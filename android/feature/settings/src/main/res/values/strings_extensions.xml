@@ -138,6 +138,7 @@
     <string name="settings_ext_card_value">Value</string>
     <string name="settings_ext_card_total">Total</string>
     <string name="settings_ext_card_other">Other</string>
+    <string name="settings_ext_card_remaining">Remaining</string>
     <string name="settings_ext_card_current">Now</string>
     <string name="settings_ext_not_chosen">None</string>
     <string name="settings_ext_search">Search</string>
@@ -162,7 +163,7 @@
     <string name="settings_ext_list_footer">Extensions can only be installed, upgraded and removed on the hub machine (personad extension). Here you can turn them on or off, change settings and enter secrets.</string>
     <string name="settings_ext_save">Save</string>
     <string name="settings_ext_saved_restart">Saved. The extension will restart.</string>
-    <string name="settings_ext_read_only">This extension is set in its manager\'s manager.json. Turn it on or off and change its settings there, then restart the manager.</string>
+    <string name="settings_ext_read_only">This extension is set in its assistant\'s manager.json. Turn it on or off and change its settings there, then restart the assistant.</string>
     <string name="settings_ext_enabled">Enabled</string>
     <string name="settings_ext_enabled_note">When turned off, it stops running and the connectors and other things it provides turn off too. Its settings and secrets are kept.</string>
     <string name="settings_ext_unavailable">Unavailable</string>
@@ -333,6 +334,9 @@
     <string name="settings_ext_cua_ready">Cua ready</string>
     <string name="settings_ext_cua_installed">Cua installed</string>
     <string name="settings_ext_machine_not_found">Machine not found</string>
+    <string name="settings_ext_machine_missing">%1$s (no such machine)</string>
+    <string name="settings_ext_launcher_missing">%1$s (no such launcher)</string>
+    <string name="settings_ext_launchers_loading">Loading launchers…</string>
     <string name="settings_ext_no_mac">No Macs on this hub yet.</string>
     <string name="settings_ext_no_machine">No machines on this hub yet.</string>
     <string name="settings_ext_turn_on_title">Turn on “%1$s”?</string>

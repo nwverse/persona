@@ -33,6 +33,7 @@ extension TaskState {
         case .needsYou: StateName.needsYou.text
         case .working: StateName.working.text
         case .unread: StateName.unread.text
+        case .waiting: StateName.taskWaiting.text
         case .followup: StateName.followUp.text
         case .notStarted: String(localized: "Starting [Task Views d14c3a]")
         case .done: StateName.done.text
@@ -175,7 +176,7 @@ struct PlanCard: View {
                     let edits = Ultracode.cardEdits(plan, choices: Ultracode.choices(plan, card: ultraChoice), blocked: { blocked.contains($0) })
                     Task { await store.start(plan, edits: edits, remember: remember) }
                 } label: {
-                    Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Started")).lineLimit(1)
+                    Text(plan.tasks.count > 1 ? String(localized: "Start \(plan.tasks.count) Tasks") : String(localized: "Start")).lineLimit(1)
                         .frame(maxWidth: .infinity)
                 }
                 .themedButton(prominent: true)
@@ -329,7 +330,7 @@ struct PlanEditSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .sheetCancel(unsaved: !tasks.isEmpty && tasks != opened) { dismiss() }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Started") { start(tasks) }.bold() }
+                ToolbarItem(placement: .confirmationAction) { Button("Start") { start(tasks) }.bold() }
             }
         }
         #if os(macOS)
@@ -359,81 +360,86 @@ struct TaskCard: View {
             let state = store.state(todo)
             let lead = store.leadSession(todo)
             let ultracode = store.ultracode(todo)
-            Button {
-                store.detailTask = todo.id
-            } label: {
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    HStack(spacing: Theme.Space.s) {
-                        TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
-                        Text(todo.title).font(Theme.Font.bodyStrong).lineLimit(1)
-                        if ultracode { UltracodeMark(font: Theme.Font.labelStrong).transition(.opacity) }
-                        Spacer(minLength: Theme.Space.s)
-                        if let t = TaskClock.since(todo.createdAt), state != .done, state != .failed {
-                            Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
-                        }
-                    }
-                    .animation(UltracodeMark.motion, value: ultracode)
-                    Text(TaskPlace.line(todo, lead: lead))
-                        .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                    TaskNowLine(todo: todo, state: state, lead: lead)
-                    // What Persona sent its agent (#1542): the hand-off sent with this card is drawn only here.
-                    TaskSentList(todoID: todo.id, conversation: conversation)
-                    if state == .done, todo.supervision != nil {
-                        ReviewChip(todo: todo)
-                    }
-                    // The PR its work is in (`pr_url`, #2768), as the Feishu bot's task report links it (#5033).
-                    if let pr = todo.prLink {
-                        Button {
-                            openURL(pr)
-                        } label: {
-                            Label(todo.prLabel ?? String(localized: "View PR"), systemImage: Theme.Icon.pullRequest).lineLimit(1)
-                        }
-                        .font(Theme.Font.captionStrong)
-                        .foregroundStyle(Theme.accent)
-                        .buttonStyle(.plain)
-                    }
-                    if state != .done {
+            if let ask = todo.openAsk {
+                BriefAcceptRow(row: ask.row(for: todo), group: AppModel.shared.hub?.group ?? "")
+                    .card(padding: Theme.Space.l)
+            } else {
+                Button {
+                    store.detailTask = todo.id
+                } label: {
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
                         HStack(spacing: Theme.Space.s) {
-                            Text(state.label).font(Theme.Font.captionMedium).foregroundStyle(state.labelColor).lineLimit(1).fixedSize()
+                            TaskMark(state: state).scaledFrame(width: Theme.Size.markM)
+                            Text(todo.title).font(Theme.Font.bodyStrong).lineLimit(1)
+                            if ultracode { UltracodeMark(font: Theme.Font.labelStrong).transition(.opacity) }
+                            Spacer(minLength: Theme.Space.s)
+                            if let t = TaskClock.since(todo.createdAt), state != .done, state != .failed {
+                                Text(t).font(Theme.Font.caption).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
+                            }
+                        }
+                        .animation(UltracodeMark.motion, value: ultracode)
+                        Text(TaskPlace.line(todo, lead: lead))
+                            .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                        TaskNowLine(todo: todo, state: state, lead: lead)
+                        // What Persona sent its agent (#1542): the hand-off sent with this card is drawn only here.
+                        TaskSentList(todoID: todo.id, conversation: conversation)
+                        if state == .done, todo.supervision != nil {
                             ReviewChip(todo: todo)
-                            Spacer(minLength: Theme.Space.l)
-                            if state == .failed {
-                                // Nothing to say a word to: the way out is on the card.
-                                Button {
-                                    store.askRemove(todo, pending: $removing)
-                                } label: {
-                                    Label("Remove [Task Sheets 6135d4]", systemImage: Theme.Icon.delete).lineLimit(1)
+                        }
+                        // The PR its work is in (`pr_url`, #2768), as the Feishu bot's task report links it (#5033).
+                        if let pr = todo.prLink {
+                            Button {
+                                openURL(pr)
+                            } label: {
+                                Label(todo.prLabel ?? String(localized: "View PR"), systemImage: Theme.Icon.pullRequest).lineLimit(1)
+                            }
+                            .font(Theme.Font.captionStrong)
+                            .foregroundStyle(Theme.accent)
+                            .buttonStyle(.plain)
+                        }
+                        if state != .done {
+                            HStack(spacing: Theme.Space.s) {
+                                Text(state.label).font(Theme.Font.captionMedium).foregroundStyle(state.labelColor).lineLimit(1).fixedSize()
+                                ReviewChip(todo: todo)
+                                Spacer(minLength: Theme.Space.l)
+                                if state == .failed {
+                                    // Nothing to say a word to: the way out is on the card.
+                                    Button {
+                                        store.askRemove(todo, pending: $removing)
+                                    } label: {
+                                        Label("Remove [Task Sheets 6135d4]", systemImage: Theme.Icon.delete).lineLimit(1)
+                                    }
+                                    .font(Theme.Font.captionStrong)
+                                    .foregroundStyle(Theme.danger)
+                                    .buttonStyle(.plain)
+                                } else {
+                                    Button {
+                                        store.routes[conversation] = todo.id
+                                    } label: {
+                                        Label("Message [Task Views 7e7db6]", systemImage: Theme.Icon.routeToTask).lineLimit(1)
+                                    }
+                                    .font(Theme.Font.captionStrong)
+                                    .foregroundStyle(Theme.accent)
+                                    .buttonStyle(.plain)
                                 }
-                                .font(Theme.Font.captionStrong)
-                                .foregroundStyle(Theme.danger)
-                                .buttonStyle(.plain)
-                            } else {
-                                Button {
-                                    store.routes[conversation] = todo.id
-                                } label: {
-                                    Label("Message [Task Views 7e7db6]", systemImage: Theme.Icon.routeToTask).lineLimit(1)
-                                }
-                                .font(Theme.Font.captionStrong)
-                                .foregroundStyle(Theme.accent)
-                                .buttonStyle(.plain)
                             }
                         }
                     }
+                    .contentShape(.rect)
                 }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .card(padding: Theme.Space.l)
-            .overlay {
-                if state == .needsYou {
-                    RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                        .stroke(state.agentState.color, lineWidth: Theme.Size.lineMedium)
+                .buttonStyle(.plain)
+                .card(padding: Theme.Space.l)
+                .overlay {
+                    if state == .needsYou {
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .stroke(state.agentState.color, lineWidth: Theme.Size.lineMedium)
+                    }
                 }
+                .menuPreviewShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                .contextMenu { TaskRemoveMenuItem(todo: todo, state: state, pending: $removing) }
+                .confirmTaskRemoval($removing)
+                .animation(Theme.Motion.state, value: state)
             }
-            .menuPreviewShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
-            .contextMenu { TaskRemoveMenuItem(todo: todo, state: state, pending: $removing) }
-            .confirmTaskRemoval($removing)
-            .animation(Theme.Motion.state, value: state)
         }
     }
 }

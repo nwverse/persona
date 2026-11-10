@@ -171,6 +171,8 @@ data class Todo(
     val ask: TodoAsk? = null,
     @SerialName("pr_url") val prUrl: String? = null,
     @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
+    /** The manager it belongs to, as the merged list stamps it (docs/assistant/managers.md "Ownership"); null: the default manager's. */
+    val manager: String? = null,
 ) {
     val isDone: Boolean get() = doneAt != null
     val activeAgents get() = agents.filter { it.releasedAt == null }

@@ -1,5 +1,17 @@
 # Lessons: web UI and interactions
 
+## Ancestor package metadata can break Vite config loading (#3301)
+
+When Vite/esbuild reports invalid `package.json` content outside the checkout, inspect the exact reported ancestor: the web package can be valid while package-scope resolution reads a broken parent file. A successful Go build does not prove that the bundled web build or deployment succeeded. Do not change application code or overwrite another worker's shared file just to silence this error.
+
+If the original configuration loads again later, verify a fresh normal build and the serving artifacts before declaring recovery. Retain the earlier failure, and distinguish stale-source refusals from compilation errors. Never bypass freshness checks or reset the failure budget to force publication.
+
+## A clipping fold left a tall card's buttons out of sight (2026-11-10, #3112)
+
+- **A sticky footer sticks in its nearest clipping ancestor, not the box that scrolls**: #2026 made a waiting card `shrink-0` with an `overflow-clip` root and a `sticky -bottom-1` footer, which works where the cards sit straight in the dock. On a phone and in a side panel (an agent's or task's chat over the main one, `compactDock`) PendingCards puts the open cards in a `Collapse`, whose clip box was `overflow-hidden`: a scroll container of its own, so the footer stuck inside it and stayed at the card's natural bottom, below `data-chat-cards`. A Feishu permission card with a long `python3 -c …` command showed half of its "Always allow covers…" line and no Allow / Deny. Open folds are `unclipped` now. Look for every `overflow-hidden` between a sticky element and the scroller you mean.
+- **Check every place a card is drawn**: the main chat's tray, an agent's own page, the side panel and a phone each wrap the cards differently; the fix for one passed while another stayed broken. `scripts/test/web_card_scroll_e2e.py --path` covers each one against the mock hub's `MOCK_ASK_LONG`.
+- **Drive real gestures**: in headless Chromium CDP `Input.synthesizeScrollGesture` scrolled nothing even where a finger does; use `Input.dispatchTouchEvent` start / move / end, start the swipe off a box that scrolls by itself (a command block), and aim the wheel at the card, not the window's middle (a side panel is off to the right).
+
 ## A completed task's omitted ask must clear the partial store merge (#3038)
 
 `putTodo` merges partial records. A completed to-do response omits `ask`, so passing it directly leaves the old decision card in the attention tray until another list read. Explicitly clear the returned optional ask when applying completion, invalidate earlier list reads with `todosAsked.forget()`, then refresh the list. Regress a delayed pre-completion read followed by a failed refresh: an accepted write must not roll back. Admit completion and recommendation acceptance through one synchronous guard: disabling buttons after a React render does not block mixed actions in the same event batch. Regress successful completion with JSON-omitted optional fields, not an object containing `ask: undefined`. Offer direct completion only on the live Pending row, never a historical briefing snapshot that may describe an earlier run.
@@ -54,6 +66,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - A flex child with `overflow-hidden` has a `min-height:auto` of 0, so flex squeezes it below its content when the box above the input is full. The card's footer (the answer buttons) then sits below the fold, and a receipt can be squeezed to a fraction of its content. Give every card in that box `shrink-0`, not only the one that was reported (`Card`, `AnsweredCard`, `DelegatedCard`).
 - An `overflow-hidden` ancestor makes itself the scroll container that `position: sticky` refers to, so a sticky footer inside it never sticks to the outer scroller. Use `overflow-clip`: it clips to the rounded corners the same way but is not a scroll container. The sticky offset also has to cancel the scroller's padding (`-bottom-1` for the dock's `p-1`), or the body shows under the footer.
 - jsdom has no layout; check it in a browser with `scripts/test/web_card_actions_e2e.py`, which asserts the button row's box is inside the viewport and the dock's visible area.
+- The assistant's Pending tray is itself the scroller, so cards inside it must not open a second scroll box (`PendingCards narrow`): the sticky answer row then sticks to the inner box and sits below the tray's fold. The action bar holding the tray also has to `shrink` with the dock (`min-h-0`), or on a short window it stands taller than the dock and the card's answer row ends up under the composer (#3083). Check with `web/e2e/ask-card-dock.mjs`.
 
 ## A native select's arrow ignores the field's padding (#2314)
 
@@ -76,6 +89,10 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 ## Pushed batches follow more_after too (#1118)
 
 - A contiguous reconnect replay can still be incomplete when its final batch carries `more_after`. Follow that flag on pushed batches as well as HTTP pages, continuing from the updated contiguous coverage cursor through the existing gap-fill timer; do not wait for another push to reveal a gap.
+
+## A poll that keeps its last answer must still redraw on failure (#1905)
+
+- `useUsageWindows` keeps the last answer when a refresh fails, and the bars judge its age (`stale_at`) at render time. A failure that sets nothing renders nothing, so kept numbers would stay "fresh" until something else redrew the sidebar. On failure it hands back a copy of what it keeps (`kept.slice()`): every consumer renders again once per poll and judges with the time now. Anything judged against the clock needs a clock or a render, not only new data.
 
 ## State updaters stay pure under StrictMode (#1165)
 
@@ -594,6 +611,16 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 Pages follow chats through WebSocket pushes. Full queues, apparently-open dead connections, or server bugs can lose a push; after the Agent stops, no next batch exposes it. Session lists still push (`sessions_delta`), so pages can detect stale content: list `updated_at` newer than latest item's `ts`, with no items for a while, triggers an `after_seq` fetch (`lib/stale-page.ts`, 10-second throttle, foreground only). Compare "file changed" with "page content," not "push arrived," avoiding dependence on any particular healthy push path. Merge retrieved data silently; label "Not real-time" only if fallback repeats.
 Writes without items (titles, modes) also advance `updated_at`, returning empty fetches. Record "Already checked this `updated_at`" to avoid refetching every 10 seconds. Deduplicate fetched items against concurrent pushes (count only `seq` above `covered`), or healthy streams appear to lose data.
 
+## Time cannot tell the last line of a burst was lost, and a push cannot settle a rev (2026-11-10, #1179)
+
+- **What went wrong**: the fallback above ignored an `updated_at` within `STALE_SLACK_MS` (1 s) of the newest line's `ts`, since the file's mtime and the line's own clock compare loosely. When the last line of a burst came 0.3 s after the line before and its push was lost, the page never asked, until the agent wrote again.
+- **Now**: the page also watches the session's `rev` (the list's row and the hub's `revs` event, which moves only the rev; `RevWatch` in `lib/stale-page.ts`) and asks once quiet when it moved since the page's newest read was *sent*. The time rule stays for subagents, which have no rev.
+- **Remembering the list's version when items last came does not work** (#1193's first take): the list comes from the node's poll and the push from its transcript watch, so a list can come before the push for an earlier line, and that push then "acknowledges" a version whose last line never came. Nothing says which lines a rev covers; only a read sent after the move does.
+- **A read's arrival is not its coverage**: a rev that moves while the read is on its way may be for a line written after the node read the file. The watch counts moves and keeps how many it had heard when the read went out.
+- **Cost**: the node reports revs on its next tick, mostly after the items, so an open chat makes one empty `after_seq` read each time it goes quiet, as on iOS (#1189).
+- **Tests that restart the clock**: `lastPulls` in `useTranscript` outlives a page on purpose (reopening a chat does not ask again at once). The sync scenarios start every case at the same fake time with the same session, so an earlier case's ask lay in the future and its pacing silently blocked the next case's: they call `resetStalePullsForTests`.
+- Tests: `useTranscript.gap.test.tsx` ("a lost last line of a burst"), `stale-page.test.ts`, the shared case `burst_last_push_lost_pulls`.
+
 ## Scripted scrolling ignores reduced motion (2026-11-05, #2664)
 
 - Global `prefers-reduced-motion` rules in `styles.css` reduce CSS animation / transition duration to 1 ms, but cannot control explicit JS `scrollTo({ behavior: "smooth" })` / `scrollIntoView({ behavior: "smooth" })`.
@@ -713,6 +740,7 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 
 - `memo` helps only when the row's props keep their identity. A value rebuilt on every push (the "By to-do" tree from `buildTodoTree`, the rail's ticks from the chat lines) breaks it even when nothing changed. Share the rebuilt value with the previous one (`shareTree`, `stabilizeLines`), or cache the result per input object in a `WeakMap`. Store the parts the result was read from next to it and check them, because callers and tests can change a line in place.
 - A prop that every row receives but only one row uses (the open row's key, the list of computers) re-renders all of them when it changes. Pass the open row's key only to the branch that holds it ("" elsewhere), and pass a lookup that keeps its identity while the labels it returns stay the same.
+- Sharing a rebuilt tree does not avoid building it (#3059). Subscribe to the machine fields the tree and its descendants read, including the never-connected predicate (trust and whether `last_seen` exists), so telemetry-only pushes keep the memo input unchanged. Memoized bars also need stable count objects and handlers; handlers must read the latest committed sessions when the bar skips a push. Keep usage and notice subscriptions inside their memo boundaries so their own updates still arrive.
 - A shortcut on text must give the same result as the full pass. `navRailExcerpt` reads only the head of a long answer, and only when no comment or link runs past the cut. Its test compares it with the whole-text excerpt on random Markdown; removing either check must make that test fail.
 - `querySelectorAll` on the chat scroller searches every message's markup. The line wrappers (`[data-line]`) are direct children of `[data-chat-content]`, so read those children instead.
 
@@ -738,6 +766,10 @@ A saved credential and an empty input are different from explicitly removing tha
 
 A successful token check does not prove the subsequent device-token exchange succeeded: a redeemed pairing code can still read during its grace period. Keep the legacy credential only when the exchange returns 404 for an old hub. Authentication refusal, server failure and transport failure must reject sign-in without replacing browser credentials. Both opened and pasted links should classify a 401 by status, not by the exact error sentence returned by the hub.
 
+## A gateway status is not an outage diagnosis (#1915)
+
+Classify stable business codes before generic status messages, including in toast folding. A 503 can mean disabled knowledge, an unready index or a disconnected manager; it does not prove the hub or a computer is down. Keep old-hub compatibility at the REST boundary, requiring the route, status, code and exact known diagnostic together. Retain diagnostics on the error object, not inside business messages, and exercise the rendered page through the real decoder.
+
 ## An op receipt keeps the hub's answer and the digest covers the body (#2459)
 
 A write under an op id can be repeated only unchanged: the hub replays the answer it kept for that id (a refusal included) and answers `409 op_id_reused` when the body changed. So a retry after a gap keeps the id and the request as they were, which means a start that may have reached the hub cannot reopen its form; a retry after a refusal needs a new id. Another request of the same flow, such as the Codex start with a prompt, has its own id. A repeat can also come back `202 {"state":"pending"}` or `{"state":"unknown"}`, which `res.ok` reads as success, so a caller that needs the real answer has to look at `state`.
@@ -749,3 +781,11 @@ A write under an op id can be repeated only unchanged: the hub replays the answe
 constant inside `TaskDock`, so nothing pointed the new code at it. Shared look lives in one exported class
 (`DOCK_CAPSULE`) used by every chip that should match; tests assert the classes are shared and the e2e measures the rendered
 height against 2 rem in a real browser.
+
+## A progress count must follow "not closed", not "an agent is running" (#3162)
+
+The old dock's pills and iOS's Progress count kept a task only while its agent was working, waiting or unseen. A
+supervised task spends most of its life stopped between rounds (`follow_up`: the agent's turn ended and was seen, the task
+is not done), so the owner saw one task out of four and asked what the others were doing. The #2920 Progress tray went the
+other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
+`start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.

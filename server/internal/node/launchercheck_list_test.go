@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/compat"
 )
 
 // A launcher health check runs a real headless claude a hundred times a day on each computer, each leaving a
@@ -34,7 +37,8 @@ func TestLauncherCheckTranscriptsTakeNoSlots(t *testing.T) {
 	_ = os.MkdirAll(kept, 0o700)
 	writeIn("-tmp-persona-check-42", mine, kept, 30*time.Hour)
 	writeIn("-tmp-persona-check-1001641372", gone, "/tmp/persona-check-1001641372", 30*time.Hour)
-	writeIn("-private-tmp-jarvis-check-3821031972", gone, "/tmp/jarvis-check-3821031972", 25*time.Hour) // an older node's check, old prefix
+	old := compat.LauncherCheckDir + "3821031972" // an older node's check, old prefix
+	writeIn("-private-tmp-"+old, gone, "/tmp/"+old, 25*time.Hour)
 	for i := 0; i < 100; i++ {
 		writeIn("-tmp-persona-check-1000"+fmt.Sprint(500000+i), fmt.Sprintf("eeeeeeee-0000-0000-0000-%012d", i), "/tmp/persona-check-100050000"+fmt.Sprint(i), time.Duration(100-i)*time.Minute)
 	}
@@ -100,7 +104,8 @@ func TestOnlyListedSessionsTakeSlots(t *testing.T) {
 
 // removeCheckProject removes the projects directory Claude Code keeps for the check's temp directory — it makes one
 // (with an empty memory directory) even under --no-session-persistence, and a claude without the flag writes the
-// transcript there — and nothing else: the suffix's random digits make the name unique.
+// transcript there — and nothing else: the suffix's random digits make the name unique. On macOS Claude Code names it
+// after the resolved path while MkdirTemp returns the symlinked one (/var → /private/var): both names are removed.
 func TestRemoveCheckProjectRemovesOnlyItsOwn(t *testing.T) {
 	n, _ := claudeHome(t)
 	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
@@ -121,5 +126,35 @@ func TestRemoveCheckProjectRemovesOnlyItsOwn(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(d, "memory", "m.txt")); err != nil {
 			t.Fatalf("%s was removed: %v", d, err)
 		}
+	}
+}
+
+// macOS's symlinked temp parent: Claude Code encodes the resolved path (/private/var/folders…), MkdirTemp hands the node
+// the symlinked one (/var/folders…), and only the directory named for the resolved path is on the disk.
+func TestRemoveCheckProjectResolvesTheTempSymlink(t *testing.T) {
+	if runtime.GOOS != "darwin" { // /var → /private/var is the case it covers; on Linux the raw path is the real one
+		t.Skip("macOS only: the raw encoding there is checked by TestRemoveCheckProjectRemovesOnlyItsOwn")
+	}
+	n, _ := claudeHome(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	projects := filepath.Join(n.home, ".claude", "projects")
+	raw, err := os.MkdirTemp("", launcherCheckDir) // /var/folders/…/T/persona-check-<digits>
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(raw)
+	real, err := filepath.EvalSymlinks(raw) // /private/var/folders/…: the name Claude Code keeps
+	if err != nil {
+		t.Fatal(err)
+	}
+	if real == raw {
+		t.Skip("this machine resolves the temp directory to the same path")
+	}
+	coded := nonAlnum.ReplaceAllString(real, "-") // what Claude Code names it (#3101)
+	check := filepath.Join(projects, coded)
+	_ = os.MkdirAll(filepath.Join(check, "memory"), 0o700)
+	n.removeCheckProject(raw)
+	if _, err := os.Stat(check); !os.IsNotExist(err) {
+		t.Fatalf("the directory named for the resolved path (%s) is still there: %v", coded, err)
 	}
 }

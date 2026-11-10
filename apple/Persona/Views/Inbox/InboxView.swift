@@ -57,6 +57,8 @@ struct InboxPage: View {
     @StoredValue("inbox.folds") private var groupFoldsJSON = ""
     /// A title to scroll to (Done's, for the DEBUG `-showInboxDone`).
     @State private var scrollTarget: String?
+    /// Done groups that loaded their first page by themselves on opening (#2969): once while the page is up.
+    @State private var autoLoaded: Set<String> = []
     @State private var composing: ComposeDraft?
     @State private var editingDraft: InboxItem? // Edit on the AI Twin's draft
     @State private var answering: Interaction? // a card on no session, open by itself (#4059)
@@ -69,7 +71,7 @@ struct InboxPage: View {
     private var store: InboxStore { .shared }
 
     /// The kind filters, by key.
-    static let kinds = [("mention", String(localized: "@Me")), ("dm", String(localized: "DMs")), ("group", String(localized: "Group chat")), ("mail", String(localized: "Mail [Assistant View 3d708e]")), ("agent", "Agent")]
+    static let kinds = [("mention", String(localized: "@Me")), ("dm", String(localized: "DMs")), ("group", String(localized: "Group chat")), ("mail", String(localized: "Mail [Assistant View 3d708e]")), ("agent", String(localized: "Agent"))]
 
     private var itemProjection: InboxProjection {
         itemMemo(store.items, filter: .init(source: source, kind: kind, query: query), revision: store.itemsRevision)
@@ -190,19 +192,44 @@ struct InboxPage: View {
                     }
                     // `-showInboxDone YES`: the first group's Done open and scrolled to, its groups' titles sticking (#2059 screenshots).
                     if UserDefaults.standard.bool(forKey: "showInboxDone") {
-                        for _ in 0..<20 where store.items.isEmpty || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+                        for _ in 0..<20 where store.items.isEmpty || store.history.isEmpty && store.doneDays == nil { try? await Task.sleep(for: .milliseconds(500)) }
                         if let share = shares.first {
                             let first = share.manager?.id
                             if !folds.isOpen("done", manager: first) { folds.toggle("done", manager: first) }
                             let done = doneAll(share.mine(itemProjection.sortedDoneItems, model.managerRoster), share: share)
                             // its newest group open (only Just Now and Today start open), then scrolled to its first row:
                             // Done's title and the group's stick above it
-                            if let g = InboxGroups.done(done, now: .now).first {
+                            if UserDefaults.standard.bool(forKey: "showInboxDoneFolded"),
+                               let last = InboxGroups.done(done, now: .now).filter({ groupOpen("done", $0.key, manager: first) }).last?.items.last {
+                                // `-showInboxDoneFolded YES`: the groups as they start (Just Now and Today open), the last
+                                // open row at the top so the folded ones with their counts follow it (#2969 screenshots)
+                                try? await Task.sleep(for: .milliseconds(300))
+                                scrollTarget = last.key
+                            } else if let g = InboxGroups.done(done, now: .now).first {
                                 setGroupOpen("done", g.key, manager: first, true)
                                 try? await Task.sleep(for: .milliseconds(300))
                                 scrollTarget = g.items.first?.key
+                            } else {
+                                // the hub's day counts and nothing loaded yet (#2969): Done's groups are folded, so the
+                                // last open row above it goes to the top (a List scrolls to rows, not headers)
+                                try? await Task.sleep(for: .milliseconds(300))
+                                scrollTarget = [InboxItem.Tier.action, .fyi].flatMap { share.byTier[$0] ?? [] }.last?.key
                             }
                         }
+                    }
+                    // `-showInboxJump <group>` ("week", "month", "d:2026-11-06"…): Done open and jumped to that group, its first
+                    // page loaded from the hub's history (#2969 screenshots: exact counts on groups not loaded before).
+                    if let key = UserDefaults.standard.string(forKey: "showInboxJump"), !key.isEmpty {
+                        for _ in 0..<20 where store.items.isEmpty || store.doneDays == nil { try? await Task.sleep(for: .milliseconds(500)) }
+                        let first = shares.first?.manager?.id
+                        if !folds.isOpen("done", manager: first) { folds.toggle("done", manager: first) }
+                        setGroupOpen("done", key, manager: first, true)
+                        autoLoaded.insert("\(first ?? "")|\(key)")
+                        store.loadDoneGroup(key, range: InboxGroups.timeRange(key, now: .now))
+                        for _ in 0..<50 where store.groupLoading.contains(key) || store.history.isEmpty { try? await Task.sleep(for: .milliseconds(100)) }
+                        try? await Task.sleep(for: .milliseconds(300))
+                        scrollTarget = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                            .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
                     }
                     // `-showInboxPickGroups YES`: Select with the mail group folded and picked whole and the Lark group picked.
                     if UserDefaults.standard.bool(forKey: "showInboxPickGroups") {
@@ -262,6 +289,59 @@ struct InboxPage: View {
         tier != .working && (groups.count > 1 || (agents > 0 && !groups.isEmpty))
     }
 
+    /// How long the list keeps done items (the hub's inboxKeepDone): Done's groups within it are complete without a page.
+    private static let listDoneSpan: TimeInterval = 3 * 86_400
+
+    /// Done's groups (#2969). With the hub's day counts (#2967; the default manager's, as the history is) every group they
+    /// name is listed with its count, loaded or not, and loads its own items when it opens; filtered or searched, the
+    /// counts are of what is loaded ("n+" until the group is complete), and `next` is the group "Show Older" loads.
+    /// Without them, as before: what the history has loaded, "n+" on the last group while there is more.
+    private func doneGroups(_ done: [InboxItem], days: [String: Int]?) -> (groups: [DoneGroup], next: DoneGroup?) {
+        let now = Date.now
+        let loaded = InboxGroups.done(done, now: now)
+        guard let days else {
+            let more = store.historyMore && !store.history.isEmpty
+            return (loaded.enumerated().map { i, g in
+                DoneGroup(group: g, count: g.items.count, plus: i == loaded.count - 1 && more, more: false, range: InboxGroups.timeRange(g.key, now: now))
+            }, nil)
+        }
+        let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
+        let counts = InboxGroups.dayCounts(days, now: now, just: filtered ? 0 : loaded.first { $0.key == "just" }?.items.count ?? 0)
+        let byKey = Dictionary(loaded.map { ($0.key, $0.items) }, uniquingKeysWith: +)
+        // complete: a page of its own reached its start, or the list holds it (its last days' done items), or (unfiltered)
+        // as many are loaded as the hub counts
+        func complete(_ key: String, _ n: Int) -> Bool {
+            if store.groupComplete.contains(key) { return true }
+            if let start = InboxGroups.timeRange(key, now: now).start, start >= now.addingTimeInterval(-Self.listDoneSpan) { return true }
+            return !filtered && n >= counts[key, default: 0]
+        }
+        func group(_ key: String) -> DoneGroup {
+            let items = byKey[key] ?? []
+            let done = complete(key, items.count)
+            return DoneGroup(group: InboxGroups.Group(key: key, title: InboxGroups.timeTitle(key), items: items),
+                             count: filtered ? items.count : max(items.count, counts[key, default: 0]), plus: filtered && !done, more: !done,
+                             range: InboxGroups.timeRange(key, now: now))
+        }
+        let keys = InboxGroups.sortedKeys(filtered ? Array(byKey.keys) : Array(byKey.keys) + Array(counts.keys), now: now)
+        let next = filtered ? InboxGroups.sortedKeys(counts.keys, now: now).first { !complete($0, 0) } : nil
+        return (keys.map(group), next.map(group))
+    }
+
+    /// "Show Older" under Done or in one of its groups: one more page. In a group it loads the first page by itself when
+    /// it shows (the group opened), once: the next ones are a tap each, so opening 1+ Month doesn't stream in all of it.
+    private func olderRow(loading: Bool, auto: String? = nil, run: @escaping () -> Void) -> some View {
+        Button(loading ? String(localized: "Loading…") : String(localized: "Show Older"), action: run)
+            .disabled(loading)
+            .lineLimit(1)
+            .listRowSeparator(.hidden)
+            .themedRow()
+            .onAppear {
+                guard let auto, !autoLoaded.contains(auto) else { return }
+                autoLoaded.insert(auto)
+                run()
+            }
+    }
+
     /// A share's Done as shown: the list's done items, then the history's it doesn't have, newest done first.
     private func doneAll(_ listed: [InboxItem], share: InboxShare) -> [InboxItem] {
         let have = Set(listed.map(\.key))
@@ -291,15 +371,16 @@ struct InboxPage: View {
                 HStack(spacing: Theme.Space.sm) {
                     ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelHeavy).foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(open ? 90 : 0))
-                    Text(g.title).font(Theme.Font.secondaryStrong).foregroundStyle(.secondary)
-                    Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.secondary).foregroundStyle(.tertiary)
+                    // the section's title size, not its weight: a level under it ("Done · 2088"), not above it (#2969)
+                    Text(g.title).font(Theme.Font.caption).foregroundStyle(.secondary)
+                    Text(verbatim: more ? "\(count)+" : "\(count)").font(Theme.Font.caption).foregroundStyle(.tertiary)
                     Spacer(minLength: 0)
                 }
                 .lineLimit(1)
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            if n > 0 { Text("\(n) Picked").font(Theme.Font.secondary).foregroundStyle(Theme.accent).lineLimit(1) }
+            if n > 0 { Text("\(n) Picked").font(Theme.Font.caption).foregroundStyle(Theme.accent).lineLimit(1) }
         }
         .textCase(nil)
         .padding(.vertical, Theme.Space.xxs)
@@ -509,23 +590,34 @@ struct InboxPage: View {
                 }
                 // Done, by when it was done, with the hub's history after the list's few days.
                 let done = doneAll(share.mine(projection.sortedDoneItems, roster), share: share)
-                if !done.isEmpty {
-                    let dg = InboxGroups.done(done, now: .now)
-                    let count = store.historyMore && !store.history.isEmpty ? "\(done.count)+" : "\(done.count)"
+                // the day counts are the default manager's, as the history is (#2969)
+                let days = manager == nil || manager == roster?.defaultID ? store.doneDays : nil
+                let (dg, nextGroup) = doneGroups(done, days: days)
+                let doneCount = days == nil ? done.count : dg.reduce(0) { $0 + $1.count }
+                if doneCount > 0 {
+                    let more = days == nil ? store.historyMore && !store.history.isEmpty : nextGroup != nil || dg.contains { $0.plus }
+                    let count = more ? "\(doneCount)+" : "\(doneCount)"
+                    let filtered = !source.isEmpty || !kind.isEmpty || !query.isEmpty
                     if dg.count > 1 {
                         Section { EmptyView() } header: { doneHeader(count: count, groups: dg, manager: manager, proxy: proxy) }
                         if folds.isOpen("done", manager: manager) {
-                            ForEach(Array(dg.enumerated()), id: \.element.key) { i, g in
-                                Section { if groupOpen("done", g.key, manager: manager) { ForEach(g.items, id: \.key) { row($0) } } } header: {
-                                    groupHeader("done", g, manager: manager, count: g.items.count, more: i == dg.count - 1 && store.historyMore, pickable: false)
+                            ForEach(dg) { g in
+                                Section {
+                                    if groupOpen("done", g.id, manager: manager) {
+                                        ForEach(g.group.items, id: \.key) { row($0) }
+                                        if days != nil && g.more && !filtered {
+                                            olderRow(loading: store.groupLoading.contains(g.id), auto: "\(manager ?? "")|\(g.id)") { store.loadDoneGroup(g.id, range: g.range) }
+                                        }
+                                    }
+                                } header: {
+                                    groupHeader("done", g.group, manager: manager, count: g.count, more: g.plus, pickable: false)
                                 }
                             }
-                            if store.historyMore && !store.history.isEmpty {
-                                Button(store.historyLoading ? String(localized: "Loading…") : String(localized: "Show Older")) { store.loadOlderDone() }
-                                    .disabled(store.historyLoading)
-                                    .lineLimit(1)
-                                    .listRowSeparator(.hidden)
-                                    .themedRow()
+                            if days == nil && store.historyMore && !store.history.isEmpty {
+                                olderRow(loading: store.historyLoading) { store.loadOlderDone() }
+                            }
+                            if let nextGroup {
+                                olderRow(loading: store.groupLoading.contains(nextGroup.id)) { store.loadDoneGroup(nextGroup.id, range: nextGroup.range) }
                             }
                         }
                     } else {
@@ -542,8 +634,9 @@ struct InboxPage: View {
         .themedPage()
         .refreshable { await store.refresh() }
         .overlay { if store.loading && store.items.isEmpty { ProgressView() } }
-        // Done's history: a first page once the list is in, so Done's groups and counts are there before it opens
-        .task(id: store.listed) { if store.listed && store.history.isEmpty { store.loadOlderDone() } }
+        // Done's day counts once the list is in, so Done lists its groups and counts before it opens (#2969); a hub
+        // without them gets the history's first page instead
+        .task(id: store.listed) { if store.listed { store.loadDoneDays() } }
         .onChange(of: scrollTarget) { _, id in
             guard let id else { return }
             withAnimation(Theme.Motion.standard) { proxy.scrollTo(id, anchor: .top) }
@@ -553,7 +646,7 @@ struct InboxPage: View {
     }
 
     /// Done's title: opens / closes it; "Jump To" lists its groups with their counts, and collapses or expands them all.
-    private func doneHeader(count: String, groups: [InboxGroups.Group], manager: String?, proxy: ScrollViewProxy) -> some View {
+    private func doneHeader(count: String, groups: [DoneGroup], manager: String?, proxy: ScrollViewProxy) -> some View {
         let open = folds.isOpen("done", manager: manager)
         return HStack(spacing: Theme.Space.sm) {
             Button {
@@ -572,11 +665,11 @@ struct InboxPage: View {
             if groups.count > 1 {
                 Menu {
                     ForEach(groups) { g in
-                        Button { jump(to: g, manager: manager, proxy: proxy) } label: { Text(g.title); Text(verbatim: "\(g.items.count)") }
+                        Button { jump(to: g, manager: manager, proxy: proxy) } label: { Text(g.group.title); Text(verbatim: g.plus ? "\(g.count)+" : "\(g.count)") }
                     }
                     Divider()
-                    Button("Collapse All") { for g in groups { setGroupOpen("done", g.key, manager: manager, false) } }
-                    Button("Expand All") { for g in groups { setGroupOpen("done", g.key, manager: manager, true) } }
+                    Button("Collapse All") { for g in groups { setGroupOpen("done", g.id, manager: manager, false) } }
+                    Button("Expand All") { for g in groups { setGroupOpen("done", g.id, manager: manager, true) } }
                 } label: {
                     Text("Jump To").font(Theme.Font.secondary).lineLimit(1)
                 }
@@ -589,13 +682,27 @@ struct InboxPage: View {
     }
 
     /// Jump To one of Done's groups: Done and the group open, then scrolled to its first row (its title sticks above it;
-    /// a List scrolls to rows, which are identified by `InboxItem.key`, not to section headers).
-    private func jump(to g: InboxGroups.Group, manager: String?, proxy: ScrollViewProxy) {
+    /// a List scrolls to rows, which are identified by `InboxItem.key`, not to section headers). A group none of whose
+    /// items has come yet loads its first page (#2969; opening it does), then scrolls once one is there.
+    private func jump(to g: DoneGroup, manager: String?, proxy: ScrollViewProxy) {
         if !folds.isOpen("done", manager: manager) { folds.toggle("done", manager: manager) }
-        setGroupOpen("done", g.key, manager: manager, true)
-        guard let first = g.items.first?.key else { return }
+        setGroupOpen("done", g.id, manager: manager, true)
+        let key = g.id
+        if g.more {
+            autoLoaded.insert("\(manager ?? "")|\(key)")
+            store.loadDoneGroup(key, range: g.range)
+        }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
+            var first = g.group.items.first?.key
+            // up to 5 s for its first page: then the group's first item, newest first, as Done lists it
+            for _ in 0..<50 where first == nil {
+                try? await Task.sleep(for: .milliseconds(100))
+                if store.groupLoading.contains(key) { continue }
+                first = store.history.filter { InboxGroups.timeKey($0.doneAt, now: .now, recent: true) == key }
+                    .max { ($0.doneAt ?? .distantPast) < ($1.doneAt ?? .distantPast) }?.key
+            }
+            guard let first else { return }
             withAnimation(Theme.Motion.standard) { proxy.scrollTo(first, anchor: .top) }
         }
     }
@@ -1211,4 +1318,15 @@ private struct InboxRowLook: ViewModifier {
                 .alignmentGuide(.listRowSeparatorLeading) { _ in InboxRow.textColumn }
         }
     }
+}
+
+/// A group of Done (#2969): its items loaded so far, its count (the hub's when it has day counts), whether the count reads
+/// "n+" (`plus`), whether more of its items can load (`more`) and its time range (where its pages start).
+private struct DoneGroup: Identifiable {
+    var group: InboxGroups.Group
+    var count: Int
+    var plus: Bool
+    var more: Bool
+    var range: (start: Date?, end: Date?)
+    var id: String { group.key }
 }

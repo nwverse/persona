@@ -46,6 +46,35 @@ var permissionModes = proto.PermissionModes
 // of sessions started with it.
 var tuiModeCycle = []string{"default", "acceptEdits", "plan", "auto", "bypassPermissions"}
 
+// processArgv reads a process' arguments without running anything (kern.procargs2, /proc/<pid>/cmdline); tests stub it.
+var processArgv = updateProcessArgv
+
+// claudeCanBypass: the claude process pid was started with a flag that puts bypassPermissions in its shift+tab cycle,
+// so tuiSetMode can reach Allow All while it runs (#1379). False when its arguments cannot be read.
+func claudeCanBypass(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	args, err := processArgv(pid)
+	return err == nil && argsCanBypass(args)
+}
+
+// argsCanBypass: --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
+// bypassPermissions among a claude's arguments, before a "--" (what follows it is the prompt).
+func argsCanBypass(args []string) bool {
+	for i, a := range args {
+		switch {
+		case a == "--":
+			return false
+		case a == "--dangerously-skip-permissions", a == "--allow-dangerously-skip-permissions", a == "--permission-mode="+proto.ModeBypass:
+			return true
+		case a == "--permission-mode" && i+1 < len(args) && args[i+1] == proto.ModeBypass:
+			return true
+		}
+	}
+	return false
+}
+
 // sessionModes is a mode / effort the app set, with when, until the transcript catches up.
 type sessionModes struct {
 	Mode, Effort     string

@@ -43,12 +43,19 @@ internal fun RequestCard(
     val answer: (AnswerAction) -> Unit = { onAnswer(request, it, AnswerDraft(), false) }
     val res = agentResources()
     val cardSummary = request.cardSummary(res)
+    // Why its buttons are greyed out (#2483): the computer must approve it, or offline, as the full page says.
+    val blockedNote = when {
+        readOnly -> null
+        !approvable -> stringResource(R.string.agents_approve_blocked)
+        !online && !expired -> stringResource(R.string.agents_request_offline)
+        else -> null
+    }
     DecisionCard(
         kind = request.decisionKind, headline = request.cardTitle(res), title = request.sessionTitle ?: stringResource(R.string.agents_request_session),
         modifier = Modifier.padding(bottom = 12.dp), source = source.takeIf { it.isNotBlank() },
         expires = if (readOnly) stringResource(R.string.agents_request_handled) else countdown(request.expiresAt, now),
         summary = markdownPreview(cardSummary).lineSequence().firstOrNull(), onOpen = onOpen,
-        expandedByDefault = false,
+        note = blockedNote, expandedByDefault = false,
         body = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (request.kind) {
@@ -82,8 +89,7 @@ internal fun RequestCard(
                 }
                 request.sourceLabel(res, metadata)?.let { Text(it.replaceFirst("来自子 Agent · ", "来自子 Agent，"), // i18n-ignore: rewrites core:domain's source line
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3) }
-                if (!approvable && !readOnly) Text(stringResource(R.string.agents_approve_blocked),
-                    style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText)
+                blockedNote?.let { Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText) }
                 if (request.needsFieldValues && !request.isSecretRun && approvable && !readOnly) Text(stringResource(R.string.agents_request_fields_elsewhere),
                     style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                 delivery?.let { RequestDeliveryStatus(it) }

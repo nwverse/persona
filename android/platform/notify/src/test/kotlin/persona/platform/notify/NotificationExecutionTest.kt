@@ -143,6 +143,35 @@ class NotificationExecutionTest {
         assertEquals(3, center.writes)
     }
 
+    @Test fun aSecondTapOnARequestThisPhoneAnsweredSaysNothingRatherThanHandledOnTheComputer() = runBlocking {
+        // #2483: the first tap's answer took the request off the hub before its notification went away, and a second tap
+        // finds it gone. Claimed here, it was this phone's own answer: no notice, no second resolve. Not claimed here, the
+        // computer answered it, as before.
+        for ((claimedHere, expected) in listOf(
+            true to NotificationActionResult.AnsweredHere,
+            false to NotificationActionResult.Gone,
+        )) {
+            val center = Center(request)
+            center.remote = null
+            val executor = NotificationActionExecutor(center, { fail("A request that is gone is never claimed"); false }, { now },
+                claimed = { it == request.id && claimedHere })
+            val result = executor.execute(request.id, "allow", null, { false })
+            assertEquals("claimed here: $claimedHere", expected, result)
+            assertEquals(0, center.writes)
+            if (claimedHere) assertNull(actionResultCopy(result))
+            else assertEquals(R.string.notify_result_gone_title to R.string.notify_result_gone_detail, actionResultCopy(result))
+        }
+        // The whole sequence with one journal: the first tap answers, the second finds the request gone.
+        val center = Center(request)
+        val claims = mutableSetOf<String>()
+        fun executor() = NotificationActionExecutor(center, { synchronized(claims) { claims.add(it) } }, { now },
+            claimed = { synchronized(claims) { it in claims } })
+        assertEquals(NotificationActionResult.Submitted, executor().execute(request.id, "allow", null, { false }))
+        center.remote = null
+        assertEquals(NotificationActionResult.AnsweredHere, executor().execute(request.id, "allow", null, { false }))
+        assertEquals(1, center.writes)
+    }
+
     @Test fun aHubThatCannotBeAskedMeansNothingWasSent() = runBlocking {
         // #5008: the check before the claim failed, so the tap can be repeated; only a lost reply after it is ambiguous.
         val center = Center(request)

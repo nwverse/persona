@@ -224,11 +224,17 @@ func clipText(s string, n int) string {
 
 // removeCheckProject removes the projects directory Claude Code keeps for the check's temp directory dir: it makes one
 // (holding an empty memory directory) even under --no-session-persistence, and a claude without the flag writes the
-// transcript there. The name is the encoded path of dir (as assistantProject encodes), so only that one goes.
+// transcript there. The name is the encoded path of dir (as assistantProject encodes), so only that one goes; on macOS
+// Claude Code encodes the resolved path while MkdirTemp returns the symlinked one (/var → /private/var), so both names go.
 func (n *Node) removeCheckProject(dir string) {
-	name := nonAlnum.ReplaceAllString(dir, "-")
+	names := []string{nonAlnum.ReplaceAllString(dir, "-")}
+	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
+		names = append(names, nonAlnum.ReplaceAllString(real, "-"))
+	}
 	for _, p := range n.projectDirs() {
-		_ = os.RemoveAll(filepath.Join(p, name))
+		for _, name := range names {
+			_ = os.RemoveAll(filepath.Join(p, name))
+		}
 	}
 }
 

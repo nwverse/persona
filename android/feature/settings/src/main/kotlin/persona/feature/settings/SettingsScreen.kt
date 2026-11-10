@@ -279,6 +279,7 @@ private fun SettingsContent(
         "plugins" -> extension?.let { id -> ExtensionPage(services.extensions.takeUnless { services.demo }, id, onBack = { extension = null },
                 manager = extensionManager,
                 machines = services.sessions.machines,
+                launchers = services.providers.takeUnless { services.demo }?.let { p -> { p.launchers() } },
                 onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext)) } }) }
             ?: ExtensionsPage(services.extensions.takeUnless { services.demo }, back,
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
@@ -477,6 +478,7 @@ private fun SettingsContent(
                 },
                     enabled = !services.demo && !busy && !installing, onClick = ::checkUpdate)
             } }
+            if (!services.demo) item { AppUpdateRecovery(updateController) }
             if (update != null || updateMessage != null) item {
                 JCard(Modifier.padding(top = Tokens.Space.m)) {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {

@@ -83,6 +83,7 @@ struct InboxActionBar: View {
 struct InboxDraftSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.pushInboxChat) private var pushChat
     let item: InboxItem
     var accounts: [MailAccount]
     /// Fired on the main actor only after the reply actually went out (InboxStore.send returns true).
@@ -169,7 +170,11 @@ struct InboxDraftSheet: View {
             }
             if let key = a.sessionKey {
                 Button {
-                    model.openAssistantConversation(model.inHub(key), manager: item.manager)
+                    if let pushChat {
+                        pushChat(InboxChatRoute(key: model.inHub(key), manager: item.manager))
+                    } else {
+                        model.openAssistantConversation(model.inHub(key), manager: item.manager)
+                    }
                     dismiss()
                 } label: {
                     Label("See How the AI Twin Handled It", systemImage: Theme.Icon.list).font(Theme.Font.captionMedium).lineLimit(1)

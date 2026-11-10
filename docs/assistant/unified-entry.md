@@ -41,6 +41,28 @@ The prototype is the UI and interaction standard; compare screen by screen durin
 - Read-only tasks always retain `permission: plan`, including after card edits and on retries. Health-space plans still wait for Start. Runtime support and the current card labels are described in [To-dos](todos.md#read-only-planned-tasks).
 - `task_plan` **does not block**: once the plan is handed to you, the turn ends immediately and you can continue talking about something else. When you tap Start, hub starts the Agents directly; Persona sees the result in the next message's live snapshot.
 
+### Needs you and In progress: each thing once (#3387)
+
+Above the Assistant's composer there are two entries. **Needs you** lists everything the user has to act on; **In
+progress** everything running that does not need them. Each thing is one row in exactly one entry, Needs you first, and
+each count is its rows:
+
+- **Needs you**: a task whose current agent asks something (one row, its cards under the task's name), a task waiting
+  for a decision or review (an open `ask`; `pending_review` / `needs_user` on an open task), one whose turn broke off on a
+  model error (`interrupted`) or whose start failed while it is still the user's to retry; in the main chat, an Agent
+  opened by hand (no task) that asks something; a plan waiting for Start (one row per plan); a message card waiting for
+  Send; the conversation's own cards.
+- **In progress**: every other task the To-dos page counts open (#3331), and in the main chat each working Agent opened by
+  hand. A task's agents are never rows of their own: the task's row carries their state and progress meter, and opens the
+  task's details, which switch between its agents' chats. Shelved tasks fold under one uncounted line.
+- Finished tasks (done, cancelled, accepted) are in neither; the board (**All**) has them. An answered card moves its task
+  back to In progress. An empty Needs you is grey and opens "All caught up".
+
+The split is one pure function per client: web `assistantEntries` (`web/src/lib/assistant-entries.ts`), Android
+`assistantEntries` (`persona.core.domain.tasks`). Both replay `spec/fixtures/entries`, which pins which entry every case goes
+to; iOS / Mac adopt the same rule by replaying the same fixture. The older Pending / Progress / Agents / To start entries
+below are the earlier presentation (#2878, #3162).
+
 ### Progress tray: one task, one row (#2878)
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.
@@ -240,6 +262,17 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
   - **Whose call it is**: an agent's MCP server has no session id of its own. `personad mcp` passes its pane (`HookPane`) to the node, and **only for the agents' own tools** (`report_to_supervisor`, `todo_decisions`, `todo_decision_add`, `todo_bind_thread`: `callerTools`) the node resolves the session from it (`node/hooks.go` `paneCaller`: the agent the host shows in the pane now, else the hooks' binding). Other tools still call without a session (a connector's approval card is not attached to the agent). An agent run by a runtime without a pane gets "nobody receives this".
 - **Attachments** (#2437, `assistant/attachments.go`): pictures and files the user gave the assistant reach the agent through `attachments` on a `task_plan` task, `agent_start` or `agent_send`: absolute paths on the computer the conversation runs on. Only paths the user gave in that conversation are accepted: the directory where Claude Code saved the conversation's pictures (`…/<conversation id>/images/`), the node's `uploads` directory, or a path one of the user's messages carries (the app puts a file sent with Files there). Anything else is refused, so the tool cannot move arbitrary files between computers. On the same computer the paths go as they are. On another one the manager copies each file there first (`file.chunk` from the assistant's node, `file.upload.*` with `dest=terminal` on the agent's: `uploads/terminal/<date>/`, swept after 7 days), at most 8 and 50 MB each, also to computers marked `work`. A `task_plan` task's are checked when the plan is made (`PlanTask.Attachments`, from `AttachFrom`, the conversation's computer) and copied when it starts. A model does not always use the parameter, so a path the prompt or text names counts too when it is where the user's files land (the conversation's pictures, the node's `uploads`, or a file the app uploaded, `<name>-YYYYMMDD-HHMMSS`, that a message of the user's carries; never any other path the user wrote, which may be a repository's file the agent should open where it is). The text then names the copies. The agent's first message (or the sent text) ends with the files, the named ones that could not come and why, and the pictures in an `<attached_images>` block, as a picture sent straight to an agent ends. A copy that fails never stops the hand-off; the tool's answer says what was handed.
 - **Clients**: web and Android task cards / to-do details show acceptance criteria and review state; iOS / Mac are separate work (sub-issues of #3124). Clients unaware of `supervision` continue normally, showing pending-review tasks as "Stopped / Unread."
+- **Cancelling stops the agents** (#3133): `task_review` `cancelled` closes each agent still on the task in the background (`session.close`: its tab and process go, its transcript stays, and where its engine can resume it a message does), ends the cards it still waits on (cancelled in the history), and archives it once its list shows it closed (reversible: `agent_unarchive` or Archived in the apps; nothing is deleted). A cancelled task's permission or question cards no longer sit in "Needs you". Left alone: an agent that works for another open task by then, an assistant conversation, a session its machine does not list; one that still reads busy 30 seconds after the close stays unarchived (logged).
+
+### Leader conversations (#3133)
+
+Off by default: with no leaders, everything above is unchanged and only the main chat supervises. Layering: user → main chat (secretary) → one leader per repository or long-running project → workers.
+
+- **Opening one**: start a side conversation for the project (`conversation_new` from the main chat, or New chat in the app), then add its id to `assistant.leaders` with `persona_settings` (`set`, the whole list of conversation ids; `conversations_list` has them). The user approves the change on the phone. Only Persona conversations on the assistant's computer other than the main chat are accepted. Removing an id ends it; tasks it handed out keep their supervisor in the ledger but their signals go back to the main chat.
+- **What a leader gets**: its context starts with "这是 leader 对话" (prompts `assistant/context.md`). A task it hands out with `task_plan` is supervised with the leader as `supervisor` (tasks handed out before it became one are not). The supervision loop routes each signal to its task's supervisor when that is a current leader (`digestTo`, `server/internal/assistant/supervise_leader.go`): the leader gets its own "📋 督办" message (when its conversation is gone, the main chat gets them instead) (the leader variant of `prompts/assistant/supervise.md`), with the same gathering, queueing, deduplication and folding as the main chat's. It reviews its tasks with `task_review` (accepted, rework with the same 2-round limit, cancelled); another side conversation cannot.
+- **What still goes to the main chat**: a leader's `needs_user` (the user gets the decision card as always, and the main chat gets an `escalated` entry with the leader's reason and recommendation, so it neither asks again nor loses track); any signal of a task waiting for the user; failed and retried starts (the start remedies, `task_start_screen` / `task_start_keys` / `task_retry`, stay main-chat tools); and tasks waiting for the user's nod to ship stay in the snapshot's approvals list. The main chat may still review a leader's task (for example after the user answered there); the task stays the leader's.
+- **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools; the main chat and leaders are not limited.
+- **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
 
 ## Data and APIs (hub)
 
@@ -312,13 +345,13 @@ Hub-inserted chat entries do not enter Claude's transcript (that would trigger a
 | Task details (embedded Agent chat), task board | `apple/Persona/Views/Assistant/Tasks/TaskSheets.swift` |
 | Feed inserted into chat at the end of its turn (before the next message) | `ChatLines.mergeFeed`, `ChatLine.Content.feed` |
 | Above the input: question card (earliest only, with "N more"), `@` list, dock, routing label; routed messages go directly to the task | `ChatView.taskFooter`, `Composer.sendText` |
-| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
+| iPhone / iPad action bar: Pending, Progress and Agents in place of the dock, each opening its tray (#2879); Progress counts the open tasks by the To-dos page's rule (`TodoTriageLogic.bucket`, shelved left out; the main chat counts every to-do, #3331), To Start shows the plans waiting for Start (#3162) | `apple/Persona/Views/Assistant/Tasks/AssistantActionBar.swift` (`ActionTrayContent`, `DockCapsule`) |
 
 - Reuse Agent state colors (`AgentState.tone`: Needs you red, Working amber, Unread green), not the prototype's orange waiting state, to match Agents.
 - If dock pills do not fit, truncate the title but never "Waiting for you."
 - **Action bar on iPhone and iPad (#2879)**: the dock's row becomes three entries, **Pending** (tasks that ask, then the
-  main chat's own waiting Agents), **Progress** (tasks going on, waiting first, then finished ones; the count is the ones
-  going on) and **Agents** (the chat's own Agents and its tasks' Agents, waiting first). One tray at a time rises above
+  main chat's own waiting Agents), **Progress** (tasks going on, waiting first, then finished ones; the count is the To-dos
+  page's "Not done" rule, shelved ones left out, #3331) and **Agents** (the chat's own Agents and its tasks' Agents, waiting first). One tray at a time rises above
   the bar; its row opens task details or the Agent's page as a pill did, and Progress' All opens the board. The entries
   are the dock's capsule (`DockCapsule`, shared with the Mac dock's All): caption medium (13 pt at the default text
   size, Dynamic Type), 12 pt horizontal and 6 pt vertical padding, a full capsule radius, `Theme.Fill.chip` behind

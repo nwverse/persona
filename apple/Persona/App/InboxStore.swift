@@ -51,20 +51,72 @@ final class InboxStore {
             defer { historyLoading = false }
             do {
                 let page = try await api.inboxDone(after: historyNext, connectors: Self.drawsConnectors)
-                // the default manager's (no header): stamped as the merged list stamps them, so an item in both is one key
-                let stamp = AppModel.shared.managerRoster.flatMap { $0.isMulti ? $0.defaultID : nil }
-                let items = page.items.map { it in
-                    guard it.manager == nil, let stamp else { return it }
-                    var it = it
-                    it.manager = stamp
-                    return it
-                }
+                let items = Self.stamped(page.items)
                 let known = Set(history.map(\.key))
                 history += items.filter { !known.contains($0.key) }
                 historyNext = page.next
                 historyMore = page.next != nil
             } catch let e as APIError where e.status == 404 || e.status == 405 {
                 historyMore = false // a hub from before the history: Done shows what the list has
+            } catch {}
+        }
+    }
+
+    /// The default manager's history items (no header), stamped as the merged list stamps them, so an item in both is one key.
+    private static func stamped(_ items: [InboxItem]) -> [InboxItem] {
+        guard let stamp = AppModel.shared.managerRoster.flatMap({ $0.isMulti ? $0.defaultID : nil }) else { return items }
+        return items.map { it in
+            guard it.manager == nil else { return it }
+            var it = it
+            it.manager = stamp
+            return it
+        }
+    }
+
+    // MARK: Done's day counts (#2969)
+
+    /// The default manager's done items per calendar day in this device's zone ("YYYY-MM-DD" → count; GET
+    /// /api/v1/inbox/done/days, #2967), as the history is the default manager's. nil: not known yet, or a hub without them.
+    private(set) var doneDays: [String: Int]?
+    /// Done groups loading a page of their own, by group key.
+    private(set) var groupLoading: Set<String> = []
+    /// Done groups whose items have all come: a page of theirs reached the group's start, or the history ended.
+    private(set) var groupComplete: Set<String> = []
+    @ObservationIgnored private var groupNext: [String: InboxDonePage.Cursor] = [:]
+
+    /// The day counts, so Done lists every day's group with its count before any of its items load. A hub without them
+    /// (404 / 405, or 400 for a zone it doesn't know) gets the history's first page instead, as before; offline, nothing
+    /// changes and the next time Done shows asks again.
+    func loadDoneDays() {
+        guard let api = AppModel.shared.api else { return }
+        Task {
+            do {
+                doneDays = try await api.inboxDoneDays(zone: TimeZone.current.identifier, connectors: Self.drawsConnectors)
+            } catch let e as APIError where e.status == 404 || e.status == 405 || e.status == 400 {
+                doneDays = nil
+                if history.isEmpty { loadOlderDone() }
+            } catch {}
+        }
+    }
+
+    /// One page of a Done group's own items: from the group's end (a moment: the items done before it), then from where
+    /// its last page ended. The group is complete when a page reaches its start or the history ends; items of older
+    /// groups a page also brings stay in `history` for theirs.
+    func loadDoneGroup(_ key: String, range: (start: Date?, end: Date?)) {
+        guard !groupLoading.contains(key), !groupComplete.contains(key), let api = AppModel.shared.api else { return }
+        groupLoading.insert(key)
+        Task {
+            defer { groupLoading.remove(key) }
+            do {
+                let page = try await api.inboxDone(after: groupNext[key], before: range.end, connectors: Self.drawsConnectors)
+                let items = Self.stamped(page.items)
+                var complete = page.next == nil
+                if let last = items.last?.doneAt, let start = range.start, last < start { complete = true }
+                if items.last?.doneAt == nil { complete = true }
+                groupNext[key] = complete ? nil : page.next
+                if complete { groupComplete.insert(key) }
+                let known = Set(history.map(\.key))
+                history += items.filter { !known.contains($0.key) }
             } catch {}
         }
     }
@@ -90,13 +142,20 @@ final class InboxStore {
         history = []
         historyMore = true
         historyNext = nil
+        doneDays = nil
+        groupLoading = []
+        groupComplete = []
+        groupNext = [:]
         triage = nil
         error = nil
         saver.run { StateCache.save(Self.stateName, [InboxItem]()) }
     }
 
-    /// What the tab's badge counts: open items that need the user.
+    /// Open items that still need the user, including ones already read.
     var actionCount: Int { items.filter { !$0.isDone && $0.triage == .action }.count }
+
+    /// Unread open items across all pending sections.
+    var unreadCount: Int { items.filter(\.isUnread).count }
 
     /// Pulls the list (bursts of `inbox` events collapse into one request).
     func reload() {
