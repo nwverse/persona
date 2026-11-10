@@ -144,6 +144,7 @@ type Service struct {
 
 	devs          Devices // the computers (devices.go); nil: no fleet
 	agentArchives agentArchiveBook
+	orphans       orphanBook      // tasks_orphan.go: the open to-dos nobody works on
 	agentNative   agentNativeBook // the tools' own archives (agent_archive_native.go)
 	fleet         fleetBook       // what comes from the nodes (fleet.go)
 	askUp         escalationBook  // cards that reached the user through an escalation (ask_route.go), under fleet.mu

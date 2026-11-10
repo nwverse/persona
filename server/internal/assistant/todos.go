@@ -731,7 +731,7 @@ func (s *Service) todoRoutes() {
 	s.todoThreadRoutes()
 	s.todoRetitleRoute()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
-	// waiting for the owner carries its ask (todo_ask.go)
+	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go)
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.ensureTodosLoaded(r.Context()); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
@@ -747,6 +747,9 @@ func (s *Service) todoRoutes() {
 		for i := range list {
 			if a, ok := asks[list[i].ID]; ok {
 				list[i].Ask = &a
+			}
+			if o, ok := s.orphanOf(list[i].ID); ok && list[i].DoneAt == nil {
+				list[i].Orphaned = &o
 			}
 		}
 
