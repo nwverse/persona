@@ -74,6 +74,14 @@ type SnapshotMachine struct {
 	Online   bool
 }
 
+// SnapshotApp is the Persona app on one kind of device as it last said its version (assistant/snapshot_app). No
+// time: the node sends only the snapshot's changed lines, and a reconnect must not make this one change.
+// Platform: ios | ipados | watchos | macos | visionos | android.
+type SnapshotApp struct {
+	Platform, Version, Build, OS string // Build, OS: "" when not said
+	Simulator                    bool
+}
+
 type SnapshotAgent struct {
 	Label, Machine, Session string             // Session: the short id
 	Line                    string             // what it waits for, or what it concluded ("" when not known)
@@ -230,6 +238,7 @@ type Snapshot struct {
 	Working        []SnapshotAgent
 	Workflows      []SnapshotWorkflow // background workflow runs still running, newest first
 	PhoneOnline    bool
+	Apps           []SnapshotApp      // one per kind of device, the user's own before a simulator
 	KB             string             // RenderKBDigest, "" leaves it out
 	Chats          *SnapshotChats     // nil: Feishu did not answer in time
 	Calendar       *SnapshotCalendar  // nil: the calendar did not answer in time
