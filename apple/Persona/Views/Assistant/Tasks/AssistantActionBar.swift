@@ -1,10 +1,10 @@
 import SwiftUI
 
-// The row above the assistant's composer on iPhone, iPad and Mac (#3393, docs/assistant/unified-entry.md): two entries,
-// Needs You and In Progress, each thing in exactly one of them (#3387). Needs You is everything the user has to act on;
-// In Progress is everything going on that does not need them, one row per thing (a task's agents are folded into its
-// row and listed in its details). Finished things are in neither: the board (All) has them. Each entry opens a tray
-// above the bar, one at a time; the entries are drawn as the old dock's capsules (`DockCapsule`), so the bar is as low.
+// The row above the assistant's composer on iPhone, iPad and Mac (#3393, docs/assistant/unified-entry.md "Needs you and In
+// progress: each thing once"): two entries, Needs You and In Progress, each thing in exactly one of them. The split is
+// `AssistantEntries`, a port of the web's `assistantEntries` (web/src/lib/assistant-entries.ts, Android's
+// AssistantEntries.kt, #3387) replaying the shared fixture spec/fixtures/entries/cases.json. Each entry opens a tray above
+// the bar, one at a time; the entries are drawn as the old dock's capsules (`DockCapsule`), so the bar is as low.
 
 /// One of the bar's entries, and the tray it opens.
 nonisolated enum ActionTray: String, CaseIterable, Identifiable, Sendable {
@@ -13,102 +13,253 @@ nonisolated enum ActionTray: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
-/// What the two trays list. Pure, so the grouping is tested without a hub; it mirrors #3387's rule on the web and
-/// Android: a thing that waits for the user is only in Needs You, a thing going on only in In Progress, a finished
-/// one in neither, and every count is the rows after that.
-nonisolated struct ActionTrayContent: Equatable, Sendable {
-    /// A task of the conversation, as it is now.
-    struct TaskRow: Equatable, Sendable {
-        var id: String
-        var state: TaskState
-        var createdAt: Date?
-        /// Where it stands by the To-dos page's rule (`TodoTriageLogic.bucket`, #3331); nil reads it from `state`.
-        var bucket: TodoBucket? = nil
-        /// It waits on the user beyond what `state` says: a decision or a review to make (`needs_user`,
-        /// `pending_review`, a deciding ask) or a start that failed to retry (`ActionTrayContent.waitsOnUser`).
-        var waitsOnUser = false
-        /// Its agents: folded into its row, never rows of their own.
-        var agentKeys: Set<SessionKey> = []
+/// Which entry each task, Agent, plan and message card goes to (#3387). A port of the web's `assistantEntries`; a change
+/// to the rule changes all three platforms and the shared fixture.
+nonisolated enum AssistantEntries {
+    /// A task's status as the web's `todoStatus` reads it (first that holds wins).
+    enum Status: String, Sendable {
+        case done, needsYou = "needs_you", interrupted, usageLimit = "usage_limit", unread, working, waiting
+        case followUp = "follow_up", notStarted = "not_started", failed
 
-        var needsYou: Bool { state == .needsYou || waitsOnUser }
-    }
-
-    /// A message card whose drafted reply waits for Send (`TasksStore.messageState` open, not put off with Later).
-    struct Message: Equatable, Sendable {
-        /// The inbox item the reply goes to.
-        var itemID: String
-        /// The feed item that carries the card.
-        var feedID: String
-        var at: Date
-    }
-
-    /// A card the conversation itself shows (Persona asking, an approval), answered below the bar.
-    struct Ask: Equatable, Sendable {
-        var id: String
-        var title: String
-        var createdAt: Date?
-    }
-
-    enum Row: Equatable, Sendable, Identifiable {
-        case ask(Ask)
-        case task(id: String, state: TaskState, agents: Int)
-        case agent(DockAgent)
-        case plan(id: String)
-        case message(Message)
-
-        var id: String {
+        /// Where it sorts (the web's `TODO_STATUS_RANK`): what the user must act on first.
+        var rank: Double {
             switch self {
-            case .ask(let a): "ask:" + a.id
-            case .task(let id, _, _): "task:" + id
-            case .agent(let a): "agent:" + a.key.path
-            case .plan(let id): "plan:" + id
-            case .message(let m): "message:" + m.itemID
+            case .needsYou: 0
+            case .interrupted: 1
+            case .usageLimit: 1.5
+            case .failed: 3
+            case .working: 4
+            case .waiting: 4.5
+            case .notStarted: 5
+            case .unread: 6
+            case .followUp: 7
+            case .done: 8
+            }
+        }
+
+        /// The app's task state for the row's mark and words.
+        var taskState: TaskState {
+            switch self {
+            case .done: .done
+            case .needsYou: .needsYou
+            case .interrupted, .usageLimit, .followUp: .followup
+            case .unread: .unread
+            case .working: .working
+            case .waiting: .waiting
+            case .notStarted: .notStarted
+            case .failed: .failed
             }
         }
     }
 
-    /// What waits for the user: the conversation's own cards, the tasks that wait on the user (most urgent, then the
-    /// newest), the agents of no task that ask, the plans waiting for Start and the replies waiting for Send (oldest first).
+    enum Row: Equatable, Sendable, Identifiable {
+        /// A task: its status and how many agents its row carries (they are never rows of their own).
+        case task(id: String, status: Status, agents: Int)
+        /// An Agent that belongs to no task (the main conversation's only).
+        case agent(DockAgent)
+        /// A plan waiting for Start, one row whatever its task count.
+        case plan(id: String)
+        /// A message card waiting for Send: its feed item, and the inbox item the reply goes to.
+        case message(feedID: String, itemID: String)
+
+        /// The fixture's row key.
+        var id: String {
+            switch self {
+            case .task(let id, _, _): "task:" + id
+            case .agent(let a): "agent:\(a.key.machineID)/\(a.key.sessionID)"
+            case .plan(let id): "plan:" + id
+            case .message(let feedID, _): "message:" + feedID
+            }
+        }
+    }
+
+    struct Result: Equatable, Sendable {
+        var needsYou: [Row] = []
+        var running: [Row] = []
+        /// Open tasks with no progress for 48 hours and nothing running: folded under In Progress, not counted.
+        var shelved: [Row] = []
+    }
+
+    /// A task's status, failed too when only its plan says the start failed (a hub from before #1077): the web's
+    /// `entryStatus` over `todoStatus`.
+    static func status(_ todo: TodoItem, lookup: TodosLogic.SessionLookup?, plans: [String: TaskPlan]) -> Status {
+        let st = todoStatus(todo, lookup: lookup)
+        guard st == .notStarted, todo.agents.isEmpty, let plan = todo.planID.flatMap({ plans[$0] }),
+              let error = plan.tasks.first(where: { $0.todoID == todo.id })?.error, !error.isEmpty else { return st }
+        return .failed
+    }
+
+    static func todoStatus(_ todo: TodoItem, lookup: TodosLogic.SessionLookup?) -> Status {
+        if todo.failedToStart { return .failed }
+        if todo.doneAt != nil { return .done }
+        let active = todo.activeAgents
+        if active.isEmpty { return .notStarted }
+        var interrupted = false, limit = false, unread = false, working = false, waiting = false
+        for a in active {
+            if let e = a.startError, !e.isEmpty { continue } // a failed start counts as stopped
+            let s = lookup?(a.machineID, a.sessionID)
+            let st = s?.state ?? .offline
+            if st == .needsYou { return .needsYou }
+            let stopped = st == .unread || st == .idle
+            let error = !(s?.turnError ?? "").isEmpty
+            if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
+            else if error, stopped { interrupted = true }
+            else if st == .unread { unread = true }
+            else if s?.waitsToBeWoken == true { waiting = true }
+            else if st == .working || s?.starting == true { working = true }
+        }
+        if interrupted { return .interrupted }
+        if limit { return .usageLimit }
+        if unread { return .unread }
+        if working { return .working }
+        if waiting { return .waiting }
+        return .followUp
+    }
+
+    /// The open ask, as the web reads it (`openAsk`): one with a verdict and a time.
+    static func openAsk(_ todo: TodoItem) -> TodoAsk? {
+        guard let a = todo.ask, !(a.verdict ?? "").isEmpty, !a.askedAt.isEmpty else { return nil }
+        return a
+    }
+
+    /// It waits for the user's review while nothing of it runs or asks (the web's `awaitsReview`): rank 2.
+    static func rank(_ todo: TodoItem, _ status: Status) -> Double {
+        let resting = status == .followUp || status == .unread || status == .notStarted
+        return resting && (todo.reviewState == .pendingReview || openAsk(todo) != nil) ? 2 : status.rank
+    }
+
+    /// The task waits for the user's decision or review: an open ask (a decided one only while the task is open), or its
+    /// supervisor's `pending_review` / `needs_user` on an open task (the web's `taskAwaitsDecision`).
+    static func awaitsDecision(_ todo: TodoItem) -> Bool {
+        if let ask = openAsk(todo) { return !(todo.doneAt != nil && ask.outcome == "decide") }
+        let state = todo.supervision?.state
+        return todo.doneAt == nil && (state == "pending_review" || state == "needs_user")
+    }
+
+    /// The message card still waits for Send by the hub's fields alone: not sent, not filed (the web's `messageWaits`).
+    static func messageWaits(_ item: FeedItem) -> Bool {
+        item.kind == .message && item.ref != nil && item.sentAt == nil && item.filedAt == nil
+    }
+
+    /// Splits a conversation's things into the two entries (the web's `assistantEntries`). `main`: the main
+    /// conversation's id (it watches every task and the Agents opened by hand); `messageWaits`: whether a message card
+    /// still waits for Send (the app adds the inbox's word and Later); `restored`: tasks brought back from shelved.
+    @MainActor static func split(conversation: String, main: String?, group: String = "", todos: [TodoItem], sessions: [Session],
+                                 interactions: [Interaction], plans: [String: TaskPlan], feed: [FeedItem], now: Date = .now,
+                                 restored: [String: Date] = [:], messageWaits: (FeedItem) -> Bool = AssistantEntries.messageWaits) -> Result {
+        let lookup = TodosLogic.makeSessionLookup(sessions)
+        let isMain = !(main ?? "").isEmpty && main == conversation
+        let pair = { (m: String, s: String) in m + "/" + s }
+        var asksOf: [String: [Interaction]] = [:]
+        for ix in interactions.sorted(by: { ($0.createdAt ?? .distantPast, $0.id) < ($1.createdAt ?? .distantPast, $1.id) }) {
+            asksOf[pair(ix.machineID, ix.sessionID), default: []].append(ix)
+        }
+
+        // The conversation's tasks (the web's `taskCardSlots`): the main conversation's every to-do, another's the ones it
+        // dispatched, plus those its plans and feed name. `at` is when its card came: its plan's, else the to-do's.
+        var at: [String: Date] = [:]
+        for plan in plans.values.sorted(by: { $0.id < $1.id }) where plan.conversation == conversation {
+            for t in plan.tasks { if let id = t.todoID, at[id] == nil { at[id] = plan.createdAt ?? .distantPast } }
+        }
+        let byID = Dictionary(todos.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for item in feed where [.task, .receipt, .review, .report].contains(item.kind) {
+            if let id = item.ref, at[id] == nil { at[id] = byID[id]?.createdAt ?? item.at }
+        }
+        for todo in todos where (isMain || todo.origin == conversation) && at[todo.id] == nil {
+            at[todo.id] = todo.createdAt ?? .distantPast
+        }
+
+        typealias Ranked = (row: Row, rank: Double, at: Date)
+        /// The agents of the tasks listed as rows: folded into them, never rows of their own, whoever made the to-do.
+        var folded = Set<String>()
+        var asking: [(row: Row, first: Date?)] = []
+        var deciding: [Ranked] = [], open: [Ranked] = [], shelved: [Ranked] = []
+        for todo in todos {
+            guard let when = at[todo.id] else { continue }
+            let status = status(todo, lookup: lookup, plans: plans)
+            let active = todo.doneAt != nil ? [] : todo.activeAgents
+            let asks = active.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
+            let row = Row.task(id: todo.id, status: status, agents: active.count)
+            let listed = { folded.formUnion(active.map { pair($0.machineID, $0.sessionID) }) }
+            let bucket = TodoTriageLogic.bucket(todo, lookup: lookup, now: now, restoredAt: restored[todo.id])
+            // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
+            let waits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
+            if !asks.isEmpty { asking.append((row, asks.map { $0.createdAt ?? .distantPast }.min())); listed() }
+            else if waits || awaitsDecision(todo) { deciding.append((row, rank(todo, status), when)); listed() }
+            else if bucket == .open { open.append((row, rank(todo, status), when)); listed() }
+            else if bucket == .shelved { shelved.append((row, rank(todo, status), when)); listed() }
+        }
+
+        // Agents that belong to no task, the main conversation's only: asking ones wait on the user, working ones run. The
+        // web's `dockAgents` leaves out the agents of conversations' tasks; an agent linked to a to-do made by hand is that
+        // to-do's row here too (the main conversation lists every to-do), so it is left out as well: one thing, one row.
+        let taskAgents = Set(todos.filter { !($0.origin ?? "").isEmpty && $0.doneAt == nil }.flatMap { t in
+            t.activeAgents.map { SessionKey(group: group, machineID: $0.machineID, sessionID: $0.sessionID) }
+        })
+        let manual = Set(todos.filter { ($0.origin ?? "").isEmpty }.map(\.id))
+        let dock = DockAgent.shown(DockAgent.going(sessions), conversation: conversation, main: main, group: group,
+                                   taskAgents: taskAgents, manualTodos: manual)
+        var running: [Row] = []
+        for agent in dock where !folded.contains(pair(agent.key.machineID, agent.key.sessionID)) {
+            if agent.isWaiting {
+                asking.append((.agent(agent), asksOf[pair(agent.key.machineID, agent.key.sessionID)]?.first?.createdAt))
+            } else {
+                running.append(.agent(agent))
+            }
+        }
+
+        let waitingPlans = plans.values.filter { $0.conversation == conversation && $0.state == .open }
+            .sorted { ($0.createdAt ?? .distantPast, $0.id) < ($1.createdAt ?? .distantPast, $1.id) }
+            .map { Row.plan(id: $0.id) }
+        let messages = feed.filter(messageWaits).compactMap { item in item.ref.map { Row.message(feedID: item.id, itemID: $0) } }
+        // stable sorts, as the web's: equal rows keep the order they came in; no time is the earliest (`byTime`)
+        func stable<T>(_ xs: [T], _ before: (T, T) -> Bool?) -> [T] {
+            xs.enumerated().sorted { a, b in before(a.element, b.element) ?? (a.offset < b.offset) }.map(\.element)
+        }
+        let newest = { (a: Ranked, b: Ranked) -> Bool? in a.rank != b.rank ? a.rank < b.rank : (a.at != b.at ? a.at > b.at : nil) }
+        let epoch = Date(timeIntervalSince1970: 0)
+        let byAsk = stable(asking) { a, b in
+            let x = a.first ?? epoch, y = b.first ?? epoch
+            return x != y ? x < y : nil
+        }.map(\.row)
+        return Result(needsYou: byAsk + waitingPlans + stable(deciding, newest).map(\.row) + messages,
+                      running: stable(open, newest).map(\.row) + running,
+                      shelved: stable(shelved, newest).map(\.row))
+    }
+}
+
+/// What the two trays list: the split, and in front of Needs You the conversation's own cards (Persona asking, an
+/// approval), which the screen adds as the web does.
+nonisolated struct ActionTrayContent: Equatable, Sendable {
+    /// A card the conversation itself shows, answered below the bar.
+    struct Ask: Equatable, Sendable, Identifiable {
+        var id: String
+        var title: String
+    }
+
+    enum Row: Equatable, Sendable, Identifiable {
+        case ask(Ask)
+        case entry(AssistantEntries.Row)
+
+        var id: String {
+            switch self {
+            case .ask(let a): "ask:" + a.id
+            case .entry(let r): r.id
+            }
+        }
+    }
+
     var needsYou: [Row] = []
-    /// What goes on without the user: the open tasks (working first, then the newest), then the agents of no task at work.
     var running: [Row] = []
+    /// Folded under In Progress, not counted.
+    var shelved: [AssistantEntries.Row] = []
 
     init() {}
 
-    /// `own`: the agents going on that no task stands for (`TasksStore.agents(of:)`, the main conversation's only);
-    /// `plans`: the conversation's plans, the open ones wait for Start.
-    init(tasks: [TaskRow], own: [DockAgent], plans: [TaskPlan] = [], messages: [Message] = [], asks: [Ask] = []) {
-        // Open, shelved and closed by the To-dos page's rule (#3331): shelved and closed tasks are in neither entry.
-        // Without a bucket, closed is done or failed to start.
-        let finished: Set<TaskState> = [.done, .failed]
-        let open = tasks.filter { ($0.bucket ?? (finished.contains($0.state) ? .closed : .open)) == .open }
-        let urgent = { (a: TaskRow, b: TaskRow) -> Bool in
-            if a.state.priority != b.state.priority { return a.state.priority < b.state.priority }
-            return (a.createdAt ?? .distantPast) > (b.createdAt ?? .distantPast)
-        }
-        let row = { (t: TaskRow) in Row.task(id: t.id, state: t.state, agents: t.agentKeys.count) }
-        // an agent of a task listed here is that task's row already, whoever started it
-        let folded = open.reduce(into: Set<SessionKey>()) { $0.formUnion($1.agentKeys) }
-        let own = own.filter { !folded.contains($0.key) }
-        let oldest = { (a: Date?, b: Date?) in (a ?? .distantPast) < (b ?? .distantPast) }
-        let newest = { (a: DockAgent, b: DockAgent) -> Bool in
-            if a.since != b.since { return (a.since ?? .distantPast) > (b.since ?? .distantPast) }
-            return a.key.path < b.key.path
-        }
-        needsYou = asks.sorted { oldest($0.createdAt, $1.createdAt) }.map(Row.ask)
-            + open.filter(\.needsYou).sorted(by: urgent).map(row)
-            + own.filter(\.isWaiting).sorted(by: newest).map(Row.agent)
-            + plans.filter { $0.state == .open }.sorted { oldest($0.createdAt, $1.createdAt) }.map { Row.plan(id: $0.id) }
-            + messages.sorted { $0.at < $1.at }.map(Row.message)
-        running = open.filter { !$0.needsYou }.sorted(by: urgent).map(row)
-            + own.filter { !$0.isWaiting }.sorted(by: newest).map(Row.agent)
-    }
-
-    /// Whether a task waits on the user by the To-dos page's rule (`TodoTriageLogic.triage`) where its state alone
-    /// does not say so: its Waiting section (an agent asks or was cut off, the owner decides, a failed start to retry)
-    /// or a review waiting for the user.
-    static func waitsOnUser(_ triage: TodoTriage, review: ReviewState?) -> Bool {
-        triage.section == .waiting || review == .pendingReview || review == .needsUser
+    init(_ entries: AssistantEntries.Result, asks: [Ask] = []) {
+        needsYou = asks.map(Row.ask) + entries.needsYou.map(Row.entry)
+        running = entries.running.map(Row.entry)
+        shelved = entries.shelved
     }
 
     func rows(_ tray: ActionTray) -> [Row] {
@@ -118,7 +269,7 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
         }
     }
 
-    /// The number its entry shows: its rows.
+    /// The number its entry shows: its rows (shelved ones are not counted).
     func count(_ tray: ActionTray) -> Int { rows(tray).count }
 }
 
@@ -182,31 +333,18 @@ struct AssistantActionBar: View {
     static func content(_ conversation: String, key: SessionKey? = nil) -> ActionTrayContent {
         let store = TasksStore.shared
         let model = AppModel.shared
-        // the main conversation watches every task (docs/assistant/unified-entry.md): its entries cover the To-dos page's
-        // open to-dos, whatever conversation a to-do came from (#3331)
-        let isMain = model.assistantMain?.sessionID == conversation
-        // Only tasks: a to-do with agents or handed out by a conversation; the user's own errands are not work going on.
-        let tasks = isMain ? store.todos.values.filter { !($0.origin ?? "").isEmpty || !$0.agents.isEmpty } : store.tasks(of: conversation)
-        let group = model.hub?.group ?? ""
-        let lookup = TodosLogic.makeSessionLookup(model.allSessions(inFront: true))
-        let restored = TodoRestores.load()
-        let now = Date.now
-        let rows = tasks.map { todo in
-            let triage = TodoTriageLogic.triage(todo, lookup: lookup, now: now, restoredAt: restored[todo.id])
-            let bucket: TodoBucket = TodoTriageLogic.countsAsOpen(todo, triage) ? .open : (triage.section == .shelved ? .shelved : .closed)
-            return ActionTrayContent.TaskRow(id: todo.id, state: store.state(todo), createdAt: todo.createdAt, bucket: bucket,
-                                             waitsOnUser: ActionTrayContent.waitsOnUser(triage, review: todo.reviewState),
-                                             agentKeys: Set(todo.activeAgents.map { SessionKey(group: group, machineID: $0.machineID, sessionID: $0.sessionID) }))
-        }
-        let messages: [ActionTrayContent.Message] = store.feed(conversation).compactMap { item in
-            guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(id),
-                  store.messageState(item, itemID: id) == .open else { return nil }
-            return ActionTrayContent.Message(itemID: id, feedID: item.id, at: item.at)
-        }
-        let asks = key.map { model.interactions(for: $0) } ?? []
-        let plans = store.plans.values.filter { $0.conversation == conversation }
-        return ActionTrayContent(tasks: rows, own: store.agents(of: conversation), plans: Array(plans), messages: messages,
-                                 asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title, createdAt: $0.createdAt) })
+        let todos = store.todos.values.sorted { ($0.createdAt ?? .distantPast, $0.id) > ($1.createdAt ?? .distantPast, $1.id) }
+        let entries = AssistantEntries.split(
+            conversation: conversation, main: model.assistantMain?.sessionID, group: model.hub?.group ?? "", todos: todos,
+            sessions: model.allSessions(inFront: true), interactions: model.pendingInteractions, plans: store.plans,
+            feed: store.feed(conversation), restored: TodoRestores.load(),
+            // the hub's fields, the inbox's word on the item, and Later
+            messageWaits: { item in
+                guard item.kind == .message, let id = item.ref, !store.laterMessages.contains(id) else { return false }
+                return store.messageState(item, itemID: id) == .open
+            })
+        let asks = (key.map { model.interactions(for: $0) } ?? []).sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
+        return ActionTrayContent(entries, asks: asks.map { .init(id: $0.id, title: $0.askLine(includeToolName: false) ?? $0.title) })
     }
 
     private func entry(_ tray: ActionTray, count: Int) -> some View {
@@ -257,7 +395,7 @@ struct AssistantActionBar: View {
             }
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Space.s)
-            if rows.isEmpty {
+            if rows.isEmpty && (tray == .needsYou || content.shelved.isEmpty) {
                 Text(tray.empty).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(2)
                     .padding(.horizontal, Theme.Space.m)
                     .padding(.bottom, Theme.Space.m)
@@ -267,6 +405,7 @@ struct AssistantActionBar: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(rows) { row($0) }
+                        if tray == .running, !content.shelved.isEmpty { shelvedLine(content.shelved.count) }
                     }
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
                 }
@@ -293,9 +432,17 @@ struct AssistantActionBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("action-tray.ask")
-        case .task(let id, let state, let agents):
+        case .entry(let entry):
+            self.entry(entry)
+        }
+    }
+
+    @ViewBuilder private func entry(_ row: AssistantEntries.Row) -> some View {
+        switch row {
+        case .task(let id, let status, let agents):
             if let todo = store.todos[id] {
-                if let ask = todo.openAsk {
+                let state = status.taskState
+                if let ask = todo.openAsk, todo.doneAt == nil {
                     BriefAcceptRow(row: ask.row(for: todo), group: AppModel.shared.hub?.group ?? "")
                         .padding(.horizontal, Theme.Space.m)
                 } else {
@@ -303,7 +450,7 @@ struct AssistantActionBar: View {
                         open = nil
                         store.detailTask = id
                     } label: {
-                        line(title: todo.title, detail: detail(todo, state: state, agents: agents), waiting: state == .needsYou) {
+                        line(title: todo.title, detail: detail(todo, status: status, agents: agents), waiting: open == .needsYou) {
                             TaskMark(state: state)
                         }
                     }
@@ -331,10 +478,10 @@ struct AssistantActionBar: View {
                     .padding(.bottom, Theme.Space.s)
                     .accessibilityIdentifier("action-tray.plan")
             }
-        case .message(let message):
+        case .message(let feedID, let itemID):
             // the message card itself: Send, Edit and Later are right here
-            if let item = store.feed(conversation).first(where: { $0.id == message.feedID }) {
-                MessageCard(item: item, itemID: message.itemID)
+            if let item = store.feed(conversation).first(where: { $0.id == feedID }) {
+                MessageCard(item: item, itemID: itemID)
                     .padding(.horizontal, Theme.Space.s)
                     .padding(.bottom, Theme.Space.s)
                     .accessibilityIdentifier("action-tray.message")
@@ -342,13 +489,32 @@ struct AssistantActionBar: View {
         }
     }
 
-    /// A task row's words: its state, what a waiting task waits for (#3274), why it waits on the user when its state
-    /// does not say (a review, a decision), and how many agents it has when more than one (they are listed in its details).
-    private func detail(_ todo: TodoItem, state: TaskState, agents: Int) -> String {
+    /// The open tasks with no progress for 48 hours: one quiet line under In Progress, not counted; the board lists them.
+    private func shelvedLine(_ count: Int) -> some View {
+        Button {
+            open = nil
+            store.showBoard = true
+        } label: {
+            line(title: String(localized: "Shelved"), detail: "\(count)", waiting: false) {
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("action-tray.shelved")
+    }
+
+    /// A task row's words: its status, what a waiting task waits for (#3274), the review it waits for when its status
+    /// does not say, and how many agents it has when more than one (they are listed in its details, never as rows).
+    private func detail(_ todo: TodoItem, status: AssistantEntries.Status, agents: Int) -> String {
         let review = todo.reviewState
-        let decides = state != .needsYou && state != .failed && (review == .pendingReview || review == .needsUser)
-        var parts = [decides ? todo.reviewBadge?.label ?? state.label : state.label]
-        if state == .waiting, let waits = store.waitLine(todo) { parts.append(waits) }
+        let resting = status == .followUp || status == .unread || status == .notStarted
+        var parts: [String]
+        if status == .interrupted { parts = [String(localized: "Interrupted [Chat Layout]")] }
+        else if status == .usageLimit { parts = [String(localized: "Usage Limit")] }
+        else if resting, review == .pendingReview || review == .needsUser { parts = [todo.reviewBadge?.label ?? status.taskState.label] }
+        else { parts = [status.taskState.label] }
+        if status == .waiting, let waits = store.waitLine(todo) { parts.append(waits) }
         if agents > 1 { parts.append(String(localized: "\(agents) agents")) }
         return parts.joined(separator: " · ")
     }

@@ -7,140 +7,137 @@ import Testing
 /// capsules they replace.
 @MainActor
 struct AssistantActionBarTests {
-    private func key(_ id: String) -> SessionKey { SessionKey(group: "", machineID: "box", sessionID: id) }
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private func iso(_ minutesAgo: Double) -> String { (now - minutesAgo * 60).formatted(.iso8601) }
 
-    private func agent(_ id: String, _ state: AgentState, since: TimeInterval = 0) -> DockAgent {
-        DockAgent(key: key(id), title: "agent \(id)", state: state, since: Date(timeIntervalSince1970: since))
+    private func decode<T: Decodable>(_ json: [String: Any]) -> T {
+        try! JSON.decoder.decode(T.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
-    private func task(_ id: String, _ state: TaskState, at: TimeInterval, bucket: TodoBucket? = nil, waits: Bool = false,
-                      agents: [String] = []) -> ActionTrayContent.TaskRow {
-        .init(id: id, state: state, createdAt: Date(timeIntervalSince1970: at), bucket: bucket, waitsOnUser: waits,
-              agentKeys: Set(agents.map(key)))
+    /// A task of the main conversation with one agent (`agent`), as the hub sends it.
+    private func todo(_ id: String, agent: String? = nil, origin: String = "main", done: Bool = false, supervision: String? = nil,
+                      ask: [String: Any]? = nil, at: Double = 30) -> TodoItem {
+        var t: [String: Any] = ["id": id, "title": "task \(id)", "origin": origin, "created_at": iso(at), "updated_at": iso(at)]
+        if let agent { t["agents"] = [["machine_id": "mac", "session_id": agent, "linked_at": iso(at)]] }
+        if done { t["done_at"] = iso(1) }
+        if let supervision { t["supervision"] = ["supervisor": "main", "state": supervision] }
+        if let ask { t["ask"] = ask }
+        return decode(t)
     }
 
-    private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: TimeInterval) -> TaskPlan {
-        TaskPlan(id: id, conversation: "c", tasks: (0..<tasks).map { PlanTask(title: "task \($0)", prompt: "p", machine: "box", cwd: "/demo") },
-                 state: state, createdAt: Date(timeIntervalSince1970: at))
+    private func session(_ id: String, _ state: String, todo: String? = nil) -> Session {
+        var s: [String: Any] = ["machine_id": "mac", "session_id": id, "title": id, "cwd": "/home/user/project", "state": state,
+                                "status": state, "updated_at": iso(5), "state_since": iso(5)]
+        if let todo { s["todo"] = ["id": todo, "title": "task \(todo)"] }
+        return decode(s)
     }
 
-    private func ids(_ rows: [ActionTrayContent.Row]) -> [String] { rows.map(\.id) }
-
-    /// Every row is in one entry at most, and each count is its entry's rows.
-    private func expectOnce(_ content: ActionTrayContent, sourceLocation: SourceLocation = #_sourceLocation) {
-        let all = ids(content.needsYou) + ids(content.running)
-        #expect(Set(all).count == all.count, "a thing listed twice: \(all)", sourceLocation: sourceLocation)
-        #expect(content.count(.needsYou) == content.needsYou.count, sourceLocation: sourceLocation)
-        #expect(content.count(.running) == content.running.count, sourceLocation: sourceLocation)
+    private func ask(_ id: String, session: String, at: Double = 3) -> Interaction {
+        decode(["id": id, "machine_id": "mac", "session_id": session, "kind": "question", "created_at": iso(at),
+                "questions": [["question": "Which one?", "options": [["label": "A"], ["label": "B"]]]]])
     }
+
+    private func split(_ todos: [TodoItem], _ sessions: [Session] = [], asks: [Interaction] = [], plans: [TaskPlan] = [],
+                       feed: [FeedItem] = [], conversation: String = "main", waits: ((FeedItem) -> Bool)? = nil) -> AssistantEntries.Result {
+        AssistantEntries.split(conversation: conversation, main: "main", todos: todos, sessions: sessions, interactions: asks,
+                               plans: Dictionary(uniqueKeysWithValues: plans.map { ($0.id, $0) }), feed: feed, now: now,
+                               messageWaits: waits ?? AssistantEntries.messageWaits)
+    }
+
+    private func ids(_ rows: [AssistantEntries.Row]) -> [String] { rows.map(\.id) }
 
     @Test func twoEntriesOnly() {
         #expect(ActionTray.allCases == [.needsYou, .running])
     }
 
-    /// A task waiting on a decision or a review is only in Needs You; once answered it is back in In Progress.
-    @Test func taskWaitingOnTheUserIsOnlyInNeedsYou() {
-        let waiting = ActionTrayContent(tasks: [
-            task("review", .followup, at: 3, bucket: .open, waits: true),
-            task("asks", .needsYou, at: 2, bucket: .open),
-            task("works", .working, at: 1, bucket: .open),
-        ], own: [])
-        #expect(ids(waiting.needsYou) == ["task:asks", "task:review"])
-        #expect(ids(waiting.running) == ["task:works"])
-        expectOnce(waiting)
-        let answered = ActionTrayContent(tasks: [task("review", .working, at: 3, bucket: .open)], own: [])
+    /// A task waiting for a decision or review is only in Needs You; once answered it is back in In Progress.
+    @Test func taskWaitingForADecisionIsOnlyInNeedsYou() {
+        let waiting = split([todo("review", agent: "w", supervision: "pending_review"),
+                             todo("decide", agent: "d", ask: ["verdict": "Pick a cache", "asked_at": iso(2), "outcome": "decide"])],
+                            [session("w", "idle"), session("d", "idle")])
+        #expect(Set(ids(waiting.needsYou)) == ["task:review", "task:decide"])
+        #expect(waiting.running.isEmpty)
+        let answered = split([todo("review", agent: "w", supervision: "")], [session("w", "working")])
         #expect(answered.needsYou.isEmpty)
         #expect(ids(answered.running) == ["task:review"])
     }
 
-    /// A running task is only in In Progress, and its agents are folded into its row, whoever started them.
-    @Test func runningTaskFoldsItsAgents() {
-        let content = ActionTrayContent(tasks: [task("t", .working, at: 1, bucket: .open, agents: ["a1", "a2"])],
-                                        own: [agent("a1", .working), agent("a2", .needsYou), agent("solo", .working)])
-        #expect(ids(content.running) == ["task:t", "agent:box/solo"])
-        #expect(content.needsYou.isEmpty, "a task's agent shows on its own: \(ids(content.needsYou))")
-        #expect(content.running.first == .task(id: "t", state: .working, agents: 2))
-        expectOnce(content)
+    /// A running task is only in In Progress, and its agent is not a row of its own.
+    @Test func runningTaskWithoutItsAgent() {
+        let r = split([todo("run", agent: "w")], [session("w", "working", todo: "run")])
+        #expect(ids(r.running) == ["task:run"])
+        #expect(r.needsYou.isEmpty)
+        #expect(r.running.first == .task(id: "run", status: .working, agents: 1))
     }
 
-    /// A manual agent (no task) that asks is only in Needs You; one at work is a row of In Progress.
-    @Test func manualAgentAskingIsOnlyInNeedsYou() {
-        let content = ActionTrayContent(tasks: [], own: [agent("asks", .needsYou, since: 1), agent("works", .working, since: 2)])
-        #expect(ids(content.needsYou) == ["agent:box/asks"])
-        #expect(ids(content.running) == ["agent:box/works"])
-        expectOnce(content)
+    /// A task's agent asking puts the task (not the agent) in Needs You, and only there.
+    @Test func taskAgentQuestionIsTheTasksRow() {
+        let r = split([todo("t", agent: "w")], [session("w", "needs_you", todo: "t")], asks: [ask("ix", session: "w")])
+        #expect(ids(r.needsYou) == ["task:t"])
+        #expect(r.running.isEmpty)
     }
 
-    /// Finished things are in neither entry: done, failed to start long ago, accepted (closed), shelved.
+    /// A manual Agent (no task) asking is only in Needs You; one at work only in In Progress; elsewhere than the main
+    /// conversation neither is a row.
+    @Test func manualAgentsAreRowsOfTheMainConversation() {
+        let sessions = [session("m-ask", "needs_you"), session("m-work", "working"), session("m-idle", "idle")]
+        let r = split([], sessions, asks: [ask("ix", session: "m-ask")])
+        #expect(ids(r.needsYou) == ["agent:mac/m-ask"])
+        #expect(ids(r.running) == ["agent:mac/m-work"])
+        let side = split([], sessions, asks: [ask("ix", session: "m-ask")], conversation: "side")
+        #expect(side.needsYou.isEmpty && side.running.isEmpty)
+    }
+
+    /// An Agent linked to a to-do made by hand (no origin) is that to-do's row in the main conversation, never a second
+    /// row of its own; once the to-do is done the Agent is a row again.
+    @Test func agentOfAHandMadeTodoIsFoldedIntoItsRow() {
+        let manual = todo("photos", agent: "p", origin: "")
+        let r = split([manual], [session("p", "needs_you", todo: "photos")], asks: [ask("ix", session: "p")])
+        #expect(ids(r.needsYou) == ["task:photos"])
+        #expect(r.running.isEmpty)
+        let working = split([manual], [session("p", "working", todo: "photos")])
+        #expect(ids(working.running) == ["task:photos"])
+        let done = split([todo("photos", agent: "p", origin: "", done: true)], [session("p", "working", todo: "photos")])
+        #expect(ids(done.running) == ["agent:mac/p"])
+    }
+
+    /// Finished things are in neither entry.
     @Test func finishedThingsAreInNeither() {
-        let content = ActionTrayContent(tasks: [
-            task("done", .done, at: 1),
-            task("failed-old", .failed, at: 2, bucket: .closed),
-            task("accepted", .followup, at: 3, bucket: .closed),
-            task("shelved", .followup, at: 4, bucket: .shelved),
-            task("unseen", .unread, at: 5, bucket: .closed),
-        ], own: [], plans: [plan("started", .started, tasks: 1, at: 1), plan("dropped", .dismissed, tasks: 1, at: 2)])
-        #expect(content.needsYou.isEmpty)
-        #expect(content.running.isEmpty)
-        for tray in ActionTray.allCases { #expect(content.count(tray) == 0) }
+        let r = split([todo("done", agent: "a", done: true), todo("accepted", agent: "b", done: true, supervision: "accepted")],
+                      [session("a", "idle"), session("b", "idle")],
+                      plans: [plan("started", .started, tasks: 2, at: 5), plan("dropped", .dismissed, tasks: 1, at: 4)])
+        #expect(r.needsYou.isEmpty)
+        #expect(r.running.isEmpty)
+        #expect(r.shelved.isEmpty)
     }
 
-    /// A start that failed recently waits for a retry: Needs You, by the To-dos page's bucket.
-    @Test func failedStartToRetryNeedsYou() {
-        let content = ActionTrayContent(tasks: [task("failed", .failed, at: 1, bucket: .open, waits: true)], own: [])
-        #expect(ids(content.needsYou) == ["task:failed"])
-        #expect(content.running.isEmpty)
+    private func plan(_ id: String, _ state: TaskPlan.State, tasks: Int, at: Double) -> TaskPlan {
+        TaskPlan(id: id, conversation: "main", tasks: (0..<tasks).map { PlanTask(title: "task \($0)", prompt: "p", machine: "mac", cwd: "/demo") },
+                 state: state, createdAt: now - at * 60)
     }
 
-    /// Plans waiting for Start, replies waiting for Send and the conversation's own cards are Needs You rows: one row
-    /// per plan, however many tasks it holds.
-    @Test func plansMessagesAndCardsNeedYou() {
-        let at = { Date(timeIntervalSince1970: $0) }
-        let content = ActionTrayContent(
-            tasks: [task("asks", .needsYou, at: 1, bucket: .open)],
-            own: [agent("asks", .needsYou)],
-            plans: [plan("later", .open, tasks: 1, at: 20), plan("first", .open, tasks: 3, at: 10), plan("started", .started, tasks: 2, at: 5)],
-            messages: [.init(itemID: "m2", feedID: "f2", at: at(9)), .init(itemID: "m1", feedID: "f1", at: at(8))],
-            asks: [.init(id: "ix", title: "Send the mail?", createdAt: at(7))])
-        #expect(ids(content.needsYou) == ["ask:ix", "task:asks", "agent:box/asks", "plan:first", "plan:later", "message:m1", "message:m2"])
-        #expect(content.count(.needsYou) == 7)
-        #expect(content.running.isEmpty)
-        expectOnce(content)
+    /// A plan waiting for Start is one row whatever its task count; a message card waits until sent, filed or put off.
+    @Test func plansAndMessagesNeedYou() {
+        let card: FeedItem = decode(["id": "f1", "conversation": "main", "at": iso(2), "kind": "message", "ref": "lark:1",
+                                     "body": ["text": "Can we ship today?", "draft": "Yes, after lunch."]])
+        let r = split([], plans: [plan("p", .open, tasks: 3, at: 3)], feed: [card])
+        #expect(ids(r.needsYou) == ["plan:p", "message:f1"])
+        #expect(r.needsYou.last == .message(feedID: "f1", itemID: "lark:1"))
+        let later = split([], plans: [plan("p", .open, tasks: 3, at: 3)], feed: [card], waits: { _ in false })
+        #expect(ids(later.needsYou) == ["plan:p"])
     }
 
-    @Test func runningListsWorkingFirstThenNewest() {
-        let content = ActionTrayContent(tasks: [
-            task("follow", .followup, at: 50, bucket: .open),
-            task("working-old", .working, at: 10, bucket: .open),
-            task("unread", .unread, at: 30, bucket: .open),
-            task("working-new", .working, at: 40, bucket: .open),
-            task("waiting", .waiting, at: 20, bucket: .open),
-        ], own: [agent("solo-old", .working, since: 1), agent("solo-new", .working, since: 2)])
-        #expect(ids(content.running) == ["task:working-new", "task:waiting", "task:working-old", "task:unread", "task:follow",
-                                         "agent:box/solo-new", "agent:box/solo-old"])
-        #expect(content.count(.running) == 7)
-    }
-
-    /// Without the To-dos page's bucket, done and failed are closed and the rest open.
-    @Test func withoutABucketTheStateDecides() {
-        let content = ActionTrayContent(tasks: [task("done", .done, at: 1), task("failed", .failed, at: 2), task("works", .working, at: 3)], own: [])
-        #expect(ids(content.running) == ["task:works"])
-        #expect(content.needsYou.isEmpty)
-    }
-
-    /// The To-dos page's Waiting section and a review the user has to make wait on the user; other sections do not.
-    @Test func waitsOnUserReadsTheTriage() {
-        let t = { (s: TodoSection, r: TodoTriageRule) in TodoTriage(section: s, rule: r, last: .distantPast) }
-        #expect(ActionTrayContent.waitsOnUser(t(.waiting, .ownerDecides), review: nil))
-        #expect(ActionTrayContent.waitsOnUser(t(.waiting, .failedStart), review: nil))
-        #expect(ActionTrayContent.waitsOnUser(t(.justDone, .finishedUnseen), review: .pendingReview))
-        #expect(!ActionTrayContent.waitsOnUser(t(.justDone, .finishedUnseen), review: nil))
-        #expect(!ActionTrayContent.waitsOnUser(t(.working, .agentRunning), review: .ongoing))
-        #expect(!ActionTrayContent.waitsOnUser(t(.pr, .prOpen), review: .rework))
+    /// The conversation's own cards come first in Needs You and are counted; the trays' counts are their rows.
+    @Test func ownCardsComeFirstAndCount() {
+        let r = split([todo("t", agent: "w")], [session("w", "needs_you", todo: "t")], asks: [ask("ix", session: "w")])
+        let content = ActionTrayContent(r, asks: [.init(id: "own", title: "Send the mail?")])
+        #expect(content.needsYou.map(\.id) == ["ask:own", "task:t"])
+        #expect(content.count(.needsYou) == 2)
+        #expect(content.count(.running) == 0)
     }
 
     @Test func emptyConversationCountsNothing() {
-        let content = ActionTrayContent(tasks: [], own: [])
+        let content = ActionTrayContent(split([]))
         for tray in ActionTray.allCases {
             #expect(content.rows(tray).isEmpty)
             #expect(content.count(tray) == 0)

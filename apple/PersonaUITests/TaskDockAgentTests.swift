@@ -1,10 +1,10 @@
 import XCTest
 
 /// The main conversation's agents opened by hand (#1113), in the action bar's trays (#3393): In Progress lists the
-/// working tasks and the agent of its own at work, its All the board, Needs You the agent of its own that waits, and a
-/// tap opens the agent's page in the task's sheet. Against
-/// scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 and MOCK_TASKS_DOCK unset (four tasks, two agents) or
-/// =pair (one task, one agent) (PERSONA_MOCK_HUB; PERSONA_DOCK_MODE names which). With PERSONA_SHOTS set it writes the
+/// working tasks and, after them, the agent of its own at work; its All opens the board, and a tap on the agent opens
+/// its page in the task's sheet. Against
+/// scripts/mock/mock_hub.py with MOCK_TASKS=1 MOCK_TASKS_NO_ASKS=1 and MOCK_TASKS_DOCK unset (PERSONA_MOCK_HUB;
+/// PERSONA_DOCK_MODE names the screenshots). With PERSONA_SHOTS set it writes the
 /// dock, the board and the agent's sheet there (PERSONA_DOCK_APPEARANCE names the simulator's appearance in the file).
 final class TaskDockAgentTests: XCTestCase {
     private var hub: String!
@@ -53,11 +53,12 @@ final class TaskDockAgentTests: XCTestCase {
         XCTAssertTrue(progress.waitForExistence(timeout: 5))
         sleep(1)
 
-        // Needs You: the agent of its own waiting for the user (the photo sync) says so.
-        app.openActionTray("needs-you")
+        // In Progress, after the tasks: the agent of its own at work (/orders) says so. (The photo sync's agent waits
+        // for the user, but it is linked to a hand-made to-do: it is that to-do's row in Needs You, #3443.)
+        app.openActionTray("running")
         app.waitForRows(agents, atLeast: want.agents)
         XCTAssertGreaterThanOrEqual(agents.count, want.agents, app.debugDescription)
-        XCTAssertTrue(agents.element(boundBy: 0).label.contains("需要你"), agents.element(boundBy: 0).label)
+        XCTAssertTrue(agents.element(boundBy: 0).label.contains("工作中"), agents.element(boundBy: 0).label)
         try shot(app, "dock-scrolled")
 
         // A tap opens the agent's page in the task's sheet.

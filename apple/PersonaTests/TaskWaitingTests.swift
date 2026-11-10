@@ -4,6 +4,7 @@ import Testing
 
 /// A task whose agent ended its turn but waits on its own background work or on the hub's wake-up is Waiting, not
 /// Follow-up (#3274); only one nothing brings back is Follow-up. The same rule as the hub's taskState and the web's.
+@MainActor
 struct TaskWaitingTests {
     private func session(_ json: String) throws -> Session {
         try JSON.decoder.decode(Session.self, from: Data(json.utf8))

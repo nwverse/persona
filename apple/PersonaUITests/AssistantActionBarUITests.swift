@@ -26,7 +26,9 @@ final class AssistantActionBarUITests: XCTestCase {
     @MainActor func testTwoLowEntriesEachThingOnce() throws {
         let app = XCUIApplication()
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", url, "-tab", "assistant"]
+        // the main conversation, where the mock's tasks, plans and Agents opened by hand are
+        app.launchArguments = ["-pairURL", url, "-tab", "assistant", "-dev.openChat", "",
+                               "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]
         app.launchPinned()
 
         let needs = app.buttons["action-bar.needs-you"]
@@ -69,10 +71,12 @@ final class AssistantActionBarUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["action-tray.needs-you"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(tray.waitForNonExistence(timeout: 5), "In Progress stayed open under Needs You")
         XCTAssertFalse(running.isSelected)
-        // the agent of its own that waits (the photo sync) is here, and only here
-        app.waitForRows(app.trayAgents, atLeast: 1)
-        XCTAssertTrue(app.trayAgents.firstMatch.label.contains("需要你"), app.trayAgents.firstMatch.label)
+        // the photo sync waits for the user: its hand-made to-do's row, once (its Agent is folded into it), and only here
+        app.waitForRows(app.trayTasks, atLeast: 1)
         let needRows = rowLabels(app)
+        let photos = needRows.filter { $0.contains("照片同步") }
+        XCTAssertEqual(photos.count, 1, "the photo sync is not one row: \(needRows)")
+        XCTAssertTrue(photos.first?.contains("需要你") == true, "\(photos)")
         XCTAssertTrue(Set(needRows).isDisjoint(with: runningRows), "listed in both: \(Set(needRows).intersection(runningRows))")
         sleep(1)
         try shot(app, "needs-you")
