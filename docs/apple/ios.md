@@ -931,6 +931,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     Page sides `Theme.Space.page` 16, aligned search/filters/group titles/cards/capsules, not individual paddings.
   - `Theme.Size` (requested 2026-10-31): named text-adjacent icons/dots/avatars/tap targets/thumbnails/label widths, default original points,
     `.scaledFrame(width:height:)` / `.scaledFrame(minWidth:…)` follows text up to 1.6× accessibility (44pt buttons not a third of screen).
+    `.tapTargetFrame(alignment:)`: a hit area that grows like `scaledFrame` but never under `tapTarget` (44pt) at Small / smaller system sizes, for small controls hit wider than drawn (uploaded avatar's corner delete).
     Lines/dividers/progress ≤4pt stay unscaled `frame`; geometric sizes unchanged; watch keeps own sizes, not App text sizing.
   - Dynamic Type + Settings › Appearance › Interface Style › Text Size (Small/Standard/Large, `TextSize`, `ui.textSize`) offsets system one level via RootView `.dynamicTypeSize`,
     changing text styles, `@ScaledMetric`, MarkdownUI and BeautifulUI together, ratios intact.
@@ -957,9 +958,33 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     (circle logos fill, others `Theme.Brand.inCircle`). Boxes: Settings `icon`, detail header `wellM`, email account `wellXS`,
     source `wellS`, sign-in `iconXS`; new marks measure opaque bounds after `rsvg-convert` and crop viewBox whitespace.
   Lock Screen Live Activities capped at `.large` (~160pt height, clips beyond).
-- Motion (`Theme.Motion`: state `.snappy` 0.25, layout `.smooth` 0.3): continuous only Needs you dot breathing and system working spinner;
-  Reduce Motion (`accessibilityReduceMotion`) stops dot (and loading/preparing placeholders), working dot static outer ring.
-  No wobbling icons/spinning gears/pulsing avatars/spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
+- Motion (`Theme.Motion`): one meaning, one motion. A page picks the row for what is happening; a new meaning gets a token and a row
+  here first, never an inline `.easeInOut(duration:)` (`TokenRatchetTests` counts those). Details and why: `docs/lessons/ios.md`, "Motion rules (#2943)".
+
+  | What happens | Motion |
+  | --- | --- |
+  | A value or state changes in place (toggle, tone, selection, a menu or card opening) | `state` / `standard`: `.snappy` 0.25 |
+  | Things take new places (rows in, out or reordered) | `layout`: `.smooth` 0.3 |
+  | A block grows in place and the eye follows its rows | `expand`: `.smooth` 0.4 |
+  | Something opens in the chat, or closes | `.unfolding`: `reveal` easeOut 0.28, `conceal` easeIn 0.2 |
+  | A number changes | `.contentTransition(.numericText)` |
+  | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
+  | Moving with the keyboard | `keyboard` (the system's spring) |
+  | The composer and the 「+」 panel | their `composer…` / `hold…` / `attach…` tokens, measured from Telegram |
+
+  Red lines:
+  - Leaving is quicker than arriving (`conceal` < `reveal`, `holdLeave` < `holdAppear`, `attachContentOut` < `attachContentIn`), and a
+    panel, card or row leaving fades and moves but does not shrink. Only a glyph swapped inside one control shrinks (`composerSwapScale`);
+    `composerAccessory` fading in quicker than out is Telegram's measured exception.
+  - Under the finger nothing animates: a drag follows it frame for frame, and the animation starts at release with the finger's speed.
+  - Only a few things move on their own, each listed with its reason in `apple/PersonaTests/ContinuousMotionTests.swift`: the Needs you
+    dot's breath, the persona while it works, typing dots, loading skeletons, the voice orb in a call, the recording dot, the watch's frog.
+    A loop changes only transform, opacity or color, never a frame, padding or font (that relays out every frame); it stops off screen,
+    in the background and with the wrist down; the persona and the voice orb also hold still in Low Power Mode.
+  - Reduce Motion (`accessibilityReduceMotion`, `Theme.Motion.reduced` outside a view): loops show one still frame (the working dot its
+    static ring); changes land at once or cross-fade, without sliding or scaling. The registry test fails for a loop whose file, or its
+    caller, never reads it.
+  - No wobbling icons, spinning gears, pulsing avatars or spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
   doubling otherwise); neighboring glass keys/top Back/⋯ use `GlassEffectContainer`.
   - An extension's View drawn again (#37, as on the web and Android; `Views/Settings/ExtensionMotion.swift`): under the same key, a `metric`, `stat_grid`
     or row value whose numbers alone changed rolls (`.numericText`, counting down when the number fell); any other change of a value or a badge's words fades in,
@@ -1518,8 +1543,17 @@ group's. With one installed manager, or a hub without a roster, nothing below sh
 
 - **Inbox items are their id and their manager** (`InboxItem.key`): the store, the bulk arithmetic (`InboxBulk`), the reply and status
   spinners, the Mac's selection, item windows and Quick Open use it. An answer about one item is put back with the manager asked
-  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. An item's
+  (`InboxStore.put(_:manager:)`), and a bulk answer is stamped with it (`InboxBulkResult.stamped`), skipped ids too. A request
+  about one item (details, Done, Mute, a reply, its suggestion, hand-off and Trail) names its manager unless that is the
+  roster's default (`AppModel.itemManager`, as the web's `itemHeaders`), and names its stamp until the roster is read (the
+  default may have moved); the Rules and Muted lists name their stamp. An item's
   rule sheet reads and saves its manager's rules and moves only that manager's items (`InboxPolicyTarget.manager`).
+- **An item's Lark chat is its manager's**: its emoji and quick reactions (`LarkMedia.catalog`, one per manager), its messaging
+  source (`MessagingSources.source(for:manager:)`: a named manager's list is read through it when its chat, a profile or a Moments
+  post opens, until one is found this launch; the default's stays the hub's), its drafts (`LarkDrafts.Key`, and the Lark user
+  its outbox draft opens under, `LarkOutboxAccounts`; the default's under the names they had) and the clients of what opens
+  inside it (thread, composer, profile, cards: `AppModel.larkAPI`, through the chat's group, `larkGroup`). A Moments post
+  pushed from an item sets its manager on its page. Tests `LarkChatManagerTests`, `LarkDraftsTests`, `LarkOutboxStoreTests`.
 - **Rules and Muted per manager**: both lists read every installed manager's at once, each one named
   (`ManagerRoster.readEach`), and show each one's under its name (`ManagerHeading`), the default first, a manager with none
   left out; one that can't be read says so in its place (offline: that they show once it is back). Each entry is stamped

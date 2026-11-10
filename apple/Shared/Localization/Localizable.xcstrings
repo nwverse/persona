@@ -1,6 +1,931 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Deselect All": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deselect All"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択を解除"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取消全选"
+          }
+        }
+      }
+    },
+    "Mark as Done": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as Done"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "処理済みにする"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "标为已处理"
+          }
+        }
+      }
+    },
+    "Select": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選択"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择"
+          }
+        }
+      }
+    },
+    "Done Just Now": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Just Now"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "たった今"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刚刚处理"
+          }
+        }
+      }
+    },
+    "7+ Days Ago": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "7+ Days Ago"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "7日以上前"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "7 天前"
+          }
+        }
+      }
+    },
+    "1+ Month Ago": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1+ Month Ago"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1か月以上前"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 个月前"
+          }
+        }
+      }
+    },
+    "Mail · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mail · %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メール · %1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "邮件 · %1$@"
+          }
+        }
+      }
+    },
+    "Agents Waiting on You": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agents Waiting on You"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたを待っている Agent"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent 在等你"
+          }
+        }
+      }
+    },
+    "Select All in %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select All in %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%1$@」をすべて選択"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选中「%1$@」整组"
+          }
+        }
+      }
+    },
+    "%lld Picked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld selected"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld件選択"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选 %1$lld"
+          }
+        }
+      }
+    },
+    "Group By": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group By"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "グループ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分组方式"
+          }
+        }
+      }
+    },
+    "By Source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Source"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ソース別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按来源"
+          }
+        }
+      }
+    },
+    "By Time": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Time"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "時間別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按时间"
+          }
+        }
+      }
+    },
+    "Jump To": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jump To"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移動"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "跳到"
+          }
+        }
+      }
+    },
+    "Show Older": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Older"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "さらに読み込む"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "加载更早的"
+          }
+        }
+      }
+    },
+    "Loading…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み込み中…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载…"
+          }
+        }
+      }
+    },
+    "Avatars other than Mochi download from the hub when selected. To use an avatar’s colors, choose Match Avatar under Theme Color.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avatars other than Mochi download from the hub when selected. To use an avatar’s colors, choose Match Avatar under Theme Color."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "団子以外のアバターは、選択時に hub からダウンロードされます。アバターの配色を使うには、テーマカラーで「アバターに合わせる」を選んでください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "团子以外的形象在选中时从 hub 下载；想用形象的配色，在主题色里选「跟随形象」。"
+          }
+        }
+      }
+    },
+    "Choose Image File": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose Image File"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像ファイルを選択"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选取图片文件"
+          }
+        }
+      }
+    },
+    "Couldn't open this image. Try another one.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't open this image. Try another one."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像を開けませんでした。別の画像を試してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打不开这张图片，换一张试试。"
+          }
+        }
+      }
+    },
+    "Couldn't prepare this image. Try another one.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't prepare this image. Try another one."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この画像を処理できませんでした。別の画像を試してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这张图片处理不了，换一张试试。"
+          }
+        }
+      }
+    },
+    "Couldn't reach the hub. Check the connection and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't reach the hub. Check the connection and try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブに接続できませんでした。接続を確認して、もう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连不上 hub，检查连接后再试一次。"
+          }
+        }
+      }
+    },
+    "Crop": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crop"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切り抜き"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "裁剪"
+          }
+        }
+      }
+    },
+    "Crop and upload": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Crop and upload"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "切り抜いて追加"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "裁剪后上传"
+          }
+        }
+      }
+    },
+    "Delete Avatar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Avatar"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アバターを削除"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "删除形象"
+          }
+        }
+      }
+    },
+    "Description (Optional)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Description (Optional)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "説明（任意）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "简介（可选）"
+          }
+        }
+      }
+    },
+    "Drag to move the image. Use the slider to zoom.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag to move the image. Use the slider to zoom."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドラッグで画像を移動、スライダーで拡大・縮小できます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拖动来移动图片，用滑块缩放。"
+          }
+        }
+      }
+    },
+    "Drag to move the photo. Pinch to zoom.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drag to move the photo. Pinch to zoom."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドラッグで写真を移動、ピンチで拡大・縮小できます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拖动来移动照片，双指捏合来缩放。"
+          }
+        }
+      }
+    },
+    "Every avatar uses the default Home Screen icon. Older alternate icons reset to the default.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every avatar uses the default Home Screen icon. Older alternate icons reset to the default."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "どのアバターもデフォルトのホーム画面アイコンを使います。古い代替アイコンはデフォルトに戻ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所有形象都使用默认桌面图标。旧的备用图标会切回默认。"
+          }
+        }
+      }
+    },
+    "From your image": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From your image"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたの画像から"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用你的图片做的"
+          }
+        }
+      }
+    },
+    "It is deleted from the hub and from your other devices. Where it is in use, the default avatar comes back.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It is deleted from the hub and from your other devices. Where it is in use, the default avatar comes back."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブとほかのデバイスから削除されます。使用中の場所ではデフォルトのアバターに戻ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会从 hub 和你的其他设备上删除。正在用它的地方会换回默认形象。"
+          }
+        }
+      }
+    },
+    "Makes an avatar from an image of your own": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Makes an avatar from an image of your own"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自分の画像からアバターを作ります"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用你自己的图片做一个形象"
+          }
+        }
+      }
+    },
+    "New Avatar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Avatar"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しいアバター"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新形象"
+          }
+        }
+      }
+    },
+    "New from Photo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New from Photo"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "写真から作成"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从照片新建"
+          }
+        }
+      }
+    },
+    "New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「写真から作成」で自分の画像からアバターを作れます。作ったアバターは、隅の削除ボタンで削除できます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「从照片新建」可以用你自己的图片做一个形象。要删除你做的形象，点它角上的删除按钮。"
+          }
+        }
+      }
+    },
+    "Persona goes by this name in the top bar and the chat. The description shows only here in Settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona goes by this name in the top bar and the chat. The description shows only here in Settings."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona はトップバーとチャットでこの名前を使います。説明は設定にだけ表示されます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona 在顶栏和对话里用这个名字。简介只在设置里显示。"
+          }
+        }
+      }
+    },
+    "The avatar was made, but this device couldn't download it. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The avatar was made, but this device couldn't download it. Try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アバターは作成されましたが、このデバイスにダウンロードできませんでした。もう一度お試しください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "形象做好了，但没能下载到这台设备，再试一次。"
+          }
+        }
+      }
+    },
+    "This file is too large to be an avatar. Choose a smaller image.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is too large to be an avatar. Choose a smaller image."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このファイルは大きすぎてアバターにできません。もっと小さい画像を選んでください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个文件太大，做不了形象。请选一张小一点的图片。"
+          }
+        }
+      }
+    },
+    "This file isn't an image Persona can read. Choose a photo, PNG, JPEG, WebP or GIF.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file isn't an image Persona can read. Choose a photo, PNG, JPEG, WebP or GIF."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persona が読み込めない画像です。写真、PNG、JPEG、WebP、GIF を選んでください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个文件不是 Persona 能读的图片。请选照片、PNG、JPEG、WebP 或 GIF。"
+          }
+        }
+      }
+    },
+    "This image is too small. Choose one at least %lld pixels on each side.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This image is too small. Choose one at least %lld pixels on each side."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "画像が小さすぎます。各辺 %lld ピクセル以上の画像を選んでください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片太小了，请选每边至少 %lld 像素的图片。"
+          }
+        }
+      }
+    },
+    "Zoom %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zoom %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ズーム %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缩放 %@"
+          }
+        }
+      }
+    },
+    "avatar.upload": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作成"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上传"
+          }
+        }
+      }
+    },
     "Automatic workout reports": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Automatic workout reports"}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポートを自動生成"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "运动后自动生成报告"}}}},
     "Workout report": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Workout report"}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポート"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "运动报告"}}}},
     "Couldn't read workout report settings. Turn the feature on again to start fresh.": {"extractionState": "manual", "localizations": {"en": {"stringUnit": {"state": "translated", "value": "Couldn't read workout report settings. Turn the feature on again to start fresh."}}, "ja": {"stringUnit": {"state": "translated", "value": "ワークアウトレポートの設定を読み込めませんでした。機能を再度オンにしてやり直してください。"}}, "zh-Hans": {"stringUnit": {"state": "translated", "value": "无法读取运动报告设置。请重新开启此功能以重新开始。"}}}},
@@ -23659,28 +24584,6 @@
       },
       "extractionState" : "manual"
     },
-    "Both avatars use the default Home Screen icon. Older alternate icons reset to the default." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Both avatars use the default Home Screen icon. Older alternate icons reset to the default."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "どちらもデフォルトのホーム画面アイコンを使います。古い代替アイコンはデフォルトに戻ります。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "两种形象都使用默认桌面图标。旧的备用图标会切回默认。"
-          }
-        }
-      }
-    },
     "Waiting in the background": {
       "localizations": {
         "en": {
@@ -29533,28 +30436,6 @@
         }
       },
       "extractionState" : "manual"
-    },
-    "Choose Mochi or Milk Frog. Milk Frog downloads from the hub when selected. To use its colors, choose Match Avatar under Theme Color." : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choose Mochi or Milk Frog. Milk Frog downloads from the hub when selected. To use its colors, choose Match Avatar under Theme Color."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "団子かミルクガエルを選べます。ミルクガエルは選択時に hub からダウンロードされます。配色を使うには、テーマカラーで「アバターに合わせる」を選んでください。"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "选择团子或奶蛙。选中奶蛙时会从 hub 下载；想用奶蛙的配色，在主题色里选「跟随形象」。"
-          }
-        }
-      }
     },
     "Choose Model" : {
       "localizations" : {
@@ -136796,25 +137677,25 @@
       }
     },
     "usage.source.local" : {
-      "comment" : "Usage numbers read from an agent's own files on a computer",
+      "comment" : "Usage numbers read from an agent's own files on one of the user's computers, when the hub doesn't say which",
       "extractionState" : "extracted_with_value",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "本机"
+            "value" : "电脑"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Local"
+            "value" : "Computer"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ローカル"
+            "value" : "コンピューター"
           }
         }
       }

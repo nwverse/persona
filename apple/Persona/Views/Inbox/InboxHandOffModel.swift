@@ -125,7 +125,7 @@ final class InboxHandOffModel {
     static func live(_ item: InboxItem, model: AppModel) -> InboxHandOffModel {
         // Without a hub nothing happens and nothing is said.
         func api() throws -> APIClient {
-            guard let api = model.api?.manager(item.manager) else { throw CancellationError() }
+            guard let api = model.api?.manager(model.itemManager(item.manager)) else { throw CancellationError() }
             return api
         }
         return InboxHandOffModel(itemID: item.id, deps: Deps(

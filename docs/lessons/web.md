@@ -1,5 +1,9 @@
 # Lessons: web UI and interactions
 
+## Shared wire projections need one property declaration (#2947)
+
+Two independently merged features can add the same optional field to an interface without a text conflict. Keep one declaration backed by the shared wire type, including its compatibility with unknown values; an older inline union can disagree with the extracted type and break the production TypeScript build. Derived projections such as a brief's acceptance row should reference that shared field type too, rather than maintain another narrower union. Run the normal build on the integrated branch: focused runtime tests alone do not detect duplicate interface properties.
+
 ## Stable task rows need lifecycle evidence, not stale progress (#2878)
 
 A completed or accepted task can still retain its last blocked progress report. Completion labels/checkmarks must use the current review or receipt summary, not keep a stale “stuck” subtitle underneath. Reused tasks also retain old plan and card upserts: deduplicate by to-do id, prefer its current durable plan, and scope completion evidence to that run's creation time. Test delayed upserts and owner acceptance changes while a previous `asked_at` request is in flight. The palette guard reads the first `:root` block; add shared geometry tokens there instead of introducing another block that hides the palettes from the guard.
