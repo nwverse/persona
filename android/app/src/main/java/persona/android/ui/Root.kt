@@ -75,6 +75,7 @@ import persona.feature.inbox.LocalInboxTriageSetup
 import persona.feature.inbox.inboxEntries
 import persona.feature.inbox.inboxItemPage
 import persona.feature.inbox.needsYouCount
+import persona.feature.inbox.inboxUnreadCount
 import persona.feature.inbox.agentWorking
 import persona.feature.inbox.inboxSourcePage
 import persona.feature.knowledge.*
@@ -433,6 +434,13 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
         needsYouCount(
             buildInboxList(inbox.records.map { it.item }, inbox.interactions, inbox.sessions, inbox.mutes), inbox.records)
     }
+    val inboxConversations by session.inbox.conversationInbox.collectAsStateWithLifecycle()
+    val inboxConversationList by (inboxConversations?.state ?: remember {
+        kotlinx.coroutines.flow.MutableStateFlow(persona.feature.inbox.InboxConversationList())
+    }).collectAsStateWithLifecycle()
+    val inboxUnread = remember(inbox.records, inboxConversationList) {
+        inboxUnreadCount(inbox.records, inboxConversationList)
+    }
     val badges = mapOf(AppTab.Agents to agentNeeds, AppTab.Persona to assistantRequests.size)
     // "Needs you now" on the Persona home: the agents waiting (not Persona's own, not muted), then the inbox's "Needs you".
     val needsYou = remember(agentRequests, sessions, preferences.mutes, inbox.records) {
@@ -528,7 +536,7 @@ private fun PersonaShell(session: ShellSession, openNavigation: MutableState<((R
                     onInbox = { sidebarDestination(InboxRoute) },
                     onKnowledge = { sidebarDestination(KnowledgeRoute) },
                     onTodos = { sidebarDestination(TodosRoute) }, todoCount = uncompletedTodosCount, showTodos = todosSupported,
-                    inboxCount = inboxNeeds, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
+                    inboxCount = inboxUnread, settingsCount = slotBadge.count, settingsDot = slotBadge.dot, settingsBadge = demoBadge,
                     pages = sidebarPages,
                     onPage = { key ->
                         if (key == "machines") sidebarDestination(MachinesRoute)

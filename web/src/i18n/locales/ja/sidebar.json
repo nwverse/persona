@@ -127,7 +127,7 @@
   "pane_count": "{count}個のペイン",
   "folded_states": "折りたたんだエージェント：{list}",
   "unread_messages_count": "未読メッセージ{count}件",
-  "inbox_badge_title": "受信トレイ：要対応のメッセージ{count}件のみ。待機中のエージェントは「概要」へ",
+  "inbox_badge_title": "受信トレイ：未読の項目{count}件。待機中のエージェントは「概要」へ",
   "auto_chats": "自動のチャット",
   "auto_chats_label": "自動のチャット {count} 件",
   "auto_working": "{count} 件実行中",
