@@ -78,5 +78,6 @@
   "goal_summary": "{title}：{tasks}",
   "deploy_gate_out": "デプロイ待ち：稼働中の hub（{hub}）にマージ {merge} がまだ入っていません",
   "deploy_gate_unmerged": "PR がまだマージされていないため、デプロイされていません",
-  "deploy_gate_unknown": "デプロイ未確認：稼働中の hub にこのマージが入っているか確認できません"
+  "deploy_gate_unknown": "デプロイ未確認：稼働中の hub にこのマージが入っているか確認できません",
+  "deploy_gate_not_in": "デプロイ待ち：稼働中の hub（{hub}）にこの PR のマージがまだ入っていません"
 }
