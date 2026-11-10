@@ -41,6 +41,13 @@ FAKE_XCODE = textwrap.dedent('''\
         tests = [] if status == "empty" else [{"nodeType": "Test Case",
             "nodeIdentifier": "PersonaTests/" + suite + "/usesTextTokens()", "result": status}]
         (bundle / "tests.json").write_text(json.dumps({"testNodes": tests}))
+        # Xcode manages the test destination; success does not keep it booted for simctl privacy.
+        state = json.loads((root / "state.json").read_text())
+        device = next(d for devices in state["devices"].values() for d in devices
+                      if d["udid"] == os.environ["OWNED_UDID"])
+        device["state"] = os.environ.get("POST_PROBE_STATE", "Shutdown")
+        device["isAvailable"] = os.environ.get("POST_PROBE_AVAILABLE", "1") == "1"
+        (root / "state.json").write_text(json.dumps(state))
     else:
         (root / "full-suite-started").write_text("yes")
         sys.exit(int(os.environ.get("FULL_STATUS", "0")))
@@ -48,7 +55,7 @@ FAKE_XCODE = textwrap.dedent('''\
 
 FAKE_XCRUN_WRAPPER = textwrap.dedent('''\
     #!/usr/bin/env python3
-    import os, signal, sys
+    import json, os, signal, sys
     from pathlib import Path
     args = sys.argv[1:]
     root = Path(os.environ["FAKE"])
@@ -64,8 +71,24 @@ FAKE_XCRUN_WRAPPER = textwrap.dedent('''\
         print((bundle / "tests.json").read_text())
     elif args[:2] == ["simctl", "privacy"]:
         assert args[2:] == [os.environ["OWNED_UDID"], "grant", "reminders", "org.example.persona.ci"], args
+        (root / "privacy-attempted").write_text("yes")
+        state = json.loads((root / "state.json").read_text())
+        device = next(d for devices in state["devices"].values() for d in devices
+                      if d["udid"] == args[2])
+        if device["state"] != "Booted":
+            print("SimError 405: Unable to lookup in current state: " + device["state"], file=sys.stderr)
+            sys.exit(149)
+        if os.environ.get("PRIVACY_STATUS", "0") != "0":
+            sys.exit(int(os.environ["PRIVACY_STATUS"]))
         (root / "privacy-granted").write_text("yes")
     else:
+        if args[:2] == ["simctl", "boot"] and os.environ.get("BOOT_HANG") == "1":
+            assert args[2:] == [os.environ["OWNED_UDID"]], args
+            def stop(*_):
+                (root / "boot.stopped").write_text("terminated")
+                sys.exit(143)
+            signal.signal(signal.SIGTERM, stop)
+            signal.pause()
         os.execv(str(root / "bin/fake-simctl"), ["xcrun", *args])
     ''')
 
@@ -128,7 +151,9 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
             self.assertIn("CODE_SIGNING_ALLOWED=YES", call)
             self.assertEqual(call[call.index("-derivedDataPath") + 1], str(self.output / "ios-tests"))
         sim_calls = (self.root / "calls").read_text()
-        self.assertNotIn("simctl boot", sim_calls)
+        self.assertNotIn("simctl bootstatus", sim_calls)
+        self.assertEqual([line for line in sim_calls.splitlines() if "simctl boot " in line],
+                         ["xcrun simctl boot " + NEW])
         self.assertEqual(sim_calls.count("simctl create"), 1)
         self.assertTrue((self.root / "privacy-granted").exists())
         self.assertTrue((self.root / "full-suite-started").exists())
@@ -184,6 +209,58 @@ TEST_SIGNING=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manu
                     self.assertEqual((case.root / pid_name.replace(".pid", ".stopped")).read_text(), "terminated")
                 finally:
                     case.doCleanups()
+
+    def test_probe_leaving_device_booted_does_not_boot_it_again(self):
+        result, calls = self.run_preparation(POST_PROBE_STATE="Booted")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("simctl boot", (self.root / "calls").read_text())
+        self.assertTrue((self.root / "privacy-granted").exists())
+
+    def test_permission_handoff_rejects_unavailable_or_transitional_device(self):
+        for options in ({"POST_PROBE_STATE": "Booting"}, {"POST_PROBE_STATE": "Shutting Down"},
+                        {"POST_PROBE_AVAILABLE": "0"}):
+            with self.subTest(options=options):
+                case = AppleReadinessTests()
+                case.setUp()
+                try:
+                    result, calls = case.run_preparation(**options)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(len(calls), 2)
+                    self.assertNotIn("simctl boot", (case.root / "calls").read_text())
+                    self.assertFalse((case.root / "privacy-attempted").exists())
+                    self.assertFalse((case.root / "full-suite-started").exists())
+                finally:
+                    case.doCleanups()
+
+    def test_failed_start_prevents_permission_and_full_suite(self):
+        self.fixture.state["boot_rc"] = 7
+        self.fixture.save()
+        result, calls = self.run_preparation()
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        self.assertEqual(len(calls), 2)
+        self.assertFalse((self.root / "privacy-attempted").exists())
+        self.assertFalse((self.root / "full-suite-started").exists())
+        self.assertEqual((self.root / "calls").read_text().count("simctl boot "), 1)
+
+    def test_permission_failure_is_not_retried_or_allowed_to_start_full_suite(self):
+        result, calls = self.run_preparation(PRIVACY_STATUS="149")
+        self.assertEqual(result.returncode, 149, result.stdout + result.stderr)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.root / "privacy-attempted").exists())
+        self.assertFalse((self.root / "privacy-granted").exists())
+        self.assertFalse((self.root / "full-suite-started").exists())
+        self.assertEqual((self.root / "calls").read_text().count("simctl boot "), 1)
+
+    def test_start_is_inside_the_existing_permission_deadline(self):
+        result, calls = self.run_preparation(BOOT_HANG="1", TEST_STEP_TIMEOUT="1")
+        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((self.root / "boot.stopped").read_text(), "terminated")
+        self.assertFalse((self.root / "privacy-attempted").exists())
+        self.assertFalse((self.root / "full-suite-started").exists())
+        self.assertEqual((self.root / "budgets").read_text().splitlines()[-1],
+                         "Grant Reminders access to the owned test app|300")
 
     def test_full_suite_failure_is_not_masked_by_successful_readiness(self):
         result, calls = self.run_preparation(FULL_STATUS="7")

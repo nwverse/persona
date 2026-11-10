@@ -193,7 +193,13 @@ PY
   CI_BUNDLE_ID=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["app"]["bundle_id"])' "$PERSONA_CONFIG")
   # On a just-booted stock simulator the grant waits for the device's own services: 54.5 s on a passing hosted run,
   # over 60 s on a failing one (#1402). A single attempt with room to spare; a hang still ends the lane.
-  ci_run 'Grant Reminders access to the owned test app' 300 xcrun simctl privacy "$SIM" grant reminders "$CI_BUNDLE_ID"
+  # A successful Xcode test can leave its destination shut down. Start only our device if needed;
+  # boot initiation and the single required TCC grant share the original permission deadline.
+  ci_run 'Grant Reminders access to the owned test app' 300 bash -c '
+    set -euo pipefail
+    "$1" --start-only --profile stock "$2" >/dev/null
+    xcrun simctl privacy "$2" grant reminders "$3"
+  ' -- "$SOURCE/scripts/app/sim-boot.sh" "$SIM" "$CI_BUNDLE_ID"
   export TEST_RUNNER_PERSONA_EVENTKIT_ROUNDTRIP=1
 
   ci_run 'iOS offline unit and design/token tests' 1800 "${IOS_TESTS[@]}" "${IOS_UNIT_SELECTION[@]}" \

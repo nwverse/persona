@@ -193,6 +193,18 @@ class SimBootTests(unittest.TestCase):
         self.assertEqual(self.verdict(r), f"sim-boot: slim default {PHONE}")
         self.assertEqual(len([c for c in calls if c.startswith("simslim on")]), 1)
 
+    def test_start_only_rejects_names_missing_devices_and_incompatible_modes(self):
+        for args in (("--profile", "stock", "mine"), ("--profile", "stock", NEW),
+                     (PHONE,), ("--profile", "stock", "--reslim", PHONE),
+                     ("--profile", "stock", "--create-only", PHONE)):
+            with self.subTest(args=args):
+                r, calls = self.run_boot("--start-only", *args)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertFalse(any("simctl boot" in c or "simctl create" in c or
+                                     c.startswith("simslim ") for c in calls), calls)
+                self.assertEqual(self.device(PHONE)["state"], "Shutdown")
+                self.assertEqual(self.device(WATCH)["state"], "Shutdown")
+
     def test_create_only_returns_a_new_shutdown_device_without_booting(self):
         r, calls = self.run_boot("--create-only", "--profile", "stock", "new owned test device")
         self.assertEqual(r.returncode, 0, r.stderr)
