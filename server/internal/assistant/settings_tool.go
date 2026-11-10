@@ -91,6 +91,13 @@ func (s *Service) ownSettings() []ownSetting {
 			Value: "the whole list of leader conversation ids (conversations_list), [] for none"},
 			get: s.getLeaders,
 			set: s.setLeaders},
+		{Setting: Setting{Key: "assistant.interject_background", Title: "Move running work to the background when I interject", Actions: getSet,
+			About: "off (the default): a message the user sends while a Claude conversation is still answering waits until the command " +
+				"or subagent running in the foreground ends; on: that work moves to the background (it goes on and reports when done) " +
+				"and the message is answered at once. Needs Claude Code 2.1.139 or later on the conversation's computer; applies from the next message",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.interjectBackground(ctx)), nil },
+			set: s.setInterjectBackground},
 		{Setting: Setting{Key: "assistant.launcher", Title: "Persona 的启动器", Actions: getSet,
 			About: "which launcher (model) new Persona conversations start with by default",
 			Value: "a launcher name from this setting's get"},
@@ -210,7 +217,7 @@ var settingTitles = map[string]string{"assistant.notes": "title_notes", "assista
 	"assistant.start_requested_tasks": "title_start_requested_tasks", "assistant.launcher": "title_launcher",
 	"assistant.recording_days": "title_recording_days", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders",
-	"model_profiles.tiers": "title_model_tiers"}
+	"assistant.interject_background": "title_interject_background", "model_profiles.tiers": "title_model_tiers"}
 
 // clipped is a value as the card shows it, in l.
 func clipped(l i18n.Lang, s string) string {
@@ -340,6 +347,13 @@ func (s *Service) setReviewSamplePercent(ctx context.Context, v json.RawMessage)
 			s.settingsChanged(ctx)
 			return fmt.Sprintf("assistant.review_sample_percent is %d from the next judgment on.", pct), nil
 		}}, nil
+}
+
+func (s *Service) setInterjectBackground(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.interjectBackground, "assistant.interject_background is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_interject_background", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.InterjectBackground },
+		"assistant.interject_background is %v from the next message on.")
 }
 
 // launchers are the launchers of the assistant's machine, as the apps list them.
