@@ -1,0 +1,450 @@
+package phone
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/netip"
+	"os"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fastTiming shortens the session's delays for a test.
+func fastTiming(t *testing.T) {
+	saved := []time.Duration{backoffMin, backoffMax, stableAfter, parkAfter, minGap, browseWait, answerMargin}
+	backoffMin, backoffMax, stableAfter, parkAfter, minGap, browseWait, answerMargin = 5*time.Millisecond, 40*time.Millisecond, time.Hour, time.Hour, time.Millisecond, 20*time.Millisecond, 0
+	t.Cleanup(func() {
+		backoffMin, backoffMax, stableAfter, parkAfter, minGap, browseWait, answerMargin = saved[0], saved[1], saved[2], saved[3], saved[4], saved[5], saved[6]
+	})
+}
+
+type request struct {
+	ID        string          `json:"id"`
+	Op        string          `json:"op"`
+	Args      json.RawMessage `json:"args"`
+	TimeoutMS int64           `json:"timeout_ms"`
+}
+
+// fakeLink is one session with a fake phone; the phone's handler decides what each request gets.
+type fakeLink struct {
+	ep       Endpoint
+	lines    chan []byte
+	mu       sync.Mutex
+	closed   bool
+	err      error
+	sendFail bool
+	phone    *fakePhone
+}
+
+func (l *fakeLink) Send(line []byte) error {
+	l.mu.Lock()
+	if l.closed || l.sendFail {
+		l.mu.Unlock()
+		return errors.New("broken pipe")
+	}
+	l.mu.Unlock()
+	var r request
+	if err := json.Unmarshal(line, &r); err != nil {
+		return err
+	}
+	l.phone.received(l, r)
+	return nil
+}
+
+func (l *fakeLink) Lines() <-chan []byte { return l.lines }
+func (l *fakeLink) Err() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
+}
+func (l *fakeLink) Close() { l.drop("closed") }
+
+// drop ends the link as the bridge does when the phone goes away.
+func (l *fakeLink) drop(reason string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
+	l.closed = true
+	l.err = &Error{Code: bridgeDisconnected, Message: reason}
+	close(l.lines)
+}
+
+func (l *fakeLink) answer(r request, result string) {
+	b, _ := json.Marshal(map[string]any{"v": 1, "id": r.ID, "ok": true, "op": r.Op, "result": json.RawMessage(result)})
+	l.push(b)
+}
+
+func (l *fakeLink) fail(r request, code string) {
+	b, _ := json.Marshal(map[string]any{"v": 1, "id": r.ID, "ok": false, "op": r.Op, "error": map[string]string{"code": code, "message": "fake"}})
+	l.push(b)
+}
+
+func (l *fakeLink) push(b []byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.closed {
+		l.lines <- b
+	}
+}
+
+// fakePhone counts what reached it and answers by handler (default: {"done":op}).
+type fakePhone struct {
+	mu      sync.Mutex
+	dials   []Endpoint
+	links   []*fakeLink
+	got     []request
+	dialErr error
+	handler func(l *fakeLink, r request)
+}
+
+func (p *fakePhone) dial(ctx context.Context, rec Record, path string, ep Endpoint) (Link, json.RawMessage, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dials = append(p.dials, ep)
+	if p.dialErr != nil {
+		return nil, nil, p.dialErr
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil, nil, err
+	}
+	l := &fakeLink{ep: ep, lines: make(chan []byte, 8), phone: p}
+	p.links = append(p.links, l)
+	return l, json.RawMessage(`{"name":"Test Phone"}`), nil
+}
+
+func (p *fakePhone) received(l *fakeLink, r request) {
+	p.mu.Lock()
+	p.got = append(p.got, r)
+	h := p.handler
+	p.mu.Unlock()
+	if h != nil {
+		h(l, r)
+		return
+	}
+	l.answer(r, `{"done":"`+r.Op+`"}`)
+}
+
+func (p *fakePhone) ops() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []string
+	for _, r := range p.got {
+		out = append(out, r.Op)
+	}
+	return out
+}
+
+func (p *fakePhone) dialCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.dials)
+}
+
+func (p *fakePhone) lastLink() *fakeLink {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.links[len(p.links)-1]
+}
+
+// testManager is a Manager over a temporary store with a paired phone, the fake phone and a fake Bonjour.
+func testManager(t *testing.T, rec Record) (*Manager, *fakePhone) {
+	t.Helper()
+	fastTiming(t)
+	m := New(t.TempDir())
+	t.Cleanup(m.Close)
+	p := &fakePhone{}
+	m.dial = p.dial
+	m.findBridge = func() (string, error) { return "/nonexistent/bridge", nil }
+	m.browse = func(context.Context, time.Duration, func([]Service) bool) ([]Service, error) { return nil, nil }
+	m.logf = t.Logf
+	if rec.UDID == "" {
+		rec.UDID = testUDID
+	}
+	if err := m.store.Save(rec); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := m.store.RecordPath(rec.UDID)
+	if err := os.WriteFile(path, []byte("opaque"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return m, p
+}
+
+func call(t *testing.T, m *Manager, op string, d time.Duration) (json.RawMessage, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	return m.Call(ctx, testUDID, op, json.RawMessage(`{"x":1}`))
+}
+
+func TestCallConnectsAndStaysConnectedWhileIdle(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5:49152"})
+	res, err := call(t, m, "tap", time.Second)
+	if err != nil || string(res) != `{"done":"tap"}` {
+		t.Fatalf("Call = %s, %v", res, err)
+	}
+	if p.dials[0] != (Endpoint{Host: "192.0.2.5", Port: 49152, Source: "manual"}) {
+		t.Fatalf("dialed %+v", p.dials[0])
+	}
+	time.Sleep(50 * time.Millisecond) // idle: nothing closes the link
+	d := m.Devices(context.Background())
+	if len(d) != 1 || d[0].State != StateConnected || d[0].Address != "192.0.2.5:49152" || string(d[0].Info) != `{"name":"Test Phone"}` {
+		t.Fatalf("Devices = %+v", d)
+	}
+	if _, err := call(t, m, "screenshot", time.Second); err != nil || p.dialCount() != 1 {
+		t.Fatalf("second call: %v, dials %d (the link should be reused)", err, p.dialCount())
+	}
+}
+
+func TestInputNotReplayedAfterLinkDrops(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	p.handler = func(l *fakeLink, r request) {
+		if r.Op == "tap" {
+			go l.drop("wifi lost") // sent, never answered
+			return
+		}
+		l.answer(r, `{}`)
+	}
+	_, err := call(t, m, "tap", time.Second)
+	if Code(err) != CodeUncertain || Sent(err) != "unknown" {
+		t.Fatalf("want uncertain, got %v", err)
+	}
+	if Sent(&Error{Code: "app_not_found"}) != "answered" {
+		t.Fatal("a bridge's answer is answered")
+	}
+	p.handler = nil
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if ops := p.ops(); len(ops) != 2 || ops[0] != "tap" || ops[1] != "device_info" {
+		t.Fatalf("phone got %v: the tap must reach it exactly once", ops)
+	}
+	if p.dialCount() != 2 {
+		t.Fatalf("dials = %d, want a reconnect", p.dialCount())
+	}
+}
+
+func TestBridgeDisconnectAnswerIsUncertainForInput(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	p.handler = func(l *fakeLink, r request) { l.fail(r, bridgeDisconnected); go l.drop("gone") }
+	if _, err := call(t, m, "type_text", time.Second); Code(err) != CodeUncertain {
+		t.Fatalf("want uncertain, got %v", err)
+	}
+	p.handler = func(l *fakeLink, r request) { l.fail(r, bridgeTimeout) }
+	if _, err := call(t, m, "swipe", time.Second); Code(err) != CodeUncertain {
+		t.Fatalf("bridge timeout on input: want uncertain, got %v", err)
+	}
+	if n := len(p.ops()); n != 2 {
+		t.Fatalf("phone got %d requests, want 2", n)
+	}
+}
+
+func TestReadOnlyRetriedOnceAfterDrop(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	first := true
+	p.handler = func(l *fakeLink, r request) {
+		if first {
+			first = false
+			go l.drop("wifi lost")
+			return
+		}
+		l.answer(r, `{"png":"…"}`)
+	}
+	res, err := call(t, m, "screenshot", time.Second)
+	if err != nil || string(res) != `{"png":"…"}` {
+		t.Fatalf("Call = %s, %v", res, err)
+	}
+	if ops := p.ops(); len(ops) != 2 {
+		t.Fatalf("phone got %v, want the screenshot twice", ops)
+	}
+	// It drops every time: retried once, then an error (not uncertain: nothing changes on the phone).
+	p.handler = func(l *fakeLink, r request) { go l.drop("again") }
+	if _, err := call(t, m, "ax_tree", time.Second); Code(err) != bridgeDisconnected {
+		t.Fatalf("want disconnected, got %v", err)
+	}
+}
+
+func TestDeadlineAfterSendIsUncertainForInputOnly(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	var timeouts []int64
+	p.handler = func(l *fakeLink, r request) { timeouts = append(timeouts, r.TimeoutMS) } // never answers
+	if _, err := call(t, m, "launch_app", 100*time.Millisecond); Code(err) != CodeUncertain {
+		t.Fatalf("input: want uncertain, got %v", err)
+	}
+	if _, err := call(t, m, "list_apps", 100*time.Millisecond); Code(err) != bridgeTimeout {
+		t.Fatalf("read-only: want timeout, got %v", err)
+	}
+	if len(timeouts) != 2 || timeouts[0] <= 0 || timeouts[0] > 100 {
+		t.Fatalf("timeout_ms = %v, want the caller's deadline", timeouts)
+	}
+	// A late answer to the first call doesn't answer the next one.
+	l := p.lastLink()
+	p.handler = func(l *fakeLink, r request) { l.answer(r, `{"n":2}`) }
+	l.answer(request{ID: "stale"}, `{"n":1}`)
+	if res, err := call(t, m, "tap", time.Second); err != nil || string(res) != `{"n":2}` {
+		t.Fatalf("Call = %s, %v", res, err)
+	}
+}
+
+func TestFailedSendIsResentOnNextLink(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	l := p.lastLink()
+	l.mu.Lock()
+	l.sendFail = true // the helper's stdin is gone: nothing reaches the phone
+	l.mu.Unlock()
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatalf("a send that never left should go on the next link: %v", err)
+	}
+	if ops := p.ops(); len(ops) != 2 || ops[1] != "tap" {
+		t.Fatalf("phone got %v", ops)
+	}
+}
+
+func TestBonjourFollowsAddressChanges(t *testing.T) {
+	m, p := testManager(t, Record{Identifier: "ID-1"})
+	addr := netip.MustParseAddr("192.0.2.20")
+	var mu sync.Mutex
+	m.browse = func(ctx context.Context, wait time.Duration, done func([]Service) bool) ([]Service, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return []Service{
+			{Instance: "other", Port: 1, TXT: map[string]string{"identifier": "ID-2"}, Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.99")}},
+			{Instance: "mine", Port: 49152, TXT: map[string]string{"identifier": "ID-1"}, Addrs: []netip.Addr{addr}},
+		}, nil
+	}
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// DHCP gave the phone a new address; the link drops; the next call finds it there.
+	mu.Lock()
+	addr = netip.MustParseAddr("192.0.2.21")
+	mu.Unlock()
+	p.lastLink().drop("wifi changed")
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.dials[len(p.dials)-1]; got.Host != "192.0.2.21" || got.Source != "bonjour" {
+		t.Fatalf("last dial %+v", got)
+	}
+	rec, _ := m.store.Load(testUDID)
+	if rec.LastHost != "192.0.2.21" || rec.LastPort != 49152 {
+		t.Fatalf("remembered %s:%d", rec.LastHost, rec.LastPort)
+	}
+	// Bonjour finds nothing (another network): the last address is still tried.
+	m.browse = func(context.Context, time.Duration, func([]Service) bool) ([]Service, error) { return nil, nil }
+	p.lastLink().drop("gone")
+	if _, err := call(t, m, "device_info", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.dials[len(p.dials)-1]; got.Source != "last" || got.Host != "192.0.2.21" {
+		t.Fatalf("last dial %+v", got)
+	}
+}
+
+func TestUnreachableBacksOffAndReportsNothingSent(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	p.dialErr = &Error{Code: "tunnel_failed", Message: "no route"}
+	_, err := call(t, m, "tap", 150*time.Millisecond)
+	if Code(err) != CodeUnreachable || Sent(err) != "no" {
+		t.Fatalf("want unreachable, got %v", err)
+	}
+	if len(p.ops()) != 0 {
+		t.Fatal("nothing should reach the phone")
+	}
+	n := p.dialCount()
+	if n < 2 {
+		t.Fatalf("dials = %d, want retries", n)
+	}
+	d := m.Devices(context.Background())
+	if d[0].LastErrorCode != "tunnel_failed" || (d[0].State != StateBackoff && d[0].State != StateConnecting) {
+		t.Fatalf("Devices = %+v", d[0])
+	}
+	// It comes back: the waiting call gets it without waiting out the backoff.
+	p.mu.Lock()
+	p.dialErr = nil
+	p.mu.Unlock()
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNotPairedAndForget(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	if _, err := m.Call(context.Background(), "00000000-OTHERPHONE", "tap", nil); Code(err) != CodeNotPaired || Sent(err) != "no" {
+		t.Fatalf("want not_paired, got %v", err)
+	}
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Forget(testUDID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, m, "tap", time.Second); Code(err) != CodeNotPaired || Sent(err) != "no" {
+		t.Fatalf("after Forget: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		l := p.lastLink()
+		l.mu.Lock()
+		closed := l.closed
+		l.mu.Unlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Forget left the link open")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestCloseEndsSessions(t *testing.T) {
+	m, p := testManager(t, Record{Address: "192.0.2.5"})
+	if _, err := call(t, m, "tap", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	m.Close()
+	l := p.lastLink()
+	deadline := time.Now().Add(time.Second)
+	for {
+		l.mu.Lock()
+		closed := l.closed
+		l.mu.Unlock()
+		if closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Close left the link open")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := call(t, m, "tap", time.Second); Code(err) != CodeUnreachable {
+		t.Fatalf("after Close: %v", err)
+	}
+}
+
+func TestParseAddress(t *testing.T) {
+	for in, want := range map[string]Endpoint{
+		"192.0.2.1":           {Host: "192.0.2.1", Source: "manual"},
+		"192.0.2.1:49152":     {Host: "192.0.2.1", Port: 49152, Source: "manual"},
+		"phone.example.com":   {Host: "phone.example.com", Source: "manual"},
+		"[2001:db8::1]:49152": {Host: "2001:db8::1", Port: 49152, Source: "manual"},
+		"2001:db8::1":         {Host: "2001:db8::1", Source: "manual"},
+	} {
+		if got, err := ParseAddress(in); err != nil || got != want {
+			t.Errorf("ParseAddress(%q) = %+v, %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "host:0", "host:x", "a b", "-x", "-x:1", "[-x]"} {
+		if _, err := ParseAddress(bad); err == nil {
+			t.Errorf("ParseAddress(%q) accepted", bad)
+		}
+	}
+}
