@@ -71,6 +71,9 @@ type superviseSignal struct {
 	To string
 	// Cards: an escalated signal's cards the user was given (ask_escalate).
 	Cards []prompts.SuperviseAsk
+	// Decision: the decision a recheck or an owner_cannot_answer signal is about, as it was asked (decision.go); for
+	// owner_cannot_answer Detail is the owner's answer (decide_yourself, not_what_i_asked, explain_first).
+	Decision *prompts.SuperviseDecision
 }
 
 const (
@@ -104,7 +107,8 @@ func (g superviseSignal) id() string {
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
-	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide: // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigUnjudged, sigFailed, sigInterrupted, sigStarted, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+		sigRecheck, sigUndecidable, sigOwnerCannot: // the owner waits on a decision they cannot answer as it is
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -330,7 +334,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.autoReviewTick(ctx, now)
 	s.askTick(now) // cards held past their time go up a rung (ask_route.go)
 	routed := s.routedSessions()
-	for _, t := range s.todosOf(ctx, "*") {
+	tasks := s.todosOf(ctx, "*")
+	s.backfillBriefs(ctx, tasks) // tasks from before briefs get one from what they still have (task_brief.go)
+	for _, t := range tasks {
 		if t.Supervision == nil || t.DoneAt != nil {
 			continue
 		}
@@ -344,6 +350,10 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if g, ok := s.orphanSignal(t); ok { // nobody works on it, as the minute pass found (tasks_orphan.go)
 			s.signal(g)
 		}
+		if g, ok := s.undecidableSignal(ctx, t, now); ok { // waits for the owner with nothing to answer (decision.go)
+			s.signal(g)
+		}
+		s.briefClock(ctx, t, now) // past its brief's clock with no end (task_brief_scope.go)
 	}
 	b := &s.supervise
 	b.mu.Lock()

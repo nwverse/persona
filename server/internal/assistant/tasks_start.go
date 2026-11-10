@@ -99,6 +99,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 		}
 		t.TodoID = todo.ID
+		s.briefStarted(ctx, p, t, todo) // what was asked, kept from now on (task_brief_plan.go)
 		s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(t.Readonly, t.DoneWhen, todo.PRURL), false)
 		// The main conversation or a leader follows up what it hands out (supervise.go); a task the main conversation
 		// handed to a leader is that leader's, while it still is one (else the main conversation's again).

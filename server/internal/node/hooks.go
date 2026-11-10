@@ -443,14 +443,14 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		}
 		_ = json.Unmarshal(in.ToolInput, &p)
 		ix.Kind, ix.Plan = proto.IxPlan, p.Plan
+		// The terminal's own dialog may decide the plan while the card still waits (the card is not always
+		// withdrawn then): the footer is watched from now, until the card is answered.
+		stopWatch := n.planThenAfterTerminal(in.SessionID)
 		res, ok, err := n.ask(ctx, ix)
 		if err != nil || !ok || res.Approve == nil {
-			if !errors.Is(err, errNodeGone) {
-				// Not answered on the card: the terminal's own dialog decides, and with it the mode that follows.
-				n.planThenAfterTerminal(in.SessionID)
-			}
-			return nil, err
+			return nil, err // the watch goes on: the terminal decides, and with it the mode that follows
 		}
+		stopWatch()
 		if !*res.Approve {
 			msg := "用户在手机上打回了这个计划。"
 			if strings.TrimSpace(res.Feedback) != "" {

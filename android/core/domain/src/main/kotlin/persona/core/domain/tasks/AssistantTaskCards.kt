@@ -34,8 +34,12 @@ object AssistantTaskCards {
     private val lifecycle = setOf("plan", "task", "receipt", "review", "report")
 
     /** Explicit hub housekeeping, drafts and assistant-to-Agent instructions live behind the trays. */
-    fun isBackgroundEvent(item: FeedItem): Boolean = item.kind in lifecycle || item.kind in setOf("notice", "message") ||
+    fun isBackgroundEvent(item: FeedItem): Boolean = (item.kind in lifecycle && !interruptShown(item)) || item.kind in setOf("notice", "message") ||
         (item.kind == "routed" && item.field("from") == "assistant")
+
+    /** An interrupted receipt the hub worked out stays in the chat as its record (#3834): a batch's card, a handled line
+     *  or a pending one; a batch's other receipts are drawn inside its head. */
+    private fun interruptShown(item: FeedItem): Boolean = InterruptLook.of(item).let { it != null && it != InterruptLook.Hidden }
 
     fun backgroundFeed(feed: List<FeedItem>): List<FeedItem> = feed.filter(::isBackgroundEvent)
 

@@ -88,6 +88,8 @@ macOS 需要能运行 `swiftc`；非 macOS 或未设置开关时，只跳过 Swi
 | 当前授权面板拒绝不附带原因。 | `apple/Persona/Views/Interactions/InteractionViews.swift：PermissionForm` | `permission_deny` |
 | 本会话总是允许附带 always。 | `apple/Persona/Views/Interactions/InteractionViews.swift：PermissionForm` | `permission_always` |
 | 没有会话标识时不提供总是允许。 | `apple/Persona/Views/Interactions/InteractionViews.swift：PermissionForm.body` | `permission_always_without_session` |
+| 管理器说不会记住（`always_honored: false`）时不提供总是允许。 | `apple/Persona/Views/Interactions/InteractionViews.swift：Interaction.offersAlways` | `permission_always_not_honored` |
+| 管理器说会记住（`always_honored: true`）时，别的 Agent 的卡没有 `always_label` 也提供总是允许。 | `apple/Persona/Views/Interactions/InteractionViews.swift：Interaction.offersAlways` | `permission_always_honored_agent` |
 | 打回编辑状态下批准按钮不显示。 | `apple/Persona/Views/Interactions/InteractionViews.swift：PlanForm.body` | `plan_rejecting_hides_approve` |
 | 取消打回后旧意见仍保留且现有批准按钮可用。 | `apple/Persona/Views/Interactions/InteractionViews.swift：PlanForm.body（取消只改 rejecting）` | `plan_cancel_retains_feedback_allows_approve` |
 | 通知动作映射为现有 Resolution。 | `apple/Persona/App/NotificationActions.swift：resolution(action:text:)` | `notification_ix_allow` |

@@ -270,6 +270,43 @@ func TestAnswerTable(t *testing.T) {
 	}
 }
 
+// A row with more cells than its header (a "|" the row did not escape, inside a code span too) keeps those cells in
+// the header's last column: nothing of the row is dropped from the card.
+func TestAnswerTableRowExtraCellsKept(t *testing.T) {
+	in := "| 命令 | 说明 |\n|---|---|\n" +
+		"| `a || b` | 或 |\n" + // two pipes in a code span: one empty cell between them, then the rest of the row
+		"| `x` | 管道 `|` 符号 |\n" +
+		"| 甲 | 乙 ||\n" // a trailing empty cell adds nothing
+	a, cards := renderCards(t, in, 1000, 5)
+	tables := byTag(cards[0].elements(), "table")
+	if len(tables) != 1 {
+		t.Fatalf("tables %v", cards[0].elements())
+	}
+	rows := tables[0]["rows"].([]any)
+	want := []map[string]string{
+		{"c0": "`a", "c1": "b` | 或"},
+		{"c0": "`x`", "c1": "管道 ` | ` 符号"},
+		{"c0": "甲", "c1": "乙"},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("%d rows, want %d: %v", len(rows), len(want), rows)
+	}
+	for i, w := range want {
+		row := rows[i].(map[string]any)
+		for k, v := range w {
+			if row[k] != v {
+				t.Fatalf("row %d %v, want %v", i, row, w)
+			}
+		}
+	}
+	// The rich-text fallback (what is sent when Lark refuses the card) keeps the same words.
+	for _, word := range []string{"b`", "或", "符号"} {
+		if !strings.Contains(a.Parts[0].Text, word) {
+			t.Fatalf("fallback %q lacks %q", a.Parts[0].Text, word)
+		}
+	}
+}
+
 // A long table goes on as more tables with the same header; past 100 rows one row says how many were left out.
 func TestAnswerTableLimits(t *testing.T) {
 	var b strings.Builder

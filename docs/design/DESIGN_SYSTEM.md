@@ -278,6 +278,10 @@ Reduce Motion:
 - Raw symbol names still appear in about 87 baselined places (settings rows, Lark, notification actions, controls).
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
 
+`Theme.Icon.phoneControl` (`iphone.radiowaves.left.and.right`) is the assistant operating an iPhone through a computer:
+the phone-control sections and the `iphone_*` tools. Why a separate symbol: `Theme.Icon.phone` (`iphone`) already means a
+device, and the phone's own data tools (`phone_*`) keep their icon.
+
 ### 2.9 Styles and theme colors
 
 | Style | Surface | Buttons | Canvas | Icons |
@@ -489,6 +493,7 @@ Today there are seven mechanisms and the same action can use different ones (DS-
 - Foreground: the system banner, suppressed for the visible session. No custom in-app push banner.
 - Actions: Allow (needs unlock) and Deny on permissions; Approve and Send Back on plans; Reply on done (`apple/Persona/App/NotificationActions.swift:19-52`). Failures are posted as local notifications.
 - Live Activity: Allow and Deny buttons; Allow requires authentication. Stale after 15 minutes.
+- Recording Live Activity: Bookmark and Stop. In a meeting Persona attends (#2981) Ask Persona leads the row with its words, and Bookmark, Turn Off Persona and Stop show only their marks (over 44 pt wide with the capsule's padding, `IslandMetrics.recordingIconButton`) and keep their names for VoiceOver, so four fit the Lock Screen's width; all work without unlocking (`docs/apple/live-activity.md`, "Recording").
 - Deep links: the `persona://` custom scheme, plus the former name's scheme kept for old links (`docs/protocol/rolling-upgrade-compatibility.md`); no associated domains.
 - Reminders are agent tools and Scheduled Tasks, not a UI object.
 - Wording differs per surface for the same event (section 5.4).
@@ -517,6 +522,10 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
 - **Questions**: one at a time, with single choice, multiple choice, Other and voice. An unsent answer is kept as a draft per request.
 - **Everywhere at once**: the first decision on any surface (phone, web, notification, watch) wins. Every other entry updates at once, with a light haptic, and offers Undo where the action can be undone.
+
+### 4.8.1 Records of interruptions
+
+A chat record of something that went wrong (an interrupted task, #3834) says what became of it once that is known: a grey line with the result ("Cancelled", "Dispatched again", "Resumed", "Accepted", "Done"), never a red card that outlives the problem. Several records with one cause in a short time are one card that counts handled and pending and opens to each item. The danger color is only for what is still pending. The hub works out the result and the grouping; the clients only draw them (principle 4; `docs/assistant/unified-entry.md`, "Interrupted receipts after the fact").
 
 ### 4.9 Sharing a conversation publicly
 
@@ -736,3 +745,11 @@ done, not applicable, or deviated (with the reason). It is short on purpose. The
 - [ ] No new problem of a kind listed in `docs/design/HIG_AUDIT.md`. A PR that fixes a listed finding names its ID.
 - [ ] Structure: in every grouping a session that needs the user is visible without opening anything; rows follow the work-item row; primary screens show no raw model IDs, session IDs, paths or engine names (sections 3.4, 5.6).
 - [ ] Review size: says whether the change is large or small (section 1.4); a large one has had a person look at its screenshots.
+
+## Codex speed controls (#3865)
+
+The web composer reuses its effort chip and radio menu. A Speed submenu reveals native model speed choices and their
+current value, including Unknown before native settings arrive. Its Fast choice explains increased usage or cost.
+Selection waits for native acknowledgment and the session push. Standard is the reversible choice. This requested
+control reuses Menu typography, spacing, focus behavior and light/dark tokens. Settings > Agents > Codex uses the
+existing agent-settings row for the native default. No account or session is automatically switched to Fast.
