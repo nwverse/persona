@@ -341,6 +341,83 @@ The main chat **supervises** tasks it dispatches (`task_plan`, and to-dos create
 - **Clients**: web and Android task cards / to-do details show acceptance criteria and review state; iOS / Mac are separate work (sub-issues of #3124). Clients unaware of `supervision` continue normally, showing pending-review tasks as "Stopped / Unread."
 - **Cancelling stops the agents** (#3133): `task_review` `cancelled` closes each agent still on the task in the background (`session.close`: its tab and process go, its transcript stays, and where its engine can resume it a message does), ends the cards it still waits on (cancelled in the history), and archives it once its list shows it closed (reversible: `agent_unarchive` or Archived in the apps; nothing is deleted). A cancelled task's permission or question cards no longer sit in "Needs you". Left alone: an agent that works for another open task by then, an assistant conversation, a session its machine does not list; one that still reads busy 30 seconds after the close stays unarchived (logged).
 
+### Briefs (#3822)
+
+A task's notes are the prompt its Agent got. When an Agent fails and another takes over, the notes are the hand-over
+prompt, written by the supervisor, and what the owner asked for is nowhere on the task. A **brief** fixes that: one
+record per piece of work, made when the work is handed out and never rewritten (`server/internal/assistant/task_brief.go`).
+
+**What it holds.**
+
+| Field | From | Meaning |
+| --- | --- | --- |
+| `request` | the hub | The owner's message that led to the task, verbatim: `text` (cut at 2000 characters, then `truncated`), `at`, and where the whole of it is (`conversation`, `message_id`). Absent when the owner did not ask for it |
+| `started_by`, `trigger`, `trigger_title`, `reason` | the hub, `reason` from the model | Who started it: `owner`, `assistant`, `leader`, `routine`, `hub`, or `unknown`; what the turn followed when it was not the owner (`supervision`, `followup`, `routine`, `conversation`, `notice`, `meeting`, `wake`); and why (`task_plan`'s `started_why`) |
+| `goal` | the model | The work in one sentence (the task's title when a writable task gives none) |
+| `done_when`, `expect_minutes`, `out_of_bounds` | the model | What done means, about how long it should take, what the Agent must not do |
+| `reconstructed`, `handover` | the hub | A brief made later for a task from before briefs ("Backfill" below) |
+
+**Who asked.** The hub reads the conversation that made the tool call (its last three turns) and goes by the latest
+message in it. One the owner wrote is the request. One Persona or another conversation put there (a supervision
+message, a task notice, a follow-up, a routine's run, a relayed message, a background task's wake) means the owner did
+not just ask: the work is recorded as started by the assistant (a leader conversation: `leader`; a routine's run:
+`routine`) with what it followed, and no older message of the owner's is attributed to it. A conversation that cannot
+be read records `unknown`. The hub's own starts (an Agent that became a task, an inbox hand-off) record `hub`. The model
+never writes `request`: a `brief` in the tool call is dropped.
+
+**Required.** `task_plan` refuses a writable task (`readonly` false) without `done_when` (at least one criterion) and
+`expect_minutes`, and a read-only task without `goal` and `expect_minutes`; the refusal names what is missing and
+nothing is planned. The plan's task carries the brief (`tasks[i].brief`) from the moment the plan is made, so the card
+can show the owner's words, the criteria and the time, and "Start" confirms them. The brief is kept when the task
+starts, dated from the start. No client draws `tasks[i].brief` on the plan card yet; each one would (web
+`views/assistant/Tasks.tsx`, iOS and Android plan cards).
+
+**Lineage.** A task that takes over from another gives `continues` (that task's to-do id) and `continues_why` in
+`task_plan`: a retry on another computer, a rework round, a new Agent after the first failed, a part split off. It
+works for the same brief (`brief.id`), with the criteria and expected time as they stand; its prompt is its own. The
+earlier to-do is linked as superseded with the reason. Without `continues`, when `task_plan`'s "Possible duplicates"
+fires, the answer tells the assistant to plan again with `continues` or say why the work is different. A to-do's
+`lineage` is the chain, oldest first: to-do id, title, Agent, machine, session, `started`, `ended`, `why` it stopped,
+`continues`, `superseded_by`. The to-do that joined the brief last carries the work: the clock, the result and the briefing go by
+it, so closing a superseded to-do ends nothing.
+
+**Scope changes are events.** After a task started, `done_when` and `expect_minutes` change in one way: `task_scope
+{todo_id, change, why, done_when?, expect_minutes?}`, from the task's supervisor only (the main conversation also for a
+task an earlier main conversation supervised). It appends to the brief's `log` (`kind: "scope"`, with `added`,
+`dropped`, the criteria it leaves) and applies them to the ledger of every open to-do on the brief. `agent_supervise`
+and `agent_send` with a `task` on one's own task go through the same code. A change whose words or added criteria name
+a step from the hub's risky words (deploy, merge, release, send, comment, delete, pay, production: `riskyWords`; the
+Agent's own pushes aside) that the work did not name before is refused, with a pointer to ask the owner. It is taken
+when the owner's own message started the turn that makes it, and that message is kept on the entry (`approval`). At
+most 40 scope changes per brief.
+
+**The clock.** A brief runs to `max(expect_minutes × 3, 24 h)` from when the work was handed out (of the brief, not of
+the latest take-over), or from its latest scope change. Past that with no end (not done, not waiting for review, not
+waiting for the owner's decision), the supervisor gets one `overdue` signal in a supervision message: close it,
+re-scope it with `task_scope`, or say why it is still right (also `task_scope`, with a new time). The mark is in the
+log (`kind: "overdue"`, `overdue_at`), so a restart does not raise it again; only a scope change starts the clock again.
+
+**Reports against the brief.** The done judge is given the owner's words and the criteria as the scope changes left
+them, with the dropped ones named, not only the latest prompt. `task_review` checks are written against the same
+criteria; an accepted or cancelled review (and the judge's own acceptance) records the brief's `result`: each
+criterion `met`, `not_met`, `unchecked` or `dropped` (with the scope change that dropped it), then `also_done`. The
+review's feed item carries it (`body.result`), and the tool's answer says it.
+
+**The briefing.** The morning and evening routines' facts (`docs/assistant/assistant.md`, "Scheduled tasks") list, from
+the briefs: for each open piece of work that needs the owner, is overdue, or whose scope changed since the last
+briefing, "On <date> you said: <their words>" (or who started it and its goal), where it stands in a line (the latest
+Agent's closeout when it wrote one), what is needed from the owner; and each piece of work that ended since the last
+briefing, once, with every criterion's result. Work that needs nothing and has not changed is not listed. At most 8
+rows a list, 80 characters of the owner's words a row.
+
+**Backfill.** A task from before briefs gets one the first time it is needed (the supervision watch, a scope change, a
+review, `continues`): its title as the goal, its notes as `handover` (the prompt at hand-over, not the owner's words),
+its creation time, its conversation, its ledger's criteria; `reconstructed: true`, `started_by: "unknown"`, no
+`request`. Nothing else is invented.
+
+**Storage.** `task_briefs` (`id`, `brief` written once, `state`: the log and the result) and `task_brief_todos`
+(`todo_id` → `brief_id`, `continues`, `reason`); migration `0498_task_briefs.sql`.
+
 ### Leader conversations (#3133)
 
 Off by default: with no leaders, everything above is unchanged and only the main chat supervises. Layering: user → main chat (secretary) → one leader per repository or long-running project → workers.
@@ -489,7 +566,8 @@ Add two columns to `todos`:
 ### Plans
 
 Table `task_plans`: `id`, `conversation`, `tasks` (JSON: each item's `title`, `notes`, `machine`, `machine_policy`, `cwd`, `launcher`, `model`, `permission`, `ultracode`, `readonly`, `user_requested`, `why`),
-`state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`.
+`state` (`open` / `started` / `dismissed`), `created_at`, `updated_at`. A task also carries its brief's fields (`goal`, `out_of_bounds`,
+`continues`, `continues_why`, `started_why`, and the hub's `brief`): "Briefs" above.
 
 - MCP tool `task_plan` (assistant only): accepts a task list. Start directly if every item is read-only, `user_requested` (with `assistant.start_requested_tasks` enabled), or matched by `tasks.trust`; otherwise save an `open` plan and emit chat activity.
   Return the plan ID and each task's state (text). Automatic dispatch is reported as queued, not as proof of an Agent start. `machine_policy` defaults to `fixed` (including old saved plans); only explicit `flexible` tasks may move off an unhealthy machine. The policy survives storage, card edits and retry. Fixed tasks fail on their own target and can retry there after health recovery.
