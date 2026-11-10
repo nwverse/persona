@@ -309,24 +309,34 @@ struct RootView: View {
     }
 }
 
-/// The iPad's routes (`PadRouter`) and its Settings sheet, on the tabs.
+/// The iPad's routes (`PadRouter`) and its Settings, on the tabs: a sheet on the iPad; on a phone (iPhone Duo open) the
+/// whole window, one column across, as ChatGPT shows its account page there, not a sheet over half of it (#3701).
 private struct PadRoutes: ViewModifier {
     @Environment(AppModel.self) private var model
     let router: PadRouter
+    private let phone = UIDevice.current.userInterfaceIdiom == .phone
 
     func body(content: Content) -> some View {
         @Bindable var model = model
         content
             .environment(\.padRouter, router)
-            .sheet(isPresented: $model.shellSettings) {
-                // The sheet outlives RootView's rebuild for a new look, so its identity follows the look too.
-                SettingsView()
-                    .environment(\.settingsSheet, true)
-                    .id(model.look)
-                    .presentationSizing(.page)
+            .sheet(isPresented: phone ? .constant(false) : $model.shellSettings) { settings.presentationSizing(.page) }
+            .fullScreenCover(isPresented: phone ? $model.shellSettings : .constant(false)) {
+                settings
+                    .environment(\.horizontalSizeClass, .compact)
+                    .accessibilityAction(.escape) { model.shellSettings = false } // VoiceOver's scrub, as on a sheet
             }
             .onAppear { router.attach(to: model) }
-            .onDisappear { router.detach(from: model) }
+            // Not for Settings' cover, which takes the tabs off the window: a route asked meanwhile (Settings itself, from
+            // an extension's link) waited for it to close and opened it again.
+            .onDisappear { if !model.shellSettings { router.detach(from: model) } }
+    }
+
+    /// It outlives RootView's rebuild for a new look, so its identity follows the look too.
+    private var settings: some View {
+        SettingsView()
+            .environment(\.settingsSheet, true)
+            .id(model.look)
     }
 }
 
@@ -575,7 +585,8 @@ private struct InnerWidthProbe: View {
 
     var body: some View {
         Color.clear
-            .frame(width: 0, height: 0)
+            .frame(width: Theme.Size.line, height: Theme.Size.line)
+            .allowsHitTesting(false)
             .onChange(of: width) { seen.count += 1 }
             .screenProbe("tree-inner", seen)
     }

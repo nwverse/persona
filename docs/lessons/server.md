@@ -1,5 +1,33 @@
 # Lessons: hub / node and networking
 
+## Sharing frontiers and migration lanes (#3604)
+
+- Migration numbers are global across the hub and manager sets, even though their
+  files live in separate directories. Inventory both sets in every worktree;
+  distinct filenames with the same numeric prefix still collide. Renumber only
+  unpublished migrations, never an applied migration or the guard.
+- Future publication needs an immutable enable-window frontier **and** a moving
+  verified scan checkpoint. Using the previous scan's EOF as the window boundary
+  drops a new pending turn when it completes on a later scan. Preserve first-seen
+  eligibility and partial-record EOF evidence while advancing the checkpoint.
+- A raw asynchronous start registration is not successful prompt delivery. Keep
+  the sanitized submission unknown until authoritative evidence resolves it; never
+  publish the original app input as delivered solely because a session ID returned.
+- A database-backed fence does not make nested pool queries safe. Waiting
+  transactions can occupy every connection while the lock holder asks for one more;
+  read ownership through the transaction's connection. Keep node RPCs outside the
+  fence and reject stale results with revision, content-version and frontier CAS.
+  Check creation receipts before fresh RPCs, and do not recapture an unchanged live
+  future setting when applying offline narrowing.
+- A per-publication body limit does not bound an owner list. Never collect all
+  retained sealed bodies to count quotas or render metadata: 1,000 individually
+  valid large rows can exceed process memory. Persist a bounded prepared header
+  and active scalar with the body, count scalars and list headers, and keep the
+  current ownership check on that path.
+- Numeric credentials are still credentials. Exempt only explicit count/flag keys
+  from redaction; `password=123456` is not the same as `max_tokens=4096`. Preserve
+  string quoting when sanitizing serialized arguments.
+
 ## Bubblewrap masks are mount views, not path-denial rules (#2977)
 
 A default-allow agent profile cannot reuse the extension sandbox's whitelist: bind the host root read-write, add
@@ -785,6 +813,9 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
   `docker run --user <uid>`. `docker compose exec` defaults to root; image `personad` wraps privilege dropping to `persona`, or newly generated tailcat keys belong to root and the hub can't read them.
 
 ## Knowledge base (docs/assistant/knowledge.md)
+
+- Forever is a sentinel, not zero days (#3780, #3862). Preserve `minutes_days: 0` before applying the transcript-retention floor, calculating an expiry date or confirming an echoed setting. A trimmed recording's metadata proves it has retained minutes even if `minutes.json` cannot be read; a parse failure must not turn forever retention into deletion. Test repeated sweeps, unreadable trimmed minutes, switching back to finite retention and explicit user deletion.
+- A meeting answer may be spoken in front of others (#3862). Until private meetings can be marked, gate earlier minutes, their linked projects and action-item states together before retrieval; a prompt warning cannot hide material already sent to the model. Keep opt-in retrieval tests as well as a default-off test that checks the model input and returned citations.
 
 - Deleting a connector is broader than deleting an archive namespace (#1836): include its alternate chat sources, posts and items, plus indexes and project references. Record the connector at ingestion, separately from a chat's namespace, and stamp item ownership before the unchanged-item fast path. Never infer legacy ownership from an item ID, title or a shared archive alias; use explicit provenance or a known source chat, leaving ambiguous records intact. Deletion tests need another connector's records, shared aliases and unowned legacy data, not only a single source.
 - A connector's knowledge-base switch must gate every ingestion path (#1835): conversations, items (documents, meetings and events), document-title lookups and program-initiated posts. Filtering the source list alone leaves direct calls open after a switch changes. Check both the feed and the main switch at the call boundary too; a shared extension process may keep running after its connector is disabled. `Registry.Feeds` does not include `Registry.Enabled`. Test both switches independently, with a connector that still answers calls, and assert that neither source reads nor post forwarding occur while off.
@@ -1670,3 +1701,16 @@ A node method that answers a refusal with a plain `errors.New` / `fmt.Errorf` ha
 - Keep generated archives byte-for-byte reproducible: no name or time in the gzip header, mode 0644, time 0 and no owner in tar entries, a fixed level, entries in path order (`TestGenerate` runs it twice and compares).
 - A set read whole on first use keeps all of it: the first `Load` walked every package, so a node serving only DSH held the 1 MB bridge too (1.6 MB retained). Unpack per package and per part, each once (`dist.load`): 0.21 MB for DSH. Prove the unpacked files and hash equal the sources' (`TestGeneratedPackages`).
 - Compressed code is noise to a strings scan. `check_bundle_privacy.py --whole-short` inflates every gzip member it finds in a binary and scans that text as well; a test hides a private word in a member inside binary bytes, after another member and in a member cut short.
+
+## A download the app gave up on, and a budget no slow link could meet (2026-11-10, #3692)
+
+On TestFlight 224 an extension's **Review** spun for two minutes and then failed. The operations list (`GET /api/v1/extensions/-/operations`) told the story the access log could not: the settings page's synchronous `catalog/preview` was downloading a 13 MB package at about 33 KB/s from the hub machine; the app's 120 s request timeout closed the request, the hub's relay to the manager closed with it, and the preview's context (the request's) took the download down at 4.5 MB (`context canceled`). Tapping again on the reopened page started a second download of the same package beside the first, which got nothing for 30 s (`download_stalled`, `400 invalid_plugin`). A read-only preview with no client timeout then showed the deeper problem: the download kept moving and was cut at 10.1 MB by `Download`'s fixed five-minute budget, so on that link it could never succeed, synchronous or not.
+- A long download must not belong to one request. The manager now has one download per package at a time (by cache and sha256, `market_download_shared.go`): callers wait for it and get its progress replayed from where it is; when they all went away it goes on into the cache; only the user's Cancel (`context.Cause` is `extension.ErrUserCanceled`, set by `DELETE …/operations/{id}`) stops one nobody else waits for.
+- Bound trickles by size, not by a constant: the stall rule catches a dead link, and the total budget is 30 minutes or the time 16 KiB/s needs. Tell our own budget from the caller's with `context.WithTimeoutCause` and a sentinel cause, or a caller's deadline reads as "too slow".
+- When the client of a synchronous call leaves, the operation it started should say so in words (`client_left`), not `context canceled`.
+- Progress is reported at most every 200 ms: a test that waits for an exact byte count can wait forever; wait for "some bytes" and prove there was no restart by counting requests.
+
+## macOS `ps` prints `nobody` as UID -2 (2026-11-10, #3687)
+
+- `uid_t` is unsigned, but macOS `ps -o uid` prints it signed: `nobody` (4294967294) shows as `-2`. Linux prints 65534, so hosted CI (Ubuntu) never sees a negative owner. `parseProcessTable` treated one as a corrupt row and failed the whole table, so `personad manager maintenance prepare|observe` broke on any Mac running a `nobody` process (`dhcp6d`, the DHCPv6 client, once a network uses DHCPv6).
+- When a check covers every row of a system table, validate the format (a number), not a range taken from one platform; keep the real constraint (the target is the current user's) on the row it is about.

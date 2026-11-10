@@ -153,13 +153,12 @@
     <string name="agents_repo_repository">Repository</string>
     <string name="agents_repo_main_checkout">Main worktree</string>
     <string name="agents_repo_worktree">Worktree</string>
-    <string name="agents_card_question">Has a question for you</string>
-    <string name="agents_card_question_by">%1$s has a question for you</string>
-    <string name="agents_card_permission">Wants to use %1$s</string>
-    <string name="agents_card_permission_by">%1$s wants to use %2$s</string>
-    <string name="agents_card_tool">a tool</string>
-    <string name="agents_card_plan">A plan needs your approval</string>
-    <string name="agents_card_screen">A dialog in the terminal needs you</string>
+    <string name="agents_card_question">Claude has a question</string>
+    <string name="agents_card_question_by">%1$s has a question</string>
+    <string name="agents_card_permission">Needs your permission</string>
+    <string name="agents_card_permission_by">%1$s needs your permission</string>
+    <string name="agents_card_plan">Plan awaiting approval</string>
+    <string name="agents_card_screen">Terminal needs you</string>
     <string name="agents_card_other">Needs you</string>
     <string name="agents_card_open_session">Open the session to see the request</string>
     <string name="agents_space_index">Space %1$d</string>
@@ -531,5 +530,30 @@
     <plurals name="agents_todos_related">
         <item quantity="one">1 related</item>
         <item quantity="other">%1$d related</item>
+    </plurals>
+    <!-- The to-dos' month (#2046) -->
+    <string name="agents_todos_view_list">List</string>
+    <string name="agents_todos_view_calendar">Calendar</string>
+    <string name="agents_todo_calendar_options">Calendar options</string>
+    <string name="agents_todo_calendar_show_done">Show done</string>
+    <string name="agents_todo_calendar_today">Today</string>
+    <string name="agents_todo_calendar_previous">Previous month</string>
+    <string name="agents_todo_calendar_next">Next month</string>
+    <string name="agents_todo_calendar_more">+%1$d</string>
+    <string name="agents_todo_calendar_see_list">See list</string>
+    <string name="agents_todo_calendar_nothing_due">Nothing is due this day</string>
+    <string name="agents_todo_calendar_all_day">All day</string>
+    <string name="agents_todo_calendar_reminder">Reminder set</string>
+    <string name="agents_todo_calendar_moved">Moved to %1$s</string>
+    <string name="agents_todo_calendar_undo">Undo</string>
+    <string name="agents_todo_calendar_move_failed">Couldn\'t change the due date: %1$s</string>
+    <string name="agents_todo_calendar_change_due">Change Due Date</string>
+    <string name="agents_todo_calendar_change_due_action">Change Due Date…</string>
+    <string name="agents_todo_calendar_change_due_of">Change Due Date: %1$s…</string>
+    <string name="agents_todo_calendar_date">Date</string>
+    <string name="agents_todo_calendar_time">Time</string>
+    <plurals name="agents_todo_calendar_undated">
+        <item quantity="one">1 without a due date</item>
+        <item quantity="other">%1$d without a due date</item>
     </plurals>
 </resources>

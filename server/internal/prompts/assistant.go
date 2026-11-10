@@ -88,6 +88,16 @@ type SnapshotAgent struct {
 	Link                    string             // its page in the hub's web app ("" when the hub has no public_url)
 	Ultracode               string             // "on" / "off"; empty when the node does not know
 	Plan                    *SnapshotAgentPlan // its own task list (Session.Plan), nil when it keeps none
+	// Closeout: what its closeout says of merging and deploying, nil when it wrote none or says neither.
+	Closeout *SnapshotAgentCloseout
+}
+
+// SnapshotAgentCloseout is the tail of an agent's line (assistant/snapshot_closeout): Merged and Deployed as the
+// agent claimed them ("yes", "no", "" when unsaid), FoundMerged and FoundDeployed what the hub found where that
+// differs from the claim ("" where it agrees or could not tell).
+type SnapshotAgentCloseout struct {
+	Merged, Deployed           string
+	FoundMerged, FoundDeployed string
 }
 
 // SnapshotAgentPlan is an agent's own task list (TodoWrite / TaskCreate, docs/integrations/agent-goal.md "Plan"): Done of Total
@@ -345,10 +355,12 @@ type TaskRun struct {
 	Label          string
 	Once, Interval bool   // neither: daily
 	Every          string // interval: "30 minutes"
-	Late           string // "" when on time; else how late ("25 minutes")
-	Due            time.Time
-	Prompt         string
-	KBHint         bool // daily runs with the knowledge base on
+	// Accelerated: a leader's open supervised todos shortened this run's interval.
+	Accelerated bool
+	Late        string // "" when on time; else how late ("25 minutes")
+	Due         time.Time
+	Prompt      string
+	KBHint      bool // daily runs with the knowledge base on
 	// KnowledgeDir: the knowledge base directory the hint names; "" is the default ~/.persona/data.
 	KnowledgeDir string
 	// Continued: it goes into the task's own conversation, which got the background on the first run.
@@ -375,7 +387,29 @@ type BriefFacts struct {
 	Accept                                                           []BriefAccept
 	Progress                                                         []BriefProgress
 	Leaders                                                          []BriefLeader // one per direction (#3609)
+	// Briefs: the open pieces of work that need the owner or changed since the last briefing, in their own words;
+	// BriefsDone: those that ended since, once, with each criterion's result (#3822).
+	Briefs, BriefsDone []BriefTask
 }
+
+// BriefTask is one piece of work in the briefing, told from its brief: Date and Words are when the owner asked and
+// what they wrote (Words "" when they did not ask: then By says who started it, and Goal what for); Now is where it
+// stands in a line, Need what is wanted from the owner, Scope the scope changes since the last briefing, Result each
+// criterion's outcome for one that ended.
+type BriefTask struct {
+	Date, Words, By, Goal string
+	Now, Need             string
+	// Status: the closeout's status when Now is the agent's own account (done, not_done, blocked). Decide: it waits
+	// for the owner's decision and no ask words it. Cancelled: one that ended by being cancelled.
+	Status          string
+	Decide, Overdue bool
+	Cancelled       bool
+	Scope, AlsoDone []string
+	Result          []BriefCriterion
+}
+
+// BriefCriterion is one criterion's result in the briefing: met, not_met, unchecked, or dropped by scope change Change.
+type BriefCriterion struct{ Criterion, State, Change string }
 
 // BriefLeader is one direction in the briefing's facts: its name, its open tasks, those waiting for the owner, those
 // stuck over a day, and its leader's latest summary of the day (empty parts: none).
@@ -483,10 +517,15 @@ type Supervise struct {
 	Leader, Escalated bool
 	// LeaderStuck: an entry is a leader's task stuck over a day (sigLeaderStuck), told the main conversation (#3609).
 	LeaderStuck bool
+	// Overdue: an entry is a task past its brief's clock (#3822).
+	Overdue bool
 	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
 	// they wait here before going up a rung.
 	Asked      bool
 	AskMinutes int
+	// Decisions: an entry is about a decision the owner cannot answer as it is (recheck, undecidable,
+	// owner_cannot_answer; #3804).
+	Decisions bool
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
@@ -521,7 +560,30 @@ type SuperviseEntry struct {
 	// cards a leader gave the user.
 	Asks      []SuperviseAsk
 	Decisions string
+	// recheck and owner_cannot_answer: the decision as it was asked; owner_cannot_answer: the owner's answer
+	// (decide_yourself, not_what_i_asked, explain_first).
+	Decision *SuperviseDecision
+	Response string
+	// From the task's brief (#3822): Asked is the owner's message that led to the work (clipped) and AskedAt its day;
+	// Started says who started it when it was not the owner; Dropped are the criteria scope changes took out.
+	// (assistant, leader, routine, hub) and StartedWhy the reason given.
+	Asked, AskedAt, Started, StartedWhy string
+	Dropped                             []string
 }
+
+// SuperviseDecision is a decision a task's supervisor put to the owner (task_review needs_user), as a supervision
+// entry repeats it: why only the owner can decide, the question, the options with what each leads to, the one
+// recommended, what waiting costs, and whether it is never taken by default.
+type SuperviseDecision struct {
+	WhyOwner, Question, Recommend, Cost string
+	Options                             []SuperviseOption
+	NeverDefault                        bool
+	// Background: where the task came from and where it stood, as the hub told the owner.
+	Background string
+}
+
+// SuperviseOption is one option of a SuperviseDecision.
+type SuperviseOption struct{ Label, LeadsTo string }
 
 // SuperviseAsk is one card of a task's agent on its way to the user: its interaction id, kind (question, permission,
 // plan), the agent's machine (a name) and short session id, what it asks, and whether the rung below did not handle it in time.
@@ -647,8 +709,11 @@ type TaskDone struct {
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
 
 // RenderTaskDelivery is the delivery standard a task's agent is handed after its prompt (assistant/task_delivery,
-// docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got.
-func RenderTaskDelivery() string { return render("assistant/task_delivery", nil) }
+// docs/assistant/todos.md "Delivery"): done is live and checked, and its last line says how far it got. closeout: the
+// closeout's form follows in the same prompt (agents/closeout_brief), so the line goes before that block, not last.
+func RenderTaskDelivery(closeout bool) string {
+	return render("assistant/task_delivery", struct{ Closeout bool }{closeout})
+}
 
 // TaskAttachments ends a message to an agent with the files and pictures the user gave the assistant for it (#2437):
 // where they are on the agent's computer (Copied: copied there from the assistant's), and those that could not come.
@@ -675,8 +740,12 @@ func RenderSideConversation(in SideConversation) string {
 // TaskDoneInput is the task as it was handed out and what its agents said when they stopped (assistant/task_done_input).
 type TaskDoneInput struct {
 	Title, Prompt string
-	Replies       []TaskDoneReply
-	Criteria      []string `json:"criteria,omitempty"`
+	// From the task's brief (#3822): Asked is the owner's message that led to the work, verbatim, and AskedAt its day;
+	// Dropped the criteria logged scope changes took out. Criteria are the brief's as those changes left them.
+	Asked, AskedAt string
+	Dropped        []string
+	Replies        []TaskDoneReply
+	Criteria       []string `json:"criteria,omitempty"`
 	// Hints the hub found in the replies: a merged pull request, a TestFlight build number.
 	MergedPR, Build bool
 }

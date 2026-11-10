@@ -272,6 +272,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Temporary-code pairing (#2766): `MOCK_PAIR_TOKEN=jp_…` behaves like `personad hub pair`: usable everywhere before `POST /api/v1/auth/tokens` exchange, then for `MOCK_PAIR_GRACE` seconds (default 10 instead of hub's 2 minutes); a second exchange returns 401. Exchanged device tokens (`jd_mock_<n>`) remain valid; every 401 logs a line. Paired sockets close after grace like hub; `ws open host=… token=…` identifies handshake tokens. `MOCK_PAIR_TRADE_DELAY=<seconds>` delays exchange, `MOCK_PAIR_DROP=<seconds>` drops the first temporary-token socket once. Add `MOCK_HUB_NAME` and `MOCK_MESH_PEERS` with `center: true`, address `http://localhost:<port>`, to reconnect through the group's center (another address). `-openWelcome YES -openPairLink 'persona://pair?url=http://127.0.0.1:<port>&token=jp_…'` pairs like scanning (`-pairURL` doesn't exchange device tokens; `simctl openurl` prompts system confirmation); `-openPairLinkTimes 2` processes it again after a few seconds. Correct only if no 401 after grace and title isn't "Connecting…".
 - Cloudflare Access (#3502): `MOCK_CF_ACCESS=<client id>:<client secret>` puts the mock behind Access: `/api/` requests without those two `CF-Access-Client-*` headers get a `302` to an Access login, wrong ones Access's HTML `403` (each logged). iOS: `-seedCloudflareAccess id:secret` gives the first `-pairURL` hub that token (`-` clears it), `-openCloudflareAccess YES` opens Settings › hub › Cloudflare Access; on the pairing sheet (`-openWelcome YES -openPairSheet other`) `-showPairAccess YES` opens the Cloudflare Access fields (filled from `-seedCloudflareAccess`), and `-showPairAccess '<pairing link>'` also pairs at once, showing the Access error when the token is missing or wrong.
 - Browser (docs/plans/plan-ego-browser.md): `MOCK_BROWSER=missing|setup|ready` enables `ego` and MacBook (not installed / installed without first setup / ready, analytics on; `MOCK_BROWSER_ANALYTICS=off` disables analytics); Mac Studio disabled/uninstalled. "Install ego lite" / "Open ego lite" advance every `MOCK_COMPUTER_STEP` seconds. With `MOCK_EXTENSIONS=1`, list includes "Browser (ego lite)" (`-tab settings -openExtension ego`).
+- Phone control (docs/extensions/iphone.md): `MOCK_IPHONE=one|several|none|pair|off` turns on the extension `iphone` with MacBook switched on. Each Mac lists the iPhones it reaches. `one`: one of them is this simulator, matched on `MOCK_IPHONE_MODEL` (`xcrun simctl getenv <udid> SIMULATOR_MODEL_IDENTIFIER`, default `iPhone18,1`) and `MOCK_IPHONE_IOS` (the runtime's version, default `26.1`); `several`: two look alike and the user picks; `none`: none is this iPhone; `pair`: this iPhone is plugged into MacBook but not paired yet, and Pair runs through Trust to paired in `2 × MOCK_COMPUTER_STEP` seconds; `off`: the extension is off, so no section appears anywhere. `MOCK_IPHONE_CONSENT=1` starts with this iPhone consented; `MOCK_IPHONE_ASK=1` adds an `iphone_do` approval card to Persona's main conversation (`-openSession server/b2e4d6f8-0000-4000-8000-000000000001`). The computer page's section: `-tab settings -openMachines YES -openMachineDetail macbook`; This iPhone's: `-tab settings -openConnectorDevice YES`. Unit tests: `IPhoneControlTests`.
 - Cards on no session (#4059): `MOCK_SCRIPT_ASK=1` adds a question card with an empty `session_id`, like `personad ask` run outside herdr;
   Agents' needs-you list and the inbox both list it, and tapping it opens the card in a sheet (`-tab mail -openInboxAsk ix_script_ask` opens it directly).
 - Password card (`secret_run`, #1137, `docs/assistant/assistant.md` "Password card"): `MOCK_SECRET_RUN=pending|ran|withheld|long` puts it in Persona's main conversation: `pending` waits for the password (two commands on the Mac Studio); `ran` is answered, every command exited 0; `withheld` the same with the first command's output withheld (it held the password); `long` the second command failed with a long output (the app reads the whole result).
@@ -1232,6 +1233,27 @@ Compare same real pushes before/after hub session-list/Live Activity timing chan
 | Connection session snapshot | 602 KB | 227 KB (no Codex history) |
 | Live Activity (App closed) | 188/hour, mismatch max 2.5 s | 115, max 29.2 s (60-second throttle: 60, 58.8 s) |
 | Live Activity (App open) | Same | 0 |
+
+## Session list reads (#3759)
+
+How often a client reads `GET /api/v1/sessions`, and what kind of read, while it sits open on a paging hub.
+
+- The mock in paging mode with a list about the size of a busy hub: `MOCK_SESSIONS_LIST=1 MOCK_AGENTS=2 PORT=<port> python3 scripts/mock/mock_hub.py`
+  (266 sessions, a 207 KB complete list). Its `since` answers from a journal of the last 128 revisions (changed, added and
+  removed rows, rows entering or leaving a filter; an older one is `409 revision_expired`), and each `sessions_list` hint
+  carries the list's current revision, once per change.
+- `GET /mock/sessions_reads` counts the reads by client (the `X-Persona-Client` platform: `web`, `ios-app`) and kind: `full`
+  (no paging query), `baseline` (a page without `since`), `since`, `counts`, `lookup`, with bytes, plus the hints sent;
+  `?reset=1` starts again.
+- `GET /mock/churn?n=120&ms=500&rows=1`: a minute in which one working agent changes every half second (a real hub changes a
+  row or two a second); without `rows` every working agent changes every round.
+- Web: `node web/e2e/session-list-reads.mjs <web URL> --hub <mock URL> [--max-full 0]` (the mock's default pins keep the
+  sidebar on its complete fallback): a quiet minute, then a churn minute; fails when the churn minute has more than
+  `--max-full` complete lists.
+- iOS: launch with `-pairURL persona://pair?url=<mock>&token=mock -app.tab chats -openAgentsFresh YES` (the Agents tab in the
+  default By Repository grouping, which needs every row), then read the counters around the same two minutes.
+- A real hub's `traffic` journal lines count by route template, not query: there a complete list and a delta are told
+  apart only by `body_bytes / count`.
 
 ## Live Activity screenshots (`LiveActivityShots`)
 
