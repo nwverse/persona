@@ -251,10 +251,12 @@ func explainDenied(path, home string, err error) error {
 		return err
 	}
 	exe, _ := os.Executable()
-	return explainDeniedFor(path, home, launchedVia(os.Getenv), exe, err)
+	via := launchedVia(os.Getenv)
+	return explainDeniedFor(path, home, via, fullDiskAccessProgram(via, home, os.Getenv("XPC_SERVICE_NAME"), exe), err)
 }
 
-// explainDeniedFor is explainDenied for a node started via ("ssh", "launchd" or "") from the program exe.
+// explainDeniedFor is explainDenied for a node started via ("ssh", "launchd" or ""), exe the program macOS holds it
+// to under launchd (fullDiskAccessProgram).
 func explainDeniedFor(path, home, via, exe string, err error) error {
 	if !errors.Is(err, fs.ErrPermission) {
 		return err
