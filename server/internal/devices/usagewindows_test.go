@@ -180,6 +180,35 @@ func TestMergeUsageAccountsOrdersByThePlanWindows(t *testing.T) {
 	}
 }
 
+// Each account says when it turns stale (#1905): a client that keeps the answer while refreshes fail judges it itself,
+// with the threshold of where the newest sample came from (a computer's 30 minutes, a gateway's 6 hours).
+func TestMergeUsageAccountsSaysWhenEachTurnsStale(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	week := now.Add(3 * 24 * time.Hour)
+	in := []proto.UsageAccount{
+		{Provider: "codex", Name: "machine", SampledAt: now.Add(-10 * time.Minute), Local: true, Windows: []proto.UsageWindow{uw("7d", 10080, 10, week)}},
+		{Provider: "claude", Name: "gateway", SampledAt: now.Add(-time.Hour), Sources: []string{"Relay"}, Windows: []proto.UsageWindow{uw("7d", 10080, 20, week.Add(time.Hour))}},
+		{Provider: "kimi", Name: "flagged", SampledAt: now, Sources: []string{"Relay"}, Stale: true, Windows: []proto.UsageWindow{uw("7d", 10080, 30, week)}},
+	}
+	got := map[string]proto.UsageAccount{}
+	for _, a := range mergeUsageAccounts(in, now) {
+		got[a.Name] = a
+	}
+	for name, want := range map[string]time.Time{
+		"machine": now.Add(-10 * time.Minute).Add(usageHubStaleAfter),
+		"gateway": now.Add(-time.Hour).Add(usageGatewayStaleAfter),
+		"flagged": now.Add(usageGatewayStaleAfter),
+	} {
+		a := got[name]
+		if a.StaleAt == nil || !a.StaleAt.Equal(want) {
+			t.Errorf("%s: stale_at %v, want %v", name, a.StaleAt, want)
+		}
+	}
+	if got["machine"].Stale || got["gateway"].Stale || !got["flagged"].Stale {
+		t.Errorf("stale now: %+v", got)
+	}
+}
+
 // An account read on computers names them (#1907): a phone or another computer cannot tell "this computer" apart from
 // the device in hand. The same account on two computers names both; a node's own say is not taken, a rename is.
 func TestUsagePollNamesTheComputersThatReadAnAccount(t *testing.T) {

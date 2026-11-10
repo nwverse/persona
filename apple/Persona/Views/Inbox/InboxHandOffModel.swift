@@ -269,7 +269,8 @@ final class InboxHandOffModel {
                 text = InboxHandOffSheet.message(try await deps.load(itemID), ask: ask)
             } catch {
                 // Nothing went yet: it never says to look in the chat.
-                self.error = error.isOffline || Self.mayHaveGone(error) ? String(localized: "Can't reach the hub") : error.shown
+                self.error = error.isOffline ? String(localized: "Can't reach the hub")
+                    : error.isTimeout ? String(localized: "The request timed out. Try again later.") : error.shown
                 return false
             }
         }
