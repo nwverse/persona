@@ -97,8 +97,22 @@ describe("host-owned extension settings", () => {
 
   it("distinguishes a removed market from a disabled extension", async () => {
     render({ ...BASE, auto_upgrade_paused: "market_removed" }); await flush();
-    expect(host.textContent).toContain("扩展市场已移除");
+    expect(host.textContent).toContain("扩展市场已删除，自动升级暂停");
     expect(host.textContent).not.toContain("扩展关闭期间");
+  });
+
+  it("says how a removed market's upgrades come back, and checks nothing until then (#1895)", async () => {
+    render({ ...BASE, auto_upgrade_paused: "market_removed" }); await flush();
+    const updates = host.querySelector('[data-extension-section="updates"]')!.textContent;
+    // the switch keeps the saved preference, greyed out; its footer says the way back
+    expect(button("自动升级").getAttribute("aria-checked")).toBe("true");
+    expect(button("自动升级").disabled).toBe(true);
+    expect(document.getElementById(button("自动升级").getAttribute("aria-describedby")!)?.textContent).toContain("用同样的地址把市场加回来后恢复");
+    // a check would only read a market the hub no longer has
+    expect(button("检查更新").disabled).toBe(true);
+    expect(updates).toContain("用同样的地址把市场加回来，才能检查新版本");
+    expect(updates).not.toContain("扩展市场暂不可用");
+    expect(requests.some((r) => r.url.includes("/-/catalog"))).toBe(false);
   });
 
   it("reads the same manager's global preference and does not disguise it as the per-extension value", async () => {
@@ -128,6 +142,26 @@ describe("host-owned extension settings", () => {
     expect(host.textContent).not.toContain("未发现新版本");
     const upgrade = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => /升级/.test(b.textContent || "") && b.getAttribute("role") !== "switch")!;
     act(() => upgrade.click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", BASE.id);
+  });
+
+  it("finds a renamed extension under its new ID and upgrades it there (#2511)", async () => {
+    catalog = { markets: [{ id: "official" }], extensions: [{ id: "example-successor", market: "official", version: "1.1.0", installed: "1.0.0", upgradable: true,
+      replaces: BASE.id, rename_from: BASE.id }] };
+    const callbacks = render(); await flush();
+    await act(async () => button("检查更新").click()); await flush();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.textContent).toContain("1.1.0");
+    // never "upgrades automatically later": a new ID waits for the owner's confirmation
+    expect(host.textContent).toContain(`将 ${BASE.id} 更名为 example-successor 并升级`);
+    expect(host.textContent).not.toContain("稍后自动升级");
+    act(() => button("去确认").click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", "example-successor");
+  });
+
+  it("opens a waiting rename under the ID its market lists it under", async () => {
+    const detail = "此次更新会将扩展 ID 从 example-extension 更改为 example-successor，需要明确确认。";
+    const callbacks = render({ ...BASE, upgrade: { id: BASE.id, market: "official", from: "1.0.0", to: "1.1.0", state: "needs_permission", rename_to: "example-successor", detail } }); await flush();
+    expect(host.textContent).toContain(detail); // the hub's words for the ID change, not "permissions changed"
+    act(() => button("去确认").click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", "example-successor");
   });
 
   it("reports market failures without claiming the installed version is current", async () => {

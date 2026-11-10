@@ -45,6 +45,21 @@ class HttpTasksApiTest {
         }
     }
 
+    @Test fun acceptanceCarriesTheCapturedRoundAndRetainsAStaleRefusal() = runBlocking {
+        MockWebServer().use { server ->
+            val askedAt = "2026-11-01T09:00:00.123Z"
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            api(server).acceptTask("todo/one", askedAt)
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertEquals("/api/v1/todos/todo%2Fone/accept", request.path)
+            assertEquals("""{"asked_at":"$askedAt"}""", request.body.readUtf8())
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"Already handled"}"""))
+            try { api(server).acceptTask("todo/one", askedAt); fail("stale acceptance was not refused") }
+            catch (error: HubFailure) { assertEquals(409, error.status) }
+        }
+    }
+
     @Test fun retryPostsAndAnswersTheReopenedTodo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"todo":{"id":"todo_1","title":"设置页按钮对齐","origin":"c","plan_id":"p","agents":[]}}"""))
@@ -159,7 +174,37 @@ class HttpTasksApiTest {
         }
     }
 
-    // A card's action (docs/assistant/assistant-views.md "Persisted submits"): the key is one escaped path segment, the version goes with it.
+    // A to-do's decisions (#1618, #1853): every one with all=1 (the revised ones too); recording one sends what was typed, trimmed,
+    // without a blank reason, and with the decision it revises when there is one.
+    @Test fun decisionsAreReadWholeAndRecordedTrimmed() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"decisions":[{"id":"dec_1","todo_id":"todo_ask_1","question":"Merge now?","choice":"Wait",""" +
+                """"source":"manual","superseded_by":"dec_2","created_at":"2026-11-09T05:00:00Z","extra":1},""" +
+                """{"id":"dec_2","todo_id":"todo_ask_1","question":"Merge now?","choice":"Merge","supersedes_id":"dec_1","source":"manual"}]}"""))
+            val list = api(server).todoDecisions("todo_ask_1")
+            val read = server.takeRequest()
+            assertEquals("GET", read.method)
+            assertEquals("/api/v1/todos/todo_ask_1/decisions?all=1", read.path)
+            assertEquals(listOf("dec_1", "dec_2"), list.map { it.id })
+            assertEquals(listOf(false, true), list.map { it.isCurrent })
+            assertEquals("dec_1", list[1].supersedesId)
+
+            server.enqueue(MockResponse().setBody("""{"decision":{"id":"dec_3","todo_id":"todo_ask_1","question":"Merge now?","choice":"Merge"}}"""))
+            val added = api(server).addTodoDecision("todo_ask_1", "  Merge now? ", " Merge ", "  ")
+            val first = server.takeRequest()
+            assertEquals("POST", first.method)
+            assertEquals("/api/v1/todos/todo_ask_1/decisions", first.path)
+            assertEquals("""{"question":"Merge now?","choice":"Merge"}""", first.body.readUtf8())
+            assertEquals("dec_3", added.id)
+
+            server.enqueue(MockResponse().setBody("""{"decision":{"id":"dec_4","question":"Merge now?","choice":"Wait"}}"""))
+            api(server).addTodoDecision("todo_ask_1", "Merge now?", "Wait", "The review is not in", supersedesId = "dec_3")
+            assertEquals("""{"question":"Merge now?","choice":"Wait","reason":"The review is not in","supersedes_id":"dec_3"}""",
+                server.takeRequest().body.readUtf8())
+        }
+    }
+
+    // A card's action (docs/assistant/assistant-views.md "Persistent submission"): the key is one escaped path segment, the version goes with it.
     @Test fun aCardsActionEscapesItsKeyAndSendsTheVersion() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"action":{"key":"uuid#0/2","action":"choose-b","client_msg_id":"m1","status":"pending","revision":1,"at":"2026-11-05T10:00:00Z"}}"""))

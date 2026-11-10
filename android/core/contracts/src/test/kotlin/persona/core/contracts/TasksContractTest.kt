@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** The unified entry's wire shapes (docs/protocol/protocol.md "Tasks and conversation activity") decode, and its events enter the stream. */
+/** The unified entry's wire shapes (docs/protocol/protocol.md "Tasks and the chat feed") decode, and its events enter the stream. */
 class TasksContractTest {
     @Test fun eventsDecode() {
         assertTrue(ServerEvent.decode("""{"type":"todos"}""") is TodosEvent)
@@ -38,6 +38,20 @@ class TasksContractTest {
         val item = JsonCodec.decodeFromString<FeedItem>("""{"id":"f1","kind":"review","ref":"t1","body":{"verdict":"accepted"}}""")
         assertEquals("review", item.kind)
         assertEquals("accepted", item.field("verdict"))
+    }
+
+    /** Reports retain their original body and evidence metadata; presentation does not alter the wire record. */
+    @Test fun aReportKeepsItsBodyAndEvidence() {
+        val raw = """{"id":"report1","conversation":"main","kind":"report","ref":"task1","body":{
+            "kind":"progress","text":"Verified the change.\nSee https://example.com/results and /tmp/example-check.log.",
+            "evidence":["https://example.com/metadata-only","/tmp/example-evidence.png"]}}"""
+        val item = JsonCodec.decodeFromString<FeedItem>(raw)
+        assertEquals("report", item.kind)
+        assertEquals("Verified the change.\nSee https://example.com/results and /tmp/example-check.log.", item.field("text"))
+        assertEquals(JsonCodec.parseToJsonElement(raw).let { (it as kotlinx.serialization.json.JsonObject)["body"] }, item.body)
+        val event = ServerEvent.decode("""{"type":"assistant_feed","conversation":"main","item":$raw}""") as AssistantFeedEvent
+        assertEquals(item, event.item)
+        assertEquals(item, JsonCodec.decodeFromString<FeedItem>(JsonCodec.encodeToString(FeedItem.serializer(), item)))
     }
 
     @Test fun unknownKindsAndTodosDecode() {

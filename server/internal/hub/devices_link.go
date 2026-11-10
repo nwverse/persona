@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// The computers are the manager's (docs/server/machines.md "Who connects the computers", devicewire): the manager that carries them — the
+// The computers are the manager's (docs/server/machines.md "Who connects to computers", devicewire): the manager that carries them — the
 // chief, the assistant's process, during the migration to managers — connects every one and holds what is known of it.
 // The hub hands it hub.json's machines as defaults (the hello's devices section, devices.config when they change),
 // relays the apps' calls and streams to it (busNode: devices.call, devices.notify), and keeps what it reports
@@ -87,9 +87,10 @@ type devicesState struct {
 	assignRead   bool
 	assignFailed bool // ownership read failed: dedicated local machines must not fall back to the carrier
 	// moving keeps moves one at a time: each writes the whole of assign, from the one before it (moveMachine).
-	moving  sync.Mutex
-	due     bool
-	started bool
+	moving        sync.Mutex
+	due           bool
+	nodeUpdateDue bool // an explicit policy write also requests a fresh package check
+	started       bool
 	// reqs are the nodes' requests being answered (devices.request) by the manager's key; reqEnded the keys whose
 	// devices.request_end came before the request did (an event is read at once, a call in its own goroutine).
 	reqs     map[string]context.CancelFunc

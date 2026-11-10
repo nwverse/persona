@@ -3,6 +3,9 @@ package hub
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"maps"
@@ -211,7 +214,11 @@ func (h *Hub) emitToExtensions(owner, event string, params any) {
 // extensionRoutesRelayed relays the apps' requests on the manager's routes.
 func (h *Hub) extensionRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range extwire.Routes {
-		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) })
+		relay := func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) }
+		if pattern == "/api/v1/agents/" { // messages to the personal Agents (terminal_controls.go)
+			relay = h.withoutTerminalControls(relay)
+		}
+		api.HandleFunc(pattern, relay)
 	}
 	// The lists: every manager's extensions and sources (ownership_lists.go).
 	for pattern, key := range mergedLists {
@@ -475,11 +482,8 @@ func (k *keptRecorder) Write(p []byte) (int, error) {
 	return k.ResponseWriter.Write(p)
 }
 
-func (k *keptRecorder) Flush() {
-	if f, ok := k.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
+// Flush goes through http.ResponseController, as codeWriter.Flush does.
+func (k *keptRecorder) Flush() { _ = http.NewResponseController(k.ResponseWriter).Flush() }
 
 func (k *keptRecorder) Unwrap() http.ResponseWriter { return k.ResponseWriter }
 
@@ -573,6 +577,7 @@ func (h *Hub) authorizeExtension(ctx context.Context, tok string, r *http.Reques
 	var a extwire.Authorized
 	manager := ""
 	sure = true
+	asked := time.Now()
 	for _, id := range h.listManagers(ctx) {
 		a = extwire.Authorized{}
 		err := h.callBus(ctx, id, extwire.MethodAuthorize, extwire.Authorize{Hash: hashToken(tok), Pattern: pattern,
@@ -589,14 +594,42 @@ func (h *Hub) authorizeExtension(ctx context.Context, tok string, r *http.Reques
 		return principal{}, false, false, "", sure
 	}
 	p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
-		Manager: manager}
+		Manager: manager, extHash: hashToken(tok), extAt: asked}
 	return p, true, a.OK, a.Scope, true
+}
+
+// tokenHash says whether s is a hash as hashToken makes one.
+func tokenHash(s string) bool {
+	if len(s) != 2*sha256.Size {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // answerOnly says whether the request comes from an answer-only device (a watch).
 func answerOnly(r *http.Request) bool { return principalOf(r.Context()).Role == roleAnswer }
 
 // ---- what the manager asks of the hub (app.call hub.*) ----
+
+// managerCollapseID is the apns-collapse-id of a push a manager asked for with collapse id id: the same id from the same
+// manager still replaces its earlier push, but no manager's id replaces another manager's push, one the hub named (a
+// to-do's, its update notice) or a notify API caller's, and any id fits APNs' 64 bytes. An empty id stays empty: a push
+// of its own.
+func managerCollapseID(manager, id string) string {
+	if id == "" {
+		return ""
+	}
+	sum := sha256.New()
+	sum.Write(binary.AppendUvarint(nil, uint64(len(manager))))
+	sum.Write([]byte(manager))
+	sum.Write([]byte(id))
+	return "ext:" + hex.EncodeToString(sum.Sum(nil)[:16])
+}
 
 func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCall) (json.RawMessage, bool, error) {
 	if p.AppID != extwire.AppHub {
@@ -617,6 +650,7 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		Machine       string                    `json:"machine"`
 		Sender        string                    `json:"sender"`
 		Request       json.RawMessage           `json:"request"`
+		Hash          string                    `json:"hash"`
 	}
 	if len(p.Params) > 0 {
 		if err := json.Unmarshal(p.Params, &a); err != nil {
@@ -634,7 +668,7 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 			}
 		}
 		// the manager's extension's: not to the devices that turned that manager's pushes off
-		h.push.sendFrom(from, func(l i18n.Lang) map[string]any { return localizedPayload(a.Payloads, l) }, a.CollapseID, nil, quietNone, nil)
+		h.push.sendFrom(from, func(l i18n.Lang) map[string]any { return localizedPayload(a.Payloads, l) }, managerCollapseID(from, a.CollapseID), nil, quietNone, nil)
 		out = map[string]any{}
 	case extwire.HubPushBackground:
 		if err := h.pushPayloadAllowed(from, a.Payload); err != nil {
@@ -644,6 +678,12 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		out = map[string]any{}
 	case extwire.HubMailTargets:
 		out = map[string]any{"targets": h.push.mailTargets()}
+	case extwire.HubTokenRevoked:
+		if !tokenHash(a.Hash) {
+			return nil, true, errors.New("hub: extensions.token_revoked without a token's hash")
+		}
+		h.dropRevokedToken(from, a.Hash)
+		out = map[string]any{}
 	default:
 		return nil, true, errors.New("hub: no method " + p.Method)
 	}

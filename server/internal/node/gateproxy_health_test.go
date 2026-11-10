@@ -19,7 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// sendAllowed is the kind of rule that stops confirming sends in a conversation (docs/assistant/assistant.md "Gate").
+// sendAllowed is the kind of rule that stops confirming sends in a conversation (docs/assistant/assistant.md "Lark: skill supplied by the Lark extension", Gate).
 var sendAllowed = proto.LarkRule{Method: "POST", Path: "/conversations/*/messages", Action: "allow"}
 
 // spaceRig is a node on a fake hub, with the proxied example gate (the given rules first) and a phone that says yes to
@@ -121,7 +121,7 @@ func (r *spaceRig) check(cwd, session, command string) string {
 	return d
 }
 
-// A health conversation's Feishu writes are confirmed on the phone each time (docs/assistant/health.md "Outgoing"), also when a
+// A health conversation's Feishu writes are confirmed on the phone each time (docs/assistant/health.md "Outbound"), also when a
 // rule allows the route and the request reaches the gate proxy on its own instead of through the gated command: it is
 // refused, the API is not asked, and no card is made.
 func TestGateProxyHealthWriteWithAnAllowRuleNeedsTheCard(t *testing.T) {

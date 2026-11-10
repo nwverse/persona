@@ -20,8 +20,7 @@ export interface ChatContextValue {
   /** The Workflow calls whose run the hub lists (#3434): they draw the run's card, and a running one stays out of the
    *  folded work. Only which runs there are, not their progress (each card reads that), so it seldom changes. */
   workflowCalls?: WorkflowCalls;
-  /** How the work lines open (work-groups.ts workLineOpen): "assistant" in a Persona conversation, open while the
-   *  exchange runs; "agents" (the default) in a coding agent's chat. */
+  /** Conversation identity; both styles share the collapsed work-line default (#2602). */
   lineStyle?: WorkLineStyle;
 }
 
@@ -35,7 +34,3 @@ export function useChatContext() {
   return useContext(ChatContext);
 }
 
-/** Items pushed over the WebSocket after the chat subscribed (not the first page, older pages or an unfolded range):
- *  their words fade in once (Markdown's `fade`). A context of its own, read only by the words that may fade: it
- *  changes with each new reply, and in ChatContext it would render every exchange again. */
-export const FreshWords = createContext<ReadonlySet<string> | undefined>(undefined);

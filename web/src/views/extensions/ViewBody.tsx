@@ -11,6 +11,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "../../ui/remark-gfm-parse";
 import { lazyPage } from "../../lib/lazy-page";
 import { openLink } from "../../lib/links";
+import { useLinkManager } from "../../lib/manager-choice";
 import {
   blocks, initials, isHttps, numberProblem, percent, tableRows, toneOf,
   type RowIcon, type UIAction, type UIItem, type UIMore, type UISection, type UITone, type UIView,
@@ -29,7 +30,8 @@ import { Badge, Carousel, DateInput, glyphOf, Grid, ImageItem, MultiChoice, Mult
 
 // UI version 4's code hosting items (CodeViews.tsx, DiffReview.tsx) are their own chunks too: only an extension's code
 // review or file browser draws them, never the assistant's cards (ui/AssistantCard.tsx), which bring this file into the
-// app's first chunk (#1794). Each is drawn under CodeItem's Suspense, so the page-level one never shows.
+// app's first chunk (#1794). They load with the first such item, not at idle (lib/lazy-page.ts), and each is drawn under
+// CodeItem's Suspense, so the page-level one never shows.
 const codeViews = () => import("./CodeViews");
 const Header = lazyPage(() => codeViews().then((m) => m.Header));
 const Breadcrumb = lazyPage(() => codeViews().then((m) => m.Breadcrumb));
@@ -44,7 +46,7 @@ function CodeItem({ children }: { children: ReactNode }) {
 }
 
 // Only chart items draw it: its own chunk, fetched by the idle preload or the first chart (lib/lazy-page.ts).
-const ExtensionChart = lazyPage(() => import("./ExtensionChart").then((m) => m.ExtensionChart));
+const ExtensionChart = lazyPage(() => import("./ExtensionChart").then((m) => m.ExtensionChart), { idle: true });
 
 const TEXT: Record<UITone, string> = { neutral: "text-ink", positive: "text-green", caution: "text-orange", danger: "text-red" };
 const BAR: Record<UITone, string> = { neutral: "bg-accent", positive: "bg-green", caution: "bg-orange", danger: "bg-red" };
@@ -330,6 +332,7 @@ function Item(props: Omit<SectionProps, "section" | "embedded" | "onMore" | "bar
 }
 
 function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoose, canPress, chosen, locked, onAct, onPicked, draft, local, nativeFetch, nativeAvailable, ...v6 }: Omit<SectionProps, "section" | "embedded" | "onMore" | "bare"> & { item: UIItem }) {
+  const manager = useLinkManager();
   const pressable = (a: UIAction) => (canPress ? canPress(a) : true);
   const tiles = { glyphs: ROW_ICON, busy, onPress, canPress, ...v6 };
   const code = { act: onAct ?? ((a: UIAction) => onPress(a)), busy: locked ? busy || "stream-locked" : busy, reveal: revealDiff, local, fetch: nativeFetch, canFetch: nativeAvailable };
@@ -435,7 +438,7 @@ function NativeItem({ item: it, compact, values, setValue, busy, onPress, onChoo
           onClick={(e) => {
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
             e.preventDefault();
-            openLink(it.url!, it.title);
+            openLink(it.url!, it.title, manager);
           }}
           className="flex items-center gap-3 px-4 py-2.5 whitespace-nowrap transition-colors hover:bg-hover"
         >
@@ -719,6 +722,7 @@ function sliderText(c: NonNullable<UIItem["control"]>, h: V6Handlers): string {
 const MD_ALLOWED = ["p", "h1", "h2", "h3", "ul", "ol", "li", "strong", "em", "del", "code", "pre", "blockquote", "a", "br", "hr", "table", "thead", "tbody", "tr", "th", "td", "input"];
 
 export function ViewMarkdown({ text, compact }: { text: string; compact?: boolean }) {
+  const manager = useLinkManager();
   return (
     <div className={cx("prose-j prose-sm px-4 py-2.5 select-text", compact && "prose-compact")}>
       <ReactMarkdown
@@ -740,7 +744,7 @@ export function ViewMarkdown({ text, compact }: { text: string; compact?: boolea
                 onClick={(e) => {
                   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
                   e.preventDefault();
-                  openLink(href);
+                  openLink(href, undefined, manager);
                 }}
               >
                 {children}

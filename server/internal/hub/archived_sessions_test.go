@@ -17,6 +17,11 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// agentSessionArchivesSupported: every owner supports archives now (the feature the apps are told).
+func (h *Hub) agentSessionArchivesSupported() bool {
+	return slices.Contains(h.agentSessionArchiveFeatures(), featureAgentSessionArchives)
+}
+
 // These tests exercise the Hub's real HTTP and manager bus boundary. Archive
 // persistence, restart and automatic restoration belong to the manager tests.
 func archiveRelayHub(t *testing.T, failingStatus ...int) (*Hub, *httptest.Server, *guardManager, *guardManager) {

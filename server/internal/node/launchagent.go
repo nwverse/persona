@@ -54,6 +54,54 @@ func NodeLaunchAgentPath(home, label string) string {
 	return filepath.Join(home, "Library", "LaunchAgents", label+".plist")
 }
 
+// launchdProgram is the program of the launchd agent called label (a process's XPC_SERVICE_NAME, which what the agent
+// starts inherits), as its plist in home's LaunchAgents names it: Program, else the first of ProgramArguments. TCC
+// holds what an agent starts to the agent's program for its privacy permissions, so the node of the hub's computer,
+// which the built-in manager's agent starts, reads with that program's (persona-manager on a new install). "" when
+// there is no such plist or it names no program.
+func launchdProgram(home, label string) string {
+	if home == "" || label == "" || strings.ContainsAny(label, "/\\") {
+		return ""
+	}
+	b, err := os.ReadFile(NodeLaunchAgentPath(home, label))
+	if err != nil {
+		return ""
+	}
+	entries, _, err := plistTop(b)
+	if err != nil {
+		return ""
+	}
+	var p string
+	if e := entries["Program"]; e.elem == "string" {
+		p = strings.TrimSpace(e.text)
+	}
+	if e := entries["ProgramArguments"]; p == "" && e.elem == "array" {
+		p = firstPlistString(b[e.start:e.end])
+	}
+	if rest, ok := strings.CutPrefix(p, "~/"); ok {
+		p = filepath.Join(home, rest)
+	}
+	return p
+}
+
+// firstPlistString is the text of the first <string> in b, a plist <array> element; "" when it has none.
+func firstPlistString(b []byte) string {
+	d := xml.NewDecoder(bytes.NewReader(b))
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return ""
+		}
+		if t, ok := tok.(xml.StartElement); ok && t.Name.Local == "string" {
+			var s string
+			if d.DecodeElement(&s, &t) != nil {
+				return ""
+			}
+			return strings.TrimSpace(s)
+		}
+	}
+}
+
 // launchdDomain is this user's login session as launchctl names it; an agent there is domain + "/" + label.
 func launchdDomain() string { return "gui/" + strconv.Itoa(os.Getuid()) }
 

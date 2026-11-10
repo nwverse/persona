@@ -8,6 +8,11 @@ import { isLoopTick, isOwnMessage, type ChatLine, type Segment, type UserMessage
 export interface NavRailTick {
   /** The line's id (a `seg:…` ChatLine): what a jump looks for in the scroller (`[data-line=…]`). */
   id: string;
+  /** Optional loaded row owner and stable sequence from the independent server index. */
+  lineId?: string;
+  seq?: number;
+  /** An unloaded input's ordinal, localized by the component rather than cached in its preview. */
+  ordinal?: number;
   /** The question's first line worth showing (quote blocks skipped, trimmed, capped): the preview card and the label. */
   preview: string;
   /** A question with no words of its own (only pictures, files or picked contexts): how many, for a fallback label. */
@@ -134,19 +139,6 @@ export function planNavRailTicks(count: number, height: number, focus = count - 
   return { start, pitch: Math.min(NAV_RAIL_TICK_PITCH, height / shown), hidden: count - shown, count: shown };
 }
 
-/** The input owning the viewport. Missing anchors are unknown, not evidence that an input has been read past. */
-export function pickActiveTick(count: number, thresholdTop: number, topAt: (i: number) => number | null): number | null {
-  let first: number | null = null;
-  let found: number | null = null;
-  for (let i = 0; i < count; i++) {
-    const top = topAt(i);
-    if (top === null) continue;
-    first ??= i;
-    if (top <= thresholdTop) found = i;
-  }
-  return found ?? first;
-}
-
 /** Cached monotone offsets make normal scrolling logarithmic, without per-message DOM reads. */
 export function activeNavRailOffset(offsets: { index: number; top: number }[], top: number): number | null {
   if (!offsets.length) return null;
@@ -163,5 +155,6 @@ export function activeNavRailOffset(offsets: { index: number; top: number }[], t
 /** Explicit data-source seam: an index adapter may load missing content before resolving a selection. */
 export interface NavRailSource {
   ticks: NavRailTick[];
+  total?: number;
   select: (id: string) => void | Promise<void>;
 }

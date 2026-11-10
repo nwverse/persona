@@ -48,6 +48,8 @@ export interface Todo {
   reminded_at?: string | null;
   /** "high" or "low"; unset or "" is normal. */
   priority?: string;
+  /** The slug of the knowledge-base project it belongs to (#2581, docs/assistant/todos.md "Project"); unset for none. */
+  project?: string;
   done_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -56,7 +58,7 @@ export interface Todo {
   /** The assistant conversation that opened it as a task, and the plan (docs/assistant/unified-entry.md); unset for a todo made by hand. */
   origin?: string;
   plan_id?: string;
-  /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Auto-complete"). */
+  /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */
   done_by?: string;
   done_reason?: string;
   /** When the user last reopened it after it was done. */
@@ -76,6 +78,44 @@ export interface Todo {
   delivery?: TodoDelivery;
   /** The chat thread the todo is bound to (#5279, docs/assistant/todos.md "Chat thread"); unset while it has none. */
   thread?: TodoThread;
+  /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
+   *  and from hubs before it. */
+  ask?: TodoAsk;
+}
+
+/**
+ * The ask a to-do waits on, as GET /todos carries it: a deployed to-do's "Please verify" (no outcome), or a supervised
+ * task's conclusion — `done`, `cannot` (cannot be done) or `decide` (needs the user's decision, with the option the
+ * supervisor recommends when it has one). `verdict` is the line its Lark card says, in the request's language;
+ * `asked_at` is the round, which POST /todos/{id}/accept takes back (an earlier round's is 409).
+ */
+export interface TodoAsk {
+  outcome?: "done" | "cannot" | "decide" | string;
+  verdict: string;
+  recommend?: string;
+  asked_at: string;
+}
+
+/** What the one button of an ask does: take a decision's recommendation, acknowledge a conclusion that only tells, or
+ *  accept a deployed to-do as verified. */
+export type AskTake = "take" | "ack" | "accept";
+
+/** The ask a to-do waits on, when the hub sent a whole one (a verdict line and a round to answer). */
+export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
+  const a = todo.ask;
+  return a && a.verdict && a.asked_at ? a : undefined;
+}
+
+/** What the ask's button does; none for a decision that recommends nothing: nothing for one tap to take, so it is
+ *  answered in its conversation (or on its Lark card). */
+export function askTake(ask: TodoAsk): AskTake | undefined {
+  if (ask.outcome === "decide") return ask.recommend ? "take" : undefined;
+  return ask.outcome ? "ack" : "accept";
+}
+
+/** The tone of an ask's verdict: a decision waits on the user, what cannot be done is red, done (or deployed) is green. */
+export function askTone(ask: TodoAsk): "attention" | "red" | "green" {
+  return ask.outcome === "decide" ? "attention" : ask.outcome === "cannot" ? "red" : "green";
 }
 
 /** A chat thread a todo is bound to: the channel, the chat and the thread in it name it; the title is only a label. */
@@ -125,10 +165,11 @@ export const TODO_TONE_CLASS: Record<(typeof TODO_STATUS_INFO)[TodoStatus]["tone
   off: "text-ink-3",
 };
 
-/** A supervised task whose work was judged finished and waits for the user to accept it (#3124): nothing of it runs or
- *  asks, so it is the user's to review rather than just stopped or finished-unseen (#4896). */
+/** A task that waits for the user's review while nothing of it runs or asks, so it is the user's rather than just stopped
+ *  or finished-unseen (#4896): a supervised one whose work was judged finished (#3124), or an open one whose result
+ *  waits on them — to verify, to acknowledge, or to decide (its `ask`, #2056). */
 export function awaitsReview(todo: Todo, status: TodoStatus): boolean {
-  return reviewState(todo) === "pending_review" && (status === "follow_up" || status === "unread" || status === "not_started");
+  return (reviewState(todo) === "pending_review" || !!openAsk(todo)) && (status === "follow_up" || status === "unread" || status === "not_started");
 }
 
 /** A task's place in the order: its status's rank, Awaiting review right after Needs you. */
@@ -155,7 +196,7 @@ export function isRemovable(status: TodoStatus): boolean {
 
 export type SessionLookup = (mid: string, sid: string) => Session | undefined;
 
-/** The hub closed it because its task's work was judged finished; reopening undoes it (docs/assistant/todos.md "Auto-complete"). */
+/** The hub closed it because its task's work was judged finished; reopening undoes it (docs/assistant/todos.md "Automatic completion"). */
 export function isAutoDone(todo: Todo): boolean {
   return Boolean(todo.done_at) && todo.done_by === "auto";
 }
@@ -494,7 +535,7 @@ export function formatTodoContext(title: string, notes?: string): string {
   return `<persona-context kind="context" title="${escape(t("lib-todos.context_title", { title }))}" url="">${body}</persona-context>`;
 }
 
-// ── Decision log (#1618, docs/assistant/todos.md "Decision log") ───────────────
+// ── Decision log (#1618, docs/assistant/todos.md "Decision records") ───────────────
 
 /** One call the user made on a todo: written by hand, or their answer to a question card of an agent on it. */
 export interface TodoDecision {
@@ -563,10 +604,11 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
 
 // ── API helpers ──────────────────────────────────────────────
 
-export async function createTodo(title: string, notes?: string): Promise<Todo> {
+/** A new to-do; `due` makes it due at a moment or on a day (one made on the calendar, #2029). */
+export async function createTodo(title: string, notes?: string, due?: { due_at?: string; due_date?: string }): Promise<Todo> {
   const r = await api<{ todo: Todo }>("/todos", {
     method: "POST",
-    json: { title: title.trim(), notes: notes?.trim() || undefined },
+    json: { title: title.trim(), notes: notes?.trim() || undefined, ...due },
   });
   return r.todo;
 }
@@ -580,6 +622,8 @@ export interface TodoPatch {
   due_date?: string | null;
   remind_at?: string | null;
   priority?: string;
+  /** A knowledge-base project's slug; "" takes it out of its project. */
+  project?: string;
 }
 
 export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
@@ -744,7 +788,7 @@ export interface DockAgent {
 }
 
 /**
- * What a conversation's dock shows after its tasks (docs/assistant/unified-entry.md "Manual agents in the main chat's task dock"): in the main
+ * What a conversation's dock shows after its tasks (docs/assistant/unified-entry.md "Manual Agents in the main-chat dock"): in the main
  * conversation, every agent going on that no task stands for — the ones opened by hand on the Agents page — waiting
  * for the user first, then the newest in its state; elsewhere nothing. Persona's own conversations are not agents. A
  * task's agents (a task not done, from any conversation) are its pill already; an agent the hub tags with a todo shows
@@ -781,7 +825,7 @@ export type TaskNow = { kind: "words"; text: string } | { kind: "step"; text: st
 /**
  * A working agent's step (its latest tool call, which the hub only sends when it is newer than its words) comes
  * before its words; once it stopped, its words do (a turn cut short on a tool call), and the step only stands in for
- * words it never said. Null when it has said and done nothing yet (docs/assistant/unified-entry.md "Task card progress", #1583).
+ * words it never said. Null when it has said and done nothing yet (docs/assistant/unified-entry.md "Task cards", #1583).
  */
 export function taskNow(lead: Session | undefined, working: boolean): TaskNow | null {
   const words = lead?.last_text?.trim() ?? "";

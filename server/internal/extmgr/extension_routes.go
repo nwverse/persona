@@ -45,6 +45,10 @@ type ExtensionDetail struct {
 	// another host deletes its key, docs/extensions/extensions.md "Built-in voice extension"; a line in Warnings says so too). An
 	// error answer carries it too when they went before the configuration could not be saved.
 	SecretsCleared []string `json:"secrets_cleared,omitempty"`
+	// DataDir is its data directory on the manager's machine, the one its program is given there (an attached package
+	// keeps it): for the master token over loopback and the admin UI only, never a device; none for one installed from
+	// remote:, one from hub.json or manager.json, or one with no program on the manager.
+	DataDir string `json:"data_dir,omitempty"`
 }
 
 // ExtensionSecretView is a declared secret and whether it has a value (never the value).
@@ -60,15 +64,21 @@ type ExtensionSecretView struct {
 
 func (ps *extensions) detail(ctx context.Context, p *extension.Extension) ExtensionDetail {
 	m := p.Full
+	l := ps.h.contextLang(ctx)
+	form := p.L10n.Schema(l, p.Schema) // the form's text in the request's language (#897); p.Schema is shared
 	d := ExtensionDetail{ExtensionView: ps.view(ctx, p), Publisher: m.Publisher, Homepage: m.Homepage, Origin: p.Record.Origin,
-		PreviousVersion: p.Record.PreviousVersion, ReadOnly: p.ReadOnly(), Form: p.Schema, Permissions: extension.ExplainWith(ps.h.contextLang(ctx), m, ps.reg.Config(p)),
+		PreviousVersion: p.Record.PreviousVersion, ReadOnly: p.ReadOnly(), Form: form, Permissions: extension.ExplainWith(l, m, ps.reg.Config(p)),
 		Contributions: ps.contributionViews(p), Depends: ps.reg.DependenciesContext(ctx, m), ExtensionPack: m.ExtensionPack}
 	if d.Permissions == nil {
 		d.Permissions = []extension.PermissionLine{}
 	}
+	if who := principalOf(ctx); (who.Owner || who.Admin) && p.Legacy == nil && m.Runtime != nil &&
+		(p.Record.Remote == nil || p.Record.AttachedPackage()) {
+		d.DataDir = ps.reg.DataDir(p.Record.ID)
+	}
 	if m.NodeProgram() != nil { // not cua / ego / imessage: built in, their machines show as they always did
 		d.NodeMachines = m.Node.Machines
-		d.Form = nodeConfirmForm(ps.h.contextLang(ctx), p.Schema, m)
+		d.Form = nodeConfirmForm(l, form, m, d.Name)
 	}
 	for _, u := range ps.uiPlaces("", "") {
 		if u.Extension == p.Record.ID && extension.FullPage(u.Placement) {
@@ -86,7 +96,8 @@ func (ps *extensions) detail(ctx context.Context, p *extension.Extension) Extens
 			if s.Hint != "" && set[s.Name] && plain == nil {
 				plain, _ = ps.reg.Secrets(ctx, p.Record.ID)
 			}
-			d.Secrets = append(d.Secrets, ExtensionSecretView{Name: s.Name, Title: s.Title, Description: s.Description, Required: s.Required, Set: set[s.Name],
+			shown := p.L10n.Secret(l, s)
+			d.Secrets = append(d.Secrets, ExtensionSecretView{Name: s.Name, Title: shown.Title, Description: shown.Description, Required: s.Required, Set: set[s.Name],
 				Hint: extension.SecretHint(s, plain[s.Name])})
 		}
 	}
@@ -181,7 +192,7 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		}
 	}
 	// marketOr is owner for installing, upgrading, rolling back and removing, or a device with full rights when it is a
-	// plugin of a registered market (its package pinned by the market's index; docs/extensions/extensions.md "Extension markets").
+	// plugin of a registered market (its package pinned by the market's index; docs/extensions/extensions.md "Extension marketplace").
 	marketOr := func(w http.ResponseWriter, r *http.Request, ofMarket func() bool) bool {
 		if ps() == nil {
 			writeExtensionResponseError(w, r, http.StatusServiceUnavailable, "no_plugins", i18n.ErrEnglish("extension-status.not_set_up"))
@@ -382,6 +393,30 @@ func (h *Manager) extensionRoutes(api *http.ServeMux) {
 		h.extensionUpgrades().rolledBackByUser(r.Context(), p.Record.ID, left)
 		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
 	})
+	// An installed package attached to its program running on its own, and back (extension.Registry.Attach): from this
+	// machine only, as installing from remote: is (it names sockets here).
+	api.HandleFunc("POST /api/v1/extensions/{id}/-/attach", owner(func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Source string `json:"source"` // remote:rpc=<socket>,http=<socket>
+		}
+		if !readExtensionJSON(w, r, &in) {
+			return
+		}
+		p, err := ps().reg.Attach(r.Context(), r.PathValue("id"), in.Source, actorOr(r, "personad extension"))
+		if err != nil {
+			writeExtensionResponseError(w, r, http.StatusBadRequest, "attach_failed", err)
+			return
+		}
+		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
+	}))
+	api.HandleFunc("POST /api/v1/extensions/{id}/-/detach", owner(func(w http.ResponseWriter, r *http.Request) {
+		p, err := ps().reg.Detach(r.Context(), r.PathValue("id"), actorOr(r, "personad extension"))
+		if err != nil {
+			writeExtensionResponseError(w, r, http.StatusBadRequest, "detach_failed", err)
+			return
+		}
+		writeExtensionJSON(w, r, detailOut(r, ps().detail(r.Context(), p)))
+	}))
 	api.HandleFunc("DELETE /api/v1/extensions/{id}/-/{$}", func(w http.ResponseWriter, r *http.Request) {
 		if !marketOr(w, r, fromMarket(r)) {
 			return
@@ -434,7 +469,7 @@ func (ps *extensions) listCtx(ctx context.Context) []ExtensionView {
 // nodeConfirmForm is the form with the computers' field asking before a machine is switched on (x-confirm), unless the
 // manifest asks something of its own: switching one on starts a program there (plan "7" "Showing permissions"). A copy:
 // the plugin's own schema is shared.
-func nodeConfirmForm(l i18n.Lang, s *extension.Schema, m *extension.Manifest) *extension.Schema {
+func nodeConfirmForm(l i18n.Lang, s *extension.Schema, m *extension.Manifest, name string) *extension.Schema {
 	if s == nil {
 		return nil
 	}
@@ -442,7 +477,7 @@ func nodeConfirmForm(l i18n.Lang, s *extension.Schema, m *extension.Manifest) *e
 	out.Fields = slices.Clone(s.Fields)
 	for i := range out.Fields {
 		if out.Fields[i].Name == m.Node.Machines && out.Fields[i].Confirm == "" {
-			out.Fields[i].Confirm = i18n.T(l, "hub-extension_routes.node_confirm", i18n.Args{"name": m.Name})
+			out.Fields[i].Confirm = i18n.T(l, "hub-extension_routes.node_confirm", i18n.Args{"name": name})
 		}
 	}
 	return &out

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › Extensions › Extension Market (docs/extensions/extensions.md「扩展市场」): the plugins of every market the hub has, searched and filtered by
+/// Settings › Extensions › Extension Market (docs/extensions/extensions.md「Extension marketplace」): the plugins of every market the hub has, searched and filtered by
 /// market; a row each with its name, version, what it does, its tags and how it stands on this hub. The markets
 /// themselves are one tap away (Markets).
 struct ExtensionMarketView: View {
@@ -453,7 +453,7 @@ private struct PermissionLine: View {
 
 /// The preview to agree to: the package downloaded and checked, what it may do (for an upgrade, what it asks for in
 /// addition first), then Install / Update.
-private struct ExtensionInstallSheet: View {
+struct ExtensionInstallSheet: View {
     var preview: ExtensionPreview
     var name: String
     var confirm: () async -> Bool

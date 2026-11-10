@@ -50,6 +50,10 @@ type principal struct {
 	Extension string
 	Scopes    []string
 	Manager   string
+	// extHash, an extension token's hash: what it relays is kept under it, with Manager (relayID), which that manager
+	// names when it drops the token (extwire.HubTokenRevoked). extAt: when the hub asked the managers whose it is.
+	extHash string
+	extAt   time.Time
 	// extOpens, extScope: an extension's token opens the request's route (the manager said), else the scope it lacks.
 	extOpens bool
 	extScope string
@@ -233,7 +237,7 @@ func (h *Hub) authenticate(ctx context.Context, tok string) (principal, bool) {
 var (
 	answerReads = lazyre.New(`^/api/v1/(machines|sessions|sessions/archived|interactions|inbox|workspace-board|workspaces|sessions/[^/]+/[^/]+/items|` +
 		`extensions/-/(widgets|shortcuts))$`)
-	// The watch draws extensions' widgets on its faces and runs their shortcuts (docs/extensions/extensions.md "System-level places").
+	// The watch draws extensions' widgets on its faces and runs their shortcuts (docs/extensions/extensions.md "System-level placements").
 	answerWrites = lazyre.New(`^/api/v1/(interactions/[^/]+/(resolve|choose)|sessions/[^/]+/[^/]+/(messages|seen|interrupt)|` +
 		`inbox/[^/]+/(done|reply|draft|suggestion)|extensions/[^/]+/-/(widget|shortcut)/[^/]+)$`)
 	answerPuts = lazyre.New(`^/api/v1/devices/[^/]+/widgets$`)

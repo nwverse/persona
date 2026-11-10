@@ -1,7 +1,7 @@
 import Testing
 @testable import PersonaKit
 
-/// The drawer dims a hub title's 「MMDD | 类型 | 」 (docs/assistant/assistant.md「对话标题」); any other title is shown as it is.
+/// The drawer dims a hub title's 「MMDD | 类型 | 」 (docs/assistant/assistant.md「Chat titles」); any other title is shown as it is.
 struct ConversationTitleTests {
     @Test func splitsTheHubsFormat() {
         #expect(ConversationTitle("1101 | 修复 | 搜索框和顶栏重叠") == ConversationTitle(head: "1101 | 修复 | ", topic: "搜索框和顶栏重叠"))

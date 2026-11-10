@@ -10,6 +10,9 @@ import SwiftUI
 /// The Appearance section of Settings: one row per scene with what it is set to now.
 struct AppearanceSection: View {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    private let layoutDisplay = AgentListDisplayChoice()
+    #endif
 
     var body: some View {
         Section {
@@ -35,13 +38,13 @@ struct AppearanceSection: View {
                 }
                 .accessibilityIdentifier("settings-language")
                 #if os(iOS)
-                // Persona's conversation on iPhone and iPad (#1666); the Mac and Vision Pro keep their look.
-                NavigationLink(value: SettingsPage.chatLayout) {
-                    SettingsRow(title: String(localized: "New Conversation Layout"), symbol: Theme.Icon.conversation, tint: Theme.Hue.orange,
-                                value: ChatLayoutSettings.shared.on ? String(localized: "On") : String(localized: "Off"), look: .oneLine)
+                // How the Agents list draws its agents on iPhone and iPad (#2530); the Mac and Vision Pro keep their look.
+                NavigationLink(value: SettingsPage.layout) {
+                    SettingsRow(title: String(localized: "Layout"), symbol: Theme.Icon.listView, tint: Theme.Hue.orange,
+                                value: layoutDisplay.display.title, look: .oneLine)
                 }
-                .settingsListRow(SettingsPage.chatLayout)
-                .accessibilityIdentifier("settings-chat-layout")
+                .settingsListRow(SettingsPage.layout)
+                .accessibilityIdentifier("settings-layout-page")
                 #endif
                 #if os(iOS) || os(visionOS)
                 NavigationLink(value: SettingsPage.colorScheme) {
@@ -76,12 +79,16 @@ struct PersonaSettingsPage: View {
             } footer: {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Text(model.isDemo ? String(localized: "Demo mode only has the default avatar.") :
-                        String(localized: "Choose Mochi or Milk Frog. Milk Frog downloads from the hub when selected. To use its colors, choose Match Avatar under Theme Color."))
+                        String(localized: "Avatars other than Mochi download from the hub when selected. To use an avatar’s colors, choose Match Avatar under Theme Color."))
+                    if !model.isDemo, model.hubFeatures.contains(AvatarUploadsModel.feature) {
+                        // The hub makes avatars from images (#2405): how to make one, and how to delete one made that way.
+                        Text("New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.")
+                    }
                     #if !os(macOS)
                     if let failure = model.appIcon.failure {
                         Text(failure).foregroundStyle(Theme.danger)
                     }
-                    Text("Both avatars use the default Home Screen icon. Older alternate icons reset to the default.")
+                    Text("Every avatar uses the default Home Screen icon. Older alternate icons reset to the default.")
                         // The icon on now, or that the system cannot switch it here (AppIconTests).
                         .accessibilityValue(model.appIcon.available ? model.appIcon.current.rawValue : "unavailable")
                         .accessibilityIdentifier("persona-icon-note")

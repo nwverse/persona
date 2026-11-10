@@ -19,7 +19,7 @@ func TestCodexHierarchySurvivesSessionAPI(t *testing.T) {
 	root := proto.Session{SessionID: "root", Agent: "codex", SourceKind: "codex_app_server", Status: proto.StatusWorking}
 	m.sessions = []proto.Session{root, child}
 	app := &client{out: make(chan []byte, 16), subs: map[[2]string]bool{}, role: roleFull, delta: true, have: map[string]map[string][]byte{}}
-	h.clients[app] = struct{}{}
+	addTestClient(h, app)
 	check := func(got proto.Session) {
 		t.Helper()
 		if got.SessionID != child.SessionID || got.ParentThreadID != child.ParentThreadID || got.ParentSessionID != child.ParentSessionID || got.RootSessionID != child.RootSessionID || !got.IsSubagent || got.RepoRoot != child.RepoRoot {

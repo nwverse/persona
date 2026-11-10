@@ -83,11 +83,25 @@ internal object Types {
         codeSmall = TextStyle(fontFamily = PersonaFonts.mono, fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
     )
 
-    val Glass = scale(
-        display = PersonaFonts.sora, text = FontFamily.Default, numbers = PersonaFonts.sora,
-        largeTitle = TextStyle(fontFamily = PersonaFonts.sora, fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.SemiBold),
-        number = TextStyle(fontFamily = PersonaFonts.sora, fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = TabularFigures),
-        voice = TextStyle(fontFamily = FontFamily.Default, fontSize = 17.sp, lineHeight = 25.sp, fontWeight = FontWeight.Normal),
+    // Native system metrics, not the content-only line-height multipliers in iOS Theme.Level.
+    private fun system(size: androidx.compose.ui.unit.TextUnit, weight: FontWeight = FontWeight.Normal) =
+        TextStyle(fontFamily = FontFamily.Default, fontSize = size, fontWeight = weight)
+
+    val Glass = PersonaType(
+        largeTitle = system(28.sp, FontWeight.Bold),
+        title = system(22.sp, FontWeight.SemiBold),
+        headline = system(Tokens.Type.RowTitle.size, FontWeight.SemiBold),
+        body = system(Tokens.Type.Body.size),
+        bodyStrong = system(Tokens.Type.Body.size, FontWeight.SemiBold),
+        callout = system(Tokens.Type.Preview.size),
+        caption = system(Tokens.Type.Meta.size),
+        micro = system(Tokens.Type.Chip.size).copy(fontFeatureSettings = TabularFigures),
+        label = system(Tokens.Type.Body.size, FontWeight.SemiBold),
+        labelSmall = system(Tokens.Type.Preview.size, FontWeight.Medium),
+        number = system(28.sp, FontWeight.Bold).copy(fontFeatureSettings = TabularFigures),
+        voice = system(Tokens.Type.Body.size),
+        code = system(Tokens.Type.Code.size).copy(fontFamily = FontFamily.Monospace),
+        codeSmall = system(Tokens.Type.CodeSmall.size).copy(fontFamily = FontFamily.Monospace),
     )
 
     val Brief = scale(

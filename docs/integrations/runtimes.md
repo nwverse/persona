@@ -94,13 +94,21 @@ Not in the SDK (used by only one runtime, or the two read different things): eac
 - **seq**: each session has one monotonically increasing sequence number, starting at 1 (0 means "nothing yet"). An item's seq is the number of the record that produced it; one record can yield several items,
   with ids `<seq>#<index>`. DSH's event seq starts at 0, so it maps to seq + 1. **Ids are unique only within a session**: across sessions, and especially across two branches split from the same session,
   the same id is different content. Anything a client caches by id (render results, parse results) must key on the session too (#372).
-- **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Item continuity")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
+- **history**: the identity of the session's content (`docs/protocol/protocol.md` ("Continuity of items")). It changes when content is rewritten (branch, reset), and the App refetches the whole page; it stays the same on pure appends. A batch with a new history doesn't need a larger seq (switching back to a branch with the same count, shorter after a rollback); the SDK pushes it anyway and continues from its `toSeq`.
 - **Item kinds** follow what the App already has: `text` (user / assistant), `thinking`, `tool_use` (`tool_name`, `tool_input`, `tool_use_id`), `tool_result`
   (`tool_use_id`, `is_error`), `image` (`lazy: true` placeholder, data via `image`), `notice` (system: interrupt, error, compaction).
 - **Tool names match Claude's**: the App draws commands, diffs and files for `Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, `TodoWrite`,
   and parameter names are Claude's too (`command`, `file_path`, `old_string` / `new_string`, `pattern`). Unrecognized names are shown as is.
 - **Length**: in a page, at most 24 KB of text per item and 4 KB of tool output, cut with the SDK's `light(item)` (with the "truncated" note the App recognizes and `full_size`); the full text goes via `item`.
-  Long strings in tool input use `clipInput`.
+  Tool input objects use `clipInput`, which clips long strings at any depth, including arrays such as MultiEdit's `edits[]`,
+  while preserving keys and structure. For inputs over 24 KB it follows the hub's `clipJSON`: first keep at most 12 KB per string, then, if the
+  input still exceeds the 24 KB budget, share the remaining budget among strings longer than 256 bytes, accounting for
+  JSON escapes and the truncation note. Cuts respect UTF-8 boundaries and the second pass only cuts when the string becomes
+  strictly shorter as JSON. A plain ASCII tail of at most the note's encoded size stays whole (37 bytes for a three-digit
+  original length); a longer or more heavily escaped tail may be cut. Each implementation measures its own wire encoding:
+  `JSON.stringify` leaves `<>&` and U+2028/U+2029 raw, whereas Go's `json.Marshal` escapes them, so their shares can differ.
+  Top-level arrays and other non-object inputs stay unchanged. This is still **not a total input size limit**: many short
+  values, large keys, or enough strings at the 256-byte floor can exceed 24 KB. Bounding those inputs remains open in #2907.
 - **Only what people need to see**: context injected for the model (time, skill list, system instructions) and internal scheduling events don't become items.
 
 ## Interactions
@@ -170,7 +178,7 @@ with the same fields as Claude sessions (`Session.subagents` / `background` in `
 - At most 50 sub-Agents and 50 background tasks per row, text cut to 500 characters; invalid ids are dropped. A daemon's sub-Agent ids are prefixed the same way: `<daemon>.<session>@<id>`.
 - Controls such as messaging or renaming a sub-Agent: if the runtime doesn't support them, it returns `unsupported` (DSH doesn't: sub-Agents are managed by the parent session).
 
-DSH's approach is in `docs/integrations/dsh.md` ("Sub-Agents and background tasks").
+DSH's approach is in `docs/integrations/dsh.md` ("Subagents and background tasks").
 
 ## Auto-update (optional)
 
@@ -198,7 +206,7 @@ To avoid going to the computer and clicking every time, the plugin is split into
   `<store>/current/…` (`current` is a symlink to `<hash>`, replaced by rename via `installCurrent`). On an offer it fetches the package, installs it as the new `current`,
   and when idle asks the host to reload (pi uses a command the extension registers itself); the new version's host connects to node with the same process identity (`createRuntime`'s `instance`) and replaces the old one.
   A long-running standalone process (pi's companion process) exits after installing and is brought back up by launchd / systemd. `selfPackage(import.meta.url, name)` tells a module which package it's running from
-  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Auto-update").
+  and whether it's inside the store (if not, it doesn't update). Details in `docs/integrations/pi.md` ("Automatic updates").
 - An implementation module that can be swapped exports `api` (`LOADER_API`, currently 1) and `start(host)`, returning `{stop, busy, fetchPackage}` (the methods of the same name on `createRuntime`).
   `host` holds the loader's `context` (for DSH, `{ctx, config}`) plus the `package` and `onUpdate` to pass to `createRuntime`. To add such a runtime: register its files in both lists,
   and change the entry point the host loads to `createLoader`.
@@ -231,7 +239,7 @@ Lark tokens and gates. node drives it with calls the protocol already has:
 
 | node sends | With (all optional fields; runtimes that don't declare `caps.assistant` never receive them) |
 | --- | --- |
-| `session.start {cwd, assistant: true}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt` |
+| `session.start {cwd, assistant: true}` | `cwd` is the assistant directory (`~/.persona/assistant`, containing `AGENTS.md` / `CLAUDE.md` and `.agents/skills/`); no `prompt`. The runtime reports this `cwd` for the chat's whole life (`runtime.sessions`, its cards), not where a tool's `cd` left the shell: the hub places assistant and health chats by that directory exactly (#2368) |
 | `session.send {session_id, text, images, client_msg_id, assistant: true, context, mode, memory_dir}` | `context`: a `<persona-context>` block given to the model before the user's text (the live snapshot; the first message of a new chat also has memory and Lark notes), not shown in the chat; `mode`: Persona's permission mode (`default` / `acceptEdits` / `auto` / `plan` / `bypassPermissions`); `memory_dir`: the memory directory |
 | `session.interrupt` | Stop on the phone; closing the assistant chat = stopping the running turn, the chat stays in the runtime |
 

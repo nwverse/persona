@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Permissions are what a plugin asks for (docs/plans/plan-extensions.md "Permissions"). The vocabulary is closed: a manifest naming
+// Permissions are what a plugin asks for (docs/plans/plan-extensions.md "Key decisions"). The vocabulary is closed: a manifest naming
 // a permission this hub does not know does not install, so nobody is shown one the hub cannot explain.
 type Permissions struct {
 	// Network are the hosts it reaches ("api.example.com", "*.example.com"). Shown and recorded; the hub does not
@@ -86,7 +86,7 @@ func (p Permissions) normalized() Permissions {
 func (p Permissions) FullHub() bool { return p.HubAPI && len(p.Hub) == 0 }
 
 // Covers says whether p grants everything q asks (an upgrade asking for no more needs no new consent). The full token
-// covers every scope; scopes never cover the full token.
+// covers every scope but agents.permission_mode, which only a grant naming it covers; scopes never cover the full token.
 func (p Permissions) Covers(q Permissions) bool {
 	if q.FullHub() && !p.FullHub() || q.LauncherKeys && !p.LauncherKeys || q.GhLogin && !p.GhLogin ||
 		q.UsageGateways && !p.UsageGateways || q.AgentRuntimes && !p.AgentRuntimes || q.ErrorReports && !p.ErrorReports ||
@@ -94,7 +94,7 @@ func (p Permissions) Covers(q Permissions) bool {
 		return false
 	}
 	for _, s := range q.Hub {
-		if !p.FullHub() && !slices.Contains(p.Hub, s) {
+		if !(p.FullHub() && InEveryScope(s)) && !slices.Contains(p.Hub, s) {
 			return false
 		}
 	}
@@ -418,10 +418,10 @@ func AddedIn(l i18n.Lang, old, m *Manifest) []PermissionLine {
 	out = append(out, configuredLines(l, m, configured, nil)...)
 	if m.Permissions.FullHub() && !old.Permissions.FullHub() {
 		out = append(out, permissionLine(l, "hub_api"))
-	} else if !m.Permissions.FullHub() && !old.Permissions.FullHub() {
+	} else if !m.Permissions.FullHub() {
 		var more []string
 		for _, s := range m.Permissions.normalized().Hub {
-			if !slices.Contains(old.Permissions.Hub, s) {
+			if !(old.Permissions.FullHub() && InEveryScope(s)) && !slices.Contains(old.Permissions.Hub, s) {
 				more = append(more, s)
 			}
 		}

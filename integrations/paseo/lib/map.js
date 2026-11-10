@@ -152,7 +152,7 @@ export function rowStatus(agent) {
 // ---- spaces ----
 
 /**
- * The Paseo project of a placement (docs/integrations/paseo.md "Which sessions show"): a repository's checkout and all its worktrees, as
+ * The Paseo project of a placement (docs/integrations/paseo.md "Which sessions appear"): a repository's checkout and all its worktrees, as
  * in Paseo's sidebar. The placement's projectKey is Paseo's project record id (its buildProjectPlacementForWorkspace),
  * not the project's own key. Undefined without a placement.
  */
@@ -234,7 +234,7 @@ export function projectSpaces(placed, canon = (p) => p) {
 }
 
 /**
- * The runtime.sessions row of an agent (docs/integrations/runtimes.md "List"), undefined for one not listed.
+ * The runtime.sessions row of an agent (docs/integrations/runtimes.md "What to implement"), undefined for one not listed.
  * @param {object} agent - an AgentSnapshotPayload
  * @param {{ project?: object, roots?: Record<string, string>, labels?: Record<string, string>, lastText?: string,
  *   spaceId?: string, spaceName?: string }} [o]

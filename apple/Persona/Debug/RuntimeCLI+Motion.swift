@@ -2,7 +2,7 @@
 import SwiftUI
 import UIKit
 
-/// Holding the screen still for a screenshot (docs/operations/runtime-cli.md「一直在动的画面」): `freeze`.
+/// Holding the screen still for a screenshot (docs/operations/runtime-cli.md「Screens that never stop moving」): `freeze`.
 extension RuntimeCLI {
     static let motionCommands: [String: Command] = [
         "freeze": { a in freeze(a) },

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// The in-app tunnels the app runs, one per paired hub that has one (docs/operations/network.md「经 App 内隧道连 hub」): the
+/// The in-app tunnels the app runs, one per paired hub that has one (docs/operations/network.md「Connecting to hub through an in-app tunnel」): the
 /// core's tunnel up, and a loopback forward to the hub's address inside the tunnel's network. A tunnel that is up
 /// routes its hub's requests through it (HubTransport), as SSHTunnels does; closing the last one takes the core's
 /// tunnel down again, so it is up only while the app needs it.
@@ -199,10 +199,10 @@ final class InAppTunnels {
 }
 
 extension AppModel {
-    // MARK: In-app tunnel (docs/operations/network.md「经 App 内隧道连 hub」)
+    // MARK: In-app tunnel (docs/operations/network.md「Connecting to hub through an in-app tunnel」)
 
     /// After a group's hello: the paired hub the socket is on takes its in-app tunnel from the hub's extension that
-    /// contributes one (docs/extensions/extensions.md「App 内隧道」), kept for the times its own addresses do not answer (when the
+    /// contributes one (docs/extensions/extensions.md「In-App tunnels」), kept for the times its own addresses do not answer (when the
     /// tunnel is needed, the hub cannot be asked). No such extension switched on: the tunnel goes. A request that
     /// fails, or a device that may not read the extension's settings, leaves what was there.
     func refreshInAppTunnel(_ group: String) async {

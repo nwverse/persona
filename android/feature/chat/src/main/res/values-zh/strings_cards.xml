@@ -2,4 +2,11 @@
 <!-- An assistant's cards in a conversation (#2022). -->
 <resources>
     <string name="chat_from_card">来自卡片</string>
+    <string name="chat_assistant_background_records">后台记录</string>
+    <plurals name="chat_assistant_checked">
+        <item quantity="other">查了 %1$d 处</item>
+    </plurals>
+    <plurals name="chat_assistant_dispatched">
+        <item quantity="other">派出 %1$d 件 · 在「进度」里看</item>
+    </plurals>
 </resources>

@@ -5,6 +5,7 @@
     <string name="settings_ext_dep_disabled">先に有効化が必要</string>
     <string name="settings_ext_dep_old">バージョン不足（現在%1$s）</string>
     <string name="settings_ext_dep_unknown">状態不明。もう一度プレビューしてください</string>
+    <string name="settings_ext_dep_unknown_installed">状態不明。詳細を更新してください</string>
     <string name="settings_ext_sandbox_active">サンドボックス有効</string>
     <string name="settings_ext_sandbox_inactive">サンドボックスを要求済みですが、現在は無効です</string>
     <string name="settings_ext_sandbox_off">サンドボックス未使用</string>
@@ -287,6 +288,7 @@
     <string name="settings_ext_auto_upgrade_off_failed">自動アップグレードをオフにできませんでした：%1$s</string>
     <string name="settings_ext_upgrade_waiting_idle">拡張機能がアイドルのときに自動で更新します</string>
     <string name="settings_ext_upgrade_available">後で自動で更新します</string>
+    <string name="settings_ext_upgrade_rename">拡張機能の ID が %1$s から %2$s に変わります。確認が必要です。設定とデータはそのまま保持されます。</string>
     <string name="settings_ext_upgrade_off">自動更新はオフです</string>
     <string name="settings_ext_upgrade_skipped">前回の更新後に起動しなかったため%1$sに戻しました。このバージョンには自動更新しません</string>
     <string name="settings_ext_upgrade_skipped_user">このバージョンから%1$sにロールバックしたため、このバージョンには自動更新しません</string>

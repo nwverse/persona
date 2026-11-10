@@ -39,8 +39,11 @@ export interface HubExtension {
   /** An extension from a market (a hub with plugin_auto_upgrade): its own auto-upgrade switch, its newer version and what
    *  happened last with an upgrade (docs/extensions/extensions.md "Automatic upgrades"). */
   auto_upgrade?: boolean;
-  /** Why its own switch does not apply now: "disabled" while the extension is off (the switch is kept for when it is on). */
+  /** Why its own switch does not apply now (the switch is kept either way): "market_removed" once its market is no longer
+   *  registered, "disabled" while the extension is off. */
   auto_upgrade_paused?: string;
+  /** The market it upgrades from, kept after that market is removed (a hub from before it: none, though `auto_upgrade` is set). */
+  market?: string;
   upgrade?: ExtensionUpgrade;
   upgrade_note?: ExtensionUpgradeNote;
   /** An extension with a program on computers: how that program is on each machine it is switched on for. */
@@ -99,7 +102,7 @@ export function channelOf(p: Pick<HubExtension, "contributes">): string | null {
   return p.contributes?.channel?.find((id) => id.trim() !== "") ?? null;
 }
 
-/** An extension's program on one machine (docs/extensions/extensions.md "Programs that run on computers"). */
+/** An extension's program on one machine (docs/extensions/extensions.md "Programs running on computers"). */
 export interface ExtensionNodeState {
   machine_id: string;
   version?: string;
@@ -121,6 +124,8 @@ export interface ExtensionUpgrade {
   detail?: string;
   /** "user" when a skipped version is one the user rolled back from (absent: it didn't start). */
   skipped_by?: string;
+  /** The new version's ID when it changes the extension's ID (`id` stays the installed one): its market lists it under this. */
+  rename_to?: string;
 }
 
 /** What happened last with an extension's upgrade. */
@@ -148,7 +153,10 @@ export interface ExtensionField {
   default?: Json;
   required?: boolean;
   enum?: ExtensionChoice[];
+  /** uri | email | hostname | machine (one of the hub's machines, by id) | launcher (one of its launchers, by name). */
   format?: string;
+  /** format machine: only machines of these systems (x-os). */
+  os?: string[];
   pattern?: string;
   min_length?: number;
   max_length?: number;
@@ -211,7 +219,7 @@ const base = (id: string) => `${extRoot()}/${enc(id)}/-`;
 type ListAnswer = { extensions?: HubExtension[]; plugins?: HubExtension[]; can_install?: boolean; markets?: boolean };
 
 export const listExtensions = () => api<ListAnswer>(extRoot()).then((r) => listOf(r));
-/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension markets"). */
+/** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension marketplace"). */
 export const listExtensionsInfo = () =>
   api<ListAnswer>(extRoot()).then((r) => ({
     extensions: listOf(r),
@@ -331,7 +339,8 @@ export function pointText(name: string): string {
 /** The "Upgrade" group's line for a newer version: what happens to it (the App's ExtensionText.upgradeDetail). */
 export function upgradeDetail(u: ExtensionUpgrade): string {
   switch (u.state) {
-    case "needs_permission": return morePermissions(u.added_permissions ?? []);
+    // A rename is confirmed for the ID change, not for permissions (#2511).
+    case "needs_permission": return u.rename_to ? u.detail || t("lib-extension-market.rename_detail", { from: u.id, to: u.rename_to }) : morePermissions(u.added_permissions ?? []);
     case "waiting_idle": return t("lib-extensions.upgrade_waiting_idle");
     case "available": return t("lib-extensions.upgrade_available");
     case "off": return t("lib-extensions.upgrade_off");
@@ -393,6 +402,41 @@ export function placeholder(f: ExtensionField): string {
     if (text) return t("lib-extensions.default_value", { value: text });
   }
   return t("lib-extensions.not_set");
+}
+
+/** A launcher as the form's picker reads it (GET /launchers' entry). */
+export interface PickerLauncher {
+  name: string;
+  display_name?: string;
+  hidden?: boolean;
+}
+
+/** One choice of a machine or launcher picker; `missing`: the value names none of them (it still shows, to change it). */
+export interface PickerChoice {
+  value: string;
+  label: string;
+  missing?: boolean;
+}
+
+/** The picker a string field draws instead of a text box: the hub's machines (format machine, of the systems x-os names)
+ *  or launchers (format launcher, the hidden ones left out), by name; a current value that names none of them comes
+ *  first, so it can be seen and changed. null: the field is not one of these, or its list is not in yet. */
+export function pickerChoices(f: ExtensionField, current: Json | undefined, machines: Pick<Machine, "id" | "name" | "os">[], launchers: PickerLauncher[] | null): PickerChoice[] | null {
+  if (f.type !== "string" || f.enum?.length) return null;
+  let out: PickerChoice[];
+  if (f.format === "machine") {
+    const os = f.os ?? [];
+    out = machines.filter((m) => !os.length || os.includes(m.os ?? "")).map((m) => ({ value: m.id, label: m.name || m.id }));
+  } else if (f.format === "launcher") {
+    if (!launchers) return null;
+    out = launchers.filter((l) => !l.hidden).map((l) => ({ value: l.name, label: l.display_name?.trim() && l.display_name.trim() !== l.name ? `${l.display_name.trim()} (${l.name})` : l.name }));
+  } else {
+    return null;
+  }
+  if (typeof current === "string" && current && !out.some((c) => c.value === current)) {
+    out.unshift({ value: current, label: t(f.format === "machine" ? "lib-extensions.machine_missing" : "lib-extensions.launcher_missing", { name: current }), missing: true });
+  }
+  return out;
 }
 
 export function secretState(s: ExtensionSecret): string {
@@ -476,6 +520,39 @@ export function numberProblems(typed: Record<string, { text: string; integer: bo
 
 /** Whether the draft differs from what the hub has (both read as sent: compacted). */
 export const isDirty = (draft: JsonObject, config: JsonObject | undefined) => !same(compact(draft), compact(config ?? {}));
+
+const isGroup = (v: Json | undefined): v is JsonObject => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** What a draft changes of the configuration it was made on (both read as sent): each changed field's path and its value
+ *  in the draft (undefined: cleared). Groups are gone into, so a change is one field's, not its whole group's. */
+function draftEdits(draft: JsonObject, base: JsonObject): { path: string[]; value: Json | undefined }[] {
+  const out: { path: string[]; value: Json | undefined }[] = [];
+  const walk = (a: JsonObject, b: JsonObject, at: string[]) => {
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const [x, y] = [a[k], b[k]];
+      if ((isGroup(x) || x === undefined) && (isGroup(y) || y === undefined)) walk(x ?? {}, y ?? {}, [...at, k]);
+      else if (!same(x, y)) out.push({ path: [...at, k], value: x });
+    }
+  };
+  walk(compact(draft), compact(base), []);
+  return out;
+}
+
+/** Unsaved edits made on `base` (number fields as typed, by dotted path), put on what the hub has now (`fresh`): the fields
+ *  they change keep the change, every other field takes the fresh value, so a change made elsewhere meanwhile shows and
+ *  is not saved back over. A number still being typed stays where it does not read as one yet, or is its field's change. */
+export function rebaseDraft<T extends { text: string; integer: boolean }>(
+  kept: { base: JsonObject; draft: JsonObject; typed: Record<string, T> },
+  fresh: JsonObject,
+): { draft: JsonObject; typed: Record<string, T> } {
+  const edits = draftEdits(kept.draft, kept.base);
+  const edited = new Set(edits.map((e) => e.path.join(".")));
+  const problems = numberProblems(kept.typed);
+  return {
+    draft: edits.reduce((out, e) => setAt(out, e.path, e.value), fresh),
+    typed: Object.fromEntries(Object.entries(kept.typed).filter(([k]) => k in problems || edited.has(k))),
+  };
+}
 
 /** The items of a list field: the draft's, else the default. */
 export function listItems(draft: JsonObject, path: string[], f: ExtensionField): string[] {

@@ -3,7 +3,7 @@ import Foundation
 
 // Siri / Shortcuts entry points. Every intent talks to the hubs directly (HubStore + APIClient), so the app does not
 // have to be in the foreground; only OpenSessionIntent runs inside the app and moves its navigation. With several
-// groups of hubs (docs/protocol/multi-hub.md「Siri」) they see every group: machines and sessions carry their group, the status
+// groups of hubs (docs/protocol/multi-hub.md「Watch, Siri, Mac, and demo mode」) they see every group: machines and sessions carry their group, the status
 // adds the groups up, and whatever acts goes to the group of what it acts on.
 
 /// Everything the intents say out loud. Pure functions, so the tests can pin the wording without a hub.
@@ -43,6 +43,9 @@ nonisolated enum IntentText {
             return String(localized: "A permission request is waiting for you")
         case .screen:
             return String(localized: "The terminal is waiting for your input")
+        case .elicitation:
+            if let m = ix.askLine(includeToolName: false) { return m }
+            return String(localized: "An MCP request is waiting for you")
         }
     }
 
@@ -58,6 +61,7 @@ nonisolated enum IntentText {
         switch kind {
         case .question: String(localized: "This is a question. Open Persona to answer it.")
         case .screen: String(localized: "The terminal is waiting for your input. Open Persona.")
+        case .elicitation: String(localized: "This MCP request needs the app. Open Persona to answer it.")
         case .plan, .permission: String(localized: "Open Persona to handle this.")
         }
     }

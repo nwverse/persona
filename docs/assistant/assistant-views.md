@@ -60,7 +60,7 @@ Extension Action.id / push.ui / push.state and existing action results remain un
 
 ### Persistent submission
 
-API: `POST /api/v1/assistant/conversations/{conversation}/views/{key}/actions`, with generated `ViewActionInput` `{action, page?, values?, client_msg_id, confirmed?, expected_version?}`. **The server retrieves the original reply text and submit definition from the saved View; clients cannot override them**. Fields and error responses follow `docs/protocol/protocol.md` ("Assistant").
+API: `POST /api/v1/assistant/conversations/{conversation}/views/{key}/actions`, with generated `ViewActionInput` `{action, page?, values?, client_msg_id, confirmed?, expected_version?}`. **The server retrieves the original reply text and submit definition from the saved View; clients cannot override them**. Fields and error responses follow `docs/protocol/protocol.md` ("REST (App → hub)").
 
 - `expected_version` is the whole-card version the user saw and confirmed (body cards are always 1). Required for actions with confirm; the hub compares it inside a transaction locking the card. On mismatch, return 409 `view_changed` and the current card; the client preserves drafts, refreshes, and asks the user to reconfirm, without automatically retrying against the new version. Thus, if the hub updates a card while the confirmation dialog is open and the update event has not reached the phone, the new definition is not treated as user-confirmed.
 
@@ -85,7 +85,7 @@ Descriptions and parameter documentation live in `server/internal/prompts/mcp/as
 
 Postgres `assistant_views` stores content, ownership, version, and timestamps; creation and the feed view entry happen in one transaction. Updates add no feed entries and redraw in the original position. Submitted results survive updates, and the assistant cannot reopen an answered card.
 
-Broadcast `assistant_view` with payload `{conversation, view: {id, version, view, updated_at}}`, using existing event_seq replay. The feed returns a `views` snapshot for recovery after disconnect or restart; clients discard old updates by version. Preserve editing and navigation state for component keys that still exist, but submitted values are server-authoritative.
+Broadcast `assistant_view` with payload `{conversation, view: {id, version, view, updated_at}}`, using existing event_seq replay. The feed returns a `views` snapshot for recovery after disconnect or restart; clients discard old updates by version. The hub builds the snapshot from a per-process cache of each card's encoded JSON (`server/internal/assistant/views.go`): every request first reads the cards' version and row version (`xmin`) from Postgres and reads again only the cards that changed, so a card written by another hub process is never served stale. The cache holds at most 4 MiB of encoded cards and drops the least recently read conversations first. Preserve editing and navigation state for component keys that still exist, but submitted values are server-authoritative.
 
 At most 64 KB per card, 200 cards per chat. Persist content first; push events are limited to once per second per card. Coalesce only notifications, never merely queue unsaved content in memory. Creation and updates do not send separate notifications; the assistant uses notify_user when the user needs reminding.
 

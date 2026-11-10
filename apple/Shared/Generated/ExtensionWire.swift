@@ -1110,7 +1110,7 @@ nonisolated struct ExtensionLookAvatar: Codable, Hashable, Sendable {
     }
 }
 
-/// An appearance's colors, #RRGGBB (docs/apple/persona.md "Palettes", the apps' PersonaPalette).
+/// An appearance's colors, #RRGGBB (docs/apple/persona.md "Color scheme", the apps' PersonaPalette).
 nonisolated struct ExtensionLookPalette: Codable, Hashable, Sendable {
     var primary: String?
     var secondary: String?
@@ -1244,8 +1244,8 @@ nonisolated struct ExtensionLookDot: Codable, Hashable, Sendable {
     }
 }
 
-/// A look (docs/extensions/extensions.md "Looks"): Persona's name, face, colors and dot, served as a persona package.
-/// app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
+/// A look (docs/extensions/extensions.md "Avatars"): Persona's name, face, colors and dot, served as a persona
+/// package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.
 nonisolated struct ExtensionLookItem: Codable, Hashable, Sendable {
     var id: String
     var name: String

@@ -23,15 +23,19 @@ type langWriter struct {
 
 func (w langWriter) Lang() i18n.Lang { return w.lang }
 
-func TestReadonlyStartRefusalLocalization(t *testing.T) {
-	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
-		want := i18n.T(lang, "rpc-errors.readonly_unsupported")
-		if got := Sentence(lang, "readonly_unsupported", nil); got != want || got == "" {
-			t.Fatalf("%s task refusal = %q, want %q", lang, got, want)
-		}
-		body := LocalizedBody(http.StatusConflict, "readonly_unsupported", errors.New("node diagnostic"), lang)
-		if body["error"] != want {
-			t.Fatalf("%s HTTP refusal = %v, want %q", lang, body, want)
+// A start the node refused on its request, with nothing to name: a launcher that cannot be read-only, a directory whose
+// name cannot be typed into a terminal. The hub words both, for a session's start_error and an HTTP answer.
+func TestPlainStartRefusalLocalization(t *testing.T) {
+	for _, code := range []string{"readonly_unsupported", "directory_untypable"} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			want := i18n.T(lang, "rpc-errors."+code)
+			if got := Sentence(lang, code, nil); got != want || got == "" || got == "rpc-errors."+code {
+				t.Fatalf("%s %s task refusal = %q, want %q", lang, code, got, want)
+			}
+			body := LocalizedBody(http.StatusConflict, code, errors.New("node diagnostic"), lang)
+			if body["error"] != want {
+				t.Fatalf("%s %s HTTP refusal = %v, want %q", lang, code, body, want)
+			}
 		}
 	}
 }
@@ -245,6 +249,10 @@ func TestRPCFailureLocalePreservesOutcomeAndDiagnostics(t *testing.T) {
 		// a mode change the node cannot make (#1843): change it on the computer, or resume the session first
 		{"modes outside", &rpc.Error{Code: proto.CodeModesOnComputer, Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.modes_on_computer"},
 		{"modes not running", &rpc.Error{Code: proto.CodeModesNotRunning, Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.modes_not_running"},
+		// queued messages sent now: not a Claude, or a send-now hint the node does not know (#2467)
+		{"send now unsupported", &rpc.Error{Code: "send_now_unsupported", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unsupported"},
+		{"send now unrecognized", &rpc.Error{Code: "send_now_unrecognized", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.send_now_unrecognized"},
+		{"untypable directory", &rpc.Error{Code: "directory_untypable", Message: "node's own words", Data: json.RawMessage(`{"delivered":"none"}`)}, "rpc-errors.directory_untypable"},
 	}
 	for _, tc := range cases {
 		legacy := httptest.NewRecorder()
@@ -327,6 +335,24 @@ func TestDescribeKeepsTheSummaryAndTheCause(t *testing.T) {
 	} {
 		if got := Describe([]byte(c.body)); got != c.want {
 			t.Errorf("Describe(%s) = %q, want %q", c.body, got, c.want)
+		}
+	}
+}
+
+// A start's new tab that stopped on its shell (#2570): the hub words it with the machine (or "this computer") and
+// the shell's line, in every language, as a task's start_error and an HTTP refusal.
+func TestStartTabRefusalsAreWorded(t *testing.T) {
+	for _, code := range []string{proto.CodeShellWaiting, proto.CodeStartLineRejected} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			on := Sentence(lang, code, map[string]any{"machine_name": "Studio", "line": "Update now? [Y/n]"})
+			here := Sentence(lang, code, nil)
+			if !strings.Contains(on, "Studio") || !strings.Contains(on, "Update now? [Y/n]") || here == "" || strings.Contains(here, "{") {
+				t.Errorf("%s %s: %q / %q", code, lang, on, here)
+			}
+			body := LocalizedBody(http.StatusConflict, code, errors.New("node text"), lang)
+			if body["error"] != i18n.T(lang, "rpc-errors."+code) || body["error"] == "" {
+				t.Errorf("%s %s HTTP: %v", code, lang, body)
+			}
 		}
 	}
 }

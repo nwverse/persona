@@ -43,12 +43,21 @@ type UsageAccount struct {
 	// (docs/server/usage-windows.md "Account pool gateways"). An account both saw lists both.
 	Local   bool     `json:"local,omitempty"`
 	Sources []string `json:"sources,omitempty"`
-	// Problem: "error" when the gateway could not read the account's numbers just now (it kept the stored ones),
-	// "unreachable" when the gateway itself could not be asked and this is its last answer. Never carries the text.
+	// Machines are the names of the computers whose agents' files reported it (#1907), set with Local; clients name
+	// those instead of a word like "this computer", which reads as the device in hand.
+	Machines []string `json:"machines,omitempty"`
+	// Problem: "error" when the gateway could not read the account's numbers just now (it kept the stored ones). When
+	// the gateway's own last read failed and this is its last answer, why: "rejected" (it turned the key away, 401 /
+	// 403), "unreachable" (it could not be asked: no connection, a timeout) or "failed" (it answered, but not with
+	// usage: 404, 5xx, a bad answer). Never carries the text; clients show nothing for a value they don't know.
 	Problem string `json:"problem,omitempty"`
 	// Ref is the account's identity at its gateway ("<source id>:<account id>"), when the source has one. Hub-internal:
 	// it is never sent out. Two samples with refs from one source but different accounts are never merged.
 	Ref string `json:"-"`
+	// Origin is where this sample was read (#1904): "<machine id>/<n>" for the n-th account of a machine's answer, the
+	// gateway's Ref, or "<source id>#<n>" for a gateway account without one. Hub-internal, never sent out: it only tells
+	// apart, in a stable order, accounts that nothing else does.
+	Origin string `json:"-"`
 }
 
 // UsageSnapshot is what a node answers to usage.windows.
