@@ -13,6 +13,7 @@ import { hubTranslation, useTranslatePrefs } from "../../lib/translate";
 import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick } from "../../lib/router";
 import { useInboxSources } from "../../lib/inbox-sources";
+import { subscriptionsHref, useSubscriptionsShown } from "../../lib/subscriptions";
 import { type Manager } from "../../lib/managers";
 import { scoped, useScope, useScoped } from "../../lib/current-assistant";
 import { useStore } from "../../lib/store";
@@ -113,6 +114,7 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
   const more = useMenu();
   const [mutesOpen, setMutesOpen] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const subscriptionsShown = useSubscriptionsShown();
   const [foldersOpen, setFoldersOpen] = useState(false);
   // Clean up all over many items asks first; the items are the ones shown when it was asked.
   const [confirm, setConfirm] = useState<{ items: InboxItem[]; scope: string } | null>(null);
@@ -340,6 +342,8 @@ export function InboxList({ selected, picked = null, onPicked }: { selected?: { 
               { key: "muted", label: t("inbox-inboxlist.muted_list"), icon: "bellOff", divider: true, onSelect: () => setMutesOpen(true) },
               { key: "rules", label: t("inbox-inboxlist.rules_list"), icon: "target", onSelect: () => setRulesOpen(true) },
               { key: "folders", label: t("inbox-folders.settings_menu"), icon: "folder", onSelect: () => setFoldersOpen(true) },
+              // source subscriptions (#2041): every subscription, with the Inbox's other settings
+              ...(subscriptionsShown ? [{ key: "subscriptions", label: t("inbox-inboxlist.subscriptions"), icon: "loop" as const, onSelect: () => navigate(subscriptionsHref()) }] : []),
             ]} />
         )}
         {mutesOpen && <MutesDialog onClose={() => setMutesOpen(false)} />}
