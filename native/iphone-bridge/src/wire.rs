@@ -26,6 +26,7 @@ pub const OPS: &[&str] = &[
     "launch_app",
     "terminate_app",
     "list_apps",
+    "mount_ddi",
 ];
 
 /// Where the phone is and how to prove who we are to it.
@@ -118,7 +119,11 @@ pub fn parse_request(line: &str, require_v: bool, require_id: bool) -> Result<Re
         id,
         op,
         device: raw.device,
-        timeout_ms: clamp_timeout(raw.timeout_ms),
+        timeout_ms: if op == "mount_ddi" {
+            raw.timeout_ms.unwrap_or(MOUNT_TIMEOUT_MS).clamp(MIN_TIMEOUT_MS, MAX_MOUNT_TIMEOUT_MS)
+        } else {
+            clamp_timeout(raw.timeout_ms)
+        },
         args,
     })
 }
@@ -126,6 +131,10 @@ pub fn parse_request(line: &str, require_v: bool, require_id: bool) -> Result<Re
 fn id_string(v: &Value) -> Option<String> {
     v.as_str().map(str::to_owned)
 }
+
+/// `mount_ddi` uploads about 17 MB through the tunnel and asks Apple's signing server: a longer default.
+pub const MOUNT_TIMEOUT_MS: u64 = 120_000;
+pub const MAX_MOUNT_TIMEOUT_MS: u64 = 300_000;
 
 pub fn clamp_timeout(ms: Option<u64>) -> u64 {
     ms.unwrap_or(DEFAULT_TIMEOUT_MS).clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
@@ -203,6 +212,10 @@ mod tests {
         assert_eq!(clamp_timeout(Some(5)), MIN_TIMEOUT_MS);
         assert_eq!(clamp_timeout(Some(10_000_000)), MAX_TIMEOUT_MS);
         assert_eq!(clamp_timeout(Some(4_000)), 4_000);
+        let r = parse_request(r#"{"v":1,"op":"mount_ddi"}"#, true, false).unwrap();
+        assert_eq!(r.timeout_ms, MOUNT_TIMEOUT_MS);
+        let r = parse_request(r#"{"v":1,"op":"mount_ddi","timeout_ms":250000}"#, true, false).unwrap();
+        assert_eq!(r.timeout_ms, 250_000);
     }
 
     #[test]

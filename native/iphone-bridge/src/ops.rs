@@ -86,6 +86,12 @@ pub enum Action {
     ListApps {
         include_system: bool,
     },
+    /// Mount the personalized developer disk image from `ddi_dir` (else the default places); `force` mounts
+    /// even when one is mounted already.
+    MountDdi {
+        ddi_dir: Option<String>,
+        force: bool,
+    },
 }
 
 impl Action {
@@ -222,6 +228,10 @@ pub fn parse(op: &str, args: &Map<String, Value>) -> Result<Action, BridgeError>
                 ));
             }
         }),
+        "mount_ddi" => Action::MountDdi {
+            ddi_dir: a.str_opt("ddi_dir")?.filter(|d| !d.is_empty()).map(str::to_owned),
+            force: a.bool_opt("force")?.unwrap_or(false),
+        },
         "list_apps" => Action::ListApps {
             include_system: a.bool_opt("include_system")?.unwrap_or(true),
         },
@@ -497,6 +507,21 @@ mod tests {
             parse("list_apps", &Map::new()).unwrap(),
             Action::ListApps { include_system: true }
         );
+        assert_eq!(
+            parse("mount_ddi", &Map::new()).unwrap(),
+            Action::MountDdi {
+                ddi_dir: None,
+                force: false
+            }
+        );
+        assert_eq!(
+            parse("mount_ddi", &args(json!({"ddi_dir": "/d", "force": true}))).unwrap(),
+            Action::MountDdi {
+                ddi_dir: Some("/d".into()),
+                force: true
+            }
+        );
+        assert!(parse("mount_ddi", &args(json!({"force": "yes"}))).is_err());
     }
 
     #[test]

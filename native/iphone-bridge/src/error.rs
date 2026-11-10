@@ -21,6 +21,10 @@ pub enum Code {
     Timeout,
     TrustPending,
     NotFound,
+    DdiMissing,
+    DdiUnsupportedDevice,
+    TssFailed,
+    MountFailed,
     Internal,
 }
 
@@ -43,6 +47,10 @@ impl Code {
             Code::Timeout => "timeout",
             Code::TrustPending => "trust_pending",
             Code::NotFound => "not_found",
+            Code::DdiMissing => "ddi_missing",
+            Code::DdiUnsupportedDevice => "ddi_unsupported_device",
+            Code::TssFailed => "tss_failed",
+            Code::MountFailed => "mount_failed",
             Code::Internal => "internal",
         }
     }
