@@ -18126,6 +18126,8 @@ MOCK_HELP.append("MOCK_RELAY_ACCOUNTS=<fixture.json>  （配合 MOCK_EXTENSIONS=
 # confirm it / remove it. MOCK_ADD_COMPUTER=seed also lists one pending computer that never connected and makes Mac Studio
 # a link computer that is offline (error_code link_offline). MOCK_ADD_COMPUTER_ERROR=<code> refuses every add with it
 # (tls_required, mesh_member, too_many_pending); MOCK_ADD_COMPUTER_NO_SITE=1: the reply has no install line (a local build).
+# {"add": {…, "manager": id}} adds it to that manager (404 no_manager, 409 installing) and the reply says `manager`;
+# MOCK_ADD_COMPUTER_NO_MANAGER=1 is a hub from before add.manager (the field ignored, no `manager` in the reply).
 # MOCK_READINESS (below) turns it on too: a scenario with no computer or a pending one is added / confirmed here.
 ADD_COMPUTER = os.environ.get("MOCK_ADD_COMPUTER", "") or ("1" if os.environ.get("MOCK_READINESS") else "")
 ADD_COMPUTER_PENDING_TEXT = "等你在新版 App 或网页里确认这是你的电脑"
@@ -18188,6 +18190,18 @@ if ADD_COMPUTER:
                 handler.send_json(reply, status)
                 return True
             added = False
+            # add.manager (docs/protocol/protocol.md "Computer pairing codes"): the computer is that manager's; a hub from
+            # before it (MOCK_ADD_COMPUTER_NO_MANAGER=1, or one with no roster) ignores it and says no manager in the reply.
+            owner = ""
+            if add and _stamps() and os.environ.get("MOCK_ADD_COMPUTER_NO_MANAGER") != "1":
+                owner = str(add.get("manager") or "").strip()
+                target = next((x for x in MANAGERS["list"] if x["id"] == owner), None)
+                if owner and target is None:
+                    handler.send_json({"error": "没有这个助手", "code": "no_manager"}, 404)
+                    return True
+                if target is not None and target.get("installing"):
+                    handler.send_json({"error": "这个助手还没装好，装好后再添加电脑", "code": "installing"}, 409)
+                    return True
             if add:
                 name = str(add.get("name") or "").strip()
                 if not name or len(name) > 40:
@@ -18208,6 +18222,10 @@ if ADD_COMPUTER:
                          "trust": "pending", "error_code": "never_connected", "error": ADD_COMPUTER_PENDING_TEXT}
                     _add_computer_listed(m)
                     added = True
+                if owner == "assistant":
+                    MANAGED_MACHINES.pop(m["id"], None)
+                elif owner:  # added to it, or the one used again moved to it
+                    MANAGED_MACHINES[m["id"]] = owner
                 os_name = add.get("os") or "mac"
             else:
                 m = next((x for x in MACHINES if x["id"] == again), None)
@@ -18226,6 +18244,8 @@ if ADD_COMPUTER:
                      "command": "persona-link pair '%s'" % pair}
             if added:
                 reply["added"] = True
+            if _stamps() and os.environ.get("MOCK_ADD_COMPUTER_NO_MANAGER") != "1":
+                reply["manager"] = machine_manager(m["id"])
             if not os.environ.get("MOCK_ADD_COMPUTER_NO_SITE"):
                 reply["install"] = {"linux": "curl -fsSL https://example.com/install.sh | sh -s -- --node --pair '%s'" % pair}
             _add_computer_push()
@@ -18263,7 +18283,8 @@ if ADD_COMPUTER:
 
 MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：features 有 machines_add / machine_trust，pair-codes 的 add 加一台待确认的电脑，"
                  "MOCK_ADD_COMPUTER_JOIN 秒后（默认 8，0 = 不来）它连上来等确认；seed 另列一台没连过的待确认电脑、Mac Studio 离线（link_offline）；"
-                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令")
+                 "MOCK_ADD_COMPUTER_ERROR=tls_required|mesh_member|too_many_pending 拒绝添加，MOCK_ADD_COMPUTER_NO_SITE=1 不给安装命令；"
+                 "add.manager 把电脑加到那个助手名下（回包 manager），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of

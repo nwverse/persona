@@ -155,6 +155,7 @@ From the new-user onboarding plan (#287) 4.2, 5.3. Request bodies:
 ```
 {"add": {"name": "Lin's MacBook", "os": "mac", "icon": "laptop"}}   add a new "Computer connects" (kind link) computer and get its code
 {"add": {"id": "macbook", "name": "…"}}                              same, with an explicit id (`personad hub pair --machine <id> --add`)
+{"add": {"name": "…", "manager": "m-3fa21c"}}                        same, the computer belonging to that manager
 {"machine": "macbook"}                                               another code for an existing link computer
 ```
 
@@ -163,19 +164,22 @@ From the new-user onboarding plan (#287) 4.2, 5.3. Request bodies:
 - The hub uses the same function as the admin page's **Add Computer › Computer connects** to write hub.json and hand it to the manager (effective while running, no restart).
   Computers added by a **device** are pending confirmation ("Computer trust" below); those added by **loopback + master token** are confirmed.
 - When a device adds the same name again and that computer is still pending and has never connected, it is reused and a new code issued (`added: false`). A master token with `add.id` that hits an existing link computer also just reissues a code.
+- `add.manager` (optional, a manager's id from `GET /api/v1/managers`): the manager the computer belongs to, normally the one the client is showing. The computer is that manager's from the start, never the carrier's first (`docs/assistant/managers.md`, "Moving a machine or a source"). An offline manager is accepted: the computer waits in hub.json and the manager takes it over when it connects; until that manager reports it, `GET /api/v1/machines` may not list it yet (the reply's `manager` says where it went). Left out (or empty), the computer is the carrier's (`assistant`), as before the field. A reused computer (above) that belongs to another manager is moved to the one named first; without `add.manager` it stays where it is. The manager is checked before anything is written: a refused request adds nothing, leaves no pending computer and voids no code. `{"machine"}` takes no manager: the computer keeps its own.
 - A device can only issue codes for **pending** computers (`machine` or reuse); a confirmed one returns 409 `not_pending`. Every code a device issues goes through "pending → confirmed"; re-pairing a confirmed computer is done on the admin page or on the hub machine.
   This is not a security boundary (a full device can already sign credentials for any link computer with `kind: link` on `POST /api/v1/auth/tokens`).
 - When a device reissues a code for a pending computer (`machine` or reuse), the computer's existing Persona Link credentials are revoked first: whichever computer redeemed the previous code, it cannot get confirmed along with the one holding the new code.
 - Success is 200 with `Cache-Control: no-store`. Besides the fields above (`token`, `expires_at`, `url`, `hub_id`, `fp`, `tls_port`, `alt`, `machine`, `pair_url`; no `qr`), it adds:
 
 ```json
-{"machine": "macbook", "name": "Lin's MacBook", "trust": "pending", "added": true,
+{"machine": "macbook", "name": "Lin's MacBook", "trust": "pending", "added": true, "manager": "m-3fa21c",
  "pair_url": "persona://link?url=…&token=…&machine=macbook&hub=…&fp=…&tls=…",
  "command": "persona-link pair '<pair_url>'",
  "install": {"linux": "curl -fsSL <site>/install.sh | sh -s -- --node --pair '<pair_url>'"}}
 ```
 
-  `trust` is `pending` or `confirmed` (always present here). `added` says whether this call added it (omitted when not). `install` is present only when the hub knows which site it was published from
+  `trust` is `pending` or `confirmed` (always present here). `added` says whether this call added it (omitted when not). `manager` is the manager the computer belongs to now (on every computer code, `{"machine"}` too):
+  the client compares it with the `add.manager` it sent and, when they differ, says which manager the computer is under. A hub from before `add.manager` ignores the field, adds every computer to the carrier and
+  leaves `manager` out of the reply; a client that sent another manager treats a missing `manager` as "added to the carrier" and says so. No `hello.features` flag: the reply tells. `install` is present only when the hub knows which site it was published from
   (the build-time `publish.site_url`, [config.md](../operations/config.md); local builds and Docker images don't have it), and currently only has `linux`.
 - Errors (`error` is localized per `Accept-Language`):
 
@@ -187,6 +191,10 @@ From the new-user onboarding plan (#287) 4.2, 5.3. Request bodies:
 | 429 | `too_many_pending` | The device is adding a new computer while 3 are already pending (reuse and reissue don't count) |
 | 409 | `exists` / `not_pending` | The given id already exists (and is not a reusable link computer) / a device issuing a code for a confirmed computer |
 | 404 | `not_found` | The `machine` a device sent is not a link computer in hub.json |
+| 404 | `no_manager` | `add.manager` is not in the roster (or was removed meanwhile) |
+| 409 | `installing` | `add.manager` is still being installed (its install code not traded yet) |
+| 503 | `assistant_offline` | The reused computer is in the own list of a manager that is offline, so it cannot move to `add.manager` now |
+| 503 | `owners_unknown` | The hub could not read which manager carries which computer yet (as for a move); try again |
 | 400 | `unknown_machine` | The `machine` sent with a master token is not a link computer in hub.json (`hub pair --machine` then suggests adding `--add`) |
 | 400 | `invalid_name` / `invalid_id` / `invalid_os` / `bad_request` | Missing or too-long name / id breaks the rules / unknown os / `machine` and `add` sent together, or `web` included |
 

@@ -8,7 +8,9 @@ Starts scripts/mock/mock_hub.py on a free port with a HOME of its own (MOCK_EXTE
 - each manager keeps its own inbox mutes and rules: one set for another manager covers only its items, and an offline
   one answers 503 assistant_offline;
 - the roster's inbox_needs_you is what the merged inbox lists open under "Needs you" for each online manager, absent
-  for an offline or installing one, and follows an item being handled.
+  for an offline or installing one, and follows an item being handled;
+- a computer added with add.manager (MOCK_ADD_COMPUTER=1) is that manager's in the reply and in /machines; a manager the
+  roster lacks is 404 no_manager, one being installed 409 installing, and neither adds a computer.
 
     python3 scripts/test/test_mock_hub_managers.py
 """
@@ -39,7 +41,8 @@ class MockHubManagersTests(unittest.TestCase):
         cls.port = free_port()
         cls.home = tempfile.mkdtemp(prefix="mock-managers-")
         env = {k: v for k, v in os.environ.items() if not k.lower().endswith("_proxy")}
-        env.update(HOME=cls.home, PORT=str(cls.port), MOCK_EXTENSIONS="1", MOCK_MANAGER_NAS="1")
+        env.update(HOME=cls.home, PORT=str(cls.port), MOCK_EXTENSIONS="1", MOCK_MANAGER_NAS="1", MOCK_ADD_COMPUTER="1",
+                   MOCK_ADD_COMPUTER_JOIN="0")
         cls.proc = subprocess.Popen([sys.executable, str(ROOT / "scripts/mock/mock_hub.py")], env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.time() + 30
@@ -126,6 +129,24 @@ class MockHubManagersTests(unittest.TestCase):
         self.assertTrue(theirs, "the offline manager's computer has a session to check")
         for s in theirs:
             self.assertEqual((s.get("machine_id"), s.get("state")), ("nas", "unknown"), s)
+
+    def test_a_computer_added_to_a_manager(self):
+        def machines():
+            _, answer = self.call("GET", "/api/v1/machines")
+            return {m["id"]: m for m in answer["machines"]}
+        body = lambda name, manager: json.dumps({"add": {"name": name, "os": "linux", "manager": manager}}).encode()
+        status, answer = self.call("POST", "/api/v1/auth/pair-codes", body("Work Box", "m-3fa21c"))
+        self.assertEqual((status, answer.get("machine"), answer.get("manager"), answer.get("added")), (200, "work-box", "m-3fa21c", True), answer)
+        self.assertEqual(machines()["work-box"]["manager"], "m-3fa21c")
+        # the same name again (pending, never connected) for another manager: the same computer, moved there
+        status, answer = self.call("POST", "/api/v1/auth/pair-codes", body("Work Box", "assistant"))
+        self.assertEqual((status, answer.get("machine"), answer.get("manager"), answer.get("added")), (200, "work-box", "assistant", None), answer)
+        self.assertEqual(machines()["work-box"]["manager"], "assistant")
+        before = set(machines())
+        for manager, want in (("m-ffffff", (404, "no_manager")), ("m-c1e9f0", (409, "installing"))):
+            status, answer = self.call("POST", "/api/v1/auth/pair-codes", body("Nowhere Box", manager))
+            self.assertEqual((status, answer.get("code")), want, answer)
+        self.assertEqual(set(machines()), before, "a refused add added a computer")
 
     def test_sessions_of_one_manager(self):
         _, everyone = self.call("GET", "/api/v1/sessions")
