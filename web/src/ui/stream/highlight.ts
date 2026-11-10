@@ -197,16 +197,18 @@ function within(r: DOMRect, root: Element | null, seen: Looked): boolean {
 }
 
 // A block's own position in an exchange the chat skips drawing makes the browser lay that exchange out (#2905); the
-// exchange's box is there without it. A block whose exchange is not near is not near either, so only blocks in near
-// exchanges are read, and the others are left to the observer.
+// exchange's box is there without it. A block the chat scrolls is not near when its exchange is not, so only the blocks
+// of near exchanges are read, and the others are left to the observer. A block in a box of its own (an open quote, a
+// fold) is near by where it is in that box, wherever the exchange is: it is read as before.
 function isNear(e: Entry, seen: Looked): boolean {
+  const root = e.root ?? null;
   const ex = e.el.closest(EXCHANGE);
-  if (ex) {
+  if (ex && scrollRoot(ex) === root) {
     let near = seen.exchanges.get(ex);
-    if (near === undefined) seen.exchanges.set(ex, (near = within(ex.getBoundingClientRect(), scrollRoot(ex), seen)));
+    if (near === undefined) seen.exchanges.set(ex, (near = within(ex.getBoundingClientRect(), root, seen)));
     if (!near) return false;
   }
-  return within(e.el.getBoundingClientRect(), e.root ?? null, seen);
+  return within(e.el.getBoundingClientRect(), root, seen);
 }
 
 // Blocks mounted in the last commit, looked at once in the next frame before it is painted: by then the chat has moved
