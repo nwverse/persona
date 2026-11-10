@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { promptsOf, rewindBlock, rewindDone, rewindFailure, rewindSession, rewindTarget } from "./rewind";
+import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindFailure, rewindSession, rewindTarget } from "./rewind";
 import { ApiError } from "./api";
 import type { Item, Session } from "./types";
 
@@ -50,6 +50,28 @@ describe("rewindBlock", () => {
     expect(rewindBlock(session({ state: "needs_you" }), false)).toBe("需要你");
     expect(rewindBlock(session({ status: "offline" }), false)).toBe("未运行");
     expect(rewindBlock(undefined, false)).toBe("仅 Claude");
+  });
+});
+
+describe("the last editable prompt", () => {
+  it("recalls the full last entry including quotes, context and multiple text blocks", () => {
+    const text = '> Quoted text\n\n<persona-context>Context</persona-context>\nRevise it';
+    const items = [user("a#0", "Earlier"), user("b#0", text), user("b#1", "Second block"), tool("result#0"), reply("answer#0")];
+    expect(lastEditablePrompt(items)).toEqual({ id: "b#0", raw: text + "\nSecond block" });
+  });
+
+  it.each([
+    { kind: "image" as const, text: undefined, image: { mime: "image/png" } },
+    { full_size: 99999 },
+    { from: "Other conversation" },
+    { injected: { kind: "followup", line: "Scheduled input" } },
+    { source: { kind: "supervision" } },
+  ])("does not rewind an earlier input when the last entry cannot be restored: %j", (extra) => {
+    expect(lastEditablePrompt([user("a#0", "Earlier"), user("b#0", "Last", extra)])).toBeNull();
+  });
+
+  it("refuses a text entry with a binary image", () => {
+    expect(lastEditablePrompt([user("a#0", "Look at this"), { id: "a#1", seq: 1, role: "user", kind: "image" }])).toBeNull();
   });
 });
 

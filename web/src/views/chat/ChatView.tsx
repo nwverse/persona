@@ -29,7 +29,7 @@ import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistan
 import { unlinkAgentFromTodo } from "../../lib/todos";
 import { LinkTodoDialog } from "../LinkTodoDialog";
 import { t as tr } from "../../i18n";
-import { rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
+import { lastEditablePrompt, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import type { Item, Session, Subagent } from "../../lib/types";
@@ -354,6 +354,25 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const [rewindLive] = useState(() => liveValue(rewindOff));
   useLayoutEffect(() => rewindLive.set(rewindOff), [rewindLive, rewindOff]);
   const canRewind = canCompose && !readOnly && !assistant;
+  const [editingLast, setEditingLast] = useState(false);
+  const editLastBusy = useRef(false);
+  const editLastMessage = useCallback(async () => {
+    if (editLastBusy.current || !canRewind || rewindLive.get() || noRow || tr.loading || tr.error) return;
+    const last = lastEditablePrompt(items.current);
+    if (!last) return;
+    editLastBusy.current = true;
+    setEditingLast(true);
+    try {
+      await rewindTo(mid, sid, draftKey, items.current, last.id, last.raw, "conversation");
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      editLastBusy.current = false;
+      setEditingLast(false);
+    }
+  }, [canRewind, rewindLive, noRow, tr.loading, tr.error, mid, sid, draftKey]);
+  const editableLast = useMemo(() => lastEditablePrompt(tr.items), [tr.items]);
+  const onEditLastMessage = canRewind && !rewindOff && !noRow && !tr.loading && !tr.error && !editingLast && editableLast ? editLastMessage : undefined;
   const actions = useMemo<ChatActions>(
     () => ({
       draftKey,
@@ -1322,6 +1341,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                         streaming={(d.line.kind === "segment" || d.line.kind === "supervision") && d.line.live ? tr.streaming || undefined : undefined}
                         expandFold={tr.expandFold}
                         onRetry={canRetry && d.line.id === lines.at(-1)?.id ? retry : undefined}
+                        onEditLastMessage={d.line.id === lines.at(-1)?.id ? onEditLastMessage : undefined}
                         fix={d.line.id === lines.at(-1)?.id ? turnFix : undefined}
                         limit={d.line.kind === "apiError" && d.line.id === limitOn ? limitLine : undefined}
                         assistant={assistant}
@@ -1341,6 +1361,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
                   streaming={(line.kind === "segment" || line.kind === "supervision") && line.live ? tr.streaming || undefined : undefined}
                   expandFold={tr.expandFold}
                   onRetry={canRetry && i === lines.length - 1 ? retry : undefined}
+                  onEditLastMessage={i === lines.length - 1 ? onEditLastMessage : undefined}
                   limit={line.kind === "apiError" && line.id === limitOn ? limitLine : undefined}
                   assistant={assistant}
                   offscreen={offscreen(line)}
@@ -1450,6 +1471,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           needsYou={state === "needs_you"}
           onSend={send}
           disabled={Boolean(offlineLine) || (!noRow && !sessionCan(session, "send"))}
+          onEditLastMessage={onEditLastMessage}
+          loadingDraft={editingLast}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
           onStop={sessionCan(session, "interrupt") ? interrupt : undefined}
           stopping={stopping}

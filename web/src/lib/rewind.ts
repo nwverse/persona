@@ -8,6 +8,7 @@ import { t } from "../i18n";
 import { stateOf } from "./format";
 import type { Item, Session } from "./types";
 import { stateName } from "./state-labels";
+import { injectedOf } from "./injected";
 
 export type RewindRestore = "conversation" | "code_and_conversation";
 
@@ -35,7 +36,7 @@ interface Prompt {
   raw: string;
 }
 
-const entryOf = (it: Item) => it.id.split("#")[0];
+const entryOf = (it: Pick<Item, "id">) => it.id.split("#")[0];
 
 /** Your messages in order. Images alone are a message too (Claude lists them), with no text; a message queued while
  *  Claude worked is not in the list yet. */
@@ -52,6 +53,16 @@ export function promptsOf(items: Item[]): Prompt[] {
     out.push({ id: it.id, raw: it.kind === "text" ? (it.text ?? "") : "" });
   }
   return out;
+}
+
+/** Only the actual last prompt can be recalled. Do not skip image-only, injected or incomplete inputs and rewind
+ *  an earlier turn instead. Binary images cannot be restored by the text draft path. */
+export function lastEditablePrompt(items: Item[]): Prompt | null {
+  const last = promptsOf(items).at(-1);
+  if (!last?.raw.trim()) return null;
+  const blocks = items.filter((it) => entryOf(it) === entryOf(last));
+  if (blocks.some((it) => it.kind === "image" || it.full_size || it.from || injectedOf(it) || (it.source && it.source.kind !== "conversation"))) return null;
+  return last;
 }
 
 const squash = (s: string) => s.replace(/\s+/g, "");
