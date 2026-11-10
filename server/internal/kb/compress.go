@@ -22,7 +22,7 @@ type Model interface {
 const (
 	compressBatch = 50
 	compressQuiet = 10 * time.Minute
-	compressInput = 24000 // characters of new messages per call
+	compressInput = 24000 // bytes of new messages per call (Store.Since)
 )
 
 // After a failed compression the chat waits compressRetry, doubled with every further failure in a row up to

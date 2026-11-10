@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -615,50 +616,95 @@ func (s *Store) Days(chatID string) []string {
 	return out
 }
 
-// Since returns the message lines written at or after t (minute precision, as stored), at most max characters,
-// the newest kept when it has to cut.
+// Since returns the message lines written at or after t (minute precision, as stored), at most max bytes after a
+// leading "…\n" when it has to cut, the newest kept. It reads the days newest first and stops once it has more than
+// max, so a long backlog costs the days it keeps, not all of them; the cut lands on a line start (cutTail).
 func (s *Store) Since(chatID string, t time.Time, max int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, _ = s.settleChatLocked(chatID)
 	zone := s.chatReadZoneLocked(chatID)
 	from := t.In(zone).Format("2006-01-02")
-	var b strings.Builder
-	for _, d := range s.Days(chatID) {
-		if d < from {
-			continue
+	days := s.Days(chatID)
+	var blocks []string // newest first
+	n := 0
+	for i := len(days) - 1; i >= 0 && days[i] >= from && n <= max; i-- {
+		raw, _ := os.ReadFile(s.path(KindChat, chatID, "messages", days[i]+".md"))
+		if b := sinceDay(string(raw), days[i], zone, t); b != "" {
+			blocks = append(blocks, b)
+			n += len(b)
 		}
-		raw, _ := os.ReadFile(s.path(KindChat, chatID, "messages", d+".md"))
-		// The kept messages' lines, joined once below: appending each continuation line to its message would copy
-		// the whole message again per line, quadratic in a long paste.
-		var keep []string
-		open := false // the last "- " line was kept, so the indented lines that continue it are too
-		for _, l := range strings.Split(string(raw), "\n") {
-			switch {
-			case strings.HasPrefix(l, "- "):
-				open = false
-				if len(l) >= 7 {
-					if at, err := time.ParseInLocation("2006-01-02 15:04", d+" "+l[2:7], zone); err == nil && at.Before(t.Truncate(time.Minute)) {
-						continue
-					}
+	}
+	slices.Reverse(blocks)
+	return cutTail(strings.Join(blocks, ""), max)
+}
+
+// sinceDay is the "## day" block of the messages in one day file written at or after t, "" when there are none.
+func sinceDay(raw, day string, zone *time.Location, t time.Time) string {
+	// The kept messages' lines, joined once below: appending each continuation line to its message would copy the
+	// whole message again per line, quadratic in a long paste.
+	var keep []string
+	open := false // the last "- " line was kept, so the indented lines that continue it are too
+	for _, l := range strings.Split(raw, "\n") {
+		switch {
+		case strings.HasPrefix(l, "- "):
+			open = false
+			if len(l) >= 7 {
+				if at, err := time.ParseInLocation("2006-01-02 15:04", day+" "+l[2:7], zone); err == nil && at.Before(t.Truncate(time.Minute)) {
+					continue
 				}
-				keep = append(keep, l)
-				open = true
-			case strings.HasPrefix(l, "  ") && open:
-				keep = append(keep, l)
-			default:
-				open = false
+			}
+			keep = append(keep, l)
+			open = true
+		case strings.HasPrefix(l, "  ") && open:
+			keep = append(keep, l)
+		default:
+			open = false
+		}
+	}
+	if len(keep) == 0 {
+		return ""
+	}
+	return "## " + day + "\n" + strings.Join(keep, "\n") + "\n"
+}
+
+// cutTail keeps at most the last limit bytes of s, after "…\n" when it cuts. The kept part starts where a message
+// ("- ") or a day ("## ") starts, so a reader gets whole messages; when that would drop more than half of what fits
+// (one long message ends the text), at the next line start; failing that at the next character, never inside one.
+func cutTail(s string, limit int) string {
+	limit = max(limit, 0)
+	if len(s) <= limit {
+		return s
+	}
+	at := len(s) - limit // >= 1: s[at-1] is the byte before the kept part
+	line, msg := -1, -1
+	for i := at; i < len(s); {
+		if s[i-1] == '\n' {
+			if line < 0 {
+				line = i
+			}
+			if strings.HasPrefix(s[i:], "- ") || strings.HasPrefix(s[i:], "## ") {
+				msg = i
+				break
 			}
 		}
-		if len(keep) > 0 {
-			fmt.Fprintf(&b, "## %s\n%s\n", d, strings.Join(keep, "\n"))
+		j := strings.IndexByte(s[i:], '\n')
+		if j < 0 {
+			break
+		}
+		i += j + 1
+	}
+	switch {
+	case msg >= 0 && msg-at <= limit/2:
+		at = msg
+	case line >= 0:
+		at = line
+	default:
+		for at < len(s) && !utf8.RuneStart(s[at]) {
+			at++
 		}
 	}
-	out := b.String()
-	if len(out) > max {
-		out = "…\n" + out[len(out)-max:]
-	}
-	return out
+	return "…\n" + s[at:]
 }
 
 // Prune deletes message days older than textDays and attachment days older than attachmentDays.

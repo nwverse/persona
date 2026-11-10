@@ -202,7 +202,8 @@ type (
 
 var ErrNotFound = errors.New("not found")
 
-// Get reads one entity. recentChars bounds a chat's latest messages (0: none).
+// Get reads one entity. recentChars bounds a chat's latest messages in bytes, a recording's transcript in characters
+// (0: none).
 func (e *Engine) Get(kind, id string, recentChars int) (*Detail, error) {
 	if kind == KindRecording {
 		id, _ = RecordingID(id) // the phone's UUID in any case
