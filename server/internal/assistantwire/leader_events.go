@@ -31,12 +31,14 @@ const (
 // LeaderReportEvent: one of a leader's tasks reached its goal, needs the owner's decision, or is stuck; written by the
 // hub from the task's ledger, never by a model. ID names the report (the same report is never sent twice; an extension
 // may still key on it); Leader the leader conversation's id; Todo the task's to-do id; Text at most 300 characters in
-// the owner's language; Link the task's PR or delivery link when it has one; At when what it reports happened.
+// the owner's language; Link the task's PR or delivery link when it has one; At when what it reports happened. A plan
+// of the leader's waiting for the owner's Start is a decision too (#3608): Plan is its id, Todo "" (it has none yet).
 type LeaderReportEvent struct {
 	ID     string    `json:"id"`
 	Leader string    `json:"leader"`
 	Kind   string    `json:"kind"`
 	Todo   string    `json:"todo"`
+	Plan   string    `json:"plan,omitempty"`
 	Text   string    `json:"text"`
 	Link   string    `json:"link,omitempty"`
 	At     time.Time `json:"at"`

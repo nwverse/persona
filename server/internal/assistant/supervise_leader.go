@@ -129,8 +129,8 @@ func (s *Service) setLeaders(ctx context.Context, v json.RawMessage) (*ownChange
 		}
 		list = append(list, id)
 	}
-	if len(list) > 20 {
-		return nil, errors.New("at most 20 leader conversations")
+	if len(list) > leadersMost {
+		return nil, fmt.Errorf("at most %d leader conversations", leadersMost)
 	}
 	before := cfg.Leaders
 	if slices.Equal(list, before) || len(list) == 0 && len(before) == 0 { // nil and [] are both none

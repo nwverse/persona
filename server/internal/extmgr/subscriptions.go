@@ -215,6 +215,8 @@ func (h *Manager) subscriptionRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"subscription": s, "runs": runs})
 	})
+	// The pages (#2041): every device may draw them; the actions they carry check full access themselves.
+	api.HandleFunc("POST /api/v1/subscriptions/-/ui", h.subscriptionUI)
 	api.HandleFunc("POST /api/v1/subscriptions/-/dry-run", h.subscriptionChange(func(w http.ResponseWriter, r *http.Request, _ subscriptions.Actor) {
 		var in subscriptions.DryRunRequest
 		if !readSubscriptionJSON(w, r, &in) {

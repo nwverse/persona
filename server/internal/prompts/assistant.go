@@ -716,3 +716,31 @@ func RenderWorkspaceMention(w WorkspaceMention) string {
 
 // RenderWorkoutReport describes one consented workout, never a medical diagnosis.
 func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
+
+// Route is the system prompt of assistant.route (assistant/route): is a New chat's first message a direction or a quick
+// chat. Language is the direction name's language by its own name ("" Chinese); Crowded: there are Leaders leaders
+// already, so the model names the closest one too.
+type Route struct {
+	Language string
+	TitleMax int
+	Crowded  bool
+	Leaders  int
+}
+
+func RenderRoute(r Route) string { return render("assistant/route", r) }
+
+// RouteLeader is a current leader as the route model is shown it.
+type RouteLeader struct{ ID, Title, Project string }
+
+// RouteInput is what the route model reads: the sentence, the leaders and the knowledge base's project names.
+type RouteInput struct {
+	Sentence string
+	Leaders  []RouteLeader
+	Projects []string
+}
+
+func RenderRouteInput(in RouteInput) string { return render("assistant/route_input", in) }
+
+// RenderRouteAgent is the system prompt of assistant.route for a new agent (assistant/route_agent): which leader's
+// direction its work belongs to; it reads RouteInput (the agent's first message as the sentence, no projects).
+func RenderRouteAgent() string { return render("assistant/route_agent", nil) }
