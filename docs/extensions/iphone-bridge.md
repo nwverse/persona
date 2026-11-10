@@ -8,7 +8,10 @@ This document is the **wire contract** of the native bridge that does the phone 
 answers. It describes primitives only; numbering elements, formatting for the model and approvals belong to the node's Go package that
 calls it. Pairing and the node's session (records, finding the phone, keeping `serve` running, reconnecting) are #3448.
 
-Status: v1. **Nothing here has been verified on a real device yet** (see "Verification status").
+Status: v1. Checked on real iPhones only as far as "Verification status" says.
+
+**Supported phones: iOS 27 and later** (a product decision). Older iOS refuses remote input, so there the bridge can only look at the
+screen and start and end apps.
 
 ## What it is
 
@@ -192,7 +195,11 @@ ready event.
 
 ### `screenshot`
 
-The bridge always asks the phone for PNG (iOS 18.7.3 refuses "jpeg", error 4864) and converts to JPEG itself when asked.
+The bridge always asks the phone for PNG (iOS 18.7.3 refuses "jpeg", error 4864) and converts to JPEG itself when asked: scaled down
+first, then encoded, tens of milliseconds for a full screen on this computer. `timing_ms` says where the time went: `capture` is the
+phone producing the image, `convert` the bridge's part, `stream_open` whether the input display stream was running then. Captures
+sometimes take much longer on the phone (18 s right after `button home` on iOS 27.0, while the stream was open): this is how to find out
+why.
 
 | Arg | Default | Meaning |
 | --- | --- | --- |
@@ -202,7 +209,8 @@ The bridge always asks the phone for PNG (iOS 18.7.3 refuses "jpeg", error 4864)
 | `out_file` | — | Write the image to this path (0600) instead of returning it; `data` is then left out |
 
 ```json
-{ "mime": "image/jpeg", "data": "<base64>", "width": 1290, "height": 2796, "point_width": 430, "point_height": 932, "orientation": "portrait" }
+{ "mime": "image/jpeg", "data": "<base64>", "width": 1290, "height": 2796, "point_width": 430, "point_height": 932, "orientation": "portrait",
+  "timing_ms": { "capture": 850, "convert": 30, "stream_open": false } }
 ```
 
 ### `ax_tree`
@@ -243,6 +251,11 @@ The phone takes synthetic input only while a display stream to this computer is 
 (about a third of a second), reads and drops its video, and in `serve` keeps it for 10 seconds after the last input so a series of taps
 does not restart it. Results are `{}`.
 
+**When the answer comes**: a touch is answered only after a request on the same connection as the touches came back, so the phone has
+read them; keys and buttons, which go one way, get another 0.1 s. The display stream stops no sooner than 1 second after the last input
+(also when a `call` ends, or `serve` reaches the end of its input), so the phone acts on it. Before this, a tap from a one-shot call
+answered `{}` and did nothing on the phone: the stream had stopped and the process ended before the phone acted on it.
+
 - `tap` `{ "x": 120, "y": 640, "count": 1 }`: `count` 1–3 (2 for a double tap).
 - `long_press` `{ "x": 120, "y": 640, "duration_ms": 800 }`.
 - `drag` `{ "from": {"x": 200, "y": 700}, "to": {"x": 200, "y": 200}, "duration_ms": 500, "hold_ms": 0 }`: `hold_ms` keeps the finger
@@ -253,7 +266,10 @@ does not restart it. Results are `{}`.
 - `keys`: exactly one of `{ "text": "hello" }` or `{ "key": "return", "repeat": 1 }`. Keys: `return`, `backspace`, `delete`, `tab`,
   `escape`, `space`, `up`, `down`, `left`, `right`. Text is typed as key presses on a US keyboard layout, so only printable ASCII, tab and
   newline can be typed; any other character (Chinese, accented letters, emoji) fails the whole request with `unsupported`, naming it,
-  before anything is typed. At most 4,096 characters.
+  before anything is typed. At most 4,096 characters. These are **hardware keyboard events**: what they type depends on the input method
+  the phone has selected. With a Chinese keyboard (for example the 9-key pinyin layout) `keys {"text": "wifi"}` leaves underlined
+  composing text rather than plain letters (seen on iOS 27.0); a search field still used it there, but other fields may not. The bridge
+  doesn't switch input methods (see "Open questions").
 - `button` `{ "name": "home", "duration_ms": 0 }`: `home` | `lock` | `volume_up` | `volume_down`; `duration_ms` 0 is a short press,
   longer holds it (up to 10 s).
 
@@ -317,7 +333,12 @@ Computer?" prompt answered once); without that, `pair` answers `trust_pending` a
   usbmuxd sees over USB, each once. `name` is `null` until the phone trusts this computer (recent iOS gives its name only in a session).
 - `pair --udid <udid> --out <path>` opens `remotepairingdeviced` through lockdown over usbmuxd and runs RemotePairing's manual pairing:
   the phone asks its user to allow it and for the passcode, then hands back the key its Bonjour advertisements are tagged with (`altIRK`).
-  The record (keys, host name, that key) is written 0600, and the answer is `{"udid", "name", "model", "product_version"}`. Error codes
+  The record (keys, host name, that key) is written 0600, and the answer is `{"udid", "name", "model", "product_version",
+  "developer_mode"}`. **Pairing works with Developer Mode off**, but the phone then neither advertises over Bonjour nor takes RemotePairing
+  connections (seen on iOS 27.0: the handshake failed with `device socket io failed`). `developer_mode` says so up front (`null` when the
+  phone didn't say); the node's `pair` command tells the user to turn it on (Settings › Privacy & Security › Developer Mode, then the
+  phone restarts), and when a phone paired with it off can't be reached, the node answers `developer_mode_off` instead of `unreachable`.
+  Error codes
   besides the common ones: `trust_pending`, `locked`, `not_found` (no such phone on USB), `pairing_rejected` (the user declined).
 - The record is the bridge's own format (`record.rs`: the RemotePairing keys plus the host name they were made under, which every later
   connection must send again) and opaque to the node.
@@ -403,18 +424,24 @@ phone has run against one only where the table says so:
 | Part | Status |
 | --- | --- |
 | RemotePairing verify, tunnel, userspace TCP, service directory | checked on a real iPhone (iPhone13,4, iOS 18.7.3) over its USB network interface |
-| Default port 49152; reaching the phone over Tailscale | not verified on a real device |
+| Default port 49152 | the port both iPhones advertised over Bonjour |
+| Reaching the phone over Tailscale or Wi-Fi without the cable | not verified on a real device |
 | `device_info` fields (lockdown keys for screen size, Developer Mode, battery) | checked on that iPhone: build, battery, 428 × 926 points, scale 3, Developer Mode |
 | `screenshot` | checked on that iPhone: PNG about 1 s; JPEG (the phone refuses it, so the bridge converts) about 4 s in `call`. Landscape rotation not verified |
 | `launch_app` | checked on that iPhone |
 | `list_apps` | checked on that iPhone through the installation service: 121 user apps, 329 in all, under a second (CoreDevice's list never answered there) |
 | `terminate_app` | checked on that iPhone: Settings (pid 12411) ended in 3 s, a second call answered `terminated: false`, the screenshot showed the home screen, and the next launch got a new pid (12460). The request that ends it on that iPhone is `killPid:` (`how: "kill"`). Before the fix, `killPid:` with the pid as a plain integer was accepted but ended nothing while the bridge reported success |
-| Input gate (display stream), touch coordinates and rotation, keys, buttons | **Not verified on any real iPhone. Below iOS 27 it is not available**: that iPhone (iOS 18.7.3) itself refused the display stream with CoreDevice error 9021 ("Remote control requires iOS 27.0 or later"), so input answers `unsupported` up front there. **On iOS 27 or later, input over this route has never been tried on a real device** |
+| Input on iOS 27.0 (iPhone17,1, 402 × 874 points), in one running `serve` session | **checked**: `tap` on Settings' search field 0.7 s (the field activated and the keyboard came up), `keys "wifi"` 0.1 s (typed, results shown), `swipe up` 0.3 s (keyboard dismissed), `button home` (home screen). The Dynamic Island shows a screen-sharing indicator while the stream is open |
+| Input from a one-shot `call` (or the node's `personad iphone call`) on iOS 27.0 | answered `{}` but did nothing before the fix above (the stream stopped right away); **the fix is not yet checked on the phone** |
+| `long_press`, `drag`, `lock` and the volume buttons, coordinates in landscape | **not verified on a real device** |
+| Input below iOS 27 | not available: an iOS 18.7.3 iPhone itself refused the display stream with CoreDevice error 9021 ("Remote control requires iOS 27.0 or later"); input answers `unsupported` up front there |
+| Other operations on iOS 27.0 (iPhone17,1) | `launch_app` 0.1 s, `terminate_app` (`how: "kill"`, then `false`), `list_apps` 58 user apps in 0.2 s, `screenshot` PNG about 1 s (once 18 s after `button home`; JPEG at 500 px about 5 s), `device_info` (input, screenshot, apps `true`) |
+| Developer Mode off at pairing (iOS 27.0) | pairing succeeded, then connecting failed with `device socket io failed` and there was no Bonjour advertisement; now reported as above, **not yet checked on the phone** |
 | `usb-list` | checked on a real iPhone (iPhone13,4, iOS 18.7.3, trusting the computer): it lists the phone with its name |
 | `pair` over USB (consent prompt, `altIRK`) | checked on that iPhone while it already trusted the computer: it answered the pairing request with pairing data straight away, without asking its user, and the record was written (0600). The first try panicked there (exit code 101): the library asked the bridge for the PIN and got an empty one; the bridge now gives iPhone's fixed manual-pairing PIN `000000` and turns any panic into an `internal` error. Not verified: the Trust prompt on a phone that doesn't trust the computer yet, and the path where the phone asks its user to allow the pairing (`awaitingUserConsent`) |
 | `match` against a real advertisement | checked on that iPhone against its `_remotepairing._tcp` advertisement on the USB network interface (port 49152, TXT `identifier`, `authTag`, `ver`, `minVer`, `flags`): it answered `true`. An advertisement over Wi-Fi not verified |
 | `ax_tree` | `unsupported` |
-| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | checked on that iPhone: mounted in 3.3 s, then `already: true`; `device_info` showed `ddi_mounted: true` and the developer services. The ticket's source (the phone's own or Apple's signing server) was not recorded: no `--force` remount was run |
+| `mount_ddi` (build selection, the phone's ticket or TSS, upload, mount, service directory again) | checked on the iOS 18.7.3 iPhone: mounted in 3.3 s, then `already: true`; `device_info` showed `ddi_mounted: true` and the developer services. The ticket's source (the phone's own or Apple's signing server) was not recorded: no `--force` remount was run. **Not verified on iOS 27**: that phone's image was mounted by Xcode's tools beforehand |
 | Simulator backend: pair, `device_info`, `screenshot`, apps, `ax_tree` (with a system alert), tap, `keys` (ASCII and Chinese), swipe, `button home`, `serve`, runner cleanup after exit and after `kill -9` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
 ## Open questions
@@ -423,4 +450,9 @@ phone has run against one only where the table says so:
 - **Text beyond ASCII**: the key channel cannot type it. The phone's pasteboard service plus a paste shortcut might, at the cost of the
   user's clipboard; not done.
 - **Locked screen**: no service found yet that reports it.
+- **Typing with a non-English input method**: `keys` sends hardware keyboard events, which the phone's current input method interprets
+  (a Chinese keyboard composes). A reliable way to type plain text regardless (switching the input method, or the pasteboard plus a paste
+  shortcut) is not known yet; the bridge doesn't try.
+- **Slow captures**: one screenshot took 18 s right after `button home` on iOS 27.0; `timing_ms` is there to find out whether the open
+  display stream or the capture service is the cause.
 - **Signing request over HTTPS**: needs the library to let the caller choose the address or send the body itself.
