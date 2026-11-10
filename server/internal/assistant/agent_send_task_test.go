@@ -1,8 +1,12 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -227,5 +231,156 @@ func TestAgentSendTaskFollowsTheAgentItStarts(t *testing.T) {
 	todo := onlyTodo(s)
 	if len(todo.Agents) != 2 || todo.Agents[1].SessionID != "worker01" || todo.Agents[1].Source != "spawned" {
 		t.Fatalf("agents: %+v", todo.Agents)
+	}
+}
+
+// replyTasks are the ways a reply's task comes: left out, null, and the zero values a runtime that fills in every field
+// of a tool's schema sends (blank title, blank or no done_when, no expect_minutes).
+var replyTasks = []string{``, `null`, `{}`, `{"title":""}`, `{"title":"  ","done_when":[],"expect_minutes":0}`,
+	`{"title":"","done_when":[""," "],"expect_minutes":-1}`}
+
+// sendArgs are agent_send's arguments to agent sid of box, with task as raw JSON ("": left out).
+func sendArgs(sid, text, task string) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{"machine": "box", "session_id": sid, "text": text})
+	if task == "" {
+		return b
+	}
+	return json.RawMessage(strings.TrimSuffix(string(b), "}") + `,"task":` + task + `}`)
+}
+
+// A task that says nothing is no task: a reply goes as a plain agent_send from any conversation. No todo is made, no
+// task gets a new supervisor, criteria or routed line, an agent on another conversation's task hears it as a side
+// conversation and that task stays theirs, and a read-only agent is still refused.
+func TestAgentSendEmptyTaskIsAReply(t *testing.T) {
+	for _, task := range replyTasks {
+		t.Run(cmp.Or(task, "omitted"), func(t *testing.T) {
+			s, f := newQuietService(t)
+			ctx := t.Context()
+			agent := func(sid string) proto.Session {
+				return proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/" + sid, Agent: "claude", Status: proto.StatusIdle,
+					State: proto.StateIdle, UpdatedAt: time.Now()}
+			}
+			ro := agent("ro000001")
+			ro.SourceKind, ro.Capabilities, ro.ReadOnlyReason = "codex_history", &proto.SessionCapabilities{Read: true}, "read only"
+			f.setSessions("box", agent("free0001"), agent("peer0001"), agent("user0001"), agent("mine0001"), ro)
+			onTask := func(sid, origin string, doneWhen ...string) {
+				t.Helper()
+				todo, err := s.createTodo(ctx, "Task of "+sid, "notes", origin, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if origin != "" {
+					s.superviseTodo(ctx, todo.ID, origin, doneWhen, 30)
+				}
+				if err := s.linkTodoAgent(ctx, todo.ID, "box", sid, todo.Title, "/code/"+sid, "claude"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			onTask("peer0001", "conv2", "peer criteria") // another conversation's supervised task
+			onTask("user0001", "")                       // the user's own todo
+			onTask("mine0001", "conv1", "my criteria")   // the main conversation's own task
+			// ledger is every todo, the user's own included (todosOf leaves them out), and the two conversations' feeds.
+			ledger := func() string {
+				var out []string
+				s.todos.mu.RLock()
+				for _, td := range s.todos.todos {
+					line := td.ID + " " + td.Origin + " " + strconv.Itoa(len(td.Agents)) + " " + strconv.FormatBool(td.DoneAt != nil)
+					if v := td.Supervision; v != nil {
+						line += " " + v.Supervisor + " " + strings.Join(v.DoneWhen, ";") + " " + strconv.Itoa(v.ExpectMinutes)
+					}
+					out = append(out, line)
+				}
+				s.todos.mu.RUnlock()
+				slices.Sort(out)
+				return strings.Join(out, "\n") + "\nconv1: " + feedKinds(s, "conv1") + "\nconv2: " + feedKinds(s, "conv2")
+			}
+			before := ledger()
+
+			for _, c := range []struct{ self, sid string }{{"conv1", "free0001"}, {"conv1", "peer0001"}, {"conv1", "user0001"},
+				{"conv1", "mine0001"}, {"conv2", "free0001"}} {
+				res, err := s.runTool(ctx, "server", c.self, "agent_send", sendArgs(c.sid, "A reply", task))
+				if err != nil || !strings.HasPrefix(res, "Sent to ") || strings.Contains(res, "task") {
+					t.Fatalf("%s to %s: %q %v", c.self, c.sid, res, err)
+				}
+			}
+			if _, err := s.runTool(ctx, "server", "conv1", "agent_send", sendArgs("ro000001", "A reply", task)); err == nil ||
+				!strings.Contains(err.Error(), "read only") {
+				t.Fatalf("read-only agent: %v", err)
+			}
+			sent := sentToAgent(f)
+			if len(sent) != 5 || sent[0] != "A reply" || sent[2] != "A reply" || sent[3] != "A reply" || sent[4] != "A reply" ||
+				!strings.Contains(sent[1], `kind="side-conversation"`) || !strings.Contains(sent[1], "From: conv1") {
+				t.Fatalf("sent %q", sent)
+			}
+			if after := ledger(); after != before {
+				t.Fatalf("a reply changed the tasks:\n%s\nwas\n%s", after, before)
+			}
+		})
+	}
+}
+
+// Any real value in title, done_when or expect_minutes makes it a hand-off, and so does a task that does not decode (a
+// field of the wrong type), with a hand-off's refusals: only the main conversation hands out tasks, and another
+// conversation's task stays theirs.
+func TestAgentSendTaskWithAnyFieldIsAHandOff(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := t.Context()
+	agent := func(sid string) proto.Session {
+		return proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/" + sid, Agent: "claude", Status: proto.StatusIdle,
+			UpdatedAt: time.Now()}
+	}
+	f.setSessions("box", agent("free0001"), agent("free0002"), agent("peer0001"))
+	if _, err := s.runTool(ctx, "server", "conv2", "agent_send", sendArgs("free0001", "Pull the weekly numbers", `{"title":"Weekly numbers"}`)); err == nil ||
+		!strings.Contains(err.Error(), "only the main conversation") {
+		t.Fatalf("from another conversation: %v", err)
+	}
+	for sid, task := range map[string]string{"free0001": `{"expect_minutes":30}`, "free0002": `{"title":123}`} {
+		if res, err := s.runTool(ctx, "server", "conv1", "agent_send", sendArgs(sid, "Pull the weekly numbers", task)); err != nil ||
+			!strings.Contains(res, "is now your task") {
+			t.Fatalf("%s: %q %v", task, res, err)
+		}
+		if todo, ok := s.openTodoOfAgent("box", sid); !ok || todo.Origin != "conv1" || todo.Supervision == nil ||
+			sid == "free0001" && todo.Supervision.ExpectMinutes != 30 {
+			t.Fatalf("%s: %+v", task, todo)
+		}
+	}
+	theirs, err := s.createTodo(ctx, "Their task", "notes", "conv2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, theirs.ID, "conv2", nil, 0)
+	if err := s.linkTodoAgent(ctx, theirs.ID, "box", "peer0001", theirs.Title, "/code/peer0001", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range []string{`{"done_when":["a PR"]}`, `{"done_when":"a PR"}`} {
+		if _, err := s.runTool(ctx, "server", "conv1", "agent_send", sendArgs("peer0001", "More work", task)); err == nil ||
+			!strings.Contains(err.Error(), theirs.ID) || !strings.Contains(err.Error(), "nothing was sent") {
+			t.Fatalf("%s to another conversation's task: %v", task, err)
+		}
+	}
+	if n := len(sentToAgent(f)); n != 2 {
+		t.Fatalf("sent %d", n)
+	}
+}
+
+// A reply from the health space still asks on the phone before it goes (an empty task is no reason to refuse it):
+// declined, nothing is sent; allowed, it goes and makes no task.
+func TestAgentSendEmptyTaskAsksBeforeItGoes(t *testing.T) {
+	f := healthHub()
+	f.sessions["server"] = append(f.sessions["server"], proto.Session{SessionID: "code-0000-0000", Cwd: "/home/me/src/app", Agent: "claude",
+		Status: proto.StatusIdle, Title: "app"})
+	s := newTestService(t, f)
+	setSettings(t, s, func(v *Settings) { v.MachineID, v.Main = "server", "main-0000-0000" })
+	args := `{"session_id":"code-0000-0000","text":"Chart my sleep","task":{"title":"","done_when":[],"expect_minutes":0}}`
+	answerOutbound(t, s, "sleep-000-0000", "agent_send", "Chart my sleep", false)
+	if out, isErr := spaceTool(t, s, "sleep-000-0000", "agent_send", args); isErr || !strings.Contains(out, "declined") || len(sentToAgent(f)) != 0 {
+		t.Fatalf("declined: %s, sent %q", out, sentToAgent(f))
+	}
+	answerOutbound(t, s, "sleep-000-0000", "agent_send", "Chart my sleep", true)
+	if out, isErr := spaceTool(t, s, "sleep-000-0000", "agent_send", args); isErr || len(sentToAgent(f)) != 1 {
+		t.Fatalf("allowed: %s, sent %q", out, sentToAgent(f))
+	}
+	if n := len(s.todosOf(context.Background(), "*")); n != 0 {
+		t.Fatalf("%d todos", n)
 	}
 }

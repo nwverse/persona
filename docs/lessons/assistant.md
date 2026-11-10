@@ -155,3 +155,9 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   CLAUDE.md each process started with and resumes the conversation in a fresh process on the next idle message once it
   changed (`instructionsStale`). For "the new prompt has no effect" look first at the CLAUDE.md's modification time in
   the assistant's directory on its machine and at `wrote the CLAUDE.md` in the hub's log.
+- **An optional object in a tool's schema can come filled with zero values** (#3386): runtimes that fill in every field
+  of a tool's schema send `agent_send`'s `task` as `{"title":"","done_when":[],"expect_minutes":0}` instead of leaving it
+  out, and the server took any `task` as a hand-off: a reply to another conversation's agent was refused, and one to an
+  agent on no task made a supervised task. A handler that branches on whether an optional object is there treats one
+  with nothing in it as absent (`givenTask`), keeps one that does not decode as it was (a wrongly typed field must not
+  turn a hand-off into an untracked reply), and its schema allows null.
