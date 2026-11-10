@@ -78,6 +78,9 @@ func modelProviderCompatible(p ModelPurpose, v ModelProvider, stored []storedLau
 	if p.Kind == "plugin" {
 		compatible = v.ID == p.ID
 	}
+	if compatible && p.CategoryID == "assistant" && v.Kind == "launcher" {
+		compatible = slices.Contains([]string{"", "claude", "codex", "agy", "omp"}, v.Agent)
+	}
 	if compatible && p.Kind == "launcher" && len(v.Machines) > 0 && p.MachineID != "" {
 		compatible = slices.Contains(v.Machines, p.MachineID)
 	}

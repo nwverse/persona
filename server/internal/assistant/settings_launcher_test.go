@@ -21,6 +21,7 @@ func assistantLauncherFixture(t *testing.T) *Service {
 		{Name: "codex", Source: "path", Agent: "codex", Model: "codex-default"},
 		{Name: "engine-claude", Source: "paseo", Model: "engine-default"},
 		{Name: "engine-codex", Source: "paseo", Agent: "codex", Model: "engine-default"},
+		{Name: "traex", Source: "path", Agent: "traex"},
 	}
 	f.hello.Models.Launchers = map[string][]ConfiguredLauncher{
 		"server": {{Launcher: proto.Launcher{Name: "configured-only"}, AgentType: "claude"}},
@@ -35,6 +36,11 @@ func assistantLauncherFixture(t *testing.T) *Service {
 func TestAssistantLauncherCandidates(t *testing.T) {
 	s := assistantLauncherFixture(t)
 	p := purposeOf(t, s, "assistant")
+	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "traex", "direct-responses"} {
+		if slices.Contains(p.ProviderIDs, "launcher."+name) {
+			t.Errorf("assistant purpose offers unsupported provider %q", name)
+		}
+	}
 	read := func(purpose string) []string {
 		t.Helper()
 		r := request(s, http.MethodGet, "/api/v1/machines/server/launchers?purpose="+purpose, "")
@@ -65,7 +71,7 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 		}
 	}
 	ordinary := read("agent.new")
-	for _, name := range []string{"engine-claude", "engine-codex", "configured-only"} {
+	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "traex"} {
 		if !slices.Contains(ordinary, name) {
 			t.Errorf("ordinary Agent lost launcher %q: %v", name, ordinary)
 		}
@@ -76,7 +82,7 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 		t.Fatalf("get launcher: %+v", r)
 	}
 	text := r.Content[0].Text
-	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "direct-responses"} {
+	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "direct-responses", "traex"} {
 		if strings.Contains(text, "- "+name+" ") {
 			t.Errorf("settings offers unsupported launcher %q: %s", name, text)
 		}
@@ -89,7 +95,7 @@ func TestAssistantLauncherCandidates(t *testing.T) {
 }
 
 func TestAssistantLauncherRejectsUnsupported(t *testing.T) {
-	for _, name := range []string{"engine-claude", "engine-codex", "configured-only"} {
+	for _, name := range []string{"engine-claude", "engine-codex", "configured-only", "traex"} {
 		t.Run(name, func(t *testing.T) {
 			s := assistantLauncherFixture(t)
 			setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "old-model", Effort: "high"})
@@ -139,6 +145,13 @@ func TestAssistantLauncherSwitchUsesDefault(t *testing.T) {
 				t.Fatalf("purpose after launcher switch: %+v", p)
 			}
 			t.Logf("GET model-config/purposes/assistant: override=%+v effective=%+v", p.Override, p.Effective)
+			params := map[string]any{}
+			if err := s.applyModel(context.Background(), "assistant", params); err != nil {
+				t.Fatal(err)
+			}
+			if params["launcher"] != tc.name || params["model"] != nil || params["effort"] != nil || params["runtime"] != proto.AssistantRuntimeAgentSDK {
+				t.Fatalf("start parameters did not use the new launcher's defaults: %v", params)
+			}
 		})
 	}
 }
