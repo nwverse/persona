@@ -170,11 +170,11 @@ Chat page:
     Mac `NSClipView` clamps beyond-latest offsets on layout, so glide manually sets each frame and restores any displacement in the same layout (`ChatPin+Mac.swift`).
     Tapping thinking/tools/BeautifulUI tool-pill groups within open work keeps both title and tapped row still (no borrowing remaining title rise or replacing persistent hold with normal 1.5 s).
     Reduce Motion disables rise/glide and content fades (`Theme.Motion.reduced`, #1123).
-  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. Wake-ups divide it into segments ending with Agent text;
-    the answer is the latest segment's text, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783; it used to be the longest, and a short reply after a wake showed while streaming, then went into the drawer once its item landed: Summary → Build uploaded now ends on Build uploaded, Summary in the work row).
-    Everything before the answer (transitional text, wake itself counted as a tool) folds into one work row; after it a small "🔔 Background command finished · <description> ›" strip, not inline expansion,
-    opens bottom `WakeDrawer` showing only results: each task notice and Agent reply in order, intermediate tools/thinking/text folded into one final work row by default (requested 2026-10-31: expanding should not unfold N process segments). While still handling a wake, strip says Background task finished · Processing.
-    Tasks completing during work (not waking) remain a work step.
+  - Background tasks wake idle Claude (`wake` notice): still the same turn, not split. The latest Agent text after a
+    wake is the answer, so the chat always ends on the newest words (`Turn.pickAnswerAcrossWakes`, #3783). Before new
+    words arrive, the previous answer stays in place while the new work joins its execution summary instead of opening
+    a second segment (#2796). Everything before the answer, including wake notices and intermediate narration, stays
+    inspectable by opening that ordinary work row. Tasks completing during work (not waking) remain a work step.
     Pitfall: Claude Code's idle-session away recap closes the turn; a later wake must reopen and merge into it,
     keeping recap in place, or post-wake replies show directly (`ChatBlock.build` `lastRaw` / `reopenedAt`).
   - Away recaps resemble background tasks: small "↺ Away recap · 21 min ago ›" strip opens `RecapCard` / `RecapDrawer` with full text. Consecutive recaps with nothing between merge into "↺ Away recap · 3 times · 3 min ago ›", newest first in drawer (`ChatLines.foldRecaps`, requested 2026-10-31); mock `MOCK_RECAPS=1`.
@@ -937,6 +937,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     Page sides `Theme.Space.page` 16, aligned search/filters/group titles/cards/capsules, not individual paddings.
   - `Theme.Size` (requested 2026-10-31): named text-adjacent icons/dots/avatars/tap targets/thumbnails/label widths, default original points,
     `.scaledFrame(width:height:)` / `.scaledFrame(minWidth:…)` follows text up to 1.6× accessibility (44pt buttons not a third of screen).
+    `.tapTargetFrame(alignment:)`: a hit area that grows like `scaledFrame` but never under `tapTarget` (44pt) at Small / smaller system sizes, for small controls hit wider than drawn (uploaded avatar's corner delete).
     Lines/dividers/progress ≤4pt stay unscaled `frame`; geometric sizes unchanged; watch keeps own sizes, not App text sizing.
   - Dynamic Type + Settings › Appearance › Interface Style › Text Size (Small/Standard/Large, `TextSize`, `ui.textSize`) offsets system one level via RootView `.dynamicTypeSize`,
     changing text styles, `@ScaledMetric`, MarkdownUI and BeautifulUI together, ratios intact.
@@ -963,9 +964,33 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     (circle logos fill, others `Theme.Brand.inCircle`). Boxes: Settings `icon`, detail header `wellM`, email account `wellXS`,
     source `wellS`, sign-in `iconXS`; new marks measure opaque bounds after `rsvg-convert` and crop viewBox whitespace.
   Lock Screen Live Activities capped at `.large` (~160pt height, clips beyond).
-- Motion (`Theme.Motion`: state `.snappy` 0.25, layout `.smooth` 0.3): continuous only Needs you dot breathing and system working spinner;
-  Reduce Motion (`accessibilityReduceMotion`) stops dot (and loading/preparing placeholders), working dot static outer ring.
-  No wobbling icons/spinning gears/pulsing avatars/spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
+- Motion (`Theme.Motion`): one meaning, one motion. A page picks the row for what is happening; a new meaning gets a token and a row
+  here first, never an inline `.easeInOut(duration:)` (`TokenRatchetTests` counts those). Details and why: `docs/lessons/ios.md`, "Motion rules (#2943)".
+
+  | What happens | Motion |
+  | --- | --- |
+  | A value or state changes in place (toggle, tone, selection, a menu or card opening) | `state` / `standard`: `.snappy` 0.25 |
+  | Things take new places (rows in, out or reordered) | `layout`: `.smooth` 0.3 |
+  | A block grows in place and the eye follows its rows | `expand`: `.smooth` 0.4 |
+  | Something opens in the chat, or closes | `.unfolding`: `reveal` easeOut 0.28, `conceal` easeIn 0.2 |
+  | A number changes | `.contentTransition(.numericText)` |
+  | The finger lets go of a drawer / of something it dragged aside | `drawer(velocity:)` (no bounce) / `springBack` |
+  | Moving with the keyboard | `keyboard` (the system's spring) |
+  | The composer and the 「+」 panel | their `composer…` / `hold…` / `attach…` tokens, measured from Telegram |
+
+  Red lines:
+  - Leaving is quicker than arriving (`conceal` < `reveal`, `holdLeave` < `holdAppear`, `attachContentOut` < `attachContentIn`), and a
+    panel, card or row leaving fades and moves but does not shrink. Only a glyph swapped inside one control shrinks (`composerSwapScale`);
+    `composerAccessory` fading in quicker than out is Telegram's measured exception.
+  - Under the finger nothing animates: a drag follows it frame for frame, and the animation starts at release with the finger's speed.
+  - Only a few things move on their own, each listed with its reason in `apple/PersonaTests/ContinuousMotionTests.swift`: the Needs you
+    dot's breath, the persona while it works, typing dots, loading skeletons, the voice orb in a call, the recording dot, the watch's frog.
+    A loop changes only transform, opacity or color, never a frame, padding or font (that relays out every frame); it stops off screen,
+    in the background and with the wrist down; the persona and the voice orb also hold still in Low Power Mode.
+  - Reduce Motion (`accessibilityReduceMotion`, `Theme.Motion.reduced` outside a view): loops show one still frame (the working dot its
+    static ring); changes land at once or cross-fade, without sliding or scaling. The registry test fails for a loop whose file, or its
+    caller, never reads it.
+  - No wobbling icons, spinning gears, pulsing avatars or spinning to-dos. Counts `.numericText`; no `.shadow` outside `.surface` (glass/Clay/Island already shadow,
   doubling otherwise); neighboring glass keys/top Back/⋯ use `GlassEffectContainer`.
   - An extension's View drawn again (#37, as on the web and Android; `Views/Settings/ExtensionMotion.swift`): under the same key, a `metric`, `stat_grid`
     or row value whose numbers alone changed rolls (`.numericText`, counting down when the number fell); any other change of a value or a badge's words fades in,
@@ -1316,7 +1341,7 @@ When a device cannot reach the hub address, connect through an SSH server. For t
 - **Code**: the tunnel itself is in the shared package `apple/Packages/PersonaSSH` (swift-nio-ssh + Network.framework, shared by iOS and Mac, not linked into the watch);
   App-side `Persona/App/SSHTunnels.swift` (one tunnel per hub, `SSHKeys`, routing `AppModel.sshRoute`),
   `Shared/HubTransport.swift` (maps hub addresses to tunnel loopback addresses, `SSHRoute` configuration), `Persona/Views/Settings/SSHTunnelView.swift`.
-- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets and port-forwarding address construction pass through `HubTransport.resolve`;
+- **Only outgoing URLs change**: `APIClient.url`, chat-item URLs, `LiveConnection` sockets, port-forwarding address construction and the Feishu video and voice player's stream URL (`LarkMedia.streamURL`) pass through `HubTransport.resolve`;
   `ServerConfig`, the pairing registry, `currentConfig` and all comparisons still use the hub's own address, so multi-hub grouping, routing and credential upgrades need no tunnel awareness.
   `HubRoute.healthProbe` uses `direct: true`, always probing the direct route.
 - **Routing**: with usable SSH settings in a group (host, user, confirmed fingerprint), `routePicker` always has a value: before every connection, `HubRoute.answering` probes direct routes (even a single address),

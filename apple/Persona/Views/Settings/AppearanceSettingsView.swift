@@ -79,12 +79,16 @@ struct PersonaSettingsPage: View {
             } footer: {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Text(model.isDemo ? String(localized: "Demo mode only has the default avatar.") :
-                        String(localized: "Choose Mochi or Milk Frog. Milk Frog downloads from the hub when selected. To use its colors, choose Match Avatar under Theme Color."))
+                        String(localized: "Avatars other than Mochi download from the hub when selected. To use an avatar’s colors, choose Match Avatar under Theme Color."))
+                    if !model.isDemo, model.hubFeatures.contains(AvatarUploadsModel.feature) {
+                        // The hub makes avatars from images (#2405): how to make one, and how to delete one made that way.
+                        Text("New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.")
+                    }
                     #if !os(macOS)
                     if let failure = model.appIcon.failure {
                         Text(failure).foregroundStyle(Theme.danger)
                     }
-                    Text("Both avatars use the default Home Screen icon. Older alternate icons reset to the default.")
+                    Text("Every avatar uses the default Home Screen icon. Older alternate icons reset to the default.")
                         // The icon on now, or that the system cannot switch it here (AppIconTests).
                         .accessibilityValue(model.appIcon.available ? model.appIcon.current.rawValue : "unavailable")
                         .accessibilityIdentifier("persona-icon-note")
