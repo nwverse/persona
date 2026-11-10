@@ -86,6 +86,21 @@ struct IPhoneControlTests {
         if case .this(let me, _) = several.match { #expect(me.consented) } else { Issue.record("picked") }
     }
 
+    /// The consent carries this app's own bundle id and name, read from the bundle, so the hub keeps the assistant
+    /// off Persona itself on the phone.
+    @Test func consentSaysWhichAppItIs() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/iphone/consent"
+        hub.on("PUT", path, json: #"{"id":"dev-1","name":"A","machines":[],"consented":true}"#)
+        _ = try await hub.client.setIPhoneConsent(device: "dev-1", allowed: true)
+        let body = try #require(hub.sent("PUT", path).first?.body)
+        let sent = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let app = sent?["app"] as? [String: Any]
+        #expect(sent?["device"] as? String == "dev-1" && sent?["allowed"] as? Bool == true)
+        #expect(app?["bundle_id"] as? String == Bundle.main.bundleIdentifier)
+        #expect((app?["name"] as? String)?.isEmpty == false)
+    }
+
     @Test func hiddenWithoutTheExtension() async {
         let off = IPhoneConsentModel(deps: .init(list: { IPhoneList(on: false) }, consent: { _, _ in throw APIError(status: 404, message: "") },
                                                  model: "iPhone18,1", ios: "26.1", picked: { nil }, pick: { _ in }))
@@ -99,17 +114,31 @@ struct IPhoneControlTests {
 
     @Test func toolsReadAsSteps() {
         let steps: JSONValue = .object(["steps": .array([
-            .object(["action": .string("tap"), "target": .number(3)]),
+            .object(["action": .string("tap"), "target": .object(["n": .number(3)])]),
             .object(["action": .string("type"), "text": .string("hello")]),
             .object(["action": .string("swipe"), "direction": .string("up")]),
-            .object(["action": .string("press"), "button": .string("home")]),
+            .object(["action": .string("button"), "button": .string("home")]),
+            .object(["action": .string("tap"), "target": .object(["x": .number(119.6), "y": .number(640)])]),
+            .object(["action": .string("long_press"), "target": .object(["label": .string("Pay")])]),
         ])])
         let line = IPhoneSteps.describe(steps) ?? ""
-        #expect(line.components(separatedBy: " → ").count == 4)
-        #expect(line.contains("3") && line.contains("hello"))
+        let parts = line.components(separatedBy: " → ")
+        #expect(parts.count == 6)
+        #expect(!line.contains("hello"), "typed text is never shown, it may be a password")
+        #expect(parts[0].contains("3") && parts[1].contains("5") && parts[3] == IPhoneSteps.step(.object(["action": .string("button"), "button": .string("home")])))
+        #expect(parts[4].contains("(120, 640)") && parts[5].contains("“Pay”"))
         #expect(IPhoneSteps.describe(.object([:])) == nil)
         #expect(ToolPresentation.symbol("mcp__persona__iphone_do") == Theme.Icon.phoneControl)
         #expect(ToolPresentation.symbol("phone_contacts_search") != Theme.Icon.phoneControl, "the phone's own data tools stay as they are")
+    }
+
+    /// The consent names the iPhone it matched, in the section and in the dialog, so a twin is noticed.
+    @Test func theConsentNamesTheIPhone() throws {
+        let all = try decoded().devices
+        let me = IPhoneIdentity.match(all, model: "iPhone14,5", ios: "18.6", picked: nil)
+        #expect(IPhoneConsentText.confirmTitle(me).contains("Other iPhone"))
+        #expect(IPhoneConsentText.detail(all[1]).contains("Other iPhone"))
+        #expect(!IPhoneConsentText.confirmTitle(.none).contains("Other iPhone"))
     }
 
     @Test func aDeviceSaysWhatIsLeft() {

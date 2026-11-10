@@ -16244,6 +16244,28 @@
         }
       }
     },
+    "Allow the Assistant to Operate %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow the Assistant to Operate %@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アシスタントに%@の操作を許可しますか？"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许助手操控%@？"
+          }
+        }
+      }
+    },
     "Allow the Assistant to Operate This iPhone" : {
       "localizations" : {
         "en" : {
@@ -29955,6 +29977,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Close %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@を終了"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭 %@"
+          }
+        }
+      }
     },
     "Close (⌘W)" : {
       "localizations" : {
@@ -45847,6 +45891,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Drag %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drag %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@をドラッグ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拖动%@"
+          }
+        }
+      }
     },
     "Drag to move the image. Use the slider to zoom." : {
       "extractionState" : "manual",
@@ -133749,6 +133815,28 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Type %lld characters" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type %lld characters"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 文字を入力"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入 %lld 个字符"
+          }
+        }
+      }
     },
     "Type Directly" : {
       "localizations" : {
