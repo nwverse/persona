@@ -24,6 +24,13 @@ retains planning, permission/question and owner-acceptance flows; `Todo.ask` use
 individual Send actions. Approval, tray navigation and filters never send a draft. Agents retains its existing filtering,
 TaskBoard and session/detail entry points. Quiet schedules have a separate Progress group.
 
+The three entries are the dock's old **All** / task capsules (#2999): `DOCK_CAPSULE` in `web/src/views/assistant/Tasks.tsx`
+gives "All", the task pills and the entries one height (2 rem, 32 px at the default size), full capsule radius, 12 px side
+padding and the 12.5 px type. Each entry is content-wide at the leading edge with an 8 px tone dot, its label and a count;
+the row scrolls sideways when a large font no longer fits. The open tray is the selected capsule (`bg-ink text-surface`,
+as the knowledge filters draw it) and keeps `aria-expanded` / `aria-controls`; there is no caret. An empty Pending is grey
+but still opens "All caught up".
+
 The feed's additive `task_cards` upserts retain a stable plan/index identity before and after to-do binding, without
 replacing or deleting audit events. Old/null/empty projections keep cached or legacy data. Current to-dos/sessions update
 the row independently; reusing a to-do under another plan deduplicates by its current `plan_id`, and completion text never
@@ -32,8 +39,8 @@ compatibility are in [the shared protocol](../protocol/protocol.md#tasks-and-the
 
 This change aligns task-row placement; existing web tool folding and turn-source presentation remain unchanged.
 `python3 web/e2e/assistant-task-trays.py <preview URL> --shots <output directory>` runs the production-built client against
-synthetic HTTP/WebSocket data in wide and phone widths, light/dark, including live same-row completion, owner decisions and
-proof that no draft was sent by approval. Its captures are browser screenshots, not a deployed-hub check.
+synthetic HTTP/WebSocket data in wide and phone widths, light/dark, including the entries' measured capsule height and
+selected state, keyboard toggling, live same-row completion, owner decisions and proof that no draft was sent by approval. Its captures are browser screenshots, not a deployed-hub check.
 
 ## Color hierarchy and quiet surfaces
 
