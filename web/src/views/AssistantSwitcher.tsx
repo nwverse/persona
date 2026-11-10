@@ -15,6 +15,7 @@ import { AppMark } from "../ui/AppMark";
 import { AssistantAvatar } from "../ui/AssistantAvatar";
 import { cx, Menu, Spinner, toast, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
+import { ASSISTANT_MENU_WIDTH } from "../ui/menu-model";
 import { useDisconnect } from "./DisconnectBrowser";
 import { hubMenuItems, useHubs } from "./Hubs";
 import { lazyDialog } from "./LazyOverlay";
@@ -162,7 +163,7 @@ const SwitcherRow = memo(function SwitcherRow({ phase, online, total, route, bad
         {/* the menu is gone while the hub revokes this browser's token or makes an install code: the row says it is busy */}
         {disconnect.busy || asking ? <Spinner size={12} /> : <Icon name="chevron" size={12} stroke={2} className={cx("shrink-0 text-ink-3 transition-transform duration-200", menu.anchor && "rotate-180")} />}
       </button>
-      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} width={several ? 264 : 220} header={several ? t("sidebar.assistants") : t("sidebar.appearance")} items={items} />}
+      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} width={several ? ASSISTANT_MENU_WIDTH.roster : ASSISTANT_MENU_WIDTH.product} header={several ? t("sidebar.assistants") : t("sidebar.appearance")} items={items} />}
       {disconnect.dialog}
       <NewManager
         open={creating}
