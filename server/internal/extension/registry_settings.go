@@ -113,6 +113,13 @@ func (r *Registry) ForgetPackOff(ctx context.Context, member string) error {
 		}
 	}
 	r.mu.Unlock()
+	var changed []string
+	defer func() { // after the operation, as every write tells it
+		unlock()
+		for _, id := range changed {
+			r.changed(Change{ID: id, Kind: "pack_off"})
+		}
+	}()
 	for i, row := range rows {
 		if err := r.put(ctx, row); err != nil {
 			return err
@@ -120,6 +127,7 @@ func (r *Registry) ForgetPackOff(ctx context.Context, member string) error {
 		r.mu.Lock()
 		packs[i].Record.PackOff = row.PackOff
 		r.mu.Unlock()
+		changed = append(changed, row.ID)
 	}
 	return nil
 }

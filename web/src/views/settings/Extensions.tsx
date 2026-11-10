@@ -615,7 +615,7 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
           manager={manager}
           busy={toggling || saving}
           offline={offline}
-          onEnabled={(on) => (!on && p.pack_members_follow && p.extension_pack?.length ? setPackOff(true) : void toggle(on))}
+          onEnabled={(on) => (!on && p.pack_members_follow && p.pack_on?.length ? setPackOff(true) : void toggle(on))}
           onAutoUpgrade={(on) => void toggleAutoUpgrade(on)}
           onUpgrade={onUpgrade}
           onUninstall={() => setRemoving(true)}
@@ -750,7 +750,7 @@ function ExtensionDetail({ id, manager, onBack, onPage, onUpgrade, onChannel, on
       {removing && p && <UninstallDialog id={p.id} name={p.name} version={p.version} pack={p.extension_pack} onClose={() => setRemoving(false)} onDone={onBack} />}
       {packOff && p && !dependents && (
         <Dialog open title={t("settings-extensions.disable_pack_title", { name: p.name })} onClose={() => !toggling && setPackOff(false)} footer={<><Button tone="quiet" disabled={toggling} onClick={() => setPackOff(false)}>{t("common.cancel")}</Button><Button tone="danger" busy={toggling} onClick={() => void toggle(false)}>{t("settings-extensions.disable_all")}</Button></>}>
-          <p className="text-ink-2">{t("settings-extensions.disable_pack_body", { names: (p.extension_pack ?? []).map((m) => m.id).join(t("settings-extensionmarket.list_separator")) })}</p>
+          <p className="text-ink-2">{t("settings-extensions.disable_pack_body", { names: (p.pack_on ?? []).map((m) => m.name || m.id).join(t("settings-extensionmarket.list_separator")) })}</p>
         </Dialog>
       )}
       {dependents && p && (

@@ -85,9 +85,16 @@ func (h *Manager) takeDependents(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (h *Manager) takeDependentsOf(w http.ResponseWriter, r *http.Request, ids []string, cascade bool) bool {
+	_, ok := h.takeDependentsSwitched(w, r, ids, cascade)
+	return ok
+}
+
+// takeDependentsSwitched is takeDependentsOf saying which dependents it switched off (cascade), for a caller that has
+// to put them back. When one cannot be switched off, those already switched go back on.
+func (h *Manager) takeDependentsSwitched(w http.ResponseWriter, r *http.Request, ids []string, cascade bool) (switched []string, ok bool) {
 	deps := h.extensions.dependentsOf(ids)
 	if len(deps) == 0 {
-		return true
+		return nil, true
 	}
 	if !cascade {
 		var names []string
@@ -98,21 +105,37 @@ func (h *Manager) takeDependentsOf(w http.ResponseWriter, r *http.Request, ids [
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(map[string]any{"code": "has_dependents", "dependents": deps,
 			"error": i18n.T(h.requestLang(r), "hub-extension_model.has_dependents", i18n.Args{"names": strings.Join(names, i18n.T(h.requestLang(r), "hub-extension_model.list_separator"))})})
-		return false
+		return nil, false
 	}
 	for _, d := range deps {
 		if p := h.extensions.reg.Get(d.ID); p != nil && p.ReadOnly() {
 			writeErrCode(w, http.StatusConflict, "read_only", i18n.Err("hub-extension_model.read_only", i18n.Args{"name": d.Name}))
-			return false
+			return nil, false
 		}
 	}
+	actor := actorOr(r, "personad extension")
 	for _, d := range deps {
-		if err := h.extensions.reg.SetEnabled(r.Context(), d.ID, false, actorOr(r, "personad extension")); err != nil {
+		if err := h.extensions.reg.SetEnabled(r.Context(), d.ID, false, actor); err != nil {
+			h.extensions.turnBackOn(r.Context(), switched, actor)
 			writeErrCode(w, http.StatusConflict, "read_only", err)
-			return false
+			return nil, false
 		}
+		switched = append(switched, d.ID)
 	}
-	return true
+	return switched, true
+}
+
+// setByUser is the user switching extension id by itself (not a pack): its pack forgets switching it off, so turning
+// the pack back on leaves it as the user set it. The caller holds switchMu.
+func (h *Manager) setByUser(ctx context.Context, id string, on bool, actor string) error {
+	ps := h.extensions
+	if err := ps.reg.SetEnabled(ctx, id, on, actor); err != nil {
+		return err
+	}
+	if err := ps.reg.ForgetPackOff(ctx, id); err != nil {
+		h.logf("extensions: %s switched by itself, but its pack still remembers switching it off: %v", id, err)
+	}
+	return nil
 }
 
 // switchExtension is PUT …/-/enabled of the regular and admin routes; it writes the error itself and then says false.
@@ -120,19 +143,19 @@ func (h *Manager) takeDependentsOf(w http.ResponseWriter, r *http.Request, ids [
 // off switches off the members that are on, after the same has_dependents question as for the pack's own
 // dependents, and remembers them on the pack (Record.PackOff); on switches the pack and then those members back on,
 // not the ones the user had turned off. A member switched by itself is forgotten by its pack. A member that cannot go
-// back on is a warning, the pack is on either way.
+// back on is a warning, the pack is on either way. Switches are one at a time (switchMu), so two devices switching a
+// pack, or a member switched while its pack goes off, do not lose or bring back the pack's record.
 func (h *Manager) switchExtension(w http.ResponseWriter, r *http.Request, p *extension.Extension, on, cascade bool, actor string) (warnings []string, ok bool) {
 	ps, id, ctx := h.extensions, p.Record.ID, r.Context()
+	ps.switchMu.Lock()
+	defer ps.switchMu.Unlock()
 	if !p.Full.IsPack() {
 		if !on && !h.takeDependents(w, r, id, cascade) {
 			return nil, false
 		}
-		if err := ps.reg.SetEnabled(ctx, id, on, actor); err != nil {
+		if err := h.setByUser(ctx, id, on, actor); err != nil {
 			writeExtensionChangeError(w, r, http.StatusConflict, "read_only", err)
 			return nil, false
-		}
-		if err := ps.reg.ForgetPackOff(ctx, id); err != nil {
-			h.logf("extensions: %s switched by itself, but its pack still remembers switching it off: %v", id, err)
 		}
 		return nil, true
 	}
@@ -157,14 +180,19 @@ func (h *Manager) switchExtension(w http.ResponseWriter, r *http.Request, p *ext
 		}
 		return warnings, true
 	}
-	members := ps.packMembers(p)
-	if !h.takeDependentsOf(w, r, append([]string{id}, members...), cascade) {
+	// Only the members that are on: one already off stays as it is, and its dependents are not asked about.
+	var members []string
+	for _, m := range ps.packMembersOn(p) {
+		members = append(members, m.ID)
+	}
+	cascaded, ok := h.takeDependentsSwitched(w, r, append([]string{id}, members...), cascade)
+	if !ok {
 		return nil, false
 	}
 	off := slices.Clone(cur.Record.PackOff)
 	var done []string
 	undo := func(err error) (warnings []string, ok bool) {
-		ps.turnOnAll(ctx, done, actor)
+		ps.turnBackOn(ctx, append(done, cascaded...), actor) // the members first, then what depends on them
 		writeExtensionChangeError(w, r, http.StatusConflict, "read_only", err)
 		return nil, false
 	}
@@ -187,30 +215,34 @@ func (h *Manager) switchExtension(w http.ResponseWriter, r *http.Request, p *ext
 	return nil, true
 }
 
-// turnOnAll switches the installed extensions ids on that are off. A member may depend on one listed after it, so
-// it goes round until a round turns nothing on; pending are the ones still off, with why (failed).
+// turnOnAll switches the installed extensions ids on that are off, in one pass: enabling does not wait for a
+// dependency (one that is off leaves its dependent waiting until it goes on), so the order does not matter. pending
+// are the ones still off, with why (failed).
 func (ps *extensions) turnOnAll(ctx context.Context, ids []string, actor string) (pending []string, failed map[string]error) {
-	pending, failed = slices.Clone(ids), map[string]error{}
-	for progress := true; progress && len(pending) > 0; {
-		progress = false
-		var next []string
-		for _, id := range pending {
-			m := ps.reg.Snapshot(id)
-			if m == nil || m.Record.Source != extension.SourceInstalled || m.Record.Enabled {
-				delete(failed, id)
-				continue // removed since, or already on again
-			}
-			if err := ps.reg.SetEnabled(ctx, id, true, actor); err != nil {
-				failed[id] = err
-				next = append(next, id)
-				continue
-			}
-			delete(failed, id)
-			progress = true
+	failed = map[string]error{}
+	for _, id := range ids {
+		m := ps.reg.Snapshot(id)
+		if m == nil || m.Record.Source != extension.SourceInstalled || m.Record.Enabled {
+			continue // removed since, or already on again
 		}
-		pending = next
+		if err := ps.reg.SetEnabled(ctx, id, true, actor); err != nil {
+			failed[id] = err
+			pending = append(pending, id)
+		}
 	}
 	return pending, failed
+}
+
+// turnBackOn undoes a switch-off that could not finish: ids, which it switched off, go back on, whatever their source.
+func (ps *extensions) turnBackOn(ctx context.Context, ids []string, actor string) {
+	for _, id := range ids {
+		if m := ps.reg.Snapshot(id); m == nil || m.Record.Enabled {
+			continue
+		}
+		if err := ps.reg.SetEnabled(ctx, id, true, actor); err != nil && ps.logf != nil {
+			ps.logf("extensions: %s was switched off by a switch that did not finish, and could not go back on: %v", id, err)
+		}
+	}
 }
 
 // packMembers are the installed members of pack p, to remove with it.
@@ -219,6 +251,17 @@ func (ps *extensions) packMembers(p *extension.Extension) []string {
 	for _, m := range p.Full.ExtensionPack {
 		if cur := ps.reg.Get(m.ID); cur != nil && cur.Record.Source == extension.SourceInstalled {
 			out = append(out, m.ID)
+		}
+	}
+	return out
+}
+
+// packMembersOn are the installed members of pack p that are on: the ones switching the pack off switches off.
+func (ps *extensions) packMembersOn(p *extension.Extension) []DependentView {
+	var out []DependentView
+	for _, mid := range ps.packMembers(p) {
+		if m := ps.reg.Snapshot(mid); m != nil && m.Record.Enabled {
+			out = append(out, DependentView{ID: m.Record.ID, Name: m.Full.Name})
 		}
 	}
 	return out

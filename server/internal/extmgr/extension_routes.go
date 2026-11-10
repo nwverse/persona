@@ -38,9 +38,11 @@ type ExtensionDetail struct {
 	Depends       []extension.DependencyState `json:"depends,omitempty"`
 	ExtensionPack []extension.PackMember      `json:"extension_pack,omitempty"`
 	// PackMembersFollow, on a pack, says its Enabled switch switches its installed members too (#1830); a hub without it
-	// switches the pack alone. PackOff are the members switching it off switched off, the ones switching it on turns on.
-	PackMembersFollow bool     `json:"pack_members_follow,omitempty"`
-	PackOff           []string `json:"pack_off,omitempty"`
+	// switches the pack alone. PackOff are the members switching it off switched off, the ones switching it on turns on;
+	// PackOn the installed members that are on, the ones switching it off would switch off.
+	PackMembersFollow bool            `json:"pack_members_follow,omitempty"`
+	PackOff           []string        `json:"pack_off,omitempty"`
+	PackOn            []DependentView `json:"pack_on,omitempty"`
 	// NodeMachines is the field of Form that picks the computers its program runs on (an extension with one,
 	// docs/extensions/extensions.md "Programs that run on computers"): the apps show that program's state on each (Nodes) in the
 	// field's rows.
@@ -81,6 +83,7 @@ func (ps *extensions) detail(ctx context.Context, p *extension.Extension) Extens
 		if cur := ps.reg.Snapshot(p.Record.ID); cur != nil {
 			d.PackOff = cur.Record.PackOff
 		}
+		d.PackOn = ps.packMembersOn(p)
 	}
 	if d.Permissions == nil {
 		d.Permissions = []extension.PermissionLine{}

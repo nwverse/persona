@@ -1,6 +1,8 @@
 package extmgr
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -207,14 +209,29 @@ func TestExtensionPackSwitchesMembers(t *testing.T) {
 		t.Helper()
 		return call(t, mux, "PUT", "/api/v1/extensions/"+id+"/-/enabled", phone, body)
 	}
-	// The user's own choice before the pack goes off.
+	// The user's own choice before the pack goes off; something outside the pack still uses solo, and is on.
 	if code, out := put("solo", `{"enabled": false}`); code != 200 {
 		t.Fatalf("%d %v", code, out)
+	}
+	fan := declarativePackage(t, `{"manifest_version":1,"id":"solofan","name":"Solo Fan","version":"1.0.0","depends":[{"id":"solo"}],"contributes":{"providers":[{"id":"solofan-p","name":"Solo Fan P","base_url":"https://solofan.example.com"}]}}`)
+	if fp, err := h.extensions.reg.Preview(t.Context(), "dir:"+fan, ""); err != nil {
+		t.Fatal(err)
+	} else if _, err = h.extensions.reg.Install(t.Context(), fp.ID, fp.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled("solofan") {
+		t.Fatal("solofan installed on")
+	}
+	if code, out := call(t, mux, "GET", "/api/v1/extensions/group/-/", phone, ""); code != 200 || fmt.Sprint(out["pack_on"]) != "[map[id:addon name:Addon] map[id:base name:Base]]" {
+		t.Fatalf("a pack's detail names the members switching it off takes along: %d %v", code, out["pack_on"])
 	}
 
 	code, out := put("group", `{"enabled": false}`)
 	if code != 409 || out["code"] != "has_dependents" || !strings.Contains(fmt.Sprint(out["dependents"]), "outside") {
 		t.Fatalf("an outside dependent of a member is asked about first: %d %v", code, out)
+	}
+	if strings.Contains(fmt.Sprint(out["dependents"]), "solofan") {
+		t.Fatalf("a member already off is not the pack's to take, nor are its dependents: %v", out["dependents"])
 	}
 	for _, id := range []string{"group", "base", "addon", "outside"} {
 		if !enabled(id) {
@@ -222,7 +239,7 @@ func TestExtensionPackSwitchesMembers(t *testing.T) {
 		}
 	}
 	code, out = put("group", `{"enabled": false, "cascade": true}`)
-	if code != 200 || out["enabled"] != false || fmt.Sprint(out["pack_off"]) != "[addon base]" {
+	if code != 200 || out["enabled"] != false || fmt.Sprint(out["pack_off"]) != "[addon base]" || out["pack_on"] != nil {
 		t.Fatalf("%d %v", code, out)
 	}
 	for _, id := range []string{"group", "base", "addon", "solo", "outside"} {
@@ -230,11 +247,14 @@ func TestExtensionPackSwitchesMembers(t *testing.T) {
 			t.Fatalf("%s still on after the pack went off", id)
 		}
 	}
+	if !enabled("solofan") {
+		t.Fatal("the dependent of a member the pack left alone was switched off")
+	}
 	if _, d := call(t, mux, "GET", "/api/v1/extensions/base/-/", phone, ""); d["status"] != "disabled" {
 		t.Fatalf("a member of a pack switched off stops: %v", d)
 	}
 
-	// Back on: addon comes first in the pack but needs base, which goes on first; solo, off by the user, stays off.
+	// Back on: the recorded members go on (addon, listed before base, which it needs, too); solo, off by the user, stays off.
 	code, out = put("group", `{"enabled": true}`)
 	if code != 200 || out["enabled"] != true || out["pack_off"] != nil || out["warnings"] != nil {
 		t.Fatalf("%d %v", code, out)
@@ -269,5 +289,73 @@ func TestExtensionPackSwitchesMembers(t *testing.T) {
 	}
 	if got := h.extensions.reg.Get("group").Record.PackOff; got != nil {
 		t.Fatalf("pack forgets once on: %v", got)
+	}
+
+	// A member that cannot be switched off: what this switch already switched off, members and the outside
+	// dependent it cascaded to, goes back on, and the pack stays on without a record.
+	if code, out := put("addon", `{"enabled": true}`); code != 200 {
+		t.Fatalf("%d %v", code, out)
+	}
+	if err := h.extensions.reg.SetEnabled(t.Context(), "outside", true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	store := h.store.(*marketTestStore)
+	store.mu.Lock()
+	store.failPutID = "base" // addon is switched off before base
+	store.mu.Unlock()
+	code, out = put("group", `{"enabled": false, "cascade": true}`)
+	store.mu.Lock()
+	store.failPutID = ""
+	store.mu.Unlock()
+	if code != 409 {
+		t.Fatalf("%d %v", code, out)
+	}
+	for id, want := range map[string]bool{"group": true, "base": true, "addon": true, "outside": true, "solo": false, "solofan": true} {
+		if enabled(id) != want {
+			t.Fatalf("after a switch-off that failed, %s on = %v, want %v", id, enabled(id), want)
+		}
+	}
+	if got := h.extensions.reg.Get("group").Record.PackOff; got != nil {
+		t.Fatalf("a switch-off that failed records nothing: %v", got)
+	}
+}
+
+// Every recorded member is tried in one pass, whatever the order; one that is refused is a pending one with why.
+func TestPackTurnOnAllReportsRefusals(t *testing.T) {
+	h, _, _ := marketHub(t)
+	ps := h.extensions
+	for _, m := range []string{
+		`{"manifest_version":1,"id":"first","name":"First","version":"1.0.0","depends":[{"id":"second"}],"contributes":{"providers":[{"id":"first-p","name":"First P","base_url":"https://first.example.com"}]}}`,
+		`{"manifest_version":1,"id":"second","name":"Second","version":"1.0.0","contributes":{"providers":[{"id":"second-p","name":"Second P","base_url":"https://second.example.com"}]}}`,
+		`{"manifest_version":1,"id":"third","name":"Third","version":"1.0.0","contributes":{"providers":[{"id":"third-p","name":"Third P","base_url":"https://third.example.com"}]}}`,
+	} {
+		pv, err := ps.reg.Preview(t.Context(), "dir:"+declarativePackage(t, m), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = ps.reg.Install(t.Context(), pv.ID, pv.Digest, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"first", "second", "third"} {
+		if err := ps.reg.SetEnabled(t.Context(), id, false, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := errors.New("not now")
+	ps.reg.CanEnable = func(_ context.Context, _ string, m *extension.Manifest) error {
+		if m.ID == "third" {
+			return refused
+		}
+		return nil
+	}
+	pending, failed := ps.turnOnAll(t.Context(), []string{"first", "second", "third", "gone"}, "test")
+	if fmt.Sprint(pending) != "[third]" || !errors.Is(failed["third"], refused) || len(failed) != 1 {
+		t.Fatalf("pending %v, failed %v", pending, failed)
+	}
+	for id, want := range map[string]bool{"first": true, "second": true, "third": false} {
+		if got := ps.reg.Get(id).Record.Enabled; got != want {
+			t.Fatalf("%s on = %v, want %v", id, got, want)
+		}
 	}
 }
