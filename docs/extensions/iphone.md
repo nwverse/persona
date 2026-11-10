@@ -141,6 +141,9 @@ answer on.
 - `PUT /api/v1/iphone/consent` `{"device", "allowed", "app"?: {"bundle_id", "name"}}` → that device as above. Not the user's own app → 403; extension off → 404.
 - `proto.Machine.iphone` is the computer's `IPhone` while the extension is on (the manager's report, like `computer`).
 - Node: `iphone.status` → `IPhone` (the manager sets `enabled` and `allowed` itself, never taking the node's word);
+  a device is `ready` when it is connected, unlocked and has `screenshot` and `input`. The element tree is not needed: a
+  real iPhone never has one (only the simulator's bridge reads one), so it shows as `capabilities.ax_tree: false` with no
+  note, and the core works from the screenshot by points, each input asked on the phone first (#3891);
   `iphone.call` `{device, session, op: status|look|do, args, approved?, timeout_ms?, confirm?, self_apps?, self_names?}` (`proto.IPhoneCall`) → `IPhoneResult`;
   `iphone.pair` / `iphone.forget` / `iphone.cancel` `{device}` → `IPhone`. Through `plugin.node.call` to the built-in
   program `iphone` (methods `status`, `call`, `pair`, `forget`, `cancel`) on a node that lists it, by these names otherwise.

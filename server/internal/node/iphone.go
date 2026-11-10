@@ -216,8 +216,10 @@ type iphoneInfo struct {
 	Notes        map[string]string `json:"notes"`
 }
 
-// iphoneNeeds are the capabilities the assistant needs of an iPhone to operate it.
-var iphoneNeeds = []string{"screenshot", "ax_tree", "input"}
+// iphoneNeeds are the capabilities the assistant needs of an iPhone to operate it. The element tree (ax_tree) is not
+// one: a real iPhone never has it (only the simulator's bridge reads one), and the core then works from the
+// screenshot by coordinates, every input asking the user (#3891). Its absence stays in Capabilities, as it is.
+var iphoneNeeds = []string{"screenshot", "input"}
 
 // iphoneProbeDevice is one iPhone's status: its link, and for a connected one what device_info says: the session's
 // latest, or (fresh, or when it has none) asked now.

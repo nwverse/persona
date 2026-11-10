@@ -1,7 +1,7 @@
 [
   {
     "name": "iphone_status",
-    "description": "List the user's iPhones the assistant may operate: those paired with one of the user's computers, with that computer turned on for it and the iPhone's own consent in its Persona app. For each: id, name, model, iOS version, the computer it is reached through, whether it is connected, locked and ready, what is missing (note), and what the iPhone says of itself now (detail: the app in front, the screen…). Changes nothing. `not_allowed` counts the iPhones that are paired but not allowed: only the user can allow them, on that iPhone.",
+    "description": "List the user's iPhones the assistant may operate: those paired with one of the user's computers, with that computer turned on for it and the iPhone's own consent in its Persona app. For each: id, name, model, iOS version, the computer it is reached through, whether it is connected, locked and ready, what is missing (note), and what the iPhone says of itself now (detail: the app in front, the screen…). A real iPhone gives no element tree (`ax_tree` false in detail's capabilities; only a simulator has one) and is still ready: work from iphone_look's screenshot by points, and every input is asked on the user's phone first. Changes nothing. `not_allowed` counts the iPhones that are paired but not allowed: only the user can allow them, on that iPhone.",
     "input_schema": {
       "type": "object",
       "properties": {}
@@ -9,7 +9,7 @@
   },
   {
     "name": "iphone_look",
-    "description": "Read the screen of one of the user's iPhones (one iphone_status lists): the app in front, a numbering, every element as `[N] role \"label\" frame`, and a screenshot. Use the numbers in iphone_do as `{\"n\": N}` with that numbering; they stay put while the screen does, and `+` / `~` mark elements new or moved since the last read. Some screens give no elements, only the screenshot: then act on points (`{\"x\", \"y\"}` in screen points), and every input is asked on the user's phone first. Changes nothing. A locked iPhone shows only its lock screen: ask the user to unlock it.",
+    "description": "Read the screen of one of the user's iPhones (one iphone_status lists): the app in front, a numbering, every element as `[N] role \"label\" frame`, and a screenshot. Use the numbers in iphone_do as `{\"n\": N}` with that numbering; they stay put while the screen does, and `+` / `~` mark elements new or moved since the last read. A real iPhone, and some screens, give no elements, only the screenshot: then act on points (`{\"x\", \"y\"}` in screen points), and every input is asked on the user's phone first. Changes nothing. A locked iPhone shows only its lock screen: ask the user to unlock it.",
     "input_schema": {
       "type": "object",
       "properties": {
