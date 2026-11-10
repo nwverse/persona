@@ -171,6 +171,79 @@ class AssistantTraysShotsTest {
         return image.getPixel(2, 2)
     }
 
+    @Test
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h1000dp-xhdpi")
+    fun backgroundWorkUsesOneSpinnerAndRealWaitUsesClockInEveryStyle() {
+        val at = "2026-11-10T08:00:00Z"
+        val flow = Workflow(taskId = "workflow-fixture", status = "running", running = true, phase = "Adversarial review",
+            agentsDone = 5, agentsStarted = 6, agentsRunning = 1, startedAt = at)
+        val workers = listOf(
+            running.copy(title = "Background checks", plan = null, waiting = true, backgroundWorking = true, backgroundTasksCount = 2),
+            blocked.copy(title = "Workflow review", state = "working", status = "working", pendingInteractions = 0,
+                waiting = true, backgroundWorking = true, backgroundTasksCount = 0, runningWorkflowsCount = 1, workflowProgress = flow),
+        )
+        val fixture = Fixture().apply {
+            requests.value = emptyList(); drafts.value = emptyList()
+            returnedTodos = workers.mapIndexed { i, agent -> Todo("background-$i", agent.title, origin = "main", createdAt = at, updatedAt = at,
+                agents = listOf(TodoAgent(agent.machineId, agent.sessionId))) }
+            sessionRows.value = listOf(Session(main.machineId, main.sessionId, title = "Persona", assistant = true, state = "idle", status = "idle")) + workers
+            tasks.reloadTodos()
+        }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var large by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                fontScale = if (large) 1.6f else 1f
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            val density = androidx.compose.ui.unit.Density(androidx.compose.ui.platform.LocalDensity.current.density, if (large) 1.6f else 1f)
+            CompositionLocalProvider(LocalConfiguration provides configuration, androidx.compose.ui.platform.LocalDensity provides density) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        HomeNavigation(listOf(NavItem("assistant", "Assistant", PhIcons.Sparkle), NavItem("agents", "Agents", PhIcons.Robot)), "assistant", {},
+                            leading = { JAppMark(Tokens.Space.xxl) })
+                        Box(Modifier.weight(1f)) {
+                            ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
+                                chrome = ChatChromeBindings(tasks = fixture.tasks, inboxTrays = fixture.inbox, inboxScope = "fixture", onOpenSession = { fixture.opened += it }),
+                                renderStyle = ChatRenderStyle.Assistant, embedded = true, showTopBar = false)
+                        }
+                    }
+                }
+            }
+        }
+        settle()
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+        for (s in AppStyle.entries) for (big in listOf(false, true)) {
+            val corners = mutableListOf<Int>()
+            for (d in listOf(false, true)) {
+                style = s; dark = d; large = big
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key) workers[0] else it }
+                settle()
+                rule.onAllNodes(hasTestTag("assistant-work-spinner") and hasAnyAncestor(hasTestTag("assistant-progress-todo:background-0")), useUnmergedTree = true).assertCountEquals(1)
+                rule.onNodeWithText("后台任务 2 个在跑").assertIsDisplayed() // i18n-ignore: localized screenshot assertion
+                rule.onAllNodes(hasTestTag("assistant-work-spinner") and hasAnyAncestor(hasTestTag("assistant-progress-todo:background-1")), useUnmergedTree = true).assertCountEquals(1)
+                rule.onNodeWithText("Adversarial review").assertIsDisplayed()
+                rule.onNodeWithText(" · 5/6+").assertIsDisplayed()
+                // Capture the actual ChatScreen with both requested activity rows in its tray.
+                corners += shot("background-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
+                    workers[0].copy(backgroundTasksCount = 0, runningSubagents = 3) else it }; settle()
+                rule.onNodeWithText("子 Agent 3 个在跑").assertIsDisplayed() // i18n-ignore: localized screenshot assertion
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
+                    workers[0].copy(state = "idle", status = "idle", backgroundWorking = false, backgroundTasksCount = 0,
+                        work = persona.core.contracts.WorkState(phase = "blocked", on = "external", wait = "Wait for deployment")) else it }; settle()
+                shot("waiting-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
+                rule.onNodeWithTag("assistant-wait-clock", useUnmergedTree = true).assertIsDisplayed()
+                rule.onAllNodesWithTag("assistant-agent-manual").assertCountEquals(0)
+            }
+            assertNotEquals("Light and dark captures must differ", corners[0], corners[1])
+        }
+        assertTrue(fixture.approvals.isEmpty()); assertTrue(fixture.sends.isEmpty())
+    }
+
     @Test fun allStylesAndAppearancesRenderActualAssistantPageAndMutuallyExclusiveTrays() {
         val fixture = Fixture()
         var style by mutableStateOf(AppStyle.Glass)
@@ -247,7 +320,15 @@ class AssistantTraysShotsTest {
 
     /** A task whose agent stopped while the hub's completion check found it waiting (#3180): its Progress row says why it is
      *  not done, in every style, light and dark. */
-    @Test fun aStoppedTaskSaysWhyItIsNotDoneInEveryStyle() {
+    @Test fun aStoppedTaskSaysWhyItIsNotDoneInEveryStyle() =
+        stoppedTaskShots("progress-stopped", "Stopped, not done yet · Waiting for CI to finish", "Stopped", "In progress", AppStyle.entries)
+
+    /** The same in Chinese: 已停下 on the right (#3576). */
+    @Test @Config(qualifiers = "zh-w400dp-h900dp-xhdpi")
+    fun aStoppedTaskSaysWhyItIsNotDoneInChinese() =
+        stoppedTaskShots("progress-stopped-zh", "停下了，还没完成 · Waiting for CI to finish", "已停下", "进行中", listOf(AppStyle.Glass))
+
+    private fun stoppedTaskShots(name: String, line: String, stoppedLabel: String, runningLabel: String, styles: List<AppStyle>) {
         val fixture = Fixture()
         val stopped = Session("computer-a", "stopped", title = "Ship the settings page", state = "idle", status = "done",
             lastText = "Pushed the branch and opened the PR")
@@ -280,12 +361,17 @@ class AssistantTraysShotsTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
         rule.onNodeWithText("Ship the settings page").performScrollTo()
-        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+        for (s in styles) for (d in listOf(false, true)) {
             style = s; dark = d; settle()
             rule.onNodeWithTag("assistant-tray-running").assertIsDisplayed()
-            rule.onNodeWithText("Stopped, not done yet · Waiting for CI to finish").assertIsDisplayed()
+            rule.onNodeWithText(line).assertIsDisplayed()
             rule.onNodeWithText("Pushed the branch and opened the PR").assertDoesNotExist()
-            shot("progress-stopped-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+            // its agents all stopped: it says Stopped, not In progress, and draws no spinning bar (#3576)
+            rule.onNodeWithTag("assistant-progress-todo:task-d").assert(hasText(stoppedLabel)).assert(!hasText(runningLabel))
+            rule.onAllNodes(hasProgressBarRangeInfo(androidx.compose.ui.semantics.ProgressBarRangeInfo.Indeterminate) and
+                hasAnyAncestor(hasTestTag("assistant-progress-todo:task-d")), useUnmergedTree = true).assertCountEquals(0)
+            rule.onNodeWithTag("assistant-progress-todo:task-a").assert(hasText(runningLabel))
+            shot("$name-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
     }
 
@@ -297,15 +383,33 @@ class AssistantTraysShotsTest {
         val todo = Todo("task-d", "Ship", origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)), check = check)
         fun row(t: Todo, s: Session = stopped) = trayProgress(listOf(t), emptyList(),
             AssistantTaskHost(fixture.tasks, "main", listOf(s), { it }, {}, {}, {})).single()
-        assertEquals("Waiting for CI", row(todo).stopped)
-        assertEquals("", row(todo.copy(check = check.copy(reason = null))).stopped)
-        assertNull(row(todo.copy(check = check.copy(verdict = "done"))).stopped)
-        assertNull(row(todo.copy(check = check.copy(verdict = "unsure"))).stopped)
-        assertNull(row(todo.copy(check = null)).stopped)
-        assertNull(row(todo, stopped.copy(state = "working", status = "working")).stopped)
-        assertNull(row(todo, stopped.copy(state = "needs_you", status = "blocked")).stopped)
-        assertNull(row(todo.copy(doneAt = "2026-11-01T11:00:00Z")).stopped)
-        assertNull(row(todo.copy(ask = TodoAsk("decide", "Pick one", askedAt = "2026-11-01T10:30:00Z"))).stopped)
+        assertEquals("Waiting for CI", row(todo).whyNotDone)
+        assertEquals("", row(todo.copy(check = check.copy(reason = null))).whyNotDone)
+        assertNull(row(todo.copy(check = check.copy(verdict = "done"))).whyNotDone)
+        assertNull(row(todo.copy(check = check.copy(verdict = "unsure"))).whyNotDone)
+        assertNull(row(todo.copy(check = null)).whyNotDone)
+        assertNull(row(todo, stopped.copy(state = "working", status = "working")).whyNotDone)
+        assertNull(row(todo, stopped.copy(state = "needs_you", status = "blocked")).whyNotDone)
+        assertNull(row(todo.copy(doneAt = "2026-11-01T11:00:00Z")).whyNotDone)
+        assertNull(row(todo.copy(ask = TodoAsk("decide", "Pick one", askedAt = "2026-11-01T10:30:00Z"))).whyNotDone)
+    }
+
+    /** A task whose agents all stopped is Stopped, not In progress, until one works again; one waiting on the user is
+     *  blocked, and a done one is done (#3576). */
+    @Test fun aTaskWhoseAgentsStoppedIsStoppedUntilOneWorks() {
+        val fixture = Fixture()
+        val agent = Session("computer-a", "stopped", title = "Ship", state = "idle", status = "done", lastText = "Opened the PR")
+        val todo = Todo("task-d", "Ship", origin = "main", agents = listOf(TodoAgent(agent.machineId, agent.sessionId)))
+        fun row(t: Todo, s: Session = agent) = trayProgress(listOf(t), emptyList(),
+            AssistantTaskHost(fixture.tasks, "main", listOf(s), { it }, {}, {}, {})).single()
+        assertTrue(row(todo).stopped)
+        assertTrue(row(todo, agent.copy(state = "unread")).stopped)
+        assertFalse(row(todo, agent.copy(state = "working", status = "working")).stopped)
+        val waits = row(todo, agent.copy(state = "needs_you", status = "blocked"))
+        assertFalse(waits.stopped); assertTrue(waits.blocked)
+        assertFalse(row(todo.copy(ask = TodoAsk("decide", "Pick one", askedAt = "2026-11-01T10:30:00Z"))).stopped)
+        assertFalse(row(todo.copy(doneAt = "2026-11-01T11:00:00Z")).stopped)
+        assertFalse(row(todo.copy(doneAt = "2026-11-01T11:00:00Z", doneBy = "cancelled")).stopped)
     }
 
     /** The #2920 entry this change replaced, kept here only as the "before" in the height comparison. */
