@@ -1,5 +1,20 @@
 # Lessons: hub / node and networking
 
+## Bubblewrap masks are mount views, not path-denial rules (#2977)
+
+A default-allow agent profile cannot reuse the extension sandbox's whitelist: bind the host root read-write, add
+`--dev-bind /dev /dev` (a plain root bind left `/dev/null` unusable for git, ssh and curl), and mask only the data
+directory with a view that binds back allowed entries. A bind follows the source's final symlink: an innocent-looking
+entry can import a secret target. Recreate ordinary links with `--symlink` so they resolve through the masked view, and
+close links for special read-only files or partially closed directories. Keep the view root read-only so later secret
+backups cannot be created. File binds still pin their inode and the top-level entry list: a replaced `node.sock` stays
+old, so a node restart requires an agent restart. Do not permanently cache probes or preflight success; bwrap/PATH and
+namespace availability can change, and full per-cwd profiles make an unbounded key space. A tmpfs mounted directly on a symlink follows it and masks the target; give an alias its own view, but do not
+claim this protects the link from unlink. Stock bwrap 0.8 has no path-aware unlink/rename filter, so protecting the link
+while keeping its parent writable needs another mechanism. It also keeps a supervisor even without `--unshare-pid` or
+with `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
+lifecycle cleanup.
+
 ## Runtime policy and publisher-owned node packages (#2566)
 
 A persisted node-update choice must override startup configuration everywhere:
