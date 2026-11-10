@@ -153,8 +153,14 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if len(t.DoneWhen) > 0 { // what the supervisor will check (supervise.go)
 		prompt += "\n\n" + prompts.RenderTaskDoneWhen(t.DoneWhen)
 	}
-	if !t.Readonly && s.doneNeedsDelivery(ctx) { // what done means: live and checked (delivery.go)
-		prompt += "\n\n" + prompts.RenderTaskDelivery()
+	// The closeout's form, up front (agents_closeout_brief.go): after the delivery line when both are asked for.
+	delivery := !t.Readonly && s.doneNeedsDelivery(ctx)
+	brief := s.closeoutBrief(ctx, delivery)
+	if delivery { // what done means: live and checked (delivery.go)
+		prompt += "\n\n" + prompts.RenderTaskDelivery(brief != "")
+	}
+	if brief != "" {
+		prompt += "\n\n" + brief
 	}
 	// The project background, and the todo's decisions (a task started again may have some), go before the prompt
 	// (#2820, #1618); the tab is named from the title.
@@ -183,6 +189,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		Session proto.Session `json:"session"`
 	}
 	picked, _ := params["launcher"].(string)
+	s.setPlanThen(ctx, m.ID, params)
 	if err := s.call(ctx, m.ID, DeviceSessionStart, params, &res); err != nil {
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
 		return "", "", err
