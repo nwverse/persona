@@ -200,6 +200,17 @@ func RenderAgentCloseoutRequired(c AgentCloseoutRequired) string {
 	return render("agents/closeout_required", c)
 }
 
+// AgentCloseoutAsk is the status question to an agent nobody supervises whose turn did work and ended without a
+// closeout (#3616): the same form and rules (agents/closeout_rules), about work already done.
+type AgentCloseoutAsk struct {
+	Form     string // the closeout's form (closeout.Example)
+	Language string // the user's language, for the sentences inside it
+}
+
+func RenderAgentCloseoutAsk(c AgentCloseoutAsk) string {
+	return render("agents/closeout_ask", c)
+}
+
 // AgentCloseoutBrief tells an agent the closeout's form before it works, so its turn does not cost a held stop
 // (agents/closeout_brief): after a task's prompt, or as a session's starting context.
 type AgentCloseoutBrief struct {

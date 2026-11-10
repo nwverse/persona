@@ -36,9 +36,11 @@ internal fun ChatHeader(
     onSearch: (() -> Unit)? = null,
     statusState: StatusLineState = StatusLineState(), onDetails: () -> Unit = {},
     onOpenTodo: ((String) -> Unit)? = null,
+    agentShares: (() -> AgentShares)? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
+    var sharing by remember(session?.key, agentShares) { mutableStateOf<AgentShares?>(null) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var title by rememberSaveable { mutableStateOf("") }
     var tabName by rememberSaveable { mutableStateOf("") }
@@ -52,7 +54,7 @@ internal fun ChatHeader(
     // Renaming changes the terminal tab and Claude's /rename: a session without a terminal has neither.
     val canRename = state.canRename && online && machine?.online != false && !readOnly && session != null && session.canTerminal
     LaunchedEffect(session?.key, menu) { if (session != null && menu) state.loadMute(session) }
-    LaunchedEffect(menu, dialog) { onOverlay(menu || dialog != null) }
+    LaunchedEffect(menu, dialog, sharing) { onOverlay(menu || dialog != null || sharing != null) }
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     val line = resolveStatusLine(statusState)
     val status = line?.status ?: Status.entries.firstOrNull { it.name == session?.agentState?.name } ?: Status.Unknown
@@ -90,6 +92,12 @@ internal fun ChatHeader(
         onGit?.let { add(JAction(gitLabel, onClick = it)) }
         add(JAction(stringResource(R.string.chat_chrome_details), onClick = onDetails))
         add(JAction(stringResource(R.string.chat_chrome_info), PhIcons.Info, enabled = session != null) { dialog = "info" })
+        if (session?.assistant == false) {
+            val unavailable = stringResource(R.string.chat_agent_share_authority)
+            add(JAction(stringResource(R.string.chat_agent_share_title), PhIcons.ShareNetwork, enabled = agentShares != null && online) {
+                try { sharing = agentShares?.invoke() } catch (_: Exception) { state.notice = unavailable }
+            })
+        }
         // A Codex app-server thread the phone may join live (iOS "Join live"); joined, it can answer its approvals.
         session?.takeIf { it.canAttach }?.let { target ->
             add(JAction(stringResource(R.string.chat_chrome_attach), PhIcons.PlugsConnected, enabled = canAct) { state.run(target, ChatAction.Attach) })
@@ -120,6 +128,7 @@ internal fun ChatHeader(
         // Only one that is not running (core:contracts Session.canDelete); the same words as the Agents list's.
         if (session?.canDelete == true) add(JAction(stringResource(R.string.chat_chrome_delete_chat), destructive = true, enabled = canAct) { dialog = "delete" })
     })
+    sharing?.let { api -> session?.let { AgentShareSheet(it.key, api, onDismiss = { sharing = null }) } }
     val feedback = LocalAppFeedback.current
     LaunchedEffect(state.notice) {
         state.notice?.let { if (feedback?.notice(it) == true && state.pending == null) state.notice = null }

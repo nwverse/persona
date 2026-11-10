@@ -1075,6 +1075,82 @@ if os.environ.get("MOCK_WORK"):
              work={"phase": "blocked", "on": "user", "line": "等你选 D2 / D4，要不要推到 beta"}),
     ]
 
+# MOCK_CLOSEOUT=1 (#3612, docs/assistant/agent-work.md "Closeout"): stopped agents that ended their turn with a closeout, one
+# per state the web draws: done with merged and deployed both confirmed by the hub; done saying merged where the hub
+# found the pull request open (the hub cannot call the turn finished: no phase, no line); blocked on someone, nothing
+# checked; not done, with a reply that is only the block. Each one's last reply carries the raw block (CLOSEOUT_REPLIES,
+# put in ITEMS below). Session lists with summary=1 leave `did` and `verified` out, as the hub's do. Settings › Session
+# triage has the `closeout` switch either way.
+MOCK_CLOSEOUT = os.environ.get("MOCK_CLOSEOUT") == "1"
+TRIAGE["closeout"] = False
+if MOCK_CLOSEOUT:
+    TRIAGE["enabled"] = True
+CLOSEOUT_DONE = "a9c00000-0000-4000-8000-000000000001"
+CLOSEOUT_DISPROVED = "a9c00000-0000-4000-8000-000000000002"
+CLOSEOUT_BLOCKED = "a9c00000-0000-4000-8000-000000000003"
+CLOSEOUT_NOT_DONE = "a9c00000-0000-4000-8000-000000000004"
+CLOSEOUT_REPLIES = {
+    CLOSEOUT_DONE: ("导出超时修好了：大报表改成分页流式写出，线上导出 50 万行用时从 94 秒降到 11 秒。\n\n"
+                    '<closeout status="done" merged="yes" deployed="yes">\n'
+                    "did: 报表导出改成分页流式写出，不再一次读进内存\n"
+                    "did: 给导出接口补了 50 万行的压测用例\n"
+                    "artifact: pr https://github.com/example/app/pull/31\n"
+                    "artifact: commit 4f2a91c\n"
+                    "verified: 线上导出 50 万行，用时 11 秒（之前 94 秒超时）\n"
+                    "</closeout>"),
+    CLOSEOUT_DISPROVED: ("支付 SDK 升到 v4 了，回调验签换成了新接口，PR 已经合并。\n\n"
+                         '<closeout status="done" merged="yes" deployed="no">\n'
+                         "did: 支付 SDK 从 v3 升到 v4，回调验签换成新接口\n"
+                         "artifact: pr https://github.com/example/app/pull/32\n"
+                         "verified: 单元测试 212 个全过；沙箱环境没有测\n"
+                         "missing: 上线前要有人在沙箱里走一遍真实支付\n"
+                         "</closeout>"),
+    CLOSEOUT_BLOCKED: ("迁移脚本写好了，在预发库上跑过一遍。正式库要等 DBA 给迁移窗口，我先停在这里。\n\n"
+                       '<closeout status="blocked" merged="no" deployed="n/a">\n'
+                       "did: 写了用户表拆分的迁移脚本，可重复执行\n"
+                       "artifact: branch feat/split-users\n"
+                       "artifact: doc docs/migrations/split-users.md\n"
+                       "verified: 预发库跑通，120 万行用时 3 分 40 秒\n"
+                       "waiting: DBA 批准正式库的迁移窗口\n"
+                       "</closeout>"),
+    CLOSEOUT_NOT_DONE: ('<closeout status="not_done">\n'
+                        "did: 搜索页的结果高亮做了一半，中文分词还没接\n"
+                        "verified: untested\n"
+                        "missing: 需要你确认用哪个分词库\n"
+                        "</closeout>"),
+}
+if MOCK_CLOSEOUT:
+    SESSIONS += [
+        sess("server", CLOSEOUT_DONE, "修复报表导出超时", "/home/me/code/app", "done", "unread", "app", 7, "export", 3, 3,
+             CLOSEOUT_REPLIES[CLOSEOUT_DONE],
+             work={"phase": "done", "line": "报表导出改成分页流式写出，不再一次读进内存", "by": "rule",
+                   "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/31"}, {"kind": "commit", "ref": "4f2a91c"}],
+                   "closeout": {"status": "done", "merged": "yes", "deployed": "yes",
+                                "did": ["报表导出改成分页流式写出，不再一次读进内存", "给导出接口补了 50 万行的压测用例"],
+                                "verified": "线上导出 50 万行，用时 11 秒（之前 94 秒超时）",
+                                "checked": {"merged": "yes", "deployed": "yes"}}}),
+        sess("server", CLOSEOUT_DISPROVED, "升级支付 SDK", "/home/me/code/app", "done", "unread", "app", 7, "pay", 4, 5,
+             CLOSEOUT_REPLIES[CLOSEOUT_DISPROVED],
+             work={"phase": "", "by": "rule", "artifacts": [{"kind": "pr", "ref": "https://github.com/example/app/pull/32"}],
+                   "closeout": {"status": "done", "merged": "yes", "deployed": "no",
+                                "did": ["支付 SDK 从 v3 升到 v4，回调验签换成新接口"],
+                                "verified": "单元测试 212 个全过；沙箱环境没有测",
+                                "missing": "上线前要有人在沙箱里走一遍真实支付",
+                                "checked": {"merged": "no"}}}),
+        sess("server", CLOSEOUT_BLOCKED, "拆分用户表", "/home/me/code/app", "done", "unread", "app", 7, "migrate", 5, 8,
+             CLOSEOUT_REPLIES[CLOSEOUT_BLOCKED],
+             work={"phase": "blocked", "on": "external", "line": "等 DBA 批准正式库的迁移窗口", "wait": "DBA 批准迁移窗口", "by": "model",
+                   "artifacts": [{"kind": "branch", "ref": "feat/split-users"}, {"kind": "doc", "ref": "docs/migrations/split-users.md"}],
+                   "closeout": {"status": "blocked", "waiting": "DBA 批准正式库的迁移窗口", "merged": "no",
+                                "did": ["写了用户表拆分的迁移脚本，可重复执行"],
+                                "verified": "预发库跑通，120 万行用时 3 分 40 秒"}}),
+        sess("server", CLOSEOUT_NOT_DONE, "搜索结果高亮", "/home/me/code/app", "done", "unread", "app", 7, "search", 6, 10,
+             CLOSEOUT_REPLIES[CLOSEOUT_NOT_DONE],
+             work={"phase": "blocked", "on": "user", "line": "等你确认用哪个分词库", "by": "model",
+                   "closeout": {"status": "not_done", "did": ["搜索页的结果高亮做了一半，中文分词还没接"],
+                                "verified": "untested", "missing": "需要你确认用哪个分词库"}}),
+    ]
+
 # MOCK_SOURCES=1: sessions that do not live in a terminal engine (docs/protocol/protocol.md "Codex sources and capabilities"): a live Codex
 # app-server thread the phone can write to and join (POST …/attach; joining lets it approve), a Codex history thread it
 # can only read, and an agent runtime's session (DSH: agent_label, no terminal) whose permission card has no
@@ -1713,6 +1789,9 @@ SCHEDULE_RAN = []  # what "Run now" started (UI tests read it back at /mock/sche
 ASSISTANT_HUB_NOTES = "代码都在 ~/code 下，平时用 MacBook 开发。\n周报每周五下班前先给我草稿，不要直接发。\n服务器上的 /srv 目录不要动。"
 ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "Asia/Shanghai", "notes": None, "main": ASK1,
                     "main_tasks_quiet": True,  # Notify tasks dispatched from the main chat only in that chat (#1731), on by default
+                    # Every agent Persona starts is a supervised task (#3617), off by default; closed sessions archive
+                    # themselves after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
+                    "agent_tasks": False, "archive_closed_days": 3,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off")}
 
@@ -1728,6 +1807,8 @@ def assistant_state(space="", archived=False):
            "timezone": cfg["timezone"], "notes_effective": notes.strip(), "main_tasks_quiet": cfg["main_tasks_quiet"],
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
+    if not os.environ.get("MOCK_LEGACY_HUB"):
+        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -2133,6 +2214,15 @@ TODO_ASKS = {
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
 
+# MOCK_ORPHANED=1 (#3618, docs/assistant/todos.md "Nobody is working on this"): open to-dos whose agents are gone, as GET
+# /api/v1/todos carries it, on to-dos whose agents have stopped, one per reason: closed after a model error (the PR
+# check), the computer offline (the blog) and, with MOCK_TASKS, closed (the blog task) and the release notes' task card
+# in the main chat (closed after an error). A done to-do carries none.
+TODO_ORPHANED = {
+    "todo_review": "error", "todo_blog": "offline", "todo_task_blog": "closed", "todo_task_release": "error",
+} if os.environ.get("MOCK_ORPHANED") == "1" else {}
+TODO_ORPHANED_SINCE = ago(hours=5)
+
 
 def sorted_todos():
     tds = copy.deepcopy(TODOS)
@@ -2141,6 +2231,8 @@ def sorted_todos():
     for t in out:
         if t.get("done_at") is None and t["id"] in TODO_ASKS and t["id"] not in BRIEF_ACCEPTED:
             t["ask"] = dict(TODO_ASKS[t["id"]], asked_at=TODO_ASKED_AT)
+        if t.get("done_at") is None and t["id"] in TODO_ORPHANED:
+            t["orphaned"] = {"reason": TODO_ORPHANED[t["id"]], "since": TODO_ORPHANED_SINCE}
     return out
 
 
@@ -3341,6 +3433,13 @@ if os.environ.get("MOCK_OPENCODE"):
     ITEMS[OC_IDLE] = [it("user", "text", 60 * 4, text="CI 里的依赖缓存为什么一直没命中？")] + [
         it("assistant", "text", 60 * 3, text="缓存键里带了时间戳，每次都是新的；改成 lockfile 的哈希就好了。")]
 ITEMS[RECIPE] = [it("user", "text", 60 * 27, text="菜谱网站加个搜索")] + [it("assistant", "text", 60 * 26, text="搜索做好了，支持按食材和用时筛选。")]
+if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
+    for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
+                             (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "npm test"),
+                             (CLOSEOUT_BLOCKED, "把用户表按地区拆开", "./scripts/migrate.sh --env staging"),
+                             (CLOSEOUT_NOT_DONE, "搜索结果里把命中的词标出来", "npm run build")):
+        ITEMS[_sid] = ([it("user", "text", 30, text=_ask)] + tool("Bash", {"command": _cmd, "description": "跑一遍"}, "ok", 12)
+                       + [it("assistant", "text", 3, text=CLOSEOUT_REPLIES[_sid])])
 
 ITEMS[ASK1] = (
     [it("user", "text", 4, text="今天有什么需要我处理的？")]
@@ -9737,6 +9836,10 @@ def paged_sessions(query):
     selected = [s for kind, s in page if kind == "row"]
     if query.get("summary", [""])[0] == "1":
         selected = [{**s, "waiting": bool(s.get("background_waiting"))} for s in selected]
+        for i, s in enumerate(selected):  # a row's closeout says where it stands, not what it did (hub sessions_list.go)
+            if (s.get("work") or {}).get("closeout"):
+                row = {k: v for k, v in s["work"]["closeout"].items() if k not in ("did", "verified")}
+                selected[i] = {**s, "work": {**s["work"], "closeout": row}}
     more = offset + limit < len(changes)
     if not since: total = len(rows)
     result = {"sessions": selected, "remove": [k for kind, k in page if kind == "remove"], "has_more": more,
@@ -17099,6 +17202,13 @@ class H(BaseHTTPRequestHandler):
                 if is_read_only(self): return self.send_json({"error": "只有完整权限的设备可以改", "code": "forbidden"}, 403)
                 if body["meeting_attendance_default"] not in MEETING_ROLES:
                     return self.send_json({"error": "meeting_attendance_default 只能是 off、listener 或 participant"}, 400)
+            if "archive_closed_days" in body:  # 0–3650, as the hub checks it (#3618)
+                days = body["archive_closed_days"]
+                if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
+                    return self.send_json({"error": "archive_closed_days must be 0–3650"}, 400)
+                ASSISTANT_CONFIG["archive_closed_days"] = days
+            if isinstance(body.get("agent_tasks"), bool):
+                ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -19443,6 +19553,62 @@ def features():
 
 MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 agent_session_archives 和 agent_session_archive_close（archive：只有归档，像旧管理器）；"
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
+MOCK_HELP.append("MOCK_CLOSEOUT=1  Four stopped agents on the server that ended their turn with a closeout (#3612): done with merged and deployed confirmed by the hub; "
+                 "done saying merged where the hub found it is not; blocked on someone, nothing checked; not done, its reply only the block. Each last reply carries the raw block")
+MOCK_HELP.append("MOCK_ORPHANED=1  Open to-dos nobody is working on (#3618): `orphaned` on the PR check (error), the blog (offline) and, "
+                 "with MOCK_TASKS=1, the blog task (closed) and the release notes task (error)")
+
+# MOCK_TASK_TRAY_ACTIVITY=1|summary: four deterministic tray rows for Apple UI verification.
+# Parent turns have ended: a command, a workflow, a subagent, and a wake-up with no background work.
+# summary uses the compact #3588 projection, without chat-only background/subagent/workflow arrays.
+if MOCK_TASKS and os.environ.get("MOCK_TASK_TRAY_ACTIVITY") in ("1", "summary"):
+    activity_rows = [
+        ("tray-command", WIDGET, "Background build verification"),
+        ("tray-workflow", ORDERS, "Workflow review verification"),
+        ("tray-subagent", REVIEW, "Subagent review verification"),
+        ("tray-wait", BLOG, "Scheduled wake-up verification"),
+    ]
+    keep = {sid for _, sid, _ in activity_rows}
+    SESSIONS[:] = [s for s in SESSIONS if s.get("assistant") or s["session_id"] in keep]
+    TODOS_INIT[:] = []
+    for index, (tid, sid, title) in enumerate(activity_rows):
+        session = next(s for s in SESSIONS if s["session_id"] == sid)
+        session.update(state="working", status="working", pending_interactions=0,
+                       background_working=True, background_waiting=False, title=title)
+        for field in ("background", "subagents", "workflows", "loop", "activity", "work"):
+            session.pop(field, None)
+        if sid == WIDGET:
+            session["background"] = [{"id": "tray-build", "kind": "shell", "description": "Build verification"},
+                                     {"id": "tray-monitor", "kind": "monitor", "description": "Test verification"}]
+        elif sid == ORDERS:
+            session["workflows"] = [{"task_id": "tray-run", "run_id": "tray-workflow-run", "name": "Review changes",
+                                     "running": True, "status": "running", "phases": ["Review", "Verify"],
+                                     "phase": "Verify", "phase_index": 2, "agents_started": 6, "agents_done": 5,
+                                     "agents_running": 1}]
+            session["background"] = [{"id": "tray-run", "kind": "workflow", "run_id": "tray-workflow-run"}]
+        elif sid == REVIEW:
+            session["subagents"] = [{"id": "tray-child", "session_id": sid + "@tray-child", "running": True,
+                                     "description": "Verify changes", "background": True}]
+        else:
+            session.update(background_working=False, background_waiting=True)
+        if os.environ.get("MOCK_TASK_TRAY_ACTIVITY") == "summary":
+            session["waiting"] = True
+            session["background_tasks_count"] = 2 if sid == WIDGET else 0
+            if sid == ORDERS:
+                progress = dict(session["workflows"][0], phase_count=2)
+                progress.pop("phases", None)
+                progress.pop("run_id", None)
+                session.update(running_workflows=1, workflow_progress=progress)
+            if sid == REVIEW:
+                session["running_subagents"] = 1
+            for field in ("background", "subagents", "workflows"):
+                session.pop(field, None)
+        ORIG_STATE[sid] = ("working", "working")
+        todo = _task_todo(tid, title, "", session["machine_id"], sid, "/demo", index + 1, "")
+        TODOS_INIT.append(todo)
+    TODOS = copy.deepcopy(TODOS_INIT)
+    TASK_PLANS.clear()
+    TASK_FEED[ASK1] = []
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="用于客户端测试的 mock hub")
