@@ -588,11 +588,19 @@ main chat (`ownConversationIfQuiet`: selecting `asked` clears a `session_id` tha
 (`run_session_id`) and a normal completion (`assistantwire.NormalFinish`, based on pushed text: final work explanation or last answer), suppress "Finished"
 but still finish through `settle`. Channel forwarding (Lark, plugin sync and task pushes) skips under the same `quietTaskTurn` rule.
 
-**In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run holds that chat's pushes the way a supervision
-message does (`holdPushes`, the send carries `hold_pushes`): its normal finish is neither pushed nor mirrored to channels (`SupervisedFinish`), until the user or any
-other message speaks there (`releasePushes`). The chat stays the user's: their own turns push as ever. A run that arrives while another turn is on there (or the chat
-waits for the user) does not hold, so that turn's finish is not swallowed; that run is pushed as before. Errors, cut-offs, stuck turns, `notify_user` and escalated asks
-reach the user as ever. The hold is in memory: after a manager restart the next finish pushes.
+**In the chat it came from** (`session_id` set, such as a leader conversation's patrol or daily round, #3673), the run writes `push: "asked"` into its persisted
+message source. A normal completion is quiet when the turn's input (its last user text that is neither queued nor a wake) has that source and nothing of the
+user's follows it (`quietTurnItems`):
+
+- A user message absorbed mid-turn (a queued text or image item before the final answer) makes the answer the user's too, so it pushes and mirrors.
+- A user message held until the turn ends starts the next turn. That turn's input has no scheduled push mode, so its answer pushes and mirrors.
+- A background wake after the patrol input stays quiet only when the patrol's own turn launched that task (its call id, or its task id in a call's result).
+  The result of a task the user started earlier, a loop firing, or a peer's message pushes.
+
+Only conversations an asked task posts into are read (`askedTaskPostsInto`). After reading the transcript, the manager checks that the session's status, revision, and
+update time did not change, so a turn that started during the read is not hidden. It does not compare `last_text`, which the node collapses and cuts to 200 runes.
+Errors, cut-offs, stuck turns, `notify_user`, and escalated asks reach the user as before. A source without `push`, including one from an older manager, keeps the old
+every-answer behavior.
 
 Cost (own chat): user-authored messages in that chat also don't push on completion. People generally don't chat in task-owned chats; if they do, they're likely viewing the App.
 
