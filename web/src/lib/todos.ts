@@ -69,8 +69,6 @@ export interface Todo {
   start_error?: string;
   /** The main conversation supervises it (#3124): what done means and where its review stands (lib/supervision.ts). */
   supervision?: Supervision;
-  /** The owner's outstanding acceptance/decision round; the existing accept route takes asked_at verbatim. */
-  ask?: { outcome?: "done" | "cannot" | "decide"; verdict: string; recommend?: string; asked_at: string };
   /** How far the work got (`plan` / `develop` / `review` / `merge` / `deploy` / `verify`, #2776); unset on hubs that
    * don't send it, and unknown values draw nothing (lib/todo-stage.ts). */
   stage?: string;
