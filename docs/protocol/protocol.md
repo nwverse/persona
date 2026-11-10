@@ -726,8 +726,8 @@ A permission card offers **Always allow** only where the answer is kept (#3590).
   and health confirmations; and on a node's card in an assistant chat it will not remember (keys but no store, more
   than 32 keys, `fields`, or a health conversation's card, confirmed each time). Clients show only Allow and Deny, and
   no scope line. An `always` answered on such a card anyway (an older client) is dropped: the card is allowed once.
-- absent: clients keep their own rule, as before: on iOS a card with a session, on the web and in Lark a card from
-  Claude (no `agent`, or `claude`) or one with an `always_label`. Agents sessions' cards never carry the field: their
+- absent: clients keep their own rule, as before: on iOS a card with a session, on the web, Android and in Lark a card
+  from Claude (no `agent`, or `claude`) or one with an `always_label`. Agents sessions' cards never carry the field: their
   agent keeps Always itself (Claude Code's session rule).
 
 The field is a tri-state rather than a plain "kept" flag because absence cannot mean "not kept": an Agents session's

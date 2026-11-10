@@ -132,6 +132,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                         scope.launch {
                             try {
                                 connector = connectors?.setConnectorEnabled(c.id, want)
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
                             }
@@ -151,6 +153,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                                 scope.launch {
                                     try {
                                         connector = connectors?.setConnectorFeed(c.id, "archive", want)
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (e: Exception) {
                                         feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
                                     }
@@ -167,6 +171,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                                 scope.launch {
                                     try {
                                         connector = connectors?.setConnectorFeed(c.id, "inbox", want)
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (e: Exception) {
                                         feedback?.notice(res.getString(R.string.settings_src_save_failed, e.message.orEmpty()))
                                     }
@@ -229,6 +235,8 @@ private fun HubConnectorDetails(connectors: ConnectorsManagement?, connectorId: 
                         connectors?.deleteConnectorData(c.id)
                         feedback?.notice(res.getString(R.string.settings_src_data_deleted))
                         load()
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         feedback?.notice(res.getString(R.string.settings_src_delete_failed, e.message.orEmpty()))
                     }
