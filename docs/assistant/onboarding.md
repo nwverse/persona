@@ -36,7 +36,7 @@ Terminology rules (enforced by the copy guard tests in section 8.1):
 
 | Step | What users must do today | Where they get stuck | Evidence |
 | --- | --- | --- | --- |
-| Get the app | iOS is TestFlight-only and requires iOS 26+; Android requires sideloading an APK; the website FAQ says "Write to us if you'd like to try it" | The first step excludes most people | `site/public/index.html`, README "Platforms" |
+| Get the app | iOS is TestFlight-only and requires iOS 26+; Android requires sideloading an APK; the website links the public TestFlight beta and its demo mode (#3842; it used to say "Write to us if you'd like to try it") | The first step excludes most people | `site/public/index.html`, README "Platforms" |
 | Install hub | `install.sh --hub` only installs a binary; it does not create Postgres, install a service, or start it. It ends with the English instruction `personad hub run … then personad hub pair` | Starting in an empty directory exits immediately: `database_url is empty (run scripts/deploy/deploy.sh …)`, pointing to a repository script the user does not have | `scripts/deploy/install.sh:421`, `server/internal/db/db.go:37` |
 | First pairing code | All four platforms' first screens say "Run `personad hub pair`"; the web login page also teaches `jq -r .token ~/.persona/hub.json` | Users without a terminal stop here. `/admin` can generate a code, but setting its password locally requires a one-time setup code from the logs | `web/src/views/Login.tsx:45-48`, `server/internal/hub/admin_setupcode.go:51-52,75-79` |
 | Address in the QR code | The default `public_url` is `http://<full-hostname>:18660` | Phones often cannot resolve the hostname; changing the port does not update it either | `server/internal/hub/config.go:215` |

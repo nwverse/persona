@@ -141,14 +141,13 @@
     <string name="agents_repo_repository">仓库</string>
     <string name="agents_repo_main_checkout">主工作树</string>
     <string name="agents_repo_worktree">工作树</string>
-    <string name="agents_card_question">有问题等你回答</string>
-    <string name="agents_card_question_by">%1$s 有问题等你回答</string>
-    <string name="agents_card_permission">请求使用 %1$s</string>
-    <string name="agents_card_permission_by">%1$s 请求使用 %2$s</string>
-    <string name="agents_card_tool">工具</string>
-    <string name="agents_card_plan">计划等你批准</string>
-    <string name="agents_card_screen">终端里有对话框等你处理</string>
-    <string name="agents_card_other">需要你处理</string>
+    <string name="agents_card_question">Claude 在问你</string>
+    <string name="agents_card_question_by">%1$s 在问你</string>
+    <string name="agents_card_permission">需要你授权</string>
+    <string name="agents_card_permission_by">%1$s 需要你授权</string>
+    <string name="agents_card_plan">计划等你审批</string>
+    <string name="agents_card_screen">终端等你处理</string>
+    <string name="agents_card_other">需要你</string>
     <string name="agents_card_open_session">打开会话查看请求</string>
     <string name="agents_space_index">空间 %1$d</string>
     <string name="agents_space_missing">未提供空间</string>
@@ -513,5 +512,29 @@
     <string name="agents_todo_state_accepted">已验收</string>
     <plurals name="agents_todos_related">
         <item quantity="other">%1$d 个相关</item>
+    </plurals>
+    <!-- The to-dos' month (#2046) -->
+    <string name="agents_todos_view_list">列表</string>
+    <string name="agents_todos_view_calendar">日历</string>
+    <string name="agents_todo_calendar_options">日历选项</string>
+    <string name="agents_todo_calendar_show_done">显示已完成</string>
+    <string name="agents_todo_calendar_today">今天</string>
+    <string name="agents_todo_calendar_previous">上个月</string>
+    <string name="agents_todo_calendar_next">下个月</string>
+    <string name="agents_todo_calendar_more">+%1$d</string>
+    <string name="agents_todo_calendar_see_list">看列表</string>
+    <string name="agents_todo_calendar_nothing_due">这天没有到期的待办</string>
+    <string name="agents_todo_calendar_all_day">全天</string>
+    <string name="agents_todo_calendar_reminder">有提醒</string>
+    <string name="agents_todo_calendar_moved">已移到 %1$s</string>
+    <string name="agents_todo_calendar_undo">撤销</string>
+    <string name="agents_todo_calendar_move_failed">没能改截止时间：%1$s</string>
+    <string name="agents_todo_calendar_change_due">改截止时间</string>
+    <string name="agents_todo_calendar_change_due_action">改截止时间…</string>
+    <string name="agents_todo_calendar_change_due_of">改截止时间：%1$s…</string>
+    <string name="agents_todo_calendar_date">日期</string>
+    <string name="agents_todo_calendar_time">时间</string>
+    <plurals name="agents_todo_calendar_undated">
+        <item quantity="other">%1$d 条没有截止</item>
     </plurals>
 </resources>

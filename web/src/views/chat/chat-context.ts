@@ -22,6 +22,9 @@ export interface ChatContextValue {
   workflowCalls?: WorkflowCalls;
   /** Conversation identity; both styles share the collapsed work-line default (#2602). */
   lineStyle?: WorkLineStyle;
+  /** The exchange whose last words carried the closeout the card above the transcript shows (#3612): they are drawn
+   *  without the raw block. Unset while no card is shown. */
+  closeoutSegment?: string;
 }
 
 export const ChatContext = createContext<ChatContextValue>({ tasks: emptyTaskIndex(), subagents: [], scope: "", workflowCalls: NO_WORKFLOW_CALLS });

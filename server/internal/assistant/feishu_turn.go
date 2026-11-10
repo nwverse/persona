@@ -41,11 +41,16 @@ const (
 
 func (feishuSink) progressIdle() time.Duration { return feishuProgressIdle }
 
-// When Feishu says the card is updated too often, updates stop for 5 s, then 10, 20, at most 30; the answer is not held.
+// When Feishu says the card is updated too often, updates stop for 5 s, then 10, 20, at most 30; the answer is not
+// held back by the pause, except that its own last write into the card waits the first window out once (answerCardWait).
 const (
 	cardBackoffFirst = 5 * time.Second
 	cardBackoffMost  = 30 * time.Second
 )
+
+// answerCardWait is how long the answer waits out a refused update of the progress card before giving up on the card:
+// the run is over, so no later update writes it again.
+var answerCardWait = cardBackoffFirst
 
 // chansNow is the channels' clock.
 func (s *Service) chansNow() time.Time {
@@ -207,7 +212,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			endHeader(l, c, end)
 		}
 		if quiet && i == 0 {
-			if err := s.botUpdateCard(ctx, card, c); err != nil {
+			if err := s.botUpdateAnswerCard(ctx, card, c); err != nil {
 				s.logf("bots: the progress card's end: %v", err)
 			}
 			break
@@ -215,7 +220,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		var mid string
 		var err error
 		if i == 0 && card != "" {
-			if err = s.botUpdateCard(ctx, card, c); err == nil {
+			if err = s.botUpdateAnswerCard(ctx, card, c); err == nil {
 				mid = card
 			} else {
 				s.logf("bots: answer into the progress card: %v; sending it", err)
@@ -254,6 +259,25 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		}
 	}
 	return nil
+}
+
+// botUpdateAnswerCard writes the answer into the progress card. Feishu refusing the update for being too often is
+// waited out once: the run is over, so no later update writes that card again, and the owner would keep a card that
+// says it is still working. Any other refusal, and a second one, is left to the caller (a card of the answer's own).
+func (s *Service) botUpdateAnswerCard(ctx context.Context, messageID string, card *feishubot.Card) error {
+	err := s.botUpdateCard(ctx, messageID, card)
+	if err == nil || !feishubot.RateLimited(err) {
+		return err
+	}
+	s.logf("bots: the progress card's answer: %v; waiting %s", err, answerCardWait)
+	t := time.NewTimer(answerCardWait)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.botUpdateCard(ctx, messageID, card)
 }
 
 // missingPiecesNote says, in l, which pieces of an answer did not get to Feishu (1-based) and where the whole is.

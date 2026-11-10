@@ -226,7 +226,19 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if purpose == "" {
 		purpose = "assistant"
 	}
+	if p.Launcher != "" {
+		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
+		switch fit {
+		case mainChatRefused:
+			return proto.Session{}, refusal
+		case mainChatGone:
+			delete(params, "launcher")
+		}
+	}
 	if err := s.applyModel(ctx, purpose, params); err != nil {
+		return proto.Session{}, err
+	}
+	if err := s.finishMainChatModel(ctx, machine, purpose, params, false); err != nil {
 		return proto.Session{}, err
 	}
 	used, _ := params["launcher"].(string)
@@ -753,6 +765,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		p["model"], picked = m, true
 	}
 	l, _ := p["launcher"].(string)
+	asked := l != "" // picked in the chat's menu for this message
 	if l == "" && !followsSetting {
 		if c, known := s.session(ctx, machine, sid); known {
 			l = c.Launcher // no launcher picked: the one this conversation runs
@@ -765,14 +778,18 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			}
 		}
 	}
-	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped) fails every turn:
-	// fall back to the assistant's launcher and its default.
+	// A launcher or model that is gone (a renamed managed launcher, a model the gateway dropped), or a launcher that
+	// can't run the assistant (a Paseo provider, a managed Codex one: launcher_mainchat.go) fails every turn: fall back
+	// to the assistant's launcher and its default. One picked for this message that can't run it is refused, saying why.
 	if l != "" {
 		model, _ := p["model"].(string)
+		fit, refusal := s.mainChatFit(ctx, machine, l)
 		switch {
-		case !s.launcherAvailable(ctx, machine, l): // true when it can't be told
+		case fit == mainChatRefused && asked:
+			return refusal
+		case fit != mainChatFits:
 			l = s.launcherNow(ctx)
-			s.logf("[%s] %s: its launcher is gone, using %s", machine, short(sid), l)
+			s.logf("[%s] %s: its launcher can't run it any more, using %s", machine, short(sid), l)
 			p["launcher"] = l
 			delete(p, "model")
 		case model != "" && !picked && !s.launcherHasModel(ctx, machine, l, model):
@@ -780,10 +797,15 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 			delete(p, "model")
 		}
 	}
-	if l != "" {
-		return s.applyPickedModel(ctx, p)
+	pickedLauncher := l != ""
+	if pickedLauncher {
+		if err := s.applyPickedModel(ctx, p); err != nil {
+			return err
+		}
+	} else if err := s.applyModel(ctx, "assistant", p); err != nil {
+		return err
 	}
-	return s.applyModel(ctx, "assistant", p)
+	return s.finishMainChatModel(ctx, machine, "assistant", p, pickedLauncher)
 }
 
 // isTaskConversation: sid on machine is a scheduled task's own conversation.
@@ -793,7 +815,8 @@ func (s *Service) isTaskConversation(ctx context.Context, machine, sid string) b
 
 // Rename is assistant.rename: the user renames conversation p.SessionID in the app ({title?, tab_name?}). The main
 // conversation has no title to change; a Codex one keeps the assistant's title (its tab is still renamed). The node
-// renames; a new title is the user's from now on.
+// renames; a new title is the user's from now on. An extension's (p.Extension, as the hub's auth found it) is only a
+// hint (titleHinted): the hub still names a conversation it started, as it names the others.
 func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, error) {
 	params := p.Params
 	if params == nil {
@@ -815,7 +838,11 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 			return nil, err
 		}
 	}
-	if strings.TrimSpace(title) != "" {
+	switch {
+	case strings.TrimSpace(title) == "":
+	case p.Extension != "":
+		s.titleHinted(p.MachineID, p.SessionID, title)
+	default:
 		s.titleSet(p.MachineID, p.SessionID, title, titleByUser)
 	}
 	return out, nil

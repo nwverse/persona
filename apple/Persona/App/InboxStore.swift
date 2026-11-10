@@ -154,8 +154,8 @@ final class InboxStore {
     /// Open items that still need the user, including ones already read.
     var actionCount: Int { items.filter { !$0.isDone && $0.triage == .action }.count }
 
-    /// Unread open items across all pending sections.
-    var unreadCount: Int { items.filter(\.isUnread).count }
+    /// Unread open items in Needs you.
+    var unreadCount: Int { items.filter(\.isUnreadAction).count }
 
     /// Pulls the list (bursts of `inbox` events collapse into one request).
     func reload() {

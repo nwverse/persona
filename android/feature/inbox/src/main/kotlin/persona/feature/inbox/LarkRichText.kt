@@ -296,8 +296,8 @@ fun LarkCodeBlock(code: String, language: String, modifier: Modifier = Modifier)
                 for (t in tokens) {
                     val color = when (t.kind) {
                         LarkSyntax.Kind.KEYWORD -> palette.accent
-                        LarkSyntax.Kind.STRING -> RichTextTokens.Syntax.string
-                        LarkSyntax.Kind.NUMBER -> RichTextTokens.Syntax.number
+                        LarkSyntax.Kind.STRING -> palette.codeString
+                        LarkSyntax.Kind.NUMBER -> palette.codeNumber
                         LarkSyntax.Kind.COMMENT -> palette.ink3
                         LarkSyntax.Kind.PLAIN -> palette.ink
                     }

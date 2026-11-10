@@ -49,7 +49,7 @@ describe("设置 › 会话分诊", () => {
     expect(switches()).toHaveLength(0);
     expect(host.textContent).toContain("加载中");
     await answer(0, ON);
-    expect(switches()).toHaveLength(6);
+    expect(switches()).toHaveLength(7);
     expect(named("会话分诊")!.getAttribute("aria-checked")).toBe("true");
   });
 
@@ -98,7 +98,7 @@ describe("设置 › 会话分诊", () => {
     await act(async () => retry()!.click());
     expect(pending).toHaveLength(3);
     await answer(2, ON);
-    expect(switches()).toHaveLength(6);
+    expect(switches()).toHaveLength(7);
   });
 
   it("tool loop defaults off and saves without changing the other switches", async () => {
@@ -112,6 +112,28 @@ describe("设置 › 会话分诊", () => {
     expect(loop.getAttribute("aria-checked")).toBe("true");
     await act(async () => named("到点叫醒")!.click());
     expect(pending[2].json).toEqual({ ...ON, tool_loop: true, wake: false });
+  });
+
+  it("ask for a closeout defaults off, saves with the hub's other switches, and needs the main switch", async () => {
+    await render();
+    // a switch this page does not draw (closeout_ask) goes back to the hub as it came
+    await answer(0, { ...ON, closeout_ask: true });
+    const closeout = named("要收尾记录")!;
+    expect(closeout.getAttribute("aria-checked")).toBe("false");
+    expect(closeout.disabled).toBe(false);
+    expect(host.textContent).toContain("会多花它自己模型的一小轮");
+    await act(async () => closeout.click());
+    expect(pending[1].json).toEqual({ ...ON, closeout_ask: true, closeout: true });
+    // an older hub answers without the field: the switch is off again, as it is on that hub
+    await answer(1, ON);
+    expect(closeout.getAttribute("aria-checked")).toBe("false");
+    await act(async () => closeout.click());
+    await fail(2, hubSays(500, "500"));
+    expect(closeout.getAttribute("aria-checked")).toBe("false");
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/^没改成：/), "error");
+    await act(async () => named("会话分诊")!.click());
+    await answer(3, { ...ON, enabled: false });
+    expect(named("要收尾记录")!.disabled).toBe(true);
   });
 
   it("hub 没有这个接口（太旧）：说不支持，不给重试", async () => {

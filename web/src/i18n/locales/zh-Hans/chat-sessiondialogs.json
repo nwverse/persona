@@ -68,5 +68,11 @@
   "archive_close_title": "归档并关闭 Agent",
   "archive_close_detail": "Persona 会归档「{title}」，并关闭它在 {machine} 上的标签页和进程。对话记录留在电脑上：可以在「已归档的 Agent」里恢复，再发一条消息就会接着这个会话。",
   "archive_close": "归档并关闭",
-  "bypass_confirm": "确认切到全部放行"
+  "bypass_confirm": "确认切到全部放行",
+  "speed": "速度",
+  "speed_standard": "标准",
+  "speed_fast": "Fast 加速",
+  "speed_unknown": "未知",
+  "speed_standard_detail": "使用标准速度和用量。",
+  "speed_paid_detail": "加快响应，会增加用量或费用。"
 }
