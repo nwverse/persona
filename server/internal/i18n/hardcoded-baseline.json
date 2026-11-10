@@ -1,7 +1,8 @@
 {
   "internal/ai/ai.go": 2,
   "internal/ai/limit.go": 5,
-  "internal/assistant/acceptance.go": 2,
+  "internal/assistant/acceptance.go": 1,
+  "internal/assistant/acceptance_reply.go": 1,
   "internal/assistant/agents_start.go": 1,
   "internal/assistant/agents_triage.go": 1,
   "internal/assistant/agents_work.go": 10,
