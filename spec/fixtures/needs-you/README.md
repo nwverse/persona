@@ -21,5 +21,8 @@ badge. These cases pin what that number counts, so the places and the clients ag
   `card:<interaction id>` for a card with no session) and its `cards` (interaction ids, oldest first);
   `expected.badge` is the tab's badge. The header and the filter show the number of rows.
 - All data is made up.
-- Run: `AgentsNeedsYouFixtureTests` in `apple/PersonaTests` (iOS). The web app's Agents badge counts sessions already;
-  Android's Agents badge and its "Needs your decision" header still count cards (#3580).
+- Run: `AgentsNeedsYouFixtureTests` in `apple/PersonaTests` (iOS: the section, its filter and the tab's badge) and
+  `cd android && ./gradlew :core:domain:test --tests '*AgentsNeedsYouFixtureTest*'` (Android: the tab's badge; its
+  "Needs your decision" section counts decisions, one per card, under a name of its own). The web app's Agents badge
+  counts sessions in Needs you without quiet tasks' agents but does not replay these cases yet: it keeps muted agents
+  and leaves out cards on no session.
