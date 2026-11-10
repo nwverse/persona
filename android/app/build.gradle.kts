@@ -118,7 +118,6 @@ dependencies {
     implementation(libs.okhttp)
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
-    testImplementation("com.squareup.okhttp3:mockwebserver:${libs.versions.okhttp.get()}")
     testImplementation(libs.turbine)
     testImplementation("com.squareup.okhttp3:mockwebserver:${libs.versions.okhttp.get()}")
     testImplementation(platform(libs.compose.bom))
