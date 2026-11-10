@@ -204,7 +204,7 @@ describe("dismiss a task-progress reply draft", () => {
   });
 
   it("captures a WebSocket-only card's manager before selection changes", async () => {
-    push(draft, "demo-realtime-owner");
+    push({ ...draft, body: { ...draft.body } }, "demo-realtime-owner");
     chooseManager("demo-other");
     api.mockImplementation(async (path: string) => path.endsWith("/undo-dismiss") ? { item: draft } : path.endsWith("/dismiss") ? { item: dismissed, dismissal_id: "demo-receipt" } : {});
     await dismissMessage(draft);

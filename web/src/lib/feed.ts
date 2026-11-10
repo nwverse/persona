@@ -360,6 +360,8 @@ function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
   for (const it of items) {
     if (it.kind === "message") {
       const before = feeds[it.conversation]?.find((old) => old.id === it.id);
+      const owner = draftOwners.get(it);
+      if (before && owner) draftOwners.set(before, owner);
       if (!before || JSON.stringify(before.body) !== JSON.stringify(it.body)) itemRevisions.set(feedKey(it), ++feedRevision);
     }
     const group = byConversation.get(it.conversation) ?? new Map<string, FeedItem>();
