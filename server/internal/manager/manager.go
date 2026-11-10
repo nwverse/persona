@@ -33,7 +33,7 @@ const Usage = `usage:
                        （默认 ~/.persona/managers/<id>）；数据库是它自己的 Postgres：install 时在 Docker 里建
                        （容器 persona-mgr-<id>-pg），或者 --database-url 给一个
   personad manager join --builtin <hub address> [<code>] [--fingerprint <fingerprint>] [--install]
-                       bind the built-in manager's own service to the hub with a code from personad hub manager-code
+                       bind the built-in manager's own service to the hub with a code from persona-hub manager-code
                        (given, or in PERSONA_MANAGER_CODE, which other users of the machine cannot read; the binding
                        goes into ~/.persona/managers/assistant/manager.json); --install: then install its service
   personad manager run [--dir 目录] [--join <hub 地址> <安装码>]
@@ -46,7 +46,7 @@ const Usage = `usage:
   personad manager install --builtin [--join <hub address>] | --check
                        install the built-in manager's own service (Linux: systemd user unit persona-manager-assistant;
                        Mac: launchd); --join: bind it first with the code in PERSONA_MANAGER_CODE, unless its binding
-                       works (personad hub setup does this); --check: only say whether it can be installed here
+                       works (persona-hub setup does this); --check: only say whether it can be installed here
   personad manager uninstall --builtin    stop and remove that service; its binding and data stay
   personad manager status --builtin       the built-in manager's binding and service
 `
