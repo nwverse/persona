@@ -134,8 +134,6 @@ struct HubCloudflareAccessPage: View {
 
     /// The group's connection failing on Access: what it said, here where it can be fixed.
     private func problem(_ hub: PairedHub) -> String? {
-        guard case .failed(let why)? = model.socket(hub.group)?.state else { return nil }
-        let access = [CloudflareAccessError(tokenSent: false), CloudflareAccessError(tokenSent: true)].compactMap(\.errorDescription)
-        return access.contains(why) ? why : nil
+        model.socket(hub.group)?.accessBlocked?.errorDescription
     }
 }

@@ -76,7 +76,9 @@ nonisolated enum CloudflareAccess {
         if isLogin(http.url) { return true }
         if (300..<400).contains(http.statusCode), let location = http.value(forHTTPHeaderField: "Location"),
            isLogin(URL(string: location, relativeTo: http.url)) { return true }
-        guard (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased().contains("html"), !body.isEmpty else { return false }
+        guard (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased().contains("html") else { return false }
+        // A WebSocket handshake has no body to read: an HTML 401 / 403 is enough there (the hub's own are JSON).
+        if body.isEmpty { return [401, 403].contains(http.statusCode) }
         let text = String(decoding: body.prefix(64 << 10), as: UTF8.self).lowercased()
         return text.contains("cloudflareaccess.com") || text.contains("/cdn-cgi/access/")
     }

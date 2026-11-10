@@ -115,6 +115,9 @@ struct CloudflareAccessTests {
         // The hub's own JSON refusal is still the hub's.
         await #expect(throws: APIError.self) { try await client(access: token).request("GET", "/api/v1/hub-forbidden") }
         #expect(CloudflareAccessError(tokenSent: false).errorDescription != CloudflareAccessError(tokenSent: true).errorDescription)
+        // A WebSocket handshake (no body): Access's HTML refusal, not the hub's JSON 401 (a revoked device).
+        #expect(CloudflareAccess.blocked(HTTPURLResponse(url: hub, statusCode: 403, httpVersion: nil, headerFields: ["Content-Type": "text/html"])))
+        #expect(!CloudflareAccess.blocked(HTTPURLResponse(url: hub, statusCode: 401, httpVersion: nil, headerFields: ["Content-Type": "application/json"])))
     }
 
     @Test func redirectsToTheLoginOrOffTheOriginAreNotFollowed() async {
