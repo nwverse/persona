@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { t } from "../../i18n";
 import { api, errorText } from "../../lib/api";
-import { Button, Loading, toast } from "../../ui/atoms";
+import { listConnectors, type HubConnector } from "../../lib/connectors";
+import { clock } from "../../lib/format";
+import { Button, cx, Loading, toast } from "../../ui/atoms";
 import { Group, Row, SettingsHint, settingsInputClass, Switch } from "./SettingsParts";
 
 type TodoRule = {
@@ -32,6 +34,42 @@ const blankRule = (): TodoRule => ({ id: `rule_${Date.now()}`, name: "", enabled
 const splitValues = (value: string) => value.split(",").map((v) => v.trim()).filter(Boolean);
 const joinValues = (value?: string[]) => (value ?? []).join(", ");
 
+/** The sources a rule can pick: the hub's connectors (mail and Lark included), plus any id the rule already names that
+ *  the hub no longer reports, so saving never drops it silently. */
+function sourceChoices(connectors: HubConnector[], picked: string[]): { id: string; name: string }[] {
+  const out = connectors.map((c) => ({ id: c.id, name: c.name || c.id }));
+  for (const id of picked) if (!out.some((c) => c.id === id)) out.push({ id, name: id });
+  return out;
+}
+
+function SourcePicker({ connectors, value, disabled, onChange }: { connectors: HubConnector[]; value: string[]; disabled?: boolean; onChange: (next: string[]) => void }) {
+  const choices = sourceChoices(connectors, value);
+  const toggle = (id: string) => onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
+  return (
+    <div role="group" aria-label={t("settings-todorules.sources")} className="flex flex-wrap items-center gap-1.5">
+      {choices.map((c) => {
+        const on = value.includes(c.id);
+        return (
+          <button
+            key={c.id}
+            type="button"
+            aria-pressed={on}
+            disabled={disabled}
+            onClick={() => toggle(c.id)}
+            className={cx(
+              "whitespace-nowrap rounded-full px-2.5 py-1 text-[12px] transition-colors disabled:opacity-50",
+              on ? "bg-accent-tint text-accent-ink" : "bg-field text-ink-2 hover:bg-hover",
+            )}
+          >
+            {c.name}
+          </button>
+        );
+      })}
+      {value.length === 0 && <span className="text-[11.5px] text-ink-3">{t("settings-todorules.all_sources")}</span>}
+    </div>
+  );
+}
+
 function verdictLabel(verdict: string): string {
   const known = ["created", "appended", "not_todo", "dry_run", "no_rule", "skipped", "error"];
   return t(`settings-todorules.verdict_${known.includes(verdict) ? verdict : "unknown"}`);
@@ -42,6 +80,11 @@ export function TodoRulesSettings() {
   const [decisions, setDecisions] = useState<TodoRuleDecision[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [connectors, setConnectors] = useState<HubConnector[]>([]);
+  useEffect(() => {
+    // The source chips; without the list (an older hub, an error) the rule's own ids still show and can be removed.
+    listConnectors(true).then(setConnectors, () => {});
+  }, []);
 
   const load = async () => {
     setError("");
@@ -120,10 +163,10 @@ export function TodoRulesSettings() {
               {t("settings-todorules.prompt")}
               <textarea className={`${settingsInputClass} min-h-24 resize-y py-2`} value={rule.prompt} placeholder={t("settings-todorules.prompt_placeholder")} onChange={(e) => updateRule(index, { prompt: e.target.value })} disabled={busy} />
             </label>
-            <label className="flex flex-col gap-1 text-[11.5px] text-ink-3">
+            <div className="flex flex-col gap-1 text-[11.5px] text-ink-3">
               {t("settings-todorules.sources")}
-              <input className={settingsInputClass} value={joinValues(rule.sources)} placeholder={t("settings-todorules.all_sources")} onChange={(e) => updateRule(index, { sources: splitValues(e.target.value) })} disabled={busy} />
-            </label>
+              <SourcePicker connectors={connectors} value={rule.sources ?? []} onChange={(sources) => updateRule(index, { sources })} disabled={busy} />
+            </div>
             <label className="flex flex-col gap-1 text-[11.5px] text-ink-3">
               {t("settings-todorules.kinds")}
               <input className={settingsInputClass} value={joinValues(rule.kinds)} placeholder={t("settings-todorules.all_kinds")} onChange={(e) => updateRule(index, { kinds: splitValues(e.target.value) })} disabled={busy} />
@@ -140,7 +183,7 @@ export function TodoRulesSettings() {
         {decisions.length === 0 ? <SettingsHint>{t("settings-todorules.decisions_empty")}</SettingsHint> : decisions.map((decision, index) => (
           <div key={`${decision.item_id}-${decision.at}-${index}`} className="flex flex-col gap-1 px-4 py-2.5 text-[12px] text-ink-2">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <time className="text-ink-3" dateTime={decision.at}>{new Date(decision.at).toLocaleString()}</time>
+              <time className="text-ink-3" dateTime={decision.at}>{clock(decision.at)}</time>
               <span className="font-medium text-ink">{verdictLabel(decision.verdict)}</span>
               {decision.rule_name && <span className="text-ink-3">{decision.rule_name}</span>}
             </div>

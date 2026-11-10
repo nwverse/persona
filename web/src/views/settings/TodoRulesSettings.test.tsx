@@ -32,14 +32,23 @@ afterEach(() => {
 describe("Settings › To-dos", () => {
   it("loads rules, adds a rule, and saves the form", async () => {
     await act(async () => root.render(<TodoRulesSettings />));
-    expect(pending.map((p) => p.path)).toEqual(["/todo-rules", "/todo-rules/decisions"]);
-    await act(async () => pending[0].resolve({ rules: [], dry_run: false }));
-    await act(async () => pending[1].resolve({ decisions: [] }));
+    const at = (path: string) => pending.find((p) => p.path === path)!;
+    expect(pending.map((p) => p.path).sort()).toEqual(["/connectors?all=1", "/todo-rules", "/todo-rules/decisions"]);
+    await act(async () => at("/todo-rules").resolve({ rules: [], dry_run: false }));
+    await act(async () => at("/todo-rules/decisions").resolve({ decisions: [{ at: new Date().toISOString(), item_id: "i1", verdict: "not_todo", title: "Build finished" }] }));
+    await act(async () => at("/connectors?all=1").resolve({ connectors: [{ id: "larkcli", name: "Lark via lark-cli" }, { id: "github", name: "GitHub" }] }));
+    // The decision time follows the app's own clock format (HH:MM today), not the browser's default locale string.
+    expect(host.querySelector("time")?.textContent).toMatch(/^\d{2}:\d{2}$/);
     const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("添加规则"));
     expect(add).toBeTruthy();
     await act(async () => add!.click());
     const inputs = [...host.querySelectorAll<HTMLInputElement>("input")];
-    expect(inputs.length).toBeGreaterThanOrEqual(3);
+    expect(inputs.length).toBeGreaterThanOrEqual(2);
+    // Sources are picked from the hub's connectors, not typed as ids.
+    const chip = [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((button) => button.textContent === "Lark via lark-cli");
+    expect(chip?.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => chip!.click());
+    expect(chip?.getAttribute("aria-pressed")).toBe("true");
     inputs[0]!.value = "Review requests";
     inputs[0]!.dispatchEvent(new Event("input", { bubbles: true }));
     const prompt = host.querySelector("textarea") as HTMLTextAreaElement;
@@ -50,6 +59,6 @@ describe("Settings › To-dos", () => {
     await act(async () => save!.click());
     const write = pending.find((p) => p.method === "PUT");
     expect(write?.path).toBe("/todo-rules");
-    expect(write?.json).toEqual(expect.objectContaining({ dry_run: false, rules: [expect.objectContaining({ enabled: true })] }));
+    expect(write?.json).toEqual(expect.objectContaining({ dry_run: false, rules: [expect.objectContaining({ enabled: true, sources: ["larkcli"] })] }));
   });
 });
