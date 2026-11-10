@@ -4,7 +4,7 @@
 Build web first. Run with a loopback production preview URL and --shots <directory>.
 The test covers wide/narrow light/dark, the two entries (#3387: Needs you and In progress, each thing in one only),
 their capsule size and selected state, stable live task rows, every open task that does not wait on the user in In
-progress (a stopped one too) with the shelved ones folded and the finished ones gone, a task's agents never listed by
+progress (a stopped one too, saying why it is not done, #3180) with the shelved ones folded and the finished ones gone, a task's agents never listed by
 themselves, an Agent opened by hand in the entry its state says, the plan waiting for Start, decisions and draft sends in
 Needs you; and the main conversation's open tasks across both entries equal to the To-dos page's "Not done" (#3331).
 """
@@ -33,6 +33,8 @@ TODOS += [{"id": "demo-stale", "title": "Old investigation", "origin": MAIN, "cr
 # Agents opened by hand (no task): one works, one asks. The main conversation lists them by what they need.
 SESSIONS += [{"machine_id": "demo", "session_id": "manual-work", "title": "Explore the crash logs", "state": "working", "status": "working", "cwd": "/demo/project", "updated_at": AT, "agent": "claude", "activity": "Reading the logs"},
              {"machine_id": "demo", "session_id": "manual-ask", "title": "Clean up the build cache", "state": "needs_you", "status": "blocked", "pending_interactions": 1, "cwd": "/demo/project", "updated_at": AT, "agent": "claude"}]
+# The stopped task's agents all stopped and the hub's completion check found it waiting (#3180): its row says why it is not done.
+TODOS[4]["check"] = {"verdict": "waiting", "reason": "Waiting for CI to finish", "at": AT, "work_since": AT}
 ITEMS = [{"id": "demo-user", "seq": 1, "role": "user", "kind": "text", "text": "Simplify the conversation and dispatch the work.", "ts": AT}, {"id": "demo-answer", "seq": 2, "role": "assistant", "kind": "text", "text": "I split the work into separate tasks. What needs you is in Needs you; each running task has one live row in In progress.", "ts": AT}]
 FEED = [{"id": "demo-plan-event", "conversation": MAIN, "at": AT, "kind": "plan", "ref": PLAN["id"]}] + [{"id": f"demo-task-event-{i}", "conversation": MAIN, "at": AT, "kind": "task", "ref": f"demo-task-{i}"} for i in range(len(TITLES))] + [{"id": "demo-review-event", "conversation": MAIN, "at": AT, "kind": "review", "ref": "demo-task-3", "body": {"verdict": "accepted", "note": "Synthetic acceptance result"}}, {"id": "demo-report-event", "conversation": MAIN, "at": AT, "kind": "report", "ref": "demo-task-0", "body": {"kind": "progress", "text": "Synthetic progress report"}}, {"id": "demo-receipt", "conversation": MAIN, "at": AT, "kind": "receipt", "ref": "demo-task-3", "body": {"state": "done", "title": TITLES[3], "summary": "Synthetic completion receipt"}}, {"id": "demo-draft", "conversation": MAIN, "at": AT, "kind": "message", "ref": "demo-draft-ref", "body": {"sender": "Demo sender", "chat": "Demo group", "text": "When are the checks ready?", "draft": "The demo checks are ready for review."}}]
 CARD_METADATA = [{"id": f"plan:demo-plan:{i}", "plan_id": PLAN["id"], "index": i, "todo_id": f"demo-task-{i}", "at": AT, "updated_at": AT, "state": "working"} for i in range(len(TITLES))]
@@ -175,6 +177,12 @@ def run(args):
                     expect(bar.get_by_text("Clean up the build cache", exact=False)).to_have_count(0)
                     expect(bar.get_by_text("PR #2801", exact=False)).to_be_visible()
                     capture("running")
+                    stopped = bar.locator('[data-task-slot="plan:demo-plan:4"]')
+                    stopped.scroll_into_view_if_needed()
+                    # its agents stopped and the hub's check found it waiting: the row says why it is not done (#3180)
+                    expect(stopped).to_contain_text("Stopped, not done yet · Waiting for CI to finish")
+                    expect(stopped).not_to_contain_text("Run the demo checks")
+                    capture("running-stopped")
                     row = bar.locator('[data-task-slot="plan:demo-plan:0"]')
                     row.evaluate("e => globalThis.originalTaskRow = e")
                     todos[0]["supervision"]["progress"] = {"kind": "blocked", "step": 3, "steps": 5, "text": "Waiting for demo review", "at": AT}

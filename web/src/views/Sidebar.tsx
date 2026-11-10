@@ -17,7 +17,7 @@ import { machineWithHub } from "../lib/mesh";
 import { baseName, tabLabel } from "../lib/format";
 import { agentKey, isSpacePinned, pinnedSessions } from "../lib/pins";
 import { firstAndCurrent } from "../lib/persona-nav";
-import { sidebarConversations, usePinnedConversations } from "../lib/conversation-pins";
+import { pinOrder, sidebarConversations, usePinnedConversations } from "../lib/conversation-pins";
 import { autoConversations, autoOrigin, isAutoConversation, originLabel, type AutoOrigin, type OriginTally } from "../lib/conversation-origins";
 import { ConversationRowMenu, pinnedSectionItems } from "./ConversationMenu";
 import { href, navigate, type Route } from "../lib/router";
@@ -250,8 +250,13 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
-  const pinnedIds = usePinnedConversations();
+  const localPins = usePinnedConversations();
+  // the leader conversations are pinned by the hub, first (#3623): not this browser's to unpin
+  const leaders = assistant?.leaders;
+  const isLeader = (id: string) => !!leaders?.includes(id) && id !== assistant?.main;
+  const pinnedIds = pinOrder(leaders, localPins);
   const { pinned: pinnedConvs, recent } = sidebarConversations(assistant?.conversations ?? [], assistant?.main, pinnedIds, 5, activeKey.startsWith("j:") ? activeKey.slice(2) : undefined);
+  const localPinned = pinnedConvs.filter((c) => !isLeader(c.session_id)).length;
   const convs = [...pinnedConvs, ...recent];
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
@@ -312,9 +317,9 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
             right={personaFolded ? <SectionAdd icon="compose" label={t("sidebar.new_chat")} to={{ name: "persona-new" }} go={go} /> : undefined}
           >
             <NavRow k="j:new" reg={reg} hover={hover} active={activeKey === "j:new"} to={{ name: "persona-new" }} go={go} icon="compose" label={t("sidebar.new_chat")} />
-            {pinnedConvs.length > 0 && <PinnedHeading onMenu={(at) => setChatsMenu(at)} />}
+            {pinnedConvs.length > 0 && <PinnedHeading onMenu={localPinned ? (at) => setChatsMenu(at) : undefined} />}
             {convs.map((c) => (
-              <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={{ name: "persona", sid: c.session_id }} go={go} label={conversationTitle(c)} showState={false} icon={pinnedIds.includes(c.session_id) ? "pin" : undefined} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
+              <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={{ name: "persona", sid: c.session_id }} go={go} label={conversationTitle(c)} showState={false} icon={pinnedIds.includes(c.session_id) ? "pin" : undefined} hint={isLeader(c.session_id) ? t("sidebar.leader") : undefined} onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />
             ))}
             {assistant && <AutoConversations conversations={assistant.conversations} main={assistant.main} shown={convs} activeKey={activeKey} holds={autoHolds} reg={reg} hover={hover} go={go} />}
             {assistant && <NavRow k="history" reg={reg} hover={hover} active={activeKey === "history"} to={{ name: "history" }} go={go} icon="list" label={t("sidebar.all_chats")} hint={assistant.conversations.length > convs.length ? String(assistant.conversations.length) : undefined} />}
@@ -326,8 +331,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate }: { route: Ro
         {/* the phone's Agents page shows them already: the drawer over it doesn't build them twice */}
         {!(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} foldable />}
       </div>
-      {convMenu && <ConversationRowMenu s={convMenu.s} main={convMenu.s.session_id === assistant?.main} pinned={pinnedIds.includes(convMenu.s.session_id)} anchor={convMenu.anchor} at={convMenu.at} onClose={() => setConvMenu(null)} />}
-      {chatsMenu && <Menu anchor={chatsMenu.anchor ?? null} point={chatsMenu.point} onClose={() => setChatsMenu(null)} align="right" width={200} header={t("sidebar.pinned_section")} items={pinnedSectionItems(pinnedConvs.length)} />}
+      {convMenu && <ConversationRowMenu s={convMenu.s} main={convMenu.s.session_id === assistant?.main} pinned={pinnedIds.includes(convMenu.s.session_id)} leader={isLeader(convMenu.s.session_id)} anchor={convMenu.anchor} at={convMenu.at} onClose={() => setConvMenu(null)} />}
+      {chatsMenu && <Menu anchor={chatsMenu.anchor ?? null} point={chatsMenu.point} onClose={() => setChatsMenu(null)} align="right" width={200} header={t("sidebar.pinned_section")} items={pinnedSectionItems(localPinned)} />}
       {/* subscription rate-limit windows (#2432): nothing is drawn without data */}
       <SidebarUsage />
       <NodePrompt />

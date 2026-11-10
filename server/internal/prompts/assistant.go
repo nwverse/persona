@@ -390,10 +390,18 @@ func RenderLostTasks(tasks []string) string {
 	return render("assistant/lost_tasks", struct{ Tasks []string }{tasks})
 }
 
+// RenderInterject goes with a message the user sent while the conversation was still answering, once its foreground
+// work was moved to the background (node/assistant_interject.go): answer it first. A <persona-context> block only.
+func RenderInterject() string { return render("assistant/interject", nil) }
+
 // RenderUsageRetry sends a conversation's message to the model again after a gateway's impossible usage made Claude
 // Code refuse it as too long and Persona repaired the transcript (assistant/usage_retry, node/assistant_usage.go). It
 // is a <persona-context> block only: the apps show no bubble for it.
 func RenderUsageRetry() string { return render("assistant/usage_retry", nil) }
+
+// RenderModelRetry resumes the same request after a bounded transient model failure. It adds no user bubble and never
+// rewrites the original request (node/assistant_recovery.go).
+func RenderModelRetry() string { return render("assistant/model_retry", nil) }
 
 // TaskNotice tells the main conversation (or a reporting one) about one of its quiet tasks (#1731): it was done, waits for the user, was
 // cut off by the model service or did not start. The assistant decides what to tell the user.
@@ -444,10 +452,14 @@ type Supervise struct {
 	// Leader: it goes to a leader conversation, for the tasks it handed out (#3133); Escalated: an entry is a leader's
 	// needs_user, told the main conversation.
 	Leader, Escalated bool
+	// Asked: an entry is an agent's cards that came to this conversation before the user (ask); AskMinutes how long
+	// they wait here before going up a rung.
+	Asked      bool
+	AskMinutes int
 }
 
 // SuperviseEntry is one task in it, with what happened (Kind: review, idle, needs_you, stalled, interrupted, failed,
-// started, escalated).
+// started, escalated, ask).
 type SuperviseEntry struct {
 	ID, Title, Kind string
 	Detail          string             // why: the judge's reason, the step it is stuck on, the model service's error, why it did not start
@@ -472,6 +484,17 @@ type SuperviseEntry struct {
 	// lines, and how many retries are left; KeptUntil "" when the start failed for good.
 	KeptUntil, Question, Screen string
 	RetriesLeft                 int
+	// ask: the cards waiting, and the task's decisions in effect (prompts/todo/decisions.md, rendered); escalated: the
+	// cards a leader gave the user.
+	Asks      []SuperviseAsk
+	Decisions string
+}
+
+// SuperviseAsk is one card of a task's agent on its way to the user: its interaction id, kind (question, permission,
+// plan), the agent's machine (a name) and short session id, what it asks, and whether the rung below did not handle it in time.
+type SuperviseAsk struct {
+	ID, Kind, Machine, Session, Text string
+	Raised                           bool
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }
@@ -584,6 +607,8 @@ type TaskDone struct {
 	// Checks: also check each done_when criterion (checkable, met, evidence) and say the delivery, for the judge's own
 	// check of a supervised task (assistant.review_sample_percent below 100, docs/assistant/todos.md "Spot-check reviews").
 	Checks bool
+	// Language: the user's language for the reason, which the apps show on the task ("" for Chinese, the prompt's own).
+	Language string
 }
 
 func RenderTaskDone(d TaskDone) string { return render("assistant/task_done", d) }
@@ -691,3 +716,31 @@ func RenderWorkspaceMention(w WorkspaceMention) string {
 
 // RenderWorkoutReport describes one consented workout, never a medical diagnosis.
 func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
+
+// Route is the system prompt of assistant.route (assistant/route): is a New chat's first message a direction or a quick
+// chat. Language is the direction name's language by its own name ("" Chinese); Crowded: there are Leaders leaders
+// already, so the model names the closest one too.
+type Route struct {
+	Language string
+	TitleMax int
+	Crowded  bool
+	Leaders  int
+}
+
+func RenderRoute(r Route) string { return render("assistant/route", r) }
+
+// RouteLeader is a current leader as the route model is shown it.
+type RouteLeader struct{ ID, Title, Project string }
+
+// RouteInput is what the route model reads: the sentence, the leaders and the knowledge base's project names.
+type RouteInput struct {
+	Sentence string
+	Leaders  []RouteLeader
+	Projects []string
+}
+
+func RenderRouteInput(in RouteInput) string { return render("assistant/route_input", in) }
+
+// RenderRouteAgent is the system prompt of assistant.route for a new agent (assistant/route_agent): which leader's
+// direction its work belongs to; it reads RouteInput (the agent's first message as the sentence, no projects).
+func RenderRouteAgent() string { return render("assistant/route_agent", nil) }

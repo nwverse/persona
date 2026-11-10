@@ -100,7 +100,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
 	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
-	return h.outerLayers(jsonRouteErrors(mux))
+	return h.outerLayers(h.plaintextLoopbackOnly(jsonRouteErrors(mux)))
 }
 
 // outerLayers are what every request goes through around the routes, outermost first: the auth layer's marks

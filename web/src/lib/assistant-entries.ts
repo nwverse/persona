@@ -98,6 +98,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const deciding: { item: NeedsYouItem; rank: number; at: string }[] = [];
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
+  const folded = new Set<string>();
   for (const card of taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain)) {
     const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     // a plan task with no to-do yet is its plan's row (below); a to-do the hub no longer sends is finished
@@ -113,12 +114,15 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     else if (waits || taskAwaitsDecision(todo)) deciding.push({ item: { kind: "task", key, todo, status, asks }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "open") open.push({ item: { kind: "task", key, card, todo, status }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status }, at: card.at });
+    else continue;
+    for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
   }
 
   // Agents that belong to no task, the main conversation's only (dockAgents): asking ones wait on the user, working ones run.
   const agentsAsking: NeedsYouItem[] = [];
   const agentsRunning: RunningItem[] = [];
   for (const { session, state } of dockAgents(sessions, todos, conversation, main)) {
+    if (folded.has(sessionKey(session.machine_id, session.session_id))) continue;
     const key = `agent:${sessionKey(session.machine_id, session.session_id)}`;
     if (state === "needs_you") agentsAsking.push({ kind: "agent", key, session, asks: asksOf.get(sessionKey(session.machine_id, session.session_id)) ?? [] });
     else agentsRunning.push({ kind: "agent", key, session });

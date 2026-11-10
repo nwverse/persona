@@ -106,5 +106,11 @@
   "model_refusal": "Claude Code refusal notice ({subtype}). Original record:",
   "model_refusal_fallback": "Claude Code reported an upstream refusal and switched from {original} to {fallback}. Category: {category}. Scope: {scope}. If the fallback model is unavailable, start a new conversation or use /model in the Claude Code terminal to select the configured model. The request may be refused again. Original record:",
   "card_remaining": "Remaining",
-  "card_total": "Total"
+  "card_total": "Total",
+  "card_done": "Actual",
+  "card_eaten": "Eaten",
+  "card_progress": "Progress",
+  "card_of_goal": "{done} {value} / Goal {goal}",
+  "card_over": "Over",
+  "card_other": "Other"
 }

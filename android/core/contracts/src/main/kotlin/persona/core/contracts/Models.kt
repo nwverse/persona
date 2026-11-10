@@ -230,6 +230,8 @@ data class SessionCapabilities(
     val approve: Boolean = false,
     val terminal: Boolean = false,
     val attach: Boolean = false,
+    /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
+    val modes: Boolean? = null,
 )
 
 /**

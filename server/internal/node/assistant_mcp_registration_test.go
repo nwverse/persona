@@ -16,7 +16,7 @@ import (
 // Exercise the actual launch boundary, including the SDK's serialized start and
 // guest restrictions. The fake runtimes never call a model or read a real home.
 func TestAssistantMCPRegistrationAtStart(t *testing.T) {
-	for _, runtime := range []string{"cli", "sdk", "guest"} {
+	for _, runtime := range []string{"cli", "sdk", "guest", "windows-cli", "windows-sdk", "windows-guest"} {
 		for _, tc := range []struct {
 			name    string
 			persona bool
@@ -29,15 +29,21 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 		} {
 			t.Run(runtime+"/"+tc.name, func(t *testing.T) {
 				f := sdkTest(t)
+				cache := assistantMCPTestCache(t)
+				engine := strings.TrimPrefix(runtime, "windows-")
+				fileConfig := engine != runtime
+				if fileConfig {
+					windowsAssistantMCPTest(t)
+				}
 				n := f.n
 				n.hubPersonaContracts.Store(tc.persona)
 				const id = "11111111-2222-3333-4444-555555555555"
 				cwd := filepath.Join(n.home, ".persona", "assistant")
-				if runtime == "guest" {
+				if engine == "guest" {
 					n.state.put(id, sessionState{Guest: []string{"lark_agent_reply"}})
 				}
 				execution := modelExecution{}
-				if runtime == "sdk" {
+				if engine == "sdk" {
 					execution = sdkExec(proto.AssistantRuntimeAgentSDK)
 				}
 				p, err := n.spawnClaude(id, cwd, "claude", tc.resume, false, execution)
@@ -54,7 +60,7 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 
 				var servers map[string]any
 				var allowed []string
-				if runtime == "sdk" {
+				if engine == "sdk" {
 					var start struct {
 						Options struct {
 							Servers map[string]any `json:"mcpServers"`
@@ -67,6 +73,9 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 						t.Fatal(err)
 					}
 					servers, allowed = start.Options.Servers, start.Options.Allowed
+					if _, err := os.Stat(cache); !os.IsNotExist(err) {
+						t.Fatalf("SDK created a CLI MCP cache: %v", err)
+					}
 					if tc.resume && start.Options.Resume != id || !tc.resume && start.Options.Session != id {
 						t.Fatalf("wrong session start: %+v", start.Options)
 					}
@@ -75,7 +84,19 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 					var config struct {
 						Servers map[string]any `json:"mcpServers"`
 					}
-					if err := json.Unmarshal([]byte(mcpFlag(t, flags, "--mcp-config")), &config); err != nil {
+					raw := []byte(mcpFlag(t, flags, "--mcp-config"))
+					if fileConfig {
+						path := string(raw)
+						if !filepath.IsAbs(path) || strings.Contains(path, `\`) {
+							t.Fatalf("not an absolute slash path: %q", path)
+						}
+						var err error
+						raw, err = os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := json.Unmarshal(raw, &config); err != nil {
 						t.Fatal(err)
 					}
 					servers, allowed = config.Servers, strings.Split(mcpFlag(t, flags, "--allowedTools"), ",")
@@ -86,7 +107,7 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 					if mcpFlag(t, flags, sessionFlag) != id {
 						t.Fatalf("wrong session flag: %v", flags)
 					}
-					if runtime == "guest" && (mcpFlag(t, flags, "--tools") != "" || !slices.Contains(flags, "--strict-mcp-config")) {
+					if engine == "guest" && (mcpFlag(t, flags, "--tools") != "" || !slices.Contains(flags, "--strict-mcp-config")) {
 						t.Fatalf("guest restrictions lost: %v", flags)
 					}
 				}
@@ -98,7 +119,7 @@ func TestAssistantMCPRegistrationAtStart(t *testing.T) {
 				if len(servers) != wantCount || servers["persona"] == nil || (servers[compat.MCPServer] != nil) != legacy {
 					t.Fatalf("servers = %v, legacy = %v", servers, legacy)
 				}
-				if runtime == "guest" {
+				if engine == "guest" {
 					if want := compat.MCPAllowedToolNames([]string{"lark_agent_reply"}, legacy); !slices.Equal(allowed, want) {
 						t.Fatalf("guest allowed %v, want %v", allowed, want)
 					}
