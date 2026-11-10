@@ -51,7 +51,17 @@ func (s *Service) modelsRequest(ctx context.Context, method string, params json.
 	}
 	if method == assistantwire.MethodModelsUsable {
 		b, err := s.resolveModel(ctx, p.Purpose)
-		return map[string]any{"usable": err == nil && s.modelUsable(ctx, b)}, true, nil
+		if err != nil || !s.modelUsable(ctx, b) {
+			return map[string]any{"usable": false}, true, nil
+		}
+		name := b.Provider
+		for _, v := range s.modelProviders(ctx) {
+			if v.ID == b.Provider {
+				name = cmpOr(v.Name, v.ID)
+				break
+			}
+		}
+		return map[string]any{"usable": true, "provider": name, "model": b.Model}, true, nil
 	}
 	out, err := s.launcherHTTP(ctx, p.Name, p.Machine, p.HTTP)
 	return out, true, err

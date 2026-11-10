@@ -145,7 +145,22 @@ func TestSubscriptionGenerate(t *testing.T) {
 	if _, err := m.JSON(ctx, in); !errors.As(err, &se) || se.Code != subscriptions.CodeModelFailed || se.RetryAfter < 500 {
 		t.Fatalf("a held connection: %v", err)
 	}
+	answer = func(params json.RawMessage) (json.RawMessage, error) {
+		if !strings.Contains(string(params), `"purpose":"subscription.recipe"`) {
+			return json.RawMessage(`{"usable":false}`), nil
+		}
+		return json.RawMessage(`{"usable":true,"provider":"Example API","model":"small-model"}`), nil
+	}
+	if got := h.subs.RecipeModel(ctx); !got.OK || got.Provider != "Example API" || got.Model != "small-model" || asked[len(asked)-1] != assistantwire.MethodModelsUsable {
+		t.Fatalf("recipe model %+v (asked %v)", got, asked)
+	}
+	if got := h.subs.ModelOf(ctx, "kb"); got.OK {
+		t.Fatalf("an unusable purpose: %+v", got)
+	}
 	h.opts.Assistant = nil
+	if got := h.subs.RecipeModel(ctx); got.OK {
+		t.Fatalf("the assistant away: %+v", got)
+	}
 	if _, err := m.JSON(ctx, in); err == nil || errors.Is(err, subscriptions.ErrNoModel) {
 		t.Fatalf("the assistant away: %v", err)
 	}

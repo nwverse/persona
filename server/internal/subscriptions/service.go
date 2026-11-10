@@ -68,6 +68,8 @@ type Options struct {
 	Model Model
 	// Language is the name of the language the model writes its note in: the request's, else the user's.
 	Language func(ctx context.Context) string
+	// Models says what a model purpose runs on now (ModelOf); nil: nothing can be called.
+	Models func(ctx context.Context, purpose string) ModelInfo
 }
 
 // Clock is time for the runner: tests drive it.

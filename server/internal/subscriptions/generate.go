@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -154,6 +155,21 @@ func (s *Service) Generate(ctx context.Context, in GenerateRequest, by Actor) (G
 	}
 	out.Subscription = &saved
 	return out, nil
+}
+
+// RecipeModel is what drafting runs on now (purpose subscription.recipe): the consent before a sample goes to the
+// model names it.
+func (s *Service) RecipeModel(ctx context.Context) ModelInfo {
+	return s.ModelOf(ctx, assistantwire.PurposeSubscriptionRecipe)
+}
+
+// ModelOf is what a model purpose runs on now, such as kb (Information processing) or inbox.triage (Information
+// screening), whose providers the destinations' consent names. It asks the assistant; no model is called.
+func (s *Service) ModelOf(ctx context.Context, purpose string) ModelInfo {
+	if s.o.Models == nil || s.o.Model == nil && purpose == assistantwire.PurposeSubscriptionRecipe {
+		return ModelInfo{}
+	}
+	return s.o.Models(ctx, purpose)
 }
 
 func noModel() *Error {

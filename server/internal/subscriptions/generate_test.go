@@ -397,3 +397,27 @@ func TestRegenerateAfterAToolChange(t *testing.T) {
 		t.Fatalf("the regenerated recipe does not run: %+v", e.get(sub.ID))
 	}
 }
+
+// What drafting and the destinations run on, for the pages' consent: asked of the manager, never a model call.
+func TestModelOf(t *testing.T) {
+	e := newEnv(t)
+	if got := e.svc.RecipeModel(e.ctx); got.OK {
+		t.Fatalf("no model and no Models: %+v", got)
+	}
+	var asked []string
+	models := func(_ context.Context, purpose string) ModelInfo {
+		asked = append(asked, purpose)
+		return ModelInfo{OK: true, Provider: "Example API", Model: "small-model"}
+	}
+	e.svc = New(Options{Store: e.store, Connectors: e.conns, Clock: e.clock, Models: models})
+	if got := e.svc.RecipeModel(e.ctx); got.OK || len(asked) != 0 {
+		t.Fatalf("drafting with no Model to call: %+v", got)
+	}
+	if got := e.svc.ModelOf(e.ctx, "inbox.triage"); !got.OK || got.Provider != "Example API" || asked[0] != "inbox.triage" {
+		t.Fatalf("%+v %v", got, asked)
+	}
+	e.svc = New(Options{Store: e.store, Connectors: e.conns, Clock: e.clock, Models: models, Model: &fakeModel{}})
+	if got := e.svc.RecipeModel(e.ctx); !got.OK || got.Model != "small-model" || asked[len(asked)-1] != "subscription.recipe" {
+		t.Fatalf("%+v %v", got, asked)
+	}
+}

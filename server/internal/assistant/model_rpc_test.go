@@ -376,8 +376,23 @@ func TestPurposeCompleteRunsTheManagersPurposeOnInformationProcessing(t *testing
 	if len(calls()) != 2 {
 		t.Fatal("a refused call went out")
 	}
+	// models.usable names what it runs on, for the consent before a sample goes there.
+	usable := func() map[string]any {
+		raw, _ := json.Marshal(map[string]string{"purpose": assistantwire.PurposeSubscriptionRecipe})
+		out, ok, err := s.modelsRequest(context.Background(), assistantwire.MethodModelsUsable, raw)
+		if !ok || err != nil {
+			t.Fatalf("models.usable: %v %v", ok, err)
+		}
+		return out.(map[string]any)
+	}
+	if u := usable(); u["usable"] != true || u["model"] != "kb-model" || u["provider"] == "" || u["provider"] == p.Effective.Provider {
+		t.Fatalf("models.usable %v: want the connection's display name, not its id %q", u, p.Effective.Provider)
+	}
 	f.hello.Models.AI = ai.Config{}
 	if _, err := call(assistantwire.PurposeSubscriptionRecipe, params); rpcCode(err) != assistantwire.CodeModelUnavailable {
 		t.Fatalf("nothing set up: %v", err)
+	}
+	if u := usable(); u["usable"] != false || u["provider"] != nil {
+		t.Fatalf("models.usable with nothing set up: %v", u)
 	}
 }

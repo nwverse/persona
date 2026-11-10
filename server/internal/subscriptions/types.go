@@ -145,6 +145,14 @@ type Shape struct {
 	Items  *int     `json:"items,omitempty"`
 }
 
+// ModelInfo is what a model purpose runs on now: the display name of its connection and its model, for the consent
+// the pages ask before content goes to it. OK false: nothing can be called for it (drafting answers no_model).
+type ModelInfo struct {
+	OK       bool   `json:"ok"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
 // Features says which later stages are in: the pages show their parts only then.
 type Features struct {
 	Deliver  bool `json:"deliver"`  // #2039: items reach the Inbox and the knowledge base

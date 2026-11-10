@@ -49,6 +49,7 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 		Logf: h.logf,
 		// Drafting recipes (#2040): the assistant holds the keys and the purpose subscription.recipe.
 		Model:    subscriptionModel{h},
+		Models:   h.purposeModelInfo,
 		Language: func(ctx context.Context) string { return h.contextLang(ctx).Name() },
 		Features: subscriptions.Features{Generate: true},
 	})
@@ -58,6 +59,20 @@ func (h *Manager) startSubscriptions(ctx context.Context) {
 // subscriptionModel makes the drafting calls on the purpose subscription.recipe, through the assistant
 // (models.purpose_complete): the manager never holds a model's key.
 type subscriptionModel struct{ h *Manager }
+
+// purposeModelInfo is what a model purpose runs on now, as the assistant resolves it (models.usable): not usable when
+// it cannot be asked.
+func (h *Manager) purposeModelInfo(ctx context.Context, purpose string) subscriptions.ModelInfo {
+	var res struct {
+		Usable   bool   `json:"usable"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := h.callAssistant(ctx, assistantwire.MethodModelsUsable, map[string]any{"purpose": purpose}, &res); err != nil || !res.Usable {
+		return subscriptions.ModelInfo{}
+	}
+	return subscriptions.ModelInfo{OK: true, Provider: res.Provider, Model: res.Model}
+}
 
 // subscriptionModelWait bounds one drafting call, its second try for the schema included.
 const subscriptionModelWait = 60
