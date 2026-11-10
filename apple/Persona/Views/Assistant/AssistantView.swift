@@ -153,8 +153,13 @@ struct AssistantView: View {
                 .disabled(pending != nil)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { switcherHeight = $0 }
                 .background(alignment: .top) {
-                    TopFog(solidHeight: switcherHeight, fadeHeight: AssistantTopBar.fade)
-                        .frame(height: switcherHeight + AssistantTopBar.fade)
+                    // Solid from where the bar's fog stops being solid, so the two read as one: starting at the
+                    // switcher's own top left the line between them showing through, cut in half by that edge (#2909).
+                    // Not higher: the switcher is drawn over the bar, and its fog would hide the bar's buttons.
+                    let lift = max(0, AssistantTopBar.room(railEdge) - AssistantTopBar.fogSolid)
+                    TopFog(solidHeight: lift + switcherHeight, fadeHeight: AssistantTopBar.fade)
+                        .frame(height: lift + switcherHeight + AssistantTopBar.fade)
+                        .offset(y: -lift)
                 }
                 .padding(.top, AssistantTopBar.room(railEdge))
         }

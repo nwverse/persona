@@ -167,6 +167,10 @@ data class Todo(
     @WireTime @SerialName("reminded_at") val remindedAt: String? = null,
     /** "high" or "low"; null or "" is normal. */
     val priority: String? = null,
+    /** The owner's current acceptance round; always submit its captured askedAt. */
+    val ask: TodoAsk? = null,
+    @SerialName("pr_url") val prUrl: String? = null,
+    @WireTime @SerialName("cancelled_at") val cancelledAt: String? = null,
 ) {
     val isDone: Boolean get() = doneAt != null
     val activeAgents get() = agents.filter { it.releasedAt == null }
@@ -188,6 +192,14 @@ data class Todo(
     fun isOverdue(now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): Boolean =
         !isDone && (dueBy(zone)?.isBefore(now) ?: false)
 }
+
+@Serializable
+data class TodoAsk(
+    val outcome: String? = null,
+    val verdict: String = "",
+    val recommend: String? = null,
+    @WireTime @SerialName("asked_at") val askedAt: String = "",
+)
 
 /**
  * How far a task's finished work went out (#3306, docs/assistant/todos.md"Delivery"): [state] live, pr, merged, off or none (kept as
@@ -237,6 +249,17 @@ data class Supervision(
     val round: Int = 0,
     val reviews: List<TaskReview> = emptyList(),
     @WireTime @SerialName("updated_at") val updatedAt: String? = null,
+    /** The agent's explicit report; missing counts never imply a percentage. */
+    val progress: TaskProgress? = null,
+)
+
+@Serializable
+data class TaskProgress(
+    val kind: String = "",
+    val step: Int = 0,
+    val steps: Int = 0,
+    val text: String = "",
+    @WireTime val at: String? = null,
 )
 
 /**
@@ -321,6 +344,20 @@ fun todoHandOffPrompt(title: String, notes: String, instruction: String): String
 @Serializable(with = TodosResponseSerializer::class)
 data class TodosResponse(val todos: List<Todo> = emptyList())
 
+/** A lifecycle card's stable identity; incremental feeds upsert these without replacing the held set. */
+@Serializable
+data class AssistantTaskCard(
+    val id: String,
+    @SerialName("todo_id") val todoId: String? = null,
+    @SerialName("plan_id") val planId: String? = null,
+    val index: Int? = null,
+    val at: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null,
+    val state: String = "",
+    @SerialName("receipt_id") val receiptId: String? = null,
+    @SerialName("report_id") val reportId: String? = null,
+)
+
 @KeepGeneratedSerializer
 @Serializable(with = FeedResponseSerializer::class)
 data class FeedResponse(
@@ -335,6 +372,8 @@ data class FeedResponse(
     @SerialName("view_actions") val viewActions: Map<String, JsonElement> = emptyMap(),
     /** The keys of the reply blocks the hub registered from a trusted transcript (`<item id>/<n>`). */
     @SerialName("view_blocks") val viewBlocks: List<String> = emptyList(),
+    /** Null on older hubs or a failed projection read; an empty incremental page removes nothing. */
+    @SerialName("task_cards") val taskCards: List<AssistantTaskCard>? = null,
 )
 
 /** The todos changed: pull them again. */

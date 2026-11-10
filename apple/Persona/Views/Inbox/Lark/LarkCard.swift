@@ -727,6 +727,7 @@ struct LarkCardButton: View {
     @Environment(\.larkRefresh) private var refresh
     @Environment(\.larkAccount) private var larkAccount
     @Environment(\.larkManager) private var larkManager
+    @Environment(\.larkGroup) private var larkGroup
     @State private var pending = false
 
     var body: some View {
@@ -744,7 +745,7 @@ struct LarkCardButton: View {
             Task {
                 defer { pending = false }
                 do {
-                    try await AppModel.shared.api?.manager(larkManager).lark(larkAccount).larkCardAction(message: mid, action: aid)
+                    try await AppModel.shared.larkAPI(group: larkGroup, manager: larkManager, account: larkAccount)?.larkCardAction(message: mid, action: aid)
                     Haptics.success()
                     AppModel.shared.toast = Toast(String(localized: "Submitted “\(label)”"), style: .success)
                     try? await Task.sleep(for: .seconds(1.2))
@@ -950,6 +951,7 @@ struct LarkCardOverflow: View {
     @Environment(\.larkRefresh) private var refresh
     @Environment(\.larkAccount) private var larkAccount
     @Environment(\.larkManager) private var larkManager
+    @Environment(\.larkGroup) private var larkGroup
 
     var body: some View {
         let options = (node.raw["options"]?.array ?? []).filter { $0["disabled"]?.bool != true }
@@ -962,7 +964,7 @@ struct LarkCardOverflow: View {
                     Button {
                         Task {
                             do {
-                                try await AppModel.shared.api?.manager(larkManager).lark(larkAccount).larkCardAction(message: mid, action: aid)
+                                try await AppModel.shared.larkAPI(group: larkGroup, manager: larkManager, account: larkAccount)?.larkCardAction(message: mid, action: aid)
                                 Haptics.success()
                                 AppModel.shared.toast = Toast(String(localized: "Submitted “\(text)”"), style: .success)
                                 try? await Task.sleep(for: .seconds(1.2))

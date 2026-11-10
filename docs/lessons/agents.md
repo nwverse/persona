@@ -217,6 +217,10 @@ A new herdr tab's tty is in canonical mode until zsh's line editor takes it, and
 
 In a herdr pane whose shell sources a file (sh family, fish), a start now writes its whole command to a 0600 `agent-start-*.sh` in the node's directory and types only `. '<file>'`. The shell sources the file, so aliases and functions used as launchers still work, and the file deletes itself first. When the pane refuses the line, the start closes the tab it made and returns `terminal_not_ready` (503, `retryable: true`, `delivered: none`). `TestHerdrStartTypesAShortLine` checks the worst case. Not covered: Orca panes and herdr's restore (`claudeResumeArgv`) still type the full command.
 
+## A pane's shell may be fish: quote for it too (2026-11-10, #2867)
+
+What the node quotes for a pane is parsed by the user's own shell: the start file runs through `source` in fish, and Orca types `cd -- <cwd>` and the command into the terminal. fish still takes `\'` and `\\` as escapes inside single quotes, so the POSIX quoting of the first message `a\';touch PWNED;#` kept the quotes open in fish and ran `touch`. `shellQuote` (`server/internal/node/node.go`) now puts each backslash outside the quotes (`'\\'`), where the sh family and fish read it alike, as the SSH deploy already did after the same finding (`docs/lessons/server.md`). `TestShellQuoteReadsBackInRealShells` reads such words back in every installed shell, fish included. No quoting makes a control character safe on a typed line (a tab completes and closes the quoted word): a first message gets its controls made inert (`typedArg`, "Text an agent is sent can press keys in its terminal" below), but a directory can't be rewritten, so Orca refuses one whose name holds a control character before it opens a terminal.
+
 ## Allowing one command for an Agent (2026-11-04, #1300)
 
 - **A skill's `allowed-tools` makes launching the skill itself an approval** (immediately denied under `-p`), so it doesn't save a card, and a fixed SKILL.md can't carry per-computer paths.
@@ -372,6 +376,10 @@ passed in the login shell and reset the launcher to `ok`, so the assistant kept 
 - `pollAgents` rebuilds the whole list every second, so a lookup made once per row is made once per row per second. With 199 Codex rollouts on disk, `codexSessions` resolved each rollout's directory through `realPath` (an `lstat` per path part, a `readlink` per link), stat'ed the rollout up to three times, resolved the Codex home per rollout and rebuilt the assistant's project name with a regexp: about 19 stats per rollout per pass, 5,600 `newfstatat` and 380 `readlinkat` a second from an idle node, half its CPU. A pass-local memo (`codexListPass`) that keeps each directory's resolved path, each rollout's stat, the App socket check per home and the project name for that one call brought it to about 1,000 `newfstatat` and 13 `readlinkat` a second, with the rows unchanged. Keep such a memo local to the call: nothing is shared between callers, and nothing can go stale for longer than one pass. Count with `strace -c -f -p <node pid>` over a steady window against a copy of a real corpus (symlinks to `~/.claude/projects` and `~/.codex/sessions` in a scratch HOME), not on a fixture with a handful of files.
 - A walk of a Go map before a stable sort leaks the map's random order into the result wherever the sort key ties. Live panes with no transcript yet all have a zero `UpdatedAt`, the list key is order-sensitive, and every reshuffle sent the whole list to the hub (67 times a minute with eight such agents). Walk the map in sorted key order when the result is compared or published.
 - On a node's first list, `scanBackground` reads each listed transcript whole and tested each line against 28 markers one by one; that was over half of a reconnect's CPU on a real corpus. One Aho-Corasick pass (`bgmatch.go`) is about four times faster on real lines. It is built on the first scan, never at package init ("Package-level work" above). A new marker still goes into `bgMarkers` or transcript's marker slices; the matcher is built from them.
+
+## A resident node's reconnect read every transcript again (2026-11-10, #2864)
+
+- `personad node --attach` makes a new `Node` for each hub connection. The assistant keeper, the spool and the runtime socket already belonged to the resident process, but the background-task scans (`bgScans`) did not, so every reconnect read each listed transcript whole again: on a real corpus of about 270 MB that was half of the reconnect's CPU and over half a gigabyte read, and the first list after it had no background or plan state for the big transcripts until those reads were done. `Attach` now carries the scans to the next connection's `Node` (`carry.go`): adopted before `Serve`, handed over after it returns, never shared by two Nodes. Something kept across connections must be checked on its first use, not trusted: a transcript can be deleted, replaced (another inode at the same path) or rewritten in place while no connection runs. A carried scan goes on only if the path is still the same file (`os.SameFile`), not shorter than what it read, and its first bytes hash the same; anything else starts it over. A new connection has no quick metas yet, so pruning has to look at scans without one too.
 
 ## MessageDisplay holds the terminal; measuring it in an isolated claude (2026-11-07, #1309, 2.1.319)
 
@@ -610,10 +618,12 @@ Closing is not durable merely because the card vanished: persist the interaction
 
 ## Text an agent is sent can press keys in its terminal
 
-- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename,
-  a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed later, in a prompt. Control
-  characters in that text are keys to the terminal, and the program in it acts on them as on the user's own, which can
-  change what the agent may do.
+- Much of what a caller sends an agent ends up typed into the agent's terminal: a message, a start's prompt, a rename's
+  title (`/rename`, a prompt), a card's answer; a to-do, its decisions and a knowledge-base entry are kept and typed
+  later, in a prompt. Control characters in that text are keys to the terminal, and the program in it acts on them as
+  on the user's own, which can change what the agent may do. A rename's tab name is not typed: it goes to the host as
+  the tab's label (herdr, Orca, Herdr App), which the node does not make inert; herdr's renderer drops control
+  characters when it draws one.
 - So the hub refuses terminal control characters (Unicode `Cc` but newline, carriage return and tab) from callers whose
   grant is narrower than the user's, extension tokens, on the routes that type a caller's text into a terminal or keep
   it for a prompt (`server/internal/hub/terminal_controls.go`). Check kept text as it comes in, while the caller is
