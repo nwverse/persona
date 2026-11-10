@@ -76,12 +76,13 @@
   "credentials_shared_note": "机器人和以我的身份读取共用这个应用。",
   "bot_section": "机器人 · 和 Persona 对话",
   "read_section": "以我的身份读取 · 收进收件箱",
-  "read_account_unknown": "未登录",
   "read_not_connected": "未连接",
   "read_status_prefix": "读取：{status}",
   "read_authorize": "扫码授权",
   "read_missing_title": "缺少权限",
   "read_open_platform": "去开放平台开通",
   "read_more": "更多设置",
-  "read_more_hint": "选择哪些内容收进收件箱"
+  "read_more_hint": "选择哪些内容收进收件箱",
+  "read_as_you": "以你的身份",
+  "read_reauthorize": "重新授权"
 }

@@ -76,12 +76,13 @@
   "credentials_shared_note": "The bot and read-as-me access use this app together.",
   "bot_section": "Bot · Chat with Persona",
   "read_section": "Read as me · Bring it into the Inbox",
-  "read_account_unknown": "Not signed in",
   "read_not_connected": "Not connected",
   "read_status_prefix": "Read: {status}",
   "read_authorize": "Scan to authorize",
   "read_missing_title": "Missing permissions",
   "read_open_platform": "Open platform permissions",
   "read_more": "More settings",
-  "read_more_hint": "Choose what to collect into the Inbox"
+  "read_more_hint": "Choose what to collect into the Inbox",
+  "read_as_you": "As you",
+  "read_reauthorize": "Sign in again"
 }

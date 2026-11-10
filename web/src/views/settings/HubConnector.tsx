@@ -519,11 +519,13 @@ function SignInSections({ c, reload }: { c: HubConnector; reload: () => Promise<
   );
 }
 
-export function SignInSteps({ c, reload, footer, startLabel, bare }: {
+export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent", bare }: {
   c: HubConnector;
   reload: () => Promise<void>;
   footer?: string;
   startLabel?: string;
+  /** The start button's tone: the default accent, or quiet where signing in is a secondary action. */
+  startTone?: "accent" | "quiet";
   /** Draw only the step content so a caller can place it inside its own section. */
   bare?: boolean;
 }) {
@@ -571,7 +573,7 @@ export function SignInSteps({ c, reload, footer, startLabel, bare }: {
   const cancel = () => (setPrompt(null), setValues({}));
   const body = !prompt ? (
     <div className="px-4 py-3">
-      <Button tone="accent" busy={busy} onClick={() => void send("", {})}>{startLabel ?? t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
+      <Button tone={startTone} busy={busy} onClick={() => void send("", {})}>{startLabel ?? t("settings-hubconnector.sign_in_to", { name: c.name })}</Button>
     </div>
   ) : (
     <SignInStep
