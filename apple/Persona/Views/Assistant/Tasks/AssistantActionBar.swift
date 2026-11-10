@@ -151,7 +151,9 @@ nonisolated enum AssistantEntries {
                                  messageWaits: (FeedItem) -> Bool = AssistantEntries.messageWaits) -> Result {
         let lookup = TodosLogic.makeSessionLookup(sessions)
         let isMain = !(main ?? "").isEmpty && main == conversation
-        let pair = { (m: String, s: String) in m + "/" + s }
+        // A function, not a closure value: Swift 6.2.4 (Xcode 26.3) rejects capturing a closure value in the `listed`
+        // closure below ("sending 'pair' risks causing data races").
+        func pair(_ m: String, _ s: String) -> String { m + "/" + s }
         var asksOf: [String: [Interaction]] = [:]
         for ix in interactions.sorted(by: { ($0.createdAt ?? .distantPast, $0.id) < ($1.createdAt ?? .distantPast, $1.id) }) {
             asksOf[pair(ix.machineID, ix.sessionID), default: []].append(ix)

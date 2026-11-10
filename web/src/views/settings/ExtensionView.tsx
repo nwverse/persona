@@ -634,7 +634,7 @@ export function LegacyExtensionUI({
             </>
           }
         >
-          <p className="text-[13px] leading-relaxed break-words text-ink-2">{confirming.action.confirm}</p>
+          <p className="text-[13px] leading-relaxed whitespace-pre-line break-words text-ink-2">{confirming.action.confirm}</p>
         </Dialog>
       )}
     </div>
