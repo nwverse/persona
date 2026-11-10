@@ -129,6 +129,7 @@ type Service struct {
 	tposts     threadPoster      // feishu_thread_posts.go: what a todo tells its chat thread
 	tevents    todoEvents        // todo_events.go: what the extensions are told of the todos
 	directions directionBook     // directions.go: the leaders' records and what the extensions were told of them
+	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
 	standing   standingBoard     // feishu_board.go: the standing "waiting for you" card
 	workbench  workbenchState    // feishu_workbench_pin.go: the pinned workbench
 	companions companionState    // feishu_companions.go: the notices for a companion bot
@@ -274,6 +275,14 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if source != nil {
 				p["message_source"] = source
 				p["text"] = prompts.MessageSourceText(text, source)
+			}
+		}
+	}
+	if p, ok := params.(map[string]any); ok && startScopeMethods[method] {
+		// A Persona-managed provider out of this computer's scope does not run there (models_launchers_scope.go).
+		if name, _ := p["launcher"].(string); name != "" {
+			if err := s.launcherScopeErr(ctx, device, name); err != nil {
+				return err
 			}
 		}
 	}

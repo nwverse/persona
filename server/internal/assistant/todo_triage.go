@@ -2,12 +2,12 @@ package assistant
 
 import (
 	"cmp"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -375,9 +375,9 @@ func triageCountsAsOpen(t Todo, tr todoTriage) bool {
 // ---- related to-dos ----
 
 var (
-	triageIssueRef  = regexp.MustCompile(`#(\d{2,7})\b`)
-	triagePRTail    = regexp.MustCompile(`[#?].*$`)
-	triageTitleDrop = regexp.MustCompile(`[\s\p{Z}\p{P}\p{S}]+`)
+	triageIssueRef  = lazyre.New(`#(\d{2,7})\b`)
+	triagePRTail    = lazyre.New(`[#?].*$`)
+	triageTitleDrop = lazyre.New(`[\s\p{Z}\p{P}\p{S}]+`)
 )
 
 // triageRelatedKeys are the keys that make two to-dos the same piece of work (the web's relatedKeys): the same PR, the

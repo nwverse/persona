@@ -356,6 +356,8 @@ function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
 }
 
 const loading = new Set<string>();
+/** Conversations asked for again while their read was out: that read's answer may predate what was asked for. */
+const again = new Set<string>();
 const todayAsked = new Map<string, string>();
 
 /** The most items the hub answers at once (docs/protocol/protocol.md: oldest first, at most 500): a full page has more after it. */
@@ -363,31 +365,44 @@ const FEED_PAGE = 500;
 /** Pages read in one load at most. */
 const FEED_PAGES = 40;
 
-/** A conversation's feed: what came since the newest item it has. */
+/** A conversation's feed: what came since the newest item it has. A read asked for while one is out runs once more
+ *  after it (a reconnect's hello during the first read on open was dropped, and what was pushed meanwhile stayed missing). */
 export async function loadFeed(conversation: string) {
-  if (loading.has(conversation)) return;
+  if (loading.has(conversation)) {
+    again.add(conversation);
+    return;
+  }
   loading.add(conversation);
   try {
-    let last = st.feeds[conversation]?.at(-1)?.at;
-    for (let n = 0; n < FEED_PAGES; n++) {
-      const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
-        `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
-      );
-      if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
-      const items = res.items ?? [];
-      received(items, res.plans ?? undefined);
-      if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
-      // the cards' snapshot comes whole with every page: what an event missed comes back here
-      applySnapshot(conversation, res);
-      const newest = items.at(-1)?.at;
-      // the next page starts after this one's newest; one that did not move on would come back the same
-      if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
-      last = newest;
-    }
+    do {
+      again.delete(conversation);
+      await readFeedPages(conversation);
+    } while (again.has(conversation));
   } catch {
     // an older hub has no feed: the conversation shows as before
   } finally {
+    again.delete(conversation);
     loading.delete(conversation);
+  }
+}
+
+/** One pass of loadFeed: the pages since the newest item the feed has now. */
+async function readFeedPages(conversation: string) {
+  let last = st.feeds[conversation]?.at(-1)?.at;
+  for (let n = 0; n < FEED_PAGES; n++) {
+    const res = await api<{ items: FeedItem[]; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(
+      `/assistant/conversations/${enc(conversation)}/feed${last ? `?since=${encodeURIComponent(last)}` : ""}`,
+    );
+    if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
+    const items = res.items ?? [];
+    received(items, res.plans ?? undefined);
+    if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
+    // the cards' snapshot comes whole with every page: what an event missed comes back here
+    applySnapshot(conversation, res);
+    const newest = items.at(-1)?.at;
+    // the next page starts after this one's newest; one that did not move on would come back the same
+    if (items.length < FEED_PAGE || !newest || (last && Date.parse(newest) <= Date.parse(last))) break;
+    last = newest;
   }
 }
 

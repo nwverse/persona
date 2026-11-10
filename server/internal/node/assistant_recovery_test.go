@@ -364,6 +364,13 @@ func TestAssistantStartupRetryKeepsItsRecovery(t *testing.T) {
 		n.stopAssistant(id)
 		t.Fatal("the failed starter's exit watcher finalized the recovery before its replacement was delivered")
 	}
+	n.mu.Lock()
+	follows := r.proc == current
+	n.mu.Unlock()
+	if !follows {
+		n.stopAssistant(id)
+		t.Fatal("the recovery still follows the starter that exited, not its replacement (#3495)")
+	}
 	n.stopAssistant(id)
 }
 
@@ -604,6 +611,12 @@ func TestAssistantHandoverResumesPendingFailureWithTheSameBudget(t *testing.T) {
 	if adopted := k.adopt(b); len(adopted) != 1 || adopted[0] != p {
 		t.Fatalf("the live conversation was not adopted: %+v", adopted)
 	}
+	select {
+	case got := <-selected:
+		t.Fatalf("the carried failure resumed (on %q) before the new connection's session state loaded", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	b.resumeAdoptedFailures(true) // startState, once the state is in
 	select {
 	case got := <-selected:
 		if got != "fallback-model" {
