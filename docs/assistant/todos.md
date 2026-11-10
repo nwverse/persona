@@ -436,6 +436,17 @@ The costliest long-task mistake is an Agent forgetting a decision already made: 
 - **Clients**: the web shows the ask on the to-do's row, its page, the main chat's task card and the task panel, with the one button that takes it (`docs/web/web.md`, "Waiting for you"); a stopped to-do with an open ask sorts with Awaiting review. The iOS / Mac / Watch part (the to-do row and detail, the `TODO_DECIDE` action) and Android are not built yet.
 - Not done here: the push is not withdrawn when the decision is taken elsewhere (an OK on it then answers 409, "already handled"); the watch's answer-only credential can neither read `/api/v1/todos` nor call the accept route.
 
+## Decision deadlines
+
+(#3127, `assistant/decision_deadline.go`.) A decision that waits for the owner can carry a recommended default and a deadline, so work does not stop just because nobody answered. Without a deadline nothing changes.
+
+- **Who sets it**: `task_review` with `needs_user` (`deadline`, `reversible`, with its `recommend`) and `ask_user` (`deadline`, `reversible`, and a `recommend` on every question naming one of its options). `deadline` is a duration (`4h`) or an RFC 3339 time, 1 minute to 30 days ahead; a deadline without `reversible`, or without a recommendation, is refused. `reversible: false` is for what cannot be undone: deleting, sending anything to other people, spending money and production changes.
+- **Where it is kept**: a task's on its decision in the acceptance book (`acceptAsk.deadline`, `reversible`, `due_at`, `by_default`); a question's in its arguments (as a time) and, once it became a to-do, on its record (`assistant.ask_todos`). The card waits no longer than the deadline. The Lark card and the decision push add a line with the deadline and what it does; on the phone card the recommended option's description says so.
+- **At the deadline** (`acceptLoop` looks every minute):
+  - **Reversible**: the recommendation is taken the way the owner's OK takes it. A task's goes to its Agent (the message says it was taken by default and can still change) and the task stops waiting for the user; a question still waiting gets the recommended options as the tool's answer, and one that became a to-do earlier has them sent to the asking conversation as a new message and closes. Either way a decision is recorded on the to-do: the question, the option, the reason "taken by default: no answer by MM-DD HH:MM", with `source = "agent"` because it is not the owner's own call.
+  - **Not reversible**: nothing is taken. The owner is reminded once (the decision push again, and the Lark card again when there was one; a question's to-do gets a push), and it keeps waiting; the owner can still answer at any time.
+- An answer from the owner before the deadline wins as before; a deadline that passes while the hub is down is handled on the next sweep.
+
 ## Chat thread
 
 (#5279, step 2: the binding itself) A to-do can be bound to a chat thread, a topic in a group chat or a conversation, so that the thread and the to-do are known to belong together. The binding itself writes nothing to any channel. What the user says in the thread comes back to the to-do ("Replies in the thread" below), and what happens to the to-do is told in the thread ("Posting into the thread" below). `todo.*` events come in a later step.

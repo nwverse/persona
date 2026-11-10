@@ -560,6 +560,14 @@ Apps built with older Xcode do not extend under the status bar and camera on Duo
     so switching Apps on an open Duo could return to "Select an Agent" in the right column (2026-11-04). Also, chats opened by left-column links do not write to `path`. The new Agents page therefore
     reopens `dev.openChat` (saved when opening a chat, cleared on returning to the list), one beat later (the outgoing tree's split view clears the path as it leaves);
     header-switched Agents in the same space are stored in `AppModel.chatSwitched`, and a rebuilt chat page on the same path opens that one directly. `ReturnToChatTests` uses `-swapTreeAt` on iPad to simulate a tree swap.
+  - Since #2836 the snapshots build nothing again: while the app is away (inactive, in the background) `RootView` gives the pages below it the width class it had while it was the active app
+    (`heldWidthClass`, in the environment, so the splits, the assistant's column and the detail presentations stay too, not only the shell / tabs choice), and on coming back the window's
+    (folded meanwhile, the shell). Swapped there, every part lost its state: an open sheet such as New Agent with what was typed in it, uploads under way, picked attachments.
+    The simulators take no snapshots in another width (a trip to the home screen keeps the sheet on the open Duo simulator without the fix too): that the hold works on the way to the background is checked on a real iPhone Duo open.
+    `-swapTreeAt` alone flips only `RootView`'s choice (the tree swap above); with `-swapTreeAway YES` the whole app's width class flips instead, from above `RootView` (`TreeSwapFlip`), while the app counts as away,
+    and the pages report they never saw it change (`probe.tree-inner`, `TreeSwapAwayTests`).
+    A real fold or unfold while the app is active still builds the tree again, and the pages' own width class changes with it: an open New Agent sheet and Health's uploads under way are lost then,
+    and in a simulation that flips the pages too the Agents page did not open its chat again (#2836, open).
   - Left-column `NavigationLink(value:)` replaces the right column (the left has its own never-pushed stack, forwarding values to the right); programmatically opened list pages must replace it too:
     `path = NavigationPath([value])` (in single-column mode the list is at the stack bottom, equivalent to append; Agents `openFromList`). Pages opened from details still append.
   - The first right-column page has no back button (the list is beside it): add `.splitDetailPage()` to the destination; Agents' custom chat back button hides for `\.splitDetail` (keeping its space so the title stays centered).
@@ -935,6 +943,14 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   - First verify Liquid Glass (lists, glass surfaces/buttons, sheets); other styles already adapt to system dark with same mechanism. Mac/Android lack option:
     Mac `NSApp.appearance` alone leaves List rows light (`MacSnapshot.colorScheme` comments), each window also needs `preferredColorScheme`, separate work.
   - Debug `-ui.scheme light|dark|system` (UserDefaults argument domain like `-ui.style`), `-tab settings -openAppearance scheme`.
+- **Glow While Replying** (requested 2026-11-09): a switch in Settings › Appearance, off by default (`ComposerGlowPrefs`, `ui.composerGlow`, iOS only).
+  When on, a band of color travels around the assistant's composer while its reply is being written (`SessionStatus.working`; not
+  `blocked`, not Agent chats) and fades out when the reply ends. Drawn by the MarqueeGlow package (`apple/project.yml`, pinned
+  `exactVersion`, `ComposerGlow.swift`): the halo is blurred once into a mask and only a gradient rotates per frame, so the chat scrolls
+  at full frame rate under it. Colors `Theme.Shell.composerGlow`, width `Theme.Size.rule`, shape `Theme.Shell.composerRadius`.
+  Reduce Motion keeps it still. Mac and Vision compile the same sources without the package (`#if os(iOS) && canImport`), so the switch is hidden there.
+  The glow is applied inside `ShellComposerBar` (`glows`), before its animations, so it follows the surface when the line grows into the card.
+  Debug `-ui.composerGlow YES`; on the mock, `GET /mock/session_state?mid=server&sid=<assistant>&state=working` holds a reply open.
 - State colors never follow style; one `Shared/StatusPalette.swift` shared by App/watch/Live Activities: Needs you red, Working amber, Unread green, Seen gray, Not running pale gray, like herdr (`docs/protocol/agent-states.md`). Three values each: `dot` (dots/icons/fills), `text` (same hue darkened, small text on white ≥4.5:1), `tint` (pale background), via `AgentState.tone`. Questions/plans/permissions/terminal dialogs all Needs you red; working spinner amber, accompanying text secondary gray. Non-Agent states use their own `Theme` tokens: `Theme.Diff` (diff/Git ±, counts, fills, body black), `caution` (connecting/stale/truncated/version mismatch, triangle not dot), `ai` (✦ AI summary), `loop` (loops/waiting), `positive` (success/connected/online/completed to-dos), `Hue` (categories such as memory types). Permission labels neutral except Allow everything red.
 - Agent row (`SlotRow`): state dot + title + time; latest sentence; metadata "Needs you · Claude · Space › Tab · Machine", regular secondary gray. Only Needs you written red; others dots only (Unread also bold title); former colored tab pill/state text/outlined Agent kind crowded first line and repeated status three times. Space counts colored dots + gray numbers.
 - Tokens (`Theme.swift`, pages reference only): `Theme.Radius` badge 6/control 10/card 14/bubble 20/panel 22 plus capsule/circle;
