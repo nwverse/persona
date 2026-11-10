@@ -404,7 +404,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     static func resolveFromNotification(_ id: String, group: String?, _ resolution: Resolution, action: String, done: @escaping () -> Void) {
         inBackground("resolve-interaction", done: done) {
             do {
-                try await HubStore.client(group: group).resolve(id, resolution)
+                try await AppModel.shared.outside(HubStore.client(group: group)) { try await $0.resolve(id, resolution) }
             } catch {
                 await NotificationActions.reportFailure(id: id, title: NotificationActions.failureTitle(action: action), error: error)
             }
