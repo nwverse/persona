@@ -172,7 +172,7 @@ func TestNotifyPayloadMutableContent(t *testing.T) {
 func TestNotifyAPI(t *testing.T) {
 	h := newTestHub(t)
 	c := &client{device: "phone-1", out: make(chan []byte, 8)}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	h.onClientMessage(context.Background(), c, []byte(`{"type":"client_hello","features":["ws_notify"]}`))
 	<-c.out // client_hello_ack
 	h.mutes = &Pins{Spaces: []string{}, Sessions: []string{"m1/muted"}}
@@ -428,7 +428,7 @@ func TestNotifyAPNs(t *testing.T) {
 func TestNodeScriptNotify(t *testing.T) {
 	h := newTestHub(t)
 	c := &client{device: "phone-1", out: make(chan []byte, 8)}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	h.onClientMessage(context.Background(), c, []byte(`{"type":"client_hello","features":["ws_notify"]}`))
 	<-c.out // client_hello_ack
 	h.mutes = &Pins{Spaces: []string{}, Sessions: []string{"box1/muted"}}
@@ -495,7 +495,7 @@ func TestNodeScriptNotify(t *testing.T) {
 	if msg = next(); msg != nil {
 		t.Fatalf("filtered notification sent: %v", msg)
 	}
-	delete(h.clients, c)
+	removeTestClient(h, c)
 	if out, err = call(`{"title":"Build finished"}`); err != nil || out["sent"] != false || out["reason"] != "no_device" {
 		t.Fatalf("no recipient: %v %v", out, err)
 	}
@@ -533,7 +533,7 @@ func TestPrefsOnlyDeviceGoesWithItsCredential(t *testing.T) {
 func TestNodeScriptNotifyCutsToFit(t *testing.T) {
 	h := newTestHub(t)
 	c := &client{device: "phone-1", out: make(chan []byte, 8), meta: clientMeta{features: map[string]bool{"ws_notify": true}}}
-	h.clients[c] = struct{}{}
+	addTestClient(h, c)
 	m := &Machine{hub: h, cfg: MachineConfig{ID: "box1", Name: "Studio"}}
 	for _, body := range []string{strings.Repeat("😀", notifyBodyMost), strings.Repeat("<", notifyBodyMost), strings.Repeat("a<b>", notifyBodyMost/4)} {
 		in := notifyRequest{Title: strings.Repeat("标", notifyTitleMost), Body: body, Level: levelActive} // as validate leaves it

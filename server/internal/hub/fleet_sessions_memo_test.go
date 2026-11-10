@@ -254,7 +254,7 @@ func TestWholeListProjectedOncePerKind(t *testing.T) {
 	for _, canonical := range []bool{false, true, false, true} {
 		c := &client{out: make(chan []byte, 4), subs: map[[2]string]bool{}, role: roleFull}
 		c.canonicalContracts.Store(canonical)
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 		apps = append(apps, c)
 	}
 	h.sessionsChanged(m)

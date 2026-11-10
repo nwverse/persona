@@ -32,7 +32,7 @@ func benchmarkBroadcastSessions(b *testing.B, older int) {
 		if i >= older {
 			c.delta, c.have = true, map[string]map[string][]byte{}
 		}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 	n := 0
 	for b.Loop() {
@@ -70,7 +70,7 @@ func oneChangedHop(tb testing.TB, h *Hub) (send func(n int)) {
 		if i >= 2 {
 			c.delta, c.have = true, map[string]map[string][]byte{}
 		}
-		h.clients[c] = struct{}{}
+		addTestClient(h, c)
 	}
 	// Two versions of each session, differing in its text.
 	rows := make([][2][]byte, 150)

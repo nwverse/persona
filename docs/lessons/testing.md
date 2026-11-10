@@ -328,6 +328,7 @@ Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUD
 
 ## WebSocket handshake tests
 
+- Hub tests must register and remove clients through `addTestClient` / `removeTestClient`, or hold `h.mu` when already updating related state (#2855). A hello starts `fleetClientsChanged` in a goroutine, which iterates `h.clients` under the mutex; an unlocked test write can race with it even after the hello handler returns. Reads and iterations also need the mutex when clients can connect or disconnect concurrently.
 - `Connection` is a comma-separated token list, so `Contains(..., "upgrade")` is not a valid upgrade check: it also matches `notupgrade`. Iterate `Header.Values`, split/trim, and `EqualFold` whole tokens. Test case, multiple fields, and substring rejection (#692).
 - Go printable rodata can concatenate independent constants, making artifact scans see short terms across boundaries (2026-11-03, #692: protocol-header token adjacent to a VirtualBox NIC prefix). Locate sanitized context and check source first; do not mistake this for actual personal-value insertion, remove sensitive terms, or add exemptions. Store brand prefixes in display case and normalize comparisons; regress unchanged NIC detection, then build/scan actual artifacts for four platforms. Header validation alone does not remove this adjacency.
 

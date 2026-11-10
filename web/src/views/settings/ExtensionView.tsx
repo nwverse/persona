@@ -376,7 +376,7 @@ export function LegacyExtensionUI({
     const at = asked.current;
     let r: ReturnType<typeof outcome> | null = null;
     try {
-      r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value } }), context?.item);
+      r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value }, manager }), context?.item);
     } catch (e) {
       toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error");
     }

@@ -9,6 +9,9 @@ import (
 	"testing"
 )
 
+// Move is MoveExcept with nothing dropped.
+func Move(hubDir, file string) (Report, error) { return MoveExcept(hubDir, file, nil) }
+
 // oldHubJSON is a hub.json of the layout before manager.json: the hub's own keys and every manager section.
 const oldHubJSON = `{
   "listen": ":18660",
