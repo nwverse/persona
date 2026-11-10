@@ -131,6 +131,7 @@ a summary up to 40 characters, and a short reason:
 - **Scope (requested 2026-11-04)**: "Triage before admission" and "No admission without fallback" below **apply only to plugin-provided connectors** (installed plugins or plugins in the manager's manager.json, not bundled personad connectors;
   currently the Lark extension). Hub-owned mail, GitHub, Telegram, and Messages behave unchanged: new items appear immediately, then triage in the background; timing and fallback (no rule tier means noise) remain as before.
   Identify by plugin ownership (`extensionConnectors`, recorded when hub starts a plugin connector and passed each round as `InboxSource.extension`), not name.
+  Source subscriptions (#2039) are handed in the same way, one source per subscription with `extension` set: their items carry a fallback tier unless the user chose to wait for the model ([subscriptions.md](../extensions/subscriptions.md) "Destinations").
 - **Triage before admission (#1644)**: hold new plugin-connector items aside for a collection round (`inbox_admit.go`). After collection, triage in the background; only then write to the database and list them:
   - Model succeeds: use its tier and summary.
   - Model fails, fallback exists: admit by fallback with "Rule-based." **That version is final**, with no retriage on model recovery (only new activity triggers it).

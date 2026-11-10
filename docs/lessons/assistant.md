@@ -165,3 +165,5 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   with nothing in it as absent (`givenTask`), keeps anything else as it was (another type, a wrongly typed field or an
   unknown key such as a misspelled `title` must not turn a hand-off into an untracked reply), and its schema allows null
   and requires none of the object's fields the handler does not.
+
+- A source the manager hands to the Inbox itself, rather than a registered connector, must be named in every round's `names`, the Feishu-chats rounds included (#2039). The Inbox keeps a source's held-back count and read error only while rounds name it (`recordHeld`, `recordReads`), and a chats-only round, which follows every Lark event, would otherwise drop a source subscription's "waiting for triage" count within seconds. Name such sources cheaply in those rounds (no items read) and hand in their things only in rounds that read the connectors (`extmgr` `readSubscriptions`).
