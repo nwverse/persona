@@ -90,10 +90,11 @@ type Machine struct {
 	dialErrAt       time.Time
 	lastSeen        time.Time
 	sessions        []proto.Session
-	sessionRevision uint64          // local ordering of session snapshots, independent of node transcript revisions
-	watched         map[string]bool // sessions the hub watches (session.watch): watched again on a new connection
-	followed        map[string]bool // sessions the manager itself follows (Follow: a channel's turn): watched as well
-	lastSeq         map[string]int  // session id -> highest item seq seen
+	lists           proto.SessionListDecoder // decodes the node's lists, only the sessions whose bytes changed (onEvent)
+	sessionRevision uint64                   // local ordering of session snapshots, independent of node transcript revisions
+	watched         map[string]bool          // sessions the hub watches (session.watch): watched again on a new connection
+	followed        map[string]bool          // sessions the manager itself follows (Follow: a channel's turn): watched as well
+	lastSeq         map[string]int           // session id -> highest item seq seen
 	// unsettled: sessions whose last Follow the node did not take (the next Follow asks it again; a new connection
 	// settles them).
 	unsettled map[string]bool
@@ -114,6 +115,8 @@ type Machine struct {
 	link                       *mgrLink      // kind link: the link Persona Link keeps open, nil while there is none
 	linkDown                   error         // why the last link went away
 	linkUp                     chan struct{} // a link arrived
+	// presence: what its Persona Link last said about the user (presence.go).
+	presence *presence
 	// herdrAsked: when the node last said whether herdr's server answers (herdr.go, its row).
 	herdrAsked time.Time
 	// herdrInstall: what the node last said of installing herdr (herdr.go).
@@ -151,12 +154,14 @@ type Machine struct {
 	next      *nodeConn
 	parked    string
 	svc       serviceState
+	// attWake wakes a service machine's sender of the "Needs you" summary (attentionLoop); one wake waits at most.
+	attWake chan struct{}
 }
 
 func newMachine(d *Devices, cfg MachineConfig) *Machine {
 	m := &Machine{cfg: cfg, d: d, watched: map[string]bool{}, lastSeq: map[string]int{}, kick: make(chan struct{}, 1),
 		timings: defaultTailcatTimings, deployRetry: 2 * time.Second, reconnectGrace: reconnectGrace,
-		linkUp: make(chan struct{}, 1), first: make(chan struct{})}
+		linkUp: make(chan struct{}, 1), first: make(chan struct{}), attWake: make(chan struct{}, 1)}
 	m.setName(cfg.Name)
 	if dial := d.opts.DialNode; dial != nil {
 		m.dialNode = dial(cfg.ID)
@@ -615,6 +620,22 @@ func (m *Machine) session(id string) (proto.Session, bool) {
 	return proto.Session{}, false
 }
 
+// decodeSessions decodes a node's sessions.changed as json.Unmarshal does, false when it does not decode: only the
+// sessions whose bytes changed since its last list (proto.SessionListDecoder), unless the event is one
+// proto.ScanSessionList leaves to json.Unmarshal. The event's other members are not decoded: none of them is the
+// list, so json.Unmarshal would skip them.
+func (m *Machine) decodeSessions(params json.RawMessage) ([]proto.Session, bool) {
+	if _, rows, scanned := proto.ScanSessionList(params); scanned && proto.DecodeChangedSessions {
+		list, _, err := m.lists.Decode(rows)
+		return list, err == nil
+	}
+	var p struct {
+		Sessions []proto.Session `json:"sessions"`
+	}
+	err := json.Unmarshal(params, &p)
+	return p.Sessions, err == nil
+}
+
 // onEvent takes what is the manager's of a node's event, and passes every event on to the hub as it came.
 func (m *Machine) onEvent(event string, params json.RawMessage) {
 	if event == "hook.event" && m.spooled.repeat(params) {
@@ -623,11 +644,8 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	m.noteClosed(event, params)
 	switch event {
 	case "sessions.changed":
-		var p struct {
-			Sessions []proto.Session `json:"sessions"`
-		}
-		if json.Unmarshal(params, &p) == nil {
-			m.setSessions(p.Sessions)
+		if list, ok := m.decodeSessions(params); ok {
+			m.setSessions(list)
 		}
 	case "sessions.revs":
 		var p struct {

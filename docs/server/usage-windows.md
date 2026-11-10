@@ -146,7 +146,12 @@ A few additions:
 
 - Two accounts in the same gateway (different `id`) are **never merged**, even if their reset times happen to match; the same upstream account seen by two gateways (or a gateway and a computer) is merged.
 - A merged account takes the newest sample's numbers and lists its sources: the computers that read it, by name (`machines`), and the gateway's name; the line under the popover title reads "MacBook · Relay"; with only one source, just that one. Never a word like "this computer": the clients run on phones and other computers, where it would point at the wrong device (#1907). Against an older hub that only sends `local`, every client says "Computer" (zh-Hans 电脑, ja コンピューター) instead.
-- When a gateway **cannot be reached, its last answer is kept and marked out of date** (`problem: "unreachable"`, the popover says "The gateway can't be reached; these are its last numbers"), so accounts do not disappear; dropped after 3 days.
+- When a gateway's **read fails, its last answer is kept and marked out of date**, so accounts do not disappear; dropped after 3 days. `problem` says why, from the source's error code, and the popover words it (the admin page's "Usage sources" gives the exact reason):
+  - `rejected` (`unauthorized`, `forbidden`: the gateway turned the key away): "The gateway turned the key away; update it in Admin → Usage sources. These are its last numbers";
+  - `unreachable` (`unreachable`, `timeout`): "The gateway can't be reached; these are its last numbers";
+  - `failed` (any other code: `not_found`, `server_error`, `bad_response`, `too_large`, `redirect`, `bad_config`): "Couldn't read the gateway; these are its last numbers".
+
+  The source failing replaces a relay's own per-account `error` (it is the newer news). Clients show no text for a value they don't know, but still fade the account.
 - Sorting is unchanged: by the fullest of the account's plan windows, highest first, out-of-date ones last. With no data at all (and no sources), the whole block is not drawn.
 
 ### The gateway's account list (#4576)
@@ -192,7 +197,7 @@ Any account-pool gateway that wants to feed usage into the sidebar implements on
 
 ## Who owns this (2026-11-05)
 
-User decision: the hub is only a communication center, and computers belong to the manager (`docs/server/machines.md` ("Who connects computers")), so subscription usage moved to the manager as-is, with no design change; the routes, fields and errors the App sees are unchanged.
+User decision: the hub is only a communication center, and computers belong to the manager (`docs/server/machines.md` ("Who connects to computers")), so subscription usage moved to the manager as-is, with no design change; the routes, fields and errors the App sees are unchanged.
 
 | Part | Code |
 | --- | --- |

@@ -1,6 +1,6 @@
 {{- $w := .Now.Weekday -}}
 - 现在：{{.Now.Format "2006-01-02"}} 周{{if eq $w 0}}日{{else if eq $w 1}}一{{else if eq $w 2}}二{{else if eq $w 3}}三{{else if eq $w 4}}四{{else if eq $w 5}}五{{else}}六{{end}} {{.Now.Format "15:04"}}（{{.Zone}}）
-- 模型档位：{{if .ModelProfile}}{{ctx .ModelProfile}}{{else}}未设置（model_profiles_list 查看，model_profile_switch 切换）{{end}}
+- 模型档位：{{with .ModelProfile}}{{if .Unreadable}}unavailable (model_profiles_list to retry){{else if .Gone}}{{.ID}}，已被删除（没有 Agent 预设；model_profile_switch 换一个）{{else}}{{ctx (or .Name .ID)}} ({{.ID}}){{with .Tiers}}；Agent 预设（agent_start / task_plan 的 tier）：{{range $i, $t := .}}{{if $i}}；{{end}}{{$t.Name}} = {{ctx $t.Launcher}} · {{if $t.Model}}{{ctx $t.Model}}{{else}}默认模型{{end}}{{with $t.Effort}} · {{.}}{{end}}{{with $t.Description}}（{{ctx .}}）{{end}}{{end}}{{else}}；没有 Agent 预设{{end}}{{end}}{{else}}未设置（model_profiles_list 查看，model_profile_switch 切换）{{end}}
 - 在线的电脑：{{range $i, $m := .Up}}{{if $i}}、{{end}}{{$m.Name}}（{{$m.ID}}）{{end}}{{with .Down}}；离线：{{range $i, $m := .}}{{if $i}}、{{end}}{{$m.Name}}（{{$m.ID}}）{{end}}{{end}}
 - Agents：需要你 {{len .Needs}} 个，完成未看 {{len .Unread}} 个，工作中 {{len .Working}} 个（详情用 agents_list）
 {{with .Needs}}  - 需要你：{{template "assistant/snapshot_agents" .}}
@@ -18,7 +18,7 @@
 {{end}}{{with .Asked}}- 你用 ask_user 问过、到点没人回、转成待办在等用户拍板的（用户在待办里记了决定会作为新消息发给发问的对话；别再问，也别先按某个选项去做，除非用户已经在对话里直接答了）：{{range $i, $a := .}}{{if $i}}；{{end}}「{{$a.Question}}」（{{$a.TodoID}}，{{$a.At.Format "01-02 15:04"}} 问的）{{end}}
 {{end}}{{with .Unaccepted}}- 等用户验收的（已部署的请验收，或任务的结论卡，用户还没回「通过」「OK」）：{{range $i, $a := .}}{{if $i}}；{{end}}「{{$a.Title}}」：{{$a.Verdict}}{{with $a.Changed}}；{{.}}{{end}}{{with $a.Link}}（{{.}}）{{end}}，{{$a.Since.Format "01-02"}} 起{{end}}{{if gt $.UnacceptedTotal (len .)}} 等 {{$.UnacceptedTotal}} 个{{end}}
 {{end}}{{if .PhoneOnline}}- iPhone：App 在线，phone_* 工具可用
-{{else}}- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请他打开 App
+{{else}}- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
 {{end}}{{with .KB}}- 知识库（kb_get 看详情）：
 {{indent "  " .}}{{end}}{{with .Chats}}{{if .Total}}- 飞书未读会话 {{.Total}} 个（免打扰的不算；用 lark_chats / lark_messages 看）
 {{with .AtMe}}  - @我：{{range $i, $c := first 6 .}}{{if $i}}；{{end}}{{$c.Name}}（{{$c.Unread}} 条）：{{$c.Preview}}{{end}}

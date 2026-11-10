@@ -132,11 +132,13 @@ func TestProviderEnv(t *testing.T) {
 			want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"}},
 		{"compact main fixed", with(func(l *proto.ManagedLauncher) { l.CompactWindow = 150000 }), "", "", true,
 			want{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000"}},
-		{"effort given wins", with(func(l *proto.ManagedLauncher) { l.Effort = "medium" }), "", "max", false,
-			want{"CLAUDE_CODE_EFFORT_LEVEL": "max"}},
-		{"effort of provider", with(func(l *proto.ManagedLauncher) { l.Effort = "medium" }), "", "", false,
-			want{"CLAUDE_CODE_EFFORT_LEVEL": "medium"}},
-		{"effort of model", base, "small", "", false, want{"CLAUDE_CODE_EFFORT_LEVEL": "low"}},
+		{"effort of provider not in env", with(func(l *proto.ManagedLauncher) { l.Effort = "medium" }), "", "", false,
+			want{"CLAUDE_CODE_EFFORT_LEVEL": "-"}},
+		{"effort of model not in env", base, "small", "", false, want{"CLAUDE_CODE_EFFORT_LEVEL": "-"}},
+		{"effort pinned by env", with(func(l *proto.ManagedLauncher) { l.Env = "CLAUDE_CODE_EFFORT_LEVEL=high" }), "", "", false,
+			want{"CLAUDE_CODE_EFFORT_LEVEL": "high"}},
+		{"effort pinned by env ignored for main", with(func(l *proto.ManagedLauncher) { l.Env = "CLAUDE_CODE_EFFORT_LEVEL=high" }), "", "", true,
+			want{"CLAUDE_CODE_EFFORT_LEVEL": "-"}},
 		{"headers", with(func(l *proto.ManagedLauncher) { l.Headers = "X-Test: v1" }), "", "", false,
 			want{"ANTHROPIC_CUSTOM_HEADERS": "X-Test: v1"}},
 		{"no headers", base, "", "", false, want{"ANTHROPIC_CUSTOM_HEADERS": "-"}},
@@ -174,7 +176,7 @@ func TestProviderEnvClear(t *testing.T) {
 		"CLAUDE_CODE_EFFORT_LEVEL=max", "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1", "CLAUDE_CODE_AUTO_COMPACT_WINDOW=1",
 		"API_TIMEOUT_MS=1", "HTTP_PROXY=p", "HTTPS_PROXY=p", "NO_PROXY=n", "PATH=/bin", "HOME=/h",
 		"CLAUDE_CODE_DISABLE_ARTIFACT=1", "API_TIMEOUT_MS_EXTRA=1"}
-	got := withoutProviderEnv(in)
+	got := withoutEnv(in, providerEnvClear)
 	if want := []string{"HTTP_PROXY=p", "HTTPS_PROXY=p", "NO_PROXY=n", "PATH=/bin", "HOME=/h", "CLAUDE_CODE_DISABLE_ARTIFACT=1",
 		"API_TIMEOUT_MS_EXTRA=1"}; !slices.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
@@ -233,8 +235,14 @@ func TestMainConversationKeepsItsOwnWindowAndLevel(t *testing.T) {
 	if _, ok := main["CLAUDE_CODE_EFFORT_LEVEL"]; ok {
 		t.Fatalf("main conversation got a thinking level env: %v", main)
 	}
-	if agent := providerEnv(l, "big", "", false); agent["CLAUDE_CODE_EFFORT_LEVEL"] != "high" || agent["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "1000000" {
+	if agent := providerEnv(l, "big", "", false); agent["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] != "1000000" {
 		t.Fatalf("agent: %v", agent)
+	} else if _, ok := agent["CLAUDE_CODE_EFFORT_LEVEL"]; ok {
+		t.Fatalf("agent got a thinking level env: %v", agent)
+	}
+	pinnedL := proto.ManagedLauncher{Name: "p", Kind: "api", Env: "CLAUDE_CODE_EFFORT_LEVEL=high"}
+	if pinnedAgent := providerEnv(pinnedL, "", "", false); pinnedAgent["CLAUDE_CODE_EFFORT_LEVEL"] != "high" {
+		t.Fatalf("pinned agent: %v", pinnedAgent)
 	}
 	// what is pinned over the user's settings leaves the per-start decisions to the start's environment
 	pinned := pinnedEnv(providerEnv(l, "big", "", false))

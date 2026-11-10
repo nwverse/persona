@@ -89,6 +89,11 @@
     <string name="machines_deploying">Installing the hub\'s Persona build on this computer…</string>
     <string name="machines_deploy_failed_last">Last deploy failed: %1$s</string>
     <string name="machines_redeploy">Redeploy</string>
+    <string name="machines_deploy_waiting_idle">Waiting for the agents on this computer to go idle before updating Persona…</string>
+    <string name="machines_deploy_transferring">Sending the hub\'s Persona build to this computer…</string>
+    <string name="machines_deploy_restarting">Restarting Persona on this computer…</string>
+    <string name="machines_deploy_confirming">Waiting for Persona on this computer to reconnect and match the hub\'s build…</string>
+    <string name="machines_deploy_unsupported">This computer can\'t be updated from here yet. Update Persona on it first.</string>
     <string name="machines_controls_title">Engine and connection</string>
     <string name="machines_engine">Engine</string>
     <string name="machines_reconnecting">Reconnecting…</string>
@@ -193,6 +198,8 @@
     <string name="machines_usage_reset_at">Resets at %1$s</string>
     <string name="machines_usage_source_local">Computer</string>
     <string name="machines_usage_problem_unreachable">The gateway can\'t be reached; these are its last numbers</string>
+    <string name="machines_usage_problem_rejected">The gateway turned the key away; update it in Admin → Usage sources. These are its last numbers</string>
+    <string name="machines_usage_problem_failed">Couldn\'t read the gateway; these are its last numbers</string>
     <string name="machines_usage_problem_error">The gateway couldn\'t read this account just now; these are the numbers it had stored</string>
     <plurals name="machines_health_summary_attention"><item quantity="one">%d feature needs attention</item><item quantity="other">%d features need attention</item></plurals>
     <plurals name="machines_health_fixed"><item quantity="one">Regenerated %d file</item><item quantity="other">Regenerated %d files</item></plurals>

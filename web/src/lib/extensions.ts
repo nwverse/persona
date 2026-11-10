@@ -1,6 +1,6 @@
-// Settings › Extensions (docs/extensions/extensions.md "The hub's API" and "App: Settings › Extensions", iOS ExtensionsModel): the hub's extensions, each one's
-// switch, its configuration as a form drawn from its schema (`form.fields`), and its secrets, write-only. Installing,
-// upgrading and removing happen on the hub's machine (`personad extension`), never here.
+// Manager-owned extension metadata and settings APIs (docs/extensions/extension-settings.md).
+// Configuration is schema-backed and secrets are write-only. Lifecycle management is host-owned;
+// market installation and consent flows live in extension-market.ts.
 import { api, ApiError, enc } from "./api";
 import type { Machine } from "./types";
 import { placeOf, type UIPlace } from "./extension-ui";
@@ -10,6 +10,7 @@ import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import type { Contribution, DependencyState, PackMember } from "./extension-model";
 import type { ExtensionAuth, ExtensionTool } from "./extension-auth";
 import { clock } from "./format";
+import { itemHeaders } from "./manager-choice";
 import { t } from "../i18n";
 
 export type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
@@ -147,7 +148,10 @@ export interface ExtensionField {
   default?: Json;
   required?: boolean;
   enum?: ExtensionChoice[];
+  /** uri | email | hostname | machine (one of the hub's machines, by id) | launcher (one of its launchers, by name). */
   format?: string;
+  /** format machine: only machines of these systems (x-os). */
+  os?: string[];
   pattern?: string;
   min_length?: number;
   max_length?: number;
@@ -233,8 +237,8 @@ export const setContribution = (id: string, point: string, cid: string, enabled:
 export const setExtensionAutoUpgrade = (id: string, auto: boolean) =>
   api<HubExtensionDetail>(`${base(id)}/auto-upgrade`, { method: "PUT", json: { auto } }).then(detailOf);
 /** The auto-upgrade switch for all market extensions; a hub from before it has no route (null). */
-export const extensionUpgrades = () =>
-  api<{ auto: boolean; upgrades?: ExtensionUpgrade[] }>(`${extRoot()}/-/upgrades`).then((r) => r.auto, () => null);
+export const extensionUpgrades = (manager?: string) =>
+  api<{ auto: boolean; upgrades?: ExtensionUpgrade[] }>(`${extRoot()}/-/upgrades`, { headers: itemHeaders(manager) }).then((r) => r.auto, () => null);
 export const setExtensionUpgrades = (auto: boolean) => api<{ auto: boolean }>(`${extRoot()}/-/upgrades`, { method: "PUT", json: { auto } }).then((r) => r.auto);
 export const setExtensionConfig = (id: string, config: JsonObject) =>
   api<HubExtensionDetail>(`${base(id)}/config`, { method: "PUT", json: { config } }).then(detailOf).then(changed);
@@ -394,6 +398,41 @@ export function placeholder(f: ExtensionField): string {
   return t("lib-extensions.not_set");
 }
 
+/** A launcher as the form's picker reads it (GET /launchers' entry). */
+export interface PickerLauncher {
+  name: string;
+  display_name?: string;
+  hidden?: boolean;
+}
+
+/** One choice of a machine or launcher picker; `missing`: the value names none of them (it still shows, to change it). */
+export interface PickerChoice {
+  value: string;
+  label: string;
+  missing?: boolean;
+}
+
+/** The picker a string field draws instead of a text box: the hub's machines (format machine, of the systems x-os names)
+ *  or launchers (format launcher, the hidden ones left out), by name; a current value that names none of them comes
+ *  first, so it can be seen and changed. null: the field is not one of these, or its list is not in yet. */
+export function pickerChoices(f: ExtensionField, current: Json | undefined, machines: Pick<Machine, "id" | "name" | "os">[], launchers: PickerLauncher[] | null): PickerChoice[] | null {
+  if (f.type !== "string" || f.enum?.length) return null;
+  let out: PickerChoice[];
+  if (f.format === "machine") {
+    const os = f.os ?? [];
+    out = machines.filter((m) => !os.length || os.includes(m.os ?? "")).map((m) => ({ value: m.id, label: m.name || m.id }));
+  } else if (f.format === "launcher") {
+    if (!launchers) return null;
+    out = launchers.filter((l) => !l.hidden).map((l) => ({ value: l.name, label: l.display_name?.trim() && l.display_name.trim() !== l.name ? `${l.display_name.trim()} (${l.name})` : l.name }));
+  } else {
+    return null;
+  }
+  if (typeof current === "string" && current && !out.some((c) => c.value === current)) {
+    out.unshift({ value: current, label: t(f.format === "machine" ? "lib-extensions.machine_missing" : "lib-extensions.launcher_missing", { name: current }), missing: true });
+  }
+  return out;
+}
+
 export function secretState(s: ExtensionSecret): string {
   if (s.set) return s.hint ? t("lib-extensions.is_set_hint", { hint: s.hint }) : t("lib-extensions.is_set");
   return s.required ? t("lib-extensions.not_set_required") : t("lib-extensions.not_set");
@@ -475,6 +514,39 @@ export function numberProblems(typed: Record<string, { text: string; integer: bo
 
 /** Whether the draft differs from what the hub has (both read as sent: compacted). */
 export const isDirty = (draft: JsonObject, config: JsonObject | undefined) => !same(compact(draft), compact(config ?? {}));
+
+const isGroup = (v: Json | undefined): v is JsonObject => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** What a draft changes of the configuration it was made on (both read as sent): each changed field's path and its value
+ *  in the draft (undefined: cleared). Groups are gone into, so a change is one field's, not its whole group's. */
+function draftEdits(draft: JsonObject, base: JsonObject): { path: string[]; value: Json | undefined }[] {
+  const out: { path: string[]; value: Json | undefined }[] = [];
+  const walk = (a: JsonObject, b: JsonObject, at: string[]) => {
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const [x, y] = [a[k], b[k]];
+      if ((isGroup(x) || x === undefined) && (isGroup(y) || y === undefined)) walk(x ?? {}, y ?? {}, [...at, k]);
+      else if (!same(x, y)) out.push({ path: [...at, k], value: x });
+    }
+  };
+  walk(compact(draft), compact(base), []);
+  return out;
+}
+
+/** Unsaved edits made on `base` (number fields as typed, by dotted path), put on what the hub has now (`fresh`): the fields
+ *  they change keep the change, every other field takes the fresh value, so a change made elsewhere meanwhile shows and
+ *  is not saved back over. A number still being typed stays where it does not read as one yet, or is its field's change. */
+export function rebaseDraft<T extends { text: string; integer: boolean }>(
+  kept: { base: JsonObject; draft: JsonObject; typed: Record<string, T> },
+  fresh: JsonObject,
+): { draft: JsonObject; typed: Record<string, T> } {
+  const edits = draftEdits(kept.draft, kept.base);
+  const edited = new Set(edits.map((e) => e.path.join(".")));
+  const problems = numberProblems(kept.typed);
+  return {
+    draft: edits.reduce((out, e) => setAt(out, e.path, e.value), fresh),
+    typed: Object.fromEntries(Object.entries(kept.typed).filter(([k]) => k in problems || edited.has(k))),
+  };
+}
 
 /** The items of a list field: the draft's, else the default. */
 export function listItems(draft: JsonObject, path: string[], f: ExtensionField): string[] {

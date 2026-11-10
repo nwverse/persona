@@ -1,4 +1,4 @@
-// Settings › Assistant (docs/assistant/assistant.md "Profile page and avatar", the iOS app's AssistantProfileView / AssistantNotesView /
+// Settings › Assistant (docs/assistant/assistant.md "Profile and avatar", the iOS app's AssistantProfileView / AssistantNotesView /
 // AssistantMemoryView, Android's assistant settings): what Persona does on its own (a line into "Scheduled tasks"), what it knows about you
 // ("About me" = `notes`, saved on "Save" or when leaving; "Memory" = its memory files: read, edit the whole file, delete), and where
 // it runs (read-only here). Its model is Settings › Models › Main chat, not here (#1291).
@@ -171,10 +171,10 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       </Group>
 
       <Group title={t("settings-nav.tab_model_config")}>
-        <a href={BASE + settingsHref("model-config", "agent.new", false, manager)} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
+        <a href={BASE + settingsHref("models", "agent.new", false, manager, "model-config")} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
           <span>{t("settings-assistantsettings.task_models")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
         </a>
-        <a href={BASE + settingsHref("model-config", "assistant", false, manager)} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
+        <a href={BASE + settingsHref("models", "assistant", false, manager, "model-config")} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
           <span>{t("settings-assistantsettings.main_chat_model")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
         </a>
       </Group>

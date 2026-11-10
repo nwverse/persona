@@ -46,8 +46,10 @@ type UsageAccount struct {
 	// Machines are the names of the computers whose agents' files reported it (#1907), set with Local; clients name
 	// those instead of a word like "this computer", which reads as the device in hand.
 	Machines []string `json:"machines,omitempty"`
-	// Problem: "error" when the gateway could not read the account's numbers just now (it kept the stored ones),
-	// "unreachable" when the gateway itself could not be asked and this is its last answer. Never carries the text.
+	// Problem: "error" when the gateway could not read the account's numbers just now (it kept the stored ones). When
+	// the gateway's own last read failed and this is its last answer, why: "rejected" (it turned the key away, 401 /
+	// 403), "unreachable" (it could not be asked: no connection, a timeout) or "failed" (it answered, but not with
+	// usage: 404, 5xx, a bad answer). Never carries the text; clients show nothing for a value they don't know.
 	Problem string `json:"problem,omitempty"`
 	// Ref is the account's identity at its gateway ("<source id>:<account id>"), when the source has one. Hub-internal:
 	// it is never sent out. Two samples with refs from one source but different accounts are never merged.
