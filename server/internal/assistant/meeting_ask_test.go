@@ -86,6 +86,7 @@ func (m *meetingFixture) earlierMeeting(transcript string) string {
 // (case-insensitively, with no second model call), another question or at under the same id refused.
 func TestMeetingAskTyped(t *testing.T) {
 	m := newMeetingFixture(t)
+	m.engine().EarlierMeetingsInAnswers = true
 	todo := m.earlierMeeting("Exports over four megabytes are dropped")
 	m.do("PATCH", "/api/v1/todos/"+todo, "", map[string]any{"done": true}, http.StatusOK)
 	m.upload(meetingRec, 1, map[string]any{"attendance": "participant", "title": "Design review"})
@@ -400,6 +401,7 @@ func TestPlainAnswer(t *testing.T) {
 // pinned facts, the to-do's own title or notes, a project's goal or summary, or any chat.
 func TestMeetingAnswerPrivacy(t *testing.T) {
 	m := newMeetingFixture(t)
+	m.engine().EarlierMeetingsInAnswers = true
 	m.f.mu.Lock()
 	m.f.hello.Owner = "Ada"
 	m.f.mu.Unlock()
@@ -489,5 +491,44 @@ func TestViewAsk(t *testing.T) {
 	if string(raw) != `{"id":"`+askOne+`","question":"","question_source":"typed","at":3.5,"state":"pending","answer":"","lang":"","speak":false,`+
 		`"sources":[],"asked_at":"2026-11-10T07:12:03Z"}` {
 		t.Fatalf("%s", raw)
+	}
+}
+
+// The production default excludes prior minutes, their projects and their action-item states until #3862 phase 1.
+func TestMeetingAnswerExcludesEarlierMeetingsByDefault(t *testing.T) {
+	m := newMeetingFixture(t)
+	todo := m.earlierMeeting("Earlier transcript")
+	m.do("PATCH", "/api/v1/todos/"+todo, "", map[string]any{"done": true}, http.StatusOK)
+	e := m.engine()
+	if e.EarlierMeetingsInAnswers {
+		t.Fatal("earlier meetings must be disabled by default")
+	}
+	if err := e.Store.PutProject(&kb.Project{Slug: "export", Name: "Earlier project", Status: "active"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Apply(kb.KindRecording, earlier, kb.Update{Projects: []string{"export"}}); err != nil {
+		t.Fatal(err)
+	}
+	m.upload(meetingRec, 1, map[string]any{"attendance": "listener", "title": "Current meeting",
+		"calendar": map[string]any{"title": "Current calendar"}})
+	m.do("POST", livePath(meetingRec), "", `{"from":0,"segments":[{"start":1,"end":3,"text":"A current line"}]}`, http.StatusOK)
+	m.model.reply = `{"question":"","answer":"No earlier meeting material is available.","sources":["` + earlier + `","export"]}`
+	a := meetingAskOf(t, m.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "What did we decide before?"}, http.StatusOK))
+	if sources, _ := a["sources"].([]any); len(sources) != 0 {
+		t.Fatalf("unavailable sources returned: %v", sources)
+	}
+	calls := m.model.called()
+	if len(calls) != 1 {
+		t.Fatalf("%d calls", len(calls))
+	}
+	for _, forbidden := range []string{"Keep the cap for this release", "Add the regression test", "Earlier project", "[to-do done]", "<earlier_meeting"} {
+		if strings.Contains(calls[0].User, forbidden) {
+			t.Errorf("earlier material %q reached the model: %s", forbidden, calls[0].User)
+		}
+	}
+	for _, want := range []string{"Current meeting", "Current calendar", "A current line", "What did we decide before?"} {
+		if !strings.Contains(calls[0].User, want) {
+			t.Errorf("current material missing %q: %s", want, calls[0].User)
+		}
 	}
 }

@@ -30,11 +30,16 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
 /** False: a manager from before minutes_days (#3780), which says only recording_days. */
 let withMinutes: boolean;
-const effective = () => saved && { recording_days: saved.recording_days, ...(withMinutes ? { minutes_days: Math.max(saved.minutes_days ?? 365, saved.recording_days ?? 14) } : {}) };
+const effective = () => saved && { recording_days: saved.recording_days, ...(withMinutes ? { minutes_days: (saved.minutes_days ?? 0) === 0 ? 0 : Math.max(saved.minutes_days!, saved.recording_days ?? 14) } : {}) };
 const state = () => ({ manager: "assistant", notes: "", ...(effective() ?? {}) });
 const input = (label: string) => host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
 const recordings = () => input(t("settings-assistantsettings.recording_days"));
 const minutes = () => input(t("settings-assistantsettings.minutes_days"));
+const mode = () => host.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-assistantsettings.minutes_days")}"]`)!;
+async function choose(value: string) {
+  await act(async () => { mode().value = value; mode().dispatchEvent(new Event("change", { bubbles: true })); });
+  await flush();
+}
 async function enter(el: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
   await act(async () => { setter.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); });
@@ -71,9 +76,13 @@ it("shows both retentions in effect and saves a change the hub confirms", async 
   expect(host.textContent).toContain("Recordings");
   expect(host.textContent).toContain(t("settings-assistantsettings.recordings_footer"));
   expect(host.textContent).not.toContain(t("settings-assistantsettings.recordings_footer_with_minutes"));
-  expect([recordings()!.value, minutes()!.value]).toEqual(["14", "365"]);
+  expect(recordings()!.value).toBe("14");
+  expect(mode().value).toBe("forever");
+  expect(minutes()).toBeNull();
+  await choose("days");
+  expect(minutes()!.value).toBe("365");
   await enter(minutes()!, "730");
-  expect(writes).toEqual([{ minutes_days: 730 }]);
+  expect(writes).toEqual([{ minutes_days: 365 }, { minutes_days: 730 }]);
   expect(minutes()!.value).toBe("730");
   await enter(recordings()!, "30");
   expect(writes.at(-1)).toEqual({ recording_days: 30 });
@@ -103,6 +112,7 @@ it("promises nothing about the minutes on a manager that deletes them with the r
 });
 
 it("sends nothing out of bounds or not a whole number, and says the bounds", async () => {
+  saved = { recording_days: 14, minutes_days: 365 };
   await render();
   for (const [field, value, max] of [[minutes, "0", 3650], [minutes, "3651", 3650], [minutes, "1.5", 3650], [recordings, "366", 365], [recordings, "", 365]] as const) {
     await enter(field()!, value);
@@ -129,9 +139,36 @@ it.each([
   ["a refusal", () => json({ error: "Synthetic refusal" }, 400), () => "Synthetic refusal"],
 ])("keeps what is in effect and says so after %s", async (_, reply, why) => {
   answer = reply;
+  saved = { recording_days: 14, minutes_days: 365 };
   await render();
   await enter(minutes()!, "30");
   expect(writes).toEqual([{ minutes_days: 30 }]);
   expect(toast).toHaveBeenCalledWith(expect.stringContaining(why()), "error");
   expect(minutes()!.value).toBe("365");
+});
+
+
+it("saves forever as zero, even with longer recording retention, and switches back", async () => {
+  saved = { recording_days: 60, minutes_days: 90 };
+  await render();
+  await choose("forever");
+  expect(writes).toEqual([{ minutes_days: 0 }]);
+  expect(mode().value).toBe("forever");
+  expect(minutes()).toBeNull();
+  await enter(recordings()!, "365");
+  expect(mode().value).toBe("forever");
+  await choose("days");
+  expect(writes.at(-1)).toEqual({ minutes_days: 365 });
+  expect(minutes()!.value).toBe("365");
+  expect(toast).not.toHaveBeenCalled();
+});
+
+it("does not claim forever when the hub refuses or ignores it", async () => {
+  saved = { recording_days: 14, minutes_days: 365 };
+  answer = () => json(state());
+  await render();
+  await choose("forever");
+  expect(mode().value).toBe("days");
+  expect(minutes()!.value).toBe("365");
+  expect(toast).toHaveBeenCalledWith(expect.stringContaining(t("settings-assistantsettings.retention_unconfirmed")), "error");
 });

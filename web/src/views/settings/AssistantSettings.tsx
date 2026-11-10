@@ -43,14 +43,14 @@ interface AssistantState {
   meeting_attendance_default?: string;
   /** How many days recordings stay in the knowledge base (#3235), in effect; the phone drops its own older ones too. */
   recording_days?: number;
-  /** How many days a meeting's minutes stay once its transcript went (#3780), in effect: never below `recording_days`. */
+  /** How many days a meeting's minutes stay once its transcript went (#3780), in effect: 0 means forever; finite windows never below `recording_days`. */
   minutes_days?: number;
 }
 
 /** `meeting_attendance_default`'s values, in the picker's order. */
 const MEETING_ROLES = ["off", "listener", "participant"] as const;
 
-/** The bounds `PUT /api/v1/assistant` takes for the two retentions (docs/protocol/protocol.md). */
+/** Finite day bounds (docs/protocol/protocol.md). Minutes also accept 0, selected as Forever rather than typed. */
 const RETENTION = { recording_days: { min: 1, max: 365 }, minutes_days: { min: 1, max: 3650 } } as const;
 type Retention = keyof typeof RETENTION;
 
@@ -102,7 +102,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     setRetentionBusy(true);
     try {
       const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { [field]: days } });
-      const want = field === "minutes_days" ? Math.max(days, r.recording_days ?? days) : days;
+      const want = field === "minutes_days" && days !== 0 ? Math.max(days, r.recording_days ?? days) : days;
       if (r.manager !== manager || r[field] !== want) throw new Error(t("settings-assistantsettings.retention_unconfirmed"));
       setInfo((i) => i ? { ...i, recording_days: r.recording_days, minutes_days: r.minutes_days } : i);
     } catch (e) {
@@ -391,22 +391,28 @@ function AboutMe({ notesSaves, info, onSaved }: { notesSaves: ReturnType<typeof 
  *  unconfirmed or raised one (minutes never below the recordings' days) shows what is in effect. */
 function DaysRow({ field, label, value, tries, disabled, onSave }: { field: Retention; label: string; value: number; tries: number; disabled: boolean; onSave: (days: number) => void }) {
   const { min, max } = RETENTION[field];
+  const forever = field === "minutes_days" && value === 0;
   const [draft, setDraft] = useState(String(value));
   useEffect(() => setDraft(String(value)), [value, tries]);
   const days = Number(draft.trim());
-  const valid = /^\d+$/.test(draft.trim()) && days >= min && days <= max;
+  const valid = forever || /^\d+$/.test(draft.trim()) && days >= min && days <= max;
   const commit = () => {
-    if (!valid || disabled) return;
+    if (forever || !valid || disabled) return;
     if (days !== value) onSave(days);
     else setDraft(String(value));
   };
   return (
     <Row label={label} hint={valid ? undefined : t("settings-assistantsettings.days_range", { min, max })}>
-      <input type="number" inputMode="numeric" min={min} max={max} step={1} aria-label={label} aria-invalid={!valid || undefined}
+      {field === "minutes_days" && <select aria-label={label} value={forever ? "forever" : "days"} disabled={disabled}
+        className={settingsInputClass} onChange={(e) => onSave(e.target.value === "forever" ? 0 : 365)}>
+        <option value="forever">{t("settings-assistantsettings.forever")}</option>
+        <option value="days">{forever ? t("settings-assistantsettings.retention_days_value", { days: 365 }) : t("settings-assistantsettings.days_unit")}</option>
+      </select>}
+      {!forever && <input type="number" inputMode="numeric" min={min} max={max} step={1} aria-label={label} aria-invalid={!valid || undefined}
         value={draft} disabled={disabled} onChange={(e) => setDraft(e.target.value)} onBlur={commit}
         onKeyDown={(e) => { if (e.key === "Enter") commit(); else if (e.key === "Escape") setDraft(String(value)); }}
-        className={`${settingsInputClass} max-w-20 text-right tabular-nums`} />
-      <span>{t("settings-assistantsettings.days_unit")}</span>
+        className={`${settingsInputClass} max-w-20 text-right tabular-nums`} />}
+      {field === "recording_days" && <span>{t("settings-assistantsettings.days_unit")}</span>}
     </Row>
   );
 }

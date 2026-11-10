@@ -133,7 +133,7 @@ export function RecordingMinutes({ detail, rec, auth, current, refresh, onSaved,
         </div>
       } />
       {rec.trimmedAt && <p data-minutes-kept className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
-        {keptUntil ? t("knowledge-kbdetail.minutes_kept_until", { date: keptUntil }) : t("knowledge-kbdetail.minutes_transcript_expired")}
+        {minutesDays === 0 ? t("knowledge-kbdetail.minutes_kept_forever") : keptUntil ? t("knowledge-kbdetail.minutes_kept_until", { date: keptUntil }) : t("knowledge-kbdetail.minutes_transcript_expired")}
       </p>}
       {!rec.trimmedAt && (state === "pending" || state === "failed") && <p role="status" className="mb-2 px-1 text-[12.5px] leading-relaxed text-ink-3">
         {t(state === "failed" ? "knowledge-kbdetail.minutes_failed" : minutes ? "knowledge-kbdetail.minutes_updating" : "knowledge-kbdetail.minutes_writing")}

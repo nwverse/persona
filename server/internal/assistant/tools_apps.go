@@ -146,7 +146,7 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		}
 		if a.Kind == kb.KindRecording && json.Unmarshal(d.Meta, &trimmed) == nil && trimmed.At != nil {
 			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
-				"assistant.minutes_days after the meeting, and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
+				"assistant.minutes_days after the meeting (0 means forever, the default), and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		}
 		switch {
 		case d.Recent != "" && a.Kind == kb.KindRecording:

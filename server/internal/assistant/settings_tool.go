@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,7 +67,8 @@ func (s *Service) ownSettings() []ownSetting {
 			set: s.setStartRequestedTasks},
 		{Setting: Setting{Key: "assistant.recording_days", Title: "录音在知识库里保留", Actions: getSet,
 			About: "how many days the phone's and watch's recording transcripts stay in the knowledge base (kind recordings); older " +
-				"ones are deleted from it (the audio and the recordings on the phone are not touched). 14 by default",
+				"transcripts are deleted from it, and the phone deletes its local recordings too (audio and text). " +
+				"Meeting minutes follow assistant.minutes_days instead. 14 by default",
 			Value: "a whole number of days, 1–365"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
 			set: s.setRecordingDays},
@@ -76,9 +76,12 @@ func (s *Service) ownSettings() []ownSetting {
 			About: "how many days a meeting recording's minutes stay in the knowledge base. Past assistant.recording_days its " +
 				"transcript, summary and live log are deleted and only the minutes (and the recording's metadata) stay, still " +
 				"searchable and readable with kb_get, until this many days after the meeting; then the rest goes too. Never " +
-				"fewer than assistant.recording_days (a smaller value keeps them as long as the recording). 365 by default",
-			Value: "a whole number of days, 1–3650"},
-			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.minutesDays(ctx)), nil },
+				"fewer than assistant.recording_days for finite windows. 0 (or forever) keeps minutes until the user deletes them, " +
+				"which is the default",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.minutesDays(ctx)), nil
+			},
 			set: s.setMinutesDays},
 		{Setting: Setting{Key: "assistant.meeting_attendance_default", Title: "Persona in recorded meetings", Actions: getSet,
 			About: "the role a meeting recording on the phone pre-selects (the user can still change it when it starts): off (the " +
@@ -355,30 +358,41 @@ func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*own
 		}}, nil
 }
 
-// setMinutesDays changes minutes_days to the value asked for, decided on the saved setting: the knowledge base raises
-// it to recording_days (kb.MinutesDaysFor), so a value below recording_days changes nothing in effect now, but it is
-// saved all the same and counts once recording_days is shorter. Only the value already saved (365 when unset) changes
-// nothing. The card says the days in effect, before and after, or that they stay and what is saved for later.
+// minutesDaysLabel spells out the forever sentinel instead of showing a misleading zero-day retention.
+func minutesDaysLabel(l i18n.Lang, days int) string {
+	if days == 0 {
+		return i18n.T(l, "assistant-settings_tool.minutes_forever")
+	}
+	return i18n.T(l, "assistant-settings_tool.minutes_days_value", i18n.Args{"days": days})
+}
+
+// setMinutesDays compares the saved setting, not its recording_days floor. A finite value below that floor is saved
+// for when recording_days becomes shorter. Unset and 0 both mean forever; the card names the effective before/after.
 func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var days int
-	if err := json.Unmarshal(v, &days); err != nil || days < minMinutesDays || days > maxMinutesDays {
-		return nil, errors.New("value must be a whole number of days, 1–3650")
+	var word string
+	forever := json.Unmarshal(v, &word) == nil && strings.EqualFold(strings.TrimSpace(word), "forever")
+	if !forever && (strings.TrimSpace(string(v)) == "null" || json.Unmarshal(v, &days) != nil || days < minMinutesDays || days > maxMinutesDays) {
+		return nil, i18n.Err("assistant-profile.bad_minutes_days")
 	}
 	cur := s.settings(ctx)
-	saved, recording := cmp.Or(minutesDaysSetting(cur), kb.DefaultMinutesDays), recordingDaysOf(cur)
+	saved, recording := minutesDaysSetting(cur), recordingDaysOf(cur)
 	before, after := kb.MinutesDaysFor(saved, recording), kb.MinutesDaysFor(days, recording)
+	args := func(l i18n.Lang) i18n.Args {
+		return i18n.Args{"before": minutesDaysLabel(l, before), "after": minutesDaysLabel(l, after),
+			"saved": minutesDaysLabel(l, days), "previous": minutesDaysLabel(l, saved)}
+	}
 	if days == saved {
-		return &ownChange{summary: fmt.Sprintf("assistant.minutes_days is unchanged: %d is saved, minutes are kept %d days (never "+
-			"fewer than assistant.recording_days, %d)", saved, before, recording)}, nil
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.minutes_unchanged", args(s.lang(ctx)))}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
 	return &ownChange{cardText: func(l i18n.Lang) string {
 		if after == before {
-			return i18n.T(l, "assistant-settings_tool.change_minutes_days_saved", i18n.Args{"before": saved, "after": days, "effective": after})
+			return i18n.T(l, "assistant-settings_tool.change_minutes_days_saved", args(l))
 		}
-		return i18n.T(l, "assistant-settings_tool.change_minutes_days", i18n.Args{"before": before, "after": after})
+		return i18n.T(l, "assistant-settings_tool.change_minutes_days", args(l))
 	},
 		apply: func(ctx context.Context) (string, error) {
 			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.MinutesDays = &days; return nil }); err != nil {
@@ -386,12 +400,7 @@ func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownCh
 			}
 			s.settingsChanged(ctx)
 			s.kbWake() // a shorter retention prunes now
-			if after != days {
-				return fmt.Sprintf("assistant.minutes_days is saved as %d: minutes are kept %d days for now, as long as "+
-					"assistant.recording_days, and %d once that is shorter.", days, after, days), nil
-			}
-			return fmt.Sprintf("assistant.minutes_days is %d: a meeting's minutes stay that long after it, its transcript "+
-				"only assistant.recording_days.", after), nil
+			return i18n.T(s.lang(ctx), "assistant-settings_tool.minutes_applied", args(s.lang(ctx))), nil
 		}}, nil
 }
 

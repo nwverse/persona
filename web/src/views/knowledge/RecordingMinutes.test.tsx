@@ -271,6 +271,14 @@ describe("recording minutes in Knowledge detail", () => {
     expect(writes().map((w) => w.url)).toEqual([`${minutesPath}/todos`]);
   });
 
+  it("says minutes are kept until deleted when retention is forever", async () => {
+    await load(trimmed());
+    await reply(assistantAsk(), { manager: "assistant", recording_days: 14, minutes_days: 0 });
+    expect(section().textContent).toContain(t("knowledge-kbdetail.minutes_kept_forever"));
+    expect(section().textContent).not.toContain("1970");
+    expect(button("Regenerate")).toBeUndefined();
+  });
+
   it.each([
     ["has no minutes_days", { manager: "assistant" }, 200],
     ["cannot be read", { error: "Synthetic failure" }, 503],

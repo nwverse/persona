@@ -1716,11 +1716,11 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
-                    # went (#3780, MOCK_MINUTES_DAYS): GET says the minutes' in effect, never fewer than the recordings'.
+                    # went (#3780, MOCK_MINUTES_DAYS): 0 means forever; finite windows are never fewer than the recordings'.
                     "recording_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
-                    "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "365"))}
+                    "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0"))}
 # What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
-RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (1, 3650)}
+RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
 
 
 def assistant_state(space="", archived=False):
@@ -1732,7 +1732,7 @@ def assistant_state(space="", archived=False):
     out = {"manager": MANAGERS["default"], "machine_id": cfg["machine_id"], "launcher": cfg["launcher"],
            "cwd": home + "/.persona/" + (space or "assistant") if home else "",
            "timezone": cfg["timezone"], "notes_effective": notes.strip(), "main_tasks_quiet": cfg["main_tasks_quiet"],
-           "recording_days": cfg["recording_days"], "minutes_days": max(cfg["minutes_days"], cfg["recording_days"]),
+           "recording_days": cfg["recording_days"], "minutes_days": 0 if cfg["minutes_days"] == 0 else max(cfg["minutes_days"], cfg["recording_days"]),
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if cfg["notes"] is not None:

@@ -34,8 +34,8 @@ const KindRecording = "recordings"
 const DefaultRecordingDays = 14
 
 // DefaultMinutesDays is how long a meeting's minutes are kept unless the user says otherwise (assistant.minutes_days);
-// never shorter than the recording itself (MinutesDaysFor).
-const DefaultMinutesDays = 365
+// 0 means forever; a finite window is never shorter than the recording itself (MinutesDaysFor).
+const DefaultMinutesDays = 0
 
 // Limits of one upload.
 const (
@@ -536,16 +536,17 @@ func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	return kept, deleted
 }
 
-// PruneRecordings applies the retention (files and index): a recording that started before recording_days goes, unless
-// it has minutes and started within minutes_days, which trims it to them (recording_trim.go), and a trim cut short is
-// finished whatever the window; tombstones older than recording_days go too. How many recordings went (the trimmed
-// ones are not counted).
+// PruneRecordings applies retention to files and the index. Past recording_days, minutes are kept forever or within
+// a finite minutes_days window, and the recording is trimmed to them (recording_trim.go); other recordings go.
+// Interrupted trims finish whatever the window. Tombstones older than recording_days go too.
+// It returns how many recordings were deleted, not counting trimmed ones.
 func (e *Engine) PruneRecordings(now time.Time) int {
 	if e.Store.ReadOnly() {
 		return 0
 	}
 	cut := now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))
-	minutesCut := now.UTC().AddDate(0, 0, -e.MinutesDays())
+	minutesDays := e.MinutesDays()
+	minutesCut := now.UTC().AddDate(0, 0, -minutesDays)
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
@@ -559,7 +560,7 @@ func (e *Engine) PruneRecordings(now time.Time) int {
 			}
 			continue
 		}
-		if !r.StartedAt.Before(minutesCut) && st.hasMinutes(r.ID) {
+		if (minutesDays == 0 || !r.StartedAt.Before(minutesCut)) && (r.Trimmed() || st.hasMinutes(r.ID)) {
 			e.trimPruned(r, now)
 			continue
 		}
@@ -615,7 +616,7 @@ func (e *Engine) RecordingDays() int {
 }
 
 // MinutesDays is how many days a meeting's minutes are kept (Engine.MinutesDaysFunc, the assistant's setting, the
-// default without one), never fewer than RecordingDays.
+// default without one): 0 means forever; otherwise never fewer than RecordingDays.
 func (e *Engine) MinutesDays() int {
 	d := 0
 	if e.MinutesDaysFunc != nil {
@@ -625,10 +626,10 @@ func (e *Engine) MinutesDays() int {
 }
 
 // MinutesDaysFor is the minutes' retention in effect for the setting minutes (<= 0: DefaultMinutesDays) and the
-// recordings' days: minutes never go before the recording they belong to.
+// recordings' days: 0 means forever; minutes never go before the recording they belong to.
 func MinutesDaysFor(minutes, recording int) int {
 	if minutes <= 0 {
-		minutes = DefaultMinutesDays
+		return DefaultMinutesDays
 	}
 	return max(minutes, recordingDays(recording))
 }

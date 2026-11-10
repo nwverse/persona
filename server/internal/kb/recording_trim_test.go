@@ -185,7 +185,8 @@ func TestRecordingTrimmedReadAndRefused(t *testing.T) {
 		t.Fatalf("confirming a to-do: %+v %v", m, err)
 	}
 
-	// A later meeting draws on its minutes.
+	// Retrieval remains tested with the privacy gate on; production keeps it off until #3862 phase 1.
+	e.EarlierMeetingsInAnswers = true
 	later := "44444444-4444-4444-8444-444444444444"
 	putRecording(t, e, later, attendedUpload(1, now, AttendanceListener), now)
 	material, err := e.MeetingMaterial(later, "What did the design review decide?")
@@ -205,7 +206,7 @@ func TestRecordingTrimmedReadAndRefused(t *testing.T) {
 	}
 }
 
-// minutes_days is never below recording_days, and 365 without a setting.
+// minutes_days is forever (0) by default, otherwise never below recording_days.
 func TestMinutesDaysEffective(t *testing.T) {
 	e := goldenEngine(t, nil)
 	if got := e.MinutesDays(); got != DefaultMinutesDays {
@@ -216,6 +217,10 @@ func TestMinutesDaysEffective(t *testing.T) {
 	e.MinutesDaysFunc = func() int { return minutes }
 	if got := e.MinutesDays(); got != 30 {
 		t.Fatalf("below recording_days: %d, want 30", got)
+	}
+	minutes = 0
+	if got := e.MinutesDays(); got != 0 {
+		t.Fatalf("forever raised to recording_days: %d", got)
 	}
 	minutes = 3650
 	if got := e.MinutesDays(); got != 3650 {
@@ -343,5 +348,41 @@ func TestRecordingTrimFinishedWithinWindow(t *testing.T) {
 	indexed = nil
 	if n := e.PruneRecordings(now.Add(time.Hour)); n != 0 || len(indexed) != 0 {
 		t.Fatalf("again: pruned %d, indexed %v", n, indexed)
+	}
+}
+
+// With the default or explicit zero, both very old and already-trimmed minutes survive every sweep. Switching to a
+// finite window still deletes them; the user's explicit delete is covered by TestRecordingTrimmedReadAndRefused.
+func TestRecordingMinutesKeptForever(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unset", true: "zero"}[explicit], func(t *testing.T) {
+			e := goldenEngine(t, nil)
+			if explicit {
+				e.MinutesDaysFunc = func() int { return 0 }
+			}
+			now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+			start := now.AddDate(-20, 0, 0)
+			putRecording(t, e, recID, meetingUpload(1, start, "old transcript"), start)
+			putMeetingMinutes(t, e, recID, Minutes{Version: 1, Revision: 1, Title: "Old meeting", Markdown: "# Old meeting"})
+			for _, sweep := range []time.Time{now, now.AddDate(100, 0, 0)} {
+				if n := e.PruneRecordings(sweep); n != 0 {
+					t.Fatalf("forever pruned %d", n)
+				}
+				if files := recordingFileNames(t, e, recID); !slices.Equal(files, trimKept) {
+					t.Fatalf("forever kept %v", files)
+				}
+			}
+			// An unreadable minutes.json must not turn a forever-trimmed recording into an expiring plain one.
+			if err := os.WriteFile(e.Store.Path(KindRecording, recID, "minutes.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if n := e.PruneRecordings(now); n != 0 {
+				t.Fatalf("unreadable trimmed minutes pruned %d", n)
+			}
+			e.MinutesDaysFunc = func() int { return 3650 }
+			if n := e.PruneRecordings(now); n != 1 {
+				t.Fatalf("finite window pruned %d, want 1", n)
+			}
+		})
 	}
 }

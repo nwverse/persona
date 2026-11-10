@@ -3,5 +3,5 @@
   "manager_required": "Choose an assistant before changing its default permission mode.",
   "other_manager": "This request names a different assistant. Reload its settings and try again.",
   "manager_conflict": "The header and URL name different assistants. Choose one target and try again.",
-  "bad_minutes_days": "minutes_days must be a whole number of days from 1 to 3650."
+  "bad_minutes_days": "minutes_days must be 0 (forever) or a whole number of days from 1 to 3650."
 }

@@ -11,7 +11,9 @@ import (
 
 // What the answering model of an attended meeting reads (docs/assistant/meeting-minutes.md "What the hub gives the
 // answering model"): an answer may be said aloud in front of other people, who can ask for anything it was given, so
-// the boundary is this material, not the prompt. It is built from four sources and nothing else: this meeting's own
+// the boundary is this material, not the prompt. Until #3862 phase 1 adds a private-meeting mark, only this meeting's
+// own material is included. EarlierMeetingsInAnswers gates the other three sources below together.
+// The four possible sources are this meeting's own
 // upload title and calendar hint, live sentences and answered questions; the minutes of earlier meetings (never their
 // transcript, summary, live log or questions); the name and status of the projects those meetings are linked to; and
 // the to-do ids of their action items, whose open or done the assistant looks up. Nothing else of the knowledge base
@@ -67,7 +69,9 @@ func (e *Engine) MeetingMaterial(rawID, question string) (MeetingMaterial, error
 			m.Asks = append(m.Asks, a)
 		}
 	}
-	m.Earlier = e.earlierMeetings(&r, question)
+	if e.EarlierMeetingsInAnswers {
+		m.Earlier = e.earlierMeetings(&r, question)
+	}
 	return m, nil
 }
 

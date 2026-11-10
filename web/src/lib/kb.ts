@@ -650,7 +650,7 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
 }
 
 /** The day a trimmed recording's minutes go (#3780): `days` (the assistant's `minutes_days` in effect) after it
- *  started, as a date; undefined when either is unknown. */
+ *  started, as a date; undefined when either is unknown or days is 0 (forever). */
 export function minutesKeptUntil(startedAt: string | undefined, days: unknown): string | undefined {
   const start = Date.parse(startedAt ?? "");
   if (!Number.isFinite(start) || typeof days !== "number" || !Number.isInteger(days) || days <= 0) return undefined;

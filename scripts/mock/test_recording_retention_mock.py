@@ -1,6 +1,6 @@
 """The mock hub keeps recordings and meeting minutes as the hub does (#3780, docs/assistant/meeting-minutes.md "Privacy"):
-GET / PUT /api/v1/assistant `recording_days` and `minutes_days` (the minutes' in effect never fewer than the
-recordings'), and a trimmed recording (POST /mock/recording_trim) that keeps its minutes, takes no upload and makes no
+GET / PUT /api/v1/assistant `recording_days` and `minutes_days` (0 means forever; finite minutes retention is never
+shorter than the recordings'), and a trimmed recording (POST /mock/recording_trim) that keeps its minutes, takes no upload and makes no
 minutes again."""
 import time
 import unittest
@@ -17,9 +17,9 @@ class RecordingRetentionMockTests(Hub, unittest.TestCase):
 
     def test_retention_settings(self):
         status, state = self.call("GET", "/api/v1/assistant")
-        self.assertEqual((status, state["recording_days"], state["minutes_days"]), (200, 14, 365))
-        for body in ({"minutes_days": 0}, {"minutes_days": 3651}, {"minutes_days": "30"}, {"minutes_days": True},
-                     {"minutes_days": 1.5}, {"recording_days": 366}, {"recording_days": 30, "minutes_days": 0}):
+        self.assertEqual((status, state["recording_days"], state["minutes_days"]), (200, 14, 0))
+        for body in ({"minutes_days": -1}, {"minutes_days": 3651}, {"minutes_days": "30"}, {"minutes_days": True},
+                     {"minutes_days": 1.5}, {"minutes_days": None}, {"recording_days": 366}, {"recording_days": 30, "minutes_days": -1}):
             self.assertEqual(self.call("PUT", "/api/v1/assistant", body)[0], 400, body)
         self.assertEqual(self.call("GET", "/api/v1/assistant")[1]["recording_days"], 14)  # a refused request changes nothing
         self.assertEqual(self.call("PUT", "/api/v1/assistant", {"minutes_days": 30})[1]["minutes_days"], 30)
@@ -28,6 +28,9 @@ class RecordingRetentionMockTests(Hub, unittest.TestCase):
         self.assertEqual(self.call("GET", "/api/v1/recordings")[1]["days"], 60)
         state = self.call("PUT", "/api/v1/assistant", {"recording_days": 14, "minutes_days": 365})[1]
         self.assertEqual((state["recording_days"], state["minutes_days"]), (14, 365))
+        state = self.call("PUT", "/api/v1/assistant", {"recording_days": 365, "minutes_days": 0})[1]
+        self.assertEqual((state["recording_days"], state["minutes_days"]), (365, 0))
+        self.assertEqual(self.call("GET", "/api/v1/assistant")[1]["minutes_days"], 0)
         # Another manager is one from before these settings: no field, so the web shows no Recordings group.
         status, other = self.call("GET", "/api/v1/assistant", headers={"X-Persona-Manager": "m-3fa21c"})
         self.assertEqual((status, other["manager"]), (200, "m-3fa21c"))

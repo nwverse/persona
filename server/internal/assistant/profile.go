@@ -68,7 +68,7 @@ type Settings struct {
 	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
 	RecordingDays *int `json:"recording_days,omitempty"`
 	// MinutesDays: how many days a meeting's minutes stay once its transcript went with RecordingDays (#3780,
-	// kb/recording_trim.go); nil is 365. In effect never fewer than RecordingDays (kb.MinutesDaysFor).
+	// kb/recording_trim.go); nil or 0 means forever. Finite windows are never fewer than RecordingDays (kb.MinutesDaysFor).
 	MinutesDays *int `json:"minutes_days,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
@@ -249,7 +249,7 @@ func recordingDaysOf(v Settings) int {
 
 // Bounds of minutes_days.
 const (
-	minMinutesDays = 1
+	minMinutesDays = 0
 	maxMinutesDays = 3650
 )
 
@@ -261,8 +261,7 @@ func minutesDaysSetting(v Settings) int {
 	return 0
 }
 
-// minutesDays is how many days a meeting's minutes stay in the knowledge base, in effect: minutes_days (365 by
-// default), never fewer than recording_days.
+// minutesDays is the effective minutes_days: 0 means forever (the default); otherwise never fewer than recording_days.
 func (s *Service) minutesDays(ctx context.Context) int {
 	v := s.settings(ctx)
 	return kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v))
@@ -310,9 +309,9 @@ func (s *Service) recordingDaysNow() int {
 	return *v.RecordingDays
 }
 
-// minutesDaysNow is minutes_days as saved for the knowledge base's engine (0: the default), read like
+// minutesDaysNow is minutes_days as saved for the knowledge base's engine (0: forever by default), read like
 // recordingDaysNow: a transient failure keeps the value read last, so it never deletes minutes the user kept for
-// longer. The engine raises it to recording_days (kb.Engine.MinutesDays).
+// longer. The engine raises only positive values to recording_days (kb.Engine.MinutesDays).
 func (s *Service) minutesDaysNow() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -411,7 +410,7 @@ type assistantView struct {
 	// RecordingDays and DoneNeedsDelivery are in effect, like MainTasksQuiet.
 	RecordingDays     int  `json:"recording_days"`
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
-	// MinutesDays is in effect: minutes_days (365 until changed), never fewer than RecordingDays.
+	// MinutesDays is in effect: 0 means forever (the default); otherwise never fewer than RecordingDays.
 	MinutesDays int `json:"minutes_days"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault string `json:"meeting_attendance_default"`

@@ -15,7 +15,7 @@ import (
 // one). A trimmed recording is still listed, found by its minutes and read; it takes no upload (RecordingExpired),
 // makes no minutes again (ErrTranscriptExpired), and its action items can still become to-dos. Attending it is over:
 // its attendance is turned off with the live log gone, so nothing resumes feeding or answering for it. Past
-// minutes_days it goes like any other recording.
+// a finite minutes_days it goes like any other recording; 0 keeps minutes forever by default (#3862).
 
 // trimKept are the files a trimmed recording keeps.
 var trimKept = []string{"meta.json", "minutes.json", "minutes.md"}

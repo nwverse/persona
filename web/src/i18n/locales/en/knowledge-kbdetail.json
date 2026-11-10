@@ -103,5 +103,6 @@
   "ask_failed_nothing_heard": "Nothing was said just before the tap.",
   "transcript_expired": "The transcript has expired.",
   "minutes_kept_until": "The transcript has expired. These minutes are kept until {date}.",
-  "minutes_transcript_expired": "The transcript has expired. Only these minutes are kept."
+  "minutes_transcript_expired": "The transcript has expired. Only these minutes are kept.",
+  "minutes_kept_forever": "The transcript has expired. These minutes are kept until you delete them."
 }
