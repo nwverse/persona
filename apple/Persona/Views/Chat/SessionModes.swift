@@ -468,10 +468,18 @@ struct BypassWarning: View {
 /// footer: the mode's symbol in its tone (`SessionModes.headerLook`), Allow Everything in the warning red. Its words are in
 /// the menu, the VoiceOver label and the pointer's tooltip. A tap opens the mode menu; a pick goes through `pick` (the
 /// page's `requestMode`, which asks first where `SessionModes.confirmation` says so).
-struct HeaderModeButton: View {
+struct HeaderModeButton: View, Equatable {
     var session: Session
     var changing = false
     var pick: (String) -> Void
+
+    /// The header re-evaluates on every hub push for its session (its rev, activity, tokens…); the button only when what
+    /// it draws or offers changes. `pick` is the page's `requestMode`, which reads the session when it runs.
+    nonisolated static func == (a: Self, b: Self) -> Bool {
+        a.changing == b.changing && a.session.permissionMode == b.session.permissionMode
+            && a.session.canChangeModes == b.session.canChangeModes && a.session.bypassAvailable == b.session.bypassAvailable
+            && a.session.assistant == b.session.assistant && a.session.status.isLive == b.session.status.isLive
+    }
 
     /// The capsule is as tall as the row's tabs; its 44 pt target overhangs the row by this much above and below.
     static let overhang = (Theme.Size.tapTarget - Theme.Size.wellS) / 2

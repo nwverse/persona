@@ -103,18 +103,26 @@ final class HeaderModeShotTests: XCTestCase {
     @MainActor func testHeaderCostUnderPushes() throws {
         open(Self.widget, scheme: "light", extra: ["-perfCounts", "YES"])
         sleep(3)
-        let start = counts()
-        mock("churn?n=12&ms=400&steps=1")
-        let deadline = Date.now.addingTimeInterval(30)
-        while (mock("churned")["rounds"] as? Int ?? 0) < 12, Date.now < deadline { usleep(300_000) }
-        sleep(2)
-        let end = counts()
-        var bodies: [String: Int] = [:]
-        for (k, v) in end["bodies"] as? [String: Int] ?? [:] { bodies[k] = v - ((start["bodies"] as? [String: Int])?[k] ?? 0) }
-        let out: [String: Any] = ["phase": phase, "device": device, "rounds": 12, "bodies": bodies,
-                                  "events": (end["events"] as? Int ?? 0) - (start["events"] as? Int ?? 0),
-                                  "passes": (end["passes"] as? Int ?? 0) - (start["passes"] as? Int ?? 0),
-                                  "ms": (end["ms"] as? Double ?? 0) - (start["ms"] as? Double ?? 0), "max_ms": end["max"] as? Double ?? 0]
+        // Three windows of twelve rounds each, so the noise between windows shows next to any difference.
+        var windows: [[String: Any]] = []
+        for _ in 0..<3 {
+            let start = counts()
+            mock("churn?n=12&ms=400&steps=1")
+            let deadline = Date.now.addingTimeInterval(30)
+            while (mock("churned")["rounds"] as? Int ?? 0) < 12, Date.now < deadline { usleep(300_000) }
+            sleep(2)
+            let end = counts()
+            var bodies: [String: Int] = [:]
+            for (k, v) in end["bodies"] as? [String: Int] ?? [:] { bodies[k] = v - ((start["bodies"] as? [String: Int])?[k] ?? 0) }
+            windows.append(["bodies": bodies, "events": (end["events"] as? Int ?? 0) - (start["events"] as? Int ?? 0),
+                            "passes": (end["passes"] as? Int ?? 0) - (start["passes"] as? Int ?? 0),
+                            "ms": (end["ms"] as? Double ?? 0) - (start["ms"] as? Double ?? 0), "max_ms": end["max"] as? Double ?? 0])
+        }
+        var out = windows[0] // the first window at the top level, as an older run of this test wrote it
+        out["phase"] = phase
+        out["device"] = device
+        out["rounds"] = 12
+        out["windows"] = windows
         let data = try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys, .prettyPrinted])
         let a = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
         a.name = "perf-\(phase)-\(device).json"
@@ -140,6 +148,19 @@ final class HeaderModeShotTests: XCTestCase {
         let title = app.descendants(matching: .any)[folded ? "chat.compactTitle" : "chat.title"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 20), "the chat did not open: \(session)")
         sleep(folded ? 5 : 3) // folded 3 s after it opens; the backlog is in and the header has settled
+        dismissIconNote()
+    }
+
+    /// The app icon follows the color scheme (`AppIconChoice`), and the system says so in an alert over the page when a
+    /// launch switches it: closed before the shot.
+    @MainActor private func dismissIconNote() {
+        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        guard board.alerts.firstMatch.waitForExistence(timeout: 2) else { return }
+        for label in ["OK", "好"] where board.alerts.buttons[label].exists { // i18n-ignore: the system's own button
+            board.alerts.buttons[label].tap()
+            sleep(1)
+            return
+        }
     }
 
     @MainActor private func menuItem(_ labels: [String]) -> XCUIElement {

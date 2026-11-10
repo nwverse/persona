@@ -3225,7 +3225,7 @@ struct ChatView: View {
                     if activity {
                         ActivityChips(loop: session?.loop, background: session?.background ?? []) { showActivity = true }
                     }
-                    if let mode { HeaderModeButton(session: mode, changing: modeChanging, pick: requestMode) }
+                    if let mode { HeaderModeButton(session: mode, changing: modeChanging, pick: requestMode).equatable() }
                 }
             }
         }
