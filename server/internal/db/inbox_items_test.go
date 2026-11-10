@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // inboxRows is n inbox items about the size of a Feishu chat's (its JSON with the last messages and the triage).
@@ -35,6 +37,61 @@ func inboxData(d *DB, doneSince time.Time) ([][]byte, error) {
 		return nil
 	})
 	return out, err
+}
+
+// InboxItems stops at an error from each and returns it, and gives its connection back to the pool: with one
+// connection, the next query still gets it.
+func TestInboxItemsStopsOnError(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	if err := d.PutInboxItems(ctx, inboxRows(3, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := pgxpool.ParseConfig(os.Getenv("PERSONA_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MaxConns = 1
+	one, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop, calls := errors.New("stop"), 0
+	err = (&DB{pool: one}).InboxItems(ctx, time.Now().Add(-time.Hour), func([]byte) error { calls++; return stop })
+	if st := one.Stat(); st.AcquiredConns() != 0 || st.IdleConns() != 1 {
+		// one is left open: Close would wait for the connection still held.
+		t.Fatalf("after the read stopped: %d connections held, %d idle; want it back in the pool", st.AcquiredConns(), st.IdleConns())
+	}
+	defer one.Close()
+	if !errors.Is(err, stop) || calls != 1 {
+		t.Fatalf("InboxItems = %v after %d rows, want the callback's error after the first", err, calls)
+	}
+	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var n int
+	if err := one.QueryRow(qctx, `SELECT count(*) FROM inbox_items`).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("the next query on the one connection: %d rows, %v", n, err)
+	}
+}
+
+// InboxItems hands each row over from the driver's buffer, copying none: a read of 200 rows allocates no more than
+// the query itself (6 times; collecting the rows as [][]byte took 616).
+func TestInboxItemsAllocationBudget(t *testing.T) {
+	d, ctx := open(t), context.Background()
+	now := time.Now()
+	if err := d.PutInboxItems(ctx, inboxRows(200, now)); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	read := func() {
+		rows = 0
+		if err := d.InboxItems(ctx, now.Add(-time.Hour), func([]byte) error { rows++; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read() // the statement is prepared and cached on the first read
+	if n := testing.AllocsPerRun(20, read); n > 6 || rows != 200 {
+		t.Fatalf("a read of %d rows allocates %v times, want at most 6", rows, n)
+	}
 }
 
 // PutInboxItems stores new items and updates those it has, as PutInboxItem does, and stores none when one fails.
