@@ -275,6 +275,16 @@ Off by default: with no leaders, everything above is unchanged and only the main
 - **Depth cap**: an agent linked to an open task (a worker) cannot call `task_plan` or `agent_start`, even when it runs as an assistant conversation: it is told to do the work itself with its in-session subagents and to ask its supervisor (`report_to_supervisor`) if it needs another task. Coding agents never had those tools; the main chat and leaders are not limited.
 - **Scheduling**: a leader is woken by its supervision messages; for a standing loop over a to-do pool, give it a recurring `schedule_followup` (`every`).
 
+**Directions and reports up (#3484, #3485).** Each leader has a record, `assistant.directions` (`directions.go`): the kb
+project it is filed under, who filed it, since when, and when it ended (it left `assistant.leaders`; nothing is
+deleted). Extensions granted `leaders.read` are told each change once (`leader.changed`), and the hub reports from the
+task ledger, with no model call (`leader_reports.go`, `leader.report`): `reached` when a review accepts a leader's task,
+`decision` when a review needs the owner, and `stuck` when, by the To-dos SOP's Go copy (`todo_triage.go`), the task sits
+in Waiting on you or stopped unfinished with no move for 24 hours. Stuck is told at most once a day, and only by the
+10-minute loop, because it asks the agents' machines. What was told is kept in `assistant.leader_reports`, so a restart
+tells nothing again. Reviews from before reports started on the hub are not told. The main-chat entry for a stuck task,
+and the leader lines in the briefings, come with the prompts (P1). See `docs/extensions/extensions.md` "Leader events".
+
 ## Data and APIs (hub)
 
 ### Task = to-do

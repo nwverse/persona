@@ -106,7 +106,10 @@ func (s *Service) directionsSoon() {
 	b.armed = true
 	after := b.after
 	b.mu.Unlock()
-	f := func() { s.directionsSync(context.Background()) }
+	f := func() {
+		s.directionsSync(context.Background())
+		s.leaderReportsSync(context.Background(), time.Now(), false) // a review just written (leader_reports.go)
+	}
 	if after != nil {
 		after(directionsSettle, f)
 		return
