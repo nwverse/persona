@@ -99,6 +99,12 @@ The session writes the message as a peer's: the transcript reader takes the user
 
 Measured end to end on a throwaway `claude` 2.1.291 in an empty directory (its own `CLAUDE_CONFIG_DIR`, a pseudo console): with the default permission mode the message was taken in 0.15–0.3 s (also while a startup dialog was on screen) and answered in the transcript; a second message while it worked was queued and answered next; in bypass permissions mode the message was held, as above. The desktop app's sessions were not written to.
 
+### The desktop app's sidebar (#3304)
+
+The desktop app keeps an index of its Claude Code sessions, one JSON per session: `~/Library/Application Support/Claude/claude-code-sessions/<…>/<…>/local_<id>.json` (`Claude-3p` for the build on a third-party provider). Each names the transcript the session runs (`cliSessionId`), whether the session is archived (`isArchived`), and the transcripts it ran before (`priorCliSessionIds`: it went on in a new one). Its sidebar lists each unarchived session once.
+
+The offline list follows the sidebar (`node/claudedesktop.go`): it leaves out the transcripts of archived sessions (on the Mac measured, every finished /btw question was an archived session), and a session's earlier transcripts while the one it runs now is listed, before a row is counted toward the 80. Only what an entry says is acted on: a transcript no entry names, or an entry that cannot be read, hides nothing. A kept session and Persona's own forks are listed as before, and running sessions are untouched (their questions and permission prompts must stay reachable). Only these files are read, never the app's config file (it holds credentials); a file is parsed again only when it changed. Only macOS's layout is known. Tests: `node/claudedesktop_test.go`.
+
 ## Blocking configuration directories (#676)
 
 Platform sessions sharing a configuration directory with personal sessions (cannot separate directories) are filtered by that platform's extension using in-session markers; see `docs/extensions/extensions.md` (“Agent filtering”).

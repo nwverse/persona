@@ -119,12 +119,21 @@ func (n *Node) scanOffline() []proto.Session {
 	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands)}
 	var counted [3]int
 	listed := map[string]bool{}
+	// The desktop app's sessions as its sidebar lists them (claudedesktop.go): left out before a row is counted.
+	desktop := readClaudeDesktopIndex(n.home)
+	present := make(map[string]bool, len(cands))
+	for _, c := range cands {
+		present[strings.TrimSuffix(filepath.Base(c.path), ".jsonl")] = true
+	}
 	for _, c := range cands {
 		id := strings.TrimSuffix(filepath.Base(c.path), ".jsonl")
 		if listed[id] {
 			continue // an older copy in another config directory (newest first): it used to win, and list the session twice
 		}
 		listed[id] = true
+		if !keep[id] && !forked[id] && desktop.hidden(id, present) {
+			continue // an archived session of the desktop app, or a transcript its session went on from
+		}
 		if counted[c.count] >= limit[c.count] {
 			continue
 		}
