@@ -262,7 +262,8 @@ enum ShareHub {
 }
 
 /// Redirects are not followed: the hub's credential and its Cloudflare Access token stay on its own address.
-private final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+/// `nonisolated`: this target defaults to MainActor, and a MainActor redirect method would never be called (#1378).
+private nonisolated final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)

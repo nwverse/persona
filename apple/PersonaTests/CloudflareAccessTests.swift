@@ -116,8 +116,15 @@ struct CloudflareAccessTests {
         await #expect(throws: APIError.self) { try await client(access: token).request("GET", "/api/v1/hub-forbidden") }
         #expect(CloudflareAccessError(tokenSent: false).errorDescription != CloudflareAccessError(tokenSent: true).errorDescription)
         // A WebSocket handshake (no body): Access's HTML refusal, not the hub's JSON 401 (a revoked device).
-        #expect(CloudflareAccess.blocked(HTTPURLResponse(url: hub, statusCode: 403, httpVersion: nil, headerFields: ["Content-Type": "text/html"])))
-        #expect(!CloudflareAccess.blocked(HTTPURLResponse(url: hub, statusCode: 401, httpVersion: nil, headerFields: ["Content-Type": "application/json"])))
+        let handshake = { (status: Int, headers: [String: String]) in
+            CloudflareAccess.blocked(HTTPURLResponse(url: hub, statusCode: status, httpVersion: nil, headerFields: headers))
+        }
+        #expect(handshake(403, ["Content-Type": "text/html", "CF-RAY": "0123456789abcdef-LHR"]))
+        #expect(handshake(401, ["Content-Type": "text/html; charset=UTF-8", "Server": "cloudflare"]))
+        #expect(!handshake(401, ["Content-Type": "application/json", "CF-RAY": "0123456789abcdef-LHR"]))
+        // A hub without Access behind a reverse proxy or basic-auth gateway that answers in HTML: as before.
+        #expect(!handshake(403, ["Content-Type": "text/html"]))
+        #expect(!handshake(401, ["Content-Type": "text/html", "Server": "nginx", "WWW-Authenticate": "Basic realm=hub"]))
     }
 
     @Test func redirectsToTheLoginOrOffTheOriginAreNotFollowed() async {
@@ -143,6 +150,30 @@ struct CloudflareAccessTests {
     }
 
     // MARK: The secret stays out of logs
+
+    @Test func theWatchKeepsItsConfigsInTheKeychain() throws {
+        let defaults = try #require(UserDefaults(suiteName: "CloudflareAccessTests.watch"))
+        defer {
+            defaults.removePersistentDomain(forName: "CloudflareAccessTests.watch")
+            Keychain.delete(account: WatchConfigs.keychainAccount)
+        }
+        Keychain.delete(account: WatchConfigs.keychainAccount)
+        let all = WatchConfigs(configs: ["": ServerConfig(url: hub, token: "watch", access: token)], names: ["": "Home"])
+        // An older build's plain copy moves into the keychain and leaves defaults.
+        defaults.set(try JSONEncoder().encode(all), forKey: "configs")
+        #expect(WatchConfigs.stored(defaults) == all)
+        #expect(defaults.data(forKey: "configs") == nil)
+        #expect(WatchConfigs.stored(defaults)?.configs[""]?.access == token)
+        // From before several hubs: the single config.
+        Keychain.delete(account: WatchConfigs.keychainAccount)
+        defaults.set(try JSONEncoder().encode(ServerConfig(url: hub, token: "watch", access: token)), forKey: "config")
+        #expect(WatchConfigs.stored(defaults)?.configs[""]?.access == token)
+        #expect(defaults.data(forKey: "config") == nil)
+        // New ones never touch defaults.
+        all.store(defaults)
+        #expect(defaults.dictionaryRepresentation().values.allSatisfy { !"\($0)".contains("example-secret-value") })
+        #expect(defaults.data(forKey: "configs") == nil && defaults.data(forKey: "config") == nil)
+    }
 
     @Test func descriptionsRedactTheSecret() {
         let config = ServerConfig(url: hub, token: "fixture-token", access: token)
