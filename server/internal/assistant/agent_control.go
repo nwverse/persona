@@ -584,8 +584,16 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	if !ok {
 		return "Nobody receives this: your work is not a task Persona supervises. Ask the user what you need the usual way.", errNoSupervisor
 	}
-	if _, _, reachable := s.leaderSupervisor(t); s.agentSupervised(t) && !reachable {
-		return "Nobody receives this: the task leader that handed you this task is gone or its task is closed. Ask the user what you need the usual way.", errNoSupervisor
+	if s.agentSupervised(t) {
+		// A leader whose task closed leaves the worker to the conversation above it: rehome it now, so this report is
+		// told to that conversation instead of being lost until the next watch (task_leader.go). With nobody above, the
+		// worker is cancelled and says so.
+		if lead, _, _ := s.leaderAbove(t); lead.ID == "" || !s.leaderOpen(lead) {
+			var cancelled bool
+			if t, cancelled = s.rehomeWorker(ctx, t); cancelled {
+				return "Your task leader is gone and nobody is above it, so this task was cancelled. Stop here; the user is not asked.", errNoSupervisor
+			}
+		}
 	}
 	if !s.upReports.allow(machine, session, now) {
 		return "", fmt.Errorf("too many reports: at most %d in %d minutes; put what is left into one report later", reportLimit, int(reportWindow.Minutes()))

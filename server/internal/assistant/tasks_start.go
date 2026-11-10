@@ -416,6 +416,9 @@ func (s *Service) retryTask(ctx context.Context, todoID string) (json.RawMessage
 	if !ok {
 		return nil, i18n.Err("assistant-tasks.no_machine", i18n.Args{"machine": strconv.Quote(t.Machine)})
 	}
+	if err := s.leaderOnWorkMachine(&t, m); err != nil { // a retry of a leader plan saved on a computer that is work-trust now
+		return nil, fmt.Errorf("%w; nothing was started", err)
+	}
 	if !m.Reachable {
 		return nil, machineOffline(m.Name)
 	}

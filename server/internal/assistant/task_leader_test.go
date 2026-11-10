@@ -456,23 +456,69 @@ func onlyLeaderTask(s *Service) Todo {
 	return Todo{}
 }
 
-// A worker whose leader's task is closed reaches nobody and is told so; its report never falls to the main chat.
-func TestWorkerReportWithoutALeader(t *testing.T) {
+// A worker whose leader's task is closed: its active report is not lost. The worker is rehomed to the conversation above
+// the leader first (supervisor and origin), and the report is told to that conversation; with nobody above, the worker is
+// cancelled and told so readably.
+func TestWorkerReportAfterLeaderClosedIsRehomedNotLost(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
 	todo := startTaskLeader(t, s, f)
 	w := planWorker(t, s, f, nil)
 	worker := w.Agents[0].SessionID
-
 	if ok, err := s.autoDoneTodo(ctx, todo.ID, "done", time.Now().Add(-time.Minute)); err != nil || !ok {
 		t.Fatalf("closing the leader's task: %v %v", ok, err)
 	}
-	res := s.agentTool(ctx, "box", worker, "report_to_supervisor", json.RawMessage(`{"kind":"progress","text":"x"}`))
-	if res.IsError || !strings.Contains(res.Content[0].Text, "Nobody receives this") {
+	res := s.agentTool(ctx, "box", worker, "report_to_supervisor", json.RawMessage(`{"kind":"blocked","text":"leader 走了之后的汇报"}`))
+	if res.IsError || strings.Contains(res.Content[0].Text, "Nobody receives") {
 		t.Fatalf("a worker of a closed leader task: %+v", res)
 	}
-	if got := f.notices(); len(got) != 0 {
-		t.Fatalf("the main conversation was told: %q", got)
+	cur := todoNow(s, w.ID)
+	if cur.Supervision.Supervisor != "conv1" || cur.Origin != "conv1" {
+		t.Fatalf("the worker was not rehomed (supervisor, origin): %+v origin %q", cur.Supervision, cur.Origin)
+	}
+	waitFor(t, "the report to reach the conversation above", func() bool { return len(f.notices()) >= 1 })
+	if n := f.notices()[0]; !strings.Contains(n, "leader 走了之后的汇报") {
+		t.Fatalf("the conversation above did not get the report:\n%s", n)
+	}
+	// Idempotent: another pass changes nothing and tells nothing twice.
+	updated := cur.Supervision.UpdatedAt
+	s.rehomeLeaderlessWorkers(ctx)
+	s.rehomeLeaderlessWorkers(ctx)
+	if got := todoNow(s, w.ID).Supervision.UpdatedAt; !got.Equal(updated) {
+		t.Fatalf("rehoming again changed the ledger: %v -> %v", updated, got)
+	}
+	if got := sendsTo(f, "box", "s1"); len(got) != 0 {
+		t.Fatalf("the closed leader was messaged: %q", got)
+	}
+	// The to-do is the conversation's task now: its notices and listings follow the origin.
+	found := false
+	for _, o := range s.todosOf(ctx, "conv1") {
+		found = found || o.ID == w.ID
+	}
+	if !found {
+		t.Fatal("the rehomed worker is not among the conversation's tasks")
+	}
+}
+
+// With nobody above the closed leader, a worker's report cancels it with a readable result.
+func TestWorkerReportWithNobodyAboveCancelsReadably(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Supervisor = ""; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.autoDoneTodo(ctx, todo.ID, "done", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("closing the leader's task: %v %v", ok, err)
+	}
+	res := s.agentTool(ctx, "box", w.Agents[0].SessionID, "report_to_supervisor", json.RawMessage(`{"kind":"progress","text":"x"}`))
+	if res.IsError || !strings.Contains(res.Content[0].Text, "was cancelled") {
+		t.Fatalf("the report of a worker with nobody above: %+v", res)
+	}
+	if cur := todoNow(s, w.ID); cur.DoneAt == nil || !cur.Cancelled() {
+		t.Fatalf("the worker: %+v", cur)
 	}
 }
 
@@ -1003,29 +1049,96 @@ func TestLeaderlessWorkerWithNobodyAboveIsCancelled(t *testing.T) {
 	}
 }
 
-// A closed leader agent whose resume fails: the message goes up instead of only being logged.
-func TestLeaderResumeFailureEscalates(t *testing.T) {
+// A closed leader agent whose resume fails: the worker's signal goes up as a decision that names the worker and says the
+// leader could not be reached, and (here with nobody above) the message is tried again on the leader's own context,
+// not a cancelled one, until the leader takes it.
+func TestLeaderResumeFailureEscalatesAndRetries(t *testing.T) {
+	old := leaderResumeWait
+	leaderResumeWait = 40 * time.Millisecond
+	t.Cleanup(func() { leaderResumeWait = old })
 	s, f := newQuietService(t)
 	ctx := context.Background()
-	todo := startTaskLeader(t, s, f)
+	startTaskLeader(t, s, f)
 	w := planWorker(t, s, f, nil)
 	lead, _, _ := s.leaderSupervisor(todoNow(s, w.ID))
-	// Make the leader's session closed: sends go through the resume path.
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude",
 		Status: proto.StatusOffline, UpdatedAt: time.Now()},
 		proto.Session{SessionID: w.Agents[0].SessionID, MachineID: "box", Agent: "claude", Status: proto.StatusWorking})
 	f.mu.Lock()
 	f.failSend = context.DeadlineExceeded
 	f.mu.Unlock()
+	kept := []superviseSignal{{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了"}}
 	text := prompts.RenderWorkerSupervise([]prompts.SuperviseEntry{{ID: w.ID, Title: w.Title, Kind: "review"}})
-	if err := s.sendToLeader(ctx, lead, text); err != nil {
+	if err := s.sendToLeader(ctx, lead, text, kept); err != nil {
 		t.Fatalf("the resume is scheduled, not failed synchronously: %v", err)
 	}
-	waitFor(t, "the failed resume to escalate", func() bool { return len(f.notices()) >= 1 })
-	if !strings.Contains(f.notices()[0], "could not be delivered") {
-		t.Fatalf("the escalation: %q", f.notices()[0])
+	waitFor(t, "the failed resume to go up", func() bool { return len(f.notices()) >= 1 })
+	n := f.notices()[0]
+	if !strings.Contains(n, "改登录页") || !strings.Contains(n, w.ID) || !strings.Contains(n, "联系不上") || strings.Contains(n, "判断要用户决定") {
+		t.Fatalf("the escalation must name the worker and say the leader is unreachable:\n%s", n)
 	}
-	_ = todo
+	// The leader comes back: the retry (own context, several attempts) delivers it.
+	f.mu.Lock()
+	f.failSend = nil
+	f.mu.Unlock()
+	waitFor(t, "the retry to reach the leader", func() bool { return len(sendsTo(f, "box", "s1")) >= 1 })
+}
+
+// With nobody above the leader nothing is lost either: no conversation to tell, so the leader itself is retried.
+func TestUndeliveredMessageWithNobodyAboveIsRetried(t *testing.T) {
+	old := leaderResumeWait
+	leaderResumeWait = 30 * time.Millisecond
+	t.Cleanup(func() { leaderResumeWait = old })
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool { v.Supervisor = ""; return true }); err != nil {
+		t.Fatal(err)
+	}
+	lead, _, _ := s.leaderSupervisor(todoNow(s, w.ID))
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Agent: "claude", Status: proto.StatusOffline})
+	f.mu.Lock()
+	f.failSend = context.DeadlineExceeded
+	f.mu.Unlock()
+	kept := []superviseSignal{{Todo: w.ID, Kind: sigReview, Key: "review@1", Detail: "做完了"}}
+	if err := s.sendToLeader(ctx, lead, "Persona · supervision: undelivered", kept); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(150*time.Millisecond, func() { f.mu.Lock(); f.failSend = nil; f.mu.Unlock() })
+	waitFor(t, "the undelivered message to reach the leader after a few tries", func() bool {
+		return len(sendsTo(f, "box", "s1")) >= 1
+	})
+	if got := f.notices(); len(got) != 0 {
+		t.Fatalf("with nobody above, something was told to the main conversation: %q", got)
+	}
+}
+
+// A flexible task leader started again on another computer: the worker's fallback by the leader task's link reaches its
+// current agent there, not only one on the old computer.
+func TestLeaderRestartedOnAnotherComputerIsStillReached(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	todo := startTaskLeader(t, s, f)
+	w := planWorker(t, s, f, nil)
+	// The old agent is released; the task leader's new agent runs on another computer.
+	s.todos.mu.Lock()
+	for i := range s.todos.todos[todo.ID].Agents {
+		a := &s.todos.todos[todo.ID].Agents[i]
+		if a.SessionID == "s1" {
+			now := time.Now().UTC()
+			a.ReleasedAt = &now
+		}
+	}
+	s.todos.mu.Unlock()
+	if err := s.linkTodoAgentWithSource(ctx, todo.ID, "box2", "s9", "leader", "/code/app", "", "", sourceLeader, ""); err != nil {
+		t.Fatal(err)
+	}
+	lead, supervised, ok := s.leaderSupervisor(todoNow(s, w.ID))
+	if !supervised || !ok || lead.MachineID != "box2" || lead.SessionID != "s9" {
+		t.Fatalf("the worker's leader after the leader moved: %+v supervised %v ok %v", lead, supervised, ok)
+	}
 }
 
 // A leader of a writable task on a work-trust computer is refused at planning and at start, readably, because that
@@ -1052,6 +1165,62 @@ func TestTaskLeaderRefusedOnWorkTrustMachine(t *testing.T) {
 	}
 	if len(f.starts) != 0 {
 		t.Fatalf("it started: %v", f.starts)
+	}
+}
+
+// A task leader never lands on a work-trust computer by any other road either: a retry of a saved plan, a recovered or
+// remedy start (startTaskAgent), nor a flexible task moved by the health check.
+func TestTaskLeaderNeverLandsOnWorkTrustMachine(t *testing.T) {
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	f.hello.Assistant.WorkMachines = []string{"box"}
+	_, _, err := s.startTaskAgent(ctx, &PlanTask{Title: "L", Prompt: "p", Machine: "box", Cwd: "/code/app", Role: roleLeader, Permission: permBypass}, true)
+	if err == nil || !strings.Contains(err.Error(), "work-trust computer") {
+		t.Fatalf("starting a task leader on a work-trust computer: %v", err)
+	}
+	f.mu.Lock()
+	starts := len(f.starts)
+	f.mu.Unlock()
+	if starts != 0 {
+		t.Fatalf("a start went out: %v", f.starts)
+	}
+	// Retry of a saved leader plan on a computer that is work-trust now.
+	f.hello.Assistant.WorkMachines = nil
+	res, err := s.toolTaskPlan(ctx, "conv1", leaderPlanArgs("leader"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := planIDRe.FindString(res)
+	started, err := s.startPlan(ctx, id, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo := started.Tasks[0].TodoID
+	waitFor(t, "the first start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
+	waitFor(t, "its link", func() bool { return len(todoNow(s, todo).Agents) == 1 })
+	if err := s.failTodo(ctx, todo, "did not start"); err != nil {
+		t.Fatal(err)
+	}
+	f.hello.Assistant.WorkMachines = []string{"box"}
+	if _, err := s.retryTask(ctx, todo); err == nil || !strings.Contains(err.Error(), "work-trust computer") {
+		t.Fatalf("retrying a leader plan on a work-trust computer: %v", err)
+	}
+}
+
+// healthyPlace never moves a flexible task leader to a work-trust computer, while an ordinary task may go there.
+func TestHealthDetourSkipsWorkTrustForTaskLeaders(t *testing.T) {
+	s, f := rerouteHub(t)
+	f.hello.Assistant.WorkMachines = []string{"box"}
+	blockWorkLauncher(s, "l4")
+	failWorkLauncherCheck(s, "server") // box is the only healthy alternative
+	ctx := context.Background()
+	leader := PlanTask{Title: "L", Machine: "l4", Cwd: "~/code/app", Launcher: "work", MachinePolicy: machineFlexible, Role: roleLeader}
+	if s.healthyPlace(ctx, &leader) || leader.Machine != "l4" {
+		t.Fatalf("a task leader was moved to a work-trust computer: %+v", leader)
+	}
+	ordinary := PlanTask{Title: "O", Machine: "l4", Cwd: "~/code/app", Launcher: "work", MachinePolicy: machineFlexible}
+	if !s.healthyPlace(ctx, &ordinary) || ordinary.Machine != "box" {
+		t.Fatalf("control: an ordinary task is moved as before: %+v", ordinary)
 	}
 }
 
