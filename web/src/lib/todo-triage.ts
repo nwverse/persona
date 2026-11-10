@@ -123,6 +123,8 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
 /** Whether a to-do counts toward the header's open count: not closed, not accepted or deployed, not shelved. A finished
  *  turn nobody looked at yet (Just finished, still open) counts: only a review or the user closes a to-do. */
 export function countsAsOpen(todo: Todo, t: Triage): boolean {
+  // a failed start has done_at too (the hub ends it), yet while it waits on the owner it is theirs to retry: open
+  if (t.rule === "failed_start") return t.section === "waiting";
   if (todo.done_at || t.section === "shelved" || t.section === "done") return false;
   return t.rule !== "accepted" && t.rule !== "deployed";
 }
@@ -140,7 +142,8 @@ export function relatedKeys(todo: Todo): string[] {
   const issue = ISSUE_REF.exec(todo.title);
   if (issue) keys.push("issue:" + issue[1]);
   const title = todo.title.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
-  if (title.length >= 4) keys.push("title:" + title);
+  // long enough that two short generic titles ("test it") do not merge
+  if ([...title].length >= 6) keys.push("title:" + title);
   if (todo.plan_id) keys.push("plan:" + todo.plan_id);
   return keys;
 }
@@ -173,11 +176,17 @@ const ORDER = new Map(TRIAGE_SECTIONS.map((s, i) => [s, i]));
 /**
  * Every to-do placed in its section, related ones merged into one row (union of shared keys). Closed to-dos are not
  * merged into open ones' rows: a group is open members only, or closed members only. A group takes its most urgent
- * member's section; rows in a section go most recently active first. Quiet tasks (#1731) are left out, as the sidebar
- * leaves them.
+ * member's section; rows in a section go most recently active first. `quiet: false` leaves quiet tasks (#1731) out,
+ * as the sidebar's badge does; the page lists them.
  */
-export function triageTodos(todos: Todo[], lookup: SessionLookup | undefined, now: number, restored: ReadonlyMap<string, number> = new Map()): TriageResult {
-  const list = todos.filter((td) => !td.quiet);
+export function triageTodos(
+  todos: Todo[],
+  lookup: SessionLookup | undefined,
+  now: number,
+  restored: ReadonlyMap<string, number> = new Map(),
+  { quiet = true }: { quiet?: boolean } = {},
+): TriageResult {
+  const list = quiet ? todos : todos.filter((td) => !td.quiet);
   const placed = new Map(list.map((td) => [td.id, triage(td, lookup, now, restored.get(td.id) ?? 0)]));
   // closed to-dos and open ones never share a row: a closed one is history, not part of the open work
   const closed = (td: Todo) => Boolean(td.done_at);

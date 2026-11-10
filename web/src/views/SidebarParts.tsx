@@ -76,7 +76,7 @@ export function useNavPages() {
   // conversation, not counted here.
   const agentSessions = useAgentSessions();
   const [restored] = useRestoredTodos();
-  const uncompletedTodosCount = useMemo(() => triageTodos(todos, makeSessionLookup(agentSessions), Date.now(), restored).open, [todos, agentSessions, restored]);
+  const uncompletedTodosCount = useMemo(() => triageTodos(todos, makeSessionLookup(agentSessions), Date.now(), restored, { quiet: false }).open, [todos, agentSessions, restored]);
   const counts = useCounts();
   const inbox = useInboxBadge();
   const larkSwitch = useLarkHome();

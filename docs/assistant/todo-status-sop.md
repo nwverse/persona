@@ -24,7 +24,7 @@ work. An agent writing "done" in its reply does not finish anything; its turn en
 | :--- | :--- | :--- |
 | Waiting on you | open | Something only the owner can move: an answer, an approval, a decision, a retry |
 | Working | open | An agent is running on it now |
-| Just finished | open | Finished in the last 24 hours and worth a look: closed, accepted, deployed, or a turn nobody has seen yet |
+| Just finished | open | Worth a look: closed, accepted or deployed in the last 24 hours, or a turn nobody has seen / a review not done yet (those stay until seen or reviewed) |
 | PR to merge | open | Its work stopped at a pull request that is still open and nothing runs: however old, it stays here, with the PR link and how long since it moved |
 | Other open | folded | Open, recently active, none of the above (an agent stopped and seen, a reminder of the user's own) |
 | Shelved | folded | No activity for 48 hours and nothing running (see "Shelving") |
@@ -69,7 +69,7 @@ belongs on the hub and is tracked separately (#3205). Until it lands, rule 7 tru
 The header reads "N open · N shelved · N done". **Open** counts to-dos that are not closed, not accepted or deployed,
 and not shelved: Waiting on you, Working, PR to merge, Other open, and Just finished rows still open (a finished turn
 is not a closed to-do; only a review or the user closes it). **Done** counts closed, accepted and deployed ones. The
-sidebar's To-dos badge shows the same open count. Quiet tasks (#1731) are left out of all of them, as before.
+sidebar's To-dos badge shows the same open count without quiet tasks (#1731), as before; the page lists and counts them. A task whose agent never started (rule 1) counts as open while it waits on the owner.
 
 ## Shelving
 
@@ -89,7 +89,7 @@ activity); "N related" under the row opens the others. Two to-dos are related wh
 
 - the same PR link (case and a trailing slash ignored);
 - the same issue number in the title (`#412`);
-- the same title once case, spaces and punctuation are dropped;
+- the same title once case, spaces and punctuation are dropped (six characters or more);
 - the same plan (`plan_id`: tasks one request was split into).
 
 Relations chain (A shares a PR with B, B an issue with C: one row). A closed to-do never joins an open one's row.

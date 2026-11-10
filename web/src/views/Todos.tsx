@@ -208,8 +208,14 @@ export function TodosView({
   const [grouping, setGrouping] = useState<"status" | "folder">(() => (pref(GROUPING_KEY) === "folder" ? "folder" : "status"));
   const byStatus = grouping === "status";
   const [restored, restoreTodo] = useRestoredTodos();
-  const triaged = useMemo(() => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored), [todos, lookup, restored, search]);
-  const triageAll = useMemo(() => (search.trim() ? triageTodos(todos, lookup, Date.now(), restored) : triaged), [todos, lookup, restored, search, triaged]);
+  // a minute's tick moves to-dos across the 24 h and 48 h lines while nothing else changes
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const triaged = useMemo(() => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored), [todos, lookup, restored, search, tick]);
+  const triageAll = useMemo(() => (search.trim() ? triageTodos(todos, lookup, Date.now(), restored) : triaged), [todos, lookup, restored, search, triaged, tick]);
   const onRestore = useCallback(
     (id: string) => {
       restoreTodo(id);
@@ -225,7 +231,10 @@ export function TodosView({
       if (found) return found;
     }
     if (byStatus) {
+      // the first row of an open section; none rather than one that would unfold a folded section
       for (const sec of TRIAGE_SECTIONS) if (!FOLDED_SECTIONS.has(sec) && triaged.sections[sec].length) return triaged.sections[sec][0].lead;
+      // nothing in the open sections: Other open starts unfolded (TodoTriageSection), its first row; never a shelved or done one
+      return triaged.sections.other[0]?.lead;
     }
     return filteredUncompleted[0] ?? filteredCompleted[0];
   }, [activeId, todos, filteredUncompleted, filteredCompleted, byStatus, triaged]);
@@ -486,6 +495,7 @@ export function TodosView({
                     <TodoTriageSection
                       key={sec}
                       section={sec}
+                      folded={FOLDED_SECTIONS.has(sec) && !(sec === "other" && !TRIAGE_SECTIONS.some((o) => !FOLDED_SECTIONS.has(o) && triaged.sections[o].length > 0))}
                       groups={triaged.sections[sec]}
                       count={triaged.todoCounts[sec]}
                       views={views}
@@ -756,6 +766,7 @@ function sectionTitle(section: TriageSection): string {
  *  to-dos. Waiting on you, Working, Just finished and PR to merge start open; Other, Shelved and Done start folded. */
 const TodoTriageSection = memo(function TodoTriageSection({
   section,
+  folded: foldedFirst,
   groups,
   count,
   views,
@@ -765,6 +776,8 @@ const TodoTriageSection = memo(function TodoTriageSection({
   onRestore,
 }: {
   section: TriageSection;
+  /** Whether it starts folded: Other open only while some open section has rows. */
+  folded: boolean;
   groups: TriageGroup[];
   /** To-dos in it (a merged row holds several). */
   count: number;
@@ -775,7 +788,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
   onRestore: (id: string) => void;
 }) {
   const holds = groups.some((g) => g.members.some((m) => m.id === selectedId));
-  const [folded, toggle] = useFolded(`todos-section:${section}`, FOLDED_SECTIONS.has(section), { holds });
+  const [folded, toggle] = useFolded(`todos-section:${section}`, foldedFirst, { follow: true, holds });
   return (
     <section className="mt-1 first:mt-0" data-testid="todo-section" data-section={section} data-count={groups.length} data-todos={count}>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] hover:bg-hover">
@@ -812,7 +825,9 @@ function TodoTriageRow({
   onRestore: (id: string) => void;
 }) {
   const others = group.members.slice(1);
-  const [open, setOpen] = useState(() => others.some((m) => m.id === selectedId));
+  const [opened, setOpen] = useState(false);
+  // a selected member always shows, however it was selected (a click, the address, a push)
+  const open = opened || others.some((m) => m.id === selectedId);
   const item = (td: Todo) => (
     <TodoListItem
       key={td.id}
@@ -832,7 +847,7 @@ function TodoTriageRow({
         <button
           type="button"
           aria-expanded={open}
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => setOpen(!open)}
           className="ml-9 flex h-7 items-center gap-1 rounded-control px-1.5 text-[11.5px] whitespace-nowrap text-ink-3 hover:bg-hover hover:text-ink-2"
         >
           <Icon name="chevron" size={10} stroke={2.4} className="transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }} />

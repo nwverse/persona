@@ -156,6 +156,18 @@ describe("triageTodos", () => {
     expect(r.sections.just_done).toHaveLength(1);
   });
 
+  it("counts a failed start waiting on the owner as open, though the hub set done_at", () => {
+    const r = triageTodos([todo("f", { start_error: "no launcher", done_at: hoursAgo(1) })], lookup, NOW);
+    expect(r.sections.waiting.map((g) => g.lead.id)).toEqual(["f"]);
+    expect(r.open).toBe(1);
+  });
+
+  it("lists quiet tasks on the page, leaves them out for the sidebar", () => {
+    const list = [todo("q", { quiet: true })];
+    expect(triageTodos(list, lookup, NOW).open).toBe(1);
+    expect(triageTodos(list, lookup, NOW, new Map(), { quiet: false }).open).toBe(0);
+  });
+
   it("counts shelved and finished apart from open, and leaves quiet tasks out", () => {
     const r = triageTodos(
       [
@@ -167,6 +179,8 @@ describe("triageTodos", () => {
       ],
       lookup,
       NOW,
+      new Map(),
+      { quiet: false },
     );
     expect([r.open, r.shelved, r.finished]).toEqual([1, 1, 2]);
   });
