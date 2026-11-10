@@ -39,6 +39,20 @@ class AssistantEntriesFixtureTest(private val name: String, private val fixture:
         assertEquals(name, expected.keys("needs_you"), got.needsYou.map { it.key })
         assertEquals(name, expected.keys("running"), got.running.map { it.key })
         assertEquals(name, expected.keys("shelved"), got.shelved.map { it.key })
+        for ((key, value) in (expected["activity"] as? JsonObject).orEmpty()) {
+            val row = got.running.first { it.key == key }
+            val work = when (row) { is RunningEntry.Task -> row.activity; is RunningEntry.Agent -> row.activity }
+            if (value == kotlinx.serialization.json.JsonNull) assertEquals(name, null, work)
+            else {
+                val wanted = value.jsonObject
+                assertEquals(name, wanted.getValue("tasks").jsonPrimitive.content.toInt(), work?.tasks)
+                assertEquals(name, wanted.getValue("subagents").jsonPrimitive.content.toInt(), work?.subagents)
+                assertEquals(name, wanted.getValue("workflows").jsonPrimitive.content.toInt(), work?.workflows)
+                wanted["phase"]?.let { assertEquals(name, it.jsonPrimitive.content, work?.workflow?.phase) }
+                wanted["progress"]?.let { assertEquals(name, it.jsonPrimitive.content, work?.workflow?.let(persona.core.domain.sort.WorkflowTimeline::counts)) }
+            }
+            if (name == "external_wait_without_background_keeps_clock") assertTrue(name, (row as RunningEntry.Task).waiting)
+        }
         // one entry each, and no agent of a listed task on its own
         val keys = got.needsYou.map { it.key } + got.running.map { it.key } + got.shelved.map { it.key }
         assertEquals(name, keys.size, keys.toSet().size)

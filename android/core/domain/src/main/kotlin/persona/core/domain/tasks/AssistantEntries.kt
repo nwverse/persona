@@ -46,12 +46,12 @@ sealed interface RunningEntry {
     val key: String
 
     /** A dispatched task not finished and not waiting on the user. */
-    data class Task(val todo: Todo, val status: TriageStatus) : RunningEntry {
+    data class Task(val todo: Todo, val status: TriageStatus, val activity: BackgroundWork? = null, val waiting: Boolean = false) : RunningEntry {
         override val key get() = "task:${todo.id}"
     }
 
     /** A working Agent that belongs to no task. */
-    data class Agent(val session: Session) : RunningEntry {
+    data class Agent(val session: Session, val activity: BackgroundWork? = session.backgroundWork()) : RunningEntry {
         override val key get() = "agent:${session.machineId}/${session.sessionId}"
     }
 }
@@ -108,7 +108,11 @@ fun assistantEntries(
         when {
             asks.isNotEmpty() -> asking += NeedsYouEntry.Task(todo, status, asks)
             waits || todo.awaitsDecision() -> deciding += NeedsYouEntry.Task(todo, status, asks) to todo.entryRank(status)
-            bucket == TodoBucket.Open -> open += RunningEntry.Task(todo, status) to todo.entryRank(status)
+            bucket == TodoBucket.Open -> {
+                val activity = todo.backgroundWork(lookup)
+                val waiting = activity == null && todo.activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() }
+                open += RunningEntry.Task(todo, status, activity, waiting) to todo.entryRank(status)
+            }
             bucket == TodoBucket.Shelved -> shelved += RunningEntry.Task(todo, status)
             else -> Unit
         }

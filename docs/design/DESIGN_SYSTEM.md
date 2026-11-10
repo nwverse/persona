@@ -337,6 +337,15 @@ Assistant avatar: a disc with the first character of the assistant's name. The d
 
 The web task stage strip (#3380) reuses `TodoStageBar` on the task detail, home card and briefing. `stage_kind: general` omits the strip: the existing task status already describes non-code progress. Code tasks keep the six steps and `aria-current="step"`; unknown kinds retain the legacy display. `plan` is current only for a pending plan-approval card before review, not guessed from prose or a running state. GitHub links retain `PR #N`; GitLab-style merge request paths on any host read `MR !N`, with the existing link behavior and tokens unchanged. No new setting, visual style or motion is introduced.
 
+Assistant In progress activity marks (#3588) reuse the existing Working spinner (`TaskMark` on web, `JSpinner` on
+Android) for active background commands, Monitor, workflows and subagents. A waiting parent is not an idle task.
+The subtitle, not another icon vocabulary, explains what is running and its counts/phase; only a real wait with no
+background activity keeps the clock. Needs you and completion precedence stay unchanged. The compact Session
+projection and cross-platform rules are in `docs/assistant/unified-entry.md`, "Background activity in In progress".
+This is a requested status correction, not a new style or setting; the existing reduced-motion behavior applies.
+Workflow phase text may ellipsize, but the done/started count stays visible; simultaneous command/subagent counts
+use another subtitle line rather than pushing the workflow count out of the row.
+
 ### 3.9 Empty states
 
 `EmptyStateView` (`apple/Persona/DesignSystem/Components.swift:385`): symbol, title, one-sentence message, optional prominent action. 92 uses. System `ContentUnavailableView` is used in about 22 other places and looks different (DS-15). Search results may use `ContentUnavailableView.search`. Web has no shared empty state outside admin; Android has `JEmptyState`. An offline current assistant (several assistants) takes the place of a merged list's empty state with its own: the assistant avatar faded with its offline mark, "<name> is offline" and when it last synced (web `OfflineState` in `web/src/views/ManagerParts.tsx`; `docs/assistant/managers.md` "Clients").

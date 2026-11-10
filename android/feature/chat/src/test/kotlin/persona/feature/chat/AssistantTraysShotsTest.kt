@@ -171,6 +171,77 @@ class AssistantTraysShotsTest {
         return image.getPixel(2, 2)
     }
 
+    @Test
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h1000dp-xhdpi")
+    fun backgroundWorkUsesOneSpinnerAndRealWaitUsesClockInEveryStyle() {
+        val at = "2026-11-10T08:00:00Z"
+        val flow = Workflow(taskId = "workflow-fixture", status = "running", running = true, phase = "Adversarial review",
+            agentsDone = 5, agentsStarted = 6, agentsRunning = 1, startedAt = at)
+        val workers = listOf(
+            running.copy(title = "Background checks", plan = null, waiting = true, backgroundWorking = true, backgroundTasksCount = 2),
+            blocked.copy(title = "Workflow review", state = "working", status = "working", pendingInteractions = 0,
+                waiting = true, backgroundWorking = true, backgroundTasksCount = 0, runningWorkflowsCount = 1, workflowProgress = flow),
+        )
+        val fixture = Fixture().apply {
+            requests.value = emptyList(); drafts.value = emptyList()
+            returnedTodos = workers.mapIndexed { i, agent -> Todo("background-$i", agent.title, origin = "main", createdAt = at, updatedAt = at,
+                agents = listOf(TodoAgent(agent.machineId, agent.sessionId))) }
+            sessionRows.value = listOf(Session(main.machineId, main.sessionId, title = "Persona", assistant = true, state = "idle", status = "idle")) + workers
+            tasks.reloadTodos()
+        }
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var large by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                fontScale = if (large) 1.6f else 1f
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            CompositionLocalProvider(LocalConfiguration provides configuration) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                    Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        HomeNavigation(listOf(NavItem("assistant", "Assistant", PhIcons.Sparkle), NavItem("agents", "Agents", PhIcons.Robot)), "assistant", {},
+                            leading = { JAppMark(Tokens.Space.xxl) })
+                        Box(Modifier.weight(1f)) {
+                            ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
+                                chrome = ChatChromeBindings(tasks = fixture.tasks, inboxTrays = fixture.inbox, inboxScope = "fixture", onOpenSession = { fixture.opened += it }),
+                                renderStyle = ChatRenderStyle.Assistant, embedded = true, showTopBar = false)
+                        }
+                    }
+                }
+            }
+        }
+        settle()
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+        for (s in AppStyle.entries) for (big in listOf(false, true)) {
+            val corners = mutableListOf<Int>()
+            for (d in listOf(false, true)) {
+                style = s; dark = d; large = big
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key) workers[0] else it }
+                settle()
+                rule.onAllNodes(hasTestTag("assistant-work-spinner") and hasAnyAncestor(hasTestTag("assistant-progress-todo:background-0")), useUnmergedTree = true).assertCountEquals(1)
+                rule.onNodeWithText("后台任务 2 个在跑").assertIsDisplayed() // i18n-ignore: localized screenshot assertion
+                rule.onAllNodes(hasTestTag("assistant-work-spinner") and hasAnyAncestor(hasTestTag("assistant-progress-todo:background-1")), useUnmergedTree = true).assertCountEquals(1)
+                rule.onNodeWithText("Adversarial review").assertIsDisplayed()
+                rule.onNodeWithText(" · 5/6+").assertIsDisplayed()
+                // Capture the actual ChatScreen with both requested activity rows in its tray.
+                corners += shot("background-${s.name.lowercase()}-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
+                    workers[0].copy(backgroundTasksCount = 0, runningSubagents = 3) else it }; settle()
+                rule.onNodeWithText("子 Agent 3 个在跑").assertIsDisplayed() // i18n-ignore: localized screenshot assertion
+                fixture.sessionRows.value = fixture.sessionRows.value.map { if (it.key == workers[0].key)
+                    workers[0].copy(state = "idle", status = "idle", backgroundWorking = false, backgroundTasksCount = 0,
+                        work = persona.core.contracts.WorkState(phase = "blocked", on = "external", wait = "Wait for deployment")) else it }; settle()
+                rule.onNodeWithTag("assistant-wait-clock").assertIsDisplayed()
+                rule.onAllNodesWithTag("assistant-agent-manual").assertCountEquals(0)
+            }
+            assertNotEquals("Light and dark captures must differ", corners[0], corners[1])
+        }
+        assertTrue(fixture.approvals.isEmpty()); assertTrue(fixture.sends.isEmpty())
+    }
+
     @Test fun allStylesAndAppearancesRenderActualAssistantPageAndMutuallyExclusiveTrays() {
         val fixture = Fixture()
         var style by mutableStateOf(AppStyle.Glass)

@@ -282,6 +282,10 @@ export interface Session {
   background_count?: number;
   running_subagents?: number;
   running_workflows?: number;
+  /** Independent shell/Monitor count; unlike background_count, excludes workflows and subagents. */
+  background_tasks_count?: number;
+  /** Newest running workflow, compact metadata only (no agents, phases or tools). */
+  workflow_progress?: Workflow;
   parent_session_id?: string;
   root_session_id?: string;
   is_subagent?: boolean;

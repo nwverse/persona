@@ -64,6 +64,28 @@ The split is one pure function per client: web `assistantEntries` (`web/src/lib/
 which entry every case goes to (Apple: `AssistantEntriesFixtureTests`). The older Pending / Progress / Agents / To start entries
 below are the earlier presentation (#2878, #3162).
 
+### Background activity in In progress (#3588)
+
+A task's row and a hand-opened Agent's row use the **existing Working spinner** whenever background commands,
+Monitor, workflows or subagents are active. They do not use separate gear, workflow or subagent icons in the tray.
+Their state text is Working, even when the parent turn ended to wait for that work. The subtitle names the activity:
+`Background tasks running: N`, `Subagents running: N`, or `Background workflow · <phase> · <done>/<started>+`,
+using the same phase and counts as the Agent's running footer. Mixed activity remains explicit; multiple workflows
+show the newest run plus the number of other runs. The `+` means more agents may still start, not a fixed planned total.
+Only a genuine wait with no background activity retains the waiting clock. Pending questions and decisions still win
+and put the task in Needs you; finished and released bindings never contribute activity to an open task.
+
+The existing pure entry functions carry derived `activity` alongside each running row. They sum distinct active
+Agent bindings, so activity on a non-lead Agent is not lost and duplicate bindings do not inflate counts. Session list
+summaries use `background_tasks_count`, `running_subagents`, `running_workflows` and `workflow_progress` (the
+compact projection in `docs/protocol/protocol.md`, "Summary rows"); complete Session responses use their
+existing `background`, `subagents` and `workflows` arrays. Missing fields on older hubs retain a generic activity line
+rather than fabricate phase or progress. Newer summary revisions win over cached chat detail, including same-state
+phase/count updates and completion; a row projection is not installed as an open chat's complete state.
+
+Apple clients can decode the two additive summary fields using their existing Workflow DTO, apply the same spinner
+and subtitle rules, and replay the extended shared fixtures. No new endpoint, task storage or model call is required.
+
 ### Progress tray: one task, one row (#2878)
 
 The approved simplified Assistant presentation places a task's **only card in the Progress tray**, not in the conversation.

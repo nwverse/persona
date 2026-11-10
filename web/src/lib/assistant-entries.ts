@@ -1,3 +1,4 @@
+import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
 import { dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
@@ -23,9 +24,9 @@ export type NeedsYouItem =
 
 export type RunningItem =
   /** A dispatched task not finished and not waiting on the user. */
-  | { kind: "task"; key: string; card: TaskCardMetadata; todo: Todo; status: TodoStatus }
+  | { kind: "task"; key: string; card: TaskCardMetadata; todo: Todo; status: TodoStatus; activity?: BackgroundWork }
   /** A working Agent that belongs to no task. */
-  | { kind: "agent"; key: string; session: Session };
+  | { kind: "agent"; key: string; session: Session; activity?: BackgroundWork };
 
 export interface AssistantEntries {
   needsYou: NeedsYouItem[];
@@ -111,17 +112,17 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const waits = status === "failed" ? bucket === "open" : !todo.done_at && WAITS_ON_YOU.has(status);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks });
     else if (waits || taskAwaitsDecision(todo)) deciding.push({ item: { kind: "task", key, todo, status, asks }, rank: todoRank(todo, status), at: card.at });
-    else if (bucket === "open") open.push({ item: { kind: "task", key, card, todo, status }, rank: todoRank(todo, status), at: card.at });
+    else if (bucket === "open") open.push({ item: { kind: "task", key, card, todo, status, activity: taskBackgroundWork(todo, lookup) }, rank: todoRank(todo, status), at: card.at });
     else if (bucket === "shelved") shelved.push({ item: { kind: "task", key, card, todo, status }, at: card.at });
   }
 
   // Agents that belong to no task, the main conversation's only (dockAgents): asking ones wait on the user, working ones run.
   const agentsAsking: NeedsYouItem[] = [];
   const agentsRunning: RunningItem[] = [];
-  for (const { session, state } of dockAgents(sessions, todos, conversation, main)) {
+  for (const { session, state } of dockAgents(sessions.map((s) => lookup(s.machine_id, s.session_id) ?? s), todos, conversation, main)) {
     const key = `agent:${sessionKey(session.machine_id, session.session_id)}`;
     if (state === "needs_you") agentsAsking.push({ kind: "agent", key, session, asks: asksOf.get(sessionKey(session.machine_id, session.session_id)) ?? [] });
-    else agentsRunning.push({ kind: "agent", key, session });
+    else agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)
