@@ -71,6 +71,9 @@ type Settings struct {
 	// off by default it stays open with where it is held, and its agent is told so with its prompt (#3306,
 	// delivery.go). nil is off (the default).
 	DoneNeedsDelivery *bool `json:"done_needs_delivery,omitempty"`
+	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
+	// default).
+	AgentTasks *bool `json:"agent_tasks,omitempty"`
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
@@ -361,6 +364,8 @@ type assistantView struct {
 	ReviewSamplePercent int `json:"review_sample_percent"`
 	// InterjectBackground is in effect, like DoneNeedsDelivery.
 	InterjectBackground bool `json:"interject_background"`
+	// AgentTasks is in effect, like DoneNeedsDelivery.
+	AgentTasks bool `json:"agent_tasks"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -378,7 +383,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
-		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground}
+		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground,
+		AgentTasks:          v.AgentTasks != nil && *v.AgentTasks}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session
