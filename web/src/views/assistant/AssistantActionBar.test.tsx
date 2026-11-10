@@ -69,6 +69,32 @@ const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assi
 const label = { needs: t("assistant-tasks.tray_needs_you"), running: t("assistant-tasks.tray_running") };
 
 describe("Assistant Needs you / In progress trays", () => {
+  it("uses the Working mark and live subtitle for background work, with a clock only after all work ends", () => {
+    act(() => entry("running").click());
+    const row = host.querySelector("[data-task-slot]")!;
+    const session: Session = { machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", status: "working", state: "working", updated_at: at,
+      waiting: true, background_working: true, background_count: 2, background_tasks_count: 2 };
+    act(() => upsertSession(session));
+    expect(host.querySelector("[data-task-slot]")).toBe(row);
+    expect(row.querySelector('[data-task-mark="working"]')).not.toBeNull();
+    expect(row.querySelector('[data-task-mark="waiting"]')).toBeNull();
+    expect(row.textContent).toContain(t("assistant-tasks.background_tasks_running", { count: 2 }));
+    const workflow = { task_id: "wf", status: "running", running: true, phase: "Adversarial review", agents_done: 5, agents_started: 6 };
+    act(() => upsertSession({ ...session, background_tasks_count: 0, background_count: 1, running_workflows: 1, workflow_progress: workflow }));
+    expect(row.textContent).toContain("Adversarial review · 5/6+");
+    expect(row.querySelector('[data-task-mark="working"]')).not.toBeNull();
+    act(() => upsertSession({ ...session, background_tasks_count: 0, background_count: 0, running_subagents: 3 }));
+    expect(row.textContent).toContain(t("assistant-tasks.subagents_count_running", { count: 3 }));
+    expect(row.textContent).not.toContain("Adversarial review");
+    act(() => upsertSession({ ...session, state: "idle", status: "idle", background_working: false, background_count: 0,
+      background_tasks_count: 0, work: { phase: "blocked", on: "external", wait: "Wait for deployment", line: "Wait for deployment" } }));
+    expect(row.querySelector('[data-task-mark="waiting"]')).not.toBeNull();
+    expect(row.querySelector('[data-task-mark="working"]')).toBeNull();
+    expect(row.textContent).toContain("Wait for deployment");
+    expect(row.textContent).not.toContain(t("assistant-tasks.background_tasks_running", { count: 2 }));
+    expect(writes).toEqual([]);
+  });
+
   it("keeps two entries in order, collapses by default and replaces conversation cards with one hint", () => {
     expect(entries().map((button) => button.getAttribute("data-tray-entry"))).toEqual(["needs", "running"]);
     expect(entries().map((button) => button.textContent)).toEqual([label.needs, `${label.running}1`]);

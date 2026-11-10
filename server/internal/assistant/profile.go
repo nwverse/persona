@@ -71,9 +71,15 @@ type Settings struct {
 	// off by default it stays open with where it is held, and its agent is told so with its prompt (#3306,
 	// delivery.go). nil is off (the default).
 	DoneNeedsDelivery *bool `json:"done_needs_delivery,omitempty"`
+	// AgentTasks: every agent Persona starts is on a quiet, supervised todo (#3617, agent_tasks.go). nil is off (the
+	// default).
+	AgentTasks *bool `json:"agent_tasks,omitempty"`
 	// IdleCloseHours: an agent Persona started that has been idle this many hours with nothing going on is closed
 	// (tasks_idle.go); 0 turns it off, nil is 12 (the default).
 	IdleCloseHours *int `json:"idle_close_hours,omitempty"`
+	// ArchiveClosedDays: a closed session idle this many days, on no to-do or only on done ones, is archived by itself
+	// (agent_archive_auto.go, #3618); 0 turns it off, nil is 3 (the default).
+	ArchiveClosedDays *int `json:"archive_closed_days,omitempty"`
 	// ReviewSamplePercent: the share (0–100) of the finished supervised tasks that passed the judge's own check whose
 	// review still goes to the main conversation (#3128, supervise_sample.go); the rest the judge closes. nil is 100:
 	// every finished task waits for task_review, as before.
@@ -352,10 +358,14 @@ type assistantView struct {
 	DoneNeedsDelivery bool `json:"done_needs_delivery"`
 	// IdleCloseHours is in effect (0: off).
 	IdleCloseHours int `json:"idle_close_hours"`
+	// ArchiveClosedDays is in effect (0: off).
+	ArchiveClosedDays int `json:"archive_closed_days"`
 	// ReviewSamplePercent is in effect (100: every finished task waits for task_review).
 	ReviewSamplePercent int `json:"review_sample_percent"`
 	// InterjectBackground is in effect, like DoneNeedsDelivery.
 	InterjectBackground bool `json:"interject_background"`
+	// AgentTasks is in effect, like DoneNeedsDelivery.
+	AgentTasks bool `json:"agent_tasks"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -371,8 +381,10 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	out := assistantView{Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: s.recordingDays(ctx),
 		DoneNeedsDelivery: v.DoneNeedsDelivery != nil && *v.DoneNeedsDelivery, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		ArchiveClosedDays:   int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent: s.reviewSamplePercent(ctx),
-		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground}
+		InterjectBackground: v.InterjectBackground != nil && *v.InterjectBackground,
+		AgentTasks:          v.AgentTasks != nil && *v.AgentTasks}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(d, sp)
 		var list []proto.Session

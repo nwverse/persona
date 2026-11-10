@@ -25,6 +25,10 @@ not.
   rank, newest first), then Agents. `shelved`: folded, not counted.
 - Not covered here: cards of the conversation's own session (they are always Needs you rows and are added by the
   screen), message cards the user put off (`later`), and Android's inbox drafts.
+- Background activity cases (#3588) additionally carry `expected.activity` keyed by running row: `tasks`, `subagents`,
+  `workflows`, and optional `phase` / `progress`; null means no background work. They cover command/Monitor counts,
+  workflow summary phase and progress, subagents, mixed counts, a real external wait, user-question precedence,
+  hand-opened Agents, and duplicate/non-lead task bindings. Both entry functions derive this from the same wire input.
 - All data is made up.
 - Run: `cd web && npx vitest run src/lib/assistant-entries.test.ts` and
-  `cd android && ./gradlew :core:domain:testDebugUnitTest --tests '*AssistantEntriesFixtureTest*'`.
+  `cd android && ./gradlew :core:domain:test --tests '*AssistantEntriesFixtureTest*'`.
