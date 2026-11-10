@@ -118,8 +118,6 @@ data class HubLauncher(
     @SerialName("definitions") val definitions: Map<String, String> = emptyMap(),
     /** The harness a launcher runs in: claude (also empty) | codex | agy | omp. */
     @SerialName("agent") val agent: String? = null,
-    /** What the apps call a managed one (any language); [name] stays the id it starts by. */
-    @SerialName("display_name") val displayName: String? = null,
     @SerialName("custom_model_name") val customModelName: String? = null,
     @SerialName("custom_model_description") val customModelDescription: String? = null,
     // A managed one's model and gateway parameters (docs/integrations/launchers.md "Provider model and gateway parameters").
