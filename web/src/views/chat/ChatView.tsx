@@ -5,6 +5,7 @@ import { alsoOpenText } from "../../lib/engines";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
 import { ago, attentionReason, backgroundWaiting, externalLink, failureReason, resumeCommand, sessionCan, sessionDeletable, sessionMenuActions, sourceSubtitle, sessionTitle, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
+import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type SessionView } from "../../lib/router";
 import { canShowTerminal, otherView, useSessionView } from "../../lib/session-view";
 import { openLink } from "../../lib/links";
@@ -148,12 +149,13 @@ const ULTRACODE_SEND_TRIES = 4;
 const STOP_SETTLE_MS = 15_000;
 
 /** "Branch to new chat" (#2137): the node copies the conversation up to this reply's turn into a new one, which opens here. */
-async function forkAt(mid: string, sid: string, itemId: string, assistant: boolean, space?: string) {
+async function forkAt(mid: string, sid: string, itemId: string, assistant: boolean, space?: string, manager?: string) {
   try {
     const r = await api<{ session_id: string }>(`${sessionPath(mid, sid)}/fork`, { method: "POST", json: { at_item_id: itemId } });
     await refresh();
     // a health conversation's branch runs in the health space too (docs/assistant/health.md)
-    navigate(!assistant ? { name: "session", mid, sid: r.session_id } : space === "health" ? { name: "health", sid: r.session_id } : { name: "persona", sid: r.session_id });
+    // a Persona conversation's branch is on its computer and its manager's (lib/conversation-page.ts)
+    navigate(!assistant ? { name: "session", mid, sid: r.session_id } : space === "health" ? { name: "health", sid: r.session_id } : conversationPage(r.session_id, mid, manager));
     toast(t("chat-chatview.forked"), "ok");
   } catch (e) {
     toast(t("chat-chatview.fork_failed", { error: errorText(e) }), "error");
@@ -385,7 +387,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
       canCompose,
       speaker: assistant ? persona.name : "Agent",
       images: () => items.current.filter((i) => i.kind === "image"),
-      fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space) : undefined,
+      fork: canFork ? (itemId: string) => void forkAt(mid, sid, itemId, Boolean(assistant), session?.space, session?.manager) : undefined,
       rewind: canRewind ? { block: rewindLive, run: (messageId, text, restore) => rewindTo(mid, sid, draftKey, items.current, messageId, text, restore) } : undefined,
     }),
     [draftKey, title, canCompose, canFork, canRewind, rewindLive, mid, sid, assistant, persona.name],
