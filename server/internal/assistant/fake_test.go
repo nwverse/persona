@@ -32,6 +32,7 @@ import (
 type fakeHub struct {
 	mu            sync.Mutex
 	inboxHook     func(ctx context.Context) // runs first in InboxChanged, no lock held (#4924)
+	sessionGet    func()                    // runs after a session.get is read, no lock held
 	readHooks     receiptHooks              // around session.items reads and on receipt broadcasts, no lock held
 	itemReads     int                       // session.items reads since the hooks were set
 	hello         Hello
@@ -240,10 +241,21 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		return json.Marshal(map[string]any{"sessions": slices.Clone(list), "muted": f.muted[p.Device]})
 	case DeviceSessionGet:
+		var session proto.Session
+		var found bool
 		for _, s := range list {
 			if s.SessionID == a["session_id"] {
-				return json.Marshal(map[string]any{"session": s, "ok": true})
+				session, found = s, true
 			}
+		}
+		hook := f.sessionGet
+		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		f.mu.Lock()
+		if found {
+			return json.Marshal(map[string]any{"session": session, "ok": true})
 		}
 		return json.Marshal(map[string]any{"ok": false})
 	case DeviceSessionItems:

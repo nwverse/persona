@@ -38,17 +38,21 @@ func needsYouTold(t *testing.T, f *fakeHub) []int {
 // waitNeedsYou waits until the inbox told the hub want counts (it tells on its own goroutine), and returns them.
 func waitNeedsYou(t *testing.T, f *fakeHub, want int) []int {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		got := needsYouTold(t, f)
-		if len(got) >= want {
-			return got
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("told %v, want %d counts", got, want)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	var got []int
+	waitFor(t, "the inbox needs-you counts", func() bool {
+		got = needsYouTold(t, f)
+		return len(got) >= want
+	})
+	return got
+}
+
+func waitNeedsYouIdle(t *testing.T, s *Service) {
+	t.Helper()
+	waitFor(t, "the inbox needs-you teller", func() bool {
+		s.inbox.needsYouMu.Lock()
+		defer s.inbox.needsYouMu.Unlock()
+		return !s.inbox.needsYou.telling
+	})
 }
 
 // The hub is told how many open items are in "Needs you" (the roster's inbox_needs_you): the items the apps list
@@ -60,8 +64,8 @@ func TestInboxNeedsYouToldToTheHub(t *testing.T) {
 	st := newInboxMemStore()
 	s := New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t)})
 	s.inbox.init()
-	s.tellInboxNeedsYou()
-	time.Sleep(50 * time.Millisecond)
+	waitNeedsYouIdle(t, s)
+	s.tellInboxNeedsYou() // an unloaded inbox is a synchronous no-op, not a reason to wait before checking
 	if got := needsYouTold(t, f); len(got) != 0 {
 		t.Fatalf("told %v before what is stored was read", got)
 	}
@@ -149,22 +153,16 @@ func TestInboxNeedsYouDoesNotWaitForTheHub(t *testing.T) {
 		t.Fatal("telling waited for the hub")
 	}
 	f.mu.Unlock()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		got := needsYouTold(t, f)
-		if got[len(got)-1] == 5 {
-			if !slices.IsSorted(got) {
-				t.Fatalf("counts out of order: %v", got)
-			}
-			if len(got) > 3 { // the first read's, the one on its way, and one for everything that came meanwhile
-				t.Fatalf("told %d times for changes that came while one count was on its way: %v", len(got), got)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the last count told is %v, want 5", got)
-		}
-		time.Sleep(2 * time.Millisecond)
+	var got []int
+	waitFor(t, "the final needs-you count", func() bool {
+		got = needsYouTold(t, f)
+		return len(got) > 0 && got[len(got)-1] == 5
+	})
+	if !slices.IsSorted(got) {
+		t.Fatalf("counts out of order: %v", got)
+	}
+	if len(got) > 3 { // the first read's, the one on its way, and one for everything that came meanwhile
+		t.Fatalf("told %d times for changes that came while one count was on its way: %v", len(got), got)
 	}
 }
 

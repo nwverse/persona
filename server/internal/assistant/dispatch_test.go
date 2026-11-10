@@ -131,11 +131,21 @@ func TestDispatchReadWaitsForTheTaskToStop(t *testing.T) {
 		t.Fatal(resultText(r))
 	}
 	f.setItems(proto.Item{ID: "i1", Role: "assistant", Kind: proto.KindText, Text: "built"})
+	polled := make(chan struct{})
+	f.sessionGet = func() {
+		f.mu.Lock()
+		f.sessionGet = nil
+		f.mu.Unlock()
+		close(polled)
+	}
+	done := make(chan struct{})
 	go func() {
-		time.Sleep(40 * time.Millisecond)
+		defer close(done)
+		<-polled // the first waiting read is over: stop before the next poll, not a guessed delay after the call
 		setStatus(f, "box", "s1", proto.StatusDone)
 	}()
 	out := resultText(dispatchCall(s, "mac", "caller-0001", "dispatch_read", `{"session_id":"s1","wait_seconds":5}`))
+	<-done
 	if !strings.Contains(out, ": stopped.") || !strings.Contains(out, "built") {
 		t.Fatalf("read: %q", out)
 	}
