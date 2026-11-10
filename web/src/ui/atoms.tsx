@@ -285,7 +285,8 @@ export function Collapse({ open, children, className = "", clipClassName = "", l
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className={`min-h-0 ${unclipped && shown && !moving ? "" : "overflow-hidden [contain:layout_paint]"} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
+      {/* min-w-0: unclipped, a grid item is as wide as its longest unbroken text (a URL in a row), and the list scrolled sideways (#3262) */}
+      <div className={`min-h-0 min-w-0 ${unclipped && shown && !moving ? "" : "overflow-hidden [contain:layout_paint]"} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
     </div>
   );
 }
