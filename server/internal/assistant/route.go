@@ -152,7 +152,7 @@ func (s *Service) routeNewChat(machine, id, sentence string) {
 	}
 	var a routeAnswer
 	mctx, cancel := context.WithTimeout(ctx, routeTimeout) // the model's budget: the lookups above are local
-	err := s.routeAsk(mctx, system, prompts.RenderRouteInput(in), &a)
+	err := s.askRouteModel(mctx, system, prompts.RenderRouteInput(in), &a)
 	cancel()
 	o, ok := decideRoute(sentence, a, err, leaders, find)
 	if err != nil {
@@ -177,8 +177,8 @@ func (s *Service) routeNewChat(machine, id, sentence string) {
 	s.event(ctx, map[string]any{"type": "direction_offer", "conversation": id, "offer": o})
 }
 
-// routeAsk asks the model (or the test's stand-in).
-func (s *Service) routeAsk(ctx context.Context, system, input string, out any) error {
+// askRouteModel asks the model (or the test's stand-in).
+func (s *Service) askRouteModel(ctx context.Context, system, input string, out any) error {
 	if ask := s.offers.ask; ask != nil {
 		return ask(ctx, system, input, out)
 	}

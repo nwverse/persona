@@ -76,8 +76,8 @@ func TestRouteRuleTable(t *testing.T) {
 	}
 }
 
-// routeEnv is the assistant with a database, its main conversation conv1 and side conversations on its machine.
-func routeEnv(t *testing.T, sides ...string) (*Service, *fakeHub) {
+// directionRouteEnv is the assistant with a database, its main conversation conv1 and side conversations on its machine.
+func directionRouteEnv(t *testing.T, sides ...string) (*Service, *fakeHub) {
 	t.Helper()
 	s, f := newQuietServiceOn(t, &memStore{})
 	list := []proto.Session{{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}}
@@ -115,7 +115,7 @@ func countEvents(f *fakeHub, typ string) int {
 // A model that does not answer within routeTimeout leaves a quick chat and no trace: no offer, no event, nothing sent
 // into the conversation; the call is not waited on past the timeout.
 func TestRouteTimeoutIsAQuietQuickChat(t *testing.T) {
-	s, f := routeEnv(t, "side1")
+	s, f := directionRouteEnv(t, "side1")
 	old := routeTimeout
 	routeTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { routeTimeout = old })
@@ -143,7 +143,7 @@ func TestRouteTimeoutIsAQuietQuickChat(t *testing.T) {
 // A direction answer is kept and told; a quick answer, the main conversation, a leader already and a conversation on
 // another machine are not offered anything (the last three are not even asked).
 func TestRouteNewChatOffersADirection(t *testing.T) {
-	s, f := routeEnv(t, "side1", "side2", "lead1")
+	s, f := directionRouteEnv(t, "side1", "side2", "lead1")
 	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	var asked []string
 	s.offers.ask = func(_ context.Context, system, input string, out any) error {
@@ -180,7 +180,7 @@ func TestRouteNewChatOffersADirection(t *testing.T) {
 
 // The owner made the chat a direction while the model was answering: no offer is kept or told afterwards.
 func TestRouteOfferNotKeptForADirectionMadeMeanwhile(t *testing.T) {
-	s, f := routeEnv(t, "side1")
+	s, f := directionRouteEnv(t, "side1")
 	s.offers.ask = func(_ context.Context, _, _ string, out any) error {
 		if code, _ := doRoute(t, s, http.MethodPost, "/api/v1/assistant/directions/side1/make", "", ""); code != 200 {
 			t.Errorf("make meanwhile: %d", code)
@@ -223,7 +223,7 @@ func (s *Service) directionOf(id string) *direction {
 // The owner's taps: Start direction takes the offer, Make it a direction a quick chat, End direction takes it out; each
 // is recorded as the owner's, with no phone approval; Just a quick chat drops the offer.
 func TestDirectionEndpoints(t *testing.T) {
-	s, f := routeEnv(t, "side1", "side2", "side3")
+	s, f := directionRouteEnv(t, "side1", "side2", "side3")
 	s.offers.ask = func(_ context.Context, _, _ string, out any) error {
 		return json.Unmarshal([]byte(`{"kind":"direction","title":"Android parity","project":""}`), out)
 	}
@@ -308,7 +308,7 @@ func TestDirectionLimit(t *testing.T) {
 	for i := range leadersMost + 1 {
 		ids = append(ids, fmt.Sprintf("side%02d", i))
 	}
-	s, _ := routeEnv(t, ids...)
+	s, _ := directionRouteEnv(t, ids...)
 	setSettings(t, s, func(v *Settings) { v.Leaders = ids[:leadersMost] })
 	if code, out := doRoute(t, s, http.MethodPost, "/api/v1/assistant/directions/"+ids[leadersMost]+"/make", "", ""); code != http.StatusConflict ||
 		!strings.Contains(string(out["error"]), "at most 20") {
