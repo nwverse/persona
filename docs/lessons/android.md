@@ -1,5 +1,12 @@
 # Lessons: Android
 
+## Installed extension details need their own dependency metadata (#1315)
+
+Decoding dependency and pack fields in an installation preview does not retain them in the installed detail's separate
+decoder. Keep both there and use that manager-bound response for inspection; a pack's declared member constraints are
+not proof that its members are installed or ready. Missing fields on older hubs hide the sections, while unknown
+dependency states remain explicit and ask to refresh details rather than preview another installation.
+
 ## Latest chat text needs both a stable slot and fresh Markdown (#2602)
 
 Changing only default-open flags leaves Agent running-step previews visible. Remove the preview and tool-card exceptions, keep every call in the manual trace, and key the outside reply by its turn slot rather than its changing message ID. Preserve the actual ID for menus, jumps and receipts. `produceState` retains its previous value when keys change: a stable slot can therefore briefly draw the predecessor's parsed Markdown even after the text has changed. Carry the parse's source identity and render it only when it matches the current source; show the new plain text while parsing. A regression must render running → new text → completed under the same key, not just compare pure line lists. Test every conversation type × style × appearance, manual toggles, completion folding and restored hub-fold loading. A background wake continues the same genuine user exchange: do not truncate ordered/process rows after its latest reply or divert tail tools into a noninteractive drawer. A wake after an away recap must mark the real reopened turn live, not add a second empty working placeholder.
