@@ -17,7 +17,7 @@ import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { useAgentSessions, useCounts } from "../lib/sessions";
+import { useScopedAgentSessions, useScopedCounts, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
 import { getSession, useStore, withTaskRows } from "../lib/store";
 import { discardOutbox, outboxEntry, queueToSession, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
@@ -44,22 +44,23 @@ function greeting() {
 }
 
 export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; onToggleSidebar: () => void }) {
-  const machines = useStore((s) => s.machines);
-  const interactions = useStore((s) => s.interactions);
+  // with several assistants, the current one's computers, cards, agents and tasks (docs/assistant/managers.md "Clients")
+  const machines = useScopedMachines();
+  const interactions = useScopedInteractions();
   const answered = useStore((s) => s.answered);
   // a card answered here moves its agent out of "Stuck" at once, not at the hub's next push (#4286)
-  const agentSessions = useAgentSessions();
+  const agentSessions = useScopedAgentSessions();
   const sessions = useMemo(() => answeredSessions(agentSessions, interactions, answered), [agentSessions, interactions, answered]);
   const loaded = useStore((s) => s.loaded);
   const noMachines = loaded && machines.length === 0;
-  const counts = useCounts();
+  const counts = useScopedCounts();
   const now = useNow(5000, counts.working > 0);
 
   // the agents of one herdr tab are one row (#2320), filed under the most urgent of them; a card waiting counts as
   // something to do, and "Mark all as seen" marks every unread agent, wherever its tab is filed
   const { groups, unread, markAllAt, quiet } = useMemo(() => homeOverview(sessions, interactions), [sessions, interactions]);
   // every open task with where it stands (#6450, the web side of the Lark bot's /tasks)
-  const todos = useStore((s) => s.todos);
+  const todos = useScopedTodos();
   const taskRows = useStore((s) => s.taskRows);
   // read as the Tasks page reads them: a card answered here moves its task at once too
   const tasks = useMemo(() => homeTasks(todos, answeredLookup(withTaskRows(makeSessionLookup(agentSessions), taskRows), interactions, answered)), [todos, agentSessions, taskRows, interactions, answered]);

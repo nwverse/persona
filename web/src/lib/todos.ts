@@ -1,5 +1,5 @@
 import { formatDate, t } from "../i18n";
-import { noteItemManager } from "./manager-choice";
+import { currentHeaders, noteItemManager } from "./manager-choice";
 import { acceptanceStands, reviewState, type Supervision } from "./supervision";
 import { api, ApiError, enc } from "./api";
 import { contextBody } from "./context-body";
@@ -650,8 +650,10 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
 
 /** A new to-do; `due` makes it due at a moment or on a day (one made on the calendar, #2029). */
 export async function createTodo(title: string, notes?: string, due?: { due_at?: string; due_date?: string }): Promise<Todo> {
+  // a to-do made here is the current assistant's (the list shows only its own)
   const r = await api<{ todo: Todo }>("/todos", {
     method: "POST",
+    headers: currentHeaders(),
     json: { title: title.trim(), notes: notes?.trim() || undefined, ...due },
   });
   return r.todo;

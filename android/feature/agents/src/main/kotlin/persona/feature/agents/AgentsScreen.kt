@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -66,7 +67,16 @@ internal fun AgentsScreen(
     val connection by model.connection.state.collectAsStateWithLifecycle()
     val group by model.group.collectAsStateWithLifecycle()
     val everyRequest by model.interactions.pending.collectAsStateWithLifecycle()
-    val pending = remember(everyRequest, group) { if (group == null) everyRequest else everyRequest.filter { group.admits(it.machineId) } }
+    // The current assistant's agents (docs/assistant/managers.md "Clients"), and the cards that are theirs.
+    val assistant = persona.core.designsystem.currentAssistant()
+    LaunchedEffect(model, assistant) { model.show(assistant) }
+    // The shell keeps the picked computer for the next launch: it follows the filter however that changes (a chip, or
+    // let go by a switch of assistant or hub group).
+    val machineSelected by androidx.compose.runtime.rememberUpdatedState(onMachineSelected)
+    LaunchedEffect(model) { model.listSettings.map { it.machineFilter }.distinctUntilChanged().collect { machineSelected(it) } }
+    val everySession by model.everySession.collectAsStateWithLifecycle()
+    val everyMachine by model.everyMachine.collectAsStateWithLifecycle()
+    val pending = remember(everyRequest, group, assistant, page.sessions) { shownRequests(everyRequest, group, assistant, page.sessions) }
     val outbox by model.sender.outbox.collectAsStateWithLifecycle()
     val delivery by model.delivery.collectAsStateWithLifecycle()
     val requestHistory by model.requestHistory.collectAsStateWithLifecycle()
@@ -615,18 +625,40 @@ internal fun AgentsScreen(
         LaunchedEffect(openedWith, delivery[selected.id]) {
             if (RequestDeliveries.closesSheet(openedWith, delivery[selected.id])) requestDetail = null
         }
+        val (session, machine) = cardContext(request, page.sessions, page.machines, everySession, everyMachine)
         RequestDetail(request, metadata, now, reachable(request), delivery[request.id],
             onDismiss = { requestDetail = null }, onOpenChat = {
                 requestDetail = null
                 open(it.sessionKey)
             }, onAnswer = model::answer, readOnly = current == null || delivery[request.id] == RequestDelivery.Sent,
-            onTerminal = if (page.sessions.firstOrNull { it.key == request.sessionKey }?.canTerminal == false) null else ({
+            onTerminal = if (session?.canTerminal == false) null else ({
                 requestDetail = null
                 navigator.navigate(TerminalRoute(request.machineId, request.sessionId))
-            }), machine = page.machines.firstOrNull { it.id == request.machineId },
-            blockedReason = page.sessions.firstOrNull { it.key == request.sessionKey }?.takeIf { !it.canApprove }
-                ?.let { approveBlocked },
-            terminalHelp = page.sessions.firstOrNull { it.key == request.sessionKey }?.canTerminal != false)
+            }), machine = machine,
+            blockedReason = session?.takeIf { !it.canApprove }?.let { approveBlocked },
+            terminalHelp = session?.canTerminal != false)
+    }
+}
+
+/**
+ * The session and computer a card's sheet reads, looked up in every manager's lists as the card is: a notification's
+ * card may be another assistant's, whose session and computer the page does not list. The page's own session comes
+ * first (it carries what is pending on it), and the hub's computer (the page has placeholders for unknown ones).
+ */
+internal fun cardContext(request: Interaction, pageSessions: List<Session>, pageMachines: List<Machine>,
+    everySession: List<Session>, everyMachine: List<Machine>): Pair<Session?, Machine?> =
+    (pageSessions.firstOrNull { it.key == request.sessionKey } ?: everySession.firstOrNull { it.key == request.sessionKey }) to
+        (everyMachine.firstOrNull { it.id == request.machineId } ?: pageMachines.firstOrNull { it.id == request.machineId })
+
+/**
+ * The cards the page shows: the current assistant's, of the hub group shown. A card names its manager, else it is its
+ * session's (one of a session the list no longer has: its own stamp alone; none: the default's).
+ */
+internal fun shownRequests(requests: List<Interaction>, group: GroupFilter?, assistant: persona.core.contracts.api.CurrentAssistant,
+    sessions: List<Session>): List<Interaction> {
+    val managers = sessions.associate { it.key to it.manager }
+    return requests.filter { request ->
+        (group == null || group.admits(request.machineId)) && assistant.ownsOn(request.machineId, request.manager ?: managers[request.sessionKey])
     }
 }
 
