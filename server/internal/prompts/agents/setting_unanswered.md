@@ -1,1 +1,1 @@
-Nobody answered the approval card for this change (it expired unanswered, or it was closed without a choice): nothing changed. The user did not decline it, so do not say they did. Tell them the change is waiting for their approval, or ask again when they are around.
+The user did not answer the approval card for this change themselves (it expired unanswered, was closed without a choice, or could not reach them): nothing changed. The user did not decline it, so do not say they did. Tell them the change is waiting for their approval, or ask again when they are around.
