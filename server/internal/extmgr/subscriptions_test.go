@@ -97,8 +97,14 @@ func TestSubscriptionGenerate(t *testing.T) {
 		return rec.Code, out
 	}
 	full, watch := principal{ID: "dev_phone", Role: roleFull}, principal{ID: "dev_watch", Role: roleAnswer}
-	if !h.subs.Features().Generate {
-		t.Fatal("features.generate is off")
+	// features.generate is on in the list the apps read, whatever else the manager's options turn on.
+	lrec := httptest.NewRecorder()
+	mux.ServeHTTP(lrec, httptest.NewRequest("GET", "/api/v1/subscriptions", nil).WithContext(withPrincipal(context.Background(), principal{ID: "dev_phone", Role: roleFull})))
+	var list struct {
+		Features subscriptions.Features `json:"features"`
+	}
+	if json.Unmarshal(lrec.Body.Bytes(), &list) != nil || !list.Features.Generate || !h.subs.Features().Generate {
+		t.Fatalf("features.generate is off: %s", lrec.Body.String())
 	}
 	if code, out := call(watch, "/api/v1/subscriptions/-/generate", `{"connector":"x","source":"y"}`); code != http.StatusForbidden || out["code"] != "read_only_device" {
 		t.Fatalf("from an answer-only device: %d %v", code, out)
