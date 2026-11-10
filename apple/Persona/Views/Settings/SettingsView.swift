@@ -140,6 +140,14 @@ struct SettingsView: View {
                         }
                         .settingsListRow(SettingsPage.connectors)
                         .accessibilityIdentifier("settings.connectors")
+                        #if os(iOS)
+                        // What the knowledge base reads and keeps of what the connectors bring (#2217).
+                        NavigationLink(value: SettingsPage.knowledgeSelection) {
+                            SettingsRow(title: String(localized: "Knowledge Selection"), symbol: Theme.Icon.knowledge, tint: Theme.accent)
+                        }
+                        .settingsListRow(SettingsPage.knowledgeSelection)
+                        .accessibilityIdentifier("settings-knowledge-selection")
+                        #endif
                     }
                     .bareListRow()
                 }
@@ -433,6 +441,7 @@ struct SettingsView: View {
             #endif
         }
         else if d.bool(forKey: "openTriageSettings") { p.append(SettingsPage.triage) }
+        else if d.string(forKey: "openKnowledgeSelection") != nil { p.append(SettingsPage.knowledgeSelection) } // (rule | chat | doc: with that sheet)
         else if d.string(forKey: "openAppearance") == "layout" { p.append(SettingsPage.layout) } // Layout (#2530)
         else if let a = d.string(forKey: "openAppearance"), a != "chat" { // persona (or YES, or icon: the icon is the Avatar's) | color | style | scheme
             p.append(a == "color" ? SettingsPage.themeColor : a == "style" ? SettingsPage.style
@@ -508,6 +517,8 @@ enum SettingsPage: Hashable {
     case triage
     /// Settings › Appearance › Layout (#2530): how the Agents list draws its agents.
     case layout
+    /// Settings › Knowledge Selection (docs/assistant/knowledge.md "Selection"): what the knowledge base reads and keeps.
+    case knowledgeSelection
     /// Settings › hub: the hubs paired, by group (docs/protocol/multi-hub.md).
     case hubs
     case hub, skills
@@ -571,8 +582,10 @@ private struct SettingsDestinations: ViewModifier {
         case .language: LanguageSettingsPage()
         #if os(iOS)
         case .layout: LayoutSettingsPage()
+        case .knowledgeSelection: KnowledgeSelectionView()
         #else
         case .layout: EmptyView()
+        case .knowledgeSelection: EmptyView()
         #endif
         #if os(iOS) || os(visionOS)
         case .colorScheme: ColorSchemeSettingsPage()

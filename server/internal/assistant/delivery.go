@@ -165,6 +165,8 @@ func deliveryStage(state string) string {
 // setTaskDelivery keeps d as task id's delivery, with its stages (the same setting), and on the todo.
 func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery) {
 	b := &s.reports
+	b.stageWriting.Lock()
+	defer b.stageWriting.Unlock()
 	b.mu.Lock()
 	if !s.loadStagesLocked(ctx) {
 		b.mu.Unlock()
@@ -177,6 +179,9 @@ func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery
 		return
 	}
 	cur.Delivery = &d
+	if stage := deliveryStage(d.State); stageIndex(stage) > stageIndex(cur.Stage) {
+		cur.Stage = stage
+	}
 	b.stages[id] = cur
 	if st := s.store(); st != nil {
 		if err := st.PutSetting(ctx, reportStagesKey, b.stages); err != nil {
@@ -186,14 +191,10 @@ func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery
 	b.mu.Unlock()
 	s.todos.mu.Lock()
 	if t := s.todos.todos[id]; t != nil {
-		t.Delivery = &d
+		t.Delivery, t.Stage = &d, cur.Stage
 	}
 	s.todos.mu.Unlock()
-	if st := deliveryStage(d.State); st != "" {
-		s.setTaskStage(ctx, id, st, "") // it also tells the apps
-	} else {
-		s.todosChanged(ctx)
-	}
+	s.todosChanged(ctx)
 }
 
 // doneNeedsDelivery: a finished task closes only once live (assistant.done_needs_delivery, off by default).
@@ -237,7 +238,8 @@ func (s *Service) snapshotApprovals(ctx context.Context, web string) []prompts.S
 		if gate == "" {
 			gate = "等用户批准"
 		}
-		out = append(out, prompts.SnapshotApproval{ID: t.ID, Title: t.Title, Stage: deliveryLabels[t.Delivery.State], Gate: gate,
+		out = append(out, prompts.SnapshotApproval{ID: t.ID, Title: clip(oneLine(t.Title), 60), Stage: deliveryLabels[t.Delivery.State],
+			Gate: clip(oneLine(gate), 60),
 			Link: todoLink(web, t.ID)})
 		if len(out) == 10 {
 			break
