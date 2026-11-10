@@ -184,6 +184,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 			return Todo{}, false, err
 		}
 		t.Supervision = &v
+		s.setTaskStageKind(ctx, t.ID, "", "", taskStageKind(false, v.DoneWhen, t.PRURL), false)
 		return t, false, nil
 	}
 	title, retitle := s.adoptedTitle(ctx, c, title, prompt)
@@ -202,6 +203,7 @@ func (s *Service) adoptAgent(ctx context.Context, self string, am Device, c prot
 		s.dropAdoption(ctx, todo.ID, err)
 		return Todo{}, false, fmt.Errorf("supervise it: %w", err)
 	}
+	s.setTaskStageKind(ctx, todo.ID, "", "", taskStageKind(false, doneWhen, todo.PRURL), false)
 	todo.Supervision = &v
 	if err := s.linkTodoAgent(ctx, todo.ID, am.ID, c.SessionID, title, c.Cwd, c.Agent); err != nil {
 		s.dropAdoption(ctx, todo.ID, err)
@@ -607,6 +609,7 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	s.signal(superviseSignal{Todo: t.ID, Kind: sigReport, Key: now.UTC().Format(time.RFC3339Nano), At: now, Machine: machine,
 		Session: session, Report: kind, Detail: text, Evidence: evidence, Step: step, Steps: steps})
 	s.noteProgress(ctx, t.ID, TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()})
+	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
 	// the handoff; progress reports only update the card (the stream stays quiet).
 	if kind != upReportProgress {

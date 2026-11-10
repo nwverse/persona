@@ -1418,8 +1418,8 @@ function TodoDetail({
       <TodoPlanEditor todo={todo} />
       <ReviewChecklist todo={todo} />
 
-      {/* Stage Bar (#2776): progress from plan to verified, from the hub's todo; nothing on hubs that don't send it. */}
-      <TodoStageBar stage={todo.stage} prURL={todo.pr_url} className="mt-4" />
+      {/* Code task stages from the hub; general tasks show only their PR/MR link, when present. */}
+      <TodoStageBar stage={todo.stage} stageKind={todo.stage_kind} prURL={todo.pr_url} className="mt-4" />
 
       {todo.origin && <TaskCompletionCheck todo={todo} />}
 

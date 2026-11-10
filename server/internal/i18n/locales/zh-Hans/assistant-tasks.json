@@ -26,6 +26,7 @@
   "outcome_question": "做完的结论",
   "outcome_pitfall": "踩过的坑",
   "adopt_notes": "收编：{agent} · {machine} · {cwd}",
+  "dispatch_notes": "由 {from_machine} 上的 {from} 派出（dispatch_start）：{machine} · {cwd}",
   "adopt_failed": "收编没成功：{reason}",
   "interrupt_summary": "停下 {agent} · {machine}",
   "start_remedy_notice": "没开起来：「{title}」。{reason}"

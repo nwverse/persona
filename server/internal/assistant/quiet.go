@@ -291,6 +291,7 @@ func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Dev
 // InteractionRaised: an agent of a quiet task asks the user something; the hub pushed nothing.
 func (s *Service) InteractionRaised(ctx context.Context, r InteractionRaised) {
 	ix := r.Interaction
+	s.taskPlanApproval()
 	t, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID)
 	if !ok || !t.Quiet && t.Supervision == nil {
 		return

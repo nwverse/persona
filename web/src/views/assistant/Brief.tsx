@@ -260,7 +260,7 @@ export function BriefCard({ item }: { item: FeedItem }) {
                 <div className="min-w-0 flex-1 text-[13.5px] font-medium [overflow-wrap:anywhere]">{p.title}</div>
                 <Button onClick={() => openPanel({ kind: "task", todo: p.id })}>{t("assistant-brief.open")}</Button>
               </div>
-              <TodoStageBar stage={p.stage} />
+              <TodoStageBar stage={p.stage} stageKind={p.stage_kind} />
             </div>
           ))}
           <More n={body.progress_total - body.progress.length} />
