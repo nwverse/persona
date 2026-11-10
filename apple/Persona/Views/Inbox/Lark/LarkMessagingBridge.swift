@@ -8,6 +8,7 @@ import SwiftUI
 nonisolated enum MessagingSources {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var byHub: [String: String] = [:]
+    nonisolated(unsafe) private static var byManager: [String: String] = [:]
     nonisolated(unsafe) private static var users: [String: (user: String, at: Date)] = [:]
 
     /// The source the Feishu screens use on this hub, if it has one. Kept across launches: a launch that opens a chat
@@ -32,6 +33,28 @@ nonisolated enum MessagingSources {
         return true
     }
 
+    /// A named manager's source on this hub: each manager has its own extensions, so its own sources (docs/assistant/managers.md
+    /// "Clients"). Read through it when its chat opens (`APIClient.readMessagingSource`), kept for this launch; nil until
+    /// one is found. The default's is `source(for:)`.
+    static func source(for hub: URL, manager: String?) -> String? {
+        guard let manager else { return source(for: hub) }
+        lock.lock(); defer { lock.unlock() }
+        let s = byManager[key(hub) + "@" + manager] ?? ""
+        return s.isEmpty ? nil : s
+    }
+
+    /// The named manager's source was found this launch: its chats don't ask again.
+    static func knows(_ hub: URL, manager: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return byManager[key(hub) + "@" + manager] != nil
+    }
+
+    /// Only a source found is kept: with none (an extension restarting lists none for a moment) the next open asks again.
+    static func set(_ source: String, for hub: URL, manager: String) {
+        lock.lock(); defer { lock.unlock() }
+        byManager[key(hub) + "@" + manager] = source
+    }
+
     /// One hub however its address is written (with or without a trailing /): its scheme, host, port and path.
     private static func key(_ url: URL) -> String {
         var path = url.path
@@ -54,8 +77,18 @@ nonisolated enum MessagingSources {
 }
 
 extension APIClient {
-    /// The messaging source the Feishu requests go to; nil: the old /api/v1/lark.
-    var messagingSource: String? { MessagingSources.source(for: config.url) }
+    /// The messaging source the Feishu requests go to, the named manager's own; nil: the old /api/v1/lark.
+    var messagingSource: String? { MessagingSources.source(for: config.url, manager: managerID) }
+
+    /// Reads the named manager's sources through it before its Feishu screens read anything, until one is found this launch
+    /// (the default's are the hub's, `HubLink.refreshMessagingSources`). `features`: the hub's at its last hello.
+    func readMessagingSource(features: Set<String>) async {
+        guard let managerID, features.contains("messaging"), !MessagingSources.knows(config.url, manager: managerID),
+              let raw = try? await request("GET", "/api/v1/messaging"),
+              let list = try? JSON.decoder.decode(ExtensionMessagingSources.self, from: raw),
+              let source = list.sources.first?.id else { return }
+        MessagingSources.set(source, for: config.url, manager: managerID)
+    }
 
     /// A path under the source.
     func messagingPath(_ source: String, _ rest: String) -> String { "/api/v1/messaging/\(source)/" + rest }

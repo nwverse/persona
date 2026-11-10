@@ -72,7 +72,7 @@ struct FeishuDocsCommentsView: View {
             app.toast = Toast(message, style: .error)
         }
         .task {
-            LarkMedia.shared.loadEmojiCatalog()
+            LarkMedia.shared.loadEmojiCatalog(manager: manager, using: app.api)
             guard self.model == nil, let api = app.api?.manager(manager) else { return }
             let m = FeishuDocsCommentsModel(url: url, api: api, target: passage ?? .document)
             #if DEBUG
@@ -180,7 +180,7 @@ struct FeishuDocsThreadCard: View {
                             HStack(spacing: Theme.Space.sm) {
                                 ForEach(rs, id: \.key) { re in
                                     HStack(spacing: Theme.Space.xs) {
-                                        LarkEmojiImage(key: re.key, size: 16)
+                                        LarkEmojiImage(key: re.key, size: 16).environment(\.larkManager, manager)
                                         Text("\(re.count)").font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary)
                                     }
                                     .padding(.horizontal, Theme.Space.sm).padding(.vertical, Theme.Space.xxs)
