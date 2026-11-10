@@ -151,13 +151,15 @@ func (h *Hub) defaultOwner(ctx context.Context) string {
 	return def
 }
 
-// ownersChanged forgets the kept default (the roster or the default changed).
+// ownersChanged forgets the kept default (the roster or the default changed), and the merged inbox answers kept
+// (inbox_answers.go).
 func (h *Hub) ownersChanged() {
 	c := &h.owners
 	c.mu.Lock()
 	c.def = ""
 	c.gen++
 	c.mu.Unlock()
+	h.inboxAnswers.changedAll()
 }
 
 // machineOwner is the manager machine mid belongs to, the only one that may act on it or its sessions.
