@@ -28,5 +28,14 @@
   "verdict_no_rule": "一致するルールなし",
   "verdict_skipped": "スキップ",
   "verdict_error": "エラー",
-  "verdict_unknown": "判断"
+  "verdict_unknown": "判断",
+  "kind_dm": "ダイレクトメッセージ",
+  "kind_mention": "@自分",
+  "kind_group": "グループメッセージ",
+  "kind_bot": "ボット通知",
+  "kind_doc": "ドキュメントのコメント",
+  "skip_senders": "これらの送信者は対象外",
+  "skip_none": "対象外の送信者なし",
+  "skip_placeholder": "送信者の名前（ボットなど）",
+  "skip_add": "追加"
 }

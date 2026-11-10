@@ -61,4 +61,18 @@ describe("Settings › To-dos", () => {
     expect(write?.path).toBe("/todo-rules");
     expect(write?.json).toEqual(expect.objectContaining({ dry_run: false, rules: [expect.objectContaining({ enabled: true, sources: ["larkcli"] })] }));
   });
+  it("picks kinds by name and skips a bot the recent decisions saw", async () => {
+    await act(async () => root.render(<TodoRulesSettings />));
+    const at = (path: string) => pending.find((p) => p.path === path)!;
+    await act(async () => at("/todo-rules").resolve({ rules: [{ id: "r1", name: "Requests", prompt: "asks me", kinds: [] }], dry_run: false }));
+    await act(async () => at("/todo-rules/decisions").resolve({ decisions: [{ at: new Date().toISOString(), item_id: "i1", verdict: "not_todo", kind: "bot", sender: "示例告警机器人", title: "示例告警机器人" }] }));
+    await act(async () => at("/connectors?all=1").resolve({ connectors: [] }));
+    const chip = (name: string) => [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((b) => b.textContent === name)!;
+    await act(async () => chip("私聊").click());
+    await act(async () => chip("机器人通知").click());
+    await act(async () => chip("示例告警机器人").click());
+    await act(async () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("保存规则"))!.click());
+    const write = pending.find((p) => p.method === "PUT");
+    expect(write?.json).toEqual(expect.objectContaining({ rules: [expect.objectContaining({ kinds: ["dm", "bot"], skip_senders: ["示例告警机器人"] })] }));
+  });
 });

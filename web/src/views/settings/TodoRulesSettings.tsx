@@ -12,6 +12,7 @@ type TodoRule = {
   enabled?: boolean;
   sources?: string[];
   kinds?: string[];
+  skip_senders?: string[];
   prompt: string;
 };
 
@@ -22,6 +23,7 @@ type TodoRuleDecision = {
   item_id: string;
   source?: string;
   kind?: string;
+  sender?: string;
   title?: string;
   rule_name?: string;
   verdict: string;
@@ -31,8 +33,6 @@ type TodoRuleDecision = {
 
 const blankRule = (): TodoRule => ({ id: `rule_${Date.now()}`, name: "", enabled: true, sources: [], kinds: [], prompt: "" });
 
-const splitValues = (value: string) => value.split(",").map((v) => v.trim()).filter(Boolean);
-const joinValues = (value?: string[]) => (value ?? []).join(", ");
 
 /** The sources a rule can pick: the hub's connectors (mail and Lark included), plus any id the rule already names that
  *  the hub no longer reports, so saving never drops it silently. */
@@ -43,10 +43,45 @@ function sourceChoices(connectors: HubConnector[], picked: string[]): { id: stri
 }
 
 function SourcePicker({ connectors, value, disabled, onChange }: { connectors: HubConnector[]; value: string[]; disabled?: boolean; onChange: (next: string[]) => void }) {
-  const choices = sourceChoices(connectors, value);
+  return <ChipPicker label={t("settings-todorules.sources")} choices={sourceChoices(connectors, value)} value={value} empty={t("settings-todorules.all_sources")} disabled={disabled} onChange={onChange} />;
+}
+
+/** The Inbox kinds a rule can pick, by their names; a kind the rule names that this list lacks still shows. */
+const KINDS = ["dm", "mention", "group", "bot", "doc"];
+function kindChoices(picked: string[]): { id: string; name: string }[] {
+  const out = KINDS.map((id) => ({ id, name: t(`settings-todorules.kind_${id}`) }));
+  for (const id of picked) if (!out.some((c) => c.id === id)) out.push({ id, name: id });
+  return out;
+}
+
+/** Senders a rule leaves alone: the bots recent decisions saw, plus any name typed in. A chip on is skipped. */
+function SkipSenders({ seen, value, disabled, onChange }: { seen: string[]; value: string[]; disabled?: boolean; onChange: (next: string[]) => void }) {
+  const [name, setName] = useState("");
+  const choices = [...new Set([...value, ...seen])].map((n) => ({ id: n, name: n }));
+  const typed = name.trim();
+  return (
+    <div className="flex flex-col gap-1.5">
+      <ChipPicker label={t("settings-todorules.skip_senders")} choices={choices} value={value} empty={t("settings-todorules.skip_none")} disabled={disabled} onChange={onChange} />
+      <form
+        className="flex items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!typed || value.includes(typed)) return;
+          setName("");
+          onChange([...value, typed]);
+        }}
+      >
+        <input className={settingsInputClass} value={name} placeholder={t("settings-todorules.skip_placeholder")} aria-label={t("settings-todorules.skip_add")} onChange={(e) => setName(e.target.value)} disabled={disabled} />
+        <Button type="submit" tone="secondary" icon="plus" disabled={disabled || !typed || value.includes(typed)}>{t("settings-todorules.skip_add")}</Button>
+      </form>
+    </div>
+  );
+}
+
+function ChipPicker({ label, choices, value, empty, disabled, onChange }: { label: string; choices: { id: string; name: string }[]; value: string[]; empty: string; disabled?: boolean; onChange: (next: string[]) => void }) {
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((v) => v !== id) : [...value, id]);
   return (
-    <div role="group" aria-label={t("settings-todorules.sources")} className="flex flex-wrap items-center gap-1.5">
+    <div role="group" aria-label={label} className="flex flex-wrap items-center gap-1.5">
       {choices.map((c) => {
         const on = value.includes(c.id);
         return (
@@ -65,7 +100,7 @@ function SourcePicker({ connectors, value, disabled, onChange }: { connectors: H
           </button>
         );
       })}
-      {value.length === 0 && <span className="text-[11.5px] text-ink-3">{t("settings-todorules.all_sources")}</span>}
+      {value.length === 0 && <span className="text-[11.5px] text-ink-3">{empty}</span>}
     </div>
   );
 }
@@ -142,6 +177,8 @@ export function TodoRulesSettings() {
   }
 
   const rules = config.rules ?? [];
+  // Bots the recent decisions saw, newest first: the senders a rule most likely wants to skip.
+  const botSenders = [...new Set(decisions.filter((d) => d.kind === "bot" && d.sender).map((d) => d.sender!))];
   return (
     <>
       <Group title={t("settings-todorules.title")} footer={t("settings-todorules.footer")} anchor="todo-rules">
@@ -167,10 +204,14 @@ export function TodoRulesSettings() {
               {t("settings-todorules.sources")}
               <SourcePicker connectors={connectors} value={rule.sources ?? []} onChange={(sources) => updateRule(index, { sources })} disabled={busy} />
             </div>
-            <label className="flex flex-col gap-1 text-[11.5px] text-ink-3">
+            <div className="flex flex-col gap-1 text-[11.5px] text-ink-3">
               {t("settings-todorules.kinds")}
-              <input className={settingsInputClass} value={joinValues(rule.kinds)} placeholder={t("settings-todorules.all_kinds")} onChange={(e) => updateRule(index, { kinds: splitValues(e.target.value) })} disabled={busy} />
-            </label>
+              <ChipPicker label={t("settings-todorules.kinds")} choices={kindChoices(rule.kinds ?? [])} value={rule.kinds ?? []} empty={t("settings-todorules.all_kinds")} disabled={busy} onChange={(kinds) => updateRule(index, { kinds })} />
+            </div>
+            <div className="flex flex-col gap-1 text-[11.5px] text-ink-3">
+              {t("settings-todorules.skip_senders")}
+              <SkipSenders seen={botSenders} value={rule.skip_senders ?? []} disabled={busy} onChange={(skip_senders) => updateRule(index, { skip_senders })} />
+            </div>
           </div>
         ))}
         <div className="flex flex-wrap justify-end gap-2 px-4 py-3">

@@ -28,5 +28,14 @@
   "verdict_no_rule": "No matching rule",
   "verdict_skipped": "Skipped",
   "verdict_error": "Error",
-  "verdict_unknown": "Decision"
+  "verdict_unknown": "Decision",
+  "kind_dm": "Direct messages",
+  "kind_mention": "@me",
+  "kind_group": "Group messages",
+  "kind_bot": "Bot notifications",
+  "kind_doc": "Document comments",
+  "skip_senders": "Leave these senders alone",
+  "skip_none": "No sender skipped",
+  "skip_placeholder": "A sender's name, a bot's for example",
+  "skip_add": "Add"
 }

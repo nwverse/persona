@@ -30,20 +30,24 @@ const (
 	todoRuleModelWait  = 90 * time.Second
 )
 
-// TodoRule is one user-authored rule. Empty Sources or Kinds match every source or kind.
+// TodoRule is one user-authored rule. Empty Sources or Kinds match every source or kind; an item whose sender is in
+// SkipSenders (a bot's name, say) never matches.
 type TodoRule struct {
 	ID      string   `json:"-"` // manager bookkeeping; the public rule shape stays name/enabled/sources/kinds/prompt
 	Name    string   `json:"name"`
 	Enabled *bool    `json:"enabled,omitempty"`
 	Sources []string `json:"sources,omitempty"`
 	Kinds   []string `json:"kinds,omitempty"`
-	Prompt  string   `json:"prompt"`
+	// SkipSenders are sender names (as the Inbox item shows them) this rule leaves alone.
+	SkipSenders []string `json:"skip_senders,omitempty"`
+	Prompt      string   `json:"prompt"`
 }
 
 func (r TodoRule) enabled() bool { return r.Enabled == nil || *r.Enabled }
 
 func (r TodoRule) matches(it *InboxItem) bool {
-	return r.enabled() && matchesTodoRuleValue(r.Sources, it.Source) && matchesTodoRuleValue(r.Kinds, it.Kind) && strings.TrimSpace(r.Prompt) != ""
+	return r.enabled() && matchesTodoRuleValue(r.Sources, it.Source) && matchesTodoRuleValue(r.Kinds, it.Kind) &&
+		!slices.Contains(r.SkipSenders, strings.TrimSpace(it.Sender)) && strings.TrimSpace(r.Prompt) != ""
 }
 
 func matchesTodoRuleValue(values []string, value string) bool {
@@ -62,6 +66,7 @@ type TodoRuleDecision struct {
 	ItemID   string    `json:"item_id"`
 	Source   string    `json:"source,omitempty"`
 	Kind     string    `json:"kind,omitempty"`
+	Sender   string    `json:"sender,omitempty"`
 	Title    string    `json:"title,omitempty"`
 	RuleID   string    `json:"rule_id,omitempty"`
 	RuleName string    `json:"rule_name,omitempty"`
@@ -183,7 +188,7 @@ func normalizeTodoRule(r TodoRule, i int) (TodoRule, error) {
 		}
 		return out
 	}
-	r.Sources, r.Kinds = normalize(r.Sources), normalize(r.Kinds)
+	r.Sources, r.Kinds, r.SkipSenders = normalize(r.Sources), normalize(r.Kinds), normalize(r.SkipSenders)
 	return r, nil
 }
 
@@ -224,6 +229,7 @@ func cloneTodoRuleConfig(in TodoRuleConfig) TodoRuleConfig {
 		out.Rules[i] = r
 		out.Rules[i].Sources = slices.Clone(r.Sources)
 		out.Rules[i].Kinds = slices.Clone(r.Kinds)
+		out.Rules[i].SkipSenders = slices.Clone(r.SkipSenders)
 		if r.Enabled != nil {
 			on := *r.Enabled
 			out.Rules[i].Enabled = &on
@@ -373,7 +379,7 @@ func (s *Service) processedTodoRule(id, last string) (todoRuleProcessed, bool) {
 
 func (s *Service) recordTodoRuleDecision(ctx context.Context, it *InboxItem, rule TodoRule, verdict, reason, todoID string) error {
 	now := time.Now().UTC()
-	d := TodoRuleDecision{At: now, ItemID: it.ID, Source: it.Source, Kind: it.Kind, Title: clip(oneLine(it.Title), 200), RuleID: rule.ID, RuleName: rule.Name,
+	d := TodoRuleDecision{At: now, ItemID: it.ID, Source: it.Source, Kind: it.Kind, Sender: clip(oneLine(it.Sender), 100), Title: clip(oneLine(it.Title), 200), RuleID: rule.ID, RuleName: rule.Name,
 		Verdict: verdict, Reason: clip(oneLine(strings.TrimSpace(reason)), 200), TodoID: todoID}
 	s.todoRules.mu.Lock()
 	s.todoRules.state.Decisions = append(s.todoRules.state.Decisions, d)

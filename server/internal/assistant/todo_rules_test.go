@@ -198,3 +198,23 @@ func TestTodoRuleSettingsAndDecisionLog(t *testing.T) {
 func TestGoldenTodoRulePrompt(t *testing.T) {
 	golden(t, "todo_rule.system", prompts.RenderTodoRule(prompts.TodoRule{RulePrompt: "Someone asks me to review or reply.", Source: "example", Kind: "review_requested", Sender: "Example sender", Title: "Review request", Context: "Please review this change and reply."}))
 }
+
+func TestTodoRuleSkipsListedSendersAndKeepsTheList(t *testing.T) {
+	on := true
+	r, err := normalizeTodoRule(TodoRule{Name: "Requests", Enabled: &on, Kinds: []string{"bot", "dm"}, SkipSenders: []string{" Build bot ", "Build bot", ""}, Prompt: "requests"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.SkipSenders) != 1 || r.SkipSenders[0] != "Build bot" {
+		t.Fatalf("skip senders = %q", r.SkipSenders)
+	}
+	if r.matches(&InboxItem{Source: "larkcli", Kind: "bot", Sender: "Build bot"}) {
+		t.Fatal("a listed sender matched")
+	}
+	if !r.matches(&InboxItem{Source: "larkcli", Kind: "bot", Sender: "Alert bot"}) {
+		t.Fatal("another bot did not match")
+	}
+	if got := cloneTodoRuleConfig(TodoRuleConfig{Rules: []TodoRule{r}}).Rules[0].SkipSenders; len(got) != 1 {
+		t.Fatalf("clone lost skip senders: %q", got)
+	}
+}

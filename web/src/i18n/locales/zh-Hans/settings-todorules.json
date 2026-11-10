@@ -28,5 +28,14 @@
   "verdict_no_rule": "没有匹配规则",
   "verdict_skipped": "已跳过",
   "verdict_error": "出错",
-  "verdict_unknown": "判断"
+  "verdict_unknown": "判断",
+  "kind_dm": "私聊",
+  "kind_mention": "@我",
+  "kind_group": "群消息",
+  "kind_bot": "机器人通知",
+  "kind_doc": "文档评论",
+  "skip_senders": "不处理这些发送者",
+  "skip_none": "不跳过任何发送者",
+  "skip_placeholder": "输入发送者名称，比如某个机器人",
+  "skip_add": "添加"
 }
