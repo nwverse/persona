@@ -1,18 +1,22 @@
 //! The simulator backend, for development and testing: the same operations on an iOS simulator on this
 //! computer, through `xcrun simctl`, so everything above the bridge can run end to end without a phone.
 //!
-//! It never boots, shuts down or erases a simulator: booting is `scripts/app/sim-boot.sh`'s job. Touches, keys
-//! and the accessibility tree answer `unsupported` until the test runner that provides them exists.
+//! It never boots, shuts down or erases a simulator: booting is `scripts/app/sim-boot.sh`'s job. The
+//! accessibility tree and input go through the test runner (`runner.rs`, `sim-runner/`), started on first use
+//! (or with `serve`) and stopped with the bridge.
 
 use std::path::Path;
+use std::time::Duration;
 
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
 use crate::error::{BridgeError, Code};
-use crate::geometry::Screen;
-use crate::ops::{Action, AppTarget, ShotOptions};
+use crate::geometry::{self, Orientation, Point, Screen};
+use crate::ops::{Action, AppTarget, KeyInput, ShotOptions, SwipeSpec};
 use crate::record::SimRecord;
 use crate::run::Phone;
+use crate::runner::Runner as TestRunner;
 use crate::shot;
 
 /// What one command printed.
@@ -25,14 +29,14 @@ pub struct Output {
 
 /// Runs `xcrun` and `plutil`; tests use a stand-in.
 #[allow(async_fn_in_trait)]
-pub trait Runner {
+pub trait Commands {
     async fn run(&self, program: &str, args: &[String], stdin: Option<&[u8]>, env: &[(String, String)]) -> Output;
 }
 
 /// The real commands, killed if the request they serve is abandoned.
 pub struct System;
 
-impl Runner for System {
+impl Commands for System {
     async fn run(&self, program: &str, args: &[String], stdin: Option<&[u8]>, env: &[(String, String)]) -> Output {
         use tokio::io::AsyncWriteExt as _;
         let mut cmd = tokio::process::Command::new(program);
@@ -99,7 +103,7 @@ pub struct SimInfo {
     pub device_type: String,
 }
 
-async fn find<R: Runner>(runner: &R, udid: &str) -> Result<Option<SimInfo>, BridgeError> {
+async fn find<R: Commands>(runner: &R, udid: &str) -> Result<Option<SimInfo>, BridgeError> {
     let o = runner
         .run("xcrun", &strings(&["simctl", "list", "devices", "-j"]), None, &[])
         .await;
@@ -142,12 +146,12 @@ fn parse_devices(v: &Value) -> Vec<SimInfo> {
 }
 
 /// Whether `udid` is one of this computer's simulators: `pair` then makes a simulator record.
-pub async fn is_simulator<R: Runner>(runner: &R, udid: &str) -> bool {
+pub async fn is_simulator<R: Commands>(runner: &R, udid: &str) -> bool {
     matches!(find(runner, udid).await, Ok(Some(_)))
 }
 
 /// `pair` for a simulator: writes a record naming it. No USB or trust involved.
-pub async fn pair<R: Runner>(runner: &R, udid: &str, out: &Path) -> Result<Value, BridgeError> {
+pub async fn pair<R: Commands>(runner: &R, udid: &str, out: &Path) -> Result<Value, BridgeError> {
     let info = find(runner, udid)
         .await?
         .ok_or_else(|| BridgeError::new(Code::NotFound, format!("no simulator {udid} on this computer")))?;
@@ -165,7 +169,7 @@ pub async fn pair<R: Runner>(runner: &R, udid: &str, out: &Path) -> Result<Value
     }))
 }
 
-async fn getenv<R: Runner>(runner: &R, udid: &str, name: &str) -> Option<String> {
+async fn getenv<R: Commands>(runner: &R, udid: &str, name: &str) -> Option<String> {
     let o = runner
         .run("xcrun", &strings(&["simctl", "getenv", udid, name]), None, &[])
         .await;
@@ -173,24 +177,44 @@ async fn getenv<R: Runner>(runner: &R, udid: &str, name: &str) -> Option<String>
     (o.ok && !v.is_empty()).then_some(v)
 }
 
-pub struct SimDevice<R: Runner> {
-    runner: R,
+pub struct SimDevice<R: Commands> {
+    cmd: R,
     info: SimInfo,
     model: Option<String>,
     build: Option<String>,
     screen: Option<Screen>,
+    /// The built test runner, `None` when it is not built.
+    runner_build: Option<std::path::PathBuf>,
+    runner: Option<TestRunner>,
+    /// How long an operation waits for the runner to start listening.
+    runner_wait: Duration,
+    /// The app last seen in front, asked about first next time.
+    front: Option<String>,
+    /// Bundle IDs of the apps a user can see, read once: helper processes that also run as apps (widget
+    /// renderers, Spotlight) are never the app in front.
+    visible: Option<std::collections::HashSet<String>>,
 }
 
-impl<R: Runner> SimDevice<R> {
+/// How the simulator backend should handle its test runner.
+pub struct RunnerPlan {
+    /// The built runner (`runner::locate`), `None` when it is not built.
+    pub build: Option<std::path::PathBuf>,
+    /// Start it right away (`serve`) rather than on first use (`call`).
+    pub start_now: bool,
+    /// How long an operation waits for it to start listening.
+    pub wait: Duration,
+}
+
+impl<R: Commands> SimDevice<R> {
     /// Opens the simulator a record names; it has to be booted already.
-    pub async fn connect(runner: R, record: &SimRecord, udid: &str) -> Result<Self, BridgeError> {
+    pub async fn connect(cmd: R, record: &SimRecord, udid: &str, plan: RunnerPlan) -> Result<Self, BridgeError> {
         if !record.udid.eq_ignore_ascii_case(udid) {
             return Err(BridgeError::new(
                 Code::WrongDevice,
                 format!("the record is for simulator {}, not {udid}", record.udid),
             ));
         }
-        let info = find(&runner, &record.udid).await?.ok_or_else(|| {
+        let info = find(&cmd, &record.udid).await?.ok_or_else(|| {
             BridgeError::new(
                 Code::PairingRejected,
                 format!(
@@ -209,7 +233,7 @@ impl<R: Runner> SimDevice<R> {
                 ),
             ));
         }
-        let env = |name| getenv(&runner, &info.udid, name);
+        let env = |name| getenv(&cmd, &info.udid, name);
         let model = env("SIMULATOR_MODEL_IDENTIFIER").await;
         let build = env("SIMULATOR_RUNTIME_BUILD_VERSION").await;
         let num = |v: Option<String>| v.and_then(|v| v.parse::<f64>().ok()).filter(|n| *n > 0.0);
@@ -224,20 +248,183 @@ impl<R: Runner> SimDevice<R> {
             }),
             _ => None,
         };
+        let runner = match (&plan.build, plan.start_now) {
+            // A runner that fails to start says why at first use.
+            (Some(b), true) => TestRunner::start(b, &info.udid).ok(),
+            _ => None,
+        };
         Ok(Self {
-            runner,
+            cmd,
             info,
             model,
             build,
             screen,
+            runner_build: plan.build,
+            runner,
+            runner_wait: plan.wait,
+            front: None,
+            visible: None,
         })
     }
 
+    /// The test runner, started and connected.
+    async fn runner(&mut self) -> Result<&mut TestRunner, BridgeError> {
+        let Some(build) = &self.runner_build else {
+            return Err(BridgeError::new(
+                Code::Unsupported,
+                "the simulator test runner is not built: run native/iphone-bridge/build.sh --sim-runner",
+            ));
+        };
+        if self.runner.is_none() {
+            self.runner = Some(TestRunner::start(build, &self.info.udid)?);
+        }
+        let runner = self.runner.as_mut().expect("just started");
+        runner.ready(Instant::now() + self.runner_wait).await?;
+        Ok(runner)
+    }
+
+    /// Apps running on the simulator, most recently started first, the last one seen in front before them:
+    /// the runner asks each whether it is in front, so the likely ones go first.
+    async fn candidates(&mut self) -> Vec<String> {
+        if self.visible.is_none() {
+            self.visible = self
+                .apps()
+                .await
+                .ok()
+                .map(|apps| apps.into_iter().map(|a| a.0).collect());
+        }
+        let o = self
+            .simctl(&["simctl", "spawn", &self.info.udid, "launchctl", "list"])
+            .await;
+        let mut apps = running_apps(&String::from_utf8_lossy(&o.stdout));
+        apps.sort_by_key(|a| std::cmp::Reverse(a.1));
+        let mut ids: Vec<String> = apps
+            .into_iter()
+            .map(|(id, _)| id)
+            .filter(|id| self.visible.as_ref().is_none_or(|v| v.contains(id)))
+            .collect();
+        ids.dedup();
+        if let Some(front) = &self.front
+            && let Some(i) = ids.iter().position(|id| id == front)
+        {
+            let id = ids.remove(i);
+            ids.insert(0, id);
+        }
+        ids
+    }
+
+    /// One runner request; a dropped runner is forgotten, so the next request starts another.
+    async fn ask(&mut self, req: Value) -> Result<Value, BridgeError> {
+        let result = self.runner().await?.call(req).await;
+        if result.as_ref().is_err_and(|e| e.code == Code::Disconnected) {
+            if let Some(r) = self.runner.take() {
+                r.stop().await;
+            }
+            return Err(BridgeError::new(
+                Code::ServiceUnavailable,
+                "the simulator test runner stopped; the next request starts it again",
+            ));
+        }
+        result
+    }
+
+    fn frame(&self) -> (f64, f64) {
+        self.screen
+            .map_or((f64::MAX, f64::MAX), |s| s.frame(Orientation::Portrait))
+    }
+
+    /// A point must be on screen, in either orientation (the runner knows which).
+    fn check(&self, p: Point) -> Result<Value, BridgeError> {
+        let (w, h) = self.frame();
+        let side = w.max(h);
+        if !p.x.is_finite() || !p.y.is_finite() || p.x < 0.0 || p.y < 0.0 || p.x > side || p.y > side {
+            return Err(BridgeError::bad_request(format!(
+                "({}, {}) is outside the screen",
+                p.x, p.y
+            )));
+        }
+        Ok(json!({"x": p.x, "y": p.y}))
+    }
+
+    async fn ax_tree(&mut self, max_depth: u32, max_nodes: u32, include_offscreen: bool) -> Result<Value, BridgeError> {
+        let candidates = self.candidates().await;
+        let tree = self
+            .ask(json!({
+                "op": "ax_tree", "candidates": candidates,
+                "max_depth": max_depth, "max_nodes": max_nodes, "include_offscreen": include_offscreen,
+            }))
+            .await?;
+        self.front = tree["app"]["bundle_id"].as_str().map(str::to_owned);
+        Ok(tree)
+    }
+
+    async fn input(&mut self, action: Action) -> Result<Value, BridgeError> {
+        let req = match action {
+            Action::Tap { at, count } => {
+                let mut r = self.check(at)?;
+                r["op"] = json!("tap");
+                r["count"] = json!(count);
+                r
+            }
+            Action::LongPress { at, duration_ms } => {
+                let mut r = self.check(at)?;
+                r["op"] = json!("long_press");
+                r["duration_ms"] = json!(duration_ms);
+                r
+            }
+            Action::Drag {
+                from,
+                to,
+                duration_ms,
+                hold_ms,
+            } => {
+                json!({"op": "drag", "from": self.check(from)?, "to": self.check(to)?, "duration_ms": duration_ms, "hold_ms": hold_ms})
+            }
+            Action::Swipe { spec, duration_ms } => {
+                let (a, b) = match spec {
+                    SwipeSpec::Ends(a, b) => (a, b),
+                    SwipeSpec::Direction { dir, origin, distance } => {
+                        geometry::swipe_ends(dir, origin, distance, self.frame())
+                    }
+                };
+                json!({"op": "drag", "from": self.check(a)?, "to": self.check(b)?, "duration_ms": duration_ms, "hold_ms": 50})
+            }
+            Action::Keys(KeyInput::Text(text)) => {
+                json!({"op": "type", "text": text, "candidates": self.candidates().await})
+            }
+            Action::Keys(KeyInput::Key { name, repeat, .. }) => {
+                json!({"op": "key", "key": name, "repeat": repeat, "candidates": self.candidates().await})
+            }
+            Action::Button { button, .. } => match crate::keys::button_name(&button) {
+                Some("home") => json!({"op": "home", "candidates": self.candidates().await}),
+                _ => {
+                    return Err(BridgeError::new(
+                        Code::Unsupported,
+                        "a simulator has no lock or volume buttons to press",
+                    ));
+                }
+            },
+            _ => unreachable!("only input comes here"),
+        };
+        self.ask(req).await?;
+        Ok(json!({}))
+    }
+
     async fn simctl(&self, args: &[&str]) -> Output {
-        self.runner.run("xcrun", &strings(args), None, &[]).await
+        self.cmd.run("xcrun", &strings(args), None, &[]).await
     }
 
     fn device_info(&self) -> Value {
+        let runner = self.runner_build.is_some();
+        let mut notes = serde_json::Map::new();
+        notes.insert(
+            "simulated".into(),
+            json!("an iOS simulator on this computer: the development and testing backend"),
+        );
+        if !runner {
+            notes.insert("ax_tree".into(), json!(Code::Unsupported.as_str()));
+            notes.insert("input".into(), json!(Code::Unsupported.as_str()));
+        }
         let frame = self.screen.map(|s| s.frame(crate::geometry::Orientation::Portrait));
         json!({
             "udid": self.info.udid,
@@ -255,12 +442,8 @@ impl<R: Runner> SimDevice<R> {
             "battery": Value::Null,
             "simulated": true,
             "transport": "simulator",
-            "capabilities": {"screenshot": true, "ax_tree": false, "input": false, "apps": true},
-            "notes": {
-                "ax_tree": Code::Unsupported.as_str(),
-                "input": Code::Unsupported.as_str(),
-                "simulated": "an iOS simulator on this computer: the development and testing backend",
-            },
+            "capabilities": {"screenshot": true, "ax_tree": runner, "input": runner, "apps": true},
+            "notes": notes,
         })
     }
 
@@ -329,7 +512,7 @@ impl<R: Runner> SimDevice<R> {
         }
         // simctl prints an old-style (OpenStep) property list; plutil turns it into XML.
         let xml = self
-            .runner
+            .cmd
             .run(
                 "plutil",
                 &strings(&["-convert", "xml1", "-o", "-", "-"]),
@@ -361,7 +544,7 @@ impl<R: Runner> SimDevice<R> {
     }
 
     async fn launch_app(
-        &self,
+        &mut self,
         bundle_id: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
@@ -376,7 +559,7 @@ impl<R: Runner> SimDevice<R> {
         cmd.extend(args);
         // simctl hands SIMCTL_CHILD_ variables to the app without the prefix.
         let env: Vec<(String, String)> = env.into_iter().map(|(k, v)| (format!("SIMCTL_CHILD_{k}"), v)).collect();
-        let o = self.runner.run("xcrun", &cmd, None, &env).await;
+        let o = self.cmd.run("xcrun", &cmd, None, &env).await;
         if !o.ok {
             if !self.installed(&bundle_id).await.unwrap_or(true) {
                 return Err(BridgeError::new(
@@ -385,6 +568,9 @@ impl<R: Runner> SimDevice<R> {
                 ));
             }
             return Err(BridgeError::internal(format!("launch {bundle_id}: {}", complaint(&o))));
+        }
+        if self.visible.as_ref().is_some_and(|v| !v.contains(&bundle_id)) {
+            self.visible = None; // installed since it was read
         }
         let pid = parse_launch(&String::from_utf8_lossy(&o.stdout), &bundle_id);
         Ok(json!({"bundle_id": bundle_id, "pid": pid}))
@@ -452,6 +638,18 @@ fn parse_apps(xml: &[u8]) -> Result<Vec<App>, BridgeError> {
     Ok(apps)
 }
 
+/// App processes in `launchctl list` inside the simulator: `(bundle ID, pid)`.
+fn running_apps(list: &str) -> Vec<(String, u32)> {
+    list.lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let pid: u32 = f.next()?.parse().ok()?;
+            let app = f.nth(1)?.strip_prefix("UIKitApplication:")?;
+            Some((app.split('[').next().unwrap_or(app).to_owned(), pid))
+        })
+        .collect()
+}
+
 /// "com.example.App: 2047" → 2047.
 fn parse_launch(out: &str, bundle_id: &str) -> Option<u32> {
     out.lines()
@@ -461,16 +659,10 @@ fn parse_launch(out: &str, bundle_id: &str) -> Option<u32> {
 /// The app whose process is `pid`, from `launchctl list` inside the simulator
 /// ("2047  0  UIKitApplication:com.apple.Preferences[9791][rb-legacy]").
 fn app_of_pid(list: &str, pid: u32) -> Option<String> {
-    list.lines().find_map(|l| {
-        let mut f = l.split_whitespace();
-        let p: u32 = f.next()?.parse().ok()?;
-        let label = f.nth(1)?;
-        let app = label.strip_prefix("UIKitApplication:")?;
-        (p == pid).then(|| app.split('[').next().unwrap_or(app).to_owned())
-    })
+    running_apps(list).into_iter().find(|a| a.1 == pid).map(|a| a.0)
 }
 
-impl<R: Runner> Phone for SimDevice<R> {
+impl<R: Commands> Phone for SimDevice<R> {
     async fn run(&mut self, action: Action) -> Result<Value, BridgeError> {
         match action {
             Action::DeviceInfo => Ok(self.device_info()),
@@ -483,24 +675,26 @@ impl<R: Runner> Phone for SimDevice<R> {
                 kill_existing,
             } => self.launch_app(bundle_id, args, env, kill_existing).await,
             Action::TerminateApp(t) => self.terminate_app(t).await,
-            Action::AxTree => Err(BridgeError::new(
-                Code::Unsupported,
-                "the simulator backend has no accessibility tree yet; use screenshot",
-            )),
-            _ => Err(BridgeError::new(
-                Code::Unsupported,
-                "the simulator backend cannot touch, type or press buttons yet",
-            )),
+            Action::AxTree {
+                max_depth,
+                max_nodes,
+                include_offscreen,
+            } => self.ax_tree(max_depth, max_nodes, include_offscreen).await,
+            input => self.input(input).await,
         }
     }
 
-    fn idle_at(&self) -> Option<tokio::time::Instant> {
+    fn idle_at(&self) -> Option<Instant> {
         None
     }
 
     async fn idle(&mut self) {}
 
-    async fn close(&mut self) {}
+    async fn close(&mut self) {
+        if let Some(r) = self.runner.take() {
+            r.stop().await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -531,7 +725,7 @@ mod tests {
         }
     }
 
-    impl Runner for Fake {
+    impl Commands for Fake {
         async fn run(&self, program: &str, args: &[String], stdin: Option<&[u8]>, env: &[(String, String)]) -> Output {
             let line = format!("{program} {}", args.join(" "));
             let mut logged = line.clone();
@@ -613,8 +807,16 @@ mod tests {
             .answer("xcrun simctl listapps", true, APPS, "")
     }
 
+    fn no_runner() -> RunnerPlan {
+        RunnerPlan {
+            build: None,
+            start_now: false,
+            wait: Duration::from_secs(1),
+        }
+    }
+
     async fn open(fake: Fake) -> SimDevice<Fake> {
-        SimDevice::connect(fake, &SimRecord { udid: UDID.into() }, UDID)
+        SimDevice::connect(fake, &SimRecord { udid: UDID.into() }, UDID, no_runner())
             .await
             .unwrap()
     }
@@ -636,7 +838,7 @@ mod tests {
     #[tokio::test]
     async fn needs_a_booted_simulator_and_never_boots_one() {
         let fake = Fake::default().answer("xcrun simctl list devices", true, &devices("Shutdown"), "");
-        let err = SimDevice::connect(fake, &SimRecord { udid: UDID.into() }, UDID)
+        let err = SimDevice::connect(fake, &SimRecord { udid: UDID.into() }, UDID, no_runner())
             .await
             .err()
             .unwrap();
@@ -644,13 +846,13 @@ mod tests {
         assert!(err.message.contains("sim-boot.sh"));
 
         let fake = Fake::default().answer("xcrun simctl list devices", true, r#"{"devices":{}}"#, "");
-        let err = SimDevice::connect(fake, &SimRecord { udid: UDID.into() }, UDID)
+        let err = SimDevice::connect(fake, &SimRecord { udid: UDID.into() }, UDID, no_runner())
             .await
             .err()
             .unwrap();
         assert_eq!(err.code, Code::PairingRejected);
 
-        let err = SimDevice::connect(Fake::default(), &SimRecord { udid: UDID.into() }, "OTHER")
+        let err = SimDevice::connect(Fake::default(), &SimRecord { udid: UDID.into() }, "OTHER", no_runner())
             .await
             .err()
             .unwrap();
@@ -719,7 +921,7 @@ mod tests {
             .unwrap();
         assert_eq!(launched, json!({"bundle_id": "com.example.App", "pid": 2047}));
         assert!(
-            d.runner
+            d.cmd
                 .ran
                 .borrow()
                 .iter()
@@ -754,14 +956,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn input_and_ax_tree_are_unsupported() {
+    async fn input_and_ax_tree_need_the_built_runner() {
         let mut d = open(booted()).await;
         let tap = Action::Tap {
             at: crate::geometry::Point { x: 1.0, y: 1.0 },
             count: 1,
         };
         assert_eq!(d.run(tap).await.unwrap_err().code, Code::Unsupported);
-        assert_eq!(d.run(Action::AxTree).await.unwrap_err().code, Code::Unsupported);
+        let ax = Action::AxTree {
+            max_depth: 0,
+            max_nodes: 10,
+            include_offscreen: false,
+        };
+        let err = d.run(ax).await.unwrap_err();
+        assert_eq!(err.code, Code::Unsupported);
+        assert!(err.message.contains("--sim-runner"), "says how to get it");
     }
 
     #[tokio::test]
@@ -780,6 +989,20 @@ mod tests {
             crate::record::Stored::Simulator(r) if r.udid == UDID
         ));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_visible_apps_can_be_in_front() {
+        let fake = booted().answer(
+            format!("xcrun simctl spawn {UDID} launchctl list"),
+            true,
+            "PID\tStatus\tLabel\n50\t0\tUIKitApplication:com.apple.chrono.WidgetRenderer-Default[1][x]\n40\t0\tUIKitApplication:com.example.App[2][x]\n30\t0\tUIKitApplication:com.apple.Preferences[3][x]\n",
+            "",
+        );
+        let mut d = open(fake).await;
+        assert_eq!(d.candidates().await, ["com.example.App", "com.apple.Preferences"]);
+        d.front = Some("com.apple.Preferences".into());
+        assert_eq!(d.candidates().await, ["com.apple.Preferences", "com.example.App"]);
     }
 
     #[test]

@@ -104,6 +104,13 @@ pub struct Button {
     pub press_ms: u64,
 }
 
+/// The wire name of a button `button` returned.
+pub fn button_name(b: &Button) -> Option<&'static str> {
+    ["home", "lock", "volume_up", "volume_down"]
+        .into_iter()
+        .find(|n| button(n).is_some_and(|x| x.usage == b.usage))
+}
+
 pub fn button(name: &str) -> Option<Button> {
     const CONSUMER: u64 = 0x0C;
     let (usage, press_ms) = match name {

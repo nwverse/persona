@@ -619,10 +619,15 @@ impl Device {
     }
 
     async fn keys(&mut self, input: KeyInput) -> Result<(), BridgeError> {
+        // Only ASCII can be typed as key presses: refuse anything else before a key goes down.
+        let strokes = match &input {
+            KeyInput::Text(text) => Some(crate::keys::strokes(text)?),
+            KeyInput::Key { .. } => None,
+        };
         self.ready_for_input().await?;
         match input {
-            KeyInput::Text(strokes) => self.type_strokes(&strokes).await,
-            KeyInput::Key { usage, repeat } => {
+            KeyInput::Text(_) => self.type_strokes(&strokes.unwrap_or_default()).await,
+            KeyInput::Key { usage, repeat, .. } => {
                 let one = [Stroke { usage, shift: false }];
                 for _ in 0..repeat {
                     self.type_strokes(&one).await?;
@@ -790,7 +795,7 @@ impl Phone for Device {
         let result = match action {
             Action::DeviceInfo => self.device_info().await,
             Action::Screenshot(opts) => self.screenshot(opts).await,
-            Action::AxTree => Err(BridgeError::new(
+            Action::AxTree { .. } => Err(BridgeError::new(
                 Code::Unsupported,
                 "the accessibility tree is not available over this connection yet; use screenshot",
             )),

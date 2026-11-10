@@ -24,8 +24,8 @@ Status: v1. **Nothing here has been verified on a real device yet** (see "Verifi
 - It is optional for the node, like Cua Driver for a Mac: not part of personad's build or CI. The node looks for it at
   `$PERSONA_IPHONE_BRIDGE`, then in `PATH`, then in `$PERSONA_HOME/bin` (`~/.persona/bin/`), then next to `personad`; without it the
   capability reports "not installed".
-- Build: `native/iphone-bridge/build.sh` (format, lint, tests, release build; `--install` copies it to `~/.persona/bin/`). Needs a Rust
-  toolchain.
+- Build: `native/iphone-bridge/build.sh` (format, lint, tests, release build; `--sim-runner` adds the simulator test runner; `--install`
+  copies them to `~/.persona/bin/`). Needs a Rust toolchain.
 
 ## Invocation
 
@@ -200,7 +200,7 @@ ready event.
 
 ### `ax_tree`
 
-**`unsupported` in v1.** The library this is built on has no client for the phone's accessibility services, and an inspector protocol
+**On a phone, `unsupported` in v1** (the simulator backend has it, see "Simulator backend"). The library this is built on has no client for the phone's accessibility services, and an inspector protocol
 written blind without a phone to test on would most likely not work. The assistant reads screenshots instead. The answer shape below is
 reserved so the node can be written against it; see "Open questions".
 
@@ -294,8 +294,58 @@ line.
   `list_apps` (`simctl listapps`), `launch_app` (`simctl launch`; `env` is passed through as `SIMCTL_CHILD_…`), `terminate_app`
   (`simctl terminate`; by pid only for an app process of that simulator, found with its `launchctl list`, never any other process on the
   computer).
-- **Not yet**: `ax_tree` and input (touches, keys, buttons) answer `unsupported`; `simctl` has no input. The orientation cannot be read
-  either: `portrait`, or `landscape_right` when a capture is wider than tall.
+- **Accessibility tree and input** go through a test runner (`native/iphone-bridge/sim-runner/`), a UI-test bundle using only public
+  XCUIAutomation API, run inside the simulator with `xcodebuild test-without-building`. No window opens on the computer and no macOS
+  Accessibility permission is needed. Build it with `native/iphone-bridge/build.sh --sim-runner` (needs Xcode and XcodeGen; simulator only,
+  no signing or team); it lands next to the binary as `persona-iphone-sim-runner/` (`--install` copies both), or set
+  `PERSONA_IPHONE_SIM_RUNNER` to its folder. Without it, `capabilities.ax_tree` / `input` are `false` and those operations answer
+  `unsupported`, naming the build command.
+- **The runner's lifetime**: `serve` starts it right away, `call` on first use; it takes about 10–25 seconds to start, and an operation
+  waits for it (in `serve` up to 15 seconds, then `service_unavailable`: try again). The bridge picks a free port, the runner listens only
+  on `127.0.0.1` there, and the bridge passes it a random token: the runner answers only the one connection that sends it first. It ends
+  when the bridge disconnects or exits (even if killed) or says `quit`; the bridge also kills `xcodebuild` if it lingers. Nothing keeps
+  running after the bridge. A runner that dies mid-session is started again by the next request.
+- **What the runner does**: `ax_tree` is the foreground app's element snapshot, plus any system alert (a permission prompt, which takes
+  every touch and the Home button until answered); bare unlabelled containers and elements with no size are folded away. The foreground
+  app is the first of the simulator's running, user-visible apps (most recent first) that reports itself in front, else the home screen;
+  about 0.3 seconds. Touches are XCUICoordinate taps, presses and drags at screen points; `keys {text}` types any text, Chinese and emoji
+  included; `keys {key}` presses the named key and needs a field with keyboard focus (`bad_request` otherwise); `button home` goes to the
+  home screen (falling back to bringing SpringBoard forward when a runtime ignores the synthesized press). `lock` and the volume buttons
+  answer `unsupported`: a simulator has none. Orientation comes from the runner in `ax_tree`; `screenshot` still reports `portrait`, or
+  `landscape_right` when a capture is wider than tall.
+
+### The simulator is not the phone
+
+Results from the simulator backend say nothing about a real iPhone. The differences that matter:
+
+| | Simulator backend | Phone |
+| --- | --- | --- |
+| Accessibility tree | yes, through the test runner | `unsupported` in v1 |
+| `keys {text}` | any text | printable ASCII, tab and newline only |
+| Input path | XCUIAutomation inside the simulator | HID events over the tunnel while a display stream is held open; not verified on a real device |
+| `button` | `home` only | `home`, `lock`, `volume_up`, `volume_down` |
+| Connection | none: local `simctl` and a loopback runner | RemotePairing, encrypted tunnel, service directory; not verified on a real device |
+| Developer Mode, disk image, lock state | not applicable (`null`) | read from the phone |
+
+### Try it
+
+On a computer with Xcode, XcodeGen and a Rust toolchain:
+
+```sh
+native/iphone-bridge/build.sh --sim-runner
+B=native/iphone-bridge/target/release/persona-iphone-bridge
+SIM=$(scripts/app/sim-boot.sh "Persona iPhone Bridge <issue>")      # your own simulator
+$B pair --udid "$SIM" --out /tmp/sim.record
+$B serve --udid "$SIM" --record /tmp/sim.record                     # waits on stdin; type one request per line:
+{"id":"1","op":"screenshot","args":{"out_file":"/tmp/sim.jpg"}}
+{"id":"2","op":"launch_app","args":{"bundle_id":"com.apple.Preferences"}}
+{"id":"3","op":"ax_tree"}
+{"id":"4","op":"tap","args":{"x":201,"y":822}}                       # the center of an element's frame from ax_tree
+{"id":"5","op":"keys","args":{"text":"Wi-Fi"}}
+{"id":"6","op":"button","args":{"name":"home"}}
+```
+
+End with Ctrl-D: `serve` stops the runner and exits 0.
 
 ## Verification status
 
@@ -313,7 +363,7 @@ to a phone has run against one:
 | Input gate (display stream), touch coordinates and rotation, keys, buttons | not verified on a real device |
 | `usb-list`, `pair` over USB (consent prompt, `altIRK`), `match` against a real advertisement | not verified on a real device; `usb-list` answered `[]` from a Mac's usbmuxd with no phone attached, `match` is unit-tested against the library's tag function |
 | `ax_tree` | `unsupported` |
-| Simulator backend: pair, `device_info`, `screenshot`, `list_apps`, `launch_app`, `terminate_app`, `serve` | checked on an iOS 27.2 simulator (Xcode 27.2) |
+| Simulator backend: pair, `device_info`, `screenshot`, apps, `ax_tree` (with a system alert), tap, `keys` (ASCII and Chinese), swipe, `button home`, `serve`, runner cleanup after exit and after `kill -9` | checked on an iOS 27.2 simulator (Xcode 27.2) |
 
 ## Open questions
 

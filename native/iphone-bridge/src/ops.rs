@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 
 use crate::error::BridgeError;
 use crate::geometry::{Direction, Point};
-use crate::keys::{self, Button, Stroke};
+use crate::keys::{self, Button};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFormat {
@@ -32,8 +32,10 @@ pub enum SwipeSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyInput {
-    Text(Vec<Stroke>),
-    Key { usage: u64, repeat: u32 },
+    /// Any text; a backend that can only type ASCII refuses the rest before typing anything.
+    Text(String),
+    /// `name` as on the wire, `usage` its HID usage.
+    Key { name: String, usage: u64, repeat: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,7 +48,11 @@ pub enum AppTarget {
 pub enum Action {
     DeviceInfo,
     Screenshot(ShotOptions),
-    AxTree,
+    AxTree {
+        max_depth: u32,
+        max_nodes: u32,
+        include_offscreen: bool,
+    },
     Tap {
         at: Point,
         count: u32,
@@ -121,7 +127,11 @@ pub fn parse(op: &str, args: &Map<String, Value>) -> Result<Action, BridgeError>
             max_dimension: a.uint_in("max_dimension", 0, 0, 16_384)? as u32,
             out_file: a.str_opt("out_file")?.map(str::to_owned),
         }),
-        "ax_tree" => Action::AxTree,
+        "ax_tree" => Action::AxTree {
+            max_depth: a.uint_in("max_depth", 0, 0, 1_000)? as u32,
+            max_nodes: a.uint_in("max_nodes", 2_000, 1, 20_000)? as u32,
+            include_offscreen: a.bool_opt("include_offscreen")?.unwrap_or(false),
+        },
         "tap" => Action::Tap {
             at: a.point_here()?,
             count: a.uint_in("count", 1, 1, MAX_TAPS)? as u32,
@@ -161,9 +171,10 @@ pub fn parse(op: &str, args: &Map<String, Value>) -> Result<Action, BridgeError>
                 if text.is_empty() || text.chars().count() > MAX_TEXT {
                     return Err(BridgeError::bad_request(format!("text: 1 to {MAX_TEXT} characters")));
                 }
-                KeyInput::Text(keys::strokes(text)?)
+                KeyInput::Text(text.to_owned())
             }
             (None, Some(name)) => KeyInput::Key {
+                name: name.to_owned(),
                 usage: keys::named_key(name)
                     .ok_or_else(|| BridgeError::bad_request(format!("key: unknown key {name:?}")))?,
                 repeat: a.uint_in("repeat", 1, 1, MAX_REPEAT)? as u32,
@@ -319,7 +330,6 @@ impl Args<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Code;
     use serde_json::json;
 
     fn args(v: Value) -> Map<String, Value> {
@@ -421,19 +431,23 @@ mod tests {
     #[test]
     fn keys_take_text_or_one_key() {
         assert!(
-            matches!(parse("keys", &args(json!({"text": "ok"}))).unwrap(), Action::Keys(KeyInput::Text(s)) if s.len() == 2)
+            matches!(parse("keys", &args(json!({"text": "ok"}))).unwrap(), Action::Keys(KeyInput::Text(s)) if s == "ok")
         );
         assert_eq!(
             parse("keys", &args(json!({"key": "backspace", "repeat": 3}))).unwrap(),
-            Action::Keys(KeyInput::Key { usage: 0x2A, repeat: 3 })
+            Action::Keys(KeyInput::Key {
+                name: "backspace".into(),
+                usage: 0x2A,
+                repeat: 3
+            })
         );
         assert!(parse("keys", &args(json!({"text": "a", "key": "return"}))).is_err());
         assert!(parse("keys", &Map::new()).is_err());
         assert!(parse("keys", &args(json!({"text": ""}))).is_err());
-        assert_eq!(
-            parse("keys", &args(json!({"text": "日本"}))).unwrap_err().code,
-            Code::Unsupported
-        );
+        assert!(matches!(
+            parse("keys", &args(json!({"text": "日本"}))).unwrap(),
+            Action::Keys(KeyInput::Text(_))
+        ));
     }
 
     #[test]

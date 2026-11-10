@@ -10,6 +10,7 @@ mod ops;
 mod pair;
 mod record;
 mod run;
+mod runner;
 mod shot;
 mod sim;
 mod wire;
@@ -84,7 +85,7 @@ impl Flags {
 /// The phone a record names: over the network, or a simulator here.
 enum AnyPhone {
     Network(Box<Device>),
-    Simulator(SimDevice<System>),
+    Simulator(Box<SimDevice<System>>),
 }
 
 impl Phone for AnyPhone {
@@ -118,9 +119,26 @@ impl Phone for AnyPhone {
 }
 
 /// Opens what `record` names. A network record needs the phone's address; a simulator record does not.
-async fn open(udid: &str, record: &Path, host: Option<&str>, port: u16) -> Result<AnyPhone, BridgeError> {
+async fn open(
+    udid: &str,
+    record: &Path,
+    host: Option<&str>,
+    port: u16,
+    serving: bool,
+) -> Result<AnyPhone, BridgeError> {
     match Stored::read(record)? {
-        Stored::Simulator(r) => Ok(AnyPhone::Simulator(SimDevice::connect(System, &r, udid).await?)),
+        Stored::Simulator(r) => {
+            let plan = sim::RunnerPlan {
+                build: runner::locate(),
+                start_now: serving,
+                // In `serve` an operation answers soon while the runner is still starting; a `call` waits
+                // for it within its own deadline.
+                wait: Duration::from_secs(if serving { 15 } else { 110 }),
+            };
+            Ok(AnyPhone::Simulator(Box::new(
+                SimDevice::connect(System, &r, udid, plan).await?,
+            )))
+        }
         Stored::Network(r) => {
             let host =
                 host.ok_or_else(|| BridgeError::bad_request("the phone's address is required for this record"))?;
@@ -179,7 +197,7 @@ async fn serve(args: &[String]) -> Outcome {
         Err(e) => return failed(&e),
     };
     let connected = tokio::time::timeout(Duration::from_millis(timeout), async {
-        let mut device = open(&udid, &record, host.as_deref(), port).await?;
+        let mut device = open(&udid, &record, host.as_deref(), port, true).await?;
         let info = device.run(Action::DeviceInfo).await?;
         Ok::<_, BridgeError>((device, info))
     })
@@ -208,6 +226,7 @@ async fn call() -> Outcome {
             Path::new(&spec.pairing_file),
             spec.address.as_deref(),
             spec.port(),
+            false,
         )
         .await
     })
