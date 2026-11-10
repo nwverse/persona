@@ -71,6 +71,7 @@
   "close_agent_title": "Close this agent?",
   "close_agent": "Close agent",
   "close_agent_detail": "This quits Claude in “{where}” on {machine} and closes the tab. The transcript stays, and you can resume it later from Recent.",
+  "close_runtime_detail": "This ends “{title}” on {machine}. The conversation history stays available.",
   "route_no_images": "Images can't be sent straight to a task yet. Remove the image and try again.",
   "not_live": "Not live",
   "not_live_reload": "Reload",
