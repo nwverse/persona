@@ -108,6 +108,8 @@ class ProviderEditShotsTest {
             page = "edit"; rule.waitForIdle()
             rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Advanced"))
             rule.onNodeWithText("Advanced").performClick()
+            // Bring what "Advanced" opened into view, not only its header.
+            rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Proxy"))
             capture("provider-edit-$suffix")
             page = "computers"; rule.waitForIdle()
             rule.onNodeWithText("Per-computer keys").performClick()

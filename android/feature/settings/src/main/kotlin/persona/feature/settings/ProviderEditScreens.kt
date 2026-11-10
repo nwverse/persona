@@ -305,15 +305,18 @@ internal fun ProviderComputersPage(
             val own = ownServiceDetected(kind, agent)
             item("switches") {
                 Column(Modifier.padding(top = Tokens.Space.m)) {
-                    JGroupItem(GroupPosition.of(0, if (own) 2 else 1)) {
+                    // Each switch on its own with its hint in full under it: the hints are longer than a row's two-line subtitle.
+                    JGroupItem(GroupPosition.Single) {
                         JSwitchRow(stringResource(R.string.settings_pscope_push), scope.delivery == Delivery.Push,
-                            { onChange(scope.copy(delivery = if (it) Delivery.Push else Delivery.OnDemand)) },
-                            subtitle = stringResource(R.string.settings_pscope_push_hint), enabled = editable)
+                            { onChange(scope.copy(delivery = if (it) Delivery.Push else Delivery.OnDemand)) }, enabled = editable)
                     }
-                    if (own) JGroupItem(GroupPosition.of(1, 2)) {
-                        JSwitchRow(stringResource(R.string.settings_pscope_use_own), scope.ownServiceOf(defaultUse) == OwnService.Use,
-                            { onChange(scope.copy(ownService = if (it) OwnService.Use else OwnService.Skip)) },
-                            subtitle = stringResource(R.string.settings_pscope_use_own_hint), enabled = editable)
+                    SettingsCaption(stringResource(R.string.settings_pscope_push_hint), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
+                    if (own) {
+                        JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.s)) {
+                            JSwitchRow(stringResource(R.string.settings_pscope_use_own), scope.ownServiceOf(defaultUse) == OwnService.Use,
+                                { onChange(scope.copy(ownService = if (it) OwnService.Use else OwnService.Skip)) }, enabled = editable)
+                        }
+                        SettingsCaption(stringResource(R.string.settings_pscope_use_own_hint), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s))
                     }
                 }
             }
