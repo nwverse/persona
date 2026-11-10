@@ -263,27 +263,6 @@ export function groupsHolding(nodes: WorkNode[], call: string): string[] | null 
   return null;
 }
 
-/** The runs of work the hub folded (fold_work) that hold the call of a workflow run it lists (#3434): its card belongs in
- *  the open, so the chat fetches what those folds stand for. A fold names no calls, so it is told by time: the run's
- *  start is its call's own time (the node takes it from the call's line), which falls within [fold.ts, fold.until] of
- *  the fold holding it. Two folds can both hold that instant (the lines of one message split by its words): both are
- *  fetched rather than the wrong one. `calls`: the runs' calls and start times (ms); a call among the steps needs nothing. */
-export function foldsHoldingCalls(steps: Step[], calls: ReadonlyMap<string, number>): Item[] {
-  if (!calls.size) return [];
-  const present = new Set(steps.flatMap((s) => (s.kind === "tool" && s.use.tool_use_id ? [s.use.tool_use_id] : [])));
-  const out: Item[] = [];
-  for (const [call, at] of calls) {
-    if (present.has(call) || !Number.isFinite(at)) continue;
-    for (const s of steps) {
-      if (s.kind !== "fold") continue;
-      const from = tsMs(s.item.ts);
-      const until = tsMs(s.item.fold?.until) ?? from;
-      if (from !== null && until !== null && at >= from && at <= until && !out.includes(s.item)) out.push(s.item);
-    }
-  }
-  return out;
-}
-
 /** Every nonempty summary can be inspected, even a single running tool call. */
 export const groupOpens = (g: WorkGroupNode): boolean => g.children.length > 0;
 

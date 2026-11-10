@@ -100,7 +100,7 @@ func (e *setupEnv) noDocker() error {
 	if !e.portFree(5432) {
 		return e.fail("database", "没有 Docker；这台电脑的 5432 端口上像是有 Postgres",
 			"在它里面建用户 persona 和库 persona，把 postgres://persona:<密码>@127.0.0.1:5432/persona 写进 "+e.hubJSON()+
-				" 的 database_url，再重跑（docs/server/server.md「数据库」）；或者装 Docker 后重跑")
+				" 的 database_url，再重跑（docs/server/server.md「Database」）；或者装 Docker 后重跑")
 	}
 	if e.goos == "darwin" {
 		return e.fail("database", "这台电脑还缺数据库", "装 Docker Desktop 或 OrbStack 后重跑这条命令")

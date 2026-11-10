@@ -1,0 +1,901 @@
+{
+  "schema_version": 1,
+  "max_entries": 20,
+  "max_cards": 3,
+  "cases": [
+    {
+      "name": "record_into_empty",
+      "operation": "record",
+      "description": "The first start is the only entry.",
+      "input": {
+        "before": [],
+        "setup": {
+          "machine": "mac-a",
+          "cwd": "/code/persona",
+          "launcher": "",
+          "model": "opus",
+          "agent_type": "claude",
+          "mode": "plan",
+          "effort": "high",
+          "at": "2026-11-09T03:00:00Z"
+        }
+      },
+      "expected": {
+        "after": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "record_moves_the_same_setup_first",
+      "operation": "record",
+      "description": "The same setup again (only at differs) is not added twice: it moves first with the new time.",
+      "input": {
+        "before": [
+          {
+            "machine": "work-b",
+            "cwd": "/code/notes-app",
+            "launcher": "claude",
+            "model": "sonnet",
+            "agent_type": "claude",
+            "mode": "bypassPermissions",
+            "effort": "xhigh",
+            "at": "2026-11-09T02:00:00Z"
+          },
+          {
+            "machine": "home-c",
+            "cwd": "/code/data-pipeline",
+            "launcher": "codex",
+            "model": "gpt-5.5",
+            "agent_type": "codex",
+            "mode": "",
+            "effort": "",
+            "at": "2026-11-09T01:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          }
+        ],
+        "setup": {
+          "machine": "mac-a",
+          "cwd": "/code/persona",
+          "launcher": "",
+          "model": "opus",
+          "agent_type": "claude",
+          "mode": "plan",
+          "effort": "high",
+          "at": "2026-11-09T05:00:00Z"
+        }
+      },
+      "expected": {
+        "after": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T05:00:00Z"
+          },
+          {
+            "machine": "work-b",
+            "cwd": "/code/notes-app",
+            "launcher": "claude",
+            "model": "sonnet",
+            "agent_type": "claude",
+            "mode": "bypassPermissions",
+            "effort": "xhigh",
+            "at": "2026-11-09T02:00:00Z"
+          },
+          {
+            "machine": "home-c",
+            "cwd": "/code/data-pipeline",
+            "launcher": "codex",
+            "model": "gpt-5.5",
+            "agent_type": "codex",
+            "mode": "",
+            "effort": "",
+            "at": "2026-11-09T01:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "record_keeps_twenty",
+      "operation": "record",
+      "description": "A 21st setup drops the oldest (last) one.",
+      "input": {
+        "before": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p00",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-01T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p01",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-02T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p02",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-03T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p03",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-04T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p04",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-05T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p05",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-06T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p06",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-07T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p07",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-08T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p08",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-01T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p09",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-02T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p10",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-03T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p11",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-04T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p12",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-05T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p13",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-06T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p14",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-07T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p15",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-08T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p16",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-01T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p17",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-02T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p18",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-03T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p19",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-04T00:00:00Z"
+          }
+        ],
+        "setup": {
+          "machine": "mac-a",
+          "cwd": "/code/persona",
+          "launcher": "",
+          "model": "opus",
+          "agent_type": "claude",
+          "mode": "plan",
+          "effort": "high",
+          "at": "2026-11-09T03:00:00Z"
+        }
+      },
+      "expected": {
+        "after": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p00",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-01T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p01",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-02T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p02",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-03T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p03",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-04T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p04",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-05T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p05",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-06T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p06",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-07T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p07",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-08T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p08",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-01T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p09",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-02T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p10",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-03T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p11",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-04T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p12",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-05T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p13",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-06T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p14",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-07T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p15",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-08T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p16",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-01T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p17",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-02T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/p18",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-03T00:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "record_differs_by_model",
+      "operation": "record",
+      "description": "Another model is another setup.",
+      "input": {
+        "before": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          }
+        ],
+        "setup": {
+          "machine": "mac-a",
+          "cwd": "/code/persona",
+          "launcher": "",
+          "model": "sonnet",
+          "agent_type": "claude",
+          "mode": "plan",
+          "effort": "high",
+          "at": "2026-11-09T06:00:00Z"
+        }
+      },
+      "expected": {
+        "after": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "sonnet",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T06:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cards_skip_unknown_machines",
+      "operation": "cards",
+      "description": "A machine the hub no longer lists is skipped.",
+      "input": {
+        "entries": [
+          {
+            "machine": "gone-d",
+            "cwd": "/code/old",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-08T00:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          },
+          {
+            "machine": "work-b",
+            "cwd": "/code/notes-app",
+            "launcher": "claude",
+            "model": "sonnet",
+            "agent_type": "claude",
+            "mode": "bypassPermissions",
+            "effort": "xhigh",
+            "at": "2026-11-09T02:00:00Z"
+          }
+        ],
+        "machines": [
+          {
+            "id": "mac-a",
+            "online": true
+          },
+          {
+            "id": "work-b",
+            "online": true
+          }
+        ]
+      },
+      "expected": {
+        "cards": [
+          {
+            "index": 1,
+            "online": true
+          },
+          {
+            "index": 2,
+            "online": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "cards_at_most_three",
+      "operation": "cards",
+      "description": "Four known setups show the first three.",
+      "input": {
+        "entries": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          },
+          {
+            "machine": "work-b",
+            "cwd": "/code/notes-app",
+            "launcher": "claude",
+            "model": "sonnet",
+            "agent_type": "claude",
+            "mode": "bypassPermissions",
+            "effort": "xhigh",
+            "at": "2026-11-09T02:00:00Z"
+          },
+          {
+            "machine": "home-c",
+            "cwd": "/code/data-pipeline",
+            "launcher": "codex",
+            "model": "gpt-5.5",
+            "agent_type": "codex",
+            "mode": "",
+            "effort": "",
+            "at": "2026-11-09T01:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/extra",
+            "launcher": "",
+            "model": "",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-08T12:00:00Z"
+          }
+        ],
+        "machines": [
+          {
+            "id": "mac-a",
+            "online": true
+          },
+          {
+            "id": "work-b",
+            "online": true
+          },
+          {
+            "id": "home-c",
+            "online": true
+          }
+        ]
+      },
+      "expected": {
+        "cards": [
+          {
+            "index": 0,
+            "online": true
+          },
+          {
+            "index": 1,
+            "online": true
+          },
+          {
+            "index": 2,
+            "online": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "cards_offline_shown",
+      "operation": "cards",
+      "description": "An offline machine's setup is a card that can't be picked.",
+      "input": {
+        "entries": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          },
+          {
+            "machine": "home-c",
+            "cwd": "/code/data-pipeline",
+            "launcher": "codex",
+            "model": "gpt-5.5",
+            "agent_type": "codex",
+            "mode": "",
+            "effort": "",
+            "at": "2026-11-09T01:00:00Z"
+          }
+        ],
+        "machines": [
+          {
+            "id": "mac-a",
+            "online": true
+          },
+          {
+            "id": "home-c",
+            "online": false
+          }
+        ]
+      },
+      "expected": {
+        "cards": [
+          {
+            "index": 0,
+            "online": true
+          },
+          {
+            "index": 1,
+            "online": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_of_the_latest_same_launcher",
+      "operation": "model",
+      "description": "The machine's latest entry with the same launcher gives the model (another launcher's newer entry does not).",
+      "input": {
+        "entries": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "codex",
+            "model": "gpt-5.5",
+            "agent_type": "codex",
+            "mode": "",
+            "effort": "",
+            "at": "2026-11-09T04:30:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/other",
+            "launcher": "",
+            "model": "haiku",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-09T04:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          }
+        ],
+        "machine": "mac-a",
+        "launcher": ""
+      },
+      "expected": {
+        "model": "haiku"
+      }
+    },
+    {
+      "name": "model_other_launcher_is_default",
+      "operation": "model",
+      "description": "No entry with that launcher: the default.",
+      "input": {
+        "entries": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          },
+          {
+            "machine": "mac-a",
+            "cwd": "/code/other",
+            "launcher": "",
+            "model": "haiku",
+            "agent_type": "claude",
+            "mode": "default",
+            "effort": "",
+            "at": "2026-11-09T04:00:00Z"
+          }
+        ],
+        "machine": "mac-a",
+        "launcher": "claude"
+      },
+      "expected": {
+        "model": ""
+      }
+    },
+    {
+      "name": "model_unknown_machine",
+      "operation": "model",
+      "description": "A machine with no entries: the default.",
+      "input": {
+        "entries": [
+          {
+            "machine": "mac-a",
+            "cwd": "/code/persona",
+            "launcher": "",
+            "model": "opus",
+            "agent_type": "claude",
+            "mode": "plan",
+            "effort": "high",
+            "at": "2026-11-09T03:00:00Z"
+          },
+          {
+            "machine": "work-b",
+            "cwd": "/code/notes-app",
+            "launcher": "claude",
+            "model": "sonnet",
+            "agent_type": "claude",
+            "mode": "bypassPermissions",
+            "effort": "xhigh",
+            "at": "2026-11-09T02:00:00Z"
+          }
+        ],
+        "machine": "new-z",
+        "launcher": ""
+      },
+      "expected": {
+        "model": ""
+      }
+    }
+  ]
+}

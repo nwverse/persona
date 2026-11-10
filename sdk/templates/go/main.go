@@ -1,4 +1,4 @@
-// {{name}}: a Persona extension (docs/extensions/extensions.md "Writing an extension: SDK, templates and CLI"). A page on the main navigation with a
+// {{name}}: a Persona extension (docs/extensions/extensions.md "Writing extensions: SDK, templates and command line"). A page on the main navigation with a
 // list you can search and open, and a card on the overview. Replace the sample items with your service's.
 package main
 

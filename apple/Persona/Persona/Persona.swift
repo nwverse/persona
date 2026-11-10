@@ -54,7 +54,7 @@ nonisolated struct Persona: Identifiable, Sendable, Hashable {
     }
 }
 
-/// persona.json, format 1 (docs/apple/persona.md「格式」).
+/// persona.json, format 1 (docs/apple/persona.md「Pack format」).
 nonisolated struct PersonaManifest: Codable, Sendable, Hashable {
     static let format = 1
 

@@ -31,7 +31,7 @@ class LexerTest(unittest.TestCase):
         self.assertEqual([p.split(":")[0] for p in apple_comments.problems("a.swift", src)], ["1", "2"])
 
     def test_quoted_headings_are_kept(self):
-        ok = '/// See docs/apple/ios.md「界面语言」; the hub sends 「终端等你处理」.\n'
+        ok = '/// See spec/README.md「夹具约定」; the hub sends 「终端等你处理」.\n'
         self.assertEqual(apple_comments.problems("a.swift", ok), [])
         self.assertEqual(len(apple_comments.problems("a.swift", "// The 形象's icon\n")), 1)
         self.assertEqual(len(apple_comments.problems("a.swift", "// 日本語のコメント\n")), 1)

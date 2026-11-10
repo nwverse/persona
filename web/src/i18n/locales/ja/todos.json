@@ -52,6 +52,7 @@
   "space_no_agent": "エージェントなし",
   "space_remove": "外す",
   "no_agents": "まだエージェントに任せていません。下のボタンから始めましょう",
+  "no_agents_done": "現在エージェントはいません。エージェントに任せるには、まず再開してください。",
   "ended": "終了",
   "start_failed": "起動できませんでした：{error}",
   "remove": "削除",
@@ -98,7 +99,6 @@
   "notes_optional": "説明（任意）",
   "new_notes_placeholder": "詳細。エージェントに任せるときにコンテキストとして一緒に送られます…",
   "create": "作成",
-  "launched": "エージェントを起動して任せました",
   "launch_failed": "起動できませんでした：{error}",
   "sent": "送信してエージェントに任せました",
   "send_failed": "送信できませんでした：{error}",
@@ -205,6 +205,7 @@
   "calendar_next": "次へ",
   "calendar_show_done": "完了を表示",
   "calendar_all_day": "終日",
+  "calendar_move_failed": "日時を変更できませんでした：{error}",
   "calendar_was_due": "期限切れ {when}",
   "calendar_more_one": "他 {count} 件",
   "calendar_more_other": "他 {count} 件",
@@ -212,5 +213,9 @@
   "calendar_undated_other": "期限のない ToDo が {count} 件あり、カレンダーには出ません。",
   "calendar_see_list": "リストで見る →",
   "calendar_back": "カレンダーに戻る",
-  "calendar_close": "閉じる"
+  "calendar_close": "閉じる",
+  "ask_ok": "OK",
+  "ask_answer": "チャットで答える",
+  "ask_answer_hint": "おすすめがないので、元の会話で答えてください。",
+  "ask_failed": "できませんでした：{error}"
 }

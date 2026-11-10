@@ -18,13 +18,30 @@ import (
 // pair wires two Muxes back to back over rpc.Peers, the way the hub and a node are.
 func pair(t *testing.T) (hub, node *Mux, hubPeer *rpc.Peer) {
 	t.Helper()
+	return pairWith(t, nodeHooks{})
+}
+
+// nodeHooks watch the node's side of a pair: beforeOpen runs in a dial once it has connected, dialed once it has
+// answered, onEvent after the node's Mux took an event.
+type nodeHooks struct {
+	beforeOpen, dialed func()
+	onEvent            func(event string, params json.RawMessage)
+}
+
+func pairWith(t *testing.T, hooks nodeHooks) (hub, node *Mux, hubPeer *rpc.Peer) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	a2bR, a2bW := io.Pipe()
 	b2aR, b2aW := io.Pipe()
 	hp, np := rpc.New("h", a2bW), rpc.New("n", b2aW)
 	hub, node = New(hp.Notify), New(np.Notify)
 	hp.OnEvent = func(e string, p json.RawMessage) { hub.Event(e, p) }
-	np.OnEvent = func(e string, p json.RawMessage) { node.Event(e, p) }
+	np.OnEvent = func(e string, p json.RawMessage) {
+		node.Event(e, p)
+		if hooks.onEvent != nil {
+			hooks.onEvent(e, p)
+		}
+	}
 	// The node's side of a dial: open and start the stream on a connection to addr, then answer.
 	np.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
 		var p struct{ ID, Addr string }
@@ -32,6 +49,12 @@ func pair(t *testing.T) (hub, node *Mux, hubPeer *rpc.Peer) {
 		c, err := net.Dial("tcp", p.Addr)
 		if err != nil {
 			return nil, err
+		}
+		if hooks.dialed != nil {
+			defer hooks.dialed()
+		}
+		if hooks.beforeOpen != nil {
+			hooks.beforeOpen()
 		}
 		if err := node.Open(p.ID); err != nil {
 			c.Close()

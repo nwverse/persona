@@ -101,8 +101,9 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     /** Download authenticated media and return a content URI suitable for a read grant. */
     suspend fun downloadFile(file: LarkPart.File): String
 
-    suspend fun momentsPost(postId: String): persona.core.contracts.LarkMomentsPost = error("Moments post unavailable")
-    suspend fun momentsComments(postId: String): List<persona.core.contracts.LarkMomentsComment> = emptyList()
+    /** A Moments post, read through [manager] (the chat or item its link was opened from; the default's, or null, names none). */
+    suspend fun momentsPost(postId: String, manager: String? = null): persona.core.contracts.LarkMomentsPost = error("Moments post unavailable")
+    suspend fun momentsComments(postId: String, manager: String? = null): List<persona.core.contracts.LarkMomentsComment> = emptyList()
     suspend fun urlPreview(messageId: String, url: String): persona.core.contracts.LarkUrlPreview? = null
     suspend fun react(messageId: String, key: String, remove: Boolean) = Unit
     suspend fun cardAction(messageId: String, actionId: String) = Unit
@@ -110,22 +111,31 @@ interface InboxRepository : persona.core.contracts.api.InboxRepository {
     suspend fun quickReactions(): List<String> = emptyList()
     suspend fun emojis(): kotlinx.serialization.json.JsonObject? = null
 
-    /** "Muted" (docs/assistant/inbox.md "Mute"): what the user muted, in every source, newest first. */
-    suspend fun inboxMutes(): List<InboxMute> = error("静音尚未接入") // i18n-ignore: developer error for a repository without the hub
+    /**
+     * "Muted" (docs/assistant/inbox.md "Muting"): what the user muted, in every source, newest first; [manager]'s (each
+     * keeps its own; named even when it is the default, which may move before an Unmute), else the default's.
+     */
+    suspend fun inboxMutes(manager: String? = null): List<InboxMute> = error("静音尚未接入") // i18n-ignore: developer error for a repository without the hub
     /** "Mute this repository / chat / sender": the item and the open ones of its source it covers are done at once; a failure puts them back. */
     suspend fun mute(record: InboxRecord, option: InboxMuteOption): Unit = error("静音尚未接入") // i18n-ignore: developer error
-    suspend fun unmute(id: String): Unit = error("静音尚未接入") // i18n-ignore: developer error
+    /** Takes a mute back on [manager] (the one "Muted" read it from), else the default. */
+    suspend fun unmute(id: String, manager: String? = null): Unit = error("静音尚未接入") // i18n-ignore: developer error
 
-    /** "Rules" (docs/assistant/inbox.md "Policies"): every source's rules, newest first; [record]'s manager's, else the default's. */
-    suspend fun inboxPolicies(record: InboxRecord? = null): List<InboxPolicy> = error("Inbox policies unavailable")
+    /**
+     * "Rules" (docs/assistant/inbox.md "Policies"): every source's rules, newest first; [record]'s manager's, else
+     * [manager]'s (each keeps its own; named even when it is the default, which may move before a Remove), else the
+     * default's.
+     */
+    suspend fun inboxPolicies(record: InboxRecord? = null, manager: String? = null): List<InboxPolicy> = error("Inbox policies unavailable")
     /**
      * Sets [target]'s rule (POST from its item, PATCH when it has one): the open, triaged items it covers take [tier] at
-     * once, back if it fails. Setting neither part removes it. Returns the hub's rule, null when removed.
+     * once, back if it fails. Setting neither part removes it; removing one opened from "Rules" names the manager it was
+     * read from even when that is the default now. Returns the hub's rule, null when removed.
      */
     suspend fun savePolicy(target: InboxPolicyTarget, tier: InboxPolicyTier, twin: InboxPolicyTwin): InboxPolicy? =
         error("Inbox policies unavailable")
-    /** Removes a rule by its id ("Rules" › Remove). */
-    suspend fun removePolicy(id: String): Unit = error("Inbox policies unavailable")
+    /** Removes a rule by its id ("Rules" › Remove) on [manager] (the one "Rules" read it from), else the default. */
+    suspend fun removePolicy(id: String, manager: String? = null): Unit = error("Inbox policies unavailable")
 
     /** A chat's "Pinned messages", a page at a time ([accountId] null: the hub's current account, which the page names). */
     suspend fun larkChatPins(feedId: String, accountId: String?, cursor: String?): LarkChatPinsPage = error("Chat pins unavailable")
@@ -364,7 +374,7 @@ sealed interface LarkPart {
     data class Card(val content: LarkCardContent, val source: LarkContentSource, val messageId: String? = null) : LarkPart
     // Models may carry an authenticated Coil ImageRequest supplied by the data layer.
     data class Image(val model: Any, val description: String = "", val width: Int = 1, val height: Int = 1) : LarkPart
-    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream") : LarkPart
+    data class File(val ref: String, val name: String, val mimeType: String = "application/octet-stream", val source: LarkContentSource? = null) : LarkPart
     data class External(val title: String, val larkUrl: String, val kind: String, val duration: String = "", val cover: Image? = null) : LarkPart
     data class Code(val code: String, val language: String = "") : LarkPart
     data class Audio(val ref: String, val durationMs: Long, val source: LarkContentSource? = null) : LarkPart

@@ -197,6 +197,7 @@
     <string name="inbox_mute_tag_sender">送信者</string>
     <string name="inbox_mutes_title">ミュート中</string>
     <string name="inbox_mutes_failed">ミュート一覧を読み取れません</string>
+    <string name="inbox_mutes_offline">オフラインです。戻るとここにミュートが表示されます。</string>
     <string name="inbox_mutes_empty_title">ミュートはありません</string>
     <string name="inbox_mutes_empty_text">受信トレイで項目を長押しすると、そのリポジトリ・会話・送信者をミュートできます。</string>
     <string name="inbox_unmute">ミュート解除</string>
@@ -228,6 +229,7 @@
     <string name="inbox_policy_failed">ルールを保存できませんでした：%1$s</string>
     <string name="inbox_rules_title">ルール</string>
     <string name="inbox_rules_failed">ルールを読み込めませんでした：%1$s</string>
+    <string name="inbox_rules_offline">オフラインです。戻るとここにルールが表示されます。</string>
     <string name="inbox_rules_empty_title">ルールはありません</string>
     <string name="inbox_rules_empty_text">受信トレイで項目を長押しして、その会話・送信者・リポジトリのルールを設定します。</string>
     <string name="inbox_rules_remove_failed">ルールを削除できませんでした：%1$s</string>

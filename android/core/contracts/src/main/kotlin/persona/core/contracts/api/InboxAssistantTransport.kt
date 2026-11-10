@@ -107,7 +107,7 @@ interface InboxAssistantTransport {
     suspend fun momentsComments(postId: String): JsonObject = throw UnsupportedOperationException("Moments comments unavailable")
     suspend fun urlPreview(messageId: String, url: String): JsonObject = throw UnsupportedOperationException("URL preview unavailable")
 
-    // Mute (docs/assistant/inbox.md "Mute"): an item's repository, chat or sender, in every source.
+    // Mute (docs/assistant/inbox.md "Muting"): an item's repository, chat or sender, in every source.
     /** `GET /api/v1/inbox/mutes`: `{mutes: [{id, source, source_name, tag, value, name, created_at}]}`. */
     suspend fun inboxMutes(): JsonObject = throw UnsupportedOperationException("Inbox mutes unavailable")
     /** `POST /api/v1/inbox/mutes` `{item_id, tag}`: `{mute, settled}`. */

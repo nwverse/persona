@@ -13,6 +13,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 
 /** A new tab in an existing herdr workspace: machine and directory are fixed. */
@@ -68,8 +70,17 @@ internal data class NewAgentState(
     /** The prefilled machine was not online, so another one was picked (named here for the form to say so). */
     val prefillOffline: String? = null,
     val models: NewAgentModels = NewAgentModels(),
-    /** The model picked for this start, an id of [modelList]; "": the default. Never saved, like a launcher override. */
+    /**
+     * The model picked for this start, an id of [modelList]; "": the default. Not saved on its own: picking a machine
+     * brings back the model of its latest recent setup with the same launcher ([RecentSetups.model]).
+     */
     val model: String = "",
+    /** This hub's recent setups, newest first; the "Recent" cards are the first ones whose machine is listed. */
+    val recentSetups: List<RecentSetup> = emptyList(),
+    /** The recent setup a card filled the form with, until a field is changed. */
+    val pickedSetup: RecentSetup? = null,
+    /** Goes up each time a card has filled the form: the form then puts the cursor in the first message. */
+    val focusPrompt: Int = 0,
 ) {
     val locked get() = !initialized || starting || pending != null || created != null
     val follow: ModelPurposeDetail? get() = (modelConfig as? NewAgentModelConfig.Follow)?.detail
@@ -128,6 +139,7 @@ internal class NewAgentViewModel(
     /** Lists a started session at once, so its chat has metadata before the next `sessions` push. */
     private val adopt: suspend (Session) -> Unit = {},
     private val prefill: NewAgentPrefill? = null,
+    private val now: () -> Instant = Instant::now,
 ) : ViewModel() {
     private val mutable = MutableStateFlow(NewAgentState())
     val state = mutable.asStateFlow()
@@ -138,14 +150,16 @@ internal class NewAgentViewModel(
         viewModelScope.launch {
             try {
                 val pending = store.pending(service.scope)
+                val recents = recentSetups()
                 if (pending != null) {
                     val r = pending.request
                     mutable.value = NewAgentState(initialized = true, machineId = r.machineId,
                         selection = AgentDefaults(r.cwd, r.launcher, r.permissionMode.orEmpty(), r.effort.orEmpty()), model = r.model.orEmpty(),
-                        prompt = pending.firstMessage ?: r.prompt.orEmpty(), pending = pending, error = AgentText(R.string.agents_new_error_pending))
+                        prompt = pending.firstMessage ?: r.prompt.orEmpty(), pending = pending, error = AgentText(R.string.agents_new_error_pending),
+                        recentSetups = recents)
                 } else {
                     val last = store.lastMachine(service.scope)
-                    mutable.update { it.copy(initialized = true, prompt = prefill?.prompt.orEmpty()) }
+                    mutable.update { it.copy(initialized = true, prompt = prefill?.prompt.orEmpty(), recentSetups = recents) }
                     machines.collect { list ->
                         if (state.value.machineId.isEmpty() && !state.value.locked) {
                             val space = state.value.space
@@ -178,14 +192,16 @@ internal class NewAgentViewModel(
         val machine = space?.machineId ?: current.machineId
         if (current.initialized && machine.isNotEmpty()) selectMachine(machine)
     }
-    fun selectMachine(id: String) {
+    fun selectMachine(id: String) = load(id)
+    /** Picks machine [id] with its remembered defaults, or with [setup]'s fields once its options are read. */
+    private fun load(id: String, setup: RecentSetup? = null) {
         if (state.value.locked || machines.value.none { it.id == id && it.online }) return
         state.value.space?.let { if (it.machineId != id) return }
         machineJob?.cancel()
         browseJob?.cancel()
         modelsJob?.cancel()
         mutable.update { it.copy(machineId = id, selection = AgentDefaults(), launchers = emptyList(), recent = emptyList(),
-            browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "") }
+            browser = null, browsing = false, loading = true, error = null, models = NewAgentModels(), model = "", pickedSetup = null) }
         machineJob = viewModelScope.launch {
             try {
                 val defaults = store.defaults(service.scope, id)
@@ -198,10 +214,13 @@ internal class NewAgentViewModel(
                     Triple(l.await(), d.await(), c.await())
                 }
                 val prefilledCwd = prefill?.cwd?.takeIf { prefill.machineId == id && it.isNotBlank() }
+                val launcher = defaultLauncher(config, defaults, launchers)
                 mutable.update { it.copy(loading = false, launchers = launchers, recent = dirs.recent.take(6), modelConfig = config,
                     selection = defaults.copy(cwd = it.space?.cwd ?: prefilledCwd ?: defaults.cwd.ifEmpty { dirs.recent.firstOrNull()?.path ?: dirs.path },
-                        launcher = defaultLauncher(config, defaults, launchers)),
-                    error = (config as? NewAgentModelConfig.Failed)?.let { failed -> AgentText(R.string.agents_new_error_model_config, failed.reason) }) }
+                        launcher = launcher),
+                    model = RecentSetups.model(it.recentSetups, id, launcher),
+                    error = (config as? NewAgentModelConfig.Failed)?.let { failed -> AgentText(R.string.agents_new_error_model_config, failed.reason) })
+                    .let { next -> if (setup != null) next.filled(setup) else next } }
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.update { it.copy(loading = false, error = AgentText(R.string.agents_new_error_load)) } }
             loadModels()
@@ -233,6 +252,43 @@ internal class NewAgentViewModel(
             mutable.update { if (it.machineId == machine && it.modelLauncher == launcher) it.copy(models = next).settled() else it }
         }
     }
+    /**
+     * A "Recent" card: fills the machine, folder, launcher, model, permission mode and effort from [setup], then asks for
+     * the cursor in the first message. It never starts; an offline machine's card, or one in a space's form, does nothing.
+     */
+    fun useRecent(setup: RecentSetup) {
+        val current = state.value
+        if (current.locked || current.space != null || machines.value.none { it.id == setup.machine && it.online }) return
+        if (current.machineId == setup.machine && !current.loading && current.launchers.isNotEmpty()) {
+            browseJob?.cancel()
+            mutable.update { it.copy(browsing = false, browser = null, error = null).filled(setup).settled() }
+            loadModels()
+        } else load(setup.machine, setup)
+    }
+    /** "Remove from Recent" on a card. */
+    fun removeRecent(setup: RecentSetup) = changeRecent { RecentSetups.remove(it, setup) }
+    /** "Clear Recent Setups". */
+    fun clearRecent() = changeRecent { emptyList() }
+    private fun changeRecent(change: (List<RecentSetup>) -> List<RecentSetup>) {
+        viewModelScope.launch {
+            try {
+                val kept = store.updateRecentSetups(service.scope, change)
+                mutable.update { it.copy(recentSetups = kept, pickedSetup = it.pickedSetup?.takeIf { picked -> kept.any(picked::same) }) }
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
+    }
+    /** The cards are a shortcut: when they can't be read, the form works without them. */
+    private suspend fun recentSetups(): List<RecentSetup> = try { store.recentSetups(service.scope) }
+        catch (e: CancellationException) { throw e } catch (_: Exception) { emptyList() }
+    /** Keeps a start of this form in the recent setups; failing to write them never hides the session it started. */
+    private suspend fun recordRecent(request: AgentStartRequest) {
+        val setup = RecentSetup(request.machineId, request.cwd, request.launcher, request.model.orEmpty(), request.agentType ?: "claude",
+            request.permissionMode.orEmpty(), request.effort.orEmpty(), now().truncatedTo(ChronoUnit.SECONDS).toString())
+        try {
+            val kept = store.updateRecentSetups(service.scope) { RecentSetups.record(it, setup) }
+            mutable.update { it.copy(recentSetups = kept) }
+        } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+    }
     /** Asks the launcher's CLI for its models again (the node keeps the list a while). */
     fun reloadModels() {
         if (!state.value.locked) loadModels(refresh = true)
@@ -242,7 +298,7 @@ internal class NewAgentViewModel(
         val current = state.value
         if (current.locked || !current.canPickModel) return
         val entry = current.modelList?.models?.firstOrNull { it.id == id }
-        mutable.update { it.copy(model = entry?.takeUnless { m -> m.isDefault }?.id.orEmpty(), error = null).settled() }
+        mutable.update { it.copy(model = entry?.takeUnless { m -> m.isDefault }?.id.orEmpty(), error = null, pickedSetup = null).settled() }
     }
     private suspend fun modelConfig(): NewAgentModelConfig = try {
         service.newAgentModel()?.let { NewAgentModelConfig.Follow(it) } ?: NewAgentModelConfig.Unsupported
@@ -251,7 +307,7 @@ internal class NewAgentViewModel(
     fun selection(value: AgentDefaults) {
         if (state.value.locked || state.value.loading) return
         // Another launcher has its own models: back to its default, and its list.
-        mutable.update { val next = it.copy(selection = value, error = null)
+        mutable.update { val next = it.copy(selection = value, error = null, pickedSetup = null)
             (if (next.modelLauncher != it.modelLauncher) next.copy(model = "") else next).settled() }
         loadModels()
     }
@@ -272,7 +328,8 @@ internal class NewAgentViewModel(
     fun closeBrowser(use: Boolean = false) {
         browseJob?.cancel()
         mutable.update { it.copy(browsing = false, browser = null, loading = false, error = null,
-            selection = if (use && it.browser != null) it.selection.copy(cwd = it.browser.path) else it.selection) }
+            selection = if (use && it.browser != null) it.selection.copy(cwd = it.browser.path) else it.selection,
+            pickedSetup = if (use && it.browser != null) null else it.pickedSetup) }
     }
     fun resume(session: Session) {
         val current = state.value
@@ -370,6 +427,8 @@ internal class NewAgentViewModel(
                         return
                     }
                 }
+                // Recent setups (#2134): a tab in an existing space too, as on iOS, the Mac and the web; a resume is not a setup.
+                if (request.resumeSessionId == null) recordRecent(request)
                 // A tab in an existing space must not replace the machine's remembered directory.
                 if (request.workspaceId == null && request.resumeSessionId == null) {
                     // A Codex (or any non-Claude) start sends no mode or effort: the machine keeps the ones its next
@@ -400,6 +459,22 @@ internal class NewAgentViewModel(
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { mutable.update { it.copy(error = AgentText(R.string.agents_new_error_cleanup)) } }
     }
+}
+
+/**
+ * The form filled from a recent setup on its machine, whose options are read: a launcher it no longer has (or following a
+ * configuration this hub can't give) keeps the machine's, and then the model its default. A Codex setup has no mode or
+ * effort, so the machine's remembered Claude ones stay.
+ */
+private fun NewAgentState.filled(setup: RecentSetup): NewAgentState {
+    val known = if (setup.launcher.isEmpty()) follow != null else launchers.any { it.name == setup.launcher }
+    val launcher = if (known) setup.launcher else selection.launcher
+    val claude = setup.agentType == "claude"
+    return copy(
+        selection = selection.copy(cwd = setup.cwd, launcher = launcher, mode = if (claude) setup.mode else selection.mode,
+            effort = if (claude) setup.effort else selection.effort),
+        model = if (known) setup.model else "", pickedSetup = setup, focusPrompt = focusPrompt + 1,
+    )
 }
 
 /**

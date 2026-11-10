@@ -64,7 +64,7 @@ func (g *dependencyGraph) localMissing(p *Extension) []string {
 		}
 		for _, secret := range p.Manifest.Secrets {
 			if secret.Required && !set[secret.Name] {
-				out = append(out, i18n.T(l, "extension-status.missing_secret", i18n.Args{"title": secret.Title}))
+				out = append(out, i18n.T(l, "extension-status.missing_secret", i18n.Args{"title": p.L10n.Secret(l, secret).Title}))
 			}
 		}
 	}
@@ -81,7 +81,7 @@ func (g *dependencyGraph) state(d Dependency) DependencyState {
 		state.State = DepMissing
 		return state
 	}
-	state.Installed, state.Name = p.Record.Version, p.Full.Name
+	state.Installed, state.Name = p.Record.Version, p.L10n.Name(i18n.From(g.ctx).Or(i18n.Default), p.Full.Name)
 	switch {
 	case p.Record.Source == SourceInstalled && !d.Allows(p.Record.Version):
 		state.State = DepOld

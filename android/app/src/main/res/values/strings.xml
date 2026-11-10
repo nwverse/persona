@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_tab_inbox">Inbox</string>
+    <string name="app_tab_assistant">Assistant</string>
+    <string name="app_tab_agents">Agents</string>
+    <string name="app_machines">Computers</string>
+    <string name="app_sidebar">Sidebar</string>
     <string name="app_tab_settings">Settings</string>
     <string name="app_demo_badge">Demo</string>
     <string name="app_try_demo">No hub? Try the demo</string>

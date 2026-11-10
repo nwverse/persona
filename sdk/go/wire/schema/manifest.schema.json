@@ -294,7 +294,7 @@
         "network": {"type": "array", "items": {"$ref": "#/$defs/NetworkEntry"}},
         "hub_api": {"type": "boolean", "description": "The old way: the hub's full token. With hub scopes, the scopes win."},
         "hub": {"type": "array", "description": "The scopes of the hub's API it calls: its token opens their routes only.",
-          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|agents\\.permission_mode|machines\\.read|notify|assistant\\.ask|assistant\\.read|todos\\.read|todos\\.write|models|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
+          "items": {"type": "string", "pattern": "^(kb\\.read|kb\\.write|sent\\.read|inbox\\.read|inbox\\.write|agents\\.read|agents\\.control|agents\\.permission_mode|machines\\.read|notify|assistant\\.ask|assistant\\.read|todos\\.read|todos\\.write|models|extensions\\.call:[a-z0-9][a-z0-9_-]{0,31})$"}},
         "launcher_keys": {"type": "boolean"},
         "gh_login": {"type": "boolean", "description": "It asks the hub for the GitHub token of a computer's gh login (the one the user picks for the GitHub connector), held in its memory only."},
         "usage_gateways": {"type": "boolean", "description": "It reads the account list of the account-pool gateways in the hub's usage sources (usage.gateway_accounts): accounts, status and quota windows, never a key."},
@@ -426,7 +426,7 @@
       "required": ["sizes"]
     },
     "LookPalette": {
-      "description": "An appearance's colors, #RRGGBB (docs/apple/persona.md \"Palettes\", the apps' PersonaPalette).",
+      "description": "An appearance's colors, #RRGGBB (docs/apple/persona.md \"Color scheme\", the apps' PersonaPalette).",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -478,7 +478,7 @@
       "required": ["states"]
     },
     "LookItem": {
-      "description": "A look (docs/extensions/extensions.md \"Looks\"): Persona's name, face, colors and dot, served as a persona package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.",
+      "description": "A look (docs/extensions/extensions.md \"Avatars\"): Persona's name, face, colors and dot, served as a persona package. app_icon_fallback is the built-in icon used where only the app's own icons can be shown.",
       "type": "object",
       "additionalProperties": false,
       "properties": {

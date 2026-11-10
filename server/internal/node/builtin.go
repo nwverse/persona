@@ -1,6 +1,6 @@
 package node
 
-// Built-in programs (#1830 steps 5 and 6, docs/plans/plan-extensions.md "Moving cua / ego" and "How iMessage uses it"): the
+// Built-in programs (#1830 steps 5 and 6, docs/plans/plan-extensions.md "Migrating cua / ego" and "How iMessage uses it"): the
 // extensions cua (Cua Driver on this Mac), ego (ego lite) and imessage (this Mac's Messages, read-only) are programs on
 // computers like any extension's, but they run in this process, not as a package the hub sends. A hub that sees them
 // in node.info's builtin_programs asks them over plugin.node.call {id, method, params}; one from before asks by their

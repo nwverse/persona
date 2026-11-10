@@ -68,7 +68,7 @@ function acceptLabel(row: BriefRow): { label: string; title: string } {
   return { label: t("assistant-brief.accept"), title: t("assistant-brief.accept_row", { title: row.title }) };
 }
 
-function AcceptRow({ row }: { row: BriefRow }) {
+export function AcceptRow({ row, stacked = false }: { row: BriefRow; stacked?: boolean }) {
   const [state, setState] = useState<Accepting>("idle");
   const button = acceptLabel(row);
   // A decision with nothing recommended has nothing for the button to take: the user answers its card or the chat.
@@ -85,8 +85,8 @@ function AcceptRow({ row }: { row: BriefRow }) {
     );
   };
   return (
-    <div className="flex items-center gap-3 py-1.5" data-brief-row="accept">
-      <div className="min-w-0 flex-1">
+    <div className={stacked ? "flex flex-wrap items-center gap-x-3 gap-y-2 py-1.5" : "flex items-center gap-3 py-1.5"} data-brief-row="accept">
+      <div className={stacked ? "w-full min-w-0" : "min-w-0 flex-1"}>
         <div className="text-[13.5px] font-medium [overflow-wrap:anywhere]">{row.title}</div>
         {row.verdict && (
           <div className="text-[12.5px] [overflow-wrap:anywhere]" data-brief-verdict={row.outcome ?? "deployed"}>

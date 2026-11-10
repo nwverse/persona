@@ -66,7 +66,7 @@ struct AgentsListMenu: View {
     @StoredValue("dev.compact") private var compact = false
     #endif
 
-    /// The shell (docs/apple/ios.md「新外壳」) shows these inside its Work switch's menu: the items, without a button of their own.
+    /// The shell (docs/apple/ios.md「New shell」) shows these inside its Work switch's menu: the items, without a button of their own.
     var inline = false
 
     var body: some View {
@@ -118,7 +118,7 @@ struct AgentsListMenu: View {
                 }
             }
             if model.isMultiHub {
-                // Several groups of hubs (docs/protocol/multi-hub.md「按组筛选」): one group's agents only.
+                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only.
                 Picker("hub", selection: Binding(get: { hubFilter }, set: { hubFilter = $0; machineFilter = "" })) {
                     Label("All Hubs", systemImage: Theme.Icon.hubGroup).tag("")
                     ForEach(model.groupIDs, id: \.self) { g in

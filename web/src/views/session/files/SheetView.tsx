@@ -1,4 +1,4 @@
-// The table viewer (docs/web/web.md "Tables"; iOS / Mac: #1294): CSV / TSV / xlsx / xls / ods / numbers as a grid with
+// The table viewer (docs/web/web.md "Sheets"; iOS / Mac: #1294): CSV / TSV / xlsx / xls / ods / numbers as a grid with
 // column letters and row numbers that stay put, the first row frozen as a header, columns that fit their text and
 // can be dragged wider, a selection to copy (⌘C pastes into any spreadsheet) with its sum, and a tab per sheet. Only
 // the cells on screen are drawn, so a sheet of half a million rows scrolls like a short one.
