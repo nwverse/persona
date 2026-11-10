@@ -106,15 +106,21 @@ func (c DelegateConfig) Timeout() time.Duration {
 }
 
 // TriageConfig is manager.json agents.triage: the limits, and the switches a hub whose user never saved them starts with
-// (unset: off).
+// (unset: off, but for transient_retry).
 type TriageConfig struct {
 	Enabled      *bool `json:"enabled,omitempty"`
 	AutoContinue *bool `json:"auto_continue,omitempty"`
 	Wake         *bool `json:"wake,omitempty"`
 	Decide       *bool `json:"decide,omitempty"`
 	ToolLoop     *bool `json:"tool_loop,omitempty"`
-	// MaxRetries: "Continue" sent for one run of transient errors before asking the user. Default 3.
+	// TransientRetry: the initial value of the transient_retry switch (unset: on): "Continue" after a transient model
+	// error, as a rule, whether or not the triage itself is on.
+	TransientRetry *bool `json:"transient_retry,omitempty"`
+	// MaxRetries: "Continue" sent for one run of transient errors before leaving it to the user. Default 5.
 	MaxRetries int `json:"max_retries,omitempty"`
+	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
+	// the one before (a rate limit four times as long). Default 15.
+	RetryBaseSeconds int `json:"retry_base_seconds,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
 	MaxWakes int `json:"max_wakes,omitempty"`
 	// SettleSeconds: how long a stopped session stays stopped before its turn is triaged. Default 15.

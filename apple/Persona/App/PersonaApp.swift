@@ -19,6 +19,9 @@ struct PersonaApp: App {
                 .environment(model)
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
+                    #if os(iOS)
+                    if ShortcutCallbacks.shared.handle(url) { return } // a shortcut Persona ran came back (#2283)
+                    #endif
                     if MetaGlasses.shared.handle(url) { return } // the Meta AI app's callback (docs/apple/meta-glasses.md)
                     #if os(iOS)
                     if let link = FleetLink.session(url) { // tapped the Live Activity
@@ -407,7 +410,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     static func resolveFromNotification(_ id: String, group: String?, _ resolution: Resolution, action: String, done: @escaping () -> Void) {
         inBackground("resolve-interaction", done: done) {
             do {
-                try await HubStore.client(group: group).resolve(id, resolution)
+                try await AppModel.shared.outside(HubStore.client(group: group)) { try await $0.resolve(id, resolution) }
             } catch {
                 await NotificationActions.reportFailure(id: id, title: NotificationActions.failureTitle(action: action), error: error)
             }

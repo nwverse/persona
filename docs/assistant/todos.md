@@ -48,8 +48,10 @@ A Codex launcher with its own `-s` / `--sandbox`, `-a` / `--ask-for-approval`, `
 of guessing which permission wins. Managed launcher arguments are checked too. A launcher argument separator
 that would turn the added flags into prompt text is also refused. Non-plan launches retain their original arguments.
 An already running Codex cannot receive new CLI flags, so it cannot be adopted by a read-only start.
-External runtime starts (including Paseo) still fail closed: their start protocol does not guarantee enforcement,
-and a runtime may ignore the mode or fall back to a different provider at dispatch.
+External runtime starts fail closed unless the runtime declares `caps.readonly` (`docs/integrations/runtimes.md`):
+without it a runtime may ignore the mode or fall back to a different provider at dispatch. The Paseo bridge declares it
+(#3238): a plan start runs on a Paseo provider that runs Claude Code, in Paseo's `plan` mode; a non-Claude provider, no
+such provider, an agent Paseo reports in another mode (archived at once), or a takeover are refused.
 Update both the assistant and nodes for this behavior. This is the runtime's plan restriction on task work, not a
 promise that the runtime writes no session metadata or plan files, and it does not prevent a later explicit mode
 change by the user.

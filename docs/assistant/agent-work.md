@@ -102,8 +102,8 @@ Apply in order; on a match, do not call the model:
      plus `turn_error_kind` based on the Codex error type (`codex_error_info`) (#2185, "Codex error types" below).
    - Use `turn_error_kind` when present; otherwise use the text:
    - A subscription's usage limit (`usage_limit`) → an `external` wait for its reset, or a card when the reset is not known ("Usage limits" below); never `transient`;
-   - Transient (5xx, `overloaded`, `Connection error`, `timed out`, `socket hang up`, `ECONNRESET`, `fetch failed`, `no eligible upstream`, 429) → `transient`, schedule automatic continuation;
-   - Other errors (`Failed to authenticate`, `OAuth token has expired`, `Invalid API key`, `Not logged in · Please run /login`—Claude Code's synthetic reply when not logged in—401 / 403, selected model unavailable) → `blocked · user`, with a card "The model service needs your attention: <original text>" and options "Fixed, continue" / "Leave it for now".
+   - Transient (408, 429, 500, 502, 503, 504, 529, `overloaded`, `Connection error`, `Connection lost mid-response`, `timed out`, `socket hang up`, `ECONNRESET`, `ECONNREFUSED`, `fetch failed`, `no eligible upstream`, `upstream`) → `transient`, schedule automatic continuation;
+   - Other errors (`Failed to authenticate`, `OAuth token has expired`, `Invalid API key`, `Not logged in · Please run /login`—Claude Code's synthetic reply when not logged in—400 / 401 / 403 / 413, `invalid_request_error`, a prompt or context too long, selected model unavailable, `Request was aborted` after a user interrupt) → `blocked · user`, with a card "The model service needs your attention: <original text>" and options "Fixed, continue" / "Leave it for now". These words win when an error also has transient ones (`transientError`).
 
    **Codex error types** (`transcript/codex_error.go`; `server_overloaded` in rollout and `serverOverloaded` in app-server mean the same thing):
 
@@ -159,9 +159,17 @@ later without sending.
 
 ### Transient errors: automatic continuation
 
-- Backoff: 30 seconds, 2 minutes, 8 minutes; up to 3 attempts (`agents.triage.max_retries`). Reset after a normal (non-error) turn completion.
-- If all 3 fail: a `blocked · user` card, "The model service keeps failing after 3 automatic retries: <original text>", with options "Try Again" / "Leave it for now".
+- On by default and independent of the main switch (`transient_retry`, #3208): it is a rule, with no triage model call. With the main switch off, only
+  turns that a transient error ended are followed (`workActive`), and the lists show only the continuation on its way (`transientPending`); everything else stays as without triage.
+- Exponential backoff (`retryBackoff`): `retry_base_seconds` (default 15) doubled for each attempt, so 15 s, 30 s, 60 s, 120 s, 240 s; a rate limit (429, "rate limit",
+  "too many requests") waits four times as long (60 s … 960 s); never more than 30 minutes. Up to 5 consecutive attempts (`agents.triage.max_retries`).
+  A turn that ends otherwise (normally, or on an error that is not transient) starts the count again.
+- If all fail: the session keeps its error and the apps' "Retry", as before. With the main switch and `decide` on, also a `blocked · user` card,
+  "The model service keeps failing after 5 automatic retries: <original text>", with options "Try Again" / "Leave it for now".
 - Send exactly `继续` ("Continue"), the same text sent by "Retry" on the App's error card (`continueText`).
+- The manager logs each step: `work <machine>/<session>: auto-continue: transient model error, attempt <n>/<max> in <backoff>: <error>` when it schedules one,
+  `work <machine>/<session>: auto-continue: sending "继续" after a transient model error (attempt <n>/<max>)` and `work <machine>/<session>: continued (<n>)` when it sends,
+  and `work <machine>/<session>: auto-continue: transient model error persists after <n> automatic continues, left to the user: <error>` at the cap.
 
 ### Usage limits: continue at the reset
 
@@ -235,22 +243,24 @@ The same applies to "Retry" on an App error card (work begins, invalidating queu
 
 ## Switches (requested 2026-11-05: all off by default)
 
-Triage calls a model after every stopped turn; continuation and wakeups also make the Agent run another turn on its own model. All consume the user's tokens. Therefore **everything defaults to off**.
+Triage calls a model after every stopped turn; continuation and wakeups also make the Agent run another turn on its own model. All consume the user's tokens. Therefore **everything defaults to off**,
+except two rules that need no triage model: `reply_reminder` and, since #3208, `transient_retry` (continuing a turn a transient error cut off only finishes what the user already asked for).
 Users enable them under **Settings › Session Triage**. The switches are stored in settings `agents.triage` (read and written only by the manager); tool-loop detection is configured on the web:
 
 | Switch | Controls | Whose tokens it uses |
 | --- | --- | --- |
 | `enabled` Session Triage | Main switch: triage after a turn stops, show what it is waiting for, and stop counting completed work as Unread | Triage model (**Settings › Model Settings › Session Triage**, `agent.triage`, defaults to the Inbox triage model) |
 | `decide` Create decision cards | Turn user decisions into "Needs you" cards | No extra tokens |
-| `auto_continue` Continue automatically on errors | Automatically send continuation after transient model API errors, and once a subscription's usage limit resets | Agent's model (resumes the interrupted turn) |
+| `auto_continue` Continue automatically on errors | Automatically send continuation once a subscription's usage limit resets | Agent's model (resumes the interrupted turn) |
+| `transient_retry` Continue after transient errors (#3208) | Automatically send continuation after transient model API errors ("Transient errors: automatic continuation") | Agent's model. **On by default**, independent of the main switch |
 | `wake` Scheduled wakeups | Wake Agents waiting for deployment / CI / another Agent so they check for themselves | Agent's model (one turn per wakeup) |
 | `tool_loop` Detect tool loops | Offer to interrupt an agent repeating tool calls, excluding polling | Triage model (at most three checks per turn) |
 | `reply_reminder` Remind when seen, unanswered (#5096) | One push when an Agent asking the user has waited `reply_reminder_minutes` (default 30) since they looked ([agent-states.md](../protocol/agent-states.md) "Awaiting your reply") | None: rules only. **On by default**, independent of the main switch |
 
-- Subswitches work only when the main switch is on. Disabling a switch takes effect immediately: Persona-created cards are removed, and queued retries / wakeups are not sent.
-- `GET / PUT /api/v1/agents/triage` (`{enabled, auto_continue, wake, decide, tool_loop, reply_reminder, reply_reminder_minutes}`, forwarded by the hub to the manager); changes broadcast `{"type":"agents.triage"}`. A PUT without `tool_loop`, `reply_reminder` or `reply_reminder_minutes` (or with minutes 0) keeps their values for older apps; negative minutes go back to the default 30. While the saved switches cannot be read, such a PUT saves their defaults.
+- Subswitches work only when the main switch is on (but `reply_reminder` and `transient_retry`). Disabling a switch takes effect immediately: Persona-created cards are removed, and queued retries / wakeups are not sent.
+- `GET / PUT /api/v1/agents/triage` (`{enabled, auto_continue, wake, decide, tool_loop, reply_reminder, reply_reminder_minutes, transient_retry}`, forwarded by the hub to the manager); changes broadcast `{"type":"agents.triage"}`. A PUT without `tool_loop`, `reply_reminder`, `reply_reminder_minutes` (or with minutes 0) or `transient_retry` keeps their values for older apps; negative minutes go back to the default 30. While the saved switches cannot be read, such a PUT saves their defaults.
 - A `GET` whose first read of the database fails answers `503` with an `error` in the request's language (Chinese, English or Japanese) saying why, instead of returning the defaults as if they were the saved switches (#4553). Failures are not cached: the next request reads again. Switches once read or saved stay cached in memory; `manager.json`'s initial values apply only when the database really has no setting. Triage itself still falls back to the defaults when its own read fails, and `PUT` saves as before.
-- `agents.triage` in the manager's `manager.json` (`docs/operations/config.md` ("manager.json"); in hub.json before 2026-11-06) now retains limits (`max_retries` default 3, `max_wakes` default 6, `settle_seconds` default 15);
+- `agents.triage` in the manager's `manager.json` (`docs/operations/config.md` ("manager.json"); in hub.json before 2026-11-06) now retains limits (`max_retries` default 5, `retry_base_seconds` default 15, `max_wakes` default 6, `settle_seconds` default 15);
   its triage switches are initial values only when settings have never been saved in the App (omitted means off). The manager reads this section itself and lays it over the hub's handshake reply (`assistantwire.Hello.Agents`); the hub no longer reads or sends it.
 
 ## Storage

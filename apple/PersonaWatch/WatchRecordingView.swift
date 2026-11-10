@@ -1,8 +1,12 @@
 import SwiftUI
 
 /// Watch recording does not depend on the hub connection: it saves without a network and sends back once near the phone.
+/// `startsMeeting`: opened as Meeting Recording (the home card, the complication), it starts at once, marked a meeting
+/// (docs/apple/recording.md「Apple Watch」); the phone names it after the calendar.
 struct WatchRecordingView: View {
+    var startsMeeting = false
     @State private var capture = RecordingCapture.shared
+    @State private var startedMeeting = false
     @State private var library = RecordingLibrary.shared
     @State private var transfer = WatchRecordingTransfer.shared
     /// Starts in the app's UI language; the button cycles through the three the recorder supports.
@@ -22,7 +26,15 @@ struct WatchRecordingView: View {
                 Text(RecordingFormat.clock(capture.elapsed))
                     .font(Theme.Font.display.monospacedDigit())
                     .foregroundStyle(capture.state == .recording ? Theme.danger : .primary)
+                if let id = capture.recordingID, library.entry(id)?.isMeeting == true {
+                    Label("Meeting", systemImage: Theme.Icon.meeting).font(Theme.Font.caption).foregroundStyle(Theme.accent)
+                        .accessibilityIdentifier("watch-recording-meeting")
+                }
                 if capture.state == .idle {
+                    Button { Task { await capture.start(locale: locale, meeting: RecordingMeeting()) } } label: {
+                        Label("Meeting Recording", systemImage: Theme.Icon.recording).lineLimit(1)
+                    }
+                    .buttonStyle(.borderedProminent)
                     Button {
                         let languages = ["zh-CN", "en-US", "ja-JP"]
                         let index = languages.firstIndex(of: locale) ?? 0
@@ -35,7 +47,7 @@ struct WatchRecordingView: View {
                     Button { Task { await capture.start(locale: locale) } } label: {
                         Label("Start Recording", systemImage: Theme.Icon.recording).lineLimit(1)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .recordingPrimaryGesture()
                 } else if capture.state == .starting {
                     ProgressView(String(localized: "Waiting for microphone access")).font(Theme.Font.secondary)
@@ -74,6 +86,12 @@ struct WatchRecordingView: View {
         }
         .navigationTitle("Record [Recordings Section ef2821]")
         .onAppear { transfer.start() }
+        .task {
+            // Meeting Recording: one tap from the home list or the watch face; once, and never over a recording running.
+            guard startsMeeting, !startedMeeting, capture.state == .idle else { return }
+            startedMeeting = true
+            await capture.start(locale: locale, meeting: RecordingMeeting())
+        }
     }
 }
 
