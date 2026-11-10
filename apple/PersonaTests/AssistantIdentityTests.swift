@@ -43,6 +43,11 @@ struct AssistantIdentityTests {
         #expect(model.managerRoster?.installed.count == 1)
     }
 
+    @Test func theMainChatLabelDoesNotNameASingleAssistant() {
+        #expect(AssistantSidebar.shownMainTitle(false) == String(localized: "Main Chat"))
+        #expect(AssistantSidebar.shownMainTitle(true) == "Persona")
+    }
+
     @Test func identityFollowsTheRosterWithoutChangingOwnership() {
         let first = HubManager(id: "assistant", name: "First assistant", online: true, isDefault: true)
         let second = HubManager(id: "second", name: "Second assistant", online: false)

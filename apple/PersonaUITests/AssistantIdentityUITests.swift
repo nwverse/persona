@@ -13,6 +13,10 @@ final class AssistantIdentityUITests: XCTestCase {
         return app
     }
 
+    @MainActor private func identityHeading(_ app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label == %@", "assistant-sidebar", "Persona")).firstMatch
+    }
+
     @MainActor func testSingleAssistantKeepsNavigationWithoutIdentity() throws {
         let app = try launch("PERSONA_IDENTITY_SINGLE_HUB")
         let sidebar = app.buttons["assistant-sidebar-button"]
@@ -22,7 +26,9 @@ final class AssistantIdentityUITests: XCTestCase {
         sidebar.tap()
         XCTAssertTrue(app.drawerSettingsButton.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.drawerNewChatButton.exists)
-        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "assistant-identity-heading").firstMatch.exists)
+        XCTAssertFalse(identityHeading(app).exists)
+        XCTAssertFalse(app.buttons["sidebar-main"].label.contains("Persona"))
+        XCTAssertTrue(app.buttons["sidebar-main"].label.contains("主对话"))
     }
 
     @MainActor func testMultipleAssistantsKeepIdentityAndSwitching() throws {
@@ -33,6 +39,7 @@ final class AssistantIdentityUITests: XCTestCase {
         XCTAssertTrue(app.buttons["manager-switch-m-8b04d2"].exists)
         app.buttons["assistant-sidebar-button"].tap()
         XCTAssertTrue(app.drawerSettingsButton.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "assistant-identity-heading").firstMatch.exists)
+        XCTAssertTrue(identityHeading(app).exists)
+        XCTAssertTrue(app.buttons["sidebar-main"].label.contains("Persona"))
     }
 }
