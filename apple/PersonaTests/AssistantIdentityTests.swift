@@ -48,6 +48,14 @@ struct AssistantIdentityTests {
         #expect(AssistantSidebar.shownMainTitle(true) == "Persona")
     }
 
+    @Test func conversationTitlesRemainWhileTheSoleAssistantsNameIsHidden() {
+        #expect(AssistantTopBar.visibleTitle(showsIdentity: false, persona: "Persona", conversation: nil, isMain: true) == nil)
+        #expect(AssistantTopBar.visibleTitle(showsIdentity: false, persona: "Persona", conversation: "Notes", isMain: false) == "Notes")
+        #expect(AssistantTopBar.visibleTitle(showsIdentity: false, persona: "Persona", conversation: "Claude Code", isMain: false) == nil)
+        #expect(AssistantTopBar.visibleTitle(showsIdentity: true, persona: "Persona", conversation: nil, isMain: true) == "Persona")
+        #expect(AssistantTopBar.visibleTitle(showsIdentity: true, persona: "Persona", conversation: "Notes", isMain: false) == "Notes")
+    }
+
     @Test func identityFollowsTheRosterWithoutChangingOwnership() {
         let first = HubManager(id: "assistant", name: "First assistant", online: true, isDefault: true)
         let second = HubManager(id: "second", name: "Second assistant", online: false)

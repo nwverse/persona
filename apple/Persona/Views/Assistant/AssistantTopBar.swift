@@ -129,8 +129,8 @@ struct AssistantTopBar: View {
             Menu { menuItems(link) } label: {
                 HStack(spacing: Theme.Space.xs) {
                     VStack(alignment: .leading, spacing: 0) {
-                        if model.showsAssistantIdentity {
-                            Text(name).font(Theme.Font.heading).foregroundStyle(Theme.macLabel).lineLimit(1)
+                        if let menuName {
+                            Text(menuName).font(Theme.Font.heading).foregroundStyle(Theme.macLabel).lineLimit(1)
                         } else {
                             ThemedIcon(Theme.Icon.more).font(Theme.Font.heading).foregroundStyle(Theme.macLabel)
                         }
@@ -357,12 +357,12 @@ struct AssistantTopBar: View {
                         .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
                         .surface(interactive: true, in: .circle)
                 }
-                if model.showsAssistantIdentity || link != .online {
+                if menuName != nil || link != .online {
                     ZStack {
                         if link != .online {
                             ConnectionLabel(phase: link, compact: true).transition(.opacity)
                         } else {
-                            Text(name).font(Theme.Font.labelStrong).lineLimit(1).transition(.opacity)
+                            Text(menuName ?? "").font(Theme.Font.labelStrong).lineLimit(1).transition(.opacity)
                         }
                     }
                     .padding(.horizontal, Theme.Space.m)
@@ -394,10 +394,21 @@ struct AssistantTopBar: View {
         return t.isEmpty || t == "Claude Code" ? persona : t
     }
 
+    nonisolated static func visibleTitle(showsIdentity: Bool, persona: String, conversation: String?, isMain: Bool) -> String? {
+        let title = conversation.flatMap { $0.isEmpty || $0 == "Claude Code" ? nil : $0 }
+        if isMain || title == nil { return showsIdentity ? persona : nil }
+        return title
+    }
+
+    private var menuName: String? {
+        Self.visibleTitle(showsIdentity: model.showsAssistantIdentity, persona: model.persona.name,
+                          conversation: session?.title, isMain: key == nil || key == model.assistantMain)
+    }
+
     private var menuAccessibilityLabel: String {
-        guard model.showsAssistantIdentity else { return String(localized: "Knowledge, details, copy directory and chat info") }
+        guard let menuName else { return String(localized: "Knowledge, details, copy directory and chat info") }
         let link = model.connection.shown
-        return link != .online ? String(localized: "\(name), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true))") : name
+        return link != .online ? String(localized: "\(menuName), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true))") : menuName
     }
 
     /// The conversation's launcher (the next message uses it) or, on the new-conversation page, the default one.
