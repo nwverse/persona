@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## A dispatch link must retain its target and its hand-off (#3711)
+
+A passing task-sheet test is not evidence that a dispatch link pushes an Agent on iPhone. Test the actual feed link,
+its exact Agent target, and Back to the same Assistant conversation; `AppModel.open` switches to Agents instead of
+pushing on that stack. Mac also needs an attached presenter for `detailTask`, not just an assignment. When replacing
+full task cards with compact dispatch links, stop filtering hand-offs as though the removed card still drew its
+instruction list, or Persona's messages silently disappear. Keep those messages as folded feed lines.
+
 ## Example-domain labels must be generic too (#3593)
 
 An `example.com` suffix does not make its hostname label anonymous: the label can still match a configured private machine value and block both app and web prebuild privacy scans. Use neutral fixture labels and change the expected route together, preserving trimming, encoding and forwarding assertions. Do not exempt a private value just because it appears in test data.
@@ -83,6 +91,11 @@ from colliding with its buttons.
 
 - Under iPhone Duo's vertical bars (the outer display, the inner one on its side), a view that hosts a `UINavigationController` and moves sideways makes the controller run its deferred transition on every layout pass and lay its top view controller out twice (`transitionConductor:didStartDeferredTransition:context:` → `_layoutTopViewControllerLookForNested:`, then `_computeAndApplyScrollContentInsetDeltaForViewController:` → `_updateTopViewFramesToMatchScrollOffsetInViewController:…`). The shell's slide between Assistant and Agents spent 28 ms a frame (p95), 140 ms of hitches a second. An `offset`, a render-only `transformEffect` and a page under a mask all cost the same; only not moving helps (`ShellPageSlide` cross-fades there). An ordinary iPhone runs the same passes cheaply, so measure on the Duo simulator.
 - Measuring with the runtime CLI (`scripts/app/personactl.py launch`), install the build first (`xcrun simctl install`): the launcher runs whatever is installed, and a round of experiments once measured an older build.
+
+## A split's detail stack shares its modifiers only with its root page (#3680)
+
+- In a `NavigationSplitView`, the detail column's `NavigationStack` becomes the column's own navigation controller: a page opened on it covers the whole column. A `.safeAreaInset` on that stack, or a row in a `VStack` above it, shows only over the stack's root page and goes as soon as a page is opened (the Assistant | Agents switch over Agents' empty page vanished over every opened agent, with no way back to Assistant). Put what every page of the column needs on the pages themselves: the root page, each destination (`SplitDetailPage`), and pages pushed with `navigationDestination(item:)` / `(isPresented:)` (`detailPresentation`, a space's New Session).
+- Check it with a page opened from the list *and* one opened in code (`-openSession`, an Inbox item, a notification): only the empty page showed the row.
 
 ## A relay push keeps the fallback's sound unless the service extension sets it (#1862)
 
@@ -290,6 +303,11 @@ Use an invalidation revision as the task key and handle the flag after completio
   Lark chat rows updated "seen" and report timers on entry, receipt bookkeeping on exit, repeatedly reevaluating the entire page during scrolling and doubling dropped frames.
   Keep invisible bookkeeping in a class held by `@State` (`LarkChatBook`), whose writes do not invalidate views; visible counts / receipts remain state, written only when actually changed.
 - Do not construct WKWebView on the main thread while scrolling: preload links only for recent replies (within 15 minutes); preloading every old reply caused 1–2 second freezes.
+- A pooled WKWebView keyed by its link's URL carries the page the user browsed to, and its back/forward history, into the next opening of that link
+  (2026-11-11, #4074: a PR link reopened on an issue page). Hand a view out for one opening only: `dismantleUIView` gives it back and the pool drops it
+  (`WebViewPool.release`). A WKWebView's history cannot be cleared, so a fresh opening needs a new view. In a unit test neither
+  `loadHTMLString` nor a script's `history.pushState` adds back/forward entries (iOS 26.5 simulator), and a UI test's synthesized edge swipe
+  does not start WebKit's back gesture: a followed link in a UI test (`LinkSheetReopenTests`) is what builds real history.
 - Scroll bookkeeping (visible rows, touch state) belongs in unobserved objects (`ChatScratch`); writing `@State` reevaluates the page. Cache derived rows by
   `ChatStore.version` and similar keys. Decode WebSocket messages on callback threads, not after returning to main.
 - `ScrollPosition.scrollTo(y:)` also zeros horizontal offset: with `contentMargins(.horizontal)`, the page sticks to screen edges.

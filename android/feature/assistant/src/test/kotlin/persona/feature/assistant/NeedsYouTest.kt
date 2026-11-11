@@ -81,10 +81,11 @@ class NeedsYouTest {
             listOf(message("m1", "2026-11-02T08:00:00Z", title = "", summary = "要你\n回复", lark = false)),
             shown = 4,
         )
-        // A mail without a title or sender has no name of its own: the row reads "Mail" (needsYouWho).
-        assertEquals(listOf("博客迁移", "weather", "Agent", ""), needs.lines.map { it.who })
+        // An agent without a title or folder, and a mail without a title or sender, have no name of their own:
+        // the row reads "Agent" or "Mail" in the app's language (needsYouWho).
+        assertEquals(listOf("博客迁移", "weather", "", ""), needs.lines.map { it.who })
         assertEquals("先迁移 哪一篇？", needs.lines[0].what)
-        assertEquals("计划等你批准", needs.lines[1].what)
+        assertEquals("计划等你审批", needs.lines[1].what)
         assertEquals("要你 回复", needs.lines[3].what)
     }
 

@@ -234,7 +234,7 @@ function sameProps<P extends { to: Route }>(a: P, b: P): boolean {
 export const SessionRow = memo(function SessionRow({ s: given, k, reg, hover, active, to, go, tab, label, prefix, prefixClass, hint, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat" }: SessionRowProps) {
   // what it asks you, or what it did, under its title (#3195): no hover or click needed to see why it is red or green
   const ix = useStore((st) => st.interactions.find((i) => i.machine_id === given.machine_id && i.session_id === given.session_id));
-  // a card answered here takes its red dot and "Asking you" line away at once, not at the hub's next push (#4286)
+  // a card answered here takes its red dot and "Has a question" line away at once, not at the hub's next push (#4286)
   const justAnswered = useStore((st) => lastAnsweredAt(st.answered, given.machine_id, given.session_id));
   const pending = useStore((st) => answerPending(st.answered, given.machine_id, given.session_id));
   // seen on this page and not yet recorded by the hub (lib/seen-outbox.ts): the paged list's rows come from the list

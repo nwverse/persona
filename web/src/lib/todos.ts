@@ -86,6 +86,18 @@ export interface Todo {
   /** What it waits on from the user (#2056, docs/assistant/todos.md "Waiting for the owner"); unset while nothing does,
    *  and from hubs before it. */
   ask?: TodoAsk;
+  /** Nobody is working on it (#3618, docs/assistant/todos.md "Nobody is working on this"): every agent of this open
+   *  to-do is gone and nothing brings one back. `reason`: `error` (closed after a model error), `offline` (its computer
+   *  is not connected) or `closed`; `since` is when the hub first saw it. Unset otherwise, and from hubs before it. */
+  orphaned?: { reason?: "error" | "offline" | "closed" | (string & {}); since?: string };
+}
+
+/** "Nobody is working on this" and why ("closed after an error"), for an open to-do the hub found orphaned; undefined
+ *  for every other. A reason this page does not know leaves the lead alone. */
+export function orphanedLine(todo: Pick<Todo, "orphaned" | "done_at">): { lead: string; reason: string } | undefined {
+  if (!todo.orphaned || todo.done_at) return undefined;
+  const reason = todo.orphaned.reason;
+  return { lead: t("lib-todos.orphaned"), reason: reason === "error" || reason === "offline" || reason === "closed" ? t(`lib-todos.orphaned_${reason}`) : "" };
 }
 
 /**
@@ -99,6 +111,43 @@ export interface TodoAsk {
   verdict: string;
   recommend?: string;
   asked_at: string;
+  /** A decision's own fields (#3804), absent from an older hub and from an ask that is no decision: what is to be
+   *  decided in one sentence, why only the owner can, the options (2 to 4, the recommended one first) with what each
+   *  leads to, and what waiting costs. */
+  question?: string;
+  why_owner?: "irreversible" | "visible_to_others" | "priority" | "acceptance" | "only_owner_knows" | string;
+  options?: AskOption[];
+  cost_of_waiting?: string;
+  /** Where the task came from and where it stands, as one line the hub wrote in the request's language; `from` and
+   *  `stands` are its parts. */
+  background?: string;
+  from?: { conversation?: string; title?: string; main?: boolean; at?: string; message?: string; by_assistant?: boolean; started_by?: string };
+  stands?: string;
+  /** `default` "taken": the recommendation is taken at `deadline` when nobody answers; "never": it never is. */
+  deadline?: string;
+  default?: "taken" | "never" | string;
+  /** The fixed answers besides the options: the owner cannot answer this as asked (lib/feed `acceptBrief`). */
+  responses?: string[];
+  /** The fixed answer already given while the decision still waits (`explain_first`: Persona is to ask again with the
+   *  background; the options stay answerable meanwhile). */
+  response?: string;
+}
+
+/** One option of a decision: its label, which is the answer, and what choosing it leads to. */
+export interface AskOption {
+  label: string;
+  leads_to?: string;
+}
+
+/** The fixed answers of a decision the web app knows (`TodoAsk.responses`); views/assistant/DecisionRow lists them. */
+export type AskResponse = "decide_yourself" | "not_what_i_asked" | "explain_first";
+
+/** The options of a decision that can be answered on its row: a decision with at least two of them, each with a label.
+ *  None for any other ask, which keeps its one button (askTake). */
+export function askOptions(ask: TodoAsk): AskOption[] {
+  if (ask.outcome !== "decide" || !Array.isArray(ask.options)) return [];
+  const list = ask.options.filter((o) => o && typeof o.label === "string" && o.label.trim());
+  return list.length >= 2 ? list : [];
 }
 
 /** What the one button of an ask does: take a decision's recommendation, acknowledge a conclusion that only tells, or

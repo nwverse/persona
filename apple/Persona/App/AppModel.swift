@@ -235,7 +235,11 @@ final class AppModel {
     static var rememberedChat: String? = UserDefaults.standard.string(forKey: "dev.openChat").flatMap { $0.isEmpty ? nil : $0 }
     /// Session whose chat is on screen; its completion pings are suppressed.
     var visibleSession: SessionKey? {
-        didSet { if heldInList != visibleSession { heldInList = nil } }
+        didSet {
+            if heldInList != visibleSession { heldInList = nil }
+            // the recently opened conversations: the home screen menu's (#2191)
+            if visibleSession != oldValue { RecentChatsStore.shared.shown(visibleSession) }
+        }
     }
     /// The open agent that was Unread and was marked seen by being open: the Agents list keeps it where it was until
     /// its chat is left (`AgentListOrder.held`, #2213; user, 2026-11-05: it moves to Idle only after you leave).
@@ -1070,6 +1074,23 @@ final class AppModel {
             assistantConfig = st
         } catch {
             if showsPage(of: api) { assistantConfig?.mainTasksQuiet = was }
+            show(error)
+        }
+    }
+
+    /// Settings › Meetings (#2981): the role every meeting recording starts with. Shown at once, put back if the hub says no.
+    func setMeetingAttendanceDefault(_ role: MeetingAttendance) async {
+        guard let api else { return }
+        // Before the assistant settings are in, the hub's answer brings them.
+        let was = assistantConfig?.meetingAttendanceDefault
+        assistantConfig?.meetingAttendanceDefault = role.rawValue
+        MeetingAttendanceDefaults.remember(offered: true, role: role)
+        do {
+            let st = try await api.setAssistant(meetingAttendanceDefault: role.rawValue)
+            guard showsPage(of: api) else { return }
+            assistantConfig = st
+        } catch {
+            if showsPage(of: api) { assistantConfig?.meetingAttendanceDefault = was }
             show(error)
         }
     }
@@ -3254,12 +3275,15 @@ struct Toast: Identifiable, Equatable {
     let action: Action?
     /// A second button before `action` (Undo beside View).
     let secondary: Action?
+    /// An explicit display window for flows whose Undo timing is shared across clients.
+    let duration: Duration?
 
-    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil) {
+    init(_ message: String, style: Style = .info, action: Action? = nil, secondary: Action? = nil, duration: Duration? = nil) {
         self.message = message
         self.style = style
         self.action = action
         self.secondary = secondary
+        self.duration = duration
     }
 
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }

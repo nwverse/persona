@@ -23,11 +23,15 @@ import (
 
 func (s *Service) launcherRoutes() {
 	s.handle("GET /api/v1/launchers", func(w http.ResponseWriter, r *http.Request) {
-		// Each machine gets launcherSyncTimeout: one that is slow or gone never holds the page (sync says which).
 		ctx, cancel := context.WithTimeout(r.Context(), launcherSyncTimeout+5*time.Second)
 		defer cancel()
-		// A launcher just added to an rc file shows up (the node caches a minute).
-		zshrc := s.zshrcLaunchers(ctx, true)
+		// A last-seen snapshot answers at once; a first-ever list still fills before it answers.
+		zshrc, cached := s.zshrcLaunchersLastSeen(ctx)
+		if cached {
+			s.refreshZshrcLaunchers(r.Context())
+		} else {
+			zshrc = s.zshrcLaunchers(ctx, true)
+		}
 		views := s.withKeyMachines(ctx, s.launcherViewsOf(ctx, zshrc))
 		if b, ok := s.builtinClaude(ctx, zshrc); ok {
 			views = append(views, b)
@@ -392,18 +396,9 @@ func (s *Service) machineLauncherRoutes() {
 			apierr.Write(w, http.StatusNotFound, errUnknownMachine)
 			return
 		}
-		var list []ConfiguredLauncher
-		var err error
-		if r.URL.Query().Get("purpose") == "assistant" {
-			list, err = s.assistantLaunchers(ctx, mid)
-		} else {
-			var ls []proto.Launcher
-			ls, err = s.machineLaunchers(ctx, mid)
-			discovered := make([]ConfiguredLauncher, 0, len(ls))
-			for _, l := range ls {
-				discovered = append(discovered, ConfiguredLauncher{Launcher: l})
-			}
-			list = sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[mid])
+		list, err := s.pickerLaunchers(ctx, mid)
+		if err == nil && r.URL.Query().Get("purpose") == "assistant" { // the main chat's menu, and the scheduled tasks' that follow it
+			list, err = s.assistantLaunchersOf(ctx, mid, list)
 		}
 		if err != nil {
 			apierr.Call(w, err)

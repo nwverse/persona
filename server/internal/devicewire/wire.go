@@ -158,6 +158,9 @@ type Accept struct {
 // Config is what the hub hands the manager: the defaults of what the manager carries, as the hub's hello has them
 // (manager.hello's answer, field devices) and devices.config again whenever they change.
 type Config struct {
+	ShareRoutingHandle []byte                    `json:"share_routing_handle,omitempty"`
+	SharePublicOrigin  string                    `json:"share_public_origin,omitempty"`
+	ShareAuthorities   map[string]ShareAuthority `json:"share_authorities,omitempty"`
 	// AutoUpdateNodes is an explicit opt-in; older hubs omit it and leave nodes unchanged.
 	AutoUpdateNodes bool `json:"auto_update_nodes,omitempty"`
 	// Machines are hub.json's machines (and those the admin page added since), each the JSON hub.json has.
@@ -314,9 +317,12 @@ type NodeEvent struct {
 
 // NodeCall is devices.call's and devices.request's params.
 type NodeCall struct {
-	MachineID string          `json:"machine_id"`
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params,omitempty"`
+	Caller     *Caller         `json:"caller,omitempty"`
+	Submission *Submission     `json:"submission,omitempty"`
+	Authority  *ShareAuthority `json:"share_authority,omitempty"`
+	MachineID  string          `json:"machine_id"`
+	Method     string          `json:"method"`
+	Params     json.RawMessage `json:"params,omitempty"`
 	// TimeoutMS bounds the call on the manager's side too, a little before the caller gives up: the manager's
 	// CodeDeadline answer comes back in time.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`

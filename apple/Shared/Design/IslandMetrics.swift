@@ -73,6 +73,9 @@ nonisolated enum IslandMetrics {
     static let recordingMark: CGFloat = 40
     /// Between the Lock Screen's and the expanded island's two buttons.
     static let buttonGap: CGFloat = 10
+    /// The mark of a button that shows only its mark (Bookmark, Turn Off, Stop beside Ask Persona in a meeting Persona
+    /// attends, #2981): with the capsule's own padding the button is over 44 pt wide, and Ask Persona keeps its words.
+    static let recordingIconButton: CGFloat = 24
     /// The Lock Screen's inset from the activity's edges.
     static let lockPadding: CGFloat = 16
 
