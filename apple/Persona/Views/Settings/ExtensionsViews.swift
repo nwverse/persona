@@ -1084,7 +1084,7 @@ private struct SecretProviderSections: View {
             } header: {
                 SettingsHeading(String(localized: "Used By"))
             } footer: {
-                Text("Settings that hold one of its references. Each is your standing approval for that setting.")
+                Text("These settings take their values from this provider. Saving a setting lets it keep taking its value.")
             }
         }
         if !rules.isEmpty {

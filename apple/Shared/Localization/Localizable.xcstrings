@@ -13,13 +13,13 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@のキー"
+            "value": "「%1$@」のキー"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%1$@ 的 Key"
+            "value": "「%1$@」的 Key"
           }
         }
       }
@@ -36,13 +36,13 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "%2$@の%1$@のキー"
+            "value": "%2$@の「%1$@」のキー"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%2$@ 上 %1$@ 的 Key"
+            "value": "%2$@ 上「%1$@」的 Key"
           }
         }
       }
@@ -59,13 +59,13 @@
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "%2$@の%1$@"
+            "value": "%2$@の「%1$@」"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "%2$@ 上的 %1$@"
+            "value": "%2$@ 上的「%1$@」"
           }
         }
       }
@@ -852,29 +852,6 @@
       },
       "extractionState": "manual"
     },
-    "Settings that hold one of its references. Each is your standing approval for that setting.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Settings that hold one of its references. Each is your standing approval for that setting."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "この参照を保存している設定です。それぞれがその設定への継続的な承認です。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存了它某个引用的设置，每一项都是你对该设置的长期批准。"
-          }
-        }
-      }
-    },
     "Share as Image…": {
       "localizations": {
         "en": {
@@ -940,6 +917,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "下次 Agent 需要它时，会重新请你批准。"
+          }
+        }
+      }
+    },
+    "These settings take their values from this provider. Saving a setting lets it keep taking its value.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These settings take their values from this provider. Saving a setting lets it keep taking its value."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "これらの設定はこのプロバイダーから値を取ります。設定を保存すると、その後も値を取ることを許可したことになります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这些设置会从它这里取值；保存设置就等于长期允许它们取用。"
           }
         }
       }
