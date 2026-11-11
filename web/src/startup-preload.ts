@@ -103,10 +103,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * gives them), and 1,024 B for background rounds in the main conversation (#4314 added about 580 B: lib/turns.ts's
  * background-round detection and source blocks in an opened round, the folded line's words and Needs you's grouping by
  * supervisor), and 4,096 B for the authoritative workspace catalog and its direct workspace rows, the first-screen
- * worktree action words, and shared sticky group controls (PR #3222: 3,605 B over its main baseline). Raise it on purpose,
- * in the change that needs it.
+ * worktree action words, and shared sticky group controls (PR #3222: 3,605 B over its main baseline), and 1,536 B for
+ * when each session was last active (#4236 added 1,081 B to ja: the sidebar row's age at its end, the paged list's
+ * Active within menu and its folded Earlier group, their words). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 590_976;
+export const FIRST_SCREEN_BUDGET = 592_512;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
