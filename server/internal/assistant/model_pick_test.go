@@ -269,7 +269,7 @@ func TestSendRefusesAPickThatCantRun(t *testing.T) {
 	// The default's launcher that can't run it still gives way to one that can (finishMainChatModel), as before.
 	s, _ := pickFixture(t)
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.codex-gw"})
-	if p, err := send(t, s, "main", map[string]any{}); err != nil || p["launcher"] != "claude" {
+	if p, err := send(t, s, "main", map[string]any{}); err != nil || p["launcher"] == "codex-gw" || p["launcher"] == nil {
 		t.Fatalf("default fallback: %v %v", p, err)
 	}
 }

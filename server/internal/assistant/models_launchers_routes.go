@@ -135,12 +135,27 @@ func (s *Service) launcherRoutes() {
 		taken := func(n string) bool {
 			return slices.ContainsFunc(views, func(v LauncherView) bool { return v.Name == n })
 		}
-		if in.Name == "" && in.Preset != "" {
+		if in.Name == "" {
+			display := ""
+			if in.DisplayName != nil {
+				display = strings.TrimSpace(*in.DisplayName)
+			}
 			var n int
-			in.Name, n = launcherNameFor(in.Preset, taken)
-			if in.DisplayName == nil || strings.TrimSpace(*in.DisplayName) == "" {
-				d := s.presetDisplayName(ctx, in.Preset, n)
-				in.DisplayName = &d
+			if in.Preset != "" {
+				in.Name, n = launcherNameFor(in.Preset, taken)
+				if display == "" {
+					d := s.presetDisplayName(ctx, in.Preset, n)
+					in.DisplayName = &d
+				}
+			} else {
+				// Without a preset (launcher_auto_name, #5029): named after the display name, else after the gateway's
+				// host, which then is the display name too.
+				host := gatewayHost(strings.TrimSpace(in.BaseURL))
+				in.Name, n = customLauncherName(display, host, taken)
+				if display == "" && host != "" {
+					d := numberedName(host, n)
+					in.DisplayName = &d
+				}
 			}
 		}
 		if err := in.check(); err != nil {
@@ -256,14 +271,14 @@ func (s *Service) launcherRoutes() {
 			apierr.WriteJSON(w, map[string]any{"ok": true, "deleted": true})
 			return
 		}
-		s.models.mu.Unlock()
 		// an rc-file launcher, or plain claude (#4384): hidden in Persona, the file is not touched; a start that names it,
-		// or a default that runs it, still runs it
-		hidden := s.hiddenLaunchers(ctx)
-		if !slices.Contains(hidden, name) {
-			hidden = append(hidden, name)
+		// or a default that runs it, still runs it. Under the lock, like an import's hiding and a restore.
+		hidden, err := s.readHiddenLaunchers(ctx)
+		if err == nil && !slices.Contains(hidden, name) {
+			err = s.putSetting(ctx, launchersHiddenKey, append(hidden, name))
 		}
-		if err := s.putSetting(ctx, launchersHiddenKey, hidden); err != nil {
+		s.models.mu.Unlock()
+		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -314,8 +329,13 @@ func (s *Service) launcherRoutes() {
 	})
 	s.handle("POST /api/v1/launchers/{name}/restore", func(w http.ResponseWriter, r *http.Request) {
 		ctx, name := r.Context(), r.PathValue("name")
-		hidden := slices.DeleteFunc(s.hiddenLaunchers(ctx), func(n string) bool { return n == name })
-		if err := s.putSetting(ctx, launchersHiddenKey, hidden); err != nil {
+		s.models.mu.Lock() // launchers.hidden changes one at a time (the import, hiding, restoring)
+		hidden, err := s.readHiddenLaunchers(ctx)
+		if err == nil {
+			err = s.putSetting(ctx, launchersHiddenKey, slices.DeleteFunc(hidden, func(n string) bool { return n == name }))
+		}
+		s.models.mu.Unlock()
+		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -420,6 +440,15 @@ func (s *Service) machineLauncherRoutes() {
 		def := s.pickerDefault(ctx, r)
 		keep, _ := def["provider"].(string)
 		shown := s.withHealth(ctx, mid, list, keep)
+		// A Persona-managed provider shows its display name over its ID (launcher_auto_name); tiers and default still
+		// name the ID, which clients look up here.
+		stored := s.storedLaunchers(ctx)
+		for i, l := range shown {
+			j := slices.IndexFunc(stored, func(m storedLauncher) bool { return m.Name == l.Name })
+			if j >= 0 && proto.CanonicalLauncherSource(l.Source) == "persona" {
+				shown[i].DisplayName = stored[j].DisplayName
+			}
+		}
 		out := map[string]any{"launchers": shown, "default": def}
 		if unavailable != nil {
 			out["unavailable"] = unavailable

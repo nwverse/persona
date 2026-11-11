@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -175,7 +176,8 @@ func (e *pickError) Unwrap() error { return e.err }
 func refusePick(status int, err error) error { return &pickError{status: status, err: err} }
 
 // pickModel checks a pick for conversation sid (on machine, "" to find it) and keeps it: the launcher can run the
-// assistant there (modelPickRefusal), the model is a model id the launcher takes, the effort one a pick may carry.
+// assistant there (modelPickRefusal) and runs the conversation's agent kind (otherKindPick), the model is a model id
+// the launcher takes, the effort one a pick may carry.
 // lang is the app's, for the refusals that are worded here.
 func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.ModelPick, lang i18n.Lang) (modelPick, error) {
 	in.Launcher, in.Model, in.Effort = strings.TrimSpace(in.Launcher), strings.TrimSpace(in.Model), strings.TrimSpace(in.Effort)
@@ -204,6 +206,10 @@ func (s *Service) pickModel(ctx context.Context, sid, machine string, in proto.M
 	}
 	if err := s.modelPickRefusal(ctx, machine, in.Launcher, lang, false); err != nil {
 		return modelPick{}, err
+	}
+	var other *launcherOtherKind
+	if err := s.otherKindPick(ctx, machine, sid, in.Launcher); errors.As(err, &other) {
+		return modelPick{}, other.rpcError(lang) // Claude Code can't resume a Codex thread, nor Codex a Claude transcript
 	}
 	if in.Model != "" {
 		if err := s.pickedModelRefusal(ctx, machine, in.Launcher, in.Model); err != nil {
@@ -266,11 +272,13 @@ func (s *Service) pickedModelRefusal(ctx context.Context, machine, launcher, mod
 	return nil
 }
 
-// storedPickRefused: err refuses a message on its conversation's pick and carries a code the hub words and acts on
-// (launcher_out_of_scope, launcher_own_service, launcher_missing): sendParams hands it on as it is.
+// storedPickRefused: err refuses a pick, or a message on its conversation's pick, and carries a code the hub words and
+// the apps act on (launcher_out_of_scope, launcher_own_service, launcher_missing, launcher_other_kind): it goes on as it
+// is (409 with the code).
 func storedPickRefused(err error) bool {
 	var re *rpc.Error
-	return errors.As(err, &re) && slices.Contains([]string{proto.CodeLauncherOutOfScope, proto.CodeLauncherOwnService, proto.CodeLauncherMissing}, re.Code)
+	return errors.As(err, &re) && slices.Contains([]string{proto.CodeLauncherOutOfScope, proto.CodeLauncherOwnService,
+		proto.CodeLauncherMissing, assistantwire.CodeLauncherOtherKind}, re.Code)
 }
 
 // modelPickRoutes: PUT /api/v1/assistant/conversations/{id}/model {launcher, model?, effort?, machine_id?} keeps the pick

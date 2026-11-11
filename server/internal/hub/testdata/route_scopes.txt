@@ -122,6 +122,7 @@ agents.read          GET /api/v1/agents/sessions/{id}/messages
 -                    GET /api/v1/app/android/apk
 -                    GET /api/v1/app/android/latest
 assistant.ask        GET /api/v1/assistant
+-                    GET /api/v1/assistant/availability
 assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
@@ -491,6 +492,7 @@ notify               POST /api/v1/notify
 -                    POST /api/v1/recordings/{id}/minutes
 -                    POST /api/v1/recordings/{id}/minutes/todos
 -                    POST /api/v1/recordings/{id}/photos
+-                    POST /api/v1/recordings/{id}/segments
 agents.control       POST /api/v1/sessions
 -                    POST /api/v1/sessions/{mid}/{sid}/archive
 -                    POST /api/v1/sessions/{mid}/{sid}/attach

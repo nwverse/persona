@@ -8,8 +8,9 @@ It serves machines, agents, conversations, interactions and the inbox, enough fo
 does not know are logged to stderr as MISSING. Timestamps are relative to when it starts. See docs/operations/testing.md.
 """
 import base64, unicodedata
-import argparse, copy, hashlib, json, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import argparse, copy, hashlib, json, math, os, re, shutil, signal, socket, ssl, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -716,6 +717,9 @@ _CONTEXT = {
 # MOCK_SPLIT_TABS=1 see below.
 if os.environ.get("MOCK_CONTEXT_DANGER"):
     _CONTEXT[TESTS] = ("claude-sonnet-5-5", 184_000, 200_000)
+# MOCK_MODEL_CHANGE=1 (#5034): the recipes agent's latest reply came from Sonnet (its first from Opus, ITEMS below).
+if os.environ.get("MOCK_MODEL_CHANGE") == "1":
+    _CONTEXT[RECIPE] = ("claude-sonnet-5-5", 42_000, 200_000)
 for _s in SESSIONS:
     if _s["session_id"] in _CONTEXT:
         _model, _tokens, _window = _CONTEXT[_s["session_id"]]
@@ -1616,9 +1620,10 @@ def mock_png(w=96, h=64):
 # went with a photo, so its words are the apps' stand-in) and one from another conversation, which the assistant holds
 # until the turn ends (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
 QUEUED_PHOTOS = {"请看图片": [{"mime": "image/png", "data": mock_png()}]}
+PERSONA_QUEUE_MESSAGES = ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」：会议纪要整理好了，要不要发给参会的人？"]
 if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
-                         "queued": ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」：会议纪要整理好了，要不要发给参会的人？"]})
+                         "queued": list(PERSONA_QUEUE_MESSAGES)})
 
 # MOCK_ORIGINS=1 (#3264, docs/protocol/protocol.md "Origin of assistant chats"): conversations the hub opened by itself — the inbox's AI twin,
 # scheduled tasks, a Feishu /agent, one another conversation started — next to the user's own; one of them runs, one
@@ -2069,6 +2074,8 @@ def assistant_state(space="", archived=False):
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
+    if isinstance(cfg.get("timezone_picked"), bool):  # once a client said so, as the hub (#1855)
+        out["timezone_picked"] = cfg["timezone_picked"]
     if cfg["main"]:
         out["main"] = cfg["main"]
     if MEETING_ATTENDANCE:  # only from a hub that attends meetings (meeting-minutes.md "Attendance fields")
@@ -2808,6 +2815,322 @@ RECORDINGS_TRIMMED = {}
 # (what the user sees is then stale).
 RECORDING_MINUTES = [os.environ.get("MOCK_RECORDING_MINUTES", "pending")]
 RECORDING_MINUTES_ASKED = []
+# All-day recording fixtures (#4741): ready makes a recap from the stored text; the other modes let clients exercise
+# waiting, retry and the time before a recap is due. All recording routes share the lock, including delete and trim.
+RECORDINGS_LOCK = threading.RLock()
+RECORDING_DAY = {"on": os.environ.get("MOCK_NO_RECORDING_DAY") != "1", "recap": os.environ.get("MOCK_DAY_RECAP", "ready")}
+RECORDING_DAY_TODOS = {}  # confirmations survive recap versions that omit an action
+DAY_MAX_SEGMENTS = 20000
+DAY_MAX_TEXT = 4 << 20
+
+
+def day_number(value):
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def day_time(value):
+    if not isinstance(value, str): raise ValueError("time must be RFC 3339")
+    out = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if out.tzinfo is None: raise ValueError("time needs a zone")
+    return out
+
+
+def day_coverage(raw):
+    if not isinstance(raw, dict) or not day_number(raw.get("to", 0)): raise ValueError("invalid coverage")
+    gaps = raw.get("gaps", [])
+    if not isinstance(gaps, list): raise ValueError("invalid coverage gaps")
+    clean = []
+    for gap in gaps:
+        if not isinstance(gap, dict) or not all(day_number(gap.get(k, 0)) for k in ("from", "to")) \
+                or not isinstance(gap.get("reason", ""), str): raise ValueError("invalid coverage gap")
+        start, end = sorted((max(0, gap.get("from", 0)), max(0, gap.get("to", 0))))
+        if start == end: continue
+        clean.append({"from": start, "to": end,
+                      "reason": gap.get("reason", "").strip().encode()[:32].decode("utf-8", "ignore")})
+    clean.sort(key=lambda g: (g["from"], g["to"]))
+    merged = []
+    for gap in clean:
+        if merged:
+            last = merged[-1]
+            if gap["reason"] == last["reason"] and gap["from"] <= last["to"]:
+                last["to"] = max(last["to"], gap["to"])
+                continue
+            if gap["from"] < last["to"]:
+                gap["from"] = last["to"]
+                if gap["to"] <= gap["from"]: continue
+        merged.append(gap)
+
+    def compact(gaps, same_reason):
+        if len(gaps) <= 500: return gaps
+        pairs = [i for i, (a, b) in enumerate(zip(gaps, gaps[1:]))
+                 if a["reason"] != "erased" and b["reason"] != "erased" and (not same_reason or a["reason"] == b["reason"])]
+        pairs.sort(key=lambda i: gaps[i + 1]["from"] - gaps[i]["to"])
+        joined = set(pairs[:len(gaps) - 500])
+        out = gaps[:1]
+        for i, gap in enumerate(gaps[1:]):
+            if i in joined: out[-1]["to"] = gap["to"]
+            else: out.append(gap)
+        return out
+
+    # Like mendCoverage: closest same-reason neighbours first, then other non-erased pairs if needed.
+    # Separated erased intervals are never bridged, even when that leaves more than 500 gaps.
+    merged = compact(compact(merged, same_reason=True), same_reason=False)
+    return {"to": max(0, raw.get("to", 0)), "gaps": merged}
+
+
+def day_fields(body):
+    """Validate before making any state changes, even for stale appends and expired recordings."""
+    out = dict(body)
+    segs = body.get("segments", [])
+    if not isinstance(segs, list): raise ValueError("invalid segments")
+    out["segments"] = []
+    for seg in segs:
+        if not isinstance(seg, dict) or not all(day_number(seg.get(k, 0)) for k in ("start", "end")) \
+                or not isinstance(seg.get("text", ""), str): raise ValueError("invalid segment")
+        out["segments"].append({"start": seg.get("start", 0), "end": seg.get("end", 0), "text": seg.get("text", "").strip()})
+    if "duration" in body and not day_number(body["duration"]): raise ValueError("invalid duration")
+    if "complete" in body and type(body["complete"]) is not bool: raise ValueError("invalid complete")
+    if "ended_at" in body and body["ended_at"] not in (None, ""): day_time(body["ended_at"])
+    if "title" in body:
+        if not isinstance(body["title"], str): raise ValueError("invalid title")
+        out["title"] = " ".join(body["title"].split())
+    if "coverage" in body: out["coverage"] = day_coverage(body["coverage"])
+    if "bookmarks" in body:
+        if not isinstance(body["bookmarks"], list): raise ValueError("invalid bookmarks")
+        for mark in body["bookmarks"]:
+            if not isinstance(mark, dict) or not day_number(mark.get("at", 0)) or not isinstance(mark.get("label", ""), str):
+                raise ValueError("invalid bookmark")
+        out["bookmarks"] = sorted(body["bookmarks"], key=lambda b: b.get("at", 0))
+    return out
+
+
+def day_expired(rid, body):
+    days = ASSISTANT_CONFIG["recording_days"]
+    return rid in RECORDINGS_TRIMMED or bool(days and day_time(body["started_at"]) < datetime.now(timezone.utc) - timedelta(days=days))
+
+
+def day_result(rid, status, put=False, fallback=None):
+    rec = RECORDINGS.get(rid) or fallback
+    out = {"id": rid, "revision": rec["revision"], "next": rec.get("next", 0), "status": status}
+    if put:
+        out["base"] = rec.get("base", rec["revision"])
+        if MEETING_ATTENDANCE: out["attendance"] = "off"
+        if fallback and fallback.get("attendance") not in (None, "", "off"):
+            out["attendance_problem"] = "not_meeting"
+    return out
+
+
+def day_clock(rec, seconds):
+    return (day_time(rec["started_at"]) + timedelta(seconds=seconds)).astimezone(ZoneInfo(rec["tz"])).strftime("%H:%M")
+
+
+def day_action_key(action):
+    return ((action.get("who") or "").strip().casefold(), action["what"].strip().casefold())
+
+
+def day_markdown(rec, recap):
+    lines = ["# " + rec["day"], "", recap["summary"]]
+    for kind, heading in (("meeting", "Meetings"), ("outside", "Outside meetings")):
+        entries = [e for e in recap.get("timeline", []) if e["kind"] == kind]
+        if not entries: continue
+        lines += ["", "## " + heading]
+        for entry in entries:
+            lines += ["", "### %s–%s %s" % (day_clock(rec, entry["from"]), day_clock(rec, entry["to"]), entry["title"])]
+            lines += ["- %s %s" % (day_clock(rec, p["at"]), p["text"]) for p in entry["points"]]
+    if recap.get("actions"):
+        lines += ["", "## Suggested to-dos"]
+        lines += ["- %s %s" % (day_clock(rec, a["at"]), a["what"]) for a in recap["actions"]]
+    return "\n".join(lines).strip() + "\n"
+
+
+def day_recap_matches(rid, word):
+    """Search the kept Markdown, never the recap's internal JSON or the transcript removed by trimming."""
+    with RECORDINGS_LOCK:
+        markdown = KB_DETAIL.get(("recordings", rid), {}).get("recap", {}).get("markdown", "")
+        return [{"path": "recordings/%s/recap.md" % rid, "n": i + 1, "line": line}
+                for i, line in enumerate(markdown.splitlines()) if line.strip() and kb_match(line, word)]
+
+
+def day_recap(rid, rec, version):
+    segs = sorted((s for s in rec["segments"] if s["text"] and s["start"] <= rec["coverage"]["to"]), key=lambda s: s["start"])
+    groups, actions, used_todos = {}, [], set()
+    for seg in segs:
+        hour = (day_time(rec["started_at"]) + timedelta(seconds=seg["start"])).astimezone(ZoneInfo(rec["tz"])).isoformat()[:13]
+        kind = "meeting" if "会议" in seg["text"] or "meeting" in seg["text"].lower() else "outside"  # i18n-ignore: fixture keywords
+        entry = groups.setdefault((hour, kind), {"from": seg["start"], "to": seg["end"], "kind": kind,
+                                                "title": seg["text"], "points": []})
+        entry["to"] = max(entry["to"], seg["end"])
+        entry["points"].append({"text": seg["text"], "at": seg["start"]})
+        if "负责" in seg["text"] or "will" in seg["text"].lower():  # i18n-ignore: fixture keywords
+            action = {"id": "a%d" % (len(actions) + 1), "what": seg["text"], "at": seg["start"], "todo_id": ""}
+            key = day_action_key(action)
+            matches = [t for t in RECORDING_DAY_TODOS.get(rid, []) if t["task"] == key and t["todo_id"] not in used_todos
+                       and abs(t["at"] - action["at"]) <= 900]
+            if matches:
+                action["todo_id"] = min(matches, key=lambda t: abs(t["at"] - action["at"]))["todo_id"]
+                used_todos.add(action["todo_id"])
+            actions.append(action)
+    cutoff = datetime.strptime(rec["day"], "%Y-%m-%d").replace(tzinfo=ZoneInfo(rec["tz"])) + timedelta(days=1, hours=6)
+    reason = "complete" if rec.get("complete") else "cutoff" if datetime.now(timezone.utc) >= cutoff else ""
+    covers = rec["coverage"]["to"]
+    gaps = [{**g, "to": min(g["to"], covers)} for g in rec["coverage"]["gaps"] if g["from"] < covers]
+    out = {"version": version, "revision": rec["revision"], "generated_at": datetime.now(timezone.utc).isoformat(),
+           "day": rec["day"], "covers": {"from": 0, "to": covers}, "final": bool(reason),
+           "summary": " ".join(s["text"] for s in segs[:2]), "timeline": sorted(groups.values(), key=lambda e: e["from"]),
+           "actions": actions, "gaps": gaps, "partial": False}
+    if reason: out["final_reason"] = reason
+    out["markdown"] = day_markdown(rec, out)
+    return out
+
+
+def day_publish(rid, repair=False, regenerate=True):
+    rec = RECORDINGS[rid]
+    prior = KB_DETAIL.get(("recordings", rid), {})
+    recap = copy.deepcopy(prior.get("recap"))
+    if repair and recap:
+        erased = [g for g in rec["coverage"]["gaps"] if g["reason"] == "erased"]
+        starts = {s["start"] for s in rec["segments"] if s["text"]}  # a point must still start a non-empty line
+        keep = lambda item: item["at"] in starts and not any(g["from"] <= item["at"] < g["to"] for g in erased)
+        # An entry overlapping an erased gap goes whole: its title can quote the erased words.
+        recap["timeline"] = [e for e in recap.get("timeline", []) if not any(g["from"] < e["to"] and e["from"] < g["to"] for g in erased)]
+        for entry in recap["timeline"]: entry["points"] = [p for p in entry["points"] if keep(p)]
+        recap["timeline"] = [e for e in recap["timeline"] if e["points"]]
+        recap["actions"] = [a for a in recap.get("actions", []) if keep(a)]
+        recap["summary"] = ""
+        recap["markdown"] = day_markdown(rec, recap)
+    mode = RECORDING_DAY["recap"]
+    has_text = any(s["text"] for s in rec["segments"])
+    state = None if not has_text or mode == "none" else mode
+    if mode == "none": recap = None
+    if state == "ready" and regenerate:
+        recap = day_recap(rid, rec, (recap or {}).get("version", 0) + 1)
+    rec.pop("recap_state", None); rec.pop("recap_final", None)
+    if state: rec["recap_state"] = state
+    if recap and recap["final"]:
+        rec["recap_final"] = True
+        rec.setdefault("recap_final_at", recap["generated_at"])  # the first final recap's time: the phone's audio clock
+    rec["matched_rev"] = rec["summarized_rev"] = rec["revision"]
+    name = rec.get("title") or "Day · " + rec["day"]
+    summary = recap["summary"] if recap else ""
+    entry = {"kind": "recordings", "id": rid, "name": name, "relevance": 0, "tags": [], "one_line": summary,
+             "updated": rec["started_at"]}
+    KB["recordings"] = [e for e in KB.get("recordings", []) if e["id"] != rid] + [entry]
+    meta = {k: v for k, v in rec.items() if k != "segments"}
+    meta.update(name=name, chars=sum(len(s["text"]) for s in rec["segments"]))
+    detail = {"meta": meta, "summary": summary, "segments": sorted((s for s in rec["segments"] if s["text"]), key=lambda s: s["start"])}
+    if recap: detail["recap"] = recap
+    KB_DETAIL[("recordings", rid)] = detail
+
+
+def day_put(h, rid, raw):
+    try:
+        body = day_fields(raw)
+        day = body.get("day")
+        if not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day): raise ValueError("day is required")
+        datetime.strptime(day, "%Y-%m-%d")
+        zone = body.get("tz", ASSISTANT_CONFIG["timezone"])
+        if not isinstance(zone, str): raise ValueError("invalid tz")
+        ZoneInfo(zone)
+        part = body.get("part", 1)
+        if type(part) is not int or not 1 <= part <= 99: raise ValueError("invalid part")
+        day_time(body["started_at"])
+    except (ValueError, TypeError, OverflowError, ZoneInfoNotFoundError):
+        return h.send_json({"error": "invalid day recording"}, 400) or True
+    if len(body["segments"]) > DAY_MAX_SEGMENTS or sum(len(s["text"].encode()) for s in body["segments"]) > DAY_MAX_TEXT:
+        return h.send_json({"error": "day recording is full", "code": "day_full", "next": RECORDINGS.get(rid, {}).get("next", 0)}, 413) or True
+    body.update(kind="day", tz=zone, part=part, base=body["revision"], next=len(body["segments"]))
+    body.setdefault("coverage", {"to": 0, "gaps": []})
+    have = RECORDINGS.get(rid)
+    if day_expired(rid, body): return h.send_json(day_result(rid, "expired", put=True, fallback=body)) or True
+    if have and have["revision"] > body["revision"]:
+        return h.send_json(day_result(rid, "stale", put=True, fallback=body)) or True
+    for key in ("calendar", "attendance", "attending_session", "room", "private", "transcription", "recap_final_at"):
+        body.pop(key, None)
+    if have and have.get("recap_final_at"): body["recap_final_at"] = have["recap_final_at"]
+    for i, seg in enumerate(body["segments"]): seg["n"] = i + 1
+    RECORDINGS[rid] = body
+    day_publish(rid, repair=bool(have))
+    return h.send_json(day_result(rid, "stored", put=True, fallback=raw)) or True
+
+
+def day_append(h, rid):
+    if is_read_only(h): return h.send_json({"error": "full credentials required", "code": "forbidden"}, 403) or True
+    raw = h.last_body or b""
+    if len(raw) > 1 << 20: return h.send_json({"error": "body over 1 MiB", "code": "too_large"}, 413) or True
+    if rid in RECORDINGS_DELETED: return h.send_json({"error": "recording deleted", "code": "recording_deleted"}, 410) or True
+    if rid not in RECORDINGS: return h.send_json({"error": "upload the recording first", "code": "recording_not_found"}, 404) or True
+    if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "knowledge base is read only", "code": "kb_read_only"}, 403) or True
+    try:
+        body = json.loads(raw or b"{}")
+        if not isinstance(body, dict): raise ValueError("invalid body")
+        if type(body.get("base")) is not int or body["base"] <= 0 or type(body.get("revision")) is not int \
+                or body["revision"] <= body["base"] or type(body.get("from")) is not int or body["from"] < 0:
+            raise ValueError("invalid base, revision or from")
+        body = day_fields(body)
+        if len(body["segments"]) > 500: raise ValueError("too many segments")
+    except (ValueError, TypeError, OverflowError):
+        return h.send_json({"error": "invalid append"}, 400) or True
+    rec = RECORDINGS[rid]
+    if day_expired(rid, rec): return h.send_json(day_result(rid, "expired")) or True
+    if rec.get("kind") != "day": return h.send_json({"error": "not a day recording", "code": "not_day"}, 409) or True
+    held = rec["next"]
+    if body["base"] != rec.get("base", 0):
+        return h.send_json({"error": "base changed", "code": "base_changed", "base": rec.get("base", 0), "next": held}, 409) or True
+    if body["from"] > held: return h.send_json({"error": "missing earlier segments", "code": "segments_gap", "next": held}, 409) or True
+    new = body["segments"][held - body["from"]:]
+    if held + len(new) > DAY_MAX_SEGMENTS or sum(len(s["text"].encode()) for s in rec["segments"] + new) > DAY_MAX_TEXT:
+        return h.send_json({"error": "day recording is full", "code": "day_full", "next": held}, 413) or True
+    before = copy.deepcopy(rec)
+    if body["revision"] >= rec["revision"]:
+        for key in ("duration", "ended_at", "title", "bookmarks", "coverage", "complete"):
+            if key not in body: continue
+            if key == "ended_at" and not body[key]: continue
+            if key == "complete" and rec.get("complete"): continue
+            rec[key] = body[key]
+    for i, seg in enumerate(new): seg["n"] = held + i + 1
+    rec["segments"] += new
+    rec["next"] += len(new)
+    rec["revision"] = max(rec["revision"], body["revision"])
+    if rec != before: day_publish(rid)
+    return h.send_json(day_result(rid, "stored")) or True
+
+
+def day_minutes(h, rid, todos=False):
+    if is_read_only(h): return h.send_json({"error": "full credentials required", "code": "forbidden"}, 403) or True
+    if MEETING_MODE["kb_read_only"]: return h.send_json({"error": "knowledge base is read only", "code": "kb_read_only"}, 403) or True
+    rec = RECORDINGS[rid]
+    if not todos:
+        if rid in RECORDINGS_TRIMMED:
+            return h.send_json({"error": "the transcript expired", "code": "transcript_expired"}, 409) or True
+        if not any(s["text"] for s in rec["segments"]): return h.send_json({"error": "no transcript", "code": "incomplete"}, 409) or True
+        day_publish(rid)
+        return h.send_json({"state": "pending"}, 202) or True
+    try: body = json.loads(h.last_body or b"{}")
+    except ValueError: body = None
+    if not isinstance(body, dict) or type(body.get("version")) is not int or not isinstance(body.get("actions"), list) \
+            or not body["actions"] or not all(isinstance(a, str) for a in body["actions"]):
+        return h.send_json({"error": "version and actions are required"}, 400) or True
+    recap = KB_DETAIL[("recordings", rid)].get("recap")
+    if not recap: return h.send_json({"error": "no recap"}, 404) or True
+    if body["version"] != recap["version"]: return h.send_json({"error": "recap changed", "code": "minutes_stale"}, 409) or True
+    actions = {a["id"]: a for a in recap.get("actions", [])}
+    if any(a not in actions for a in body["actions"]): return h.send_json({"error": "unknown action"}, 400) or True
+    todos = []
+    for aid in dict.fromkeys(body["actions"]):
+        action = actions[aid]
+        confirmed = RECORDING_DAY_TODOS.setdefault(rid, [])
+        tid = action.get("todo_id") or "todo_day_" + hashlib.sha256((rid + "\0" + str(recap["version"]) + "\0" + aid).encode()).hexdigest()[:24]
+        todo = next((t for t in TODOS if t["id"] == tid), None)
+        if todo is None:
+            now = datetime.now(timezone.utc).isoformat()
+            todo = {"id": tid, "title": action["what"], "notes": "Day · %s · %s" % (rec["day"], day_clock(rec, action["at"])),
+                    "created_at": now, "updated_at": now, "done_at": None, "agents": []}
+            TODOS.insert(0, todo)
+        if not any(t["todo_id"] == tid for t in confirmed):
+            confirmed.append({"task": day_action_key(action), "at": action["at"], "todo_id": tid})
+        action["todo_id"] = tid
+        todos.append(format_todo(todo))
+    return h.send_json({"todos": todos, "recap": recap}) or True
 
 
 def recording_minutes_next(rid):
@@ -3224,7 +3547,8 @@ _features_without_meeting_attendance = features
 
 def features():
     return _features_without_meeting_attendance() + (["meeting_attendance"] if MEETING_ATTENDANCE else []) + \
-        (["meeting_conversation"] if meeting_conversation_on() else []) + (["meeting_photos"] if meeting_photos_on() else [])
+        (["meeting_conversation"] if meeting_conversation_on() else []) + (["meeting_photos"] if meeting_photos_on() else []) + \
+        (["recording_day"] if RECORDING_DAY["on"] else [])
 
 
 def meeting_live(rid):
@@ -3239,7 +3563,7 @@ def recording_kind(body):
     if kind is None: return "note"
     if not isinstance(kind, str): return None
     kind = kind.strip().lower() or "note"
-    return kind if kind in ("note", "meeting") else None
+    return kind if kind in ("note", "meeting") or (kind == "day" and RECORDING_DAY["on"]) else None
 
 
 def meeting_attendance(body):
@@ -4407,7 +4731,39 @@ def photo_post(h, rid, raw):
 
 
 def recordings_route(h, method, p):
+    with RECORDINGS_LOCK:
+        return recordings_route_locked(h, method, p)
+
+
+def recordings_route_locked(h, method, p):
     """The hub's recording sync, and its copy in the knowledge base (KB["recordings"])."""
+    if p == "/mock/recording_day":
+        if method == "POST":
+            try: body = json.loads(h.last_body or b"{}")
+            except ValueError: body = None
+            if not isinstance(body, dict) or ("on" in body and type(body["on"]) is not bool) \
+                    or ("recap" in body and body["recap"] not in ("ready", "pending", "failed", "none")):
+                return h.send_json({"error": "invalid day mock mode"}, 400) or True
+            RECORDING_DAY.update({k: v for k, v in body.items() if k in RECORDING_DAY})
+            if "recap" in body:
+                for rid, rec in RECORDINGS.items():
+                    if rec.get("kind") == "day" and rid not in RECORDINGS_TRIMMED: day_publish(rid)
+        return h.send_json(RECORDING_DAY) or True
+    if method == "GET" and p == "/api/v1/kb/recordings":
+        tag = parse_qs(urlparse(h.path).query).get("tag", [""])[0]
+        return h.send_json({"items": [e for e in KB.get("recordings", []) if not tag or tag in e.get("tags", [])],
+                            "tags": kb_tags("recordings")}) or True
+    if method == "GET" and re.fullmatch(r"/api/v1/kb/recordings/[^/]+", p):
+        rid = p.rsplit("/", 1)[-1].lower()
+        if RECORDINGS.get(rid, {}).get("kind") == "day":
+            detail = dict(KB_DETAIL[("recordings", rid)], kind="recordings", id=rid,
+                          path="/home/me/.persona/data/recordings/" + rid)
+            out = {"detail": detail}
+            word = parse_qs(urlparse(h.path).query).get("q", [""])[0]
+            if word: out["matches"] = day_recap_matches(rid, word)
+            return h.send_json(out) or True
+    if re.fullmatch(r"/api/v1/recordings/[^/]+/segments", p) and not RECORDING_DAY["on"]:
+        return h.send_json({"error": "404 page not found"}, 404, add_error_code=False) or True
     if meeting_conversation_route(h, method, p): return True
     if photos_route(h, method, p): return True
     if p == "/mock/meeting_attendance":
@@ -4428,7 +4784,7 @@ def recordings_route(h, method, p):
         # A fresh start for the next test on the same mock: what an earlier one stored (its minutes) is gone too.
         RECORDING_MINUTES[0] = json.loads(h.last_body or b"{}").get("mode", "pending")
         meeting_conversation_reset()
-        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear()
+        RECORDINGS.clear(); RECORDING_MINUTES_ASKED.clear(); MEETING_LIVE.clear(); RECORDINGS_TRIMMED.clear(); RECORDING_DAY_TODOS.clear()
         with PHOTO_LOCK: PHOTO_STORE.clear()
         KB["recordings"] = []
         for key in [k for k in KB_DETAIL if k[0] == "recordings"]: KB_DETAIL.pop(key)
@@ -4445,12 +4801,18 @@ def recordings_route(h, method, p):
     if p == "/mock/recording_trim" and method == "POST":
         rid = str(json.loads(h.last_body or b"{}").get("id", "")).lower()
         detail = KB_DETAIL.get(("recordings", rid))
-        if rid not in RECORDINGS or not detail or not detail.get("minutes"):
-            return h.send_json({"error": "no stored recording with minutes"}, 404) or True
+        if rid not in RECORDINGS or not detail or not (detail.get("minutes") or detail.get("recap")):
+            return h.send_json({"error": "no stored recording with minutes or recap"}, 404) or True
         at = RECORDINGS_TRIMMED.setdefault(rid, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        detail["meta"].update(trimmed_at=at, minutes_state="ready")
+        is_day = RECORDINGS[rid].get("kind") == "day"
+        detail["meta"].update(trimmed_at=at, **({"recap_state": "ready"} if is_day else {"minutes_state": "ready"}))
         detail["meta"].pop("attendance", None); detail["meta"].pop("attending_session", None)
-        detail.pop("segments", None); detail["summary"] = ""  # "" over the entry's one line, as the hub's has no summary.md
+        detail.pop("segments", None)
+        # "" over the entry's one line, as the hub's has no summary.md; a day recording keeps its recap's summary.
+        detail["summary"] = detail["recap"]["summary"] if is_day else ""
+        if is_day:
+            RECORDINGS[rid]["segments"] = []
+            RECORDINGS[rid]["recap_state"] = "ready"
         with PHOTO_LOCK:  # what goes into the room (a photo's note, a withdrawn line) never lands in one deleted
             room_delete(rid)  # the room goes at the transcript cut; the private mark and the follow-up stay
             photos_trim(rid)  # and the photos the minutes do not cite
@@ -4462,12 +4824,19 @@ def recordings_route(h, method, p):
         return h.send_json({"days": ASSISTANT_CONFIG["recording_days"], "deleted": sorted(RECORDINGS_DELETED),
                             "recordings": [{"id": k, "revision": v["revision"], "complete": v.get("complete", False),
                                             "started_at": v["started_at"],
+                                            **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
+                                               if v.get("kind") == "day" else {}),
                                             **({"trimmed_at": RECORDINGS_TRIMMED[k]} if k in RECORDINGS_TRIMMED else {})}
                                            for k, v in RECORDINGS.items()]}) or True
     rid = p.split("/")[4].lower()
+    if p.endswith("/segments"):
+        if method != "POST": return h.send_json({"error": "method"}, 405) or True
+        return day_append(h, rid)
     if not re.fullmatch(UUID_RE, rid):
         return h.send_json({"error": "录音 id 不对"}, 400) or True
     if p.endswith("/live") or p.endswith("/ask"): return meeting_route(h, method, p, rid)
+    if method == "POST" and (p.endswith("/minutes") or p.endswith("/minutes/todos")) and RECORDINGS.get(rid, {}).get("kind") == "day":
+        return day_minutes(h, rid, todos=p.endswith("/todos"))
     if p.endswith("/minutes/todos") and method == "POST":
         detail = KB_DETAIL.get(("recordings", rid)) or {}
         minutes = detail.get("minutes")
@@ -4506,7 +4875,7 @@ def recordings_route(h, method, p):
         return h.send_json({"error": "404 page not found"}, 404) or True
     if method == "DELETE":
         existed = rid in RECORDINGS
-        RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None)
+        RECORDINGS.pop(rid, None); RECORDINGS_DELETED.add(rid); RECORDINGS_TRIMMED.pop(rid, None); RECORDING_DAY_TODOS.pop(rid, None)
         kb[:] = [e for e in kb if e["id"] != rid]; KB_DETAIL.pop(("recordings", rid), None)
         with MEETING_LOCK: MEETING_LIVE.pop(rid, None)  # live lines and asks go with the recording
         with PHOTO_LOCK:  # as at the trim
@@ -4516,12 +4885,17 @@ def recordings_route(h, method, p):
     if method != "PUT": return h.send_json({"error": "method"}, 405) or True
     RECORDING_PUTS[0] += 1
     if rid in RECORDINGS_DELETED: return h.send_json({"error": "这条录音已删除", "code": "recording_deleted"}, 410) or True
-    body = json.loads(h.last_body or b"{}")
+    try: body = json.loads(h.last_body or b"{}")
+    except ValueError: body = None
+    if not isinstance(body, dict): return h.send_json({"error": "invalid recording"}, 400) or True
     kind = recording_kind(body)  # unknown is a 400, as the hub's clean()
-    if not isinstance(body.get("revision"), int) or body["revision"] <= 0 or not body.get("started_at") \
+    if type(body.get("revision")) is not int or body["revision"] <= 0 or not body.get("started_at") \
             or body.get("device") not in ("phone", "watch") or kind is None:
         return h.send_json({"error": "参数不对"}, 400) or True
     have = RECORDINGS.get(rid)
+    if have and (have.get("kind") == "day") != (kind == "day"):
+        return h.send_json({"error": "recording kind cannot change to or from day", "code": "kind_changed"}, 409) or True
+    if kind == "day": return day_put(h, rid, body)
     if rid in RECORDINGS_TRIMMED:  # the hub takes no transcript back (kb/recordings.go putRecording)
         out = {"id": rid, "revision": body["revision"], "status": "expired"}
         if MEETING_ATTENDANCE: out["attendance"] = "off"
@@ -5063,6 +5437,21 @@ if os.environ.get("MOCK_OPENCODE"):
     ITEMS[OC_IDLE] = [it("user", "text", 60 * 4, text="CI 里的依赖缓存为什么一直没命中？")] + [
         it("assistant", "text", 60 * 3, text="缓存键里带了时间戳，每次都是新的；改成 lockfile 的哈希就好了。")]
 ITEMS[RECIPE] = [it("user", "text", 60 * 27, text="菜谱网站加个搜索")] + [it("assistant", "text", 60 * 26, text="搜索做好了，支持按食材和用时筛选。")]
+# MOCK_MODEL_CHANGE=1 (#5034): the recipes agent's two exchanges were answered by two models, as the transcript records
+# them (Item.model), so its chat draws the model change divider between them (web lib/model-change.ts).
+if os.environ.get("MOCK_MODEL_CHANGE") == "1":
+    def _by(model, part):  # a tool call is the model's; its result is the tool's
+        return [dict(x, model=model) if x["role"] == "assistant" else x for x in part]
+    ITEMS[RECIPE] = (
+        [it("user", "text", 60 * 28, text="菜谱网站加个搜索")]
+        + [it("assistant", "thinking", 60 * 28, text="先看看现在的路由里有没有搜索的入口。", model="claude-opus-5-5")]
+        + _by("claude-opus-5-5", tool("Grep", {"pattern": "search", "path": "src"}, "src/routes/index.tsx:12:  // TODO search", 60 * 28))
+        + [it("assistant", "text", 60 * 27, text="搜索做好了，支持按食材和用时筛选。", model="claude-opus-5-5")]
+        + [it("user", "text", 60 * 26, text="结果再按用时从短到长排一下")]
+        + _by("claude-sonnet-5-5", tool("Edit", {"file_path": "/Users/me/code/recipes/src/search.ts", "old_string": "return hits",
+                                               "new_string": "return hits.sort(byTime)"}, "ok", 60 * 26))
+        + [it("assistant", "text", 60 * 26, text="排好了：用时短的菜谱排在前面，同样用时的按收藏数。", model="claude-sonnet-5-5")]
+    )
 if MOCK_CLOSEOUT:  # each agent's last reply ends with the raw closeout block (the not-done one is only the block)
     for _sid, _ask, _cmd in ((CLOSEOUT_DONE, "报表导出一到 50 万行就超时，修一下", "go test ./export/..."),
                              (CLOSEOUT_DISPROVED, "把支付 SDK 升到 v4", "npm test"),
@@ -6400,6 +6789,22 @@ if os.environ.get("MOCK_IPHONE_ASK") == "1":  # an iphone_do step the node says 
          "summary": "在「我的 iPhone」上：在「钱包」里点「支付 ¥ 36.00」",
          "always_honored": False, "tool_title": "iPhone 操控"})  # the manager's own tool (#3590)
 
+# MOCK_AGENT_OWN_TOOL=before|after: the tests Agent's only card asks about one of Persona's own MCP tools
+# (report_to_supervisor, #4966). `before`: the raw name only, as a card was titled until then; `after`: the title the
+# manager gives a node's card for Persona's tools now (tool_title, in the user's language), and the tool alone for what
+# Always covers (tool_name_title).
+if os.environ.get("MOCK_AGENT_OWN_TOOL") in ("before", "after"):
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["session_id"] != TESTS]
+    _own = {"id": "ix_own_tool", "machine_id": "macbook", "session_id": TESTS, "session_title": "补齐网络层的单元测试",
+            "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=29),
+            "tool_name": "mcp__persona__report_to_supervisor",
+            "tool_input": {"kind": "done", "text": "网络层的单元测试补齐了，swift test 全部通过"},
+            "summary": "kind: done"}  # the node's summary: the input's first text argument (toolSummary)
+    if os.environ.get("MOCK_AGENT_OWN_TOOL") == "after":
+        _own["tool_title"] = "向督办汇报 · 完成"
+        _own["tool_name_title"] = "向督办汇报"
+    INTERACTIONS.append(_own)
+
 # MOCK_SECRET_RUN=pending|ran|withheld|long: the password card (secret_run, #1137) in Persona's main conversation.
 # `pending`: the assistant asked to run two commands on the Mac Studio, its call waits and the card asks for the
 # password; `ran`: the card was answered, the call's result (the tool's JSON) says every command exited 0, and no card is
@@ -7650,7 +8055,6 @@ SENT_TO = []  # where each of them went: machine_id, session_id, client_msg_id, 
 LARK_READS = []  # Feishu read reports, {"feed", **body} (GET /mock/lark_reads): what a chat page saw
 MAIL_SENT = []  # POST /api/v1/mail/send bodies (GET /mock/mail_sent): "Compose mail" / "Reply"
 MAIL_FLAGS = []  # POST …/mail/messages/{aid}/{uid}/flags, {"account_id", "uid", **body} (GET /mock/mail_flags)
-QUEUE_EDITS = []  # bodies of …/queue ("Withdraw to edit" / "Delete" of a queued message; GET /mock/queue_edits)
 
 
 QUEUED_IMAGES = [0]  # Claude Code numbers the pictures pasted into a session: [Image #1], [Image #2]…
@@ -10174,31 +10578,64 @@ LAUNCHER_PRESETS = [
      "models_error": "插件读模型列表超时"},
 ]
 
-# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and ~/.zshrc import. Two managed
+# MOCK_PROVIDERS=1 (#2455, scripts/test/web_providers_e2e.py): Settings › Model providers's wizard and the alias import. Two managed
 # providers (one with every advanced field), "Test connection" that passes or fails (a key or address with "bad" in it fails),
-# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and an import preview of 3 providers on macbook (one merging into gw_full); studio's node is
-# too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
+# "Fetch models" with 3 models (these two also without MOCK_PROVIDERS), and the rc-file launchers of the aliases macbook's import
+# preview reads (#5024). The import itself answers in every mode (a page served by Vite against a plain mock asked for it and got
+# a 404): 4 providers on macbook (one merging into gw_full when it is there, one whose aliases differ in more than the model, one
+# from ~/.bashrc with variables carried over and left out), its hide checks recomputed against the launchers each time; studio's
+# node is too old (409 node_outdated), nas is offline (503). Keys and headers are kept only as has_key / has_headers.
+# With the feature launcher_auto_name (#5029): a provider added with no name gets one (launcher_name_for), and "New Agent"'s
+# launchers list the managed providers with their display names (gw_full has one, anthropic_main shows its ID).
 MOCK_PROVIDERS = os.environ.get("MOCK_PROVIDERS") == "1"
 PROVIDER_LOG = {"post": None, "put": None, "test": [], "discover": [], "catalog": [], "import": None}
 PROVIDER_FIELDS = ("kind", "api", "base_url", "model", "small_model", "subagent_model", "custom_model", "custom_model_name",
                    "custom_model_description", "args", "auth", "models", "opus_model", "sonnet_model", "haiku_model", "fable_model",
                    "subagent_force", "proxy", "no_proxy", "timeout_ms", "compact_window", "max_context", "effort")
+# GET /api/v1/launchers/import's groups as the hub reads them from macbook's aliases. `existing` (a provider on the same address,
+# a variant's by its origin) and `hide` (none once Persona lists no such launcher or hides it) are worked out per request,
+# import_preview(); `hide` here is what an alias Persona lists would get.
 PROVIDER_IMPORT = [
-    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "model": "example-opus",
+    # two aliases that differ only in the model: one provider, merging into gw_full when it is there
+    {"name": "cc_full", "base_url": "https://gw.example.com", "auth": "bearer", "has_key": True, "own_service": "use", "model": "example-opus",
      "models": [{"id": "example-opus", "context_window": 1000000}, {"id": "example-haiku", "context_window": 200000}],
-     "aliases": ["cc_full", "cc_full_haiku"], "existing": "gw_full"},
-    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True,
-     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"]},
-    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True,
-     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}],
-     "aliases": ["cc_kimi", "cc_kimi_fast"], "has_headers": True},
+     "aliases": ["cc_full", "cc_full_haiku"],
+     "sources": [{"alias": "cc_full", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_full_haiku", "file": "~/.zshrc", "hide": "in_use", "uses": ["模型档位「性能」的 Agent 预设「strong」"]}]},
+    {"name": "cc_glm", "base_url": "https://open.bigmodel.example.com/api/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "glm-5.3", "models": [{"id": "glm-5.3", "context_window": 200000}], "aliases": ["cc_glm"],
+     "sources": [{"alias": "cc_glm", "file": "~/.zshrc", "hide": "ok"}]},
+    # one gateway and key, but the aliases set their tiers and effort differently: each can become a provider of its own
+    {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+     "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}, {"id": "kimi-k3-turbo"}], "has_headers": True,
+     "effort": "high", "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"],
+     "aliases": ["cc_kimi", "cc_kimi_fast"], "differs": ["tiers", "effort"],
+     "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"},
+                 {"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}],
+     "variants": [
+         {"name": "cc_kimi", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3", "models": [{"id": "kimi-k3", "context_window": 256000}], "has_headers": True, "effort": "high",
+          "opus_model": "kimi-k3", "has_env": True, "env_names": ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "aliases": ["cc_kimi"],
+          "sources": [{"alias": "cc_kimi", "file": "~/.zshrc", "hide": "ok"}]},
+         {"name": "cc_kimi_fast", "base_url": "https://api.moonshot.example.com/anthropic", "auth": "bearer", "has_key": True, "own_service": "use",
+          "model": "kimi-k3-turbo", "models": [{"id": "kimi-k3-turbo"}], "has_headers": True, "effort": "low", "haiku_model": "kimi-k3-turbo",
+          "aliases": ["cc_kimi_fast"], "sources": [{"alias": "cc_kimi_fast", "file": "~/.zshrc", "hide": "in_use", "uses": ["主对话"]}]},
+     ]},
+    # from ~/.bashrc: two variables carried over, three left out; the server defines cc_relay for another address
+    {"name": "cc_relay", "base_url": "https://relay.example.org", "auth": "api_key", "has_key": True, "own_service": "use",
+     "model": "relay-pro", "models": [{"id": "relay-pro"}], "aliases": ["cc_relay"], "has_env": True,
+     "env_names": ["CLAUDE_CODE_MAX_OUTPUT_TOKENS", "DISABLE_TELEMETRY"],
+     "skipped_env": [{"name": "HOME", "reason": "computer"}, {"name": "RELAY_TOKEN", "reason": "credential"}, {"name": "WORKDIR", "reason": "shell"}],
+     "sources": [{"alias": "cc_relay", "file": "~/.bashrc", "hide": "elsewhere", "elsewhere": ["服务器"]}]},
 ]
+# what a preview group carries that a stored provider does not
+IMPORT_ONLY = ("aliases", "existing", "create_as", "sources", "differs", "variants", "env_names", "skipped_env")
 PROVIDER_DISCOVERED = [{"id": "example-opus", "name": "Example Opus", "context_window": 1000000, "efforts": ["low", "medium", "high", "xhigh", "max"], "default_effort": "high"},
                        {"id": "example-sonnet", "name": "Example Sonnet", "context_window": 200000, "efforts": ["low", "medium", "high"]},
                        {"id": "example-haiku", "context_window": 200000}]
 if MOCK_PROVIDERS:
     LAUNCHERS[:0] = [
-        {"name": "gw_full", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
+        {"name": "gw_full", "display_name": "Team gateway", "source": "persona", "base_url": "https://gw.example.com", "model": "example-opus", "has_key": True,
          "auth": "bearer", "has_headers": True, "models": [{"id": "example-opus", "context_window": 1000000, "efforts": ["high", "max"], "default_effort": "high"},
                                                            {"id": "example-sonnet", "context_window": 200000}],
          "opus_model": "example-opus", "sonnet_model": "example-sonnet", "haiku_model": "example-haiku", "fable_model": "example-opus",
@@ -10207,6 +10644,106 @@ if MOCK_PROVIDERS:
         {"name": "anthropic_main", "source": "persona", "base_url": "https://api.anthropic.com", "model": "claude-sonnet-4-5", "has_key": True,
          "auth": "api_key", "models": [{"id": "claude-sonnet-4-5", "context_window": 200000}]},
     ]
+    # the aliases the import reads on macbook, as Persona lists them (cc_glm is there already)
+    LAUNCHERS[-1:-1] = [
+        {"name": "cc_full", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-opus", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_full_haiku", "source": "zshrc", "base_url": "https://gw.example.com", "model": "example-haiku", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_kimi_fast", "source": "zshrc", "base_url": "https://api.moonshot.example.com/anthropic", "model": "kimi-k3-turbo", "machines": ["macbook"], "rc_files": ["~/.zshrc"]},
+        {"name": "cc_relay", "source": "zshrc", "base_url": "https://relay.example.org", "model": "relay-pro", "machines": ["macbook", "server"], "rc_files": ["~/.bashrc"]},
+    ]
+    _features_without_auto_name = features
+
+    def features():
+        return _features_without_auto_name() + ["launcher_auto_name"]
+
+
+# The hub's names for providers it names itself (server/internal/assistant/models_presets.go): the slug rule, the
+# names its routes keep, -2, -3… while taken.
+RESERVED_LAUNCHER_NAMES = ("claude", "presets", "test", "discover", "import", "health")
+
+
+def launcher_slug(s):
+    """launcherSlug: lower case, each run of other characters one -, none at either end, at most 40 bytes, p- before a
+    leading digit; "" when nothing is left."""
+    slug = re.sub(r"[^a-z0-9_]+", "-", s.lower()).strip("-")[:40].rstrip("-")
+    return "p-" + slug if slug[:1].isdigit() else slug
+
+
+def launcher_name_for(base):
+    """freeLauncherName: (name, n), n 1 for base itself, else the number after it."""
+    name, n = base, 1
+    while name in RESERVED_LAUNCHER_NAMES or any(l["name"] == name for l in LAUNCHERS):
+        n += 1
+        name = "%s-%d" % (base, n)
+    return name, n
+
+
+def auto_named(b):
+    """launcher_auto_name: the name a provider added with neither a name nor a preset gets, after its display name, else
+    after its gateway's host, which then is its display name too (with the name's number). (name, the body with it)."""
+    display = (b.get("display_name") or "").strip()
+    host = urlparse((b.get("base_url") or "").strip()).hostname or ""
+    name, n = launcher_name_for(launcher_slug(display) or launcher_slug(host) or "provider")
+    if not display and host:
+        b = dict(b, display_name=host + ("" if n == 1 else " %d" % n))
+    return name, b
+
+
+def machine_launchers():
+    """GET /api/v1/machines/{mid}/launchers's launchers: claude, sonnetcc and codex ("Create from the phone"), and under
+    MOCK_PROVIDERS the managed providers Agents can start, each with its display name."""
+    out = [{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
+           {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]
+    if MOCK_PROVIDERS:
+        out += [{k: l[k] for k in ("name", "display_name", "base_url", "model", "source") if l.get(k)}
+                for l in LAUNCHERS if l["source"] == "persona" and l.get("kind") != "api"]
+    return launcher_health_list(out)
+
+
+def _import_hide(src):
+    """One alias's hide check as the hub makes it now: none when Persona lists no rc-file launcher of that name or hides it."""
+    rc = [l for l in LAUNCHERS if l["source"] == "zshrc" and l["name"] == src["alias"]]
+    if not rc or any(l.get("hidden") for l in rc): return {"alias": src["alias"], "file": src["file"], "hide": "none"}
+    return dict(src)
+
+
+def _import_existing(base_url, alias=None):
+    """The stored provider an import lands in: one on the same address (the mock knows no keys), or for a variant one that
+    came from that alias (origin zshrc:<alias>@<machine>)."""
+    for l in LAUNCHERS:
+        if l["source"] == "persona" and l.get("base_url") == base_url and (alias is None or (l.get("origin") or "").startswith("zshrc:%s@" % alias)):
+            return l["name"]
+    return None
+
+
+def _import_name(name, taken):
+    """The name an imported provider is saved under: its own, or with -2, -3… when a launcher already has it (an alias
+    Persona lists does), as the hub's importLaunchers names it."""
+    out, n = name, 2
+    while out in taken: out, n = "%s-%d" % (name, n), n + 1
+    return out
+
+
+def import_preview():
+    """The preview: each group and variant with its `existing`, its sources' hide checks and, for one that will be
+    created under another name, `create_as`. A group and its variants are alternatives, so they are named against the
+    same launchers; the names a group may take are taken for the groups after it."""
+    out, taken = [], {l["name"] for l in LAUNCHERS}
+    for g in copy.deepcopy(PROVIDER_IMPORT):
+        names = set()
+        for x in [g] + g.get("variants", []):
+            x["sources"] = [_import_hide(src) for src in x.get("sources", [])]
+            existing = _import_existing(x["base_url"], x["aliases"][0] if x is not g else None)
+            if existing:
+                x["existing"] = existing
+                continue
+            name = _import_name(x["name"], taken)
+            if name != x["name"]: x["create_as"] = name
+            names.add(name)
+        taken |= names
+        out.append(g)
+    return out
 
 
 def _provider_redacted(b):
@@ -10226,6 +10763,67 @@ def _provider_apply(l, b):
     if "headers" in b:
         if b["headers"]: l["has_headers"] = True
         else: l.pop("has_headers", None)
+    if b.get("display_name") is not None:  # null or left out keeps it, "" clears it
+        if b["display_name"].strip(): l["display_name"] = b["display_name"].strip()
+        else: l.pop("display_name", None)
+
+
+def _display_name_refused(h, b):
+    """The hub's display-name check (at most 64 characters, no line breaks or other control characters): True when it
+    answered 400."""
+    d = (b.get("display_name") or "").strip()
+    if len(d) <= 64 and not any(unicodedata.category(c) == "Cc" for c in d): return False
+    h.send_json({"error": "显示名最多 64 个字，不能有换行等控制字符"}, 400)
+    return True
+
+
+def import_route(h, method, q, body):
+    """GET / POST /api/v1/launchers/import (#2455, #5024), in every mode. POST takes {machine, providers, split?, hide_aliases?}:
+    a split group comes in as its variants, a provider that is there takes the new models, a new one is saved under its
+    previewed `create_as` (a name taken gets -2); with hide_aliases the aliases whose check is still ok once saved are
+    hidden, the others kept with why."""
+    b = json.loads(body or b"{}") if method == "POST" else {}
+    machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
+    if machine == "studio":
+        h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 alias，需要更新 node"}, 409); return
+    if not machine_online(machine):
+        h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return
+    if method == "GET":
+        h.send_json({"machine": machine, "providers": import_preview()}); return
+    PROVIDER_LOG["import"] = b
+    groups = {g["name"]: g for g in import_preview()}
+    names, split = b.get("providers") or [], b.get("split") or []
+    unknown = [n for n in names if n not in groups] + [n for n in split if n not in names]
+    if unknown:
+        h.send_json({"code": "bad_request", "error": "没有可导入的 %s" % unknown[0]}, 400); return
+    created, updated, landed = [], [], []
+    taken = {l["name"] for l in LAUNCHERS}
+    for g in (groups[n] for n in names):
+        for x in (g["variants"] if g["name"] in split and g.get("variants") else [g]):
+            landed += x.get("sources", [])
+            if x.get("existing"):
+                l = next(l for l in LAUNCHERS if l["name"] == x["existing"])
+                have = {m["id"] for m in l.get("models", [])}
+                l["models"] = l.get("models", []) + [m for m in x.get("models", []) if m["id"] not in have]
+                updated.append(x["existing"])
+                continue
+            name = x.get("create_as") or x["name"]  # as previewed, unless something took it since
+            if name in taken: name = _import_name(x["name"], taken)
+            l = {k: v for k, v in x.items() if k not in IMPORT_ONLY}
+            l.update(name=name, source="persona", origin="zshrc:%s@%s" % (x["aliases"][0], machine))
+            LAUNCHERS.insert(0, l)
+            taken.add(name)
+            created.append(name)
+    hidden, kept = [], []
+    if b.get("hide_aliases"):
+        for src in map(_import_hide, landed):  # recomputed against what was just saved
+            if src["hide"] == "ok":
+                for l in LAUNCHERS:
+                    if l["source"] == "zshrc" and l["name"] == src["alias"]: l["hidden"] = True
+                hidden.append(src["alias"])
+            elif src["hide"] != "none":
+                kept.append({k: v for k, v in src.items() if k != "file"})
+    h.send_json({"created": created, "updated": updated, "hidden": hidden, "kept": kept})
 
 
 # POST /api/v1/launchers/catalog (#4975): the hub's built-in model catalog for ids typed by hand, read from the file the
@@ -10271,10 +10869,12 @@ def _catalog_route(h, body):
 
 
 def providers_route(h, method, p, q, body):
-    """The provider endpoints under MOCK_PROVIDERS; True when it answered. A typed-in gateway's "Test connection" and
-    "Fetch models" answer in the hub's shape without it too (#4881): the catch-all {"ok": true} has no `ms`, which the
-    wizard shows. A built-in preset's test keeps its own answers then (_builtin_preset_route). The catalog lookup
-    (_catalog_route) answers with or without MOCK_PROVIDERS."""
+    """The provider endpoints under MOCK_PROVIDERS; True when it answered. The import (import_route) and the catalog lookup
+    (_catalog_route) answer with or without MOCK_PROVIDERS, and so do a typed-in gateway's "Test connection" and "Fetch
+    models" (#4881): the catch-all {"ok": true} has no `ms`, which the wizard shows. A built-in preset's test keeps its own
+    answers then (_builtin_preset_route)."""
+    if p == "/api/v1/launchers/import":
+        import_route(h, method, q, body); return True
     if p == "/api/v1/launchers/catalog" and method == "POST":
         _catalog_route(h, body); return True
     probe = method == "POST" and p in ("/api/v1/launchers/test", "/api/v1/launchers/discover")
@@ -10289,29 +10889,6 @@ def providers_route(h, method, p, q, body):
         except ValueError:
             return False
         if not isinstance(b, dict) or b.get("preset"): return False
-    if p == "/api/v1/launchers/import":
-        machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
-        if machine == "studio":
-            h.send_json({"code": "node_outdated", "error": "这台机器上的 personad 太旧，不能读取 ~/.zshrc，需要更新 node"}, 409); return True
-        if not machine_online(machine):
-            h.send_json({"code": "offline", "error": "这台机器离线，连上后再导入"}, 503); return True
-        if method == "GET":
-            h.send_json({"machine": machine, "providers": PROVIDER_IMPORT}); return True
-        PROVIDER_LOG["import"] = b
-        created, updated = [], []
-        for imp in PROVIDER_IMPORT:
-            if imp["name"] not in b.get("providers", []): continue
-            if imp.get("existing"):
-                l = next(x for x in LAUNCHERS if x["name"] == imp["existing"])
-                have = {m["id"] for m in l.get("models", [])}
-                l["models"] = l.get("models", []) + [m for m in imp["models"] if m["id"] not in have]
-                updated.append(imp["existing"])
-            else:
-                l = {k: v for k, v in imp.items() if k not in ("aliases", "existing")}
-                l.update(source="persona", origin="zshrc:%s@%s" % (imp["aliases"][0], machine))
-                LAUNCHERS.insert(0, l)
-                created.append(imp["name"])
-        h.send_json({"created": created, "updated": updated}); return True
     if p == "/api/v1/launchers/test" and method == "POST":
         PROVIDER_LOG["test"].append(_provider_redacted(b))
         stored = next((x for x in LAUNCHERS if x["name"] == b.get("name")), None)
@@ -10331,6 +10908,8 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
         name = (b.get("name") or "").strip()
+        if _display_name_refused(h, b): return True
+        if not b.get("name"): name, b = auto_named(b)
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", name):
             h.send_json({"error": "名字只能用字母、数字、_ 和 -，以字母或 _ 开头（不能叫 claude）"}, 400); return True
         if any(l["name"] == name for l in LAUNCHERS):
@@ -10344,6 +10923,7 @@ def providers_route(h, method, p, q, body):
         l = next((x for x in LAUNCHERS if x["name"] == unquote(p.split("/")[4]) and x["source"] == "persona"), None)
         if l is None:
             h.send_json({"error": "只能改 Persona 里加的启动器；~/.zshrc 里的请在那台电脑上改"}, 404); return True
+        if _display_name_refused(h, b): return True
         _provider_apply(l, b)
         h.send_json({"launcher": l}); return True
     return False
@@ -10716,10 +11296,12 @@ if os.environ.get("MOCK_CHAT_LINES") == "1":
                                      "description": "核对没有价格的商品", "running": False, "started_at": ago(minutes=26)}]))
 
 
-# MOCK_SUBAGENT_CARDS=1: subagent cards in the chat (#1963, web): a finished exchange whose subagents completed, failed
-# and nested (one launched another, which launched a third) fold into its "Work done"; then the live exchange, with one
-# still running in the background (its card stays in the open) and a command running after it. Every subagent has a
-# transcript ("<session>@<agent>") for the card's latest steps and the side panel's "View full process".
+# MOCK_SUBAGENT_CARDS=1: subagent cards in the chat (#1963, #5030 web): a finished exchange whose subagents completed,
+# failed and nested (one launched another, which launched a third, each its own card by when it started) fold into its
+# "Worked"; then the live exchange, with one still running in the background and a command running after it (both in
+# its live summary, super rule 2). The subagents carry the model they ran on and their tokens (#5030). A second session, "后台子 Agent",
+# has finished its turn while a background subagent runs on (`background_working`): the bar above the composer says
+# background subtasks still use the model. Old links to a subagent ("<session>@<agent>") open its parent at its card.
 SUBCARDS = "a1f3c2d4-0000-4000-8000-0000000c1e02"
 
 
@@ -10763,18 +11345,34 @@ def mock_subagent_cards():
         + tool("Bash", {"command": "npm run test:e2e -- search --all", "description": "跑搜索全量用例"}, "120 passed", 8)
         + tool("Read", {"file_path": "/Users/me/code/shop-web/e2e/filters.spec.ts"}, "test('filters', …)", 6)
         + [it("assistant", "tool_use", 2, tool_use_id="toolu_scrunb", tool_name="Bash", tool_input={"command": "npm run test:e2e -- filters", "description": "跑筛选用例"})])
-    sub = lambda i, desc, use, **kw: {"id": i, "session_id": SUBCARDS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
-                                      "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 20)), **kw}
+    sub = lambda i, desc, use, **kw: {k: v for k, v in {
+        "id": i, "session_id": SUBCARDS + "@" + i, "type": kw.pop("type", "general-purpose"), "description": desc,
+        "tool_use_id": use, "running": False, "started_at": ago(minutes=kw.pop("at", 20)),
+        "model": kw.pop("model", "claude-haiku-4-5-20251001"), "tokens": kw.pop("tokens", 18432), **kw}.items() if v is not None}
     SESSIONS.append(sess("macbook", SUBCARDS, "回归拆给子 Agent", "/Users/me/code/shop-web", "working", "working", "shop-web", 15, "agents", 2, 0,
                          "搜索全量在后台跑，首页在打包。", subagents=[
                              sub("scrun", "回归：搜索全量", _run, at=9.8, running=True, background=True, last_text="筛选的用例在跑。", steps=3,
                                  last_tool={"id": "toolu_scrunb", "name": "Bash", "summary": "跑筛选用例"}),
                              sub("scdone", "回归：结算流程", _done, at=29.5, last_text="结算流程 42 个用例全部通过。", steps=2,
                                  last_tool={"id": "toolu_scdone2", "name": "Read", "summary": "读 checkout.spec.ts"}, updated_at=ago(minutes=27)),
-                             sub("scfail", "回归：支付回调", _fail, at=27, steps=1),
-                             sub("scnest", "回归：价格筛选", _nest, at=26, type="Explore", steps=2),
-                             sub("scdata", "查价格的测试数据", _data, at=25, parent_id="scnest"),
-                             sub("scold", "核对下架商品", None, at=24.5, parent_id="scdata", type="fork", fork=True)]))
+                             sub("scfail", "回归：支付回调", _fail, at=27, steps=1, model="claude-sonnet-4-6", tokens=9120),
+                             sub("scnest", "回归：价格筛选", _nest, at=26, type="Explore", steps=2, tokens=31250),
+                             sub("scdata", "查价格的测试数据", _data, at=25, parent_id="scnest", steps=1, tokens=7340),
+                             sub("scold", "核对下架商品", None, at=24.5, parent_id="scdata", type="fork", fork=True, model=None, tokens=None)]))
+    # the turn is over, a background subagent runs on
+    bg = "a1f3c2d4-0000-4000-8000-0000000c1e12"
+    _b = [it("user", "text", 6, text="后台把 iOS 的崩溃日志归类一下，我先去开会")]
+    _b += tool("Agent", {"description": "归类崩溃日志", "subagent_type": "general-purpose", "prompt": "把最近一周的崩溃日志按调用栈归类，列出前五类", "run_in_background": True},
+               "Async agent launched successfully.\nagentId: bgcrash (This is an internal ID for your use)", 5.8)
+    _bg = _b[-2]["tool_use_id"]
+    _b.append(it("assistant", "text", 5.5, text="已经在后台归类了，归类完会把前五类发给你。"))
+    ITEMS[bg] = _b
+    ITEMS[bg + "@bgcrash"] = [it("user", "text", 5.8, text="把最近一周的崩溃日志按调用栈归类，列出前五类")]
+    SESSIONS.append(sess("macbook", bg, "后台子 Agent", "/Users/me/code/shop-web", "working", "working", "shop-web", 15, "agents", 3, 0,
+                         "崩溃日志在后台归类。", background_working=True, subagents=[
+                             {"id": "bgcrash", "session_id": bg + "@bgcrash", "type": "general-purpose", "description": "归类崩溃日志", "tool_use_id": _bg,
+                              "running": True, "background": True, "started_at": ago(minutes=5.8), "model": "claude-sonnet-4-6", "tokens": 41230, "steps": 9,
+                              "last_tool": {"id": "toolu_bgc9", "name": "Grep", "summary": "找 EXC_BAD_ACCESS"}}]))
 
 
 if os.environ.get("MOCK_SUBAGENT_CARDS") == "1":
@@ -11609,6 +12207,82 @@ if os.environ.get("MOCK_LONG_HISTORY") == "1":
     for _i, _d in enumerate(_all):  # transcript order: the history first
         _d["seq"] = _i + 1
     ITEMS[WIDGET] = _all
+
+# MOCK_LONG_REPORT=1: an agent chat that ends in one very long final report, the shape of a real planning session that
+# scrolled badly (#4970): about 33,000 characters in one reply (headings, lists, nine tables of 115 rows, a dozen code
+# blocks, a quote), after 120 tool calls folded into work lines, eight subagent cards and the same report handed in as a
+# plan. `-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`. MOCK_LONG_REPORT=<items.json> serves that file's
+# items instead (a transcript's items as the hub parses them, kept outside the repository), cutting long tool outputs as
+# the hub's pages do.
+LONG_REPORT = "a1f3c2d4-0000-4000-8000-000000000090"
+
+
+def long_report_text():
+    """The report: about 33,000 characters over 750 lines, Chinese and English mixed like the real one."""
+    words = ("迁移方案需要先确认现有数据的边界，再决定哪些字段保留、哪些合并；The adapter keeps the old wire format readable "
+             "while the new one rolls out, so older clients keep working. 每一步都要能单独回滚，不依赖下一步。")
+    tables = [(7, 3), (20, 3), (10, 2), (9, 3), (8, 3), (35, 3), (8, 5), (7, 3), (11, 3)]
+    codes = [31, 6, 3, 7, 8, 18, 3, 1, 1, 20, 6, 56]
+    out = ["# 天气 App 数据层迁移方案", "", "> 本文是第 3 版：根据评审意见补了回滚和灰度两节，表格里的数字都来自压测。", ""]
+    for n in range(12):
+        out += ["## %d. 第 %d 部分：%s" % (n + 1, n + 1, ("背景", "现状", "目标", "约束", "方案", "接口", "存储", "同步", "灰度", "回滚", "监控", "排期")[n]), ""]
+        for k in range(3):
+            out += [words + " " + words[:10 * k], ""]
+            out += ["### %d.%d 细节 %d" % (n + 1, k + 1, k + 1), ""]
+            out += ["- **要点 %d**：%s" % (j + 1, words[:40 + j * 7]) for j in range(3)] + [""]
+            if k == 1:
+                out += ["#### 备注", "", "1. 先在测试环境跑一遍", "2. 再按 5% / 25% / 100% 放量", "3. 每一档观察 24 小时", ""]
+        if n < len(tables):
+            rows, cols = tables[n]
+            out.append("| " + " | ".join("列 %d" % (c + 1) for c in range(cols)) + " |")
+            out.append("|" + "---|" * cols)
+            out += ["| " + " | ".join(("`field_%d_%d`" % (r, c)) if c == 0 else ("第 %d 行的说明文字，" % r) * (1 + c % 2)
+                                     for c in range(cols)) + " |" for r in range(rows - 2)]
+            out.append("")
+        if n < len(codes):
+            out.append("```text")
+            out += ["%-3d %s" % (j + 1, "step_%02d -> check_%02d -> commit  # keep the old reader until every client moved" % (j, j))[:64 + j % 10]
+                    for j in range(codes[n])]
+            out += ["```", ""]
+    return "\n".join(out)
+
+
+if os.environ.get("MOCK_LONG_REPORT"):
+    _src = os.environ["MOCK_LONG_REPORT"]
+    SESSIONS.append(sess("macbook", LONG_REPORT, "数据层迁移方案", "/Users/me/code/weather", "done", "idle", "weather", 1, "plan", 6, 3,
+                         "方案写好了，共十二部分。"))
+    if _src == "1":
+        _report = long_report_text()
+        _r = [it("user", "text", 180, text="把天气 App 的数据层迁移方案整理出来，先读完现有代码再写。")]
+        _r += [it("assistant", "text", 179, text="好，我先分头读代码。")]
+        for _a in range(8):
+            _r += tool("Agent", {"description": "读第 %d 组模块" % (_a + 1), "prompt": "读 Sources/Data 下第 %d 组文件，列出公开接口。" % (_a + 1)},
+                       "第 %d 组共 12 个文件，公开接口如下：\n" % (_a + 1) + "".join("- func load%d()\n" % k for k in range(40)), 178 - _a)
+        for _g in range(15):
+            _r.append(it("assistant", "thinking", 170 - _g * 5, text="接着读第 %d 批文件，确认字段的来源。" % (_g + 1)))
+            for _f in range(8):
+                _body = "".join("%4d  let field%d = try container.decode(String.self, forKey: .field%d)\n" % (k + 1, k, k)
+                                for k in range(40 + 30 * ((_g + _f) % 5)))
+                _r += long_tool("Read", {"file_path": "/Users/me/code/weather/Sources/Data/Model%02d_%d.swift" % (_g, _f)}, _body, 170 - _g * 5)
+        _r += tool("Bash", {"command": "git log --oneline -20 -- Sources/Data"}, "".join("%07x 调整字段 %d\n" % (k * 7919, k) for k in range(20)), 95)
+        _r += tool("WebSearch", {"query": "SwiftData migration plan"}, "3 results", 94)
+        _r += tool("Write", {"file_path": "/Users/me/.claude/plans/data-migration.md", "content": _report}, "File written", 93)
+        _r += tool("ExitPlanMode", {"plan": _report}, "User approved the plan", 92)
+        _r += [it("assistant", "text", 90, text=_report)]
+        _r += [it("user", "text", 60, text="第 6 部分的表再核对一遍")]
+        _r += [it("assistant", "text", 59, text="核对过了，第 6 部分的 33 行都和压测记录一致。")]
+    else:  # a transcript's items: long tool outputs cut to the page's 4 KB, as the hub serves them
+        with open(_src, encoding="utf-8") as _f:
+            _r = json.load(_f)
+        for _x in _r:
+            _t = _x.get("text") or ""
+            if _x.get("kind") == "tool_result" and len(_t.encode()) > 4096:
+                FULL[_x["id"]] = dict(_x)
+                _x["text"] = _t.encode()[:4096].decode(errors="ignore") + "\n…"
+                _x["full_size"] = len(_t.encode())
+    for _i, _d in enumerate(_r):
+        _d["seq"] = _i + 1
+    ITEMS[LONG_REPORT] = _r
 
 # MOCK_DRAWER=1: the main conversation ends with a reply whose code block is much wider than the phone, for the sidebar's
 # drag (DrawerSwipeTests: a drag on the code block scrolls it, a drag anywhere else opens the sidebar).
@@ -17546,8 +18220,7 @@ def model_defaults_launchers(h, p, q):
         default = {"provider": b.get("provider", "").removeprefix("launcher."), "model": b.get("model", ""), "effort": b.get("effort", "")}
         if purpose.get("runtimes"):
             default["runtime"] = b.get("runtime") or "cli"
-    out = {"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                              {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}]), "default": default}
+    out = {"launchers": machine_launchers(), "default": default}
     if pid == "agent.new":
         # "New agent"'s presets (#2225): the tiers of the profile in use whose launcher this machine starts
         out["tiers"] = [{"name": name, **tier} for name, tier in sorted(MOCK_PRESETS.items())]
@@ -17627,7 +18300,7 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *a):
         LOG.write("%s %s\n" % (self.command, self.path)); LOG.flush()
 
-    def send_json(self, obj, status=200, headers=None):
+    def send_json(self, obj, status=200, headers=None, add_error_code=True):
         global LOST_RECEIPT
         if self.command == "GET" and 200 <= status < 300:
             obj = stamp_managers(urlparse(self.path).path, obj)
@@ -17637,7 +18310,7 @@ class H(BaseHTTPRequestHandler):
                     LOST_RECEIPT = False
                     status, obj = 502, {"error": "操作回执丢失，请核对执行结果", "code": "lost_receipt",
                                         "delivered": "unknown", "retryable": False}
-        if status >= 400 and isinstance(obj, dict):
+        if status >= 400 and isinstance(obj, dict) and add_error_code:
             obj = dict(obj)
             obj.setdefault("code", {400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found",
                                     405: "method_not_allowed", 409: "conflict", 502: "upstream_error",
@@ -18052,6 +18725,13 @@ class H(BaseHTTPRequestHandler):
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
             INTERACTION_HISTORY[:] = [x for x in INTERACTION_HISTORY if x["id"] not in ids]
+            if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
+                ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
+                                     "queued": list(PERSONA_QUEUE_MESSAGES)})
+                photo = {"mime": "image/png", "data": mock_png()}
+                QUEUED_PHOTOS["请看图片"] = [photo for _ in range(int(q.get("photos", ["1"])[0] or 1))]
+                QUEUE_EDITS.clear()
+                push_machine(ASSISTANT[0]["machine_id"])
             return self.send_json({"ok": True})
         if p == "/mock/session_close":
             if "fail" in q: SESSION_CLOSE["fail"] = q["fail"][0] == "1"
@@ -18474,8 +19154,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
-            return self.send_json({"launchers": launcher_health_list([{"name": "claude", "model": "opus"}, {"name": "sonnetcc", "model": "sonnet"},
-                                                                      {"name": "codex", "model": "gpt-5.5", "agent": "codex", "agent_type": "codex"}])})  # Codex: "Create from the phone"
+            return self.send_json({"launchers": machine_launchers()})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-settings"):
             return self.send_json({"settings": CLAUDE_SETTINGS.setdefault(p.split("/")[4], _claude_settings())})
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs"):
@@ -18600,14 +19279,15 @@ class H(BaseHTTPRequestHandler):
                     for e in l:
                         found = [{"path": "%s/%s/messages/%s.md" % (k, e["id"], d), "n": n, "line": t}
                                  for d, n, t in reversed(kb_messages(e["id"])) if kb_match(t, word)] if k == "chats" else \
-                            photo_matches(e["id"], word) if k == "recordings" else []
+                            photo_matches(e["id"], word) + day_recap_matches(e["id"], word) if k == "recordings" else []
                         named = kb_match(e["name"], word) or kb_match(e.get("one_line") or "", word)
                         if found or named:
                             res.append({"entry": e, "count": len(found), "hits": found[:3], "in_name": kb_match(e["name"], word)})
                 return self.send_json({"results": res})
             hits = [{"path": "%s/%s/summary.md" % (k, e["id"]), "line": "- " + e["name"] + "：" + (e.get("one_line") or "")}
                     for k, l in KB.items() for e in l if word and (word in e["name"].lower() or word in (e.get("one_line") or "").lower())]
-            hits += [{"path": x["path"], "line": x["line"]} for e in KB.get("recordings", []) for x in photo_matches(e["id"], word)] if word else []
+            hits += [{"path": x["path"], "line": x["line"]} for e in KB.get("recordings", [])
+                     for x in photo_matches(e["id"], word) + day_recap_matches(e["id"], word)] if word else []
             return self.send_json({"hits": hits})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/thumb"): return self.file_thumb(p, q)
         files = mock_files(p, q)
@@ -19702,6 +20382,7 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/launchers" and self.command == "POST":  # "Add provider" (from a plugin's preset: the rest filled in)
             b = json.loads(self.last_body or b"{}")
             name = (b.get("name") or "").strip()
+            if not b.get("name") and not b.get("preset"): name, b = auto_named(b)
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_-]*$", name) or name in ("claude", "presets"):
                 return self.send_json({"error": "名字只能用字母、数字、_ 和 -，以字母或 _ 开头（不能叫 claude）"}, 400)
             if any(l["name"] == name for l in LAUNCHERS): return self.send_json({"error": "已经有叫 %s 的启动器" % name}, 409)
@@ -19714,6 +20395,7 @@ class H(BaseHTTPRequestHandler):
             l = {"name": name, "source": "persona", "base_url": b["base_url"], "model": b["model"], "has_key": bool(b.get("api_key"))}
             for k in ("kind", "api", "small_model", "args"):
                 if b.get(k): l[k] = b[k]
+            if (b.get("display_name") or "").strip(): l["display_name"] = b["display_name"].strip()
             LAUNCHERS.insert(0, l)
             return self.send_json({"launcher": l})
         if p.startswith("/api/v1/launchers/") and (self.command == "DELETE" or p.endswith("/restore")):  # hide / bring back
@@ -19877,9 +20559,14 @@ class H(BaseHTTPRequestHandler):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
                 ASSISTANT_CONFIG["machine_id"] = body["machine_id"]
-            for key in ("launcher", "timezone"):
-                if body.get(key):
-                    ASSISTANT_CONFIG[key] = body[key]
+            if body.get("launcher"):
+                ASSISTANT_CONFIG["launcher"] = body["launcher"]
+            # as the hub (#1855): a zone sent without timezone_picked is a device's own sync, left out while one was picked
+            picked = body.get("timezone_picked")
+            if body.get("timezone") and (isinstance(picked, bool) or ASSISTANT_CONFIG.get("timezone_picked") is not True):
+                ASSISTANT_CONFIG["timezone"] = body["timezone"]
+            if isinstance(picked, bool):
+                ASSISTANT_CONFIG["timezone_picked"] = picked
             if body.get("notes") is not None:
                 ASSISTANT_CONFIG["notes"] = body["notes"]
             if body.get("main"):
@@ -20779,6 +21466,7 @@ MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
 MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
+MOCK_HELP.append("MOCK_LONG_REPORT=1|<items.json>  An Agent chat (macbook/a1f3c2d4-0000-4000-8000-000000000090) ending in one ~33,000-character report with nine tables and a dozen code blocks after 120 folded tool calls (#4970); a path serves that file's transcript items instead")
 MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -21845,7 +22533,7 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
 # the states the setup card shows, in the hub's shapes and words (its own catalogs, by Accept-Language): the features
-# assistant_readiness, machines_add, machine_trust and builtin_presets; GET /api/v1/assistant/readiness[?probe=1],
+# assistant_readiness, machines_add, machine_trust, builtin_presets and launcher_auto_name; GET /api/v1/assistant/readiness[?probe=1],
 # POST …/readiness/dismiss, POST /api/v1/assistant/warm with readiness; POST /api/v1/assistant/conversations refused
 # with the scenario's code (409 no_machine / machine_pending / claude_missing / launcher_missing, 503 node_unreachable); POST
 # /api/v1/sessions on a pending computer 409 machine_pending; GET /api/v1/launchers/presets with the built-in providers
@@ -21854,7 +22542,7 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
 # readiness follows the machines: zero → add → it joins → confirm → the computer step is ok.
 # MOCK_START_ERROR=<code> refuses every conversation start with that code whatever the scenario (no_machine,
 # machine_pending, claude_missing, launcher_missing, node_unreachable, assistant_offline). MOCK_BUILTIN_PRESETS=1 serves
-# the built-in providers and the feature builtin_presets without a scenario.
+# the built-in providers and the features builtin_presets and launcher_auto_name without a scenario.
 READINESS = os.environ.get("MOCK_READINESS", "")
 BUILTIN_PRESETS = bool(READINESS) or os.environ.get("MOCK_BUILTIN_PRESETS") == "1"
 if READINESS or BUILTIN_PRESETS:
@@ -21869,8 +22557,8 @@ if READINESS or BUILTIN_PRESETS:
 
     def features():
         f = _features_without_readiness()
-        extra = ("assistant_readiness", "machines_add", "machine_trust", "builtin_presets") if READINESS else ("builtin_presets",)
-        return f + [x for x in extra if x not in f]
+        extra = ("assistant_readiness", "machines_add", "machine_trust") if READINESS else ()
+        return f + [x for x in extra + ("builtin_presets", "launcher_auto_name") if x not in f]
 
 READY = {"sc": readiness_mock.SCENARIOS.get(READINESS, {}) if READINESS else {}, "dismissed": False}
 # Optional probe boundaries for #1892: exceed Apple's old 30 s timeout, or refuse the try with an HTTP error.
@@ -21974,11 +22662,7 @@ def _builtin_preset_route(handler, p, body):
     PROVIDER_LOG["post"] = _provider_redacted(b)
     name, n = (b.get("name") or "").strip(), 1
     if not name:
-        slug = re.sub(r"[^A-Za-z0-9_-]", "-", pr["id"].split("/", 1)[1])
-        name = slug
-        while any(l["name"] == name for l in LAUNCHERS):
-            n += 1
-            name = "%s-%d" % (slug, n)
+        name, n = launcher_name_for(launcher_slug(pr["id"].split("/", 1)[1]) or "provider")
     if any(l["name"] == name for l in LAUNCHERS):
         handler.send_json({"error": "已经有叫 %s 的启动器了" % name}, 409)
         return True
@@ -22075,7 +22759,7 @@ if READINESS or BUILTIN_PRESETS:
 
 MOCK_HELP.append("MOCK_READINESS=zero|offline|pending|no_claude|not_logged_in|bad_key|full|demo|unverified|launcher_missing|model_route|rate_limited|node_outdated|assistant_offline  "
                  "主对话就绪度的场景（#287，docs/operations/testing.md「Readiness scenarios」）：GET /api/v1/assistant/readiness、dismiss、warm 带 readiness、开对话按码拒绝、"
-                 "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
+                 "内置供应商预设，features 有 assistant_readiness / machines_add / machine_trust / builtin_presets / launcher_auto_name；MOCK_START_ERROR=<码> 让开对话一律按这个码拒绝；"
                  "MOCK_BUILTIN_PRESETS=1 只加内置供应商预设")
 MOCK_HELP.append("MOCK_READINESS_PROBE_DELAY=<秒> / MOCK_READINESS_PROBE_ERROR=<HTTP 状态>  延迟或拒绝 ?probe=1（#1892，超过旧 30 秒客户端超时 / 显示失败）")
 

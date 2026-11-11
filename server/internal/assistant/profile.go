@@ -50,6 +50,10 @@ type Settings struct {
 	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
 	// Timezone is the phone's (IANA name): routines and the snapshot read times in it, and the hub its own.
 	Timezone string `json:"timezone,omitempty"`
+	// TimezonePicked: the user picked Timezone by hand (#1855); while true, a device's own sync (a `timezone` written
+	// without `timezone_picked`) leaves it alone. false: it follows the devices again. nil: never said (every write
+	// lands, as before).
+	TimezonePicked *bool `json:"timezone_picked,omitempty"`
 	// Notes, once edited in the app, replace manager.json's assistant.notes.
 	Notes *string `json:"notes,omitempty"`
 	// OwnerAliases are the names the user explicitly adds for kb.owner; an empty list clears them.
@@ -105,7 +109,8 @@ type Settings struct {
 	Leaders []string `json:"leaders,omitempty"`
 	// InterjectBackground: a message the user sends while a Claude conversation is still answering moves what runs in
 	// the foreground (Bash commands, subagents) to the background, so the message is taken up at once instead of after
-	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default).
+	// them (Claude Code 2.1.139 or later, node/assistant_interject.go). nil is off (the default). A round the
+	// user did not start is moved to the background by their message either way (owner_preempt.go).
 	InterjectBackground *bool `json:"interject_background,omitempty"`
 }
 
@@ -227,7 +232,8 @@ func (s *Service) mainTasksQuiet(ctx context.Context) bool {
 }
 
 // interjectBackground: a message sent while a conversation answers moves its foreground work to the background
-// (interject_background, off by default).
+// (interject_background, off by default). The owner's message to a round they did not start does so whatever this says
+// (owner_preempt.go).
 func (s *Service) interjectBackground(ctx context.Context) bool {
 	v := s.settings(ctx).InterjectBackground
 	return v != nil && *v
