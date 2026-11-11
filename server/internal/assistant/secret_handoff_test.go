@@ -716,6 +716,30 @@ func TestAVouchedIDCountsOnce(t *testing.T) {
 	}
 }
 
+// A message with a workspace mention is the user's own: the transcript shows the block as the manager filled it in, not
+// as the app wrote it, and the words compared are the user's, without it.
+func TestHandoffRulesCoverAMessageWithAWorkspaceMention(t *testing.T) {
+	ctx := context.Background()
+	r := newHandoffRig(t)
+	r.secrets.rules = []extmgr.HandoffRule{{Reference: "op://Dev/GitHub/credential1", Launcher: "claude", Machine: "box"},
+		{Reference: "op://Dev/npm/credential2", Launcher: "claude", Machine: "box"}}
+	setSettings(t, r.s, func(v *Settings) { v.Main, v.MainMachineID = "s1", "server" }) // one the manager fills in
+	const ws = `<persona-context kind="workspace" title="App" machine="box" cwd="/code/app">`
+	out, err := r.s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "s1", Human: true,
+		Params: map[string]any{"client_msg_id": "c-ws", "text": ws + "App · Box</persona-context>fix CI with my token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	going, _ := out["text"].(string)
+	if strings.Contains(going, "App · Box") || !strings.Contains(going, "fix CI with my token") {
+		t.Fatalf("the mention was not filled in: %q", going)
+	}
+	r.f.items = []proto.Item{{ID: "line-ws", Role: "user", Kind: proto.KindText, Text: going, ClientMsgID: "c-ws"}}
+	if answer, errText := r.answer(r.start(handoffArgs)); errText != "" || !strings.Contains(answer, "Always rule") {
+		t.Fatalf("answer %q, error %q", answer, errText)
+	}
+}
+
 // What the old main conversation left, put before the first message of a new main conversation, is not the user's own
 // words (it may hold a mail handed on there): a new main conversation the user's app opens with a message, and the first
 // message to one started empty, get the card.

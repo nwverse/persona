@@ -322,6 +322,13 @@ type humanSend struct {
 	void  bool   // sent again by someone else, or with other words: it counts for nothing
 }
 
+// withoutContext is a vouched message's words, or its line's, compared without any context block: the ones the
+// transcript drops from every user line, and the workspace mentions, which the app wrote one way and the manager sent
+// filled in (a vouched message holds no other block, workspace_mention.go fillWorkspaces).
+func withoutContext(text string) string {
+	return transcript.ViewErrorsRe.ReplaceAllString(contextBlockRe.ReplaceAllString(text, ""), "")
+}
+
 // handoffLine is the transcript line an item belongs to: its id before the last "#", as the node ties a send to a line
 // (node echo.go echoLineKey); "" for an item without an id.
 func handoffLine(id string) string {
@@ -356,9 +363,7 @@ func (h *humanSends) note(session, id, text string) {
 	if session == "" || id == "" {
 		return
 	}
-	// The words as the transcript shows the line: without the context blocks it drops from every user line.
-	text = transcript.ViewErrorsRe.ReplaceAllString(transcript.ContextRe.ReplaceAllString(text, ""), "")
-	words := humanWords(text, humanWordsMost)
+	words := humanWords(withoutContext(text), humanWordsMost)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	ids := h.sessionLocked(session)
@@ -470,7 +475,7 @@ func (h *humanSends) has(session, id, text string, picture bool, line string) bo
 	if !ok || sent.void || time.Since(sent.at) > humanSendsKeep {
 		return false
 	}
-	if !picture && !strings.Contains(humanWords(text, 1<<20), sent.words) {
+	if !picture && !strings.Contains(humanWords(withoutContext(text), 1<<20), sent.words) {
 		return false
 	}
 	switch sent.line {
