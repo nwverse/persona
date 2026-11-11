@@ -3,15 +3,19 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { credentialOwner } from "./api";
 import { CompleteSessions } from "./complete-sessions";
 import { stateOf } from "./format";
+import { foldedState } from "./child-sessions";
+import { foldRows } from "./folded-rows";
 import { getState, onHubEvent, subscribe, useStore } from "./store";
 import { SESSIONS_LIST_FEATURE } from "./session-list";
 import type { Session } from "./types";
 
+/** The agents the lists show and count: without the child sessions folded under one of them, each parent in its folded
+ *  state (lib/folded-rows.ts, #5120). A child's own row is in the store (`sessions`, `sessionSummaries`) for its card. */
 export function useAgentSessions(): Session[] {
   const by = useStore((s) => s.sessions);
   const summaries = useStore((s) => s.sessionSummaries);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
-  return useMemo(() => (bounded ? summaries : Object.values(by).flat()).filter((s) => !s.assistant), [by, summaries, bounded]);
+  return useMemo(() => foldRows((bounded ? summaries : Object.values(by).flat()).filter((s) => !s.assistant)), [by, summaries, bounded]);
 }
 
 const EMPTY_FULL_LIST = { sessions: [] as Session[], loaded: false, base: {} as Record<string, Session[]> };
@@ -122,8 +126,17 @@ function createFullCache(owner: string) {
 }
 
 /** Pins, grouping and the per-assistant lists need complete rows, including agents outside the bounded first page.
- * Consumers share a scoped snapshot and request, released shortly after the last one leaves. */
+ * Consumers share a scoped snapshot and request, released shortly after the last one leaves. Folded like
+ * useAgentSessions: no child session folded under a listed one, each parent in its folded state. */
 export function useFullAgentSessions(on = true): { sessions: Session[]; loaded: boolean } {
+  const full = useCompleteAgentSessions(on);
+  return useMemo(() => {
+    const sessions = foldRows(full.sessions);
+    return sessions === full.sessions ? full : { sessions, loaded: full.loaded };
+  }, [full]);
+}
+
+function useCompleteAgentSessions(on: boolean): { sessions: Session[]; loaded: boolean } {
   const by = useStore((s) => s.sessions);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const loaded = useStore((s) => s.loaded);
@@ -173,7 +186,7 @@ export function stateCounts(all: Session[]) {
 /** `badge` without `open`, the agent on screen: it says it is waiting itself, so a count of only it would tell nothing.
  *  `quietCounted`: `badge` is the hub's own count, which has quiet agents in it. */
 export function othersWaiting(badge: number, open: Session | undefined, quietCounted = false): number {
-  return Math.max(0, badge - (open && !open.assistant && (quietCounted || !open.quiet) && stateOf(open) === "needs_you" ? 1 : 0));
+  return Math.max(0, badge - (open && !open.assistant && (quietCounted || !open.quiet) && foldedState(open) === "needs_you" ? 1 : 0));
 }
 
 export function useCounts() {

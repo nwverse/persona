@@ -31,8 +31,9 @@ export const runtimeOrder = (a: Session, b: Session) => {
 };
 /** A row's last activity, the time `runtimeOrder` sorts by (NaN without one: it sorts last and counts as earlier). */
 export const runtimeActiveAt = (s: Session) => Date.parse(s.updated_at ?? "");
-/** Needs the user by the hub's rule for `state.needs_you` counts, not the client's answered-here state. */
-export const runtimeNeedsYou = (s: Session) => s.state === "needs_you";
+/** Needs the user by the hub's rule for `state.needs_you` counts, not the client's answered-here state: by the folded
+ *  state, which a child that waits gives its parent (`roots=1` counts it so, #5120). */
+export const runtimeNeedsYou = (s: Session) => s.state === "needs_you" || (s.children?.needs_you ?? 0) > 0;
 export const SESSIONS_LOOKUP_FEATURE = "sessions_lookup";
 export const SESSIONS_PAGE_COUNTS_FEATURE = "sessions_page_counts";
 let pageCounts = false;
