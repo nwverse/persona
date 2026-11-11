@@ -179,6 +179,7 @@ struct HubsView: View {
             if model.socket(g)?.rejected == true {
                 Button { showPair = true } label: {
                     SettingsRow(title: String(localized: "Pair Again"), symbol: Theme.Icon.pairing, tint: Theme.accent)
+                        .lineLimit(1)
                 }
                 .modifier(SettingsButtonLook())
                 .disabled(model.hubSignOut != nil)
