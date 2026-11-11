@@ -17,6 +17,10 @@ import java.time.ZoneId
 internal fun offeredGroupings(todosSupported: Boolean): List<AgentGrouping> =
     if (todosSupported) AgentGrouping.selectable else AgentGrouping.selectable - AgentGrouping.Todo
 
+/** The grouping the list shows: a saved By To-do reads By project on a hub without to-dos, as iOS's `DevGrouping.resolved`. */
+internal fun resolvedGrouping(stored: AgentGrouping, todosSupported: Boolean): AgentGrouping =
+    if (stored == AgentGrouping.Todo && !todosSupported) AgentGrouping.MachineSpace else stored
+
 /** Implement with the shared DraftStore for the active hub scope; never create a second draft store. */
 fun interface AgentsDraftSource {
     fun observe(session: SessionKey): Flow<AgentDraft>
