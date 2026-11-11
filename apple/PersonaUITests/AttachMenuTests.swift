@@ -86,19 +86,40 @@ final class AttachMenuTests: XCTestCase {
     }
 
     /// Health's model button (#3825): Persona's new conversation's menu, the effort and, a level down, the permission mode.
+    /// As there, the button is in the box's open row: a short draft opens it, with the keyboard put away so the menu has room.
     @MainActor func testHealthModelMenu() {
-        for scheme in schemes {
-            let app = launch(Self.health, scheme: scheme)
-            let modes = app.buttons["shell-composer-modes"].firstMatch
-            XCTAssertTrue(modes.waitForExistence(timeout: 40), "no model button on Health's page:\n\(app.debugDescription)")
-            sleep(2) // the page settles
-            modes.tap()
-            for title in ["思考强度", "权限模式"] {
-                let row = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
-                XCTAssertTrue(row.waitForExistence(timeout: 5), "no \(title) in Health's model menu:\n\(app.debugDescription)")
+        for style in styles {
+            for scheme in schemes {
+                let app = launch(Self.health, scheme: scheme, style: style)
+                let field = app.descendants(matching: .any)["shell-composer-field"].firstMatch
+                XCTAssertTrue(field.waitForExistence(timeout: 40), "no composer on Health's page:\n\(app.debugDescription)")
+                sleep(2) // the page settles
+                for _ in 0..<3 where !app.keyboards.firstMatch.exists {
+                    field.tap()
+                    _ = app.keyboards.firstMatch.waitForExistence(timeout: 4)
+                }
+                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12) + "ok")
+                let hide = app.buttons["shell-composer-dismiss-keyboard"].firstMatch
+                if hide.waitForExistence(timeout: 5) { hide.tap() }
+                _ = app.keyboards.firstMatch.waitForNonExistence(timeout: 5)
+                let modes = app.buttons["shell-composer-modes"].firstMatch
+                XCTAssertTrue(modes.waitForExistence(timeout: 10), "no model button on Health's page:\n\(app.debugDescription)")
+                modes.tap()
+                for title in ["思考强度", "权限模式"] {
+                    let row = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+                    XCTAssertTrue(row.waitForExistence(timeout: 5), "no \(title) in Health's model menu:\n\(app.debugDescription)")
+                }
+                shot("health-model-menu", scheme, style)
+                // The page keeps its draft: it goes again, or the next screenshots show it.
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+                for _ in 0..<3 where !app.keyboards.firstMatch.exists {
+                    field.tap()
+                    _ = app.keyboards.firstMatch.waitForExistence(timeout: 4)
+                }
+                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 12))
+                sleep(2) // drafts are saved a moment later
+                app.terminate()
             }
-            shot("health-model-menu", scheme)
-            app.terminate()
         }
     }
 
