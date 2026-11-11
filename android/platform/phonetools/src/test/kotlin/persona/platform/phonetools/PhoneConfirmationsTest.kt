@@ -258,4 +258,89 @@ class PhoneConfirmationsTest {
         assertEquals(PhoneConfirmation.NotShown, second.await())
         assertNull(confirmations.pending.value)
     }
+
+    /**
+     * In the background, answering the current card must post the next queued card's notification. The old
+     * code only updated StateFlow on promote, leaving the second write's await hanging forever with no
+     * system notification. Exactly one notification is visible at any time: the current card's.
+     */
+    @Test @Config(sdk = [35]) fun backgroundAnswerPostsTheNextCardsNotification() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        assertEquals(1, notifications.allNotifications.size)
+        val second = async { confirmations.confirm { "Add event two" } }
+        runCurrent()
+        // Still only the first card's notification; the second is queued, not posted.
+        assertEquals(1, notifications.allNotifications.size)
+        val firstToken = confirmations.pending.value!!.token
+        confirmations.resolve(firstToken, true)
+        runCurrent()
+        assertEquals(PhoneConfirmation.Allowed, first.await())
+        // The first card's notification is gone; the second card's notification is posted.
+        val secondToken = confirmations.pending.value!!.token
+        assertNotEquals(firstToken, secondToken)
+        assertEquals(1, notifications.allNotifications.size)
+        assertFalse(second.isCompleted)
+        confirmations.resolve(secondToken, false)
+        runCurrent()
+        assertEquals(PhoneConfirmation.Denied, second.await())
+        assertEquals(0, notifications.allNotifications.size)
+    }
+
+    /** Dismissing the current card's notification also promotes and posts the next one. */
+    @Test @Config(sdk = [35]) fun backgroundDismissPostsTheNextCardsNotification() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        val second = async { confirmations.confirm { "Add event two" } }
+        runCurrent()
+        val firstToken = confirmations.pending.value!!.token
+        confirmations.dismiss(firstToken)
+        runCurrent()
+        assertEquals(PhoneConfirmation.Dismissed, first.await())
+        assertEquals(1, notifications.allNotifications.size)
+        assertFalse(second.isCompleted)
+        confirmations.resolve(confirmations.pending.value!!.token, false)
+        assertEquals(PhoneConfirmation.Denied, second.await())
+        assertEquals(0, notifications.allNotifications.size)
+    }
+
+    /** A cancelled current awaiter (watcher killed the call) promotes and posts the next card too. */
+    @Test @Config(sdk = [35]) fun aCancelledCurrentCardLetsTheNextOnePost() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        val first = async { confirmations.confirm { "Add event one" } }
+        runCurrent()
+        val second = async { confirmations.confirm { "Add event two" } }
+        runCurrent()
+        first.cancel()
+        runCurrent()
+        assertNotNull(confirmations.pending.value)
+        assertEquals(1, notifications.allNotifications.size)
+        confirmations.resolve(confirmations.pending.value!!.token, false)
+        assertEquals(PhoneConfirmation.Denied, second.await())
+        assertEquals(0, notifications.allNotifications.size)
+    }
+
+    /**
+     * Resurrect race: a resolve/close that lands while `showNotification` is mid-post would otherwise leave
+     * the answered card's notification on screen (the answer's `cancel` ran before the post). The post-time
+     * recheck cancels it again, so no stale notification survives.
+     */
+    @Test @Config(sdk = [35]) fun aNotificationPostedMidAnswerIsCancelledAgain() = runTest {
+        val confirmations = PhoneConfirmations(context)
+        val answer = async { confirmations.confirm { "Add an event" } }
+        runCurrent()
+        assertEquals(1, notifications.allNotifications.size)
+        // Mid-post answer: the hook fires inside showNotification, right before NotificationManager.notify.
+        // resolve() cancels the (not yet re-posted) notification, then the post lands, then the recheck
+        // cancels it again. Final state: answered, no notification left.
+        PhoneConfirmations.beforeNotify = { token -> confirmations.resolve(token, true) }
+        try {
+            confirmations.setForeground(false)  // re-settle, driving another showNotification pass
+            runCurrent()
+            assertEquals(PhoneConfirmation.Allowed, answer.await())
+            assertEquals(0, notifications.allNotifications.size)
+        } finally { PhoneConfirmations.beforeNotify = null }
+    }
 }
