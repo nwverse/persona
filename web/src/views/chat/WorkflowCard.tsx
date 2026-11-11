@@ -107,7 +107,7 @@ export const WorkflowCallCard = memo(function WorkflowCallCard({ step, mid, sid,
       meta={meta(run)}
       extra={<Overview run={run} />}
       onClick={inDialog ? () => void openBackgroundDialog(mid, sid, run.task_id) : () => setOpen((o) => !o)}
-      ariaLabel={inDialog ? t("chat-subagentcard.open_in_background") : t(open ? "lib-workflows.collapse_run" : "lib-workflows.expand_run", { name })}
+      ariaLabel={inDialog ? t("chat-subagentcard.open_in_background", { name }) : t(open ? "lib-workflows.collapse_run" : "lib-workflows.expand_run", { name })}
       expanded={inDialog ? undefined : open}
       trailing={inDialog ? <Icon name="sidebar" size={14} className="mt-1 shrink-0 text-ink-3" /> : undefined}
       data={{ "data-workflow-call": workflowStatus(run), "data-tool-use": call, "data-items": ids, "data-workflow-opens": inDialog ? "dialog" : "inline" }}

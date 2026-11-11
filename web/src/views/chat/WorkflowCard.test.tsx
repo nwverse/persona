@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// A workflow run's cards. In the chat, in place of the Workflow call that launched it and never folded into the work
-// summary (the call's row again when the hub lists no such run): a task card (#5030, after cindy) with the status word, what it used, its progress line and a
+// A workflow run's cards. In the chat, in place of the Workflow call that launched it, inside the folded work summary
+// until the reader opens it (the call's row again when the hub lists no such run): a task card (#5030, after cindy) with the status word, what it used, its progress line and a
 // strip of a square per agent, opening the chat's Background dialog at its run, or in place where the chat has no such
 // dialog. In the dialog (#3434): one block per phase with "done/started+", rows in start order folded past 12, only to
 // read; a bar in parts moved by transform. Things move only when a value changes: not on the first draw, not with
@@ -258,7 +258,7 @@ describe("the card and the chat's Background dialog", () => {
     const head = card.querySelector("button")!;
     expect(card.dataset.workflowOpens).toBe("dialog");
     expect(head.hasAttribute("aria-expanded")).toBe(false);
-    expect(head.getAttribute("aria-label")).toBe("在后台任务中打开");
+    expect(head.getAttribute("aria-label")).toBe("在后台任务中打开 parity-audit");
     act(() => head.click());
     expect(opened).toHaveBeenCalledWith("w1");
     expect(q("[data-workflow-inline]")).toBeNull(); // nothing opens in place
@@ -475,29 +475,36 @@ describe("in the chat's flow", () => {
     );
   };
 
-  it("keeps a running run's card out of the work summary, where its call was", () => {
+  it("keeps a running workflow inside the summary until manual expansion", () => {
     draw([running()]);
+    expect(q("[data-workflow-call]")).toBeNull();
+    act(() => q("[data-work-group] > button")!.click());
     const card = q('[data-workflow-call="running"]')!;
-    expect(card.closest("[data-work-group]")).toBeNull();
+    expect(card.closest("[data-work-group]")).not.toBeNull();
     expect(q("[data-work-group]")).not.toBeNull(); // the Grep before it folded
   });
 
-  it("keeps an ended run's card out of the summary too", () => {
+  it("keeps an ended workflow inspectable inside the folded execution summary", () => {
     draw([running({ running: false, status: "completed", ended_at: at(100) })]);
+    expect(q("[data-workflow-call]")).toBeNull();
+    act(() => q("[data-work-group] > button")!.click());
     const card = q('[data-workflow-call="completed"]')!;
-    expect(card.closest("[data-work-group]")).toBeNull();
+    expect(card.closest("[data-work-group]")).not.toBeNull();
+    expect(card.querySelector("button[aria-expanded]")!.getAttribute("aria-expanded")).toBe("false"); // no dialog here: in place, closed
     expect(card.querySelector("[data-task-status]")!.textContent).toBe("已完成");
     expect(q("[data-work-group]")!.textContent).toContain("已工作"); // the Grep before it folded
   });
 
   it("ends in place: the same card turns its status word, nothing leaves the chat", () => {
     draw([running()]);
+    expect(q("[data-workflow-call]")).toBeNull();
+    act(() => q("[data-work-group] > button")!.click());
     const card = q("[data-workflow-call]")!;
     push([running({ running: false, status: "completed", ended_at: at(100), agents_running: 0, agents_done: 5 })]);
     expect(q("[data-workflow-call]")).toBe(card); // not unmounted and drawn again elsewhere
     expect(card.dataset.workflowCall).toBe("completed");
     expect(card.querySelector("[data-task-status]")!.textContent).toBe("已完成");
-    expect(card.querySelector("button[aria-expanded]")!.getAttribute("aria-expanded")).toBe("false"); // no dialog here: in place, closed
+    expect(card.querySelector("button[aria-expanded]")!.getAttribute("aria-expanded")).toBe("false");
   });
 
   const foldedExchange = (): Item[] => [

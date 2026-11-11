@@ -106,7 +106,7 @@ describe("a workflow card opening the chat's Background dialog", () => {
   it("opens the dialog brought to its run, lit a moment", () => {
     draw([run("w1", "call-1"), run("w2", "call-2")]);
     expect(card("call-2").dataset.workflowOpens).toBe("dialog");
-    expect(head("call-2").getAttribute("aria-label")).toBe("在后台任务中打开");
+    expect(head("call-2").getAttribute("aria-label")).toBe("在后台任务中打开 run-w2");
     expect(dialog()).toBeNull();
     act(() => head("call-2").click());
     expect(dialog()).not.toBeNull();
