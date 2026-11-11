@@ -39,7 +39,7 @@ while IFS= read -r line; do
       echo "$count" > "$SDK_FAKE_DIR/attempts"
       printf '{"type":"stream_event","event":{"type":"message_start","message":{"model":"%s","usage":{"input_tokens":5}}},"parent_tool_use_id":null}\n' "$model"
       if [ "$count" -le 2 ]; then
-        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: safeguards flagged this message"}'
+        echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 503 no eligible upstream account is currently available"}'
       else
         echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answered by fallback"}},"parent_tool_use_id":null}'
         echo '{"type":"result","subtype":"success","is_error":false,"result":"answered by fallback"}'
@@ -116,7 +116,7 @@ func TestAssistantAdoptedFailureEndsWhenItCannotResume(t *testing.T) {
 		n := assistantNode(t)
 		p := &assistantProc{id: id, agent: "claude", busy: true, manual: tc.manual}
 		n.procs[id] = p
-		failure := &assistantPendingFailure{text: "API Error: safeguards flagged this message"}
+		failure := &assistantPendingFailure{text: "API Error: 503 no eligible upstream account is currently available"}
 		r := &assistantTurnRecovery{retried: map[string]bool{}, used: map[string]bool{}, pending: failure, proc: p}
 		n.recoveries = map[string]*assistantTurnRecovery{id: r}
 		n.adoptedFailures = []adoptedFailure{{p, r, failure}}
@@ -265,7 +265,7 @@ func TestAssistantFirstFailureInTheHandoverGapIsCarried(t *testing.T) {
 	p := keptProc(t, a, id, "claude")
 	p.launcher, p.model, p.busy = "claude", modelExecution{Model: "primary-model"}, true
 	a.handOverAssistants()
-	if !a.recoverAssistantResult(p, true, "API Error: safeguards flagged this message") {
+	if !a.recoverAssistantResult(p, true, "API Error: 503 no eligible upstream account is currently available") {
 		t.Fatal("the first failure in the handover gap was published as final")
 	}
 	send := assistantRecoverySend
@@ -286,5 +286,82 @@ func TestAssistantFirstFailureInTheHandoverGapIsCarried(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the carried first failure did not resume on the new Node")
+	}
+}
+
+// A Claude safeguards refusal goes straight to the next model: Claude Code has already continued once on the same
+// one. A Codex refusal still gets its same-model retry (#4283).
+func TestAssistantClaudeRefusalSwitchesAtOnce(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	models, send := assistantRecoveryModels, assistantRecoverySend
+	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Models: []proto.AgentModel{{ID: "primary-model"}, {ID: "fallback-model"}}}, nil
+	}
+	for _, agent := range []string{"claude", "codex"} {
+		type sent struct {
+			model   string
+			restart bool
+		}
+		got := make(chan sent, 1)
+		assistantRecoverySend = func(ctx context.Context, _ *Node, _ *assistantProc, _, _ string, execution modelExecution) error {
+			_, restart := assistantRecoveryOf(ctx)
+			got <- sent{execution.Model, restart}
+			return nil
+		}
+		n := assistantNode(t)
+		p := &assistantProc{id: id, agent: agent, launcher: agent, model: modelExecution{Model: "primary-model"}}
+		n.procs[id] = p
+		if !n.recoverAssistantResult(p, true, "API Error: Opus 5.5's safeguards flagged this message") {
+			t.Fatalf("%s: the refusal was not recovered", agent)
+		}
+		select {
+		case s := <-got:
+			if switched := agent == "claude"; s.restart != switched || switched && s.model != "fallback-model" {
+				t.Errorf("%s: recovery sent on %q (restart %v)", agent, s.model, s.restart)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: no recovery send", agent)
+		}
+	}
+}
+
+// A fallback the gateway does not have is the recovery's own pick: it is spent and the next model takes the turn. The
+// same failure on the model the user asked for stays theirs (#4283).
+func TestAssistantUnavailableFallbackMovesOn(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	const missing = "There's an issue with the selected model (ccone/claude-fable-5-2). It may not exist or you may not have access to it."
+	models, send := assistantRecoveryModels, assistantRecoverySend
+	t.Cleanup(func() { assistantRecoveryModels, assistantRecoverySend = models, send })
+	assistantRecoveryModels = func(context.Context, *Node, string) (proto.LauncherModels, error) {
+		return proto.LauncherModels{Models: []proto.AgentModel{{ID: "default", Default: true, Resolved: "claude-opus-5-5"},
+			{ID: "fable", Resolved: "ccone/claude-fable-5-2"}, {ID: "haiku", Resolved: "gemini-3.8-flash-tiered"}}}, nil
+	}
+	got := make(chan string, 1)
+	assistantRecoverySend = func(_ context.Context, _ *Node, _ *assistantProc, _, _ string, execution modelExecution) error {
+		got <- execution.Model
+		return nil
+	}
+	n := assistantNode(t)
+	p := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fable"}}
+	n.procs[id] = p
+	n.recoveries = map[string]*assistantTurnRecovery{id: {retried: map[string]bool{"": true}, switched: true,
+		used: map[string]bool{"claude-opus-5-5": true, "fable": true}}}
+	if !n.recoverAssistantResult(p, true, missing, proto.TurnErrorUser, assistantRecordKind) {
+		t.Fatal("an unavailable fallback ended the recovery")
+	}
+	select {
+	case m := <-got:
+		if m != "haiku" {
+			t.Fatalf("the chain went on to %q, want haiku", m)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no recovery send after the unavailable fallback")
+	}
+	own := assistantNode(t)
+	q := &assistantProc{id: id, agent: "claude", launcher: "claude", model: modelExecution{Model: "fable"}}
+	own.procs[id] = q
+	if own.recoverAssistantResult(q, true, missing, proto.TurnErrorUser, assistantRecordKind) {
+		t.Fatal("a model the user asked for that does not exist was replayed")
 	}
 }
