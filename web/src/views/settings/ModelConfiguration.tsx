@@ -172,7 +172,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   const chosen = data?.providers.find((v) => v.id === (draft.provider || p?.effective?.provider));
   const followsAgents = !!p && agentsOverride(p);
   const writable = p && (["provider", "model", "effort"] as const).some((field) => supportsField(p, field));
-  const effortAllowed = p && supportsField(p, "effort") && (followsAgents || !(chosen?.kind === "api" && chosen.api !== "responses"));
+  const effortAllowed = p && supportsField(p, "effort") && (followsAgents || chosen?.kind !== "api" || chosen.api === "responses" || chosen.api === "messages" || !chosen.api);
   const listProvider = p?.kind !== "plugin" && chosen?.kind === "launcher" && supportsField(p!, "model") ? chosen.id : "";
   useEffect(() => {
     const refresh = refreshNext.current;
@@ -194,7 +194,7 @@ function PurposeEditor({ manager, id, sourceName, onClose, onSaved }: { manager:
   // provider picked here it is that provider's default (the list's "Default").
   const inherited: ModelBinding = !draft.provider && !p?.override?.model && p?.effective?.model ? { model: p.effective.model } : {};
   const listedEfforts = launcherList.status === "ready" && launcherList.list && takesEffort(launcherList.list.agent)
-    ? effortChoices(launcherList.list, draft.model, inherited) : ["low", "medium", "high", "xhigh", "max"];
+    ? effortChoices(launcherList.list, draft.model, inherited) : (p?.id === "inbox.triage" || p?.kind === "api" ? ["off", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"]);
   const effectiveProvider = data?.providers.find((v) => v.id === p?.effective?.provider);
   const effectiveAgent = providerAgent(effectiveProvider, p?.effective?.provider);
   const chosenAgent = (launcherList.provider === listProvider && launcherList.list?.agent) || providerAgent(chosen, draft.provider || p?.effective?.provider);

@@ -111,6 +111,8 @@ func TestLarkAgentModelValidationAndProviderUse(t *testing.T) {
 		`{"revision":0,"runtime":"agentsdk"}`,
 		`{"revision":0,"provider":"launcher.missing"}`,
 		`{"revision":0,"effort":"unsupported"}`,
+		`{"revision":0,"effort":"off"}`,
+		`{"revision":0,"effort":"none"}`,
 	} {
 		if w := modelRequest(s, http.MethodPut, purposeLarkAgent, body); w.Code != http.StatusBadRequest {
 			t.Fatalf("invalid %s: %d %s", body, w.Code, w.Body.String())

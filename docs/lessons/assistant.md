@@ -261,8 +261,9 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   Android draws them in order — so none of them changes.
 
 - A read-only worker must be able to report while staying in plan mode (#4201). Denying `ExitPlanMode` does not remove
-  the provider's separate permission request for `mcp__persona__report_to_supervisor`. Allow that exact call once only
-  for a supervised task with a current read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
+  the provider's separate permission request for `report_to_supervisor`. Recognize both built-in namespaces with
+  `compat.MCPToolNames`: Paseo preserves the requested name, including the compatibility alias (#4318). Allow only
+  that tool for a supervised task with a current started read-only plan binding. Return `Allow` without `Always`, `Approve`, or `Mode`;
   the terminal hook and Paseo then send no permission or mode update. Reuse `PlanTask.TodoID`, whose old bindings are
   retired on takeover, rather than treating a historical read-only plan as authority for a new writable worker.
 

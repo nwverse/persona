@@ -188,7 +188,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	var d chatDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.Owner}), in, 4000, &d); err != nil {
+	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.ownerName()}), in, 4000, &d); err != nil {
 		return e.compressFailed(ctx, c, err)
 	}
 	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back
