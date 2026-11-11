@@ -28,7 +28,7 @@ import (
 //     leader's Agent, task_leader.go) puts its Agents under that leader Agent inside the leader's task; when the
 //     leader's task is not listed it is a task of the conversation above the leader (supervisorAboveTask).
 //   - Its state, first match wins: needs_you (the SOP's Waiting on you), review (waits for acceptance, nothing of it
-//     running), stuck (taskStuck, the leader reports' rule), doing.
+//     running), stuck (taskStuck, the leader reports' rule), working.
 //
 // The apps are told {"type":"directions"} whenever the tree's content changes (directionTreeSync), and read the tree
 // again then.
@@ -38,10 +38,10 @@ const (
 	treeNeedsYou = "needs_you"
 	treeReview   = "review"
 	treeStuck    = "stuck"
-	treeDoing    = "doing"
+	treeWorking  = "working"
 )
 
-var treeStates = []string{treeNeedsYou, treeReview, treeStuck, treeDoing}
+var treeStates = []string{treeNeedsYou, treeReview, treeStuck, treeWorking}
 
 // sourceSpawned: a to-do Agent linked because another Agent of the to-do spawned it (todo_sessions.go); its via is
 // "<machine>/<session>" of that Agent.
@@ -66,7 +66,7 @@ type treeDirection struct {
 
 // treeCounts are how many of a direction's listed tasks are in each state.
 type treeCounts struct {
-	Doing    int `json:"doing"`
+	Working  int `json:"working"`
 	NeedsYou int `json:"needs_you"`
 	Stuck    int `json:"stuck"`
 	Review   int `json:"review"`
@@ -81,7 +81,7 @@ func (c *treeCounts) add(state string) {
 	case treeStuck:
 		c.Stuck++
 	default:
-		c.Doing++
+		c.Working++
 	}
 }
 
@@ -435,7 +435,7 @@ func (tb *treeBuild) state(t listedTodo) string {
 	case taskStuck(t.Todo, tr, tb.reached[t.ID], tb.now):
 		return treeStuck
 	}
-	return treeDoing
+	return treeWorking
 }
 
 // tree is the directions in order with the secretary group last.

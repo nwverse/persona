@@ -98,7 +98,7 @@ func TestDirectionTreeGroupsTasksBySupervisor(t *testing.T) {
 	if want := sortedIDs(mainTask, none, empty, ended, unknown); !slices.Equal(sortedIDs(taskIDs(sec)...), want) {
 		t.Fatalf("secretary's tasks: %v, want %v", taskIDs(sec), want)
 	}
-	if sec.Counts != (treeCounts{Doing: 5}) || got[0].Counts != (treeCounts{Doing: 1}) {
+	if sec.Counts != (treeCounts{Working: 5}) || got[0].Counts != (treeCounts{Working: 1}) {
 		t.Fatalf("counts: %+v %+v", got[0].Counts, sec.Counts)
 	}
 }
@@ -159,16 +159,16 @@ func TestDirectionTreeTaskStatesAndCounts(t *testing.T) {
 		state[tk.ID] = tk.State
 	}
 	want := map[string]string{asks: treeNeedsYou, asksPending: treeNeedsYou, decides: treeNeedsYou, review: treeReview,
-		runningPending: treeDoing, stuck: treeStuck, unreached: treeDoing, doing: treeDoing}
+		runningPending: treeWorking, stuck: treeStuck, unreached: treeWorking, doing: treeWorking}
 	for id, w := range want {
 		if state[id] != w {
 			t.Errorf("%s: %q, want %q", e.s.todos.todos[id].Title, state[id], w)
 		}
 	}
-	if a.Counts != (treeCounts{NeedsYou: 3, Review: 1, Stuck: 1, Doing: 3}) {
+	if a.Counts != (treeCounts{NeedsYou: 3, Review: 1, Stuck: 1, Working: 3}) {
 		t.Fatalf("counts: %+v", a.Counts)
 	}
-	// Listed needs_you, review, stuck, doing.
+	// Listed needs_you, review, stuck, working.
 	var order []int
 	for _, tk := range a.Tasks {
 		order = append(order, slices.Index(treeStates, tk.State))
@@ -199,7 +199,7 @@ func TestDirectionTreeLeavesOutWhatIsNotOpen(t *testing.T) {
 	e.task("Shelved", func(t *Todo) {
 		t.Supervision, t.Origin, t.CreatedAt, t.UpdatedAt = &Supervision{Supervisor: "conv_lead_a"}, treeMain, long, long
 	})
-	if a := e.tree().Directions[0]; !slices.Equal(taskIDs(a), []string{open}) || a.Counts != (treeCounts{Doing: 1}) {
+	if a := e.tree().Directions[0]; !slices.Equal(taskIDs(a), []string{open}) || a.Counts != (treeCounts{Working: 1}) {
 		t.Fatalf("A: %+v", a)
 	}
 }
@@ -229,7 +229,7 @@ func TestDirectionTreeNestsWorkersUnderTheirLeaderAgent(t *testing.T) {
 
 	ds := e.tree().Directions
 	a, b := ds[0], ds[1]
-	if !slices.Equal(taskIDs(a), []string{lead}) || a.Counts != (treeCounts{Doing: 1}) {
+	if !slices.Equal(taskIDs(a), []string{lead}) || a.Counts != (treeCounts{Working: 1}) {
 		t.Fatalf("A lists the leader's task only, the worker not counted (it needs you, but under its leader): %+v", a)
 	}
 	agents := a.Tasks[0].Agents
@@ -243,7 +243,7 @@ func TestDirectionTreeNestsWorkersUnderTheirLeaderAgent(t *testing.T) {
 	if slices.Contains(taskIDs(ds[2]), worker) {
 		t.Fatalf("the worker is listed on its own: %+v", ds[2])
 	}
-	if !slices.Equal(taskIDs(b), []string{orphan}) || b.Counts != (treeCounts{Doing: 1}) {
+	if !slices.Equal(taskIDs(b), []string{orphan}) || b.Counts != (treeCounts{Working: 1}) {
 		t.Fatalf("B lists the closed leader's worker: %+v", b)
 	}
 }
@@ -332,7 +332,7 @@ func TestDirectionTreeRouteShape(t *testing.T) {
 		string(got.Directions[2]["secretary"]) != "true" || string(got.Directions[2]["name"]) != `""` {
 		t.Fatalf("the secretary's fields: %v %s", k, got.Directions[2]["secretary"])
 	}
-	if c := string(got.Directions[0]["counts"]); c != `{"doing":1,"needs_you":0,"stuck":0,"review":0}` {
+	if c := string(got.Directions[0]["counts"]); c != `{"working":1,"needs_you":0,"stuck":0,"review":0}` {
 		t.Fatalf("counts: %s", c)
 	}
 	if ts := string(got.Directions[1]["tasks"]); ts != "[]" {
@@ -340,7 +340,7 @@ func TestDirectionTreeRouteShape(t *testing.T) {
 	}
 	var tasks []map[string]json.RawMessage
 	_ = json.Unmarshal(got.Directions[0]["tasks"], &tasks)
-	if len(tasks) != 1 || !slices.Equal(keys(tasks[0]), []string{"agents", "id", "state", "title"}) || string(tasks[0]["state"]) != `"doing"` {
+	if len(tasks) != 1 || !slices.Equal(keys(tasks[0]), []string{"agents", "id", "state", "title"}) || string(tasks[0]["state"]) != `"working"` {
 		t.Fatalf("task: %v", tasks)
 	}
 	if a := string(tasks[0]["agents"]); a != `[{"machine_id":"mac","session_id":"s-run","title":"Run","agent":"claude","state":"working"}]` {
@@ -463,8 +463,8 @@ func TestDirectionTreeCountsAddUpToTheOpenCount(t *testing.T) {
 	sum := 0
 	for _, d := range e.tree().Directions {
 		c := d.Counts
-		sum += c.Doing + c.NeedsYou + c.Stuck + c.Review
-		if n := c.Doing + c.NeedsYou + c.Stuck + c.Review; n != len(d.Tasks) {
+		sum += c.Working + c.NeedsYou + c.Stuck + c.Review
+		if n := c.Working + c.NeedsYou + c.Stuck + c.Review; n != len(d.Tasks) {
 			t.Fatalf("%s: counts %+v for %d tasks", d.ID, c, len(d.Tasks))
 		}
 	}
