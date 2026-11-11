@@ -490,6 +490,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/tabs/autoname
 -                    POST /api/v1/task-plans/{id}/dismiss
 -                    POST /api/v1/task-plans/{id}/start
+-                    POST /api/v1/task-plans/{id}/workspace-preview
 todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/retitle
 -                    POST /api/v1/todos/{id}/accept
