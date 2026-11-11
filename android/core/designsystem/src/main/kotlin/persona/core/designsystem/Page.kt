@@ -24,6 +24,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -109,46 +110,55 @@ private fun PageFrame(
 ) {
     val palette = PersonaTheme.palette
     val chrome = LocalChromeInsets.current
-    val density = LocalDensity.current
-    val navigation = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val navigationPadding = WindowInsets.navigationBars.asPaddingValues()
+    val navigation = navigationPadding.calculateBottomPadding()
     val glass = LocalGlassSource.current ?: remember { HazeState() }
     val window = LocalWindowLayout.current
-    // Half-folded: what you read stays above the hinge, the composer or key bar goes below it.
-    val tabletop = window.tabletop && bottomBar != null && window.hingeBottom > window.hingeTop
     CompositionLocalProvider(LocalGlassSource provides glass) {
         if (PersonaTheme.style == AppStyle.Glass) {
             val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
             val light = ambience ?: LocalAmbience.current
-            // One measure pass: the bars first, then the content with room for them. Measuring the bars after the
-            // first frame (onSizeChanged) drew every page once without that room, so titles jumped under the bar.
+            // Bars and content are measured in one pass. In particular, a dock's real height decides whether the lower
+            // side is usable; an onSizeChanged correction would first draw a frame across the hinge.
             SubcomposeLayout(modifier.fillMaxSize()) { constraints ->
                 val loose = constraints.copy(minWidth = 0, minHeight = 0)
                 val inset = readingInset(constraints.maxWidth.toDp())
-                val hingeTop = window.hingeTop.toInt().coerceIn(0, constraints.maxHeight)
-                val hingeBottom = window.hingeBottom.toInt().coerceIn(hingeTop, constraints.maxHeight)
                 val bars = subcompose(PageSlot.Top) { topBar() }.map { it.measure(loose) }
                 // A host's bar above this page (chrome.top): this page's own bars sit below it, the content under both.
                 val above = chrome.top.roundToPx().coerceIn(0, constraints.maxHeight)
+                val dockStart = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateLeftPadding(layoutDirection).roundToPx()
+                val dockEnd = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateRightPadding(layoutDirection).roundToPx()
+                // System and host insets are placement arithmetic, not part of the dock measurement: tabletop needs
+                // the dock's actual height, while a flat page keeps exactly its former bottom inset behavior.
                 val dock = if (bottomBar == null) emptyList() else subcompose(PageSlot.Bottom) {
-                    Box(Modifier.fillMaxWidth().padding(bottom = if (tabletop) 0.dp else chrome.bottom)
-                        .then(if (chrome.handlesNavigationBar || tabletop) Modifier else Modifier.navigationBarsPadding()), contentAlignment = Alignment.TopCenter) {
+                    Box(Modifier.fillMaxWidth().then(if (chrome.handlesNavigationBar) Modifier
+                        else Modifier.consumeWindowInsets(WindowInsets.navigationBars)), contentAlignment = Alignment.TopCenter) {
                         // On wide panes the composer and bars stay as wide as the text they belong to.
                         Box(Modifier.widthIn(max = ReadingWidth + 40.dp)) { bottomBar() }
                     }
-                }.map { it.measure(loose) }
-                val top = (above + (bars.maxOfOrNull { it.height } ?: 0)).toDp()
+                }.map { it.measure(loose.copy(maxWidth = (constraints.maxWidth - dockStart - dockEnd).coerceAtLeast(0))) }
+                val topHeight = above + (bars.maxOfOrNull { it.height } ?: 0)
+                val dockHeight = dock.maxOfOrNull { it.height } ?: 0
+                val flatDockInset = chrome.bottom.roundToPx() +
+                    (if (chrome.handlesNavigationBar) 0 else navigation.roundToPx())
+                val pageLayout = tabletopPageLayout(window, topHeight,
+                    bottomBarHeight = if (bottomBar == null) null else dockHeight,
+                    totalHeight = constraints.maxHeight, minimumContentHeight = Tokens.MinTouch.android.roundToPx())
+                val split = pageLayout as? TabletopPageLayout.Split
+                val top = topHeight.toDp()
                 val floor = when {
-                    tabletop -> 12.dp
-                    dock.isNotEmpty() -> dock.maxOf { it.height }.toDp()
+                    split != null -> TabletopHingeSpacing.contentBottom
+                    dock.isNotEmpty() -> (dockHeight + flatDockInset).toDp()
                     chrome.handlesNavigationBar -> chrome.bottom
                     else -> navigation
                 }
-                val bodyHeight = if (tabletop) hingeTop else constraints.maxHeight
+                val bodyHeight = split?.bodyHeight ?: constraints.maxHeight
                 val body = subcompose(PageSlot.Content) {
                     // A tap on the page's blank space puts the keyboard away (the bars and the dock are not in here).
                     // A page of its own in here (!edges) is the glass source itself: Haze does not let an effect draw
                     // an ancestor source, so with this one as well the inner page's edges and dock blurred nothing (#3040).
-                    Box(Modifier.fillMaxSize().then(if (edges) Modifier.glassSource() else Modifier).dismissKeyboardOnBlankTap()) {
+                    Box(Modifier.fillMaxSize().then(if (split != null) Modifier.clipToBounds() else Modifier)
+                        .then(if (edges) Modifier.glassSource() else Modifier).dismissKeyboardOnBlankTap()) {
                         // The window's one light, not a block of this page's own: panes, nested pages and the
                         // shell around them paint the same pixels, so nothing shows where one ends.
                         PageBackdrop(ambience = light)
@@ -163,51 +173,72 @@ private fun PageFrame(
                 val edgeStrips = if (!edges) emptyList() else subcompose(PageSlot.Edges) {
                     Box(Modifier.fillMaxSize()) {
                         if (top > 0.dp) EdgeWhen(underTop, Modifier.align(Alignment.TopCenter)) { ScrollEdge(it, maxOf(statusBar + 20.dp, top), top = true, light = light) }
-                        if (!tabletop) EdgeWhen(underBottom, Modifier.align(Alignment.BottomCenter)) { ScrollEdge(it, maxOf(navigation + 28.dp, floor), top = false, light = light) }
+                        if (split == null) EdgeWhen(underBottom, Modifier.align(Alignment.BottomCenter)) { ScrollEdge(it, maxOf(navigation + 28.dp, floor), top = false, light = light) }
                     }
                 }.map { it.measure(constraints.copy(minHeight = bodyHeight, maxHeight = bodyHeight)) }
-                // Below the hinge the lower half continues the same background, with the bar in its middle.
-                val lower = if (!tabletop) emptyList() else subcompose(PageSlot.Lower) {
+                // The hinge and the lower side continue the same background. Only a separately measured dock may add
+                // interactive content below the hinge; an ordinary page has no lower content slot at all.
+                val lower = if (split == null) emptyList() else subcompose(PageSlot.Lower) {
                     Box(Modifier.fillMaxSize()) { PageBackdrop(ambience = light) }
-                }.map { it.measure(constraints.copy(minHeight = constraints.maxHeight - hingeTop, maxHeight = constraints.maxHeight - hingeTop)) }
+                }.map {
+                    val lowerHeight = constraints.maxHeight - split.bodyHeight
+                    it.measure(constraints.copy(minHeight = lowerHeight, maxHeight = lowerHeight))
+                }
                 layout(constraints.maxWidth, constraints.maxHeight) {
-                    lower.forEach { it.place(0, hingeTop) }
+                    lower.forEach { it.place(0, split?.bodyHeight ?: 0) }
                     body.forEach { it.place(0, 0) }
                     edgeStrips.forEach { it.place(0, 0) }
                     bars.forEach { it.place(0, above) }
                     dock.forEach {
-                        if (tabletop) it.place(0, hingeBottom + ((constraints.maxHeight - hingeBottom - it.height) / 2).coerceAtLeast(0))
-                        else it.place(0, constraints.maxHeight - it.height)
+                        val dockPlacement = split?.dockPlacement as? TabletopDockPlacement.BottomBar
+                        val x = if (split != null) (constraints.maxWidth - it.width) / 2 else dockStart
+                        it.place(x, dockPlacement?.top ?: (constraints.maxHeight - dockHeight - flatDockInset))
                     }
                 }
             }
         } else {
-            BoxWithConstraints(modifier.fillMaxSize().background(palette.background)) {
-                val inset = readingInset(maxWidth)
-                val withInset: @Composable (PaddingValues) -> Unit = { padding ->
-                    Box(Modifier.fillMaxSize().dismissKeyboardOnBlankTap()) { CompositionLocalProvider(LocalReadingInset provides inset) { content(padding) } }
+            // Brief and Board use the same measured policy. Their bars take layout space instead of floating, but the
+            // content slot and its state stay identical when a posture change selects split or single layout.
+            SubcomposeLayout(modifier.fillMaxSize().background(palette.background)) { constraints ->
+                val loose = constraints.copy(minWidth = 0, minHeight = 0)
+                val inset = readingInset(constraints.maxWidth.toDp())
+                val bars = subcompose(PageSlot.Top) { topBar() }.map { it.measure(loose) }
+                val above = chrome.top.roundToPx().coerceIn(0, constraints.maxHeight)
+                val dockStart = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateLeftPadding(layoutDirection).roundToPx()
+                val dockEnd = if (chrome.handlesNavigationBar) 0 else navigationPadding.calculateRightPadding(layoutDirection).roundToPx()
+                val dock = if (bottomBar == null) emptyList() else subcompose(PageSlot.Bottom) {
+                    Box(Modifier.fillMaxWidth().then(if (chrome.handlesNavigationBar) Modifier
+                        else Modifier.consumeWindowInsets(WindowInsets.navigationBars)), contentAlignment = Alignment.TopCenter) {
+                        Box(Modifier.widthIn(max = ReadingWidth + 40.dp)) { bottomBar() }
+                    }
+                }.map { it.measure(loose.copy(maxWidth = (constraints.maxWidth - dockStart - dockEnd).coerceAtLeast(0))) }
+                val topHeight = above + (bars.maxOfOrNull { it.height } ?: 0)
+                val dockHeight = dock.maxOfOrNull { it.height } ?: 0
+                val flatDockInset = if (chrome.handlesNavigationBar) 0 else navigation.roundToPx()
+                val pageLayout = tabletopPageLayout(window, topHeight,
+                    bottomBarHeight = if (bottomBar == null) null else dockHeight,
+                    totalHeight = constraints.maxHeight, minimumContentHeight = Tokens.MinTouch.android.roundToPx())
+                val split = pageLayout as? TabletopPageLayout.Split
+                val contentBottom = when {
+                    split != null -> TabletopHingeSpacing.contentBottom
+                    bottomBar == null && !chrome.handlesNavigationBar -> navigation
+                    else -> 0.dp
                 }
-                if (tabletop) {
-                    val hingeTop = with(density) { window.hingeTop.toDp() }.coerceIn(0.dp, maxHeight)
-                    val hingeBottom = with(density) { window.hingeBottom.toDp() }.coerceIn(hingeTop, maxHeight)
-                    Column(Modifier.fillMaxSize()) {
-                        Column(Modifier.fillMaxWidth().height(hingeTop)) {
-                            topBar()
-                            Box(Modifier.weight(1f)) { withInset(PaddingValues(bottom = 12.dp)) }
-                        }
-                        Spacer(Modifier.height(hingeBottom - hingeTop))
-                        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Box(Modifier.widthIn(max = ReadingWidth + 40.dp)) { bottomBar?.invoke() } }
+                val dockSpace = if (dock.isEmpty()) 0 else dockHeight + flatDockInset
+                val contentHeight = ((split?.bodyHeight ?: constraints.maxHeight - dockSpace) - topHeight).coerceAtLeast(0)
+                val body = subcompose(PageSlot.Content) {
+                    Box(Modifier.fillMaxSize().then(if (split != null) Modifier.clipToBounds() else Modifier)
+                        .dismissKeyboardOnBlankTap()) {
+                        CompositionLocalProvider(LocalReadingInset provides inset) { content(PaddingValues(bottom = contentBottom)) }
                     }
-                } else Column(Modifier.fillMaxSize()) {
-                    if (chrome.top > 0.dp) Spacer(Modifier.height(chrome.top))
-                    topBar()
-                    Box(Modifier.weight(1f)) {
-                        withInset(PaddingValues(bottom = if (bottomBar == null && !chrome.handlesNavigationBar) navigation else 0.dp))
-                    }
-                    bottomBar?.let {
-                        Box(Modifier.fillMaxWidth().then(if (chrome.handlesNavigationBar) Modifier else Modifier.navigationBarsPadding()), contentAlignment = Alignment.TopCenter) {
-                            Box(Modifier.widthIn(max = ReadingWidth + 40.dp)) { it() }
-                        }
+                }.map { it.measure(constraints.copy(minHeight = contentHeight, maxHeight = contentHeight)) }
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    body.forEach { it.place(0, topHeight) }
+                    bars.forEach { it.place(0, above) }
+                    dock.forEach {
+                        val dockPlacement = split?.dockPlacement as? TabletopDockPlacement.BottomBar
+                        val x = if (split != null) (constraints.maxWidth - it.width) / 2 else dockStart
+                        it.place(x, dockPlacement?.top ?: (constraints.maxHeight - dockHeight - flatDockInset))
                     }
                 }
             }
@@ -417,6 +448,7 @@ fun JListPage(
     val large = largeTitle && style != AppStyle.Board
     val collapsed by remember(state, large) { derivedStateOf { !large || state.firstVisibleItemIndex > 0 || state.firstVisibleItemScrollOffset > 120 } }
     val barSubtitle = if (style == AppStyle.Board) subtitle ?: summary else null
+    AdaptiveListProbe(page = title, state = state)
     PageFrame(
         modifier, ambience,
         topBar = { JTopBar(title, barSubtitle.takeIf { collapsed }, onBack ?: LocalRootBack.current, actions, titleBusy, onTitleClick, showTitle = collapsed) },

@@ -249,12 +249,22 @@ and the Duo's inner screen; a phone, folded or not, is narrower than 600dp uprig
   bottom overlays such as input fields and key bars share that limit. Images and tables lay out within the content width. This is the Duo's 760pt readable width.
 - Foldable book posture (vertical half-fold): the hinge separates panes, and content and buttons do not sit over it (the list-detail scene handles it through `HingePolicy`);
   the sidebar column ends at the fold and the Assistant page starts past it (`sidebarSplit`), as the half-folded Duo keeps both columns clear of its crease.
-- Tabletop posture (horizontal half-fold): pages with bottom overlays (chat, terminal) place content above the hinge and the input field / key bar below (`PageFrame`); the sidebar column runs the full height.
+- Tabletop posture (horizontal half-fold): every page avoids the hinge. Pages with bottom overlays (chat, terminal) keep content above the hinge and the input field / key bar below it; pages without one keep all interactive content above it (`PageFrame`, section 3.1.1). The sidebar column runs the full height.
 - Not taken from iOS, because Android has no matching system behavior: the Duo's vertical side bars and the shell's side rail (`ShellSideRail`; the system moves iOS bars to the screen's edge on the outer screen and inner landscape,
   Android never does), the cross-fade between pages under those bars, and the iPad's page-sized Settings card (`presentationSizing(.page)`): Android's sheet spans the window like the Duo's.
   The Agents page gets no sidebar column: the Duo's Agents tab has none either, and on an open foldable a third column would take the room the Agents list and its chat need.
 - Keyboard, mouse, trackpad: session, message and settings-row long-press menus also respond to right-click; hover has feedback; lists support the wheel; the software keyboard does not open by itself on launch.
 - Glass blurs a larger area on large screens (each pane's top bar and scroll edges); performance has not been measured.
+
+### 3.1.1 Tabletop pages
+
+Tabletop layout is selected only from the window's horizontal separating hinge, never from a device model. Glass, Brief and Board all measure the actual top bar and bottom dock before choosing their geometry in one `SubcomposeLayout` pass; there is no second-frame size correction.
+
+- **With a bottom dock:** reading and scrolling stay above `hingeTop`; the composer, terminal key bar or page actions start at or after `hingeBottom`. The dock keeps `ReadingWidth`, does not receive another ordinary navigation-bar padding, and is centred in the measured lower safe area. Content leaves `Tokens.Space.m` before the hinge.
+- **Without a bottom dock:** the top bar and all content end at `hingeTop`. The hinge and everything below it draw only the same page background: no content slot, focusable node or clickable control is placed there.
+- **Fallback:** a missing or zero-height hinge, an upper side that cannot hold the measured top bar plus `Tokens.MinTouch.android` of content, or a lower side that cannot hold the measured dock uses the ordinary flat single-page layout and its system insets. A short lower side is allowed when there is no dock because it is only background. Returning between flat and tabletop reuses the same content slot, scroll state, draft, selection and focus; it does not navigate or recreate a ViewModel.
+
+Acceptance covers Glass in light and dark and samples Brief and Board in both appearances. Generic Fold's real book posture can provide real `FoldingFeature` evidence. A fake tabletop supplied through `debug.posture` is visual and layout evidence only; the real tabletop posture still needs device verification. No frame-rate, memory or power improvement is claimed without measurement.
 
 ## 4. Screenshots and verification
 
