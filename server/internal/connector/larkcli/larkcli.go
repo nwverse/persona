@@ -66,7 +66,7 @@ func (c *Connector) Profile() string {
 }
 
 func (c *Connector) Manifest() connector.Manifest {
-	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapLogin}}
+	return connector.Manifest{Capabilities: []connector.Capability{connector.CapStatus, connector.CapTools, connector.CapLogin, connector.CapThreads}}
 }
 
 func (c *Connector) Tools() []proto.Tool {

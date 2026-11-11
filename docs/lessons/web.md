@@ -930,3 +930,13 @@ first page. A list 300 rows deep became 50, the scroller clamped its offset, and
 every time they reached the bottom. Recover by reading a fresh view as deep as the reader has scrolled plus one page,
 keeping the old rows on screen until it arrives (web `SessionList.reread`, #4431; iOS `SessionListModel.rebaseline`); any
 recovery that publishes fewer rows than are on screen moves the reader.
+
+## Connector context is not a conversation (#856)
+
+A collected context string loses message boundaries, individual timestamps and
+direction. Do not recover them by splitting on sender names or colons: descriptions
+can contain both. Use `Threads` for structured pages and retain a literal fallback
+for old items. Parse a textual card envelope only inside one source message, and
+keep incomplete or unknown card shapes readable. Capability errors need their own
+code; a 409 without `Threads` is different from a temporary failure or lost access.
+A failed page refresh must not erase a loaded page or its pending reply draft.

@@ -104,8 +104,8 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
             <div className="flex items-start gap-3">
               <ItemAvatar it={item} size={36} />
               <div className="min-w-0 flex-1">
-                <h2 className="flex min-w-0 items-center gap-2 text-[15px] font-semibold text-ink">
-                  <span className="truncate" title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
+                <h2 className={cx("flex min-w-0 items-center gap-2 text-[15px] font-semibold text-ink", item.source === "larkcli" && "flex-wrap gap-y-1 sm:flex-nowrap")}>
+                  <span className={item.source === "larkcli" ? "min-w-0 max-w-full break-words sm:truncate" : "truncate"} title={translated?.subject ? item.title : undefined}>{translated?.subject || item.title}</span>
                   {label && <Tag urgent={labelIsUrgent(item)}>{label}</Tag>}
                 </h2>
                 {/* the source line gives way first, so the time stays whole */}
