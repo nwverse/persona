@@ -46,9 +46,8 @@ func (i *Index) Query(options Options) (Page, error) {
 	}
 	end := min(offset+o.Limit, len(r.events))
 	p := Page{Sessions: make([]any, 0, end-offset), Remove: make([]string, 0), Revision: r.counts.Revision, Total: r.counts.Total, HasMore: end < len(r.events)}
-	p.Facets, p.Groups = r.dimensions.response(o.view())
 	for _, e := range r.events[offset:end] {
-		if e.removed {
+		if e.value == nil {
 			p.Remove = append(p.Remove, e.id)
 			continue
 		}
@@ -81,20 +80,14 @@ func (i *Index) Counts(options Options) (Counts, error) {
 		if err != nil {
 			return Counts{}, err
 		}
-		return responseCounts(s.result, o), nil
+		return copyCounts(s.result.counts), nil
 	}
 	if o.Since != "" {
 		if _, err := i.sinceRevision(o.Since); err != nil {
 			return Counts{}, err
 		}
 	}
-	return responseCounts(i.countsView(o), o), nil
-}
-
-func responseCounts(r *result, o Options) Counts {
-	c := copyCounts(r.counts)
-	c.Facets, c.Groups = r.dimensions.response(o.view())
-	return c
+	return copyCounts(i.countsResult(o.filters()).counts), nil
 }
 
 func copyCounts(c Counts) Counts {
@@ -114,9 +107,6 @@ func (f filters) matches(r *record) bool {
 	return (f.ID == "" || f.ID == v.ID) &&
 		(f.State == "" || f.State == v.State) &&
 		(f.Machine == "" || f.Machine == v.Machine) &&
-		setMatches(f.machines, v.Machine) && setMatches(f.scope, v.Machine) &&
-		setMatches(f.projects, v.Dimensions.ProjectID) && setMatches(f.harnesses, v.Dimensions.HarnessID) &&
-		(!f.agentsOnly || !v.Assistant) && (!f.workOnly || !v.WorkExcluded) &&
 		(f.Project == "" || f.Project == v.Project) &&
 		(f.Group == "" || f.Group == v.Group) &&
 		(f.Source == "" || f.Source == v.Source) &&
@@ -225,60 +215,30 @@ func (i *Index) countsResult(f filters) *result {
 	return i.remember(key, &result{counts: counts})
 }
 
-// countsView derives the dimensions from the same matching set as the rows.
-// Its metadata is reusable across sort directions and delta baselines.
-func (i *Index) countsView(o Options) *result {
-	f := o.filters()
-	if !o.Facets && o.GroupBy == "" {
-		return i.countsResult(f)
-	}
-	key := cacheKey{filters: f, viewOptions: viewOptions{Facets: o.Facets, GroupBy: o.GroupBy}}
-	if r := i.cached(key); r != nil {
-		return r
-	}
-	r := &result{counts: i.countsResult(f).counts, dimensions: newDimensionView(key.viewOptions)}
+func (i *Index) fullResult(f filters) *result {
 	if f.ID != "" {
-		if item := i.items[f.ID]; f.matches(item) {
-			r.dimensions.add(item.item)
-		}
-		return r
+		return i.exactResult(f)
 	}
-	for _, item := range i.items {
-		if f.matches(item) {
-			r.dimensions.add(item.item)
-		}
-	}
-	return i.remember(key, r)
-}
-
-func (i *Index) fullResult(o Options) *result {
-	f := o.filters()
-	if f.ID != "" {
-		r := i.exactResult(f)
-		r.dimensions = i.countsView(o).dimensions
-		return r
-	}
-	key := cacheKey{filters: f, viewOptions: o.view()}
+	key := cacheKey{filters: f}
 	if r := i.cached(key); r != nil && r.ordered {
 		return r
 	}
-	view := i.countsView(o)
-	r := &result{counts: view.counts, dimensions: view.dimensions, ordered: true}
+	r := &result{counts: i.countsResult(f).counts, ordered: true}
 	for id, item := range i.items {
 		if !f.matches(item) {
 			continue
 		}
 		r.events = append(r.events, event{id: id, updated: item.item.UpdatedAt, value: item})
 	}
-	sortView(r.events, o.view(), r.dimensions)
+	sortEvents(r.events)
 	return i.remember(key, r)
 }
 
 func (i *Index) queryResult(o Options) *result {
 	if o.Since == "" {
-		return i.fullResult(o)
+		return i.fullResult(o.filters())
 	}
-	key := cacheKey{filters: o.filters(), Since: o.Since, viewOptions: o.view()}
+	key := cacheKey{filters: o.filters(), Since: o.Since}
 	if r := i.cached(key); r != nil {
 		return r
 	}
@@ -297,8 +257,7 @@ func (i *Index) queryResult(o Options) *result {
 			collapsed[id] = c
 		}
 	}
-	view := i.countsView(o)
-	r := &result{counts: view.counts, dimensions: view.dimensions}
+	r := &result{counts: i.countsResult(o.filters()).counts}
 	f := o.filters()
 	for id, c := range collapsed {
 		before, after := f.matches(c.before), f.matches(c.after)
@@ -312,9 +271,9 @@ func (i *Index) queryResult(o Options) *result {
 			if c.after != nil {
 				updated = c.after.item.UpdatedAt
 			}
-			r.events = append(r.events, event{id: id, updated: updated, value: c.before, removed: true})
+			r.events = append(r.events, event{id: id, updated: updated})
 		}
 	}
-	sortView(r.events, o.view(), r.dimensions)
+	sortEvents(r.events)
 	return i.remember(key, r)
 }

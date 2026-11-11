@@ -82,6 +82,16 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			by = h.byTodo
 		}
 		var relay http.HandlerFunc = func(w http.ResponseWriter, r *http.Request) { h.forwardOwned(w, r, by) }
+		if pattern == "GET /api/v1/machines/{mid}/launchers/{name}/start-options" {
+			next := relay
+			relay = h.withMachine(func(w http.ResponseWriter, r *http.Request, m *Machine) {
+				if h.machineUntrusted(m.cfg.ID) {
+					writeErrCode(w, http.StatusConflict, "machine_pending", errors.New("Confirm this computer before starting a session."))
+					return
+				}
+				next(w, r)
+			})
+		}
 		if slices.Contains(storedTerminalTexts, pattern) {
 			relay = h.withoutTerminalControls(relay)
 		}
@@ -316,11 +326,8 @@ func (l assistantLink) snapshotFrom(_ context.Context, from string, s assistantw
 	}
 	a.mu.Unlock()
 	// The hub keeps one profile as its own (assistant_profile.go): the assistant it starts.
-	if s.Profile != nil && !jsonSame(oldProfile, s.Profile) {
-		if from == assistantwire.AssistantID {
-			h.keepAssistantProfile(context.Background(), s.Profile)
-		}
-		h.refreshWorkListMain(from)
+	if s.Profile != nil && !jsonSame(oldProfile, s.Profile) && from == assistantwire.AssistantID {
+		h.keepAssistantProfile(context.Background(), s.Profile)
 	}
 	// What the nodes keep listing (s.Profile.Keep) the manager tells them itself (internal/devices SetKeep).
 	// The session lists' decoration (its titles, todos, work, channels, inbox agents) and its own cards on the phone

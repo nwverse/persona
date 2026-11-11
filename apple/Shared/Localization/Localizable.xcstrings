@@ -1,6 +1,167 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Addresses": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Addresses"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アドレス"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "地址"
+          }
+        }
+      }
+    },
+    "Addresses · %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Addresses · %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アドレス・%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "地址 · %1$@"
+          }
+        }
+      }
+    },
+    "Order to Try": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Order to Try"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "試す順序"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尝试顺序"
+          }
+        }
+      }
+    },
+    "Add Address": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Address"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アドレスを追加"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加地址"
+          }
+        }
+      }
+    },
+    "Remove Address": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove Address"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アドレスを削除"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除地址"
+          }
+        }
+      }
+    },
+    "The app asks every address at once and uses the first in this order that answers; a later one only when the earlier ones don't. The paired address always comes first.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app asks every address at once and uses the first in this order that answers; a later one only when the earlier ones don't. The paired address always comes first."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アプリはすべてのアドレスに同時に問い合わせ、この順序で最初に応答したものを使います。後のアドレスは、それより前のものが応答しないときだけ使います。ペアリングしたアドレスは常に先頭です。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App 会同时探测所有地址，按这里的顺序用第一个有响应的；排在前面的都连不上，才会用后面的。配对时的地址始终排第一。"
+          }
+        }
+      }
+    },
+    "Another way to reach this same hub, such as a public domain when the paired address is a VPN one. Fill in the Cloudflare Access token only if this address is behind Access; it's sent to this address only.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another way to reach this same hub, such as a public domain when the paired address is a VPN one. Fill in the Cloudflare Access token only if this address is behind Access; it's sent to this address only."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同じ hub に届く別の経路です（ペアリングしたアドレスが VPN のものなら公開ドメインなど）。Cloudflare Access のトークンは、このアドレスが Access の背後にあるときだけ入力してください。このアドレスにだけ送られます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接同一个 hub 的另一条路，比如配对地址走 VPN 时再加一个公网域名。只有这个地址在 Cloudflare Access 后面时才需要填令牌，令牌只发给这个地址。"
+          }
+        }
+      }
+    },
     "Connection method": {
       "extractionState": "manual",
       "localizations": {
@@ -24030,51 +24191,6 @@
       },
       "extractionState": "manual"
     },
-    "By Repository keeps its own tree of worktrees and agents.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "By Repository keeps its own tree of worktrees and agents."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "「按仓库」仍用它自己的工作树和 Agent 树。"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "「リポジトリ別」は独自のワークツリーとエージェントのツリーを使います。"
-          }
-        }
-      }
-    },
-    "By Repository keeps one line per agent": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "By Repository keeps one line per agent"
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "リポジトリ別では各エージェントを 1 行で表示"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "按仓库分组时每个 Agent 一行"
-          }
-        }
-      }
-    },
     "By Rules": {
       "extractionState": "manual",
       "localizations": {
@@ -45648,19 +45764,180 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Directions"
+            "value": "Pinned"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "方向性"
+            "value": "常駐"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "方向"
+            "value": "常驻"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Direction Ended [Assistant Sidebar 9c07f3]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unpinned"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常駐をやめました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已取消常驻"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Direction Pinned [Assistant Sidebar 2e8a51]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pinned"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常駐にしました"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已设为常驻"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Pin [Assistant Sidebar 6d1f2a]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pin"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常駐にする"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设为常驻"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Unpin [Assistant Sidebar b7c40e]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unpin"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "常駐をやめる"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取消常驻"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%lld need you": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld need you"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "対応待ち %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等你 %lld"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%lld working": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld working"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業中 %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在做 %lld"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "%lld working · %lld need you": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld working · %lld need you"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作業中 %1$lld · 対応待ち %2$lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在做 %1$lld · 等你 %2$lld"
           }
         }
       },
@@ -124079,28 +124356,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "上次交给的 Agent 已经结束，这次交给主对话"
-          }
-        }
-      }
-    },
-    "The Agents list is grouped By Repository: its tree keeps one line per agent. These styles show in the other groupings.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The Agents list is grouped By Repository: its tree keeps one line per agent. These styles show in the other groupings."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "エージェント一覧はリポジトリ別にグループ分けされています。ツリーでは各エージェントを 1 行で表示し、ここで選ぶスタイルは他のグループ分けで使われます。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agents 列表现在按仓库分组：仓库树每个 Agent 一行。这里的样式用于其他分组。"
           }
         }
       }

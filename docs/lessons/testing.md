@@ -347,6 +347,10 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - A database copied with `CREATE DATABASE ... TEMPLATE` keeps none of its template's `ALTER DATABASE ... SET` settings: set `synchronous_commit` on every copy (`dbtest.create`). Nothing may be connected to the template; Postgres waits up to 5 s on its own for backends that are closing, so no sleep after `Close` is needed. Use `STRATEGY wal_log`: `file_copy` checkpoints the whole server twice.
 - Since Postgres 15, every `DROP DATABASE` forces a checkpoint of the whole server, which writes whatever other tests left dirty. On a loaded machine, one drop took 0.07-3.8 s. Count that before giving more tests a database of their own.
 
+## Live-only Go tests need their own compile pass (2026-11-11, #4654)
+
+Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helper signature change can leave live-only callers uncompilable while every default test stays green. After changing such a signature, compile the whole node test package with `go test -c -tags herdrlive -o /tmp/node-live.test ./internal/node`; `-run` selects which test executes but does not reduce which source files must compile. Run the live tests themselves only on demand in an isolated herdr session, never against the working one.
+
 ## Dead-code reports depend on the selected build (2026-11-07, #5856)
 
 - `deadcode -test ./...` only analyzes the selected platform and build tags. A default Linux run reports `sysmon.ptr`, the Windows tray notification helpers and `DevelopmentLimits.valid` as unreachable, but macOS, Windows and the `persona_dev_resources` build respectively call them.
