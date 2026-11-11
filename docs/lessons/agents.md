@@ -2,6 +2,8 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+- A native terminal Codex start must preserve a user's same-name `codex()` function (#4876), not just find the executable. `codex-start` used to bypass it, losing launcher environment while a normal terminal command worked; the assistant app-server fix (#3707) did not cover this path. Pass the launcher and prompt as positional arguments to the interactive shell, never interpolate them as shell code, and keep the shell inside the agent sandbox.
+
 ## A queued AGY turn cannot own the executing prompt's text (#4564)
 
 The pending-turn record can change before the previous ACP prompt finishes. Keep the executing prompt's stream

@@ -180,11 +180,13 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 - **Which launchers are Codex launchers**: `codex` on PATH adds a launcher named `codex`. Aliases in `~/.zshrc` that run a single `codex` command are listed after Claude launchers (can have preceding
   `export A=1;`, `VAR=… codex`, or wrappers such as `env` / `command`; arguments are retained, model taken from `-m` / `--model` / `-c model=…`).
   They carry `agent: "codex"` in the launcher list and are marked "Codex" on the App's launchers page (`parseCodexAliases` in `launchers.go`). Unsupported: shell functions running Codex
-  (rejected with an explanation, `codex_launcher`: functions run only in a shell, so the first message would have to pass through it), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
+  under other names (rejected with an explanation, `codex_launcher`), aliases doing additional work (`cd x && codex`, not listed), and the internal Codex fork.
+  On Unix, the native `codex` command honors a same-name shell function, including its environment and flags (#4876).
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message, so a Codex start must include it (required in the App; otherwise `codex_needs_prompt`;
   older Apps using background startup get the same error and a prompt to update). Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
   `personad codex-start <file>`: it reads and deletes the file, then `exec`s an argument array containing launcher words (preceding `VAR=…` enters the environment), `--`, and the message.
-  The message never passes through a shell—quotes, newlines, `$`, backticks, Chinese, and thousands of characters all reach Codex unchanged (`codex_start.go`). Launcher words also stay off-screen and out of shell history
+  On Unix, native `codex` runs through the user's interactive shell to preserve a same-name function. The shell executes only `"$@"`: launcher words and the message are positional arguments, never interpolated as shell code.
+  Quotes, newlines, `$`, backticks, Chinese, and thousands of characters all reach Codex unchanged (`codex_start.go`). Launcher words also stay off-screen and out of shell history
   (aliases may contain keys). With `--remote`, add `-C <directory>` (the TUI does not supply the directory itself when connecting to another app-server).
 - **Text only**: the first message carries no photos or files. New Agent offers no attachments for a Codex launcher on iPhone and iPad, and the web refuses such a start with "This launcher can't take attachments in the first message" (#2321).
 - **Tell herdr this is Codex** (#3454): in herdr panes (except Windows), the file also contains `agent: "codex"`. `codex-start` sets `HERDR_AGENT=codex` in the exec environment,

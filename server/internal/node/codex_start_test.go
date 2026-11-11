@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -391,6 +392,51 @@ func TestCodexStartScopesOrcaHooksWithoutChangingExplicitLaunchers(t *testing.T)
 				t.Fatalf("argv: %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestCodexStartPreservesNativeShellFunction(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh not installed")
+	}
+	dir := t.TempDir()
+	file, out := filepath.Join(dir, "start.json"), filepath.Join(dir, "out")
+	program := filepath.Join(dir, "codex")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$PERSONA_TEST_LAUNCHER_MARK\" \"$@\" > \"$OUT\"\n"
+	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rc := `export PATH="$PERSONA_TEST_CODEX_BIN:$PATH"
+function codex { PERSONA_TEST_LAUNCHER_MARK=from-function command codex --function-flag "$@"; }
+alias codex='codex --alias-already-expanded'
+`
+	if err := os.WriteFile(filepath.Join(dir, ".zshrc"), []byte(rc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(codexStartFile{Argv: []string{"codex", "--alias-already-expanded"}, Prompt: specialPrompt})
+	if err := os.WriteFile(file, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal([]string{file})
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+	cmd.Env = append(os.Environ(), "HOME="+dir, "ZDOTDIR="+dir, "SHELL=/bin/zsh",
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "OUT="+out, "PERSONA_TEST_CODEX_BIN="+dir,
+		"PERSONA_HOME="+filepath.Join(dir, "state"), "PERSONA_AGENT_SANDBOX=off",
+		"PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, b)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "from-function\n--function-flag\n--alias-already-expanded\n--\n" + specialPrompt + "\n"
+	if string(got) != want {
+		t.Fatalf("launcher environment/flags or literal prompt lost: got %d bytes, want %d; prefix %q",
+			len(got), len(want), got[:min(100, len(got))])
 	}
 }
 

@@ -5,8 +5,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -304,12 +306,25 @@ func TestCodexStartExec(t *testing.T) {
 		t.Errorf("recorded %v", readAgentSandboxStatus(dir))
 	}
 	words := []string{"codex", "-c", `sandbox_mode="danger-full-access"`, "--", "hello"}
+	command := func(words []string) []string {
+		if runtime.GOOS != "windows" {
+			if shell, err := exec.LookPath(loginShellProgram()); err == nil {
+				return append([]string{shell, "-ic", `"$@"`, "persona-codex-start"}, words...)
+			}
+		}
+		return append([]string{"/opt/bin/codex"}, words[1:]...)
+	}
 	p, argv, env, st := codexStartExec("/opt/bin/codex", words, []string{"A=1"})
-	if st.State != sandbox.AgentActive || p != argv[0] || !inSandbox(argv) || argv[3] != "/opt/bin/codex" || !slices.Equal(argv[4:], words[1:]) || !slices.Contains(env, sandbox.AgentEnv+"=1") {
+	if st.State != sandbox.AgentActive || p != argv[0] || !inSandbox(argv) || !slices.Equal(argv[3:], command(words)) || !slices.Contains(env, sandbox.AgentEnv+"=1") {
 		t.Errorf("danger-full-access: %s %q %q %+v", p, argv, env, st)
 	}
 	words = []string{"codex", "--", "hello"}
-	if p, argv, _, st := codexStartExec("/opt/bin/codex", words, nil); p != "/opt/bin/codex" || !slices.Equal(argv, words) || st.State != sandbox.AgentSkipped || st.Why == "" {
+	want := command(words)
+	wantPath := want[0]
+	if wantPath == "/opt/bin/codex" {
+		want = words
+	}
+	if p, argv, _, st := codexStartExec("/opt/bin/codex", words, nil); p != wantPath || !slices.Equal(argv, want) || st.State != sandbox.AgentSkipped || st.Why == "" {
 		t.Errorf("plain codex: %s %q %+v", p, argv, st)
 	}
 	if st := readAgentSandboxStatus(dir)["codex-start"]; st.State != sandbox.AgentSkipped {

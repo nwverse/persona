@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -375,7 +376,7 @@ type codexStartFile struct {
 }
 
 // CodexStart is `personad codex-start <file>`: it reads a codexStartFile (and removes it), then runs its words with the
-// message as one more argument after "--", in place of itself. No shell sees either. The file's agent replaces a
+// message as one more argument after "--", in place of itself. Neither is parsed as shell code. The file's agent replaces a
 // HERDR_AGENT the shell had: appended, the inherited one would come first, and that is the one getenv and herdr read.
 func CodexStart(args []string) error {
 	if len(args) != 1 {
@@ -441,8 +442,15 @@ func codexStartExec(path string, argv, env []string) (string, []string, []string
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 	inner := func() string { return codexInner(argv, env, cwd, home) }
+	run := append([]string{path}, argv[1:]...)
+	if argv[0] == "codex" && runtime.GOOS != "windows" {
+		if shell, err := exec.LookPath(loginShellProgram()); err == nil {
+			// Resolve a same-name function after its rc file, without expanding aliases twice or parsing data as code.
+			run = append([]string{shell, "-ic", `"$@"`, "persona-codex-start"}, argv...)
+		}
+	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad codex-start: "+format+"\n", a...) }
-	wrapped, wenv, st := wrapAgent("codex-start", home, identity.DataDir(home), cwd, nil, inner, append([]string{path}, argv[1:]...), env, logf)
+	wrapped, wenv, st := wrapAgent("codex-start", home, identity.DataDir(home), cwd, nil, inner, run, env, logf)
 	if wrapped[0] == path {
 		return path, argv, env, st
 	}
