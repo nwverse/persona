@@ -846,11 +846,11 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           return true;
         }
         setPending((ps) => ps.filter((x) => x.id !== id));
-        // an edit's send the node did not take (#4605): nothing went, so the words go back into the box, not into a
-        // failed bubble whose Retry would send them without the rewind's care
+        // an edit's send the node did not take (#4605): nothing went, so the words go back into the box with the node's
+        // reason (a draft in Claude's box…), not into a failed bubble whose Retry would send them without the rewind's care
         if (keepInBox && e instanceof ApiError && e.body.delivered === "none") {
           forgetOutgoing(key, id);
-          toast(e.code === "input_draft" ? t("rewind.edit_not_sent") : errorText(e), "error");
+          toast(errorText(e), "error");
           return false;
         }
         failed(e, out, p);
