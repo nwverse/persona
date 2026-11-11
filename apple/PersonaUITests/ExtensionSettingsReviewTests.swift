@@ -109,7 +109,8 @@ final class ExtensionSettingsReviewTests: XCTestCase {
     }
 
     /// The card at the largest text size, on this page (Review) and on the market page (Install), light and dark: the
-    /// download going, then why it stopped and Retry, with the title, its line and the steps wrapped, not cut (#4058).
+    /// download going, then why it stopped and Retry, with the title, its line and the steps wrapped, not cut; and the
+    /// market page's header, its name and line wrapped with the state under them (#4058).
     @MainActor func testTheCardAtTheLargestText() throws {
         guard let hub = env["PERSONA_EXTENSIONS_REVIEW_HUB"] else {
             throw XCTSkip("needs mock_hub.py with MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=stall (PERSONA_EXTENSIONS_REVIEW_HUB)")
@@ -138,6 +139,9 @@ final class ExtensionSettingsReviewTests: XCTestCase {
                     app = launched
                     let install = app.buttons["market-install"]
                     XCTAssertTrue(install.waitForExistence(timeout: 15), "\(look): no Install:\n\(app.debugDescription)")
+                    // The page's header above it: the name and its line wrap, the state under them.
+                    shot(app, "market-header-large", look: look)
+                    scrollTo(install, in: app)
                     install.tap()
                 }
                 // At this size the card starts below the screen, where a list has not made it yet: scroll while it starts,
