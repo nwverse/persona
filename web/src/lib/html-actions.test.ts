@@ -2,7 +2,7 @@
 // answer, an open comes back with what to open; the same 409s as a declared reply.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { conversationCards, resetCards } from "./assistant-views";
-import type { HtmlActionRequest } from "./assistant-html";
+import type { HtmlActionRequest } from "./html-bridge";
 import { htmlActionsPath, postHtmlAction } from "./html-actions";
 
 function respond(status: number, body: unknown) {

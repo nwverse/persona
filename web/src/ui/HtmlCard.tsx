@@ -5,13 +5,14 @@
 // and persona.open reach the hub only after a native confirmation here, outside the card, showing what they carry.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentLanguage, t } from "../i18n";
-import { htmlRequest, judge, mounted, newBridge, prompted, unmounted, type BridgeAsk, type HtmlInstance } from "../lib/assistant-html";
+import { htmlRequest, judge, mounted, newBridge, prompted, unmounted, type BridgeAsk, type HtmlInstance } from "../lib/html-bridge";
 import { conversationCards, useCards } from "../lib/assistant-views";
 import { postHtmlAction } from "../lib/html-actions";
 import type { UIItem } from "../lib/extension-ui";
 import { uuid } from "../lib/format";
 import { claimSlot, releaseSlot, runCard, type RunningCard } from "../lib/html-runtime/host";
-import { cardHeight, HIDDEN_GRACE_MS } from "../lib/html-runtime/limits";
+import { cardHeight } from "../lib/html-runtime/height";
+import { HIDDEN_GRACE_MS } from "../lib/html-runtime/limits";
 import { FRAME_SANDBOX } from "../lib/html-runtime/sanitize";
 import type { StopReason } from "../lib/html-runtime/protocol";
 import { useLinkManager } from "../lib/manager-choice";
