@@ -2260,6 +2260,9 @@ A hub picture that fails to load may have outlived its token, so the page is dra
 A row's extra actions open from a right click, a half-second press on a touch screen and the … button at its end (no swipe on the web).
 The component showcase's version 6 pages are `web/src/showcase/v6` (with their pictures in `web/src/showcase/images`) until the showcase extension's own snapshots have them.
 
+**iOS** (#827) draws it in parts and sends 6 only when all of it is drawn, after the rest of UI version 5; meanwhile the hub downgrades it as for any older app. Drawn so far: row controls
+(see "App: Settings › Extensions" below). One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
+
 ## System-level placements (#1858)
 
 Extension content **outside the app**: Home Screen widgets, Lock Screen and Apple Watch complications (the `ui` slot `widget`), actions in Shortcuts and Siri (extension point `shortcuts`),
@@ -2699,6 +2702,15 @@ Views, components, actions, responses, placements and context all use schema-gen
   `GET /mock/invalidate` syncs one note and sends `ui.invalidate`; UI test `ExtensionV3Tests` (list, filters, more, search to empty state, push note page, edit/save/pop, invalidate),
   unit tests `ExtensionUIv3Tests`, `PersonaCardTests`. `MOCK_EXTENSION_CARDS=1` with `ExtensionAssistantCardTests` checks in a real assistant chat that
   `persona-view` and old `persona-card` share the renderer, actions are not tappable, links remain, and saves light/dark screenshots. Four-client showcase comparison depends on #1852, not replaceable by notes screenshots.
+- UI version 6 (#827, "UI version 6"), drawn in parts; pages keep sending 4 and cards 3 until all of it is drawn, so the hub still downgrades it for iOS meanwhile.
+  Row controls (`ExtensionControls.swift`, `ExtensionControlRow`): a switch or a stepper at the row's end, a slider on a line under it, all system controls labeled by the row's title and read out with
+  their value as written (`display` for the value the extension drew, else the number in the user's locale and the unit); a row with its own action does it from its words, the control beside them.
+  A switch sends at once, a slider when the finger lifts (moved without a drag, by VoiceOver or a keyboard, 0.6 s after the last move), a stepper 0.6 s after the last tap. `action.confirm` asks
+  with an alert (the confirm words, **Turn On** / **Turn Off** or **Confirm**, and **Cancel**); the system switch has already moved, so Cancel puts it back. `ExtensionViewModel.change` sends:
+  one request a control at a time and only the latest change made meanwhile, the answer's `view` or `items` drawn (an answer with neither draws the page again), a failure puts back the extension's
+  value with the error as a toast, a redraw meanwhile keeps the user's value, a spinner after a second. A disabled control, or one on a card without a model, is dimmed. Mock: `showcase › controls`
+  (`-openExtension showcase -openExtensionPage controls`) keeps what its controls are changed to, answers with the row (`items`), fails `fails` with 502, and asks first for two switches
+  (`GET /mock/controls/reset` forgets); unit tests `ExtensionControlsTests`, UI test `ExtensionControlsUITests`.
 - Inbox-item body (#1682, `inbox_item`, see "Inbox items" above): when the hub has `extension_ui_slots` (also query immediately after app startup before hello arrives: an item opened at launch must not be permanently assigned the original body because of that;
   hubs not knowing this slot simply return an empty list), query each hub once via `GET /api/v1/extensions/-/ui?placement=inbox_item` (again on pairing / hub switch or opening Inbox),
   recording connectors with extension rendering (`InboxItemSlots`, `connector` matched to item `source`). Opening such items calls `POST …/-/ui/{ui}` with the item id in `context.item`,

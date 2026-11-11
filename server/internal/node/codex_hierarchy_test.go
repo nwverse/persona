@@ -254,3 +254,59 @@ func TestCodexAppChatInNoProjectIsUnderCodexChats(t *testing.T) {
 		t.Fatalf("the chat in a project is placed in %q", s.SpaceID)
 	}
 }
+
+// A chat in a project of the App is under the App's name for the project whose folder is the repository's root — a
+// project the user renamed, a ChatGPT project in its g-p-<id> folder — and under the folder's name when no project
+// names that folder. One folder has one name whichever chat asks. No database or git involved.
+func TestCodexAppProjectsGoByTheAppsNames(t *testing.T) {
+	n := &Node{}
+	home := t.TempDir()
+	base := t.TempDir()
+	dir := func(name string) string {
+		p := filepath.Join(base, name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	renamed, chatgpt := dir("site"), dir(filepath.Join(".chatgpt-projects", "g-p-6aca"))
+	shared, unnamed := dir("shared"), dir("unnamed")
+	assign := func(project string) map[string]string { return map[string]string{"projectId": project} }
+	state := map[string]any{
+		"thread-project-assignments": map[string]any{
+			"renamed": assign("p1"), "chatgpt": assign("p2"), "first": assign("p3"), "second": assign("p4"), "loose": assign("p5"),
+		},
+		"local-projects": map[string]any{
+			"p1": codexAppProject{Name: "Website", RootPaths: []string{renamed}},
+			"p2": codexAppProject{Name: "GenImageX", RootPaths: []string{chatgpt}},
+			"p3": codexAppProject{Name: "Beta", RootPaths: []string{shared}},
+			"p4": codexAppProject{Name: "Alpha", RootPaths: []string{shared + "/"}},
+			"p5": codexAppProject{Name: " ", RootPaths: []string{unnamed}},
+		},
+	}
+	raw, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ thread, cwd, want string }{
+		{"renamed", renamed, "Website"},
+		{"chatgpt", chatgpt, "GenImageX"},
+		{"first", shared, "Alpha"},
+		{"second", filepath.Join(shared, "sub"), "Alpha"},
+		{"loose", unnamed, "unnamed"},
+	} {
+		path := filepath.Join(home, c.thread+".jsonl")
+		if err := os.WriteFile(path, []byte(`{"type":"session_meta","payload":{"originator":"Codex Desktop","source":"vscode"}}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s := proto.Session{SessionID: c.thread, Cwd: c.cwd, Capabilities: &proto.SessionCapabilities{}}
+		n.decorateCodexSession(&s, codexSource{home: home, thread: c.thread, path: path}, home, map[string]string{})
+		root := realPath(c.cwd)
+		if c.thread == "second" {
+			root = realPath(shared)
+		}
+		if s.SpaceID != "codex-project:"+root || s.SpaceName != c.want {
+			t.Errorf("%s placed in %q %q, want %q", c.thread, s.SpaceID, s.SpaceName, c.want)
+		}
+	}
+}
