@@ -10,6 +10,7 @@ import { agentsChanged, refreshAgentPrefs, refreshAgentSessions, resetAgents, se
 import { onRuntimeChanges, runtimeIdentity, runtimeRemoval, runtimeSessions, SESSIONS_LOOKUP_FEATURE, SESSIONS_PAGE_COUNTS_FEATURE, setRuntimePageCounts } from "./runtime-list";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
+import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, markOver, newMark, nextDue, unansweredMarks, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
@@ -726,6 +727,8 @@ function onMessage(msg: Record<string, unknown>) {
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       if (runtimeSessions.isSummary() !== summaryMode) listedFull.clear();
       runtimeSessions.setSummary(summaryMode);
+      // a hub that folds child sessions (#5120): the Agents list and its counts leave them out, each parent counted once
+      runtimeSessions.setRoots(state.features.includes(SESSIONS_HIERARCHY_FEATURE));
       setRuntimePageCounts(state.features.includes(SESSIONS_PAGE_COUNTS_FEATURE));
       setAgentListMode(state.features.includes(SESSIONS_LIST_FEATURE));
       taskRowsAsked.clear();
