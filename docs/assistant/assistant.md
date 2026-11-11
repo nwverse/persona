@@ -722,6 +722,34 @@ Migration: first startup without `assistant.tasks` moves `assistant.routines` / 
 then clears old follow-ups so an older hub can't rerun them; thereafter reads only the new table. Failed Postgres reads save nothing (formerly defaults overwrote).
 Legacy App `routines` / `followups` APIs still read / write this table (`docs/protocol/protocol.md`).
 
+## Background rounds
+
+Many main-chat rounds are not started by the user: another Persona conversation hands work over with `conversation_send` /
+`conversation_new` (a supervisor message), a scheduled task or follow-up runs, and the hub's supervision wakes the chat.
+They used to fill the main chat and push the user's own exchanges out of sight. Since #4314 the apps fold the first two
+the way quiet supervision rounds already were (#1988, `docs/assistant/unified-entry.md` "Supervision"):
+
+- **Which rounds**: in the main conversation, a round whose first input has the message source (`Item.source.kind`, else
+  the `persona-context kind="message-source"` metadata or the hub's `injected` mark, read by each client's `sourceOf`)
+  `conversation`, `followup` or `patrol`. Like a supervision round it lasts until the next genuine input; a queued user
+  message never joins it, and recaps or compactions inside it stay inside. Other conversations and Agent sessions are not
+  affected: a conversation another one opened shows its first message as before.
+- **Folded**: one muted line, `@<source> · Background round` (`· Running in the background` while it runs), that the
+  user can open and close at any time to see the full transcript, history included (super rule 2.4). A scheduled task's
+  prompt is never shown in the main chat while folding is on: its source block says only which task ran, closed or open.
+  A supervisor message shows its text when opened.
+- **Not folded** (the visibility rule supervision rounds use, `supervisionVisible` / `fold.supervision_user` from
+  `server/internal/transcript/fold_supervision.go`): a round that used `ask_user` or `notify_user` successfully, a pending
+  `ask_user` while it runs, a `task_review` with an `accepted` or `needs_user` verdict card, or a `supervision_finish`
+  with user visibility.
+- **Needs you** keeps its entry and its count. While folding is on and its rows come from more than one supervising
+  conversation (a task's `origin`), they are grouped under that conversation's title, this conversation's own first;
+  the rows and their order within a group are unchanged.
+- **Switch**: Settings › Assistant › **Fold background rounds** (`assistant.main_background_folded`, `PUT /api/v1/assistant`,
+  on unless turned off; Persona's settings tool changes it only after the user confirms the card). Off, the main chat and
+  Needs you look exactly as before. A hub that does not send the field is treated as on. Display only: what the rounds do,
+  notify or push is unchanged.
+
 ## Chat titles
 
 Requested: "Generate titles after starting new chats; standardize as ‘MMDD | Type | Topic’." Implemented as follows:

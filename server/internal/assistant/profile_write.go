@@ -148,6 +148,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.KBTopics != nil {
 			v.KBTopics = in.KBTopics
 		}
+		if in.MainBackgroundFolded != nil {
+			v.MainBackgroundFolded = in.MainBackgroundFolded
+		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
 		}
