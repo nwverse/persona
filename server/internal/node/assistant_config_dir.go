@@ -49,19 +49,20 @@ func (n *Node) assistantProfileSelection(ctx context.Context, id, launcher, runt
 				p.mu.Unlock()
 			}
 		}
-		if selected == "" {
-			if path := n.transcriptPath(id); path != "" {
-				project := filepath.Dir(path)
-				projects := filepath.Dir(project)
-				if filepath.Base(projects) == "projects" {
-					selected = filepath.Dir(projects)
-					if sameScopePath(selected, filepath.Join(n.home, ".claude")) {
-						// Preserve the old unset-profile global config, unless
-						// the old parser explicitly selected this same directory.
-						legacy := n.legacyAssistantProfile(ctx, launcher, runtime)
-						if legacy == "default" || !sameScopePath(legacy, selected) {
-							selected = "default"
-						}
+		// The newest transcript decides where the conversation resumes. A recorded
+		// profile without it (a launcher switch, a rollback that resumed elsewhere)
+		// would make Claude answer "No conversation found".
+		if path := n.transcriptPath(id); path != "" {
+			project := filepath.Dir(path)
+			projects := filepath.Dir(project)
+			if filepath.Base(projects) == "projects" && (selected == "" || !sameScopePath(n.assistantConfigPath(selected), filepath.Dir(projects))) {
+				selected = filepath.Dir(projects)
+				if sameScopePath(selected, filepath.Join(n.home, ".claude")) {
+					// Preserve the old unset-profile global config, unless
+					// the old parser explicitly selected this same directory.
+					legacy := n.legacyAssistantProfile(ctx, launcher, runtime)
+					if legacy == "default" || !sameScopePath(legacy, selected) {
+						selected = "default"
 					}
 				}
 			}
@@ -203,11 +204,16 @@ func (n *Node) claudeProcessEnv(base []string, dir string) []string {
 }
 
 // Terminal Agents keep launcherCommand unchanged; only this assistant start
-// overrides a shell's default after startup, using its saved selection.
+// overrides a shell's default after startup, using its saved selection. An
+// empty dir is "default": unset, because Claude Code reads an empty
+// CLAUDE_CONFIG_DIR as a directory and a resume then finds no conversation.
 func (n *Node) launcherCommandIn(name, dir string, q func(string) string) string {
 	cmd := name
 	if _, managed := n.managedLauncher(name); managed {
 		cmd = q(n.bin) + " launch " + name
+	}
+	if dir == "" {
+		return "unset CLAUDE_CONFIG_DIR; " + cmd
 	}
 	return "CLAUDE_CONFIG_DIR=" + q(dir) + " " + cmd
 }
