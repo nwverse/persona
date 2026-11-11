@@ -265,6 +265,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
   The first three also end chats of their own (`…c2916` Edit, `…c2917` MultiEdit, `…c2918` Write), so `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows each diff without scrolling; `scripts/app/personactl.py tap --label-prefix "Show All"` opens the long one.
 - A reply's Markdown as written (#3863, `CJKEmphasis` in PersonaKit and `MarkdownTable.swift`): `MOCK_REPLY_MARKDOWN=1` adds MacBook's "导出耗时整理" (`macbook/a1f3c2d4-0000-4000-8000-0000000c3863`) and puts the same turn at the end of Persona's conversation: a table whose delimiter row aligns its columns (the seconds right-aligned so the decimals line up, the result centered), headings at levels 4 to 6, and bold labels next to full-width punctuation (`**注意：**后文`, `**「必须」**`), which render bold with no asterisks left over.
 - Tool outcomes (#4303, `ToolOutcomeText` in `apple/Persona/Views/Chat/ToolOutcomeViews.swift`): `MOCK_TOOL_OUTCOMES=1` adds MacBook's "Why the last export batch goes missing" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4303`), one turn whose tool results carry the node's `outcome`: a test run that failed with exit code 1 and an output the page cut (its last lines in `tail`), an edit the user denied, a write refused before it ran, a command the user interrupted and one that timed out and went on in the background. Only the failed run is red; the others say in gray what stopped them. The failed run and the denied edit also end chats of their own (`…c4304`, `…c4305`): `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows "Exit code 1" with "End of output" under the cut output, or "Denied".
+- A file tool's change on its permission card (#4621, `PermissionDiff` in `apple/Persona/Views/Interactions/PermissionDiff.swift`): `MOCK_PERMISSION_DIFF=1` adds two MacBook chats that wait on a Claude Code permission card, as a hub sends it: "Keep the last export batch" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4621`), an Edit whose diff is longer than the card shows (Show All 15 Lines), and "Test the last export batch" (`…c4622`), a Write of a short test file. `-openSession macbook/<id>` shows the card under the chat.
 - Cron scheduled tasks (#4399, `docs/assistant/assistant.md` "Scheduled tasks"): `MOCK_CRON=1` adds the `task_cron` feature and a cron task (every 30 minutes in work hours on weekdays, `rt_cron`), and answers `GET /api/v1/assistant/tasks/cron` for the web editor's examples (anything else gets the hub's kind of refusal). iOS: `-tab assistant -openAssistantPage routines` shows it in the list, `-openAssistantPage cronTask` opens it. Web: `node web/e2e/task-cron.mjs` (`docs/web/web.md`).
 - Notification settings that can't load (#1860): `MOCK_PREFS_FAIL=1` makes `GET /api/v1/devices/<id>/prefs` answer 503; `-openNotificationSettings YES` shows "Couldn't load: …" with Retry while the system-settings buttons stay enabled. `GET /mock/prefs_fail?on=0` lets the next read through (Retry, or switching back to the app).
 - herdr stopped (#1916): `MOCK_HERDR_STOPPED=macbook` stops classic herdr for mock MacBook; Agents shows "MacBook's herdr isn't running" and "Start" at the top.
@@ -330,7 +331,8 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Messaging sources (`messaging` extension point, #2138): `MOCK_MESSAGING=1`, `GET /api/v1/messaging` lists `lark` (extension `larkext`); `/api/v1/messaging/lark/…` follows `docs/extensions/extension-messaging.md`. `scripts/mock/lark_messaging.py` reads mock `/api/v1/lark/…` and converts, applying extension display rules for encrypted external/unlocked display, recall/edit history. Settings is full extension UI `POST /api/v1/extensions/larkext/-/ui/display`; hello/health add `messaging` feature, and every `{type: lark}` push also emits `{type: messaging}`. Can combine other fixtures (`MOCK_LARK=1`, `MOCK_LARK_TRAINER=1`, `MOCK_LARK_NATIVE_OLK=1`…). `python3 scripts/mock/test_lark_messaging.py` verifies schemas and processing.
 - Hub without Lark gateway extension (#1530): default features include extension-provided `lark`, `lark_moments`; `MOCK_NO_LARK=1` removes them and `lark_attachments`, all `/api/v1/lark/…` return 404, no Lark connector. Messages, Settings › Connectors › Lark, translation's Lark chat option vanish; Lark docs/Moments links open as regular web pages.
 - Lark /agent context (#876): `MOCK_LARK_AGENT=1` turns the "Schedule Friday…" request into Lark /agent (instructions + 7 context items in `<persona-context>`, only request outside). `-openSession server/b2e4d6f8-0000-4000-8000-000000000003`, `-showContexts YES` expands context group and first item.
-- Persona sidebar: `MOCK_ASSISTANT_SIDEBAR=1` adds 36 Recent chats (above displayed 30, showing View All); first three Needs you (red), unread (blue), Working (spinner).
+- Conversations an extension opened (#3758): `MOCK_AUTO_CONVERSATIONS=1 MOCK_EXTERNAL=1` gives the Lark /agent auto chat (`-openAssistant server/b2e4d6f8-0000-4000-8000-000000000308`) a first message of context blocks and a request, and adds one opened by another extension (`…000000000310`, origin `extension`). Their rows carry the source mark and their first message "From Lark /agent" / "From an extension". UI suite `ExternalConversationsTests` (`TEST_RUNNER_PERSONA_EXTERNAL_HUB`, screenshots in `PERSONA_SHOTS`).
+- Persona sidebar: `MOCK_ASSISTANT_SIDEBAR=1` adds 36 Recent chats (above displayed 30, showing View All); first three Needs you (blue dot), unread (green dot), Working (spinner).
 - Follow latest (`ChatFollowTests`, `MOCK_LONG_HISTORY=1`): long chat opens at bottom; new replies follow when already there (Persona replies first stream via `delta`); scrolling up shows "Back to latest",
   replies don't pull you down; tapping returns to bottom and resumes following. Agent opens tested normally, Unread (`-showAsUnread YES`), saved position (`-chat.read.<session> <row id>`), and cold-start with disk cache far from end (mock `/mock/paging?on=1` mimics hub pagination, `/mock/delay?s=3` shows cache first, #597; `/mock/reset` disables both).
   `GET /mock/say?text=…&user=…&stream=1` pushes replies to all open chats. App `-showScrollState YES` reports list state via accessibility
@@ -359,8 +361,9 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Voice mode (docs/assistant/voice.md 6.8, #3508): `MOCK_VOICE=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` (`scripts/mock/voice_mock.py`: `/info` at protocol 2 and a scripted socket; a protocol 1 `start` still gets the old Android script; `MOCK_VOICE=setup|p1` for an extension that is not set up / too old; `GET /mock/voice2` shows what the app sent).
   `TEST_RUNNER_PERSONA_VOICE_HUB=http://127.0.0.1:<port>` runs `VoiceModeTests`: four matrix cases shoot ten `-showVoiceSample <state>` states for Agent / main conversation × standard / AX text, and `testOpenVoiceWalksTheScript` walks the script with `-openVoice silent`.
   `TEST_RUNNER_PERSONA_SHOTS=<dir>` saves screenshots; switch the appearance with `simctl ui <udid> appearance light|dark` (`TEST_RUNNER_PERSONA_VOICE_APPEARANCE` only names the files) and the style with `TEST_RUNNER_PERSONA_UI_STYLE=beautiful`. A simulator's microphone may not work (lessons/voice.md "The iOS voice mode"), which is why the real path uses `silent`.
-- Settings › Extensions: `MOCK_EXTENSIONS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py`; `TEST_RUNNER_PERSONA_EXTENSIONS_HUB=http://127.0.0.1:<port>` runs `ExtensionSettingsTests` (list, rejected form, Running after secret), `ExtensionSlotsTests` (Settings home card/entry, usage page, machine section), `ExtensionMotionUITests` (a page drawn again ends on the new values, #37).
+- Settings › Extensions: `MOCK_EXTENSIONS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py`; `TEST_RUNNER_PERSONA_EXTENSIONS_HUB=http://127.0.0.1:<port>` runs `ExtensionSettingsTests` (list, rejected form, Running after secret), `ExtensionSlotsTests` (Settings home card/entry, usage page, machine section), `ExtensionMotionUITests` (a page drawn again ends on the new values, #37), `ExtensionControlsUITests` (row controls: a switch flips and stays, a confirm cancelled and confirmed, a failure put back, disabled, a slider and a stepper sent; both styles, light and dark, in one run, #827).
   Machine and launcher pickers, integer steppers (#2385): add `MOCK_EXTENSION_PICKERS=1` (extension "Example 聊天", its auto-reply launcher one the hub no longer has); `TEST_RUNNER_PERSONA_EXTENSIONS_PICKERS=1` with the same hub runs `ExtensionPickerTests` (the /agent switch, a machine and a launcher picked by name, a step, the missing launcher marked, saved).
+  Extension packs (#4072, #4122): add `MOCK_EXTENSION_PACK=1` (Example 合集 installed with four members, one not installed; uninstalling it with its members answers 409 `partial_uninstall` and changes nothing; Example 套件 in the catalog to preview); `TEST_RUNNER_PERSONA_EXTENSION_PACK_HUB` runs `ExtensionPackTests` (the pack's page, the uninstall confirmation, the partial uninstall's card and the install preview, members by name, in light, dark and the largest text). `TEST_RUNNER_PERSONA_PHASE=before` takes the same steps on an older build for before screenshots.
   Restart mock before each round (in-memory state). Screenshots as above: `TEST_RUNNER_PERSONA_SHOTS`, `simctl ui … appearance`, naming `TEST_RUNNER_PERSONA_EXTENSIONS_APPEARANCE`, both styles.
   Extension install progress (#3307): `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=fail PORT=<dedicated port> python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_EXTENSIONS_OPS_HUB=http://127.0.0.1:<port>` runs `ExtensionInstallProgressTests` (background preview steps, auto-opening on approval, stuck at Start, leave/return, cache retry completes directly, uninstall failure/retry).
   Extension CLI/login (#4507): fresh `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=1 MOCK_EXTENSION_AUTH=1 PORT=<port>` mock and old hub `MOCK_EXTENSIONS=1 MOCK_EXTENSION_OPS=1 MOCK_EXTENSION_AUTH=installed MOCK_EXTENSION_AUTH_OLD=1 PORT=<port 2>` each time; `TEST_RUNNER_PERSONA_EXT_AUTH_HUB` / `TEST_RUNNER_PERSONA_EXT_AUTH_OLD_HUB` runs `ExtensionSignInTests` (Install command-line programs in confirmation, Install CLI step/programs, automatic QR sign-in after install, polling success, sign-out, CLI section; old hub only warning + extension's login page, no login section).
@@ -387,7 +390,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - A picture that did not load (#182): `MOCK_IMAGES_FAIL=1` (or `GET /mock/images`) makes lazy chat pictures answer 503 until `GET /mock/images?ok=1`; with the variable set, pages also leave the pictures' bytes out (as the hub does for `lazy_images`), so a tool step's picture says "Image didn't load. Tap to retry" too; with `MOCK_TURN_IMAGES=many` and `-openImagesFresh YES` (drops the pictures kept on disk), `ImageViewerTests/testAPictureThatDidNotLoadSaysSoWithRetry` walks fail, tap, Retry and Close in light and dark.
 - A tile that did not load (#559): `GET /mock/images?asked=1` reads how many lazy pictures were asked for, changing nothing. With `MOCK_TURN_IMAGES=many`, `ImageViewerTests/testATileThatDidNotLoadRetriesWithoutOpeningTheViewer` checks that a tap on a wide and a narrow viewed-image tile asks the hub again and brings the picture without opening the viewer; run `testASentPhotoThatDidNotLoadRetriesWithoutOpeningTheViewer` alone with `MOCK_CHAT_IMAGES=many MOCK_IMAGES_FAIL=1` added (it skips otherwise; that mock has a second strip of viewed images).
 - The chat's newest end (#1108, #2016): with `MOCK_TURN_IMAGES=many MOCK_QUEUE=1`, `ChatBottomGapTests` checks that at the end of a conversation the newest message sits `ChatView.newestGap` (48 pt: a row gap and the list's room at its end) above the footer's first row, with the keyboard up, with queued messages and with an upload's bar, light and dark, and that the jump-to-latest arrow stays over the list; it writes `gap-*.png` to `PERSONA_SHOTS`. Run it on an SE too.
-- The review page (#151): with `MOCK_REVIEW=1 MOCK_ECHO_SENT=1`, `ReviewPageTests` opens ⋯ › Review Changes on the widget chat, picks a range of lines, starts a review with a comment, sends it and finds the sent message's `Code comment 1` block (`/mock/sent`) and its card in the chat, light and dark; it also checks the clean and not-a-repository states (`/mock/review?mode=`). `ReviewLogicTests` covers the rows, the picked range, the order, the message and the `Diff:` labels.
+- The review page (#151): with `MOCK_REVIEW=1 MOCK_ECHO_SENT=1`, `ReviewPageTests` opens ⋯ › Review Changes on the widget chat, picks a range of lines, starts a review with a comment, sends it and finds the sent message's `Code comment 1` block (`/mock/sent`) and its card in the chat, light and dark; it also checks the clean and not-a-repository states (`/mock/review?mode=`), and draws the page, a comment and the finish sheet at the largest accessibility text size. `ReviewLogicTests` covers the rows, the picked range, the order, the message and the `Diff:` labels.
 - Comment blocks (#151): with `MOCK_COMMENTS=1 MOCK_ECHO_SENT=1`, `CommentBubbleTests` checks that the widget chat's review sent from the web shows its three comment blocks as cards (light and dark, a tap opens one), and that `-showSampleComments YES` puts comments over the box, × drops one and Send writes the rest as the web does; it writes `comments-*.png` to `PERSONA_SHOTS`. The format itself is checked by `MessageCommentsTests` and the web's `comments.spec-fixtures.test.ts` against `spec/fixtures/comments`.
 - New Chat in the Persona tab (#1749, #2189): with the default mock, `NewChatTopBarTests` taps the middle of the top bar's New Chat (where a finger lands) in the shell from the main conversation and an ordinary one, with the keyboard up, from the history drawer and right after starting conversations, and expects the welcome each time; a miss prints the shell trace (`-probes YES`). The shell on the main conversation runs over several launches (`TEST_RUNNER_NEWCHAT_RUNS`, default 5), since builds 209 and 213 lost about one tap in five: the page drawn while `assistantCurrent`'s observers were told read the old conversation (`AssistantCurrentTests` pins the order). Use a fresh mock for each run of the class: each run starts three conversations, and after two runs the drawer's Recent no longer lists the one the drawer case opens.
 - Links in file previews (`FilePreviewLinkTests`): `MOCK_FILES=1 MOCK_FILE_LINKS=1 MOCK_PORTS=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py`, `TEST_RUNNER_PERSONA_FILE_LINK_HUB=http://127.0.0.1:<port>`. Open README from a chat file block and the shell Files page; use `-openSession` for the target chat rather than relying on a saved tab or an offscreen assistant handling global DEBUG arguments; links clickable immediately before closing file. Closing returns to original file position, reopening same link works, no stale link pops up after closing. Dev preview must actually show webpage text forwarded through hub.
@@ -588,6 +591,12 @@ Port forwarding (`PortForwardTests`, `docs/operations/ports.md`): `:<port>` badg
 `…/ports/{port}/connect` (`GET /mock/ports` records connections); gray says No longer listening:
 `MOCK_PORTS=1 PORT=18791 python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:18791 xcodebuild test … -only-testing:PersonaUITests/PortForwardTests`;
 light/dark × compact shell / regular-width sidebar, `TEST_RUNNER_SHOT_SUFFIX`, shots `/tmp/persona-ports-*`.
+
+Dev server preview on the iPhone (`PreviewUITests`, #150, `docs/web/preview.md` "iPhone"): ⋯ › Preview lists the mock's launch.json servers and the
+Agent's Storybook port; web opens in the link card (the mock forwards a running preview port to its own page server), the bar goes back, attaches a
+screenshot, and picks the Save button into an Element comment card; api's Start… shows `env PORT=8080 go run ./cmd/api` and opens once its port answers:
+`MOCK_PREVIEW=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py &`, `TEST_RUNNER_PERSONA_MOCK_HUB=http://127.0.0.1:<port> xcodebuild test … -only-testing:PersonaUITests/PreviewUITests`,
+`TEST_RUNNER_PERSONA_SHOTS=<dir>` keeps each screen, `TEST_RUNNER_PERSONA_LOOKS=light,dark` runs it in both appearances in one go. `-openPreviewServers YES` opens the list as the chat appears, `-showPreviewPicking YES` starts picking in a forwarded page (screenshots).
 
 Own-hub links open in App (`HubPageLinkUITests`, #2696): mock `/s/…?at=…` opens Agent chat with target message visible, `/todos?id=…` opens to-do details;
 external links remain web cards. `MOCK_HUB_LINKS=1 PORT=18796 python3 scripts/mock/mock_hub.py &`,
@@ -936,6 +945,24 @@ verify trust dialog detected (`dialog_open` refusal), option answers (rev check,
 (`input_draft`), unrelated text not cleared, clearing seen draft allows send. Without local Go, cross-build test binary on hub/copy back.
 Requires herdr/claude locally (claude starts but receives no message).
 
+First-prompt image delivery has a separate opt-in real-Agent test (`server/internal/node/firstprompt_live_test.go`,
+#4794). Start your own named `herdr --session persona-firstprompt-<unique> server`; set `HERDR_SESSION` to that
+name and `HERDR_SOCKET_PATH` to its socket, never the active server's. Then, from `server/`, run:
+
+```sh
+PERSONA_LIVE_FIRST_PROMPT=1 PERSONA_LIVE_LAUNCHER=<launcher> \
+  go test -tags herdrlive -run '^TestLiveFirstPrompt$' ./internal/node -v -timeout 6m
+```
+
+It starts disposable Claude Agents in temporary directories/profiles, with no Persona hooks or hub/node service
+changes, and sends a synthetic 768×768 PNG plus multiline text through `firstPrompt`. A launcher's first Bypass
+Permissions confirmation is accepted only in its disposable test profile. The normal case uses real
+`agent.prompt`; the fault-injected case pastes into the real terminal but omits initial Enter and swallows one
+recovery Enter. Both require exactly one user prompt and image in the transcript, a model reply, and an empty
+input box. `PERSONA_LIVE_ARTIFACTS=<existing directory outside the repo>` keeps redacted ANSI captures and JSON
+receipts. Stop the test server by its exact session name afterwards. A fault-injected pass proves recovery, not
+that the normal case reproduced the original timing race.
+
 ## Codex integration
 
 `./scripts/test/test-codex.sh` tests real Codex question/approval cards (`docs/integrations/codex.md` ("Questions and approvals")), independent `persona-codex-<pid>` herdr
@@ -1277,6 +1304,44 @@ How often a client reads `GET /api/v1/sessions`, and what kind of read, while it
   default By Repository grouping, which needs every row), then read the counters around the same two minutes.
 - A real hub's `traffic` journal lines count by route template, not query: there a complete list and a delta are told
   apart only by `body_bytes / count`.
+
+## Fleet soak (`server/internal/fleetsoak`, #3197)
+
+What a fleet's churn costs the hub and its manager, per minute: bytes and objects allocated, CPU time, live heap.
+For a change that claims to make the manager or the hub cheaper under load, run it on the base and on the change and
+put both in the PR.
+
+```sh
+cd server
+go run ./internal/fleetsoak -label head -minutes 20 -out <directory>
+go run ./internal/fleetsoak -label base -minutes 20 -out <directory> -tree <a worktree of the base commit>/server
+go run ./internal/fleetsoak -compare <base directory>/report.json <head directory>/report.json
+```
+
+- It builds `personad` from `-tree` and runs a throwaway hub with its manager: a home directory of its own under
+  `/tmp`, a free loopback port, and a `persona-ci-db-fleetsoak-<pid>` Postgres 18 container, all removed when it ends
+  (it needs Docker and the `postgres:18-alpine` image). Every process gets an environment made by the soak, so the
+  machine's own installation is neither read nor written.
+- The computers are played by the soak itself: it puts itself on the manager's `PATH` as `ssh`, and started that way
+  it is the node of the host asked for (`node.go`): 10 computers with 50 sessions each by default, one of them starting
+  or ending a turn every 2 s on each computer (`-machines`, `-sessions`, `-interval`). 20 WebSocket connections play
+  apps left open (`-clients`). Nodes answer every other call with `{}`: transcripts, screens and cards are not played.
+- The measured programs are the ones that ship, plus a sampler laid over `cmd/personad` at build time
+  (`go build -overlay`, `sampler.go`): every five seconds it appends the runtime's allocation and GC counters and the
+  process's CPU time to `<out>/stats/<role>-<pid>.jsonl`. The window starts after `-warmup` (a minute) and is cut into
+  whole minutes; steady numbers have their min and max close to the median.
+- The manager refreshes the official market first, as a hub in use has it (the report says how many catalog entries
+  it got; without the network the catalog is empty and the channel list cheaper than in use).
+- `<out>` also has `report.md` and `report.json`, the hub's log, CPU and allocation profiles of the window
+  (`stats/*.pprof`) and what `go tool pprof -top` says of them (`manager-alloc-cum.txt`, `manager-cpu-cum.txt`, the
+  hub's beside them).
+- Allocation per minute repeats within about a percent from run to run, so base and head can run one after the
+  other. CPU time cannot be compared that way: it follows what else the machine does and which cores the processes
+  get, by a factor of two on a laptop. For CPU, run base and head at the same time (each in its own terminal, they
+  share nothing): every minute is then the same machine for both, and `-compare` adds the head's CPU time over the
+  base's in the same minute, for the manager and for the hub. When the change leaves the hub's work as it was, the
+  hub's row shows how much is noise.
+- It ends with one line: `PASS`, `FAIL` or `TIMEOUT`.
 
 ## Live Activity screenshots (`LiveActivityShots`)
 

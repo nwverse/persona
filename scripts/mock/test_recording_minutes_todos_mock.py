@@ -30,9 +30,12 @@ class RecordingMinutesTodosMockTests(Hub, unittest.TestCase):
     def test_actions_become_todos_once(self):
         rid = self.meeting()
         m = self.minutes(rid)["minutes"]
-        # `when` as the hub writes it: the recording's own start in the local zone, and at least a minute.
+        # `when` as the hub writes it: the recording's own start in the local zone, and at least a minute; `start` / `end`
+        # the same span (#4713).
         start = datetime.fromisoformat("2026-11-10T14:00:00+08:00").astimezone()
-        self.assertEqual(m["when"], start.strftime("%Y-%m-%d %H:%M") + "–" + (start + timedelta(minutes=1)).strftime("%H:%M"))
+        end = start + timedelta(minutes=1)
+        self.assertEqual(m["when"], start.strftime("%Y-%m-%d %H:%M") + "–" + end.strftime("%H:%M"))
+        self.assertEqual((m["start"], m["end"]), (start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")))
         self.assertEqual((m["version"], [a["id"] for a in m["actions"]], m["actions"][0]["todo_id"]), (1, ["a1", "a2"], ""))
         path = f"/api/v1/recordings/{rid}/minutes/todos"
         status, out = self.call("POST", path, {"version": 1, "actions": ["a1"]})
