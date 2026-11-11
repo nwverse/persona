@@ -410,7 +410,7 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 
 ### 3.6 Sheets
 
-- **Live recording sheet** (#4240, `RecordingLiveSheet`): a large-detent sheet with its own navigation stack for something that keeps running when it is dismissed. It opens by itself when the activity starts, **Hide** or a swipe leaves it, and a one-row card on the page is the way back. After the activity ends the same sheet cross-fades to a wrap-up of what happens next, so the user is not dropped on a list. Reason: a recording is the one task whose controls must stay under the thumb while the user looks at what is being heard, and whose end needs visible follow-through (saved, transcribed, synced, minutes) instead of a word in a list row.
+- **Live recording sheet** (#4240, `RecordingLiveSheet`): a large-detent sheet with its own navigation stack for something that keeps running when it is dismissed. It opens by itself when the activity starts, **Hide** or a swipe leaves it, and a one-row card on the page is the way back. After the activity ends the same sheet cross-fades to a wrap-up of what happens next, so the user is not dropped on a list. Reason: a recording is the one task whose controls must stay under the thumb while the user looks at what is being heard, and whose end needs visible follow-through (saved, transcribed, synced, minutes) instead of a word in a list row. A room meeting's sheet (#3862, a phone meeting recording started while the hub listed `meeting_conversation`) shows the meeting page in place of the live view, and after Stop the same page goes on as the meeting's thread in place of the wrap-up ("Meeting page (#3862)" below); ordinary recordings and #3746 meetings keep this sheet's look.
 - System `.sheet` with detents for most things (43 detent sites). Settings is a near-full sheet with a close button.
 - Link card: detents 0.6 and large, background stays interactive down to 0.6 (`apple/Persona/Views/Link/LinkSheet.swift:142-146`).
 - Edit sheets: `sheetCancel` asks to discard on Mac only; on iOS it discards at once (`apple/Persona/DesignSystem/SheetActions.swift:44`).
@@ -881,3 +881,67 @@ to the initiating app rather than a reusable device token. Password sign-in requ
 remaining available for self-signed deployments. This changes connection features only, without selecting a model,
 speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTextField, JButton and SettingsCaption;
 Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
+
+## Meeting page (#3862)
+
+The live recording sheet's page for a room meeting (a phone meeting recording started while the hub listed
+`meeting_conversation`; contract: `docs/assistant/meeting-minutes.md`, "Meeting conversation (#3862)"; the phone's side:
+`docs/apple/recording.md`, "The meeting conversation (#3862)"). It is `MeetingPage`, shown by `RecordingLiveSheet`: live
+while the meeting records, and after Stop the same page in its after mode, continuing as the meeting's thread; a past
+meeting's recording page pushes the after mode (row **Meeting Conversation**). Ordinary recordings and #3746 meetings keep
+the live view and the wrap-up unchanged. Reason: the meeting is one conversation from its start to its follow-up, so the
+page the user watches during the meeting is the page they keep writing in after it.
+
+- **Structure, live**: a header (title in `Theme.Font.title`, the page menu, **Hide**), a state line (the recording dot,
+  the system-ticked clock, the state word), a subtitle (the role, "On this iPhone", "Private" when marked), a problem as a
+  caution `NoticeBanner` when the room can't take part, the **Live** box, the thread's section header, the thread, and the
+  bar pinned through `safeAreaInset`. At accessibility sizes a one-line header (dot, time, menu, Hide) stays fixed, the
+  rest scrolls as one, and the bar stays pinned.
+- **Structure, after**: **Done** when it is in the sheet, a status card (title, start–end, the minutes' state with
+  **Open Minutes** / **Open Recording** as a plain themed button, since the composer is the page's primary action), the
+  room's thread, the **After the Meeting** divider, the follow-up's thread, and the composer alone in the bar. While the
+  hub would still answer `409 meeting_running` the composer is disabled with a caption that says why. When pushed it has
+  the navigation bar's back and no Open button (the recording's page is behind it).
+- **One composer, from the shell composer's parts**: the field (`ComposerSurface`, a vertical `TextField` that grows to
+  `Theme.Recording.askLines` lines, `askLinesLargeType` at accessibility sizes), the round send button
+  (`ComposerRoundButton`, dimmed with `Theme.Recording.askSendIdle` while there is nothing to send) and a `[+]` menu built
+  as `ShellComposerBar`'s, with the round button's face. Return sends; the keyboard goes down after a send. It writes to
+  the room (an ask), to Just me, or after the meeting to the follow-up. Why not `ShellComposerBar` itself: its dictation
+  button would take the microphone the recording holds, and its model and attachment rows don't apply. The page has no
+  second composer.
+- **Control row** (live only): Pause / Continue, Bookmark and Stop, with the live bar's looks, identifiers, Stop
+  confirmation and announcements; hidden while the field has focus; icons plus a More menu at accessibility sizes.
+- **Live box**: a `.surface` card with the radius `Theme.Radius.card`: "Live" and, on the right, how far the transcript
+  is behind ("About N s behind", or "Listening…" before any line), then the last `Theme.Recording.liveLines` sentences
+  (time in monospaced digits, secondary; two lines of text at most) and **Full Transcript**, which pushes the whole
+  timeline.
+- **The thread**: rows read as one element each. The room's first message is a quiet centered line ("Persona joined the
+  meeting"); each batch of live lines is a collapsed capsule ("N lines from the meeting") that expands to its `[m:ss]`
+  lines; a heard question is a capsule "What was just said (m:ss)"; the owner's questions are labelled **You**, answers
+  **Persona** in `Theme.ai`, plain text in the room and Markdown in the follow-up; the end is a quiet "The meeting ended";
+  the follow-up's seed is a collapsed capsule "The meeting's material". A reply being written shows as a pending answer.
+  The thread follows its end unless the reader scrolled up, then **Jump to Latest** shows with the count of unseen
+  entries. Asks the room's thread doesn't hold (still asking, failed, answered from material) keep the existing
+  `MeetingExchangeRow` look.
+- **The After the Meeting divider**: a centered caption between two hairlines, the look of the chat's `CompactDivider`,
+  between the room's thread and the follow-up's.
+- **Just me**: a switch row in the bar (live only) with its caption ("Only you see it, in the main chat"). With it on the
+  section header reads **Just Me** ("Only on this screen, never said aloud"), the field's placeholder "Ask privately…",
+  and the thread shows only the owner's private questions and the main chat's answers to them, in the same You / Persona
+  rows, with Sending…, a failure's words and **Retry** under a question. Its answers are never spoken, announced to
+  VoiceOver, put in the Live Activity or pushed; a card the turn raises is answered in the main chat, which the thread
+  says in one line.
+- **Page menu**: the **Persona** role picker and the **Private Meeting** switch (`PUT …/private`; a refusal shows its
+  words). The start shows the same switch under the role, off by default, and no Who Attends.
+- Haptics: only `tap`, on send, Pause and Bookmark, while the microphone is open (section 4.3); new room answers are
+  announced to VoiceOver as the live view's are.
+- Identifiers for tests: `meeting-page-menu`, `meeting-role`, `meeting-private`, `meeting-page-subtitle`,
+  `meeting-room-problem`, `meeting-live`, `meeting-transcript`, `meeting-thread-header`, `meeting-thread-earlier`,
+  one `meeting-thread-<kind>` per row kind (`lines`, `heard`, `question`, `answer` and the others),
+  `meeting-just-me`, `meeting-just-me-retry`, `meeting-plus`, `meeting-heard`, `meeting-ask-field`, `meeting-ask-send`,
+  `meeting-page-stop-speaking`, `meeting-after-status`, `meeting-after-divider`, `meeting-followup-retry`; at the start
+  `meeting-private-start`; on the recording's page `recording-private` and `recording-meeting-conversation`; the sheet's
+  shared ones (`recording-now-title`, `recording-live-timer`, `recording-live-hide`, `recording-pause`,
+  `recording-bookmark`, `recording-stop`, `recording-wrapup-title`, `recording-wrapup-open`, `recording-wrapup-done`)
+  keep their names. UI tests: `MeetingConversationUITests`.
+- Platforms: the web shows the same thread on the recording detail (**Conversation**); Android has no meeting page yet.

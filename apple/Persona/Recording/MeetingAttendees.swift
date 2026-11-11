@@ -40,6 +40,26 @@ import Foundation
         return hubDefault(model) ?? MeetingAttendanceDefaults.cachedRole()
     }
 
+    /// The hub takes the meeting conversation (#3862): `meeting_attendance` and `meeting_conversation` (from the last
+    /// `hello`, kept for a start without the app in front, as `offered`).
+    static func conversation(_ model: AppModel) -> Bool {
+        guard offered(model) else { return false }
+        let features = model.hubFeatures
+        guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.conversationKey) }
+        let conversation = features.contains(MeetingAttendanceDefaults.conversationFeature)
+        MeetingAttendanceDefaults.remember(conversation: conversation,
+                                           photos: conversation && features.contains(MeetingAttendanceDefaults.photosFeature))
+        return conversation
+    }
+
+    /// …and photos in the meeting (phase 3), which come only with the conversation.
+    static func photos(_ model: AppModel) -> Bool {
+        guard conversation(model) else { return false }
+        let features = model.hubFeatures
+        guard !features.isEmpty else { return UserDefaults.standard.bool(forKey: MeetingAttendanceDefaults.photosKey) }
+        return features.contains(MeetingAttendanceDefaults.photosFeature)
+    }
+
     // MARK: Sessions
 
     /// The main chat first, Persona's other open chats, then the Agents, latest first; each one that may attend.
@@ -110,6 +130,13 @@ import Foundation
         let chosen = preferred(model, store: store)
         return RecordingAttendance(role: role, session: chosen.flatMap { $0.main ? nil : $0.key.path },
                                    sessionTitle: chosen?.title ?? model.persona.name)
+    }
+
+    /// What a meeting recording started with nothing picked begins with (`MeetingRecorder.startMeeting`): with the meeting
+    /// conversation a room meeting in the default role, not private (the one-tap rule, #3862); else `defaultAttendance`.
+    static func startAttendance(_ model: AppModel) -> RecordingAttendance {
+        guard conversation(model) else { return defaultAttendance(model) }
+        return .room(defaultRole(model), private: false, photos: photos(model))
     }
 
     /// Remembers the session picked (nil: the main chat), for the next meeting.

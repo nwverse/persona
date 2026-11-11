@@ -159,6 +159,11 @@ nonisolated struct RecordingEntry: Codable, Identifiable, Hashable, Sendable {
     var transcript: String { sentences.map { "[\(RecordingFormat.clock($0.start))] \($0.text)" }.joined(separator: "\n") }
 }
 
+nonisolated extension RecordingEntry {
+    /// A meeting recorded on this phone as a room meeting (#3862).
+    var roomMeeting: Bool { isMeeting && source == .phone && attendance?.room == true }
+}
+
 nonisolated struct RecordingTransfer: Codable, Sendable {
     var id: UUID
     var createdAt: Date

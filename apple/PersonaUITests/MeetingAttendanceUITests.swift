@@ -193,9 +193,18 @@ final class MeetingAttendanceUITests: XCTestCase {
         XCTAssertTrue(limits.exists, "what Persona may say in front of others")
     }
 
+    /// The mock lists `meeting_conversation` beside attending (#3862), which replaces the attending session with the meeting's
+    /// room: off here, so these keep covering the attending session (#3746).
+    override func setUpWithError() throws {
+        if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] { try conversation(hub, on: false) }
+    }
+
     /// The shared mock goes back to how it starts (attending on, the default off), so the next class sees what it always did.
     override func tearDownWithError() throws {
-        if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] { try attendance(hub, on: true, default: "off") }
+        if let hub = ProcessInfo.processInfo.environment["PERSONA_MOCK_HUB"] {
+            try attendance(hub, on: true, default: "off")
+            try conversation(hub, on: true)
+        }
     }
 
     // MARK: Helpers
@@ -215,6 +224,16 @@ final class MeetingAttendanceUITests: XCTestCase {
         request.httpMethod = "POST"
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let done = expectation(description: "attendance")
+        URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
+        wait(for: [done], timeout: 5)
+    }
+
+    /// The mock hub's `meeting_conversation` (#3862), before the app launches (its next `hello` says it).
+    private func conversation(_ hub: String, on: Bool) throws {
+        var request = URLRequest(url: URL(string: hub + "/mock/meeting_conversation")!)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["on": on])
+        let done = expectation(description: "conversation")
         URLSession.shared.dataTask(with: request) { _, _, _ in done.fulfill() }.resume()
         wait(for: [done], timeout: 5)
     }

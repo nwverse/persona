@@ -315,6 +315,7 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertIn("[30:00] Bo: Who owns the regression test?", items[0]["text"])
         self.assertTrue(items[0]["text"].endswith("\n\nDraft the email to the vendor."))
         self.assertEqual(items[-1]["role"], "assistant")
+        self.assertLess(items[0]["seq"], items[-1]["seq"])  # apps order by seq: the owner's words come before the reply
         # The same call again: its answer, nothing sent; another body under its id: op_id_reused.
         self.assertEqual(self.call("POST", path, {"id": first, "text": "Draft the email to the vendor."}), (200, made))
         self.assertEqual(len(self.items(sid)), len(items))
@@ -345,14 +346,18 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual((status, out["client_msg_id"]), (200, f"just-me-{cid}"))
         main = self.call("GET", "/api/v1/assistant")[1]["main"]
         self.assertEqual(out["conversation"], {"machine_id": "server", "session_id": main})
-        sent = self.items(main)[-1]
-        self.assertEqual(sent["client_msg_id"], f"just-me-{cid}")
+        sent = next(x for x in self.items(main) if x.get("client_msg_id") == f"just-me-{cid}")
         self.assertTrue(sent["text"].startswith('<persona-context kind="context" title="Meeting: Design review"'))
         self.assertTrue(sent["text"].endswith("\n\nShould I push back on the vendor?"))
         self.assertEqual(self.call("POST", path, {"id": cid, "text": "Should I push back on the vendor?"}), (200, out))
-        self.assertEqual(self.items(main)[-1]["id"], sent["id"])
+        self.assertEqual([x["id"] for x in self.items(main) if x.get("client_msg_id") == f"just-me-{cid}"], [sent["id"]])
         self.assertEqual(self.call("POST", path, {"id": cid, "text": "other"})[1]["code"], "op_id_reused")
         self.assertEqual(self.live(rid)["asks"], [])  # nothing of it is kept with the recording
+        for _ in range(40):  # the main chat answers a moment later, after the owner's message
+            after = [x for x in self.items(main) if x["seq"] > sent["seq"] and x["role"] == "assistant"]
+            if after: break
+            time.sleep(0.1)
+        self.assertTrue(after)
         note = str(uuid.uuid4())
         self.upload(note, kind="note")
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{note}/just-me", {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "not_meeting")

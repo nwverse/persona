@@ -33,6 +33,8 @@ import UserNotifications
         // However a meeting stops: nothing more is said in it, and its questions go (#2981).
         capture.onStopping = { MeetingAsk.shared.ended($0) }
         MeetingLive.shared.start()
+        // The room of every upload 200 of a room meeting (#3862).
+        MeetingConversation.shared.start()
         // A call that ended while the app was away (or never said so): coming back carries on, unless another app's audio
         // (a VoIP call without CallKit, still going) holds the route: taking the session would cut into that call.
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { @Sendable _ in
@@ -54,21 +56,27 @@ import UserNotifications
     /// (`inForeground`), the Recordings page opens (unless the caller opened it: `openPage`), and the calendar is asked
     /// for once if it never was, after the recording has begun, so the prompt costs no seconds of the meeting.
     /// `attendance`: Persona's part (#2981), as picked on the Recordings page; nil (the drawer, Siri, the Control, the Action
-    /// button) starts with the hub's default role and the session picked last (`MeetingAttendees.defaultAttendance`).
+    /// button) starts with the hub's default role and the session picked last (`MeetingAttendees.defaultAttendance`), or,
+    /// with the meeting conversation, as a room meeting in the default role, not private (`MeetingAttendees.startAttendance`).
     @discardableResult
     func startMeeting(inForeground: Bool, openPage: Bool? = nil, attendance: RecordingAttendance? = nil) async -> Outcome {
         if openPage ?? inForeground { Self.openRecordings() }
         guard capture.state == .idle else { return .alreadyRecording }
         let meeting = await MeetingCalendar.meetingOffMain() ?? RecordingMeeting()
         let picked = attendance != nil
-        let attendance = attendance ?? MeetingAttendees.defaultAttendance(AppModel.shared)
+        let attendance = attendance ?? MeetingAttendees.startAttendance(AppModel.shared)
         await capture.start(locale: Self.locale, input: RecordingInput.chosen, title: meeting.title ?? "", meeting: meeting,
                             playsAloud: attendance.role.speaks)
         guard capture.state == .recording, let id = capture.recordingID else {
             return .failed(capture.error ?? String(localized: "Can't open the microphone. Try again later."))
         }
-        // Off leaves the recording exactly as it was before attendance existed. Attending, the hub hears of it at once.
-        if attendance.role.attends {
+        // A room meeting (#3862) keeps its attendance whatever the role: every upload carries `room` (`off` included),
+        // so the hub has it at once. Nothing to remember: it has no attending session.
+        if attendance.room {
+            RecordingLibrary.shared.change(id) { $0.attendance = attendance }
+            RecordingSync.shared.attendanceChanged(id)
+        } else if attendance.role.attends {
+            // Off leaves the recording exactly as it was before attendance existed. Attending, the hub hears of it at once.
             RecordingLibrary.shared.change(id) { $0.attendance = attendance }
             // Only a pick is remembered: a start with the default keeps the one picked last.
             if picked { MeetingAttendees.remember(attendance.key, title: attendance.sessionTitle) }
@@ -111,6 +119,18 @@ import UserNotifications
               let entry = RecordingLibrary.shared.entry(id), entry.isMeeting, entry.source == .phone else { return }
         guard (entry.attendance?.role ?? .off) != role else { return }
         let at = capture.timeline
+        // A room meeting (#3862) keeps its room, photos and private mark, and has no attending session to look up.
+        if entry.attendance?.room == true {
+            RecordingLibrary.shared.change(id) { e in
+                guard var a = e.attendance else { return }
+                a.set(role, at: at)
+                e.attendance = a
+            }
+            capture.setPlaysAloud(role.speaks)
+            if !role.speaks { MeetingSpeaker.shared.stop() }
+            RecordingSync.shared.attendanceChanged(id)
+            return
+        }
         // Turned on for the first time mid-meeting: the preferred session, attending from now (what came before is not sent).
         let fresh = MeetingAttendees.defaultAttendance(AppModel.shared, role: role)
         RecordingLibrary.shared.change(id) { e in
@@ -121,6 +141,12 @@ import UserNotifications
         capture.setPlaysAloud(role.speaks)
         if !role.speaks { MeetingSpeaker.shared.stop() }
         RecordingSync.shared.attendanceChanged(id)
+    }
+
+    /// The meeting page's Private Meeting switch (#3862): `PUT …/private`; the mark the hub stored. Throws `APIError`.
+    @discardableResult
+    func setPrivate(_ value: Bool, recordingID: UUID) async throws -> Bool {
+        try await MeetingConversation.shared.setPrivate(recordingID, value)
     }
 
     /// Another session attends the meeting being recorded.

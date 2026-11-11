@@ -3778,14 +3778,14 @@ def followup_send(rid, msg):
     m = conv_of(rid, True)
     f = m.get("followup")
     images = [it("user", "image", 0, image={"mime": x["mime"], "data": x["data"]}) for x in msg["images"]]
-    words = [conv_item("user", msg["text"], client_msg_id="followup-" + msg["id"])] if msg["text"] else []
-    reply = [conv_item("assistant", FOLLOWUP_REPLY)]
+    # The reply is made after the owner's words: items take their seq as they are made, and apps order by it.
     if f and f.get("session_id"):
         if f.get("op_id") == msg["id"]: return 200, {"followup": followup_view(m), "created": True, "client_msg_id": "followup-" + msg["id"]}
-        conv_append(f["machine_id"], f["session_id"], images + words + reply)
+        words = [conv_item("user", msg["text"], client_msg_id="followup-" + msg["id"])] if msg["text"] else []
+        conv_append(f["machine_id"], f["session_id"], images + words + [conv_item("assistant", FOLLOWUP_REPLY)])
         return 200, {"followup": followup_view(m), "created": False, "client_msg_id": "followup-" + msg["id"]}
     first = conv_item("user", followup_seed(rid, msg["text"]), client_msg_id="followup-" + msg["id"])
-    mid, sid = conv_start(rid, "followup", "meeting_followup", images + [first] + reply)
+    mid, sid = conv_start(rid, "followup", "meeting_followup", images + [first] + [conv_item("assistant", FOLLOWUP_REPLY)])
     m["followup"] = {"machine_id": mid, "session_id": sid, "op_id": msg["id"]}
     meeting_changed(rid, ["followup"])
     return 200, {"followup": followup_view(m), "created": True, "client_msg_id": "followup-" + msg["id"]}
@@ -3811,7 +3811,21 @@ def just_me_send(rid, msg):
         ASSISTANT_CONFIG["main"] = main
     images = [it("user", "image", 0, image={"mime": x["mime"], "data": x["data"]}) for x in msg["images"]]
     conv_append(mid, main, images + [conv_item("user", text, client_msg_id="just-me-" + msg["id"])])
+    # The main chat answers a moment later, as its turn would (the meeting page shows it under Just me).
+    timer = threading.Timer(JUST_ME_REPLY_SECONDS, conv_append, args=(mid, main, [conv_item("assistant", just_me_reply(rec))]))
+    timer.daemon = True
+    timer.start()
     return 200, {"conversation": {"machine_id": mid, "session_id": main}, "client_msg_id": "just-me-" + msg["id"]}
+
+
+JUST_ME_REPLY_SECONDS = float(os.environ.get("MOCK_JUST_ME_REPLY_SECONDS", "1"))
+
+
+def just_me_reply(rec):
+    """The main chat's made-up private answer, in the recording's language."""
+    if (rec.get("language") or "en").lower().startswith("zh"):
+        return "发布说明一般由负责这个版本的人来写。上周的周会把这个版本交给了张三，可以先请他起个草稿。"  # i18n-ignore: made-up model answer
+    return "Release notes usually come from whoever owns the release. Last week's review gave this one to Bo, so ask Bo for a first draft."
 
 
 def meeting_receipt(h, kind, raw, run):

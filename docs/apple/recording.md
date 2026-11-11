@@ -105,7 +105,7 @@ The hub writes minutes for a meeting recording once its text is complete (#2710;
 
 ## Persona in meetings
 
-Persona can attend a meeting being recorded on the iPhone (#2981; the iPhone side is #3375). The contract, with every field and error, is [meeting-minutes.md](../assistant/meeting-minutes.md) "Attending a meeting"; this is what the app does with it. Only a hub that lists the `meeting_attendance` feature gets any of it: with another hub the Recordings page, the upload and the Live Activity are exactly as before. The redesign (#3862) replaces the attending session with the meeting's own room conversation and a meeting page, on a hub that lists `meeting_conversation`: [meeting-minutes.md](../assistant/meeting-minutes.md) "Meeting conversation (#3862)".
+Persona can attend a meeting being recorded on the iPhone (#2981; the iPhone side is #3375). The contract, with every field and error, is [meeting-minutes.md](../assistant/meeting-minutes.md) "Attending a meeting"; this is what the app does with it. Only a hub that lists the `meeting_attendance` feature gets any of it: with another hub the Recordings page, the upload and the Live Activity are exactly as before. The redesign (#3862) replaces the attending session with the meeting's own room conversation and a meeting page, on a hub that lists `meeting_conversation`: [meeting-minutes.md](../assistant/meeting-minutes.md) "Meeting conversation (#3862)". The iPhone does phase 1 of it ("The meeting conversation (#3862)" below); a meeting started on a hub without it, or before the hub listed it, keeps everything this section describes.
 
 - **Role, chosen as the recording starts**: **Off** (the hub writes the minutes after the meeting, as before), **Listen** (Persona follows the meeting; answers show on screen only), or **Take Part** (they are also said aloud). The Recordings page shows the choice under **Meeting Recording** (`MeetingAttendanceStart`), pre-selected from the hub's `meeting_attendance_default`, which **Settings › Meetings** changes (`MeetingSettingsView`, `PUT /api/v1/assistant`). A pick on the page is for that one recording. The drawer, the home screen's menu, the Control, Siri and the Action button start with the default and the session picked last, so they stay one tap; the last word from the hub (whether it offers attending, its default) is kept for a start without the app in front (`MeetingAttendanceDefaults`).
 - **Who attends**: one session per recording (`MeetingAttendees`): the main chat (sent by leaving `attending_session` out), Persona's other open chats, or an Agent that takes messages; never one the hub would refuse ("Sessions that never attend": a work computer's, another manager's, the health space's, a chat whose replies leave the apps or that an extension opened, one in `bypassPermissions`). The one picked last is pre-selected while it can still attend, else the main chat. Kept on the recording as `RecordingEntry.attendance` (`RecordingAttendance`), on this phone only.
@@ -118,6 +118,79 @@ Persona can attend a meeting being recorded on the iPhone (#2981; the iPhone sid
 - **The Live Activity**: under the name, "Persona listening" or "Persona taking part"; the latest answer, cut to two lines (the hub posts no notification for answers); **Ask Persona**, and **Turn Off Persona** (`TurnOffMeetingAttendanceIntent`) beside Bookmark and Stop, which give up their words for their marks so the four fit. Ask and Turn Off work from the Lock Screen without unlocking, as Stop does: the hub answers a meeting only from meeting material.
 - In the attending session the meeting's batches show as messages from **Meeting** (`MessageSource` kind `meeting`).
 - Screenshots and UI tests: `-showMeetingSample listening|taking-part|answered` (a made-up meeting Persona listens to, takes part in, or takes part in with two answers, the newest being said); `-openMeetingSettings YES` for Settings › Meetings. The mock hub serves the whole contract (`scripts/mock/mock_hub.py`, "Attending a meeting"); `POST /mock/meeting_attendance {"on", "default"}` switches the feature and the default before a launch, and `GET /mock/meeting_attendance` reads back each recording's role, live log and questions (`MeetingAttendanceUITests`).
+
+### The meeting conversation (#3862)
+
+Phase 1 of the contract ([meeting-minutes.md](../assistant/meeting-minutes.md) "Phase 1: the meeting conversation"), on a
+hub that lists `meeting_conversation` beside `meeting_attendance`. The page's design and its identifiers are in
+[DESIGN_SYSTEM.md](../design/DESIGN_SYSTEM.md) "Meeting page (#3862)".
+
+- **A room meeting**: a phone meeting recording started while the hub listed the feature (`MeetingAttendees.conversation`,
+  from the last `hello`, kept in `MeetingAttendanceDefaults` for a start without the app in front). The recording keeps
+  what it started with (`RecordingAttendance.room`, `photos`, `privateMark`; `RecordingEntry.roomMeeting`), whatever the
+  hub lists later.
+- **Starting**: the Recordings page shows the role and **Private Meeting** (off; "Its minutes are never used when Persona
+  answers in later meetings."), and no Who Attends: the meeting's own room conversation attends. One-tap starts (drawer,
+  home screen menu, Control, Siri, Action button) use the default role and not private (`MeetingAttendees.startAttendance`).
+  A room meeting stores its attendance whatever the role, Off included, so it uploads at once.
+- **The upload**: every upload of a room meeting carries `room: {"attendance": <role>}` (`off` too) and `private`, never
+  the top-level `attendance` or `attending_session`. Live lines and asks wait for a `200` that carries `room` (the stored
+  mark is `room|<role>`); its `room` goes to `MeetingConversation` (`RecordingSync.onRoom`), and an upload with `ended_at`
+  that the hub stored is noted (`RecordingSync.endedStored`).
+- **An older manager after a rollback**: a `200` without `room` is not permanent. The recording goes on uploading `room`,
+  no `…/live` or `…/ask` goes, the page says the hub can't take part right now (`RecordingSync.roomMissing`), and the
+  Live Activity shows Persona as not attending, until a `200` carries `room` again.
+- **The hub's state of the meeting** (`MeetingConversation`): the room (`MeetingRoom`: state, ids, problem; a state the
+  app doesn't know reads as `starting`), the private mark, the follow-up and the asks, from the upload's `200`, the `200`
+  of `POST …/live` and `GET …/live`. A page on screen watches its recording (one watch per page) and reads it whole once;
+  a `meeting_live` event reads only the parts it names that are newer than those read (`?parts=`), and only the parts
+  phase 1 shows (`room`, `asks`, `private`, `followup`); a reconnect reads every watched meeting again. An upload's or a
+  live POST's late answer never takes the room back to an earlier state. `404` / `410` mean the hub has no such recording.
+- **The meeting page in the sheet**: `RecordingLiveSheet` shows `MeetingPage` for a room meeting in place of the live
+  view, and after Stop in its after mode in place of the wrap-up; every way in (the drawer row, the Live Activity, a
+  notification, Recordings) still opens the sheet. The page has the state line, a subtitle with the role, "On this
+  iPhone" and "Private", the room's problem (`runtime_unsupported`, `node_too_old`, `machine_offline`, `start_failed`: then
+  questions are answered from the meeting so far), the **Live** box (the last three lines, how far behind the transcript
+  is, **Full Transcript**), the thread, and the bar: Just me, the composer and its `[+]` menu (**What Was Just Said**, the
+  heard ask), Pause, Bookmark, Stop.
+- **The thread** (`MeetingThreadView`, read apart by `MeetingThread`, a port of the web's `meeting-thread.ts`): once the
+  room has ids the page subscribes to it like any chat (WS `subscribe`, **Show Earlier** pages back) and shows its items:
+  Persona joined, batches as "N lines from the meeting", heard questions as "What was just said (m:ss)", the owner's
+  questions, Persona's answers (consecutive replies merged), the end. An ask the room's thread doesn't hold yet, a failed
+  one and one answered from material keep the `MeetingExchangeRow` look; without ids ("Persona is joining the meeting…",
+  or a room that never came up) every ask shows that way.
+- **Asking**: the composer asks the room (`…/ask` as #3746 does, one at a time); the answer records how it went (`via`).
+  A room ask the hub fails at once with `room_unavailable` (the room went unavailable) is asked once more under a new id,
+  which the hub answers from the meeting's material; `meeting_ended`, `room_unavailable` and `no_answer` have their own
+  words.
+- **Just me**: with the switch on, the composer sends `POST …/just-me` (id, text, images) and the thread shows those
+  questions and the main chat's answers after each one (by its `client_msg_id`) until the next question, and the main
+  chat's reply while its turn runs; a card the turn raises is answered in the main chat. Just me lives only in
+  `MeetingConversation`: never in `MeetingAsk`, the Live Activity, `MeetingSpeaker`, VoiceOver announcements or the room.
+  Retries follow the hub's receipts: the same id only when no answer came, on `503 assistant_offline` or a pending
+  receipt; any other answer ends that id and **Retry** sends the words under a new one. A `404 recording_not_found`
+  uploads the recording first and sends once more.
+- **The private mark**: the page menu's **Private Meeting** (`PUT …/private`); shown as the hub has it, absent counting as
+  private. The recording's page has the same switch for every meeting on such a hub (hidden after `409 not_meeting`).
+- **After the meeting**: the after page shows the status card (when, the minutes' state, **Open Minutes** / **Open
+  Recording** in the sheet), the room's thread (or the hub's `asks` when the room never came up), **After the Meeting**,
+  then the follow-up. Its composer waits while the hub would answer `409 meeting_running` (the recording runs, its
+  `ended_at` isn't stored yet, the room is still starting, ready or unavailable, or not read yet). The first message goes
+  to `POST …/followup` (it makes the follow-up with that message), the next ones to the follow-up's
+  `POST /api/v1/sessions/{mid}/{sid}/messages` with the message's id as `client_msg_id` and op id; a send keeps the route
+  it started on. A `400` / `409` / `413` ends that id (Retry sends the words under a new one); no answer, a pending
+  receipt, a 5xx or a `404` keep it. A sent message leaves the pending list once the follow-up's items hold its
+  `client_msg_id` (`followup-<id>` or the id).
+- **The recording's page**: for a meeting on such a hub a **Private Meeting** row, and for a room meeting (or one the hub
+  has a follow-up for) **Meeting Conversation**, which pushes the after page.
+- **Screenshots and tests**: `-showMeetingSample room-listening|room-taking-part` (the made-up meeting as a room meeting,
+  listening in or taking part). The mock hub serves the phase (`POST /mock/meeting_conversation {"on", "room",
+  "end_seconds"}`, `GET` reads back each meeting's room, mark and follow-up). UI tests: `MeetingConversationUITests` (the
+  start's choices on a hub with and without the feature, a typed question answered in the room's thread, Just me reaching
+  only the main chat, the private switch, the follow-up after Stop); `MeetingAttendanceUITests` turns the feature off to
+  keep covering #3746. Unit tests: `MeetingConversationTests` (the upload and its `200`, the hub's state and events, the
+  private mark, Just me and the follow-up with their retries, `room_unavailable`, the words) and `MeetingThreadTests` (the
+  web's cases and the mock's items).
 
 ## Entry points
 

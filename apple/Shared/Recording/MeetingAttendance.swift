@@ -57,6 +57,13 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
     /// Why the phone stopped attending on its own, said on the recording: the hub can't follow meetings (an older
     /// manager), or it takes no more live lines for this one.
     var stopped: StopReason?
+    /// A room meeting (#3862): started while the hub listed `meeting_conversation`. Its uploads carry `room` and `private`
+    /// (never the top-level `attendance` / `attending_session`); it stays one for life.
+    var room: Bool = false
+    /// Started while the hub listed `meeting_photos` (phase 3): the page offers the camera and the library.
+    var photos: Bool = false
+    /// The start sheet's Private meeting choice, sent as the upload's `private` (the hub takes it only while it has no mark).
+    var privateMark: Bool? = nil
 
     nonisolated enum StopReason: String, Codable, Sendable {
         case unsupported
@@ -68,7 +75,16 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         set(role, at: at)
     }
 
-    enum CodingKeys: String, CodingKey { case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped }
+    /// A room meeting's attendance as it starts: no attending session (the meeting's own room attends), whatever the role.
+    static func room(_ role: MeetingAttendance, private privateMark: Bool, photos: Bool, at: Double = 0) -> RecordingAttendance {
+        var a = RecordingAttendance(role: role, at: at)
+        a.room = true
+        a.photos = photos
+        a.privateMark = privateMark
+        return a
+    }
+
+    enum CodingKeys: String, CodingKey { case role, session, sessionTitle, periods, live, liveSegments, spoken, stopped, room, photos, privateMark }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -81,6 +97,10 @@ nonisolated struct RecordingAttendance: Codable, Hashable, Sendable {
         liveSegments = try c.decodeIfPresent([Int].self, forKey: .liveSegments) ?? []
         spoken = try c.decodeIfPresent([RecordingSpan].self, forKey: .spoken) ?? []
         stopped = try? c.decodeIfPresent(StopReason.self, forKey: .stopped)
+        // Written by #3862 apps; an older file has none, and is no room meeting.
+        room = (try? c.decodeIfPresent(Bool.self, forKey: .room)) ?? false
+        photos = (try? c.decodeIfPresent(Bool.self, forKey: .photos)) ?? false
+        privateMark = try? c.decodeIfPresent(Bool.self, forKey: .privateMark)
     }
 
     /// The attending session, nil for the main chat.
@@ -153,5 +173,54 @@ nonisolated enum MeetingAttendanceDefaults {
     static func remember(offered: Bool, role: MeetingAttendance?, _ store: UserDefaults = .standard) {
         if store.object(forKey: offeredKey) == nil || store.bool(forKey: offeredKey) != offered { store.set(offered, forKey: offeredKey) }
         if let role, store.string(forKey: roleKey) != role.rawValue { store.set(role.rawValue, forKey: roleKey) }
+    }
+
+    /// Listed by a hub whose manager has the meeting conversation (#3862, docs/assistant/meeting-minutes.md「Flags and
+    /// compatibility」): a meeting started then is a room meeting.
+    static let conversationFeature = "meeting_conversation"
+    /// …and photos in the meeting (phase 3); only ever with `meeting_conversation`.
+    static let photosFeature = "meeting_photos"
+    /// Whether the hub listed the two, for a start without the app in front, as `offeredKey`.
+    static let conversationKey = "recording.meeting.conversation"
+    static let photosKey = "recording.meeting.photos"
+
+    /// Keeps whether the hub lists the two (a start without the app in front reads them).
+    static func remember(conversation: Bool, photos: Bool, _ store: UserDefaults = .standard) {
+        if store.object(forKey: conversationKey) == nil || store.bool(forKey: conversationKey) != conversation { store.set(conversation, forKey: conversationKey) }
+        if store.object(forKey: photosKey) == nil || store.bool(forKey: photosKey) != photos { store.set(photos, forKey: photosKey) }
+    }
+}
+
+/// The room conversation's state as the hub reports it (`room` on the upload's 200, `GET/POST …/live`, `detail.meta`;
+/// docs/assistant/meeting-minutes.md「Fields on `GET …/live` and `detail.meta`」).
+nonisolated struct MeetingRoom: Codable, Hashable, Sendable {
+    nonisolated enum State: String, Sendable { case none, starting, ready, unavailable, ended, deleted }
+    var state: String
+    var machineID: String?
+    var sessionID: String?
+    /// Why it is `unavailable` (an open set: `runtime_unsupported`, `node_too_old`, `machine_offline`, `start_failed`).
+    var problem: String?
+
+    enum CodingKeys: String, CodingKey { case state, machineID = "machine_id", sessionID = "session_id", problem }
+
+    /// An open set: a value the app doesn't know reads as `starting`.
+    var known: State { State(rawValue: state) ?? .starting }
+
+    /// The room's conversation once it has ids (never with `none` / `deleted`).
+    func key(group: String) -> SessionKey? {
+        guard known != State.none, known != State.deleted, let machineID, !machineID.isEmpty, let sessionID, !sessionID.isEmpty else { return nil }
+        return SessionKey(group: group, machineID: machineID, sessionID: sessionID)
+    }
+}
+
+nonisolated extension MeetingRoom {
+    /// Leniently: a field of another shape is left out rather than losing the answer it came in (a missing state is one
+    /// the app doesn't know).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? State.starting.rawValue
+        machineID = try? c.decodeIfPresent(String.self, forKey: .machineID)
+        sessionID = try? c.decodeIfPresent(String.self, forKey: .sessionID)
+        problem = try? c.decodeIfPresent(String.self, forKey: .problem)
     }
 }

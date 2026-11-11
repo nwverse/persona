@@ -130,6 +130,8 @@ struct RecordingCaptureControls: View {
     /// Persona's part in the next meeting (#2981): the hub's default until one is picked here for it.
     @State private var pickedRole: MeetingAttendance?
     @State private var pickedAttendee: MeetingAttendees.Candidate?
+    /// The next meeting's private mark (#3862): off unless turned on here, for that meeting only.
+    @State private var pickedPrivate = false
     /// A start was tapped and recording has not begun (the calendar read, then the microphone): the hero stays, busy.
     @State private var startRequested = false
     #endif
@@ -199,7 +201,10 @@ struct RecordingCaptureControls: View {
         .accessibilityIdentifier("recording-start")
         if MeetingAttendees.offered(model) {
             personaRow.disabled(busy)
-            if role.attends {
+            if MeetingAttendees.conversation(model) {
+                // The meeting's own room conversation attends (#3862): no session to pick, and the private mark instead.
+                privateRow.disabled(busy)
+            } else if role.attends {
                 NavigationLink { MeetingAttendeePicker(selected: attendee?.key) { pickedAttendee = $0 } } label: {
                     MeetingAttendeeLabel(title: attendee?.title, detail: attendee?.detail)
                 }
@@ -296,6 +301,20 @@ struct RecordingCaptureControls: View {
         }
     }
 
+    /// Private Meeting (#3862): whether this meeting's minutes may be used when Persona answers in later ones.
+    private var privateRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Toggle(isOn: $pickedPrivate) {
+                Label("Private Meeting", systemImage: Theme.Icon.privateMeeting)
+            }
+            .font(Theme.Font.body)
+            .accessibilityIdentifier("meeting-private-start")
+            Text("Its minutes are never used when Persona answers in later meetings.")
+                .font(Theme.Font.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var role: MeetingAttendance { pickedRole ?? MeetingAttendees.defaultRole(model) }
 
     // MARK: Recording
@@ -367,7 +386,7 @@ struct RecordingCaptureControls: View {
 
     private func startMeeting() {
         let attendance = startAttendance
-        pickedRole = nil; pickedAttendee = nil
+        pickedRole = nil; pickedAttendee = nil; pickedPrivate = false
         startRequested = true
         Task {
             await MeetingRecorder.shared.startMeeting(inForeground: true, openPage: false, attendance: attendance)
@@ -388,10 +407,14 @@ struct RecordingCaptureControls: View {
     private var attendee: MeetingAttendees.Candidate? { pickedAttendee ?? MeetingAttendees.preferred(model) }
 
     /// What Meeting Recording starts with: the role and session shown above it. A session picked here that can no longer
-    /// attend (its computer went offline meanwhile) gives way to the preferred one.
+    /// attend (its computer went offline meanwhile) gives way to the preferred one. With the meeting conversation (#3862)
+    /// it is a room meeting whatever the role, off included: every upload carries `room` and the private mark.
     private var startAttendance: RecordingAttendance? {
         guard MeetingAttendees.offered(model) else { return nil }
         let role = pickedRole ?? MeetingAttendees.defaultRole(model)
+        if MeetingAttendees.conversation(model) {
+            return RecordingAttendance.room(role, private: pickedPrivate, photos: MeetingAttendees.photos(model))
+        }
         guard role.attends else { return RecordingAttendance(role: .off) }
         let all = MeetingAttendees.candidates(model)
         let chosen = pickedAttendee.flatMap { p in all.first { $0.key == p.key } } ?? MeetingAttendees.preferred(model)
@@ -491,9 +514,21 @@ struct RecordingsPage: View {
     }
 }
 
-/// One recording's transcript, with re-transcribing in another language and delete (here and in the knowledge base).
+/// One recording's transcript, with re-transcribing in another language and delete (here and in the knowledge base). A
+/// meeting also has its private mark, and a room meeting the way to its conversation (#3862).
 struct RecordingDetailView: View {
     var id: UUID
+    #if os(iOS)
+    @Environment(AppModel.self) private var model
+    @State private var conversation = MeetingConversation.shared
+    /// This page's hold on the meeting's state (`MeetingConversation.watch`), while it shows a meeting.
+    @State private var owner = UUID()
+    @State private var watching = false
+    /// The private mark being changed: shown at once, the hub's answer follows.
+    @State private var pendingPrivate: Bool?
+    /// The hub said the recording isn't a meeting (`409 not_meeting`): it takes no private mark.
+    @State private var notMeeting = false
+    #endif
     @Environment(\.dismiss) private var dismiss
     @State private var library = RecordingLibrary.shared
     @State private var transcription = RecordingTranscription.shared
@@ -526,6 +561,9 @@ struct RecordingDetailView: View {
                 await keeper.run()
             }
         }
+        #if os(iOS)
+        .onTabVisibility(appear: { watchMeeting() }, disappear: { unwatchMeeting() })
+        #endif
         .confirmationDialog("Delete This Recording?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 transcription.cancel(id)
@@ -563,6 +601,9 @@ struct RecordingDetailView: View {
                 }
                 if transcription.current == id { ProgressView().tint(Theme.accent) }
             }
+            #if os(iOS)
+            meetingSection(entry)
+            #endif
             if entry.isRolling {
                 rollingSections(entry)
             } else {
@@ -623,6 +664,74 @@ struct RecordingDetailView: View {
             try? await Task.sleep(for: .seconds(15))
         }
     }
+
+    #if os(iOS)
+    // MARK: The meeting conversation (#3862)
+
+    /// Private Meeting for any meeting (whatever recorded it: a meeting with no mark counts as private until it is turned
+    /// off), and Meeting Conversation for a room meeting, or one the hub says has a room or a follow-up. Only with a hub
+    /// that lists the meeting conversation.
+    @ViewBuilder private func meetingSection(_ entry: RecordingEntry) -> some View {
+        let meeting = conversation.meeting(id)
+        let showsPrivate = entry.isMeeting && !notMeeting
+        let showsThread = entry.roomMeeting || meeting.followup != nil
+            || meeting.room.map { $0.known != MeetingRoom.State.none } == true
+        if MeetingAttendees.conversation(model), showsPrivate || showsThread {
+            Section {
+                if showsPrivate {
+                    Toggle(isOn: Binding(get: { pendingPrivate ?? MeetingPage.isPrivate(entry, meeting) }, set: { setPrivate($0) })) {
+                        Label {
+                            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                                Text("Private Meeting").font(Theme.Font.body)
+                                Text("Its minutes are never used when Persona answers in later meetings.")
+                                    .font(Theme.Font.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        } icon: {
+                            ThemedIcon(Theme.Icon.privateMeeting)
+                        }
+                    }
+                    .disabled(pendingPrivate != nil)
+                    .accessibilityIdentifier("recording-private")
+                }
+                if showsThread {
+                    NavigationLink { MeetingPage(id: id, mode: .after) } label: {
+                        Label("Meeting Conversation", systemImage: Theme.Icon.meeting).lineLimit(1)
+                    }
+                    .accessibilityIdentifier("recording-meeting-conversation")
+                }
+            }
+        }
+    }
+
+    /// Reads the meeting's private mark and room while the page shows a meeting (`GET …/live`, then `meeting_live`).
+    private func watchMeeting() {
+        guard !watching, library.entry(id)?.isMeeting == true, MeetingAttendees.conversation(model) else { return }
+        watching = true
+        conversation.watch(id, by: owner)
+    }
+
+    private func unwatchMeeting() {
+        guard watching else { return }
+        watching = false
+        conversation.unwatch(id, by: owner)
+    }
+
+    /// `PUT …/private`; a recording the hub doesn't count as a meeting loses the row instead of showing an error.
+    private func setPrivate(_ value: Bool) {
+        pendingPrivate = value
+        Task {
+            do {
+                try await conversation.setPrivate(id, value)
+            } catch let error as APIError where error.status == 409 && error.code == "not_meeting" {
+                notMeeting = true
+            } catch {
+                failure = MeetingConversation.message(error)
+            }
+            pendingPrivate = nil
+        }
+    }
+    #endif
 
     /// A transcript line's identity: where it starts, in milliseconds, so a row keeps its identity when text is added before
     /// or after it (a line at the same start gets a number after it).
