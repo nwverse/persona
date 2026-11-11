@@ -775,9 +775,11 @@ function ExtensionDetail({ id, manager, onBack: back, onPage, onUpgrade, onChann
             </Group>
           )}
           {!!p.extension_pack?.length && (
-            <Group title={t("settings-extensions.pack_title")} footer={t("settings-extensions.pack_footer")}>
-              {p.extension_pack.map((m) => <PackMemberRow key={m.id} member={m} name={memberNames[m.id]} mono />)}
-            </Group>
+            <div data-pack-members>
+              <Group title={t("settings-extensions.pack_title")} footer={t("settings-extensions.pack_footer")}>
+                {p.extension_pack.map((m) => <PackMemberRow key={m.id} member={m} name={memberNames[m.id]} mono />)}
+              </Group>
+            </div>
           )}
           {!!p.contributions?.length && (
             <Group title={t("settings-extensions.contributions_title")} footer={t("settings-extensions.contributions_footer")}>
