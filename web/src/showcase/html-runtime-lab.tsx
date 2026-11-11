@@ -4,6 +4,7 @@
 // down), window.lab.posts counts the bridge's calls that reached the hub, window.lab.pwned what anything posted to this
 // page that isn't the card frame's own (an attack that ran outside the card's runtime would show here).
 import { StrictMode } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { initI18n } from "../i18n";
 import FRAME_SCRIPT from "../lib/html-runtime/frame.js?raw";
@@ -59,7 +60,8 @@ lab.card = (html, opts = {}) => {
   const view = { title: opts.title ?? "Lab", fallback: "The card's words, shown where its page doesn't run.", sections: [{ items: [{ type: "html", key: "page", html, height: opts.height ?? 240 }] }] };
   const text = "```persona-view\n" + JSON.stringify(view) + "\n```\n";
   cards.applyBlock(C, `${id}/0`);
-  root.render(
+  // at once: when this returns, the last card is gone and this one is on the page (the e2e reads its state next)
+  flushSync(() => root.render(
     <StrictMode>
       <main className="min-h-dvh bg-page p-4 text-ink" style={{ width }}>
         <HtmlRuntime.Provider value>
@@ -72,7 +74,7 @@ lab.card = (html, opts = {}) => {
         <Toasts />
       </main>
     </StrictMode>,
-  );
+  ));
 };
 // The display frame alone, the sanitizer bypassed: its sandbox, its CSP and its own script are all that stand between
 // what is written into it and the network. The real path never writes the card's HTML into the frame (sanitize.ts); this

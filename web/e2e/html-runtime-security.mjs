@@ -128,7 +128,17 @@ async function cardState(page, timeout = 15_000) {
   });
 }
 
-const cardFrame = async (page) => (await page.$('[data-assistant-card="html"] iframe'))?.contentFrame();
+/** The card's display frame, once it is there and has its document (WebKit can take a moment after the card says it runs). */
+async function cardFrame(page) {
+  for (let i = 0; i < 30; i++) {
+    const frame = await (await page.$('[data-assistant-card="html"] iframe'))?.contentFrame();
+    if (frame && frame.url() === "about:srcdoc") return frame;
+    await settle(100);
+  }
+  const has = await page.$('[data-assistant-card="html"] iframe');
+  console.log(`     (no frame after 3 s; the iframe element is ${has ? "there" : "missing"})`);
+  return undefined;
+}
 
 /** What the display frame holds that it never should: scripts, handlers, links, forms, anything with a URL. */
 const frameLeftovers = (frame) =>
