@@ -109,7 +109,7 @@ internal fun ProvidersPage(
                     item("hidden") {
                         JSectionHeader(stringResource(R.string.settings_providers_hidden), count = groups.hidden.size,
                             trailing = stringResource(if (open) R.string.settings_providers_fold else R.string.settings_providers_unfold),
-                            onClick = if (query.isBlank()) ({ showHidden = !showHidden }) else null)
+                            onClick = if (query.isBlank()) ({ showHidden = !showHidden }) else null, open = open)
                     }
                     if (open) {
                         launcherRows("hidden", groups.hidden, name, selected, onOpen) { menu = it }

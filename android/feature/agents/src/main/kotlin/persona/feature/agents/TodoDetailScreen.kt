@@ -448,7 +448,7 @@ fun TodoDetailScreen(
             if (todo.releasedAgents.isNotEmpty()) {
                 item(key = "past-header") {
                     Row(
-                        Modifier.fillMaxWidth().clickable { pastFolded = !pastFolded }.padding(vertical = Tokens.Space.xs),
+                        Modifier.fillMaxWidth().foldToggle(open = !pastFolded) { pastFolded = !pastFolded }.padding(vertical = Tokens.Space.xs),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         JSectionHeader(

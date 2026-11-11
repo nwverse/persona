@@ -383,6 +383,7 @@ fun TodosScreen(
                             countTone = section.status ?: Status.Idle,
                             onClick = { toggled = if (section.name in toggled) toggled - section.name else toggled + section.name },
                             sub = false,
+                            open = !folded,
                             action = { JIcon(if (folded) PhIcons.CaretDown else PhIcons.CaretUp, null, size = Tokens.Space.l, tint = PersonaTheme.palette.ink3) },
                         )
                     }
