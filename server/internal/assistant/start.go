@@ -237,6 +237,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	if p.PermissionMode == "" && p.GuestTools == nil {
 		p.PermissionMode = s.settings(ctx).DefaultPermissionMode
+		if p.PermissionMode == "" {
+			p.PermissionMode = proto.ModeBypass
+		}
 	}
 	var cwd string
 	var err error
@@ -256,6 +259,12 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.GuestTools != nil {
 		// The node starts it with no built-in tools and only these of Persona's (node/assistant_guest.go).
 		params["guest"] = map[string]any{"tools": p.GuestTools}
+	}
+	if p.NewSessionID != "" {
+		params["new_session_id"] = p.NewSessionID // node/assistant_guest.go: under this id, once
+	}
+	if p.ClientMsgID != "" {
+		params["client_msg_id"] = p.ClientMsgID // its first message's (node/node.go assistant.send)
 	}
 	purpose := p.Purpose
 	if purpose == "" {
@@ -748,6 +757,9 @@ func (s *Service) sendParams(ctx context.Context, p SendParams) (map[string]any,
 		params = map[string]any{}
 	}
 	params["is_main"] = false
+	if err := s.roomRefusesSend(ctx, p.MachineID, p.SessionID, p.Lang); err != nil {
+		return nil, err // an ended room: 409 meeting_ended (meeting_room.go)
+	}
 	if s.isGuest(ctx, p.MachineID, p.SessionID) {
 		// A guest conversation keeps what it started on: no launcher, model, runtime or mode picked for a message
 		// (the node refuses a change too, node/assistant_guest.go).

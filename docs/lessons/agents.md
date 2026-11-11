@@ -2,6 +2,17 @@
 
 Pitfalls, odd behavior, and the trade-offs made at the time (formerly in `CLAUDE.md`, index in `docs/lessons/README.md`). Add new lessons to the matching section; create a section if none fits.
 
+## A queued AGY turn cannot own the executing prompt's text (#4564)
+
+The pending-turn record can change before the previous ACP prompt finishes. Keep the executing prompt's stream
+owner separately, clear its text at completion, and publish an empty boundary before the next prompt starts. Text
+chunks separated by a tool call are distinct messages. Accumulating them across the whole turn makes progress and
+final replies appear concatenated in the next exchange. Runtime wire tests cover queued and consecutive prompts.
+
+The web hook must also forget raw live text once its transcript item replaces it. Hiding the derived visible text
+alone retains a copy that can return when a new user message changes the matching transcript tail. A fresh delta
+may legitimately repeat an earlier answer, so retirement follows the landed stream's lifetime.
+
 - A source-search query containing a colon is not necessarily a URL: Go's `url.Parse` treats `bug: login` and `is:open login` as schemes.
   In `server/internal/node/worktree_composer.go`, only an explicit HTTP(S) prefix selects URL validation; other text remains a repository-scoped
   search, even when it contains a URL later in the query. Regress through `worktree.source` and check the exact query sent to `github.listWorkItems`,
@@ -802,6 +813,11 @@ refused as `dialog_open` with nothing on the phone to answer.
   decide the state.
 - Measure a hook's effect on a real pty with a throwaway `--settings` hook and an empty config directory, answering both ways: the
   same check that ignored allow honoured deny.
+- `--setting-sources project` does not keep a `--settings` file out: flag settings always load, hooks, plugins and output
+  style included. A launcher alias's `--settings` is a user settings file, so a process that must carry none of the user's
+  setup (a meeting's room, `node/assistant_guest.go` `meetingRoomKeys`) copies only what it needs from it (env, login, model).
+- A node's session state is stored by the hub's manager (`db.NodeSession`): a field it does not keep is gone after the next node
+  restart. Persist what decides how a process runs (a guest's tools and kind), and fail closed when it is missing.
 
 ## A headless Claude's queue is on its stdout, not in its transcript (#4342)
 
