@@ -114,8 +114,28 @@ public nonisolated enum VoiceRoute {
            let mic = headset(in: route.available.filter { $0.id != refused }) {
             return Plan(input: mic.id)
         }
-        // Nothing connected: the loudspeaker, never the earpiece.
-        return route.outputs.contains(where: { $0.port == .builtInReceiver }) ? Plan(speaker: true) : .keep
+        return loudspeaker(route)
+    }
+
+    /// Where Persona's spoken answer plays while a meeting recording holds the microphone (#2981): the same rule as a
+    /// call for the voice, but never a microphone, since the recording keeps the one it records with (the phone's, or
+    /// the Bluetooth one picked for it). A connected device plays it; with nothing connected, the loudspeaker, never
+    /// the earpiece.
+    public static func output(_ route: Snapshot) -> Plan {
+        if route.outputs.contains(where: { !$0.port.isBuiltIn }) { return .keep }
+        return loudspeaker(route)
+    }
+
+    /// The voice plays from the phone's loudspeaker (as it is, or once `plan` is applied): the room hears it, and so
+    /// does a microphone recording the room.
+    public static func fromLoudspeaker(_ route: Snapshot, after plan: Plan = .keep) -> Bool {
+        if route.outputs.contains(where: { !$0.port.isBuiltIn }) { return false }
+        return plan.speaker || route.outputs.contains { $0.port == .builtInSpeaker }
+    }
+
+    /// Nothing connected: the loudspeaker, never the earpiece.
+    private static func loudspeaker(_ route: Snapshot) -> Plan {
+        route.outputs.contains(where: { $0.port == .builtInReceiver }) ? Plan(speaker: true) : .keep
     }
 
     /// The microphone that belongs with an external output: the same device's, else none (the phone's records).

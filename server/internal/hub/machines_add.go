@@ -406,6 +406,9 @@ func (h *Hub) addComputer(ctx context.Context, mc *MachineConfig, owner, by stri
 // revokeComputer revokes every Persona Link credential of computer id and its pairing codes not used yet, closing what
 // they have open; how many credentials it revoked. A store that keeps no credentials has none to revoke.
 func (h *Hub) revokeComputer(ctx context.Context, id string) (int, error) {
+	if err := h.retireShareMachine(ctx, id); err != nil {
+		return 0, err
+	}
 	cr, _ := h.store.(credentialRevoker)
 	if cr == nil {
 		return 0, nil
