@@ -106,7 +106,7 @@ function liveStatus(live: RecordingLive, recording: boolean): string {
 
 const ASK_ERRORS = ["model_unavailable", "model_error", "model_timeout", "interrupted", "nothing_heard"];
 
-function AskRow({ ask, startedAt }: { ask: RecordingAsk; startedAt?: string }) {
+export function AskRow({ ask, startedAt }: { ask: RecordingAsk; startedAt?: string }) {
   const heard = ask.question_source === "heard";
   const source = t(heard ? "knowledge-kbdetail.ask_heard" : "knowledge-kbdetail.ask_typed");
   // At its place in the recording; a typed question sent without one at the clock time it was asked.
