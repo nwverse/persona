@@ -33,6 +33,7 @@ struct ImageEditor: View {
     /// The source's pixels, upright and at most the size sent; decoded off the main thread once the editor is up.
     @State private var pixels: CGImage?
     @State private var caption: String
+    @FocusState private var captionFocused: Bool
     @State private var finishing = false
 
     init(_ start: EditedImage, doneTitle: String = String(localized: "Done [Extension System Presentation c0b3fb]"),
@@ -171,6 +172,7 @@ struct ImageEditor: View {
         .gesture(tool == .crop ? cropGesture(l) : nil)
         .animation(reduceMotion ? nil : Theme.Motion.state, value: tool)
         .animation(reduceMotion ? nil : Theme.Motion.state, value: shownTurns)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("image-edit-canvas")
     }
 
@@ -179,6 +181,7 @@ struct ImageEditor: View {
             .onChanged { v in
                 let p = edits.unturn(l.pixel(v.location), in: size)
                 if current == nil {
+                    captionFocused = false // drawing on the picture puts the caption's keyboard away
                     let width = Theme.ImageEdit.lineWidths[lineWidth] / max(l.scale, .ulpOfOne)
                     current = ImageMark(kind: tool == .pen ? .pen : .box, ink: ink, width: width, points: [p])
                 } else {
@@ -195,6 +198,7 @@ struct ImageEditor: View {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
                 if cropping == nil {
+                    captionFocused = false
                     guard let handle = Self.handle(at: v.startLocation, in: l.crop) else { return }
                     cropping = (handle, edits.crop)
                 }
@@ -279,6 +283,7 @@ struct ImageEditor: View {
     private func finish(sending: Bool) {
         guard !finishing, let pixels else { return }
         finishing = true
+        captionFocused = false
         let edits = edits, history = history
         Task {
             let result = edits.isEmpty ? start.source : await ImageEditWork.render(edits, over: pixels) ?? start.source
@@ -437,6 +442,7 @@ struct ImageEditor: View {
             TextField("Add a caption…", text: $caption, axis: .vertical)
                 .lineLimit(1...4)
                 .font(Theme.Font.body)
+                .focused($captionFocused)
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.vertical, Theme.Space.s)
                 .scaledFrame(minHeight: Theme.Size.tapTarget)
