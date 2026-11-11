@@ -198,11 +198,15 @@ type Store struct {
 
 	recMu             sync.Mutex                 // a recording's read-compare-write (recordings.go)
 	recFilesMu        sync.RWMutex               // acquire before metaMu for recording snapshots and recovery
+	liveMu            sync.Mutex                 // a live log's read-modify-write (live.go); after recMu, before recFilesMu
 	recordingWrite    func(string, []byte) error // per-store candidate fault injection
 	recordingReadWait func()                     // per-store read-entry observation for concurrency tests
 	recordingRemove   func(string) error         // per-store commit fault injection
 
 	dedupeMu sync.Mutex // projects/.dedupe.json's read-modify-write (dedupe.go)
+	// topicMu: a topic's points.json read-modify-write (the distill and merge steps, forgetting a source) and the
+	// sources' distill marks (topic_distill.go). Acquire before metaMu.
+	topicMu  sync.Mutex
 	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
@@ -223,7 +227,7 @@ type Store struct {
 }
 
 func NewStore(dir string) (*Store, error) {
-	for _, k := range []string{KindChat, KindPerson, KindProject, KindDoc, KindMeeting, KindEvent, KindRecording} {
+	for _, k := range []string{KindChat, KindPerson, KindProject, KindDoc, KindMeeting, KindEvent, KindRecording, KindTopic} {
 		if err := os.MkdirAll(filepath.Join(dir, k), 0o700); err != nil {
 			return nil, err
 		}

@@ -24,17 +24,37 @@ struct InboxTests {
         pending.id = "read-pending"
         pending.read = true
         items.append(pending)
-        #expect(items.filter(\.isUnread).count == 1)
+        #expect(items.filter(\.isUnreadAction).count == 1)
         #expect(!pending.isDone && pending.triage == .action)
         items[0].read = true
-        #expect(items.filter(\.isUnread).isEmpty)
+        #expect(items.filter(\.isUnreadAction).isEmpty)
         let restored = try JSON.decoder.decode([InboxItem].self, from: JSON.encoder.encode(items))
-        #expect(restored.filter(\.isUnread).isEmpty)
+        #expect(restored.filter(\.isUnreadAction).isEmpty)
         #expect(restored.filter { !$0.isDone }.count == 2)
         var fyi = pending
         fyi.tier = "fyi"
         fyi.read = false
-        #expect(fyi.isUnread)
+        #expect(!fyi.isUnreadAction)
+        var working = fyi
+        working.tier = "action"
+        working.status = "working"
+        #expect(!working.isUnreadAction)
+        var noise = fyi
+        noise.tier = "noise"
+        #expect(!noise.isUnreadAction)
+        var promoted = fyi
+        promoted.status = "action"
+        #expect(promoted.isUnreadAction)
+        var demoted = promoted
+        demoted.status = "fyi"
+        #expect(!demoted.isUnreadAction)
+        var completed = promoted
+        completed.doneAt = Date()
+        #expect(!completed.isUnreadAction)
+        let mixed = try JSON.decoder.decode([InboxItem].self,
+            from: JSON.encoder.encode([pending, fyi, working, noise, promoted, demoted, completed]))
+        #expect(mixed.filter(\.isUnreadAction).count == 1)
+        #expect(!fyi.isDone && !working.isDone && !noise.isDone)
     }
 
     @Test func decodesItemsAndOpensThem() throws {

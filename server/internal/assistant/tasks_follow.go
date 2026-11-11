@@ -149,6 +149,7 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string) {
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
+	s.interruptsSoon()          // an interrupted receipt of it reads resumed now (interruptions.go)
 	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
 	s.setTaskStage(ctx, t.ID, "develop", "")
 	s.taskPlanApproval()
@@ -164,11 +165,24 @@ type receiptBody struct {
 	PR      string         `json:"pr,omitempty"`
 	Machine string         `json:"machine,omitempty"`
 	Review  *receiptReview `json:"review,omitempty"`
+	// Criteria: a done receipt's list of its brief's criteria as they stood when the agent stopped (#3822,
+	// briefCriteriaNow): met or not met as the supervision ledger tracks them (#3635: the agent's reports and the
+	// reviews), unchecked while pending there, or dropped by a scope change.
+	// Absent without a brief or criteria. CriteriaMore: how many the list left out.
+	Criteria     []BriefCriterion `json:"criteria,omitempty"`
+	CriteriaMore int              `json:"criteria_more,omitempty"`
 	// Reroute names the machine a flexible task was moved off and where it landed, with the health-check reason;
 	// absent when it ran where it was asked (#2271).
 	Reroute *PlanReroute `json:"reroute,omitempty"`
 	// Error: what the model service answered when the turn was cut off (interrupted), for the card's detail.
 	Error string `json:"error,omitempty"`
+	// Interrupted receipts only (interruptions.go): Cause is the kind of error, Group the receipt heading the batch this
+	// one joined (empty on a head), Resolution how its task was dealt with since (worked out on every read), Batch the
+	// batch on its head.
+	Cause      string        `json:"cause,omitempty"`
+	Group      string        `json:"group,omitempty"`
+	Resolution string        `json:"resolution,omitempty"`
+	Batch      *receiptBatch `json:"batch,omitempty"`
 }
 
 // rerouteOfTask resolves the recorded machine reroute for the plan task that runs todoID: nil when the task has no
@@ -213,9 +227,15 @@ func (s *Service) taskTurnEnded(ctx context.Context, machine, sid string) {
 
 // taskTurnSettled is taskTurnEnded once the turn stayed still: after its sleep, or afterSettle's timer.
 func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
+	if s.meetingTurnNow(machine, sid) {
+		return // a meeting's batch: never the task's progress, report or completion (meeting_turns.go)
+	}
 	t, ok := s.taskOf(ctx, machine, sid)
 	if !ok {
-		return
+		// An agent Persona started that is on no todo becomes a task once a turn of it did work (#3617, agent_tasks.go).
+		if t, ok = s.agentTaskAtTurnEnd(ctx, machine, sid); !ok {
+			return
+		}
 	}
 	if current, ok := s.todoNow(t.ID); ok && (current.Cancelled() || current.AgentAborted(machine, sid)) {
 		s.logf("task %s: cancelled or agent %s/%s aborted: skipping turn end", t.ID, machine, sid)
@@ -282,9 +302,7 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		where := [2]string{cut.MachineID, cut.SessionID}
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(s.lang(cctx), "assistant-tasks.interrupted"), Machine: name,
 			Error: clip(strings.TrimSpace(cut.TurnError), 300)}
-		if _, err := s.appendFeed(cctx, t.Origin, feedReceipt, t.ID, body); err != nil {
-			s.logf("task %s: receipt: %v", t.ID, err)
-		}
+		s.appendInterrupted(cctx, t, body, false)
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
 		return
@@ -321,9 +339,7 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 		l := s.lang(cctx)
 		body := receiptBody{Title: t.Title, State: "interrupted", Summary: i18n.T(l, "assistant-tasks.interrupted"), Machine: name,
 			Error: silentTurnErrorIn(l)}
-		if _, err := s.appendFeed(cctx, t.Origin, feedReceipt, t.ID, body); err != nil {
-			s.logf("task %s: receipt: %v", t.ID, err)
-		}
+		s.appendInterrupted(cctx, t, body, true)
 		s.taskNotice(cctx, t, name, "interrupted", "", body.Error)
 		s.taskReport(t, reportInterrupted, name, where, body.Error, nil)
 		return
@@ -348,6 +364,13 @@ func (s *Service) taskTurnSettled(ctx context.Context, machine, sid string) {
 				state = "awaiting"
 			}
 			body.Review = &receiptReview{State: state, Criteria: len(v.DoneWhen)}
+		}
+	}
+	if current, ok := s.todoNow(t.ID); ok {
+		if list := s.briefCriteriaNow(current); len(list) > briefCriteriaMost {
+			body.Criteria, body.CriteriaMore = list[:briefCriteriaMost], len(list)-briefCriteriaMost
+		} else {
+			body.Criteria = list
 		}
 	}
 	if body.Summary == "" {
@@ -402,6 +425,21 @@ func (s *Service) routeToTask(ctx context.Context, conversation, todoID, text st
 // routeToTaskChecked lets automatic decisions recheck their task after slow session/device lookups.
 // Direct user messages retain routeToTask's ability to reuse a completed task's agent.
 func (s *Service) routeToTaskChecked(ctx context.Context, conversation, todoID, text string, guard func(Todo) bool) (FeedItem, error) {
+	return s.routeToTaskAs(ctx, conversation, todoID, text, "", guard)
+}
+
+// routedRelay marks a routed item the hub wrote for the owner (`relay`): an answer of theirs it put into words for the
+// task's agent (a recommendation taken, an option chosen, a reply to a card), as opposed to what they typed to the
+// task themselves. The apps draw both as the owner's; where a task came from reads only the latter (decision.go).
+const routedRelay = "answer"
+
+// relayToTask is routeToTaskChecked for what the hub words on the owner's behalf (routedRelay).
+func (s *Service) relayToTask(ctx context.Context, conversation, todoID, text string, guard func(Todo) bool) (FeedItem, error) {
+	return s.routeToTaskAs(ctx, conversation, todoID, text, routedRelay, guard)
+}
+
+// routeToTaskAs is routeToTaskChecked; relay marks the routed item it leaves ("": the owner's own words).
+func (s *Service) routeToTaskAs(ctx context.Context, conversation, todoID, text, relay string, guard func(Todo) bool) (FeedItem, error) {
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return FeedItem{}, err
 	}
@@ -440,5 +478,9 @@ func (s *Service) routeToTaskChecked(ctx context.Context, conversation, todoID, 
 	if err := s.call(sctx, c.MachineID, DeviceSessionSend, map[string]any{"session_id": c.SessionID, "text": text}, nil); err != nil {
 		return FeedItem{}, err
 	}
-	return s.appendFeed(sctx, conversation, feedRouted, todoID, map[string]string{"text": text})
+	body := map[string]string{"text": text}
+	if relay != "" {
+		body["relay"] = relay
+	}
+	return s.appendFeed(sctx, conversation, feedRouted, todoID, body)
 }

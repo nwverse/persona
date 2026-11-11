@@ -7,8 +7,8 @@
 {{end}}{{with .Unread}}  - 完成未看：{{if $.Omit.Unread}}{{len .}} 个，{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}{{template "assistant/snapshot_agents" .}}{{end}}
 {{end}}{{with .Awaiting}}  - 在问用户、用户看过还没回的（用户问有什么要处理时带上；别替用户回答）：{{template "assistant/snapshot_agents" .}}
 {{end}}{{with .Waiting}}  - 在等的（hub 到时会叫醒它们，不用管）：{{if $.Omit.Waiting}}{{len .}} 个，{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}{{template "assistant/snapshot_agents" .}}{{end}}
-{{end}}{{with .Done}}  - 做完的（24 小时内）：{{if $.Omit.Done}}{{len .}} 个，{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}{{template "assistant/snapshot_agents" .}}{{end}}
-{{end}}{{with .Muted}}  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：{{if $.Omit.Muted}}{{len .}} 个，{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}{{template "assistant/snapshot_agents" .}}{{end}}
+{{end}}{{with .Done}}  - 做完的（24 小时内）：{{len .}} 个，agents_list state=done 查
+{{end}}{{with .Muted}}  - 已屏蔽（用户关了它们的通知，上面的数不算它们；别主动提，问到再说）：{{len .}} 个，agents_list state=muted 查
 {{end}}{{with .Working}}  - 工作中：{{if $.Omit.Working}}{{len .}} 个，{{template "assistant/snapshot_omitted" "agents_list"}}{{else}}{{range $i, $a := first 8 .}}{{if $i}}；{{end}}{{$a.Label}}{{with $a.Ultracode}}〔ultracode={{.}}{{if eq . "on"}}：每个实质任务都会跑多 Agent workflow，等结果时别催{{end}}〕{{end}}{{with $a.Plan}}（{{template "assistant/snapshot_plan" .}}）{{end}}{{end}}{{if gt (len .) 8}} 等 {{len .}} 个{{end}}{{end}}
 {{end}}{{with .Workflows}}  - 后台 workflow 在跑（这些 Agent 这一轮停着是在等结果，不是做完了，结果回来会叫醒它们；别关它们）：{{range $i, $w := first 6 .}}{{if $i}}；{{end}}{{$w.Agent}}（{{$w.Machine}}，session_id={{$w.Session}}）的{{template "assistant/snapshot_workflow" $w}}{{end}}{{if gt (len .) 6}} 等 {{len .}} 个{{end}}
 {{end}}{{with .Tasks}}- 从对话开的任务（task_plan；问已有结果看这里，不够用 agent_read 读它的对话；要它新查、新做或改方向才用 agent_send）：{{if $.Omit.Tasks}}{{len .}} 个，{{template "assistant/snapshot_omitted" "todo_list"}}
@@ -20,6 +20,7 @@
 {{end}}{{with .Unaccepted}}- 等用户验收的（已部署的请验收，或任务的结论卡，用户还没回「通过」「OK」）：{{if $.Omit.Unaccepted}}{{if gt $.UnacceptedTotal (len .)}}{{$.UnacceptedTotal}}{{else}}{{len .}}{{end}} 个，{{template "assistant/snapshot_omitted" "todo_list"}}{{else}}{{range $i, $a := .}}{{if $i}}；{{end}}「{{$a.Title}}」：{{$a.Verdict}}{{with $a.Changed}}；{{.}}{{end}}{{with $a.Link}}（{{.}}）{{end}}，{{$a.Since.Format "01-02"}} 起{{end}}{{if gt $.UnacceptedTotal (len .)}} 等 {{$.UnacceptedTotal}} 个{{end}}{{end}}
 {{end}}{{if .PhoneOnline}}- iPhone：App 在线，phone_* 工具可用
 {{else}}- iPhone：App 不在前台，phone_* 工具会先尝试在后台唤醒 App，失败就请用户打开 App；要手机确认的写操作可以带 queue_if_offline 先排队（phone_write_queue_list 查看）
+{{end}}{{with .Apps}}- 各设备上的 Persona App 版本（各自最近一次连上 hub 时报的，App 不在前台也是这个版本）：{{range $i, $a := .}}{{if $i}}；{{end}}{{template "assistant/snapshot_app" $a}}{{end}}
 {{end}}{{with .KB}}- 知识库（kb_get 看详情）：{{if $.Omit.KB}}{{template "assistant/snapshot_omitted" "kb_get"}}
 {{else}}
 {{indent "  " .}}{{end}}{{end}}{{with .Chats}}{{if .Total}}- 飞书未读会话 {{.Total}} 个（免打扰的不算；用 lark_chats / lark_messages 看）

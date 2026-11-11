@@ -78,7 +78,7 @@ final class ChatTrace {
     /// One line of the chat, by kind and transcript line: `a17` an answer, `u10` a message, `work(3,live)`.
     static func code(_ line: ChatLine) -> String {
         switch line.content {
-        case .supervision(_, let trace, let live): "supervision(\(trace.count)\(live ? ",live" : ""))"
+        case .supervision(_, let trace, let live, let source): "\(source == nil ? "supervision" : "background")(\(trace.count)\(live ? ",live" : ""))"
         case .supervisionInput(let item): "supervision-input\(item.seq)"
         case .row(let r):
             switch r {

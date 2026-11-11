@@ -46,6 +46,9 @@ type WorkState struct {
 	// reported by its node, when it could be read at retirement.
 	RetiredAt     *time.Time `json:"retired_at,omitempty"`
 	RetiredTurnAt *time.Time `json:"retired_turn_at,omitempty"`
+	// CloseoutAsk is the manager's own note of the status question for this turn (docs/assistant/agent-work.md
+	// "Closeout"): "pending" while it is scheduled, "sent" once it went. Never sent to the apps.
+	CloseoutAsk string `json:"closeout_ask,omitempty"`
 	// Questions are what the user is to decide (on user), as the card asks them.
 	Questions []Question `json:"questions,omitempty"`
 	// InteractionID is the card the hub made for a decision (on user), while it is pending.

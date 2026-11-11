@@ -411,6 +411,26 @@ class FilesControllerTest {
         assertTrue(machine.asked.isEmpty())
         coroutineContext.cancelChildren()
     }
+    @Test fun aLoadedComparisonIsNotReadAgainOnReconnect() = runTest {
+        val machine = FakeMachine()
+        val online = MutableStateFlow(ConnectionState.Online)
+        val files = FilesController(machine, "macbook", cwd, this, describe = { it.message ?: "?" }, connection = online)
+        files.start()
+        runCurrent()
+        files.push(FileSelection.Compare("art/icon.png", "art/icon.png", "INDEX", "WORKTREE"))
+        runCurrent()
+        val loaded = files.state.value.compare
+        assertNotNull(loaded)
+        machine.asked.clear()
+        online.value = ConnectionState.Connecting
+        runCurrent()
+        online.value = ConnectionState.Online
+        runCurrent()
+        // Nothing failed: the comparison on screen stays, and neither version is fetched again.
+        assertEquals(loaded, files.state.value.compare)
+        assertTrue(machine.asked.none { it.startsWith("blob") })
+        coroutineContext.cancelChildren()
+    }
     @Test fun aReadStillOnItsWayWhenTheConnectionReturnsIsAskedAgain() = runTest {
         val machine = FakeMachine()
         val online = MutableStateFlow(ConnectionState.Connecting)

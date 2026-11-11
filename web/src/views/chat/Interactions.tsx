@@ -13,7 +13,7 @@ import { answerLines } from "../../lib/answered";
 import { interactionCanAnswer, sessionTitle } from "../../lib/format";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
-import { mcpServerLabel, toolDisplayName } from "../../lib/turns";
+import { cardToolName, mcpServerLabel } from "../../lib/turns";
 import { isSecretRun, optionDisplay, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
@@ -26,7 +26,7 @@ import { cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnswered } from "./dock
 import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
-import { alwaysScope } from "../../lib/always-scope";
+import { alwaysScope, offersAlways } from "../../lib/always-scope";
 import { StatusMark } from "../../ui/StatusMark";
 import { useVoiceAsking } from "../../lib/voice/calls";
 import { composing } from "../../lib/send-history";
@@ -454,7 +454,7 @@ function PermissionCard({ ix }: { ix: Interaction }) {
   return (
     <Card
       kicker={t("chat-interactions.permission_kicker")}
-      title={t("chat-interactions.permission_title", { tool: toolDisplayName(ix.tool_name) })}
+      title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })}
       cardKeys={keys}
       onDismiss={() => go({ dismiss: true })}
       busy={busy}
@@ -464,8 +464,8 @@ function PermissionCard({ ix }: { ix: Interaction }) {
             {t("chat-interactions.deny")}
           </Button>
           <span className="flex gap-1.5">
-            {/* Claude's "Always allow"; another agent's card (Codex, an agent runtime) only when it says what always allows. */}
-            {(!ix.agent || ix.agent === "claude" || ix.always_label) && (
+            {/* Only where an Always is kept (offersAlways): never on the manager's own cards. */}
+            {offersAlways(ix) && (
               <Button tone="secondary" disabled={busy} onClick={() => go({ allow: true, always: true })}>
                 {t("chat-interactions.always_allow")}
               </Button>
