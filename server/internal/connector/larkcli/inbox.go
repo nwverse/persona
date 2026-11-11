@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	adapter "github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 const (
@@ -845,8 +845,8 @@ func messageText(message adapter.Message) string {
 }
 
 var (
-	cardOpen  = regexp.MustCompile(`<card(?:\s+title="([^"]*)")?\s*>`)
-	cardClose = regexp.MustCompile(`</card>`)
+	cardOpen  = lazyre.New(`<card(?:\s+title="([^"]*)")?\s*>`)
+	cardClose = lazyre.New(`</card>`)
 )
 
 // cardText turns lark-cli's rendering of an interactive card (`<card title="…">body</card>`) into plain text: the
