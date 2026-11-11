@@ -222,6 +222,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if seen[s.SessionID] {
 			continue
 		}
+		n.decorateState(s)
 		if n.runtimeAssistant(s.SessionID) { // the assistant keeps its mode (assistant_runtime.go)
 			if m := n.assistantModeOf(s.SessionID); m != "" {
 				s.PermissionMode = m
@@ -334,6 +335,19 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	if s.PaneID != "" && s.Host == "" {
 		s.Host = host.ParsePane(s.PaneID).Kind // the host it runs in (#2576)
 	}
+	n.decorateState(s)
+	if s.Launcher == "" {
+		s.Launcher = n.inferLauncher(s.SessionID)
+	}
+	if s.Title == "" {
+		s.Title = filepath.Base(s.Cwd)
+	}
+	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
+	n.ultracodeRow(s, pass)
+}
+
+// decorateState restores metadata recorded when Persona started the session.
+func (n *Node) decorateState(s *proto.Session) {
 	if st, ok := n.state.get(s.SessionID); ok {
 		s.StartedByPersona = true
 		s.Launcher = st.Launcher
@@ -344,14 +358,6 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 			s.Cwd = st.Cwd
 		}
 	}
-	if s.Launcher == "" {
-		s.Launcher = n.inferLauncher(s.SessionID)
-	}
-	if s.Title == "" {
-		s.Title = filepath.Base(s.Cwd)
-	}
-	s.BypassAvailable = n.hooks.canBypass(s.SessionID) // modes.go claudeCanBypass
-	n.ultracodeRow(s, pass)
 }
 
 func snippet(s string) string {
