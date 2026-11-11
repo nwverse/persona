@@ -36,4 +36,8 @@ struct ViewFeedbackTests {
         let items = [text("l1#0", 1, "user", "Plan a weekend trip."), text("l2#0", 2, "assistant", feedback)]
         #expect(ChatStore.withoutViewFeedback(items) == items)
     }
+
+    @Test func theWatchDoesNotShowIt() {
+        #expect(WatchText.shown(feedback + "\nAdd a bakery stop.") == "Add a bakery stop.")
+    }
 }

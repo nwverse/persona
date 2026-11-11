@@ -519,7 +519,7 @@ final class ChatStore {
             // Refs again: a cache written before they named a chat's group of hubs (#1555) sent its pictures to the
             // current group's hub.
             items = Self.withImageRefs(cached.items, key)
-            ids = Set(cached.items.map(\.id))
+            ids = Set(items.map(\.id))
             hasMore = cached.hasMore
             history = cached.history
             covered = cached.covered ?? (cached.items.last?.seq ?? 0)
