@@ -1787,13 +1787,31 @@ func (n *Node) herdrRunning(ctx context.Context) (running, known bool) {
 }
 
 func claudeVersion(ctx context.Context) string {
+	v, _ := claudeProbe(ctx)
+	return v
+}
+
+// claudeProbe asks claude's version in the login shell, and says whether the shell found no claude at all (missing).
+// Only a shell that could not find the command is missing: a run that took longer than its 10 s on a busy machine,
+// an rc file that failed, or output with no version leaves the version unknown this time, not Claude Code absent.
+func claudeProbe(ctx context.Context) (version string, missing bool) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	out, err := loginShell(ctx, "command claude --version").Output()
-	if err != nil {
-		return ""
+	return claudeProbeResult(out, err, ctx.Err() != nil)
+}
+
+// claudeProbeResult reads claudeProbe's run: its stdout, its error, and whether its time ran out.
+func claudeProbeResult(out []byte, err error, timedOut bool) (version string, missing bool) {
+	if err == nil {
+		return parseClaudeVersion(string(out)), false
 	}
-	return parseClaudeVersion(string(out))
+	var ee *exec.ExitError
+	if timedOut || !errors.As(err, &ee) {
+		return "", false // killed, or the shell did not start: nothing said about claude
+	}
+	lines := strings.Split(string(out)+"\n"+string(ee.Stderr), "\n")
+	return "", missingFrom("claude", lines, ee.ExitCode() == 127) == proto.CodeClaudeMissing
 }
 
 // parseClaudeVersion takes the version out of `claude --version` run in an interactive shell, whose ~/.zshrc may
