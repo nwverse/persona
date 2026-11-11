@@ -1,7 +1,5 @@
-import BeautifulUI
 import Foundation
 import Observation
-import SwiftUI
 
 /// The lists behind a running Claude Code session's model menus (#3754): what New Agent offers for the session's
 /// launcher on its computer (`GET /api/v1/machines/{mid}/launchers/{name}/models`: Default, the agent's models with
@@ -46,22 +44,6 @@ import SwiftUI
             lists[k] = answer.models.isEmpty || answer.locked != nil ? nil : answer.models
         } catch {
             asked[k] = nil
-        }
-    }
-}
-
-/// A row of a running session's model menu: its name and, from the launcher's list, what it is under it (the ID, the
-/// model an alias stands for), so two versions of a family read apart; the fixed aliases keep their one line.
-struct RunningModelRow: View {
-    let model: PromptModel
-    /// The row came from the launcher's list.
-    var detailed: Bool
-
-    var body: some View {
-        if detailed, !model.tag.isEmpty {
-            Label { Text(model.name); Text(model.tag) } icon: { EmptyView() }
-        } else {
-            Text(model.name)
         }
     }
 }

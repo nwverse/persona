@@ -273,7 +273,7 @@ Chat page:
     prefixes existing input with `/loop ` (existing text becomes task, cursor after command to enter interval), never sends directly (other + shortcuts still send on tap). A `/loop` draft shows shared `LoopDraftNote`
     explaining "Repeat every 10 minutes: Check CI" / "Repeat at Claude's chosen pace: …", gray usage when task absent;
     PersonaKit `LoopCommand` matches `web/src/lib/loop-command.ts`. Screenshot `-showLoopDraft "/loop 10m Check CI"`.
-  - Model: the session's launcher list, the rows New Agent offers for it (Default, the agent's models with their versions, the IDs typed before; `RunningModelLists`, #3754), each with what it is on a second line; the fixed `/model` aliases (Default / Opus / Sonnet / Haiku) only until the list is read or when it can't be. Selection sends `/model <id>`; absent for Codex, internal Codex fork and headless assistant.
+  - Model: the session's launcher list, the rows New Agent offers for it (Default, the agent's models with their versions, the IDs typed before; `RunningModelLists`, #3754), an alias named by the version it stands for (Opus → Opus 5.5) so it reads apart from the versions beside it; the fixed `/model` aliases (Default / Opus / Sonnet / Haiku) only until the list is read or when it can't be. Selection sends `/model <id>`; absent for Codex, internal Codex fork and headless assistant.
     Assistant home uses launcher list (former model label moved here).
   - Dictation: `Dictation` (`SFSpeechRecognizer` Chinese + `AVAudioEngine`), live recognized text appended to draft; tap again or send stops.
   - Permission/effort above input (`SessionModeBar` / `NewSessionModePicker`) remain, not merged into toolbar; rationale PLAN PromptBar v2.

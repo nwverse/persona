@@ -21,8 +21,12 @@ import Testing
 
     @Test func theMenuIsTheList() {
         #expect(PromptItems.runningModels(nil, list: list).map(\.id) == list.map(\.id))
-        #expect(PromptItems.runningModels(nil, list: list).map(\.name).contains("Fable 5.2"))
-        // An alias row says what it stands for under its name.
+        let names = Dictionary(uniqueKeysWithValues: PromptItems.runningModels(nil, list: list).map { ($0.id, $0.name) })
+        #expect(names["claude-fable-5-2"] == "Fable 5.2")
+        // An alias is named by the version it stands for; Default and typed IDs keep their names.
+        #expect(names["opus"] == "Opus 5.5")
+        #expect(names["default"] == "Default (recommended)")
+        #expect(names["vendor/typed"] == "vendor/typed")
         #expect(PromptItems.runningModels(nil, list: list).first { $0.id == "opus" }?.tag == "opus → claude-opus-5-5")
         #expect(PromptItems.composerModels(running: nil, list: list).last?.id == PromptItems.otherModel.id)
         // No list (not read yet, or none): the fixed aliases.

@@ -217,7 +217,7 @@ struct SessionModeBar: View {
                         // A typed model (#1644) is a row of its own, by its ID: no alias is ticked for it.
                         Picker("Model [Assistant View c98e11]", selection: Binding(get: { PromptItems.runningModelID(session?.model, list: list) }, set: { id in change(model: id) })) {
                             ForEach(PromptItems.runningModels(session?.model, list: list), id: \.id) { m in
-                                RunningModelRow(model: m, detailed: list != nil).tag(m.id)
+                                Text(m.name).tag(m.id)
                             }
                         }
                         .pickerStyle(.inline)
@@ -314,7 +314,7 @@ struct SessionModesMenu: View {
                     model.sendNow(key, text: text, images: []) // photos and quotes stay for the message
                 })) {
                     ForEach(PromptItems.runningModels(session?.model, list: list), id: \.id) { m in
-                        RunningModelRow(model: m, detailed: list != nil).tag(m.id)
+                        Text(m.name).tag(m.id)
                     }
                 }
                 .pickerStyle(.inline)

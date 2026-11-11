@@ -242,9 +242,19 @@ enum PromptItems {
     /// model it runs when the menu doesn't name it, by its ID (the one ticked; a menu row has no room for a second line
     /// saying it).
     static func runningModels(_ model: String?, list: [AgentModel]? = nil) -> [PromptModel] {
-        let rows = list.flatMap { $0.isEmpty ? nil : $0.map { PromptModel(id: $0.id, name: $0.displayName, tag: $0.detail ?? "") } }
+        let rows = list.flatMap { $0.isEmpty ? nil : $0.map { PromptModel(id: $0.id, name: menuName($0), tag: $0.detail ?? "") } }
         return (rows ?? claudeModels)
             + (unlistedModel(model, list: list).map { [PromptModel(id: $0, name: $0, tag: String(localized: "Current"))] } ?? [])
+    }
+
+    /// A list row's name in a running session's menu: an alias says the version it stands for ("Opus" → "Opus 5.5",
+    /// from its `resolved`), so it reads apart from the versions beside it; Default, typed IDs and models that name
+    /// their version keep their name. A menu row has room for one line only.
+    static func menuName(_ m: AgentModel) -> String {
+        guard !m.isDefault, !m.custom, let resolved = m.resolved, resolved != m.id,
+              let version = SessionModes.modelName(resolved), version != resolved,
+              !m.displayName.localizedCaseInsensitiveContains(version) else { return m.displayName }
+        return version
     }
 
     /// BeautifulUI's model menu for a running session: `runningModels` (the button names the ticked one), then "Other Model…".
