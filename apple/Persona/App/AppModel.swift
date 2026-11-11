@@ -2308,29 +2308,44 @@ final class AppModel {
             let sent = response.images.flatMap { images in images.indices.contains(index) ? images[index] : nil } ?? local
             // The one taken out will not reach the transcript: its sent bubble goes now, not when the turn ends.
             if let taken, chat(key).pulledBack(taken) { saveOutbox() }
-            var left = 0
-            if !delete, let taken { left = await restoreQueued(key, QueuedDraft(taken), sent: sent) }
+            var outcome = (left: 0, unpreviewable: 0)
+            if !delete, let taken {
+                outcome = await restoreQueued(key, QueuedDraft(taken, photoCount: sent.count), sent: sent,
+                                              preservePayloads: response.images != nil)
+            }
             Haptics.success()
-            toast = left > 0
-                ? Toast(String(localized: "Moved back to the input box. \(left) attachments couldn't be put back and stay in the message as text."), style: .info)
-                : Toast(delete ? String(localized: "Removed from the queue") : String(localized: "Moved back to the input box. Edit it and send again."), style: .success)
+            if outcome.unpreviewable > 0 {
+                toast = Toast(String(localized: "Moved back to the input box. \(outcome.unpreviewable) photos could not be previewed; their original data is kept."), style: .info)
+            } else {
+                toast = outcome.left > 0
+                    ? Toast(String(localized: "Moved back to the input box. \(outcome.left) attachments couldn't be put back and stay in the message as text."), style: .info)
+                    : Toast(delete ? String(localized: "Removed from the queue") : String(localized: "Moved back to the input box. Edit it and send again."), style: .success)
+            }
         } catch {
             show(error)
         }
     }
 
     /// A queued message taken back to edit (#3022): its words under what the box holds, its photos (the ones this phone
-    /// sent, else read from the conversation's machine by their paths), videos and quotes back in their bars. A photo that
-    /// can't be had, or doesn't fit beside the ones already in the box, leaves its path in the words (a video its tag):
-    /// nothing is lost. Returns how many were left there.
-    private func restoreQueued(_ key: SessionKey, _ draft: QueuedDraft, sent: [ImagePayload]) async -> Int {
+    /// sent, else read from the conversation's machine by their paths), videos and quotes back in their bars. A pathful
+    /// photo that can't be had, or doesn't fit beside the ones already in the box, leaves its path in the words (a video
+    /// its tag). A pathless Persona photo stays in the composer even past the picker's cap, and an unreadable preview
+    /// keeps its original payload: nothing is silently lost. Returns the text fallbacks and unreadable preview counts.
+    private func restoreQueued(_ key: SessionKey, _ draft: QueuedDraft, sent: [ImagePayload],
+                               preservePayloads: Bool) async -> (left: Int, unpreviewable: Int) {
         let held = composerAttachments(key)
         // Each photo with its path on the machine (the outbox's in the order they went, as the paths are).
         var photos: [(path: String?, photo: (UIImage, ImagePayload))] = []
         var left: [String] = []
         var copies: [(UIImage, ImagePayload)] = []
+        var unpreviewable = 0
         for payload in sent {
-            if let photo = await Self.composerPhoto(payload) { copies.append(photo) }
+            if let photo = await Self.composerPhoto(payload) {
+                copies.append(photo)
+            } else if preservePayloads {
+                copies.append((UIImage(), payload))
+                unpreviewable += 1
+            }
         }
         if copies.count >= draft.imagePaths.count {
             photos = copies.enumerated().map { (draft.imagePaths.indices.contains($0.offset) ? draft.imagePaths[$0.offset] : nil, $0.element) }
@@ -2340,8 +2355,11 @@ final class AppModel {
             }
         }
         let room = max(0, MessagePhotos.limit - held.images.count)
-        left += photos.dropFirst(room).compactMap(\.path)
+        let overflow = photos.dropFirst(room)
+        left += overflow.compactMap(\.path)
         held.images += photos.prefix(room).map(\.photo)
+        // A hub photo has no machine path to leave as text. Keep it visible; `sendNow` still enforces the four-photo cap.
+        held.images += overflow.filter { $0.path == nil }.map(\.photo)
         left += held.videos.restore(draft.files).map(\.xml)
         if !draft.contexts.isEmpty { composerContexts[key] = (composerContexts[key] ?? []) + draft.contexts }
         let words = ([draft.text] + left).filter { !$0.isEmpty }.joined(separator: "\n")
@@ -2349,7 +2367,7 @@ final class AppModel {
             let current = drafts[key] ?? ""
             drafts[key] = current.isEmpty ? words : current + "\n" + words
         }
-        return left.count
+        return (left.count, unpreviewable)
     }
 
     /// A photo as the composer holds it, from the bytes a message carried: decoded off the main actor and no larger than
@@ -2411,14 +2429,22 @@ final class AppModel {
         return true
     }
 
-    /// Puts the message on screen immediately and sends it in the background; a failure marks it for retry.
-    func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = []) {
-        guard allowSend(key) else { return }
+    /// Puts the message on screen immediately and sends it in the background; a failure marks it for retry. Returns whether
+    /// the send was accepted, so a composer clears only then (a refusal must leave everything typed or restored in place).
+    @discardableResult
+    func sendNow(_ key: SessionKey, text: String, images: [ImagePayload] = []) -> Bool {
+        guard allowSend(key) else { return false }
+        // Take-back can retain pathless hub photos past the picker's cap; the person removes some before sending.
+        guard images.count <= MessagePhotos.limit else {
+            toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+            return false
+        }
         let msg = PendingMessage(text: text, images: images)
         chat(key).pending.append(msg)
         saveOutbox()
         Haptics.tap()
         deliver(key, msg)
+        return true
     }
 
     /// Sends /clear to a herdr pane's claude and waits for the pane to show up under its new session id (Claude Code

@@ -17738,6 +17738,8 @@ class H(BaseHTTPRequestHandler):
             if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
                 ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                                      "queued": list(PERSONA_QUEUE_MESSAGES)})
+                photo = {"mime": "image/png", "data": mock_png()}
+                QUEUED_PHOTOS["请看图片"] = [photo for _ in range(int(q.get("photos", ["1"])[0] or 1))]
                 QUEUE_EDITS.clear()
                 push_machine(ASSISTANT[0]["machine_id"])
             return self.send_json({"ok": True})

@@ -75339,6 +75339,41 @@
       },
       "extractionState": "manual"
     },
+    "Moved back to the input box. %lld photos could not be previewed; their original data is kept.": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved back to the input box. %1$lld photo could not be previewed; its original data is kept."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved back to the input box. %1$lld photos could not be previewed; their original data is kept."
+                }
+              }
+            }
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "入力欄に戻しました。写真%1$lld枚はプレビューできませんが、元のデータは保持されています。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已撤回到输入框，%1$lld 张照片无法预览，原始数据仍保留"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Moved “%@” to %@": {
       "localizations": {
         "en": {

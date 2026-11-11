@@ -4841,7 +4841,10 @@ struct Composer: View, Equatable {
                                    let t = text
                                    if let gate { gate.action(); Task { @MainActor in text = t }; return } // the draft stays
                                    if videos.busy { return holdForVideos(restoring: t) }
-                                   Task { await sendText(t) }
+                                   Task {
+                                       let accepted = await sendText(t)
+                                       if !accepted { text = t }
+                                   }
                                })
             } else {
                 ComposerRow(placeholder: status.isActive ? String(localized: "Add a note (queued)") : (suggestion ?? placeholder ?? String(localized: "Message Claude")),
@@ -5111,14 +5114,15 @@ struct Composer: View, Equatable {
     private func addPicked(_ ids: [String]) async { await held.addPicked(ids, machine: key.machineRef, model: model) }
     #endif
 
-    private func sendText(_ raw: String) async {
-        guard model.allowSend(key) else { return }
-        if videos.busy { return holdForVideos() }
+    @discardableResult
+    private func sendText(_ raw: String) async -> Bool {
+        guard model.allowSend(key) else { return false }
+        if videos.busy { holdForVideos(); return false }
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let ctx = model.composerContexts[key] ?? []
         let comments = model.composerComments[key] ?? []
         let files = videos.ready
-        guard !t.isEmpty || !images.isEmpty || !files.isEmpty || !ctx.isEmpty || !comments.isEmpty else { return }
+        guard !t.isEmpty || !images.isEmpty || !files.isEmpty || !ctx.isEmpty || !comments.isEmpty else { return false }
         // Picked page excerpts ride along as <persona-context> tags before what was typed, comments as `> ` blocks
         // after them (the web's order), videos as <persona-file> after the text. Comments alone need no words.
         let alone = t.isEmpty && images.isEmpty && files.isEmpty && !comments.isEmpty
@@ -5133,15 +5137,16 @@ struct Composer: View, Equatable {
             if raw == text { text = "" }
             model.composerContexts[key] = nil
             model.composerComments[key] = nil
-            return
+            return true
         }
         // On screen at once; the request runs in the background (a failure turns the bubble into "Resend").
-        model.sendNow(key, text: message, images: images.map(\.1))
+        guard model.sendNow(key, text: message, images: images.map(\.1)) else { return false }
         if raw == text { text = "" }
         images = []
         videos.sent()
         model.composerContexts[key] = nil
         model.composerComments[key] = nil
+        return true
     }
 
     /// A send while a video is still on its way: nothing goes; what was typed goes back in the box (the prompt bar
@@ -5456,8 +5461,8 @@ struct QueueStrip: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             ForEach(Array(queued.enumerated()), id: \.offset) { i, q in
-                let draft = QueuedDraft(q)
                 let photos = i < own && photoMarks.indices.contains(i) ? photoMarks[i] : 0
+                let draft = QueuedDraft(q, photoCount: photos)
                 Menu {
                     if i < own {
                         Button { act(i, delete: false) } label: { Label("Take Back to Edit", systemImage: Theme.Icon.edit) }

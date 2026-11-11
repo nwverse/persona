@@ -16,8 +16,12 @@ final class PersonaQueueUITests: XCTestCase {
             throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_PERSONA_QUEUE=1 (PERSONA_MOCK_HUB)")
         }
         self.hub = hub
+        resetQueue()
+    }
+
+    private func resetQueue(photos: Int = 1) {
         let done = expectation(description: "reset persona queue")
-        URLSession.shared.dataTask(with: URL(string: hub + "/mock/reset")!) { _, _, _ in done.fulfill() }.resume()
+        URLSession.shared.dataTask(with: URL(string: hub + "/mock/reset?photos=\(photos)")!) { _, _, _ in done.fulfill() }.resume()
         wait(for: [done], timeout: 5)
     }
 
@@ -91,12 +95,43 @@ final class PersonaQueueUITests: XCTestCase {
 
         let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue((field.value as? String)?.contains("请看图片") == true, "the words return to the composer")
+        XCTAssertFalse((field.value as? String)?.contains("请看图片") == true,
+                       "the photo-only stand-in is not restored as the user's words")
         XCTAssertTrue(app.buttons["移除图片 1"].waitForExistence(timeout: 10),
                       "the queued photo returns to the composer too:\n\(app.debugDescription)")
         let edits = try queueEdits()
         XCTAssertEqual(edits.last?["keep"], [0], "only the other own message is re-queued")
         try shot(app, "restored")
+    }
+
+    @MainActor func testOverflowTakeBackCannotBeSentAway() throws {
+        resetQueue(photos: 4)
+        let app = launch(["-showComposerPhoto", "YES"])
+        let words = "撤回后保留 \(UUID().uuidString.prefix(8))"
+        let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
+        field.tap()
+        field.typeText(words)
+        let strip = app.descendants(matching: .any)["queue-strip"].firstMatch
+        XCTAssertTrue(strip.waitForExistence(timeout: 20), app.debugDescription)
+        if strip.elementType == .button { strip.tap() } else { strip.buttons.firstMatch.tap() }
+        let photoMessage = app.buttons.matching(identifier: "queue-item").element(boundBy: 1)
+        XCTAssertTrue(photoMessage.waitForExistence(timeout: 5), app.debugDescription)
+        photoMessage.tap()
+        let takeBack = app.buttons["撤回编辑"]
+        XCTAssertTrue(takeBack.waitForExistence(timeout: 5), app.debugDescription)
+        takeBack.tap()
+
+        let fifth = app.buttons["移除图片 5"]
+        XCTAssertTrue(fifth.waitForExistence(timeout: 10), "one picked plus four restored photos stay in the composer:\n\(app.debugDescription)")
+        let send = app.buttons["发送"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), app.debugDescription)
+        send.tap()
+        XCTAssertTrue(app.staticTexts["一次最多 4 张"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(fifth.exists, "a refused over-limit send must not clear the restored photos:\n\(app.debugDescription)")
+        XCTAssertTrue((field.value as? String)?.contains(words) == true,
+                      "a refused over-limit send must not clear the words either:\n\(app.debugDescription)")
+        try shot(app, "overflow-send")
     }
 
     @MainActor func testOwnMessagesMoveDeleteAndSendNow() throws {
