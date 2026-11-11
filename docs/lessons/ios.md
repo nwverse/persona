@@ -2,6 +2,14 @@
 
 Pitfalls, odd behavior and the decisions made at the time (formerly "Lessons" in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or create one if none fits.
 
+## What a VNC client can count on from macOS Screen Sharing (#3075)
+
+- ClientCutText reaches the Mac's pasteboard only as the legacy `com.apple.traditional-mac-plain-text` type, without `public.utf8-plain-text`: AppleScript's `the clipboard` reads it, `pbpaste` and Terminal do not, so a ⌘V after it pasted nothing. Write the clipboard through the node, which answers once the text is there.
+- `pbcopy` / `pbpaste` take the text encoding from the locale. A launchd-started node has none and uses MacRoman, so 中文 became ‰∏≠Êñá; set `LANG`, `LC_ALL` and `LC_CTYPE` for them.
+- Key events in a session's first 2 to 3 seconds are dropped; pointer events are not, and no message marks the end. An early pointer move or Shift press does not wake the keyboard. Hold keys after every sign-in (`RFBInputQueue`), reconnects included.
+- `UIPasteboard.general.string` on the main thread blocks it while iOS asks Allow Paste (a device, and from iOS 27 the simulator too): the live picture stops and a UI test cannot query the app. Read it in `Task.detached` (`UIPasteboard` is Sendable) and answer the question in SpringBoard.
+- To measure, sign in with ARD to 127.0.0.1:5900 from a script, read a Terminal window with `stty -echo; dd of=FILE bs=1 count=N` and compare bytes; read the Mac's own pointer through CoreGraphics (`CGEventGetLocation`). A real-Mac paste test steals focus: tell the lanes sharing the screen first, and close only windows you opened (match their titles through System Events; AppleScript to Terminal blocks on the Automation prompt).
+
 ## An environment font design replaces every run's font (#2984)
 
 `.fontDesign(_:)` in the environment, even `.default`, replaces the font of every run in a `Text`'s attributed string
@@ -1750,6 +1758,16 @@ A worktree's display name and its Agents' conversation names are different comma
 - **DisclosureGroup**: `.tint(.secondary)` on it leaves its chevron in the primary color, so a gray "Details" label sat
   next to a black / white chevron that read as a navigation link. Use a borderless button with the expand / collapse icon
   in `.secondary`, as `ReadinessCard`'s Details does.
+
+## A `Menu` draws no section header over an inline picker (2026-11-11, #3719)
+
+- The Agents header's mode menu wanted "Permission Mode: …" over its modes, as the web and Android have. Inside a `Menu`,
+  neither `Section(title) { Picker … .pickerStyle(.inline) }` nor `Picker { Section { … } header: { Text } }` drew it (iOS 27
+  simulator; the UI test found no element with the words, and the shot showed the bare list). The section titles above
+  were in a picker's own menu (a `Picker` in a `Form`), not an inline picker inside a `Menu`.
+- The modes became `Toggle`s, the current one on, in a `Section { … } header: { Text }`: a menu draws that header, as the
+  composer's ultracode section does, and a check mark beside the switch that is on, as a picker does. The Agents menu's
+  Display note (#3182) is the second shape above; look at it in a shot before counting on it.
 
 ## A menu inside a menu keeps the items it was first built with (2026-11-09, #1644)
 

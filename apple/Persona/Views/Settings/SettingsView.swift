@@ -1527,11 +1527,15 @@ struct SettingsRow: View {
     var look: ValueLook = .plain
     /// A brand's own mark (an asset of `Theme.Brand`) in place of the tinted tile, in the BeautifulUI style.
     var brand: String? = nil
+    /// Public catalog artwork; absent artwork preserves the existing row mark.
+    var iconURL: String? = nil
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
             BUIListRow(title, value: value.flatMap { $0.isEmpty ? nil : $0 }) {
-                if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
+                if let iconURL, ExtensionImageCache.url(iconURL) != nil {
+                    ExtensionLogo(url: iconURL, side: Theme.Size.iconL)
+                } else if let brand { SettingsBrandMark(asset: brand) } else { IconTile(symbol, tint: tint) }
             }
         } else if let value {
             LabeledContent {

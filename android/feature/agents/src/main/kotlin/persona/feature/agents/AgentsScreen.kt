@@ -228,6 +228,7 @@ internal fun AgentsScreen(
             onClose = { operationDialog = AgentOperationDialog.Close(row.session) },
             // A Codex app-server thread the phone may join live (iOS "Join live").
             onAttach = if (row.session.canAttach) ({ model.attach(row.session) }) else null,
+            onInterrupt = { model.interrupt(row.session) },
             onLinkTodo = { pickingTodoForSession = row.session },
             onUnlinkTodo = row.session.todo?.let { todo -> { model.unlinkTodo(todo.id, row.session) } },
             onDelete = { operationDialog = AgentOperationDialog.Delete(row.session) }, nested = nested) + listOfNotNull(archiveAction)
@@ -253,7 +254,10 @@ internal fun AgentsScreen(
     val tabs = page.preferences.grouping == AgentGrouping.MachineSpace
     var expandedTasks by remember { mutableStateOf(emptySet<String>()) }
     val tree = remember(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks) {
-        agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks)
+        agentTreeEntries(page.list, page.settings.machineFilter, tabs, page.preferences.foldedTabs, page.preferences.mutes, expandedTasks,
+            showAll = page.settings.expandedIdle.takeIf {
+                page.settings.query.isEmpty() && page.settings.quick == AgentQuickFilter.All && !page.pagination.paged
+            })
     }
     val spacesById = page.spacesById
 
@@ -329,7 +333,8 @@ internal fun AgentsScreen(
                 // "Lark groups" / "Terminal" (#2526) only while they have agents (or are chosen), as iOS and the web.
                 val shown = AgentQuickFilter.shown(page.settings.quick, quickCounts)
                 HomeAgentFilters(shown.map { filter ->
-                    Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else quickCounts[filter] ?: 0, filter.state?.designStatus)
+                    Bay(filter.label, if (filter == AgentQuickFilter.All) page.allCount else quickCounts[filter] ?: 0, filter.state?.designStatus,
+                        icon = PersonaIcons.backgroundWaiting.takeIf { filter == AgentQuickFilter.BackgroundWaiting })
                 }, shown.indexOf(page.settings.quick), { model.filter(shown[it]) }, Modifier.padding(vertical = Tokens.Space.s))
             }
             // The computer the list is narrowed to (iOS's "Only <computer>", #1659): with the shared home chrome the computer
@@ -465,7 +470,7 @@ internal fun AgentsScreen(
                                 machine.repoCount?.let { pluralStringResource(R.plurals.agents_count_repos, it, it) }
                                     ?: pluralStringResource(R.plurals.agents_count_spaces, machine.spaceCount, machine.spaceCount),
                                 pluralStringResource(R.plurals.agents_count_sessions, machine.sessionCount, machine.sessionCount)),
-                            counts = machine.headingCounts,
+                            counts = machine.headingCounts, waiting = machine.waitingInBackground,
                             onMonitor = { navigator.navigate(MachineDetailRoute(machine.machine.id)) }, tag = groups.tagFor(machine.machine.id))
                     }
                     is TreeGroupEntry -> item(entry.key, contentType = if (entry.space) "space" else "section") {
@@ -527,6 +532,9 @@ internal fun AgentsScreen(
                     is TreeIdleEntry -> item(entry.key, contentType = "idle") {
                         AgentIdleRow(entry.hidden, onClick = { model.showIdle(entry.group) }, depth = entry.depth)
                     }
+                    is TreeShowAllEntry -> item(entry.key, contentType = "idle") {
+                        AgentShowAllRow(entry.count, entry.expanded, onClick = { model.showAll(entry.group, !entry.expanded) }, depth = entry.depth)
+                    }
                 }
             }
             if (page.pagination.paged && !firstPageIncomplete) item("sessions-pagination", contentType = "pagination") {
@@ -554,11 +562,13 @@ internal fun AgentsScreen(
             onClick = { showArchives = true }))
         AgentRange.entries.forEach { range -> add(JAction(stringResource(R.string.agents_menu_range, range.label), checked = page.preferences.range == range, onClick = { model.range(range) })) }
         if (!homeChrome) groupings.forEach { grouping -> add(JAction(grouping.label, checked = page.preferences.grouping == grouping, onClick = { model.grouping(grouping) })) }
-        AgentSort.entries.forEachIndexed { index, sort -> add(JAction(stringResource(R.string.agents_menu_sort, sort.label), icon = sort.icon,
-            checked = page.preferences.sort == sort, separatorBefore = index == 0, onClick = { model.sort(sort) })) }
+        // Not under By Status: its sections are the states, and a section's rows are by time already (iOS's list menu).
+        if (page.preferences.grouping != AgentGrouping.State) AgentSort.entries.forEachIndexed { index, sort ->
+            add(JAction(stringResource(R.string.agents_menu_sort, sort.label), icon = sort.icon,
+                checked = page.preferences.sort == sort, separatorBefore = index == 0, onClick = { model.sort(sort) })) }
         add(JAction(stringResource(R.string.agents_menu_compact), checked = page.preferences.compact, onClick = { if (!page.preferences.compact) model.compact() }))
         add(JAction(stringResource(R.string.agents_menu_detailed), checked = !page.preferences.compact, onClick = { if (page.preferences.compact) model.compact() }))
-        add(JAction(stringResource(R.string.agents_menu_collapse_all), checked = page.list.groups.isNotEmpty() && page.list.groups.all { it.folded } && page.list.machines.all { it.folded }, onClick = { model.foldAll(true) }))
+        add(JAction(stringResource(R.string.agents_menu_collapse_all), checked = page.list.allCollapsed, onClick = { model.foldAll(true) }))
         add(JAction(stringResource(R.string.agents_menu_expand_all), checked = page.list.groups.isNotEmpty() && page.list.groups.none { it.folded } && page.list.machines.none { it.folded } &&
             // under "By machine" a tab group folded by hand is not expanded either (#2792)
             (page.preferences.grouping != AgentGrouping.MachineSpace || page.preferences.foldedTabs.isEmpty()), onClick = { model.foldAll(false) }))
@@ -794,6 +804,8 @@ internal fun SlotRow(
             if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
             if (located) listOfNotNull(machine, session.spaceName?.takeIf { it.isNotBlank() } ?: session.folderName.takeIf { it.isNotBlank() })
                 .joinToString(" / ").takeIf { it.isNotBlank() }?.let { add(RowFact(it)) }
+            // The model it runs on, as iOS's row names it (#4338 A9): the session's model, else its launcher's.
+            (session.model ?: session.launcher)?.trim()?.takeIf(String::isNotEmpty)?.let { add(RowFact(it)) }
             session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
             slotLabel?.let { add(RowFact(it)) }
             if (requestCount > 0) add(RowFact(pluralStringResource(R.plurals.agents_row_requests, requestCount, requestCount), caution = true))
@@ -879,6 +891,8 @@ internal fun AgentSessionMenuItems(
     onOpen: () -> Unit, onPin: () -> Unit, onMute: () -> Unit, onRead: () -> Unit,
     onRename: () -> Unit, onStopLoop: () -> Unit, onHandoff: () -> Unit, onClose: () -> Unit,
     onAttach: (() -> Unit)? = null,
+    /** Stops its turn; offered while it works or needs you and can be interrupted (iOS `AgentRowMenu`). */
+    onInterrupt: (() -> Unit)? = null,
     onLinkTodo: (() -> Unit)? = null,
     onUnlinkTodo: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
@@ -888,6 +902,8 @@ internal fun AgentSessionMenuItems(
     val session = row.session
     return buildList {
         if (pinned || !nested) add(JAction(stringResource(if (pinned) R.string.agents_action_unpin else R.string.agents_action_pin), PhIcons.PushPin, enabled = !busy, onClick = onPin))
+        if (onInterrupt != null && (row.state == AgentState.Working || row.state == AgentState.NeedsYou) && session.canInterrupt)
+            add(JAction(stringResource(R.string.agents_action_interrupt), PersonaIcons.interrupt, enabled = !busy, onClick = onInterrupt))
         add(JAction(stringResource(if (muted) R.string.agents_action_unmute else R.string.agents_action_mute), PhIcons.Prohibit, enabled = !busy, onClick = onMute))
         if (session.todo != null && onUnlinkTodo != null) {
             // The same picker moves it to another todo: the hub releases the old link (#2348).
@@ -953,6 +969,7 @@ private val AgentQuickFilter.label: String @Composable get() = stringResource(wh
     AgentQuickFilter.NeedsYou -> R.string.agents_filter_needs_you
     AgentQuickFilter.Unread -> R.string.agents_filter_unread
     AgentQuickFilter.Working -> R.string.agents_filter_working
+    AgentQuickFilter.BackgroundWaiting -> R.string.agents_filter_background_waiting
     AgentQuickFilter.Feishu -> R.string.agents_filter_feishu
     AgentQuickFilter.Terminal -> R.string.agents_filter_terminal
 })
@@ -984,10 +1001,16 @@ internal fun AgentSession.rowStatus(muted: Boolean): Status = if (asksYou && !mu
 
 /** A row's state words: "Awaiting your reply" for a seen agent waiting on the user's answer; none for a plain seen one. */
 @Composable
+/**
+ * The row's state in words, as iOS's default row (#4338 A9): only what its dot does not say alone, Needs you (unless
+ * muted), Awaiting reply and Waiting in the background. Working, Unread and the rest are the dot's; TalkBack still
+ * hears the state ([AgentRow]).
+ */
 internal fun AgentSession.rowStatusText(muted: Boolean): String? = when {
+    state == AgentState.NeedsYou && !muted -> state.label
     asksYou && !muted -> CoreText.of(CoreText.Key.StateAwaitingReply).text()
-    state == AgentState.Idle || state == AgentState.Unknown -> null
-    else -> state.label
+    waitsInBackground && !muted -> CoreText.of(CoreText.Key.StateBackgroundWaiting).text()
+    else -> null
 }
 @Composable
 internal fun StateDot(state: AgentState, breathe: Boolean = false) {

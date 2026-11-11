@@ -33,9 +33,9 @@ import type { WorkspaceTarget } from "../lib/workspace-catalog";
 import { selectWorkspace, useWorkspaceSelection } from "../lib/workspace-selection";
 import { DirectionCountsText, DirectionStateText } from "./DirectionMarks";
 
-type TreeRowProps = { machineLabel: MachineLabel; showHost?: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu: RowMenuFn; onNavigate?: () => void };
+export type TreeRowProps = { machineLabel: MachineLabel; showHost?: boolean; /** No space · computer at a row's end (the sidebar's 常驻 rows, nested deep, #4352). */ noContext?: boolean; /** Before each agent row's glide key and its children's fold key: a second copy of a row (the sidebar's 常驻 tree) keeps its own, apart from the Agents list's. */ keyPrefix?: string; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu?: RowMenuFn; onNavigate?: () => void };
 /** A computer's name as an agent row shows it ("" with a single computer). */
-type MachineLabel = (machineId: string) => string;
+export type MachineLabel = (machineId: string) => string;
 
 const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
@@ -56,7 +56,7 @@ const within = (sessions: readonly Session[], activeKey: string) => (activeKey &
 const withinAgent = (a: TreeAgent, activeKey: string): string => (activeKey && (rowKey(a.session) === activeKey || a.children.some((c) => withinAgent(c, activeKey))) ? activeKey : "");
 
 /** Each computer's row label, one lookup while the labels are the same. */
-function useMachineLabel(machines: Machine[]): MachineLabel {
+export function useMachineLabel(machines: Machine[]): MachineLabel {
   const last = useRef<Map<string, string> | null>(null);
   const names = useMemo(() => {
     const next = machines.length > 1 ? new Map(machines.map((m) => [m.id, machineWithHub(m.id, machines)])) : null;
@@ -100,13 +100,13 @@ const TreeProjectSection = memo(function TreeProjectSection({ k, name, state, fo
 
 /** One todo (or, under "Unassigned", one project) and its agents under its own folding line; a direction tree's task
  *  (#4352) says its task state. */
-const TreeTodoRows = memo(function TreeTodoRows({ td, ...p }: { td: TreeTodo } & TreeRowProps) {
+export const TreeTodoRows = memo(function TreeTodoRows({ td, ...p }: { td: TreeTodo } & TreeRowProps) {
   const [folded, toggle] = useFolded(td.key, td.folded, { follow: true, holds: holdsRow(td.sessions, p.activeKey) });
   return (
     <div className="mt-px">
       <div className="relative z-10 flex w-full min-w-0 items-center gap-1.5 rounded-control py-1 pl-2 pr-2 text-[12px] text-ink-2 hover:bg-hover">
         {td.agents.length > 0 || !td.taskState ? (
-          <button type="button" aria-expanded={!folded} aria-label={td.name} onClick={toggle} className="touch-hit flex shrink-0 items-center">
+          <button type="button" aria-expanded={!folded} aria-label={t("sidebar.task_agents", { name: td.name })} onClick={toggle} className="touch-hit flex shrink-0 items-center">
             <Icon name="chevron" size={9} stroke={2.4} className="opacity-60 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
           </button>
         ) : (
@@ -139,12 +139,12 @@ const TreeTodoRows = memo(function TreeTodoRows({ td, ...p }: { td: TreeTodo } &
 });
 
 /** An agent and, folded under it, the agents it spawned for the same todo. */
-const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, showHost, reg, hover, activeKey, go, onRowMenu }: { a: TreeAgent; depth: number } & TreeRowProps) {
+const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, showHost, noContext, keyPrefix = "", reg, hover, activeKey, go, onRowMenu }: { a: TreeAgent; depth: number } & TreeRowProps) {
   const subtree = (n: TreeAgent): Session[] => n.children.flatMap((c) => [c.session, ...subtree(c)]);
-  const [folded, toggle] = useFolded(a.key + ":children", a.folded, { follow: true, holds: holdsRow(subtree(a), activeKey) });
+  const [folded, toggle] = useFolded(keyPrefix + a.key + ":children", a.folded, { follow: true, holds: holdsRow(subtree(a), activeKey) });
   const s = a.session;
-  const key = `s:${s.machine_id}/${s.session_id}`;
-  const context = [s.space_name || baseName(s.cwd), machineLabel(s.machine_id)].filter(Boolean).join(" · ");
+  const key = `${keyPrefix}s:${s.machine_id}/${s.session_id}`;
+  const context = noContext ? undefined : [s.space_name || baseName(s.cwd), machineLabel(s.machine_id)].filter(Boolean).join(" · ");
   return (
     <div style={depth ? { paddingLeft: 12 } : undefined}>
       <div className="flex items-center">
@@ -160,7 +160,7 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, show
       {a.children.length > 0 && (
         <Collapse open={!folded} sidebarFold>
           <div className="flex flex-col gap-px border-l border-line ml-2" inert={folded || undefined}>
-            {a.children.map((c) => <SpawnedAgentRows key={c.key} a={c} depth={depth + 1} machineLabel={machineLabel} showHost={showHost} reg={reg} hover={hover} activeKey={withinAgent(c, activeKey)} go={go} onRowMenu={onRowMenu} />)}
+            {a.children.map((c) => <SpawnedAgentRows key={c.key} a={c} depth={depth + 1} machineLabel={machineLabel} showHost={showHost} noContext={noContext} keyPrefix={keyPrefix} reg={reg} hover={hover} activeKey={withinAgent(c, activeKey)} go={go} onRowMenu={onRowMenu} />)}
           </div>
         </Collapse>
       )}
