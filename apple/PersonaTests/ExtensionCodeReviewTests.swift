@@ -165,7 +165,8 @@ struct ExtensionCodeReviewTests {
         }
         let m = ExtensionViewModel(plugin: "forge", ui: "review", deps: .init(api: { hub.client }))
         await m.load()
-        let load = try #require(try Self.diff(#require(m.view), "docs/upload.md").load)
+        let shown = try #require(m.view)
+        let load = try #require(try Self.diff(shown, "docs/upload.md").load)
         _ = await m.perform(load, with: ["path": "docs/upload.md"])
         #expect(draws.count == 1, "the page is not drawn again")
         #expect(try Self.diff(#require(m.view), "docs/upload.md").hunks?.first?.lines == ["-old", "+new"], "the loaded diff in its place")
@@ -187,7 +188,8 @@ struct ExtensionCodeReviewTests {
         }
         let m = ExtensionViewModel(plugin: "forge", ui: "review", deps: .init(api: { hub.client }))
         await m.load()
-        let mark = try #require(try Self.diff(#require(m.view), "src/upload/client.go").markViewed)
+        let shown = try #require(m.view)
+        let mark = try #require(try Self.diff(shown, "src/upload/client.go").markViewed)
         let o = await m.quiet(mark, with: ["path": "src/upload/client.go", "viewed": "true"])
         #expect(o.error == nil && draws.count == 1 && m.running == nil, "an empty answer draws nothing, nothing waited")
         let sent = try #require(hub.sent("POST", Self.path).last)
@@ -274,7 +276,8 @@ extension ExtensionCodeReviewTests {
         }
         let m = ExtensionViewModel(plugin: "forge", ui: "review", deps: .init(api: { hub.client }))
         await m.load()
-        let context = try #require(try Self.diff(#require(m.view), "src/upload/client.go").context)
+        let shown = try #require(m.view)
+        let context = try #require(try Self.diff(shown, "src/upload/client.go").context)
         let o = await m.quiet(context, with: ["path": "src/upload/client.go", "side": "new", "from": "1", "to": "19"])
         #expect(o.lines?.lines == ["a", "b"] && o.lines?.total == 90 && m.running == nil)
     }
