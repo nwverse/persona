@@ -62,4 +62,3 @@ export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGrou
     groups: SEARCH_INDEX.filter((g) => (g.group + " " + (g.hint ?? "")).toLocaleLowerCase().includes(q)),
   };
 }
-
