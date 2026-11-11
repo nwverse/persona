@@ -199,9 +199,9 @@ type Session struct {
 	// "Waiting in the background" apart from Working (lighter, not in the Working count); State stays working, so an
 	// older app shows Working. The node says whether its background commands wait; the manager keeps it only so.
 	BackgroundWaiting bool `json:"background_waiting,omitempty"`
-	// The flags from BackgroundWorking to Quiet sit together, not beside the fields they go with: with Go's 8-byte
-	// allocation header a Session must stay at most 1,528 bytes to keep its 1,536-byte size class, and every row the
-	// manager copies out of a node's list pays the next class's 256 bytes otherwise (internal/assistant's
+	// The fields from BackgroundWorking to QueuedRelayed sit together, not beside the ones they go with: with Go's
+	// 8-byte allocation header a Session must stay at most 1,528 bytes to keep its 1,536-byte size class, and every
+	// row the manager copies out of a node's list pays the next class's 256 bytes otherwise (internal/assistant's
 	// TestSessionReadersCopyNoList, #2528). Mind the padding when adding a field.
 	// WokeByTask: the latest turn was started by a background task reporting back, not by the user; finishing
 	// it sends no push (the user did not ask for anything).
@@ -212,8 +212,13 @@ type Session struct {
 	// Quiet: the agent works (or worked) for a quiet task, one the main conversation opened while the user wanted
 	// those told only there (#1731): set by the hub, also once the task is done. Clients leave it out of task
 	// notifications and global badges; the Agents page shows it as always.
-	Quiet  bool      `json:"quiet,omitempty"`
-	SeenAt time.Time `json:"seen_at,omitempty"`
+	Quiet bool `json:"quiet,omitempty"`
+	// QueuedRelayed: the last this many of Queued are messages from other conversations that an assistant
+	// conversation's manager holds until its turn ends (docs/assistant/assistant.md "Queue while running"); the apps
+	// show them but take back, delete, move and send now only the others (#4342). A uint16 here sits in the padding
+	// before SeenAt, so a Session stays the size the allocation budgets measured.
+	QueuedRelayed uint16    `json:"queued_relayed,omitempty"`
+	SeenAt        time.Time `json:"seen_at,omitempty"`
 	// StateSince is when the agent entered its current state, as the hub saw it (the hub restarting resets it):
 	// lists sort "Working" by it, since updated_at moves on every step.
 	StateSince time.Time `json:"state_since,omitempty"`
