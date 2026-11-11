@@ -304,6 +304,15 @@ var meetingRoomKeys = []string{"env", "model", "apiKeyHelper", "awsAuthRefresh",
 // gateway's token), and the room answered every question "Not logged in".
 const meetingRoomProfile = "legacy"
 
+// startProfile is the profile (config_dir) a start asks assistantProfileSelection for: asked, or meetingRoomProfile for
+// a new conversation of guest kind guestKind that is a room and names none.
+func (n *Node) startProfile(asked, guestKind string, resume bool) string {
+	if !resume && asked == "" && n.sessionScope == nil && guestKind == guestMeeting {
+		return meetingRoomProfile
+	}
+	return asked
+}
+
 // meetingRoomSettingsFile writes room id's settings: meetingRoomKeys of its profile's settings.json (configDir's,
 // "" for none), which --setting-sources project leaves out (a gateway and its token in its env, an apiKeyHelper), with
 // those of settings (a file or JSON, "" for none) over them as Claude Code ranks them (env merged by name), Persona's

@@ -430,6 +430,31 @@ func TestMeetingRoomIsAnAssistantConversation(t *testing.T) {
 	}
 }
 
+// A new room that names no profile signs in as the assistant's conversations did ("legacy"), never in a new private
+// profile, a config directory with no login; a profile it names, a resumed room, another guest and a scoped node keep
+// the usual choice.
+func TestMeetingRoomStartProfile(t *testing.T) {
+	n, _ := testNode(t)
+	for _, c := range []struct {
+		asked, kind string
+		resume      bool
+		want        string
+	}{
+		{"", guestMeeting, false, meetingRoomProfile},
+		{"~/.claude-work", guestMeeting, false, "~/.claude-work"},
+		{"", guestMeeting, true, ""},
+		{"", "", false, ""},
+	} {
+		if got := n.startProfile(c.asked, c.kind, c.resume); got != c.want {
+			t.Errorf("startProfile(%q, %q, %v) = %q, want %q", c.asked, c.kind, c.resume, got, c.want)
+		}
+	}
+	n.sessionScope = &nodeSessionScope{}
+	if got := n.startProfile("", guestMeeting, false); got != "" {
+		t.Errorf("a scoped node's room asks for %q: the scope is its only profile", got)
+	}
+}
+
 // A room's own --settings keeps of the start's settings and of its profile's settings.json only the environment,
 // login and model (the start's over the profile's, env by name), and Persona's own hooks when no plugin carries them:
 // an alias launcher's settings file or the profile's (user settings files) brings none of its hooks, plugins, output
