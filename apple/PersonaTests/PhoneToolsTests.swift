@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import Testing
+import UIKit
 @testable import Persona
 
 /// The registry is main-actor isolated (the app target defaults to MainActor),
@@ -386,6 +387,13 @@ struct PhoneToolsTests {
         emptied.keepsStrings = false // the count moved, yet no string arrived
         let noString = failure { try ClipboardTool.set(.object(["text": .string(secret)]), board: emptied, inFront: true) }
         #expect(noString.contains("did not reach the iPhone's clipboard"))
+    }
+
+    /// The real pasteboard does what the check expects: a write by the app in front (the test host) moves `changeCount`
+    /// at once and leaves a string, so a write that landed is never reported as lost.
+    @Test func clipboardCheckPassesOnTheRealPasteboard() throws {
+        let set = try ClipboardTool.set(.object(["text": .string("Persona clipboard check")]), board: UIPasteboard.general, inFront: true)
+        #expect(text(of: set) == JSONValue.object(["ok": .bool(true), "characters": .number(23)]).pretty)
     }
 
     /// The model's text of the error a tool call throws, or "" when it did not throw.
