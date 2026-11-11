@@ -71,6 +71,8 @@ type runtimeHello struct {
 		Close     bool `json:"close"`
 		// Assistant: its launcher may run the Persona assistant (assistant_runtime.go; docs/integrations/runtimes.md "Assistant").
 		Assistant bool `json:"assistant"`
+		// Execution reports the actual per-session execution environment via session.execution.
+		Execution bool `json:"execution"`
 		// Modes: the phone's permission mode and effort for its sessions go to it (session.modes).
 		Modes bool `json:"modes"`
 		// Model permits session.modes model changes. Models provides live launchers.models discovery.
