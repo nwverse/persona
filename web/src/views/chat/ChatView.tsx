@@ -46,6 +46,7 @@ import { segmentChanges, shiftAbove } from "./offscreen";
 import { glide } from "./glide";
 import { AGENT_COMMANDS, Composer, type Outgoing } from "./Composer";
 import { agentCommands } from "../../lib/composer-commands";
+import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
 import { PendingCards } from "./Interactions";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
 import { lostWith } from "../../lib/dock-focus";
@@ -228,6 +229,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   headerActions?: React.ReactNode;
 }) {
   const { session, detail, retry: retryDetail } = useRuntimeSession(mid, sid);
+  // the main conversation, with a hub that clears its context in place: /clear in its command list (#5095)
+  const clears = useStore((s) => Boolean(assistant) && s.assistant?.main === sid && hubHas(s.features, CLEAR_MAIN_FEATURE));
   // an archived agent (lib/agent-archives.ts) is not in the lists: its chat says so and offers Restore
   const archivedHere = useArchived(mid, sid);
   // its manager offline (several managers): nothing can be sent, wherever it was opened from; the page's own word first
@@ -891,6 +894,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   }
 
   const onSend = async (out: Outgoing): Promise<boolean> => {
+    // /clear in the main conversation clears its context in place, it is not words for Persona (#5095); an edit of the
+    // last message stays an edit (its rewind already ran)
+    if (clears && !out.edit && isClearCommand(out.text, out.images.length)) return clearMainContext(sid);
     // Routed to a task ("Tell "xx""): straight to its agent, not to Persona (docs/assistant/unified-entry.md "Routing").
     if (assistant && out.images.length && getFeedState().routes[sid]) {
       toast(t("chat-chatview.route_no_images"), "error");
@@ -1397,7 +1403,8 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const lastRole = lastItem?.role;
   const lastKind = lastItem?.kind;
   const faceLast = useMemo(() => (lastRole && lastKind ? { role: lastRole, kind: lastKind } : undefined), [lastRole, lastKind]);
-  const commands = useMemo(() => (assistant ? [] : agentCommands(AGENT_COMMANDS, session)), [assistant, session]);
+  // the main conversation's /clear (#5095, lib/main-clear.ts): Persona's other conversations take no commands
+  const commands = useMemo(() => (assistant ? (clears ? mainCommands() : []) : agentCommands(AGENT_COMMANDS, session)), [assistant, clears, session]);
   const footer = useMemo(() => (session ? <ComposerFooter session={session} assistant={assistant} /> : null), [session, assistant]);
   // an Agent's model pill (#5032); a Persona conversation keeps its launcher chip in the footer for now (#5033)
   const trailing = useMemo(() => (session && !assistant ? <AgentModelPill session={session} /> : null), [session, assistant]);

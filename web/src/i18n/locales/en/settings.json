@@ -56,6 +56,7 @@
   "hide_in_persona": "Hide in Persona",
   "confirm_delete": "Delete",
   "confirm_hide": "Hide",
+  "hide_uses": "Still used by {uses}. They keep running on it: hiding only takes it out of the pickers.",
   "edit": "Edit",
   "test_again": "Test again",
   "test": "Test",
