@@ -82,6 +82,8 @@ internal data class NewAgentState(
     val pickedSetup: RecentSetup? = null,
     /** Goes up each time a card has filled the form: the form then puts the cursor in the first message. */
     val focusPrompt: Int = 0,
+    /** Claude Code's ultracode for this start (#582, iOS NewChatView): off each time the form opens, never saved. */
+    val ultracode: Boolean = false,
     /** What `worktree/status` says of the folder picked (#4532); null while asking or when the computer can't say. */
     val repo: WorktreeStatus? = null,
     /** Start it in a worktree of its own, on [worktreeBranch] (empty: the node's pick). */
@@ -334,6 +336,7 @@ internal class NewAgentViewModel(
         loadModels()
     }
     fun prompt(value: String) { if (!state.value.locked) mutable.update { it.copy(prompt = value) } }
+    fun ultracode(on: Boolean) { if (!state.value.locked && state.value.ultracode != on) mutable.update { it.copy(ultracode = on, error = null) } }
     fun inWorktree(on: Boolean) { if (!state.value.locked) mutable.update { it.copy(inWorktree = on, error = null) } }
     fun worktreeBranch(value: String) { if (!state.value.locked) mutable.update { it.copy(worktreeBranch = value) } }
     fun browse(path: String = state.value.selection.cwd) {
@@ -435,6 +438,7 @@ internal class NewAgentViewModel(
             current.selection.effort.takeIf { it.isNotEmpty() && agentType == "claude" && (efforts == null || it in efforts) },
             current.space?.workspaceId, agentType.takeIf { it != "claude" }, async = true.takeIf { async },
             nameHint = first.takeIf { async }, model = current.sentModel,
+            ultracode = true.takeIf { current.ultracode && agentType == "claude" },
         )
         return AgentStartOperation(UUID.randomUUID().toString(), request,
             firstMessage = first.takeIf { async }, firstMessageId = UUID.randomUUID().toString().takeIf { async && first != null },
@@ -479,7 +483,10 @@ internal class NewAgentViewModel(
             }
             is AgentStartResult.Rejected -> {
                 store.pending(service.scope, null)
-                mutable.update { it.copy(pending = null, error = AgentText.raw(result.message.shown)) }
+                // Refused for ultracode (an old node, a CLI that can't take it): the switch goes off, so Retry starts without it.
+                val ultra = operation.request.ultracode == true
+                mutable.update { it.copy(pending = null, ultracode = it.ultracode && !ultra,
+                    error = if (ultra) AgentText(R.string.agents_new_ultracode_failed, result.message.shown) else AgentText.raw(result.message.shown)) }
             }
             AgentStartResult.Pending -> mutable.update { it.copy(error = AgentText(R.string.agents_new_error_starting)) }
             AgentStartResult.Unknown -> mutable.update { it.copy(error = AgentText(R.string.agents_new_error_unknown)) }
