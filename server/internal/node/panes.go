@@ -139,9 +139,13 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 			if p.PaneID == "" {
 				continue
 			}
-			ph.Panes = append(ph.Panes, proto.PaneItem{Pane: p.PaneID, Terminal: panePrefix + p.PaneID, TabID: p.TabID,
+			item := proto.PaneItem{Pane: p.PaneID, Terminal: panePrefix + p.PaneID, TabID: p.TabID,
 				WorkspaceID: p.WorkspaceID, Agent: p.Agent, Status: p.AgentStatus, Title: p.Title, Cwd: p.Cwd,
-				SessionID: sessionOf[p.PaneID]})
+				SessionID: sessionOf[p.PaneID]}
+			if id := p.Tokens[personaTabToken]; validID(id) && p.Agent == "" && item.SessionID == "" {
+				item.AgentSession = id // the terminal a stopped agent left (stopped.go)
+			}
+			ph.Panes = append(ph.Panes, item)
 		}
 		out.Hosts = append(out.Hosts, ph)
 	}

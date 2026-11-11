@@ -518,6 +518,16 @@ func (s *Service) continueTask(ctx context.Context, cur Todo) (json.RawMessage, 
 		delete(s.tasks.retrying, cur.ID)
 		s.tasks.mu.Unlock()
 	}
+	if stoppedAgent(cut) { // it stopped since (read-only, #4754): a new agent goes on with the task (tasks_successor.go)
+		defer release()
+		if live, _ := liveTaskAgents(s.taskAgents(ctx, cur)); len(live) > 0 {
+			return s.todoView(ctx, cur.ID) // another agent of the task still runs: it is that one's
+		}
+		if _, err := s.startTaskSuccessor(ctx, cur, cut, continueText); err != nil {
+			return nil, err
+		}
+		return s.todoView(ctx, cur.ID)
+	}
 	if err := s.call(ctx, cut.MachineID, DeviceSessionSend, map[string]any{"session_id": cut.SessionID, "text": continueText}, nil); err != nil {
 		release()
 		return nil, err
