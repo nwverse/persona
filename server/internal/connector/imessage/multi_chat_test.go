@@ -135,6 +135,57 @@ func TestMultiChatMessagesPagesAndUnread(t *testing.T) {
 	}
 }
 
+func TestMultiChatMessagesEqualTimestampCursor(t *testing.T) {
+	r := multiChatFixture(t)
+	// Distinct messages in both chats share one timestamp, including messages joined to both chats.
+	modifyMultiChatFixture(t, r, `
+UPDATE message SET date = (SELECT date FROM message WHERE ROWID = 9)
+  WHERE ROWID IN (1, 2, 3, 5, 6, 7, 8, 9);
+UPDATE chat_message_join SET message_date = (SELECT date FROM message WHERE ROWID = message_id)
+  WHERE message_id IN (1, 2, 3, 5, 6, 7, 8, 9);`)
+	ctx := context.Background()
+	conversation := convID("person:+15550100")
+	at := appleNanos(time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC))
+	tests := []struct {
+		limit int
+		pages [][]string
+	}{
+		{1, [][]string{{"9"}, {"8"}, {"7"}, {"6"}, {"5"}, {"3"}, {"2"}, {"1"}}},
+		{3, [][]string{{"7", "8", "9"}, {"3", "5", "6"}, {"1", "2"}}},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("limit-%d", tt.limit), func(t *testing.T) {
+			before := ""
+			for i, want := range tt.pages {
+				page, err := r.Messages(ctx, conversation, tt.limit, before, KeepContacts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := messageIDs(page.Messages); !reflect.DeepEqual(got, want) {
+					t.Fatalf("page %d = %v, want %v", i, got, want)
+				}
+				more := i+1 < len(tt.pages)
+				cursor := ""
+				if more {
+					cursor = fmt.Sprintf("%d.%s", at, want[0])
+				}
+				if page.More != more || page.Before != cursor {
+					t.Fatalf("page %d: more %v, cursor %q; want %v, %q", i, page.More, page.Before, more, cursor)
+				}
+				before = page.Before
+			}
+		})
+	}
+	// A saved date.ROWID cursor remains valid after restarting the reader, with ROWID breaking ties.
+	restarted := &Reader{Home: r.Home, SQLite: r.SQLite, Via: r.Via}
+	legacy := fmt.Sprintf("%d.6", at)
+	page, err := restarted.Messages(ctx, conversation, 3, legacy, KeepContacts)
+	if err != nil || !reflect.DeepEqual(messageIDs(page.Messages), []string{"2", "3", "5"}) ||
+		!page.More || page.Before != fmt.Sprintf("%d.2", at) {
+		t.Fatalf("legacy cursor %s = %+v, %v", legacy, page, err)
+	}
+}
+
 func TestMultiChatChangesPagesAndLegacyCursor(t *testing.T) {
 	r := multiChatFixture(t)
 	ctx := context.Background()
