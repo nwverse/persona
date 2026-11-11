@@ -509,6 +509,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/sessions/{mid}/{sid}/unarchive
 -                    POST /api/v1/subscriptions
 -                    POST /api/v1/subscriptions/-/dry-run
+-                    POST /api/v1/subscriptions/-/push
 -                    POST /api/v1/subscriptions/-/ui
 -                    POST /api/v1/subscriptions/{id}/generate
 -                    POST /api/v1/subscriptions/{id}/run

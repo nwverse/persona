@@ -1919,8 +1919,8 @@ struct ChatView: View {
     }
 
     private var paneBadges: [SessionPane: String] {
-        guard let n = git?.files.count, n > 0 else { return [:] }
-        return [.git: n > 99 ? "99+" : String(n)]
+        guard let n = git?.files.count, let text = CountBadge.text(n) else { return [:] }
+        return [.git: text]
     }
 
     private func loadGit() async {
@@ -4098,6 +4098,15 @@ struct ChatView: View {
         return [s.sourceSubtitle, machine, place.isEmpty ? nil : place, s.hasSource ? nil : s.agentLabel, s.stateLabel(muted: model.isMuted(s))].compactMap { $0 }.joined(separator: " · ")
     }
 
+    /// The extension that opened this Persona conversation (#3758), when `item` is the message it opened it with: the
+    /// conversation's first user message, once the page has loaded back to its start (with more to load, the first one
+    /// here is not the first). nil for every other message and conversation.
+    private func externalOpening(_ item: Item) -> AutoConversationSource? {
+        guard style == .assistant, let source = AutoConversationSource.external(session?.origin), !store.hasMore,
+              store.items.first(where: { $0.role == "user" && $0.kind == .text })?.id == item.id else { return nil }
+        return source
+    }
+
     /// A user's line: a bubble, or what stands for it (a message from a source, one Persona injected, a loop's tick, a peer's).
     @ViewBuilder private func userRow(_ i: Item, showsSource: Bool, hidesPrompt: Bool) -> some View {
         if let source = MessageSource.of(i) {
@@ -4110,7 +4119,7 @@ struct ChatView: View {
         } else if let from = i.from {
             PeerMessage(item: i, from: from)
         } else {
-            UserBubble(item: i).equatable()
+            UserBubble(item: i, external: externalOpening(i)).equatable()
         }
     }
 
