@@ -123,8 +123,16 @@ func TestLauncherHealthRoundAndDetour(t *testing.T) {
 	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/Users/me/code/app" || !strings.Contains(res, "runs on box instead") {
 		t.Fatalf("start %v: %s", f.starts, res)
 	}
-	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); slices.Contains(names, "work") {
-		t.Fatalf("picker offers the launcher that failed: %v", names)
+	// `work` is the configured default, so it stays with its blocked record: the next Start uses it.
+	var kept struct {
+		Launchers []launcherWithHealth `json:"launchers"`
+	}
+	if err := json.Unmarshal(getJSON(t, s, "/api/v1/machines/l4/launchers"), &kept); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(kept.Launchers, func(l launcherWithHealth) bool { return l.Name == "work" })
+	if i < 0 || kept.Launchers[i].Health == nil || kept.Launchers[i].Health.State != healthBlocked {
+		t.Fatalf("the configured default lost its reason: %+v", kept.Launchers)
 	}
 	if body := getJSON(t, s, "/api/v1/launchers/health?state=blocked"); !strings.Contains(string(body), `"machine":"l4"`) || strings.Contains(string(body), `"machine":"box"`) {
 		t.Fatalf("health: %s", body)
@@ -138,6 +146,36 @@ func TestLauncherHealthRoundAndDetour(t *testing.T) {
 	}
 	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
 		t.Fatalf("picker still hides the fixed launcher: %v", names)
+	}
+}
+
+// pointDefaultAt makes name the launcher Model settings › Agents runs with no pick, and makes sure the machine lists
+// it: every other launcher is then one the pickers may hide.
+func pointDefaultAt(t *testing.T, s *Service, f *fakeHub, name string) {
+	t.Helper()
+	f.mu.Lock()
+	if !slices.ContainsFunc(f.launcherList, func(l proto.Launcher) bool { return l.Name == name }) {
+		f.launcherList = append(f.launcherList, proto.Launcher{Name: name})
+	}
+	f.mu.Unlock()
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher." + name})
+}
+
+// A launcher that is not the configured default is hidden while its latest check fails, and comes back when one passes.
+func TestPickerHidesAFailedLauncherThatIsNotTheDefault(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	pointDefaultAt(t, s, f, "other")
+	f.mu.Lock()
+	f.checks["l4/work"] = proto.LauncherCheck{Error: `API Error: 401 invalid api key`}
+	f.mu.Unlock()
+	s.healthRound(context.Background(), true)
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); slices.Contains(names, "work") {
+		t.Fatalf("picker offers a launcher that failed its check: %v", names)
+	}
+	delete(f.checks, "l4/work")
+	postJSON(t, s, "/api/v1/launchers/health/check?machine=l4&launcher=work")
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
+		t.Fatalf("picker still hides the launcher that works again: %v", names)
 	}
 }
 
@@ -179,6 +217,7 @@ func TestLauncherPickerKeepsWhatWasNeverChecked(t *testing.T) {
 func TestLauncherPickerHidesNothingWhenTheRecordsCannotBeRead(t *testing.T) {
 	st := &memStore{}
 	s, f := launcherHealthHubOn(t, func(t *testing.T, f *fakeHub) *Service { return newServiceOn(t, f, st) })
+	pointDefaultAt(t, s, f, "other")
 	f.checks["l4/work"] = proto.LauncherCheck{Error: `API Error: 400 Bare Claude model name cannot be routed`}
 	s.healthRound(context.Background(), true)
 	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); slices.Contains(names, "work") {
@@ -186,7 +225,8 @@ func TestLauncherPickerHidesNothingWhenTheRecordsCannotBeRead(t *testing.T) {
 	}
 
 	st.failKey(launchersHealthKey, errors.New("database is restarting"))
-	restarted, _ := launcherHealthHubOn(t, func(t *testing.T, f *fakeHub) *Service { return newServiceOn(t, f, st) })
+	restarted, rf := launcherHealthHubOn(t, func(t *testing.T, f *fakeHub) *Service { return newServiceOn(t, f, st) })
+	pointDefaultAt(t, restarted, rf, "other") // the fixture's own creation pointed it back at work
 	if names := launcherNamesAt(t, restarted, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
 		t.Fatalf("an unreadable store hid the launcher: %v", names)
 	}
@@ -210,8 +250,36 @@ func TestUnreadableProviderListIsNotALauncherDeletion(t *testing.T) {
 	if _, state := s.readinessLauncher(ctx, "server", "gw"); state != launcherUnknownHere {
 		t.Fatalf("an unreadable provider list was read as a deletion: %d", state)
 	}
-	if _, known := s.launchersHere(ctx, "server"); known {
-		t.Fatal("a machine list whose managed half could not be read is treated as known")
+}
+
+// The launcher the configuration runs with no pick stays listed even when its latest check failed, with its record:
+// the next start will use it, and the form must be able to say why it may fail instead of going silent (#4437).
+func TestPickerKeepsTheConfiguredDefaultWithItsReason(t *testing.T) {
+	s, _ := launcherHealthHub(t)
+	s.healthRound(context.Background(), true)
+	var body struct {
+		Launchers []launcherWithHealth `json:"launchers"`
+		Default   map[string]string    `json:"default"`
+	}
+	raw := getJSON(t, s, "/api/v1/machines/l4/launchers")
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Default["provider"] != "work" {
+		t.Fatalf("the fixture's default is not work: %s", raw)
+	}
+	var kept *launcherWithHealth
+	for i, l := range body.Launchers {
+		if l.Name == "work" {
+			kept = &body.Launchers[i]
+		}
+	}
+	if kept == nil || kept.Health == nil || kept.Health.State != healthBlocked || kept.Health.Kind != errKindModelRoute {
+		t.Fatalf("the configured default lost its reason: %s", raw)
+	}
+	// The same machine's main-chat list has no such default, so the failed launcher is hidden there.
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers?purpose=assistant"); slices.Contains(names, "work") {
+		t.Fatalf("the main chat's list offers the launcher that failed: %v", names)
 	}
 }
 
@@ -607,7 +675,8 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 // offered there either, and comes back with a passing one.
 func TestMainChatPickerHidesWhatFailed(t *testing.T) {
 	s, f := launcherHealthHub(t)
-	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.work"})
+	pointDefaultAt(t, s, f, "other")
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.other"})
 	s.healthRound(context.Background(), true)
 	const main = "/api/v1/machines/l4/launchers?purpose=assistant"
 	if names := launcherNamesAt(t, s, main); slices.Contains(names, "work") {

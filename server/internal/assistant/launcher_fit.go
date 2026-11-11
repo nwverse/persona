@@ -87,9 +87,6 @@ func (s *Service) launchersHere(ctx context.Context, machine string) (list []pro
 	if err != nil || !slices.ContainsFunc(list, func(l proto.Launcher) bool { return compat.Source(l.Source) != "persona" }) {
 		return nil, false
 	}
-	if _, known := s.storedLaunchersKnown(ctx); !known { // the managed half of that list could not be read
-		return nil, false
-	}
 	for _, c := range s.hello(ctx).Models.Launchers[machine] {
 		if c.Name != "" && !slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == c.Name }) {
 			list = append(list, c.Launcher)

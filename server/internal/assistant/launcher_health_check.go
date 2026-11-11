@@ -337,18 +337,19 @@ type launcherHealthView struct {
 
 // withHealth puts machine's health records on its launchers (none: never checked) and leaves out the ones that do not
 // work now. The launcher pickers list only what a start can use: a launcher whose latest check failed (failing,
-// repairing or blocked within healthStale, a usage limit until its reset) is hidden until one passes again, and a
-// passing check or a passing "Test availability" brings it back. A launcher never checked stays: no result is not a
-// failure, and launcher health is off unless the manager turns it on. A not_in_terminal launcher stays too: its checks
-// pass, only a real start clears it, and hiding it would leave no way to make that start.
-func (s *Service) withHealth(ctx context.Context, machine string, list []ConfiguredLauncher) []launcherWithHealth {
+// repairing or blocked within healthStale, a usage limit until its reset) is hidden until a check passes again. A
+// launcher never checked stays: no result is not a failure, and launcher health is off unless the manager turns it on.
+//
+// Two stay listed with their record: a not_in_terminal launcher (its checks pass, only a real start clears it, and
+// hiding it would leave no way to make that start) and keep, the launcher the configuration runs with no pick. That one
+// will be used by the next start, so the form must be able to say why it may fail (clients mark the Default row and its
+// line); hiding it would fail the start with no warning at all.
+func (s *Service) withHealth(ctx context.Context, machine string, list []ConfiguredLauncher, keep string) []launcherWithHealth {
 	out := make([]launcherWithHealth, 0, len(list))
 	for _, l := range list {
 		v := launcherWithHealth{ConfiguredLauncher: l}
 		if r, ok := s.launcherHealth(ctx, machine, l.Name); ok {
-			// Hidden until a later check passes. not_in_terminal stays: its checks pass (the login shell runs it), only a
-			// real start clears it, and hiding it would leave the user no way to make that start.
-			if r.unusable() && r.Kind != errKindNotInTerminal {
+			if r.unusable() && r.Kind != errKindNotInTerminal && l.Name != keep {
 				continue
 			}
 			if r.State == healthOK || r.unusable() { // not a failure too old to count
