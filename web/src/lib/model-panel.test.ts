@@ -148,6 +148,9 @@ describe("the search", () => {
     expect(shape({ query: "vendor/new-model", state: state({ recommended: [] }) })).toEqual([]);
     const [s] = panelSections(input({ query: "vendor/new-model" }));
     expect(s.rows[0].setup).toEqual({ provider: "claude", model: "vendor/new-model" });
+    // a word that names a listed model is a search: no "Use" row beside its match
+    expect(shape({ query: "son" })).not.toContain("provider:claude [typed:son]");
+    expect(shape({ query: "son" }).join(" ")).not.toContain("typed:son");
   });
 });
 

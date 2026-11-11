@@ -282,7 +282,7 @@ function resolveCopy(providers: PanelProvider[], copy: PanelConfig): { provider:
  * other models of the providers in `state.recommended`; those leave their own group), then one group per provider (an
  * emptied group is left out; one whose list is being read shows a spinner). A provider's view: its favorites, then its
  * models. Favorites: the favorites only. Recent: the last setups applied. A search searches every provider, and a typed
- * model ID that no list has is offered as "Use “…”" in the group of each recommended provider that takes typed IDs.
+ * model ID none of whose models answers is offered as "Use “…”" in the group of each recommended provider that takes typed IDs.
  */
 export function panelSections({ providers, state, view: chosen, query, favorites, recent, overrides }: SectionsInput): PanelSection[] {
   const q = query.trim();
@@ -346,7 +346,9 @@ export function panelSections({ providers, state, view: chosen, query, favorites
       continue;
     }
     const rows = [...(groups.get(p.id) ?? [])];
-    if (typed && p.typable && state.recommended.includes(p.id) && validModelId(typed) && !p.models.some((m) => m.id === typed)) {
+    // only when none of its models answers the search (by the model's own words, not the provider's name): a word that
+    // names a listed model is a search, not an ID
+    if (typed && p.typable && state.recommended.includes(p.id) && validModelId(typed) && !p.models.some((m) => matchesQuery({ name: "" }, m, q))) {
       const model: PanelModel = { id: typed, name: typed, efforts: [], custom: true };
       rows.push({ key: `typed:${p.id}\n${typed}`, kind: "typed", provider: p, model, setup: { provider: p.id, model: typed }, current: false, customized: false });
     }
