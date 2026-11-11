@@ -87,6 +87,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	}
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.fleetKeepPrevious(machine, list)
+	s.roundsSeen(list) // whose round each conversation is on (owner_preempt.go)
 	s.sessionsChanged(machine)
 	// Messages from other conversations, for those no longer running; the todos' links and herdr marks.
 	var connected time.Time

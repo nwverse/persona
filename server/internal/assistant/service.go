@@ -63,6 +63,8 @@ type Service struct {
 	ext ExtensionTools
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
+	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
+	humanSent humanSends
 
 	hub   Hub
 	store func() Store
@@ -118,6 +120,7 @@ type Service struct {
 	avail     availBook     // availability.go
 	quiet     quietBook     // quiet.go
 	supervise superviseBook // supervise_signals.go
+	preempt   preemptBook   // owner_preempt.go
 	tbriefs   taskBriefBook // task_brief.go
 	// briefsOptional: task_plan takes a task without done_when / expect_minutes (briefRequired). Only the tests of
 	// what a plan does once it exists set it; the hub never does.
@@ -254,6 +257,7 @@ func New(o Options) *Service {
 	s.workSessionStartRoutes()
 	s.launcherQuotaRoutes()
 	s.providerProbeRoutes()
+	s.providerCatalogRoutes()
 	s.launcherImportRoutes()
 	s.launcherHealthRoutes()
 	return s
@@ -315,6 +319,7 @@ func (s *Service) lang(ctx context.Context) i18n.Lang {
 
 // call is a DeviceCall whose answer is read into out (nil: not read).
 func (s *Service) call(ctx context.Context, device, method string, params, out any) error {
+	roundKind := "" // the round the message starts, when it is one the owner did not start (owner_preempt.go)
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceSessionSend) {
 		if text, ok := p["text"].(string); ok {
 			source, _ := p["message_source"].(*proto.MessageSource)
@@ -326,6 +331,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			if source == nil {
 				source = prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: text})
 			}
+			roundKind = backgroundRoundKind(text, source)
 			if source != nil {
 				p["message_source"] = source
 				p["text"] = prompts.MessageSourceText(text, source)
@@ -362,6 +368,10 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			s.releasePushes(ctx, id) // something else speaks there: its turns are pushed again (a supervision message holds them anew)
 		}
 	}
+	var round *roundStart
+	if p, ok := params.(map[string]any); ok && method == DeviceAssistantSend && !meetingSource(p) {
+		round = s.roundStarting(device, p, roundKind) // read before the send: its conversation is working right after
+	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
@@ -370,6 +380,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	res, ok, err := s.localFleetDeviceCall(ctx, p) // what the hub answered before the nodes' events were the manager's
 	if !ok {
 		res, err = s.hub.DeviceCall(ctx, p)
+	}
+	if err == nil {
+		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
 	}
 	if sent, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
 		s.recordManagerSend(device, sent, res, err) // the north star's availability (north_star.go)

@@ -45,10 +45,10 @@ const (
 )
 
 // What started a round, besides the message sources (proto.SourceSupervision, SourceFollowup, SourcePatrol,
-// SourceConversation).
+// SourceConversation) and roundNotice (owner_preempt.go; here also a late ask_user answer and a spawned
+// conversation's report).
 const (
-	roundOwner  = "owner"
-	roundNotice = "notice" // a task's notice, a late ask_user answer, a spawned conversation's report
+	roundOwner = "owner"
 	// roundOther: the manager neither sent nor saw the input: a new conversation's first message, a background task
 	// reporting back, a round under way when the manager started.
 	roundOther = "other"
