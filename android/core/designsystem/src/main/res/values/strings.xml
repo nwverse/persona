@@ -50,8 +50,8 @@
     <string name="designsystem_processing">Working…</string>
     <string name="designsystem_with_state">%1$s, %2$s</string>
     <!-- Requests that need the user (Agents page) -->
-    <string name="designsystem_decision_command">Needs your permission</string>
-    <string name="designsystem_decision_tool">Needs your permission</string>
+    <string name="designsystem_decision_command">Waiting for your approval</string>
+    <string name="designsystem_decision_tool">Waiting for your approval</string>
     <string name="designsystem_decision_plan">Plan awaiting approval</string>
     <string name="designsystem_decision_question">Has a question</string>
     <string name="designsystem_decision_form">Needs a few answers</string>
