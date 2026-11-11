@@ -54,6 +54,7 @@ class HttpChatActions internal constructor(
                     action.permissionMode?.let { put("permission_mode", it) }
                     action.effort?.let { put("effort", it) }
                     action.ultracode?.let { put("ultracode", it) }
+                    action.dismissUltracodeLost?.let { put("ultracode_dismiss_lost", it) }
                 }
                 else -> buildJsonObject { }
             }
@@ -161,7 +162,8 @@ class HttpChatActions internal constructor(
                         (action.permissionMode == null || current.permissionMode == action.permissionMode) &&
                         (action.effort == null || current.effort == action.effort) &&
                         // a queued switch went through too: the node applies it after the turn
-                        (action.ultracode == null || current.ultracode == action.ultracode || current.ultracodePending)
+                        (action.ultracode == null || current.ultracode == action.ultracode || current.ultracodePending) &&
+                        (action.dismissUltracodeLost == null || current.ultracodeLostAt == null)
                     ChatAction.Close -> current == null || !current.isLive
                     ChatAction.Interrupt -> current != null && current.status in listOf("idle", "done", "offline")
                     ChatAction.Attach -> current?.attached == true

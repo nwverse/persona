@@ -50,6 +50,16 @@ class NewAgentUltracodeTest {
         }
     }
 
+    @Test fun theRowMarkIsForAClaudeAgentWithItOnThatIsNotOffline() {
+        val on = persona.core.contracts.Session(machineId = "m", sessionId = "s", agent = "claude", status = "working", ultracode = true)
+        assertTrue(ultracodeMark(on))
+        assertFalse(ultracodeMark(on.copy(ultracode = null)))
+        assertFalse(ultracodeMark(on.copy(ultracode = false)))
+        assertFalse(ultracodeMark(on.copy(status = "offline", state = "offline")))
+        assertFalse(ultracodeMark(on.copy(assistant = true)))
+        assertFalse(ultracodeMark(on.copy(agent = "codex")))
+    }
+
     private class Store : AgentCreationStore {
         var operation: AgentStartOperation? = null
         override suspend fun lastMachine(scope: String) = "first"
