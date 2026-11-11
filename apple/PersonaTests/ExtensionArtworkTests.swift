@@ -31,6 +31,18 @@ import Testing
         #expect(old.iconURL == nil && old.downloads == nil)
     }
 
+    @Test func hubCopiesTheSnapshotTimeToMarketsEntriesAndInstalledRecords() throws {
+        let timestamp = "2026-11-11T12:00:00Z"
+        let json = #"{"markets":[{"id":"m","spec":"https://extensions.example.com/","name":"Example","downloads_updated_at":"\#(timestamp)"}],"extensions":[{"market":"m","id":"a","name":"Alpha","version":"1","downloads":1099511627776,"downloads_updated_at":"\#(timestamp)"}]}"#
+        let catalog = try JSON.decoder.decode(ExtensionCatalog.self, from: Data(json.utf8))
+        #expect(catalog.downloadsUpdatedAt == nil, "the hub places a separate timestamp on each market and entry")
+        #expect(catalog.markets.first?.downloadsUpdatedAt == catalog.plugins.first?.downloadsUpdatedAt)
+        #expect(catalog.plugins.first?.downloadsUpdatedAt != nil)
+        #expect(catalog.plugins.first?.downloads == 1 << 40, "the hub's int64 total is not narrowed to Int32")
+        let installed = try JSON.decoder.decode(HubExtension.self, from: Data(#"{"id":"a","name":"Alpha","kind":"ui","status":"running","downloads_updated_at":"\#(timestamp)"}"#.utf8))
+        #expect(installed.downloadsUpdatedAt == catalog.plugins.first?.downloadsUpdatedAt)
+    }
+
     @Test func installedListUsesTheSamePopularityDefinitionAndRetainsArtwork() async {
         let hub = FakeHub()
         hub.on("GET", "/api/v1/plugins", json: #"{"plugins":[{"id":"a","name":"Alpha","kind":"ui","status":"running"},{"id":"z","name":"Zulu","kind":"ui","status":"running","downloads":10,"icon_url":"https://images.example.com/z.png"}],"markets":true}"#)

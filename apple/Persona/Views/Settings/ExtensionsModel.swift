@@ -49,10 +49,11 @@ nonisolated struct HubExtension: Codable, Hashable, Sendable, Identifiable {
     /// Optional catalog artwork/popularity on newer hubs; absent on legacy responses.
     var iconURL: String?
     var downloads: Int?
+    var downloadsUpdatedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, status, error, version, source, enabled, description, contributes, warnings, market, upgrade, nodes, auth, tools, manager, attached, sandbox, downloads
-        case iconURL = "icon_url"
+        case iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at"
         case needsSetup = "needs_setup", autoUpgrade = "auto_upgrade", autoUpgradePaused = "auto_upgrade_paused", upgradeNote = "upgrade_note"
     }
 

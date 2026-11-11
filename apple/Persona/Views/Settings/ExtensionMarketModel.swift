@@ -24,6 +24,8 @@ nonisolated struct ExtensionMarket: Codable, Hashable, Sendable, Identifiable {
     var addedAt: Date?
     /// The market every hub has (#2351); nil from a hub before it.
     var official: Bool?
+    /// The publisher's GHCR download snapshot time, copied from its signed index by the hub.
+    var downloadsUpdatedAt: Date?
 
     /// The official market reads Official Extensions whatever its index names it (#5017): the index's name is its publisher's.
     var title: String {
@@ -37,7 +39,7 @@ nonisolated struct ExtensionMarket: Codable, Hashable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, spec, name, description, homepage, plugins, warnings, error, official
-        case hasToken = "has_token", fetchedAt = "fetched_at", addedAt = "added_at"
+        case hasToken = "has_token", fetchedAt = "fetched_at", addedAt = "added_at", downloadsUpdatedAt = "downloads_updated_at"
     }
 }
 
@@ -60,6 +62,7 @@ extension ExtensionMarket {
         error = try c.decodeIfPresent(String.self, forKey: .error)
         fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
         addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt)
+        downloadsUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .downloadsUpdatedAt)
     }
 }
 
@@ -91,6 +94,7 @@ nonisolated struct ExtensionCatalogItem: Codable, Hashable, Sendable, Identifiab
     var iconURL: String?
     /// Cumulative package downloads reported by the catalog, not active installations.
     var downloads: Int?
+    var downloadsUpdatedAt: Date?
 
     var id: String { market + "/" + pluginID }
 
@@ -103,7 +107,7 @@ nonisolated struct ExtensionCatalogItem: Codable, Hashable, Sendable, Identifiab
     enum CodingKeys: String, CodingKey {
         case market, name, version, description, publisher, homepage, tags, contributes, permissions, problem, installed, upgradable, replaces, downloads
         case pluginID = "id", marketName = "market_name", installedSource = "installed_source", fromThisMarket = "from_this_market"
-        case renameFrom = "rename_from", iconURL = "icon_url"
+        case renameFrom = "rename_from", iconURL = "icon_url", downloadsUpdatedAt = "downloads_updated_at"
     }
 }
 
