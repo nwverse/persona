@@ -422,6 +422,16 @@ final class AppModel {
         applyPersonaPalette()
         connection.onCaughtUp = { [weak self] in self?.flushOutbox() }
         #if os(iOS) || os(visionOS)
+        let leaving = [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
+        #else
+        let leaving = [NSApplication.willTerminateNotification]
+        #endif
+        for name in leaving {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable [weak self] _ in
+                MainActor.assumeIsolated { self?.flushSnapshot() }
+            }
+        }
+        #if os(iOS) || os(visionOS)
         if registryUnreadable {
             NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil,
                                                    queue: .main) { @Sendable _ in MainActor.assumeIsolated { AppModel.shared.retryRegistry() } }
@@ -3012,7 +3022,9 @@ final class AppModel {
         }
     }
 
-    @ObservationIgnored private let snapshotWriter = Debouncer(.seconds(2))
+    /// At most one write a minute (#4684): about 390 KB on a hub with about 230 sessions, which change all the time. A
+    /// cold start paints from it, and a minute-old copy paints as well; the app leaving writes what is waiting.
+    @ObservationIgnored private let snapshotWriter = Throttle(gap: .seconds(60))
     /// Each group's default manager's Persona settings, kept for when its page shows again (`assistantConfig` is the page's
     /// of the moment).
     @ObservationIgnored var assistantByGroup: [String: APIClient.AssistantState] = [:]
@@ -3050,6 +3062,9 @@ final class AppModel {
         interactions = Dictionary(allInteractions.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         assistantConfig = heldAssistant(hub?.group ?? "")
     }
+
+    /// The snapshot waiting for its turn, written now: the app is going to the background or quitting.
+    func flushSnapshot() { snapshotWriter.flush() }
 
     func saveSnapshot() {
         snapshotWriter.run { [weak self] in

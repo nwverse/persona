@@ -522,6 +522,9 @@ internal class AgentsViewModel(
         ?.let { it.isLive && it.canTerminal } ?: page.value.sessions.isEmpty()
     /** "Join live": join a Codex app-server thread live; the list refreshes after it. */
     fun attach(session: Session) = change(session.machineId, R.string.agents_notice_attached) { it.attach(session) }
+    /** Stop its turn from the list (iOS's row menu Interrupt): felt once it went through. */
+    fun interrupt(session: Session) = change(session.machineId, R.string.agents_notice_interrupted,
+        onDone = { _haptics.tryEmit(Haptic.Tap) }) { it.interrupt(session) }
     fun stopLoop(session: Session) = sendOperation("loop:${session.key.path}") {
         if (hubGroups.groups.value.stateFor(session.machineId, connection.state.value) != ConnectionState.Online) { _notice.value = AgentText(R.string.agents_notice_stop_loop_offline); return@sendOperation }
         sendOnce("loop:${session.key.path}", session.key, STOP_LOOP_PROMPT)
