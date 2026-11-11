@@ -172,7 +172,7 @@ Link/release semantics:
 | PATCH | `/api/v1/todos/{id}` | Edit `{"title"?, "notes"?, "done"?, "due_at"? \| "due_date"?, "remind_at"?, "priority"?, "project"?}` → `{"todo": Todo}`; only supplied fields change, `null` (or `""`) clears a due date or reminder, `""` takes it out of its project; either due field replaces the other; a new `remind_at` is pushed again; user completion-state changes clear `done_by` / `done_reason`, and reopening records `reopened_at`; `"done": true` on a to-do whose agent never started (closed by the hub with `start_error`) is the owner closing it: `start_error` cleared, `done_at` now (#3713); `"done": true` on an open concern 409 (only its report closes it, "Concerns"); missing 404; read-only role 403 |
 | POST | `/api/v1/todos/retitle` | Give short titles to task to-dos previously named from the prompt's first line ("To-do titles") → `{"dry_run", "todos": [{"id", "old_title", "new_title"}]}`; `?dry_run=1` lists without changes; read-only role 403 |
 | POST | `/api/v1/todos/{id}/accept` | Verify a to-do from a briefing's Accept button `{"asked_at"}` (the `brief` feed item's `accept[].asked_at`, `docs/protocol/protocol.md`) → `{"ok":true}`; no `asked_at` 400; not the round that waits now (the to-do was reopened or asked again since), already verified or never asked 409; a decision whose recommendation could not reach the task's Agent 502, in the request's language with the reason (nothing taken or recorded, the button works again); the stored asks could not be read or the acceptance could not be saved 503 (nothing verified, the button works again); the ask may have no Lark card (the bot is not set up, or its task reports are off); read-only role 403 |
-| POST | `/api/v1/todos/{id}/done-check` | Run an "Automatic completion" judgment read-only → `{"verdict", "reason", "would_close", "skip", "replies", "signals"}`, no database write ("Automatic completion"); missing 404; read-only role 403 |
+| POST | `/api/v1/todos/{id}/done-check` | Run an "Automatic completion" judgment → `{"verdict", "reason", "would_close", "skip", "replies", "signals"}`, no database write ("Automatic completion"); `{"apply": true}` (Re-check) writes it and adds `applied`, `stage` (#4867); missing 404; read-only role 403 |
 | DELETE | `/api/v1/todos/{id}` | Delete to-do and associations → `{"ok": true}`; Agent sessions untouched; missing 404; read-only role 403 |
 | PUT | `/api/v1/todos/{id}/spaces/{mid}/{space...}` | Link an entire workspace project → `{"ok": true, "linked": N}`; `space` is URL-encoded project name (wildcard path); completed to-do cannot be linked (409); missing 404; read-only role 403 |
 | DELETE | `/api/v1/todos/{id}/spaces/{mid}/{space...}` | Unlink the project (physically delete this project's space-linked Agents under the to-do) → `{"ok": true}`; missing 404; read-only role 403 |
@@ -349,6 +349,15 @@ Normal receipts are written before judgment for both supervised and unsupervised
 ```
 
 Nonempty `skip` means automatic flow would not judge this to-do (`not_a_task` manual, `done` completed, `reopened` no new work after reopen), but API still returns model verdict for inspection.
+
+**Re-check applies** (#4867): with the body `{"apply": true}`, which the web's Re-check sends, the check writes what it finds, as the end of a turn would.
+This catches up after a turn end the hub missed, such as a restart mid-turn, and after a verdict that was only shown.
+It runs only when the automatic flow would judge the to-do (no `skip`) and its agents are not working.
+
+1. It reads the agents' last replies and moves the stage and delivery from them through the deploy check ("Deployed needs evidence" in `docs/assistant/todo-status-sop.md`). Deployed work is asked to be verified.
+2. It judges, keeps the verdict as the to-do's `check`, and moves the task on: a supervised task found done waits for its supervisor's review, and the supervisor is told; an unsupervised one is closed.
+
+The answer adds `applied` (whether it wrote) and `stage`. Without `apply` nothing changes.
 With **Delivery** enabled (next section), response also has `delivery`; `verdict` may be hub's own `undelivered`.
 
 ### Judged against the brief (#3822)
