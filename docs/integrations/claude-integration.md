@@ -72,7 +72,7 @@ running Agent to another provider".
 - **Only the user's own message carries it out**: a `session.send` with `apply_switch`, which the web sends from the
   chat of a session that shows the switch. The assistant's messages, a task's supervision, channels and the phone apps
   send without it: their message goes on the launcher the agent runs on, and the switch keeps waiting. A switch picked
-  more than a day ago is dropped when a message comes.
+  more than a day ago is no longer shown on the row and is dropped when a message comes.
 - **A busy agent is not switched**: one that works, waits for the user, is starting, or has background work a quit
   would end gets the message on its launcher as always, and the switch waits for a later message. Background work is the
   row's (running subagents and workflows, a `/loop`) and every background command or monitor of its claude process,
@@ -82,8 +82,8 @@ running Agent to another provider".
 - **Everything is worked out before the quit** (`applySwitch`, inside the message's turn, after the usual draft and dialog
   checks, at most a minute): the launcher's checks below, the conversation's folder, the model to start with, the
   launcher and model to come back with. Then a last look (the agent's state, background work, a draft or dialog in the
-  box: a turn may have started meanwhile), the session is listed as starting (messages and the user's Resume wait for it,
-  stop and archive refuse), and only then Ctrl+C until the agent leaves its pane (`quitAgent`, the pane kept, never
+  box: a turn may have started meanwhile), the session is listed as starting (messages and the user's Resume wait for it),
+  and only then Ctrl+C until the agent leaves its pane (`quitAgent`, the pane kept, never
   `stop`, which would take the typing lock again), a wait until only a shell is in front and no claude has the
   conversation open any more (Claude Code still writes its transcript as it exits), and the launcher's command typed into
   that shell with `--resume`, the current permission mode (and the plan's next mode, so `--allow-dangerously-skip-permissions`
@@ -93,7 +93,11 @@ running Agent to another provider".
 - **In the conversation's folder**: `claude --resume` finds a conversation by the project folder named after the
   directory it started in. The folder is the first of the record's directory, the agent's and the transcript's whose name
   is the transcript's project folder (the transcript's own `cwd` may follow a Bash `cd`); none of them: refused. A shell
-  that is elsewhere gets `cd <folder> &&` in front of the command; the record keeps its folder.
+  that is elsewhere gets `cd <folder> &&` in front of the command (`cd <folder>;` in nu and elvish, which have no `&&`);
+  the record keeps its folder.
+- **Nothing else restarts it meanwhile**: from the moment the message takes the switch up (before its checks) until it
+  ends, a pick or cancel is refused at once as `switch_stale`, and a stop or archive at once as still starting, rather
+  than held for the minutes the message holds the session's typing lock.
 - **From the first Ctrl+C on, on its own clock** (`context.WithoutCancel`, at most 5 minutes): a hub redeploy that ends
   the connection does not leave the agent quit and not started again. The start on the new launcher gets 90 seconds.
   The hub waits 7 minutes for a message with `apply_switch`.
@@ -126,8 +130,9 @@ running Agent to another provider".
   hub's Postgres), so a node restart neither drops it nor carries it out by itself; a message right after a restart
   waits for the record to load first. A session Persona did not start has no record and gets none for this (a record
   means "Persona started it"): its switch waits in the node's memory, and a node restart forgets it, so its row shows
-  none and nothing is switched behind the user's back. A switch carried out writes a record, as a Resume does; one that
-  failed and could not be brought back removes the record its starts made (`state.delete`).
+  none and nothing is switched behind the user's back. A switch carried out writes a record, as a Resume does, and so
+  does one that failed: a session Persona did not start keeps a record of its own launcher after a failed switch, the
+  one a Resume brings it back on once no process of it is left to name it.
 - **Not carried over**, as with any resume: the ultracode switch (its resume notice says so), "allow for this session"
   rules, a running `/loop` (it holds the switch back), and bypass availability, which follows the new launcher's own
   flags. The new provider starts with a cold prompt cache. The row's `model` shows the picked model until a reply names

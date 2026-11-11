@@ -172,8 +172,10 @@ type Node struct {
 	sys        proto.System
 
 	// switches: the launcher switches waiting for a message, of sessions with no state record (launcher_switch.go); a
-	// recorded session keeps its own in the record. Under mu; nil until the first.
-	switches map[string]proto.PendingSwitch
+	// recorded session keeps its own in the record. switching: the sessions a message is carrying a switch out for
+	// right now (markSwitching). Under mu; nil until the first.
+	switches  map[string]proto.PendingSwitch
+	switching map[string]bool
 
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
@@ -460,11 +462,6 @@ func (n *Node) loadState(ctx context.Context) bool {
 	n.state.persist = func(id string, v sessionState) {
 		if n.peer != nil {
 			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
-		}
-	}
-	n.state.unpersist = func(id string) {
-		if n.peer != nil {
-			_ = n.peer.Notify("state.delete", map[string]any{"session_id": id})
 		}
 	}
 	n.state.mu.Unlock()

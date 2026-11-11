@@ -350,6 +350,9 @@ func (n *Node) decorateIn(s *proto.Session, pass *codexListPass) {
 	if s.PendingSwitch == nil {
 		s.PendingSwitch = n.unrecordedSwitch(s.SessionID)
 	}
+	if ps := s.PendingSwitch; ps != nil && time.Since(ps.At) > switchMaxAge {
+		s.PendingSwitch = nil // dropped by the next message that would carry it out: not shown as waiting meanwhile
+	}
 	if s.Launcher == "" {
 		s.Launcher = n.inferLauncher(s.SessionID)
 	}

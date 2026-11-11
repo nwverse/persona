@@ -78,14 +78,6 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 	return err
 }
 
-// DeleteNodeSession removes a session's record and the model settings PutNodeSession keeps beside it: a node's
-// state.delete, for a record it made and must not keep (node/launcher_switch.go).
-func (d *DB) DeleteNodeSession(ctx context.Context, machine, id string) error {
-	_, err := d.pool.Exec(ctx, `WITH gone AS (DELETE FROM node_sessions WHERE machine_id = $1 AND session_id = $2)
-		DELETE FROM settings WHERE key = 'node_model.' || $1 || '.' || $2`, machine, id)
-	return err
-}
-
 // nodeSessionsSQL reads a machine's sessions from the last 60 days through node_sessions_started (0418), with the
 // model settings PutNodeSession keeps beside each one.
 // settings holds a node_model row for every session ever started, so the row is fetched per session through

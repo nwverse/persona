@@ -243,6 +243,12 @@ func TestLauncherSwitchPickPreconditions(t *testing.T) {
 		t.Errorf("a cancel during a switch: %q", code)
 	}
 	n.starts.finish(sidA, nil)
+	// nor while the message carrying it out still runs its checks, before the session is listed as starting
+	done := n.markSwitching(sidA)
+	if code, _ := refusalOf(t, pick(t, n, map[string]any{"launcher": "work", "from": "claude"})); code != proto.CodeSwitchStale {
+		t.Errorf("a pick during a switch's checks: %q", code)
+	}
+	done()
 	if err := pick(t, n, map[string]any{"launcher": "work", "from": "claude", "model": "opus"}); err != nil {
 		t.Fatal(err)
 	}
@@ -663,16 +669,15 @@ func TestLauncherSwitchFailureRollsBack(t *testing.T) {
 	}
 }
 
-// A session Persona did not start whose switch failed and could not be brought back keeps no record: the ones the
-// starts made would count it as Persona's from then on.
-func TestLauncherSwitchFailureOfAnUnrecordedSessionLeavesNoRecord(t *testing.T) {
+// A session Persona did not start whose switch failed and could not be brought back keeps the record its starts made,
+// naming its own launcher: with no process of it left to say which launcher it ran on, that is what its Resume brings
+// it back on (not plain claude), and the switch is gone from it.
+func TestLauncherSwitchFailureOfAnUnrecordedSessionKeepsItsLauncher(t *testing.T) {
 	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
 	n.claudeStart, n.claudeReady = time.Second, time.Second
 	n.state.mu.Lock()
 	delete(n.state.Sessions, sidA)
 	n.state.mu.Unlock()
-	var dropped []string
-	n.state.unpersist = func(id string) { dropped = append(dropped, id) }
 	inferredAs(t, n, "gw")
 	if err := pick(t, n, map[string]any{"launcher": "work", "model": "opus"}); err != nil {
 		t.Fatal(err)
@@ -687,8 +692,12 @@ func TestLauncherSwitchFailureOfAnUnrecordedSessionLeavesNoRecord(t *testing.T) 
 	if starts := typedStarts(f, "w1:p1"); len(starts) != 2 || !strings.Contains(starts[1], " launch gw ") {
 		t.Fatalf("typed %q", starts)
 	}
-	if _, kept := n.state.get(sidA); kept || len(dropped) != 1 {
-		t.Errorf("a record was left: kept %v, dropped %q", kept, dropped)
+	st, kept := n.state.get(sidA)
+	if !kept || st.Launcher != "gw" || st.PendingSwitch != nil || st.Cwd != cwd {
+		t.Errorf("record = %+v (kept %v)", st, kept)
+	}
+	if r := n.resumeWith(sidA, sendOpts{Launcher: "hub-pick"}); r.launcher != "gw" {
+		t.Errorf("a Resume would bring it back on %q", r.launcher)
 	}
 	if n.pendingSwitch(sidA) != nil {
 		t.Error("the failed switch still waits")
@@ -841,5 +850,56 @@ func TestProbeTellsUnsetVariables(t *testing.T) {
 	p, ok := parseProbe(out)
 	if !ok || len(p.Unset) != 1 || p.Unset[0] != "CLAUDE_CONFIG_DIR" {
 		t.Fatalf("probe = %+v", p)
+	}
+}
+
+// The command a switch types into a shell elsewhere changes to the conversation's folder first, with the shell's own
+// way of running one command after another: nu and elvish have no &&.
+func TestCdThen(t *testing.T) {
+	for _, tc := range []struct{ shell, want string }{
+		{"-zsh", "cd '/w x' && claude"},
+		{"fish", "cd '/w x' && claude"},
+		{"/usr/bin/nu", "cd '/w x'; claude"},
+		{"elvish", "cd '/w x'; claude"},
+	} {
+		if got := cdThen("/w x", "claude", tc.shell); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.shell, got, tc.want)
+		}
+	}
+}
+
+// A stop or archive while a switch is carried out is refused at once, not after the minutes the message carrying it
+// out holds the session's typing lock (stopping the agent it starts then would leave the switch for nothing).
+func TestStopRefusedAtOnceDuringASwitch(t *testing.T) {
+	n, _, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	unlock := n.typing.lock(sidA) // the message carrying the switch out
+	defer unlock()
+	done := n.markSwitching(sidA)
+	defer done()
+	refused := make(chan error, 1)
+	go func() {
+		_, err := request(t, n, "session.stop", map[string]any{"session_id": sidA})
+		refused <- err
+	}()
+	select {
+	case err := <-refused:
+		if code, _ := refusalOf(t, err); code != notRetirable {
+			t.Fatalf("refused with %q (%v)", code, err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stop waited for the switch")
+	}
+}
+
+// A switch picked over a day ago is not shown as waiting: the next message drops it.
+func TestAnOldSwitchIsNotShownAsWaiting(t *testing.T) {
+	n, _, _, _, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", At: time.Now().Add(-25 * time.Hour)})
+	if ps := rowOf(t, n, sidA).PendingSwitch; ps != nil {
+		t.Errorf("row shows %+v", ps)
+	}
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", At: time.Now()})
+	if ps := rowOf(t, n, sidA).PendingSwitch; ps == nil {
+		t.Error("a fresh switch is not shown")
 	}
 }

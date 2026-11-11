@@ -19,8 +19,6 @@ type stateFile struct {
 	mu       sync.Mutex
 	Sessions map[string]sessionState `json:"sessions"`
 	persist  func(id string, v sessionState)
-	// unpersist removes a session's copy in the hub's store (state.delete): only drop calls it.
-	unpersist func(id string)
 	// loading: the hub's copy has yet to come (Serve opens it before loadState runs, which closes it). Until then a
 	// session missing from Sessions may still be Persona's. Nil once loaded.
 	loading chan struct{}
@@ -241,19 +239,6 @@ func (s *stateFile) restoreLaunch(id string, prev sessionState, had bool, launch
 	s.mu.Unlock()
 	if persist != nil {
 		persist(id, v)
-	}
-}
-
-// drop removes session id's record, here and in the hub's store: a record a failed launcher switch's start made for a
-// session Persona did not start (launcher_switch.go), which would otherwise count it as Persona's from then on.
-func (s *stateFile) drop(id string) {
-	s.mu.Lock()
-	_, ok := s.Sessions[id]
-	delete(s.Sessions, id)
-	unpersist := s.unpersist
-	s.mu.Unlock()
-	if ok && unpersist != nil {
-		unpersist(id)
 	}
 }
 

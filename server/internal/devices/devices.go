@@ -45,11 +45,6 @@ type Store interface {
 
 // nodeStateStore keeps what a node puts aside of its sessions (state.put / state.load, db.DB); a store without it
 // keeps nothing.
-// nodeStateDeleter removes a session's record a node put aside (state.delete); a store without it keeps it.
-type nodeStateDeleter interface {
-	DeleteNodeSession(ctx context.Context, machine, id string) error
-}
-
 type nodeStateStore interface {
 	PutNodeSession(ctx context.Context, machine, id string, s db.NodeSession) error
 	NodeSessions(ctx context.Context, machine string) (map[string]db.NodeSession, error)

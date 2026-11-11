@@ -188,8 +188,8 @@ func TestCallCodesErrorsForTheHub(t *testing.T) {
 	}
 }
 
-// Every event of a node goes on to the hub, in order; what is the manager's alone (state.put, state.delete) is done
-// here and not sent on; its session list is the manager's too.
+// Every event of a node goes on to the hub, in order; what is the manager's alone (state.put) is kept here and not
+// sent on; its session list is the manager's too.
 func TestEventsGoToTheHubAsTheyCame(t *testing.T) {
 	d := newTestDevices(t)
 	st := &nodeStates{memStore: newMemStore()}
@@ -202,7 +202,6 @@ func TestEventsGoToTheHubAsTheyCame(t *testing.T) {
 	_ = p.Notify("session.items", map[string]any{"session_id": "s1", "items": []proto.Item{{Seq: 7, Kind: "user", Text: "hi"}}})
 	_ = p.Notify("terminal.frame", map[string]any{"session_id": "s1", "seq": 1})
 	_ = p.Notify("state.put", map[string]any{"session_id": "s1", "state": map[string]any{}})
-	_ = p.Notify("state.delete", map[string]any{"session_id": "s1"})
 	_ = p.Notify("stream.data", map[string]any{"id": "x", "data": "AA=="})
 	f := d.host()
 	eventually(t, 5*time.Second, "the events at the hub", func() bool { return len(f.eventsOf("box", "stream.data")) == 1 })
@@ -221,10 +220,10 @@ func TestEventsGoToTheHubAsTheyCame(t *testing.T) {
 	if s, ok := m.session("s1"); !ok || s.Status != proto.StatusWorking {
 		t.Fatalf("the manager's list: %+v", m.sessionList())
 	}
-	eventually(t, 2*time.Second, "state.put kept and state.delete done", func() bool {
+	eventually(t, 2*time.Second, "state.put kept", func() bool {
 		st.mu.Lock()
 		defer st.mu.Unlock()
-		return st.puts == 1 && st.deletes == 1
+		return st.puts == 1
 	})
 	m.mu.Lock()
 	seq := m.lastSeq["s1"]
@@ -234,18 +233,11 @@ func TestEventsGoToTheHubAsTheyCame(t *testing.T) {
 	}
 }
 
-// nodeStates counts state.put and state.delete.
+// nodeStates keeps state.put in memory.
 type nodeStates struct {
 	*memStore
-	mu            sync.Mutex
-	puts, deletes int
-}
-
-func (s *nodeStates) DeleteNodeSession(context.Context, string, string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.deletes++
-	return nil
+	mu   sync.Mutex
+	puts int
 }
 
 func (s *nodeStates) PutNodeSession(context.Context, string, string, db.NodeSession) error {

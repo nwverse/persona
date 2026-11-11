@@ -146,9 +146,9 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 		}
 		checked = true
 	}
-	// A switch being carried out right now (listed as starting) takes minutes: the pick is refused at once rather than
-	// held past the hub's wait, and made again against what the agent runs on then.
-	if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+	// A switch being carried out right now (from the moment a message takes it up) takes minutes: the pick is refused
+	// at once rather than held past the hub's wait, and made again against what the agent runs on then.
+	if n.restarting(id) {
 		return true, refusal(proto.CodeSwitchStale, "the agent is being started again (a launcher switch, a resume): pick again once it runs", nil)
 	}
 	// One at a time with the messages: one carrying a switch out writes the record anew, and would drop a pick made
@@ -603,8 +603,50 @@ func (n *Node) ranExecution(id string, prev sessionState) modelExecution {
 	return ex
 }
 
+// markSwitching marks session id as having a switch carried out by a message, from before its checks until it ends
+// (the returned func): restarting says so.
+func (n *Node) markSwitching(id string) (done func()) {
+	n.mu.Lock()
+	if n.switching == nil {
+		n.switching = map[string]bool{}
+	}
+	n.switching[id] = true
+	n.mu.Unlock()
+	return func() {
+		n.mu.Lock()
+		delete(n.switching, id)
+		n.mu.Unlock()
+	}
+}
+
+// restarting: session id's agent is being started again right now, by a message carrying out a launcher switch (from
+// its checks on) or a start listed as starting: a pick or a stop is refused rather than held for it.
+func (n *Node) restarting(id string) bool {
+	n.mu.Lock()
+	switching := n.switching[id]
+	n.mu.Unlock()
+	if switching {
+		return true
+	}
+	r := n.starts.get(id)
+	return r != nil && r.ended.IsZero()
+}
+
+// cdThen is cmd typed after changing to dir, for a shell among shells: `cd <dir> && cmd`, and `cd <dir>; cmd` in nu
+// and elvish, which have no &&.
+func cdThen(dir, cmd string, shells ...string) string {
+	sep := " && "
+	for _, s := range shells {
+		switch strings.TrimPrefix(filepath.Base(s), "-") {
+		case "nu", "elvish":
+			sep = "; "
+		}
+	}
+	return "cd " + shellQuote(dir) + sep + cmd
+}
+
 // cdFirstKey marks a start that carries a switch out in a shell that is not in the conversation's folder: its typed
-// command changes there first (start).
+// command changes there first (start, cdThen).
 type cdFirstKey struct{}
 
 func withCdFirst(ctx context.Context) context.Context {
@@ -639,6 +681,9 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 		n.logf("session %s: switch to launcher %s waits (%s); the message goes on %s", id, ps.Launcher, why, own)
 		return pane, false, nil
 	}
+	// From here until it ends, picks and stops are refused at once (restarting): the checks below take up to a minute
+	// before the session is listed as starting.
+	defer n.markSwitching(id)()
 	pctx, cancel := context.WithTimeout(ctx, switchProbeWait)
 	plan, err := n.planSwitch(pctx, id, ps)
 	var backErr error // why the agent could not be brought back on its own launcher
@@ -666,7 +711,8 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 	rec := &startRec{done: make(chan struct{}), session: proto.Session{SessionID: id, Cwd: plan.cwd, Launcher: ps.Launcher,
 		Agent: "claude", Status: proto.StatusIdle, Starting: true, StartedByPersona: had, UpdatedAt: time.Now().UTC(),
 		WorkspaceID: plan.a.WorkspaceID, PendingSwitch: &ps}}
-	if n.starts.add(id, rec) != nil {
+	if err := n.starts.add(id, rec); err != nil {
+		n.logf("session %s: switch to launcher %s waits (%v); the message goes on %s", id, ps.Launcher, err, own)
 		return pane, false, nil // a start of it under way: the switch waits
 	}
 	defer func() {
@@ -690,7 +736,8 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 // carryOut quits session id's agent and starts it on ps's launcher in the same shell, as plan says; after a start that
 // did not come up it clears the pane and resumes the agent on its own launcher (back, with backEffort; not when
 // backErr says it cannot be), putting the record back as it was (prev, or dropping the one the start made when there
-// was none). It returns the pane the agent runs in, or the refusal that says how it ended.
+// was none: then the one the start made, naming its own launcher). It returns the pane the agent runs in, or the
+// refusal that says how it ended.
 func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwitch, plan *switchPlan, mode, effort, backEffort string,
 	back modelExecution, backErr error, prev sessionState, had bool) (string, error) {
 	a, h, ref := plan.a, plan.h, plan.ref
@@ -727,10 +774,9 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 		}
 	}
 	if err != nil {
+		// A session Persona did not start keeps the record its starts made, naming its own launcher: what a Resume
+		// brings it back on, now that no process of it says which launcher it ran on.
 		n.logf("session %s: could not bring the agent back on launcher %s: %v", id, own, err)
-		if !had { // the record the starts made would count the session as Persona's from now on
-			n.state.drop(id)
-		}
 		return "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent did not come up on launcher %s (%v), nor again on %s (%v); it has stopped",
 			ps.Launcher, startErr, own, err), nil)
 	}
