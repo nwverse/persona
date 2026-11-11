@@ -30,7 +30,7 @@ import { conversationKey, pickedLauncher, pickedModel } from "../../lib/assistan
 import { unlinkAgentFromTodo } from "../../lib/todos";
 import { LinkTodoDialog } from "../LinkTodoDialog";
 import { t as tr } from "../../i18n";
-import { lastEditablePrompt, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
+import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import type { Item, Session, Subagent } from "../../lib/types";
@@ -100,6 +100,8 @@ import { VoiceBar } from "./voice/VoiceBar";
 import { useVoiceEntry, VoiceEnded, VoiceTail } from "./voice/VoiceParts";
 import { ChatOnlyNote, FailureCard, ReadinessCard, useReadinessGate, type ReadinessGate } from "../assistant/Readiness";
 import { codedFailure, refreshReadiness, turnErrorFix, type CodedFailure } from "../../lib/readiness";
+import { FALLBACK_UNAVAILABLE } from "../../lib/model-fallback";
+import { ModelFallbackCard } from "./ModelFallbackCard";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type FeedItem } from "../../lib/feed";
 import { CardConversation } from "../../ui/AssistantCard";
@@ -378,23 +380,68 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   const [rewindLive] = useState(() => liveValue(rewindOff));
   useLayoutEffect(() => rewindLive.set(rewindOff), [rewindLive, rewindOff]);
   const canRewind = canCompose && !readOnly && !assistant;
+  // Edit last message (#2945) and ↑ in an empty box (#4503), Slack's way: ↑, Esc twice or the safeguards card's button put
+  // the last prompt in the box with an "Editing" bar, and the conversation-only rewind to before it runs when the edit is
+  // sent (commitEdit), so starting or cancelling an edit changes nothing on the computer. One edit, of this conversation:
+  // another one shown is not editing. `editingLast`: that rewind is running (the composer read-only).
   const [editingLast, setEditingLast] = useState(false);
   const editLastBusy = useRef(false);
-  const editLastMessage = useCallback(async () => {
+  const [editTarget, setEditTarget] = useState<{ key: string; id: string } | null>(null);
+  const editing = editTarget?.key === draftKey ? editTarget : null;
+  const editNow = useRef(editing);
+  editNow.current = editing;
+  const editLastMessage = useCallback(() => {
     if (editLastBusy.current || !canRewind || rewindLive.get() || noRow || tr.loading || tr.error) return;
     const last = lastEditablePrompt(items.current);
     if (!last) return;
+    setEditTarget({ key: draftKey, id: last.id });
+    sendDraft(draftKey, { type: "replace", text: last.raw, edit: true });
+  }, [canRewind, rewindLive, noRow, tr.loading, tr.error, draftKey]);
+  const commitEdit = useCallback(async (): Promise<boolean> => {
+    const target = editNow.current;
+    if (!target) return true;
+    if (editLastBusy.current) return false;
+    // another message came after it: rewinding to before the old one would take that one too
+    if (promptsOf(items.current).at(-1)?.id !== target.id) {
+      setEditTarget(null);
+      toast(t("rewind.edit_ended"), "info");
+      return false;
+    }
+    const block = rewindLive.get();
+    if (block) {
+      toast(t("rewind.edit_wait", { reason: block }), "error");
+      return false;
+    }
+    const at = rewindTarget(items.current, target.id);
+    if (!at) {
+      setEditTarget(null);
+      toast(t("rewind.no_text"), "error");
+      return false;
+    }
     editLastBusy.current = true;
     setEditingLast(true);
     try {
-      await rewindTo(mid, sid, draftKey, items.current, last.id, last.raw, "conversation");
+      const res = await rewindSession(mid, sid, at, "conversation");
+      setEditTarget((cur) => (cur === target ? null : cur));
+      // the old prompt is still in Claude's input: the send is refused (input_draft), and its card offers to clear it
+      if (!res.input_cleared) toast(t("rewind.input_kept"), "info");
+      return true;
     } catch (e) {
       toast(errorText(e), "error");
+      return false;
     } finally {
       editLastBusy.current = false;
       setEditingLast(false);
     }
-  }, [canRewind, rewindLive, noRow, tr.loading, tr.error, mid, sid, draftKey]);
+  }, [mid, sid, rewindLive]);
+  // The last message changed while editing (one from the phone, a rewind from the menu): the words stay as a new message.
+  const lastPromptId = useMemo(() => promptsOf(tr.items).at(-1)?.id, [tr.items]);
+  useEffect(() => {
+    if (!editing || editingLast || tr.loading || !tr.items.length || lastPromptId === editing.id) return;
+    setEditTarget(null);
+    toast(t("rewind.edit_ended"), "info");
+  }, [editing, editingLast, tr.loading, tr.items.length, lastPromptId]);
+  const editProp = useMemo(() => (editing ? { commit: commitEdit, cancel: () => setEditTarget(null) } : undefined), [editing, commitEdit]);
   const editableLast = useMemo(() => lastEditablePrompt(tr.items), [tr.items]);
   const onEditLastMessage = canRewind && !rewindOff && !noRow && !tr.loading && !tr.error && !editingLast && editableLast ? editLastMessage : undefined;
   const actions = useMemo<ChatActions>(
@@ -1204,7 +1251,9 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
-  const canRetry = !readOnly && lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send");
+  // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model
+  const canRetry =
+    !readOnly && lastLine?.kind === "apiError" && state !== "working" && !outgoing && sessionCan(session, "send") && session?.turn_error_code !== FALLBACK_UNAVAILABLE;
   // Claude Code's "while you were away" recap, open in full while it is the newest thing and not closed: the chat's last
   // line, in the flow with the agent's words (#1360: above the composer it covered the end of the reply)
   const recapKey = `${mid}/${sid}`;
@@ -1489,6 +1538,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           </>
         )}
         {(!assistant || voiceState === "live") && pendingCards}
+        {!assistant && !readOnly && session?.model_fallback && <ModelFallbackCard session={session} headless={false} />}
         {assistant && session && <CompactionStrip session={session} />}
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} onRetry={failedEntry && !refusedNoRow && sessionCan(session, "send") && !gate.blocked ? () => void retryOutbox(mid, sid, failedEntry.id) : undefined} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
@@ -1527,6 +1577,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           onSend={send}
           disabled={Boolean(offlineLine) || (!noRow && !sessionCan(session, "send"))}
           onEditLastMessage={onEditLastMessage}
+          editingLast={editProp}
           loadingDraft={editingLast}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
           onStop={sessionCan(session, "interrupt") ? interrupt : undefined}

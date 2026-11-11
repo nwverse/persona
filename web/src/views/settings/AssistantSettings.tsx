@@ -23,6 +23,7 @@ import { Group, Pill, Row, settingsInputClass, Switch } from "../settings/Settin
 import { SkillsGroup } from "./Skills";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
+import { TaskTrust } from "./TaskTrust";
 
 interface AssistantState {
   manager?: string;
@@ -284,6 +285,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
             <option value="prefer-new">{t("settings-assistantsettings.workspace_prefer_new")}</option>
           </select>
         </Row>
+        <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
 
       {/* Following up agents, their tasks' new messages and tidying closed ones (#3617, #4293, #3618): each row only from a hub that has its setting */}

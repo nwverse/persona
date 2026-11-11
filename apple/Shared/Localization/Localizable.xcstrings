@@ -1,6 +1,282 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Connection method": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection method"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接方式"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続方法"
+          }
+        }
+      }
+    },
+    "Password sign-in": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password sign-in"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "密码登录"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "パスワードログイン"
+          }
+        }
+      }
+    },
+    "Scan or token": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan or token"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扫码或 Token"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキャンまたはトークン"
+          }
+        }
+      }
+    },
+    "HTTPS hub address": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTPS hub address"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTPS hub 地址"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTPS ハブアドレス"
+          }
+        }
+      }
+    },
+    "Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter the connection password set by your administrator in the system sign-in window. Use QR pairing for self-signed certificates."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在系统登录窗口输入管理员设置的连接密码。自签名证书请使用扫码配对。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "システムのログイン画面で管理者が設定した接続用パスワードを入力してください。自己署名証明書の場合は QR コードでペアリングしてください。"
+          }
+        }
+      }
+    },
+    "Enter a valid HTTPS hub address": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a valid HTTPS hub address"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请输入有效的 HTTPS hub 地址"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有効な HTTPS ハブアドレスを入力してください"
+          }
+        }
+      }
+    },
+    "Invalid hub address": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid hub address"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 地址无效"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブアドレスが無効です"
+          }
+        }
+      }
+    },
+    "Could not create the sign-in request": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create the sign-in request"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法创建登录请求"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログインリクエストを作成できませんでした"
+          }
+        }
+      }
+    },
+    "Invalid sign-in callback. Try again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid sign-in callback. Try again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录回调无效，请重试"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログインのコールバックが無効です。もう一度お試しください"
+          }
+        }
+      }
+    },
+    "Sign-in authorization has expired. Sign in again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in authorization has expired. Sign in again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录授权已失效，请重新登录"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ログイン認可の有効期限が切れています。再度ログインしてください"
+          }
+        }
+      }
+    },
+    "Invalid device credential": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid device credential"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备凭据无效"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デバイスの認証情報が無効です"
+          }
+        }
+      }
+    },
+    "Could not create a secure sign-in request": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create a secure sign-in request"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法创建安全登录请求"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "安全なログインリクエストを作成できませんでした"
+          }
+        }
+      }
+    },
     "Background round": {
       "extractionState": "manual",
       "localizations": {
@@ -119998,6 +120274,29 @@
       },
       "extractionState": "manual"
     },
+    "Subtasks (%lld)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Subtasks (%lld)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サブタスク（%lld）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "子任务（%lld）"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Succeeded": {
       "localizations": {
         "en": {
@@ -158634,7 +158933,76 @@
         }
       }
     }
-  }
+  },
+    "Cron": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron"
+          }
+        }
+      }
+    },
+    "Cron Expression": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron Expression"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cron 表达式"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "cron 式"
+          }
+        }
+      }
+    },
+    "Runs when its cron expression matches, in your time zone. To change the expression, edit it in Persona on the web or ask Persona.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs when its cron expression matches, in your time zone. To change the expression, edit it in Persona on the web or ask Persona."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按你的时区，在 cron 表达式匹配时运行。要改表达式，请在网页版 Persona 里编辑，或者直接告诉 Persona。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "あなたのタイムゾーンで、cron 式に一致したときに実行します。式を変えるには、Web 版の Persona で編集するか、Persona に頼んでください。"
+          }
+        }
+      }
+    }
   },
   "version": "1.0"
 }

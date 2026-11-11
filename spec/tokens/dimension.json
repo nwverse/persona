@@ -263,6 +263,14 @@
         "unit": "px"
       },
       "$description": "Theme.Size.icon"
+    },
+    "dotXL": {
+      "$type": "dimension",
+      "$value": {
+        "value": 10,
+        "unit": "px"
+      },
+      "$description": "Theme.Size.dotXL"
     }
   }
 }
