@@ -8,14 +8,20 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The done receipt lists the brief's criteria as they stood when the agent stopped (nobody checked them yet), and the
+// The done receipt lists the brief's criteria as they stood when the agent stopped, read from the supervision
+// ledger's per-criterion state (the one the agent reported is met with its evidence, the other still unchecked), and the
 // conclusion card lists each with its result once the review accepted the work, then what was done beyond the brief.
 func TestReceiptAndConclusionListTheBriefsCriteria(t *testing.T) {
 	s, f, todo, posts, _ := conclusionService(t, false)
-	waitsForReview(t, s, f, todo.ID, "PR #12 已合并 https://code.example.com/a/b/pull/12")
 	ctx := context.Background()
+	agentTurn(s, f, proto.StatusWorking, "", 0)
+	if err := s.recordCriterionReports(ctx, todo, "box", "s1", []criterionReport{{Number: 1, State: "met", Evidence: "pull/12 merged"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	waitsForReview(t, s, f, todo.ID, "PR #12 已合并 https://code.example.com/a/b/pull/12")
 	var receipt receiptBody
 	waitFor(t, "the done receipt", func() bool {
 		items, _, err := s.feed(ctx, "conv1", time.Time{})
@@ -29,8 +35,8 @@ func TestReceiptAndConclusionListTheBriefsCriteria(t *testing.T) {
 		}
 		return receipt.State == "done"
 	})
-	if len(receipt.Criteria) != 2 || receipt.Criteria[0].Criterion != "PR 合并到 master" || receipt.Criteria[0].State != criterionUnchecked ||
-		receipt.Criteria[1].State != criterionUnchecked || receipt.CriteriaMore != 0 {
+	if len(receipt.Criteria) != 2 || receipt.Criteria[0].Criterion != "PR 合并到 master" || receipt.Criteria[0].State != criterionMet ||
+		receipt.Criteria[0].Evidence != "pull/12 merged" || receipt.Criteria[1].State != criterionUnchecked || receipt.CriteriaMore != 0 {
 		t.Fatalf("receipt = %+v", receipt)
 	}
 	before := len(posts())

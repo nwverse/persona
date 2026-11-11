@@ -2,7 +2,8 @@
 // before "Start" (their own words with the date and one line that counts the rest; the goal, the criteria, the
 // expected time and what is out of bounds open on demand, so the card's buttons stay in reach), on
 // the task's page above its criteria (a brief made later says so and shows the hand-over prompt as that), under them
-// the scope changes and who worked on it, and each criterion's result in the criteria box once the work ended. None of it is on
+// the scope changes and who worked on it, and under a finished task's criteria what their list cannot say (the
+// criteria a scope change dropped, what was done beyond the brief). None of it is on
 // the first screen: every user is a lazy import, and the strings are the namespace `assistant-taskbrief`, which loads
 // with the rest of the catalog.
 import { useEffect, useState, type ReactNode } from "react";
@@ -11,7 +12,7 @@ import { briefAsked, briefCriteria, briefExpect, lineageTells, scopeChanges, typ
 import { useStore } from "../../lib/store";
 import type { Todo } from "../../lib/todos";
 import { cx } from "../../ui/atoms";
-import { Icon, type IconName } from "../../ui/icons";
+import { Icon } from "../../ui/icons";
 import { useClamped } from "../../ui/use-clamped";
 
 const CLAMP = { 2: "line-clamp-2", 3: "line-clamp-3", 4: "line-clamp-4" } as const;
@@ -205,37 +206,31 @@ export function TaskBriefPanel({ todo }: { todo: Todo }) {
   );
 }
 
-const STATE: Record<string, { icon: IconName; className: string; label: string }> = {
-  met: { icon: "check", className: "text-green", label: "assistant-taskbrief.state_met" },
-  not_met: { icon: "x", className: "text-red", label: "assistant-taskbrief.state_not_met" },
-  dropped: { icon: "undo", className: "text-ink-3", label: "assistant-taskbrief.state_dropped" },
-  unchecked: { icon: "minus", className: "text-ink-3", label: "assistant-taskbrief.state_unchecked" },
-};
-
-/** Each criterion with how it ended: met, not met, dropped (with the scope change that dropped it) or not checked,
- *  in a mark and in words; then what was done beyond the brief. */
-export function BriefResultList({ criteria, alsoDone }: { criteria: BriefCriterion[]; alsoDone?: string[] }) {
+/** Under a finished task's criteria (the review box's own list says met, missing and not checked, #3635): the
+ *  criteria a scope change dropped, struck through with the change that dropped them, then what was done beyond the
+ *  brief. In a mark and in words, never by color alone. */
+export function BriefResultExtras({ dropped, alsoDone }: { dropped: BriefCriterion[]; alsoDone: string[] }) {
+  if (!dropped.length && !alsoDone.length) return null;
   return (
-    <div data-testid="brief-result" className="flex min-w-0 flex-col gap-1.5 text-[13px] leading-snug">
-      <ul className="flex flex-col gap-1.5">
-        {criteria.map((c, i) => {
-          const m = STATE[c.state] ?? STATE.unchecked;
-          const dropped = c.state === "dropped";
-          const detail = dropped ? c.change : c.evidence;
-          return (
-            <li key={i} data-criterion-state={STATE[c.state] ? c.state : "unchecked"} className="flex items-start gap-2">
-              <span aria-hidden className={cx("mt-0.5 shrink-0", m.className)}>
-                <Icon name={m.icon} size={13} stroke={2.4} />
+    <div data-testid="brief-result" className="mt-1.5 flex min-w-0 flex-col gap-1.5 text-[13px] leading-snug">
+      {dropped.length > 0 && (
+        <ul className="flex flex-col gap-1.5">
+          {dropped.map((c, i) => (
+            <li key={i} data-criterion-state="dropped" className="flex items-start gap-2">
+              <span aria-hidden className="mt-0.5 shrink-0 text-ink-3">
+                <Icon name="undo" size={13} stroke={2.4} />
               </span>
               <span className="flex min-w-0 flex-1 flex-col select-text [overflow-wrap:anywhere]">
-                <span className={cx(dropped ? "text-ink-2 line-through" : "text-ink")}>{c.criterion}</span>
-                <span className="text-[12px] text-ink-3">{detail ? t("assistant-taskbrief.state_detail", { state: t(m.label), detail }) : t(m.label)}</span>
+                <span className="text-ink-2 line-through">{c.criterion}</span>
+                <span className="text-[12px] text-ink-3">
+                  {c.change ? t("assistant-taskbrief.state_detail", { state: t("assistant-taskbrief.state_dropped"), detail: c.change }) : t("assistant-taskbrief.state_dropped")}
+                </span>
               </span>
             </li>
-          );
-        })}
-      </ul>
-      {alsoDone && alsoDone.length > 0 && (
+          ))}
+        </ul>
+      )}
+      {alsoDone.length > 0 && (
         <div data-testid="brief-also-done" className="flex min-w-0 flex-col gap-0.5 text-[12.5px] text-ink-2 select-text [overflow-wrap:anywhere]">
           <span className="font-medium text-ink-3">{t("assistant-taskbrief.also_done")}</span>
           <Lines items={alsoDone} />

@@ -3,10 +3,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { formatDate } from "../../i18n";
-import { briefAsked, resultOf, type BriefCriterion, type TaskBrief } from "../../lib/brief";
+import { briefAsked, resultExtras, resultOf, type BriefCriterion, type TaskBrief } from "../../lib/brief";
 import type { Todo } from "../../lib/todos";
-import { ReviewChecklist } from "./Supervision";
-import { BriefResultList, briefSummary, expectText, PlanBrief, TaskBriefHistory, TaskBriefPanel } from "./TaskBrief";
+import { ReviewChecklist } from "../Todos";
+import { BriefResultExtras, briefSummary, expectText, PlanBrief, TaskBriefHistory, TaskBriefPanel } from "./TaskBrief";
 
 const at = "2026-11-03T12:00:00Z";
 const brief: TaskBrief = {
@@ -136,35 +136,42 @@ describe("the brief on the task's page (#3822)", () => {
   });
 });
 
-describe("each criterion's result (#3822)", () => {
-  it("says met, not met, dropped with the change, and not checked, then what else was done", () => {
-    const html = renderToStaticMarkup(<BriefResultList criteria={criteria} alsoDone={["Removed a dead flag"]} />);
-    for (const state of ["met", "not_met", "dropped", "unchecked"]) expect(html).toContain(`data-criterion-state="${state}"`);
-    expect(html).toContain("已达成：merged in the example change");
-    expect(html).toContain("未达成");
+describe("what a finished task's result adds to its criteria (#3822)", () => {
+  it("lists only the dropped criteria, with the change, and what else was done", () => {
+    const extras = resultExtras({ ...todo, brief: { ...brief, result: { at, todo_id: "todo_3", criteria, also_done: ["Removed a dead flag"] } } })!;
+    expect(extras.dropped.map((c) => c.criterion)).toEqual(["Screenshots attached"]);
+    const html = renderToStaticMarkup(<BriefResultExtras dropped={extras.dropped} alsoDone={extras.alsoDone} />);
+    expect(html.match(/data-criterion-state=/g)).toHaveLength(1);
+    expect(html).toContain('data-criterion-state="dropped"');
     expect(html).toContain("已去掉：No screen changed after all");
-    expect(html).toContain("未核对");
     expect(html).toContain("另外做了");
     expect(html).toContain("Removed a dead flag");
+    // met, not met and not checked are the criteria list's own (the supervision ledger's): not said a second time
+    expect(html).not.toContain("The fix is merged");
+    expect(html).not.toContain("The changelog has a line");
   });
-  it("reads a state it does not know as not checked", () => {
-    const html = renderToStaticMarkup(<BriefResultList criteria={[{ criterion: "x", state: "later" }]} />);
-    expect(html).toContain('data-criterion-state="unchecked"');
-    expect(html).toContain("未核对");
+  it("is nothing when no criterion was dropped and nothing else was done", () => {
+    const kept = criteria.filter((c) => c.state !== "dropped");
+    expect(resultExtras({ ...todo, brief: { ...brief, result: { at, todo_id: "todo_3", criteria: kept } } })).toBeUndefined();
+    expect(resultExtras(todo)).toBeUndefined();
+    expect(renderToStaticMarkup(<BriefResultExtras dropped={[]} alsoDone={[]} />)).toBe("");
   });
-  it("stands in for the review box's list once the work ended", () => {
-    const done: Todo = { ...todo, done_at: at, supervision: { supervisor: "main", done_when: brief.done_when, state: "accepted" } };
-    const html = renderToStaticMarkup(<ReviewChecklist todo={done}><BriefResultList criteria={criteria} /></ReviewChecklist>);
-    expect(html).toContain('data-testid="brief-result"');
-    expect(html).toContain("验收标准"); // the box keeps its title
-    expect(html).not.toContain('aria-label="未单独核对'); // the review's own list is not drawn twice
-    expect(renderToStaticMarkup(<ReviewChecklist todo={done} />)).not.toContain("brief-result");
+  it("leaves the review box's own list as the one list of criteria", () => {
+    const supervision = { supervisor: "main", done_when: brief.done_when, state: "accepted" as const };
+    const result = { at, todo_id: "todo_3", criteria, also_done: ["Removed a dead flag"] };
+    const done: Todo = { ...todo, done_at: at, supervision, brief: { ...brief, result } };
+    const html = renderToStaticMarkup(<ReviewChecklist todo={done} />);
+    expect(html).toContain("验收标准");
+    for (const c of brief.done_when!) expect(html.split(c).length - 1).toBe(1); // each criterion once
+    // while the task is open, or without a result, the box is as it was
+    const open = renderToStaticMarkup(<ReviewChecklist todo={{ ...done, done_at: undefined }} />);
+    expect(open).toBe(renderToStaticMarkup(<ReviewChecklist todo={{ ...done, done_at: undefined, brief: undefined }} />));
+    expect(renderToStaticMarkup(<ReviewChecklist todo={{ ...done, brief }} />)).toBe(renderToStaticMarkup(<ReviewChecklist todo={{ ...done, brief: undefined }} />));
   });
   it("is the to-do's own result only", () => {
     const result = { at, todo_id: "todo_3", criteria };
     expect(resultOf({ ...todo, brief: { ...brief, result } })).toBe(result);
     expect(resultOf({ ...todo, id: "todo_1", brief: { ...brief, result } })).toBeUndefined(); // another to-do took the work over
-    expect(resultOf({ ...todo, brief: { ...brief, result: { at, criteria: [] } } })).toBeUndefined();
     expect(resultOf(todo)).toBeUndefined();
   });
 });

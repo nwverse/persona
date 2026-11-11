@@ -166,7 +166,8 @@ type receiptBody struct {
 	Machine string         `json:"machine,omitempty"`
 	Review  *receiptReview `json:"review,omitempty"`
 	// Criteria: a done receipt's list of its brief's criteria as they stood when the agent stopped (#3822,
-	// briefCriteriaNow): met or not met as the reviews so far found them, unchecked, or dropped by a scope change.
+	// briefCriteriaNow): met or not met as the supervision ledger tracks them (#3635: the agent's reports and the
+	// reviews), unchecked while pending there, or dropped by a scope change.
 	// Absent without a brief or criteria. CriteriaMore: how many the list left out.
 	Criteria     []BriefCriterion `json:"criteria,omitempty"`
 	CriteriaMore int              `json:"criteria_more,omitempty"`

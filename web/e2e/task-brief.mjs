@@ -1,5 +1,5 @@
 // A task's brief (#3822): on the plan card before Start, on the task's page above its criteria with the scope changes
-// and who worked on it under them, and each criterion's result on a finished task's page.
+// and who worked on it under them, and under a finished task's criteria the dropped ones and what else was done.
 // The real web app with synthetic HTTP/WS only; it never connects to a user's hub or conversation.
 // node web/e2e/task-brief.mjs <web URL> --shots <directory> [--chromium <executable>]
 import assert from "node:assert/strict";
@@ -75,7 +75,12 @@ function todos() {
       brief: brief("brief-release", day(10, 8), "This week's example release notes are ready to send", [...releaseCriteria, "The notes name who to thank", "Each entry links its issue"], 20, {
         request: request(day(10, 8), "Write up this week's release notes from what was merged."), criteria: [...releaseCriteria, "The notes name who to thank"], result,
         log: [{ at: day(10, 9), kind: "scope", change: "Links are added by the release script", why: "The script already adds them when it publishes", dropped: ["Each entry links its issue"] }] }),
-      supervision: { supervisor: sid, done_when: [...releaseCriteria, "The notes name who to thank"], expect_minutes: 20, state: "accepted", reviews: [{ at: day(10, 10), verdict: "accepted", note: "Written, with one gap", checks: [{ criterion: releaseCriteria[0], met: true }, { criterion: releaseCriteria[1], met: false }] }] } }),
+      supervision: { supervisor: sid, done_when: [...releaseCriteria, "The notes name who to thank"], expect_minutes: 20, state: "accepted", reviews: [{ at: day(10, 10), verdict: "accepted", note: "Written, with one gap", checks: [{ criterion: releaseCriteria[0], met: true }, { criterion: releaseCriteria[1], met: false }] }],
+        criteria: [
+          { criterion: releaseCriteria[0], state: "met", evidence: "7 listed, the same as the repository shows", at: day(10, 10) },
+          { criterion: releaseCriteria[1], state: "not_met", evidence: "Two fixes are under features", at: day(10, 10) },
+          { criterion: "The notes name who to thank", state: "pending" },
+        ] } }),
   ];
 }
 
@@ -223,14 +228,16 @@ async function run(browser, size, theme, language) {
     await made.scrollIntoViewIfNeeded();
     await page.screenshot({ path: name("reconstructed") });
 
-    // 4. finished work: each criterion's result in the criteria box, then what else was done
+    // 4. finished work: one list of criteria (the review box's own), then only what it cannot say: the criterion a
+    // scope change dropped, with the change, and what else was done
     await page.goto(`${base}/todos?id=demo-release`);
     const box = page.locator('[data-testid="review-checklist"]');
     await box.locator('[data-testid="brief-result"]').waitFor();
-    assert.deepEqual(await box.locator("[data-criterion-state]").evaluateAll((els) => els.map((el) => el.getAttribute("data-criterion-state"))), ["met", "not_met", "unchecked", "dropped"]);
     const text = await box.innerText();
-    for (const state of w.states) assert(text.includes(state), `the result says "${state}" in words`);
-    assert(text.includes("Links are added by the release script"), "a dropped criterion names the scope change");
+    for (const criterion of [...releaseCriteria, "The notes name who to thank", "Each entry links its issue"]) assert.equal(text.split(criterion).length - 1, 1, `"${criterion}" is listed once`);
+    assert.deepEqual(await box.locator("[data-criterion-state]").evaluateAll((els) => els.map((el) => el.getAttribute("data-criterion-state"))), ["dropped"], "the result adds only the dropped criterion");
+    assert(text.includes(w.states[3]) && text.includes("Links are added by the release script"), "a dropped criterion says so and names the scope change");
+    assert(text.includes("Two fixes are under features"), "the list's own evidence is there");
     assert(text.includes(w.also) && text.includes("Fixed two typos"));
     await noOverflow(page, "finished task");
     await box.scrollIntoViewIfNeeded();
@@ -238,7 +245,7 @@ async function run(browser, size, theme, language) {
     await page.screenshot({ path: name("result"), fullPage: true });
     assert.deepEqual(errors, []);
     assert.deepEqual(writes, [], "showing a brief writes nothing");
-    console.log(`PASS ${size} ${theme} ${language}: plan briefs=2, Start visible folded and open (tray ${folded.top}-${folded.bottom}, Start ${folded.startTop}-${folded.startBottom}; card ${heights.card}px, folded briefs ${heights.briefs.join("+")}px), result rows=4, lineage steps=3`);
+    console.log(`PASS ${size} ${theme} ${language}: plan briefs=2, Start visible folded and open (tray ${folded.top}-${folded.bottom}, Start ${folded.startTop}-${folded.startBottom}; card ${heights.card}px, folded briefs ${heights.briefs.join("+")}px), result extras: dropped=1, lineage steps=3`);
   } catch (error) {
     await page.screenshot({ path: name("failed") }).catch(() => {});
     throw error;

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -107,25 +108,37 @@ func (r *BriefResult) unsettled() []string {
 // briefCriteriaMost is the most criteria a receipt or a conclusion card lists; the rest are counted.
 const briefCriteriaMost = 8
 
-// briefCriteriaNow is each criterion of to-do t's brief as it stands while the work goes on: met or not met as the
-// latest review that judged it found it, unchecked when none did, then the ones scope changes dropped. Nil when the
-// to-do has no brief (none is made here) or its brief names no criterion.
+// briefCriteriaNow is each criterion of to-do t's brief as it stands while the work goes on, read from the one place
+// that tracks it: the supervision ledger's per-criterion state (#3635, criteria.go: what the agent reported and what
+// a review or the judge checked, with its evidence). met and not_met as the ledger has them, pending as unchecked;
+// then the criteria scope changes dropped, which the ledger no longer lists (from the brief's log). Nil when the to-do
+// has no brief (none is made here) or its brief names no criterion.
 func (s *Service) briefCriteriaNow(t Todo) []BriefCriterion {
 	brief, ok := s.briefOfTodo(t.ID)
 	if !ok {
 		return nil
 	}
-	var checks []ReviewCheck // in order: a later review's check of a criterion wins (briefResultOf keeps the last)
+	var ledger []db.TodoCriterion
 	if v := t.Supervision; v != nil {
-		for _, r := range v.Reviews {
-			checks = append(checks, r.Checks...)
+		ledger = db.AlignTodoCriteria(v.DoneWhen, v.Criteria)
+	}
+	var list []BriefCriterion
+	for _, c := range brief.Criteria {
+		row := BriefCriterion{Criterion: c, State: criterionUnchecked}
+		for _, k := range ledger {
+			if !sameCriterion(k.Criterion, c) {
+				continue
+			}
+			switch k.State {
+			case "met":
+				row.State, row.Evidence = criterionMet, k.Evidence
+			case "not_met":
+				row.State, row.Evidence = criterionNotMet, k.Evidence
+			}
 		}
+		list = append(list, row)
 	}
-	list := briefResultOf(brief, checks, nil, t.ID, "", "", time.Time{}).Criteria
-	if len(list) == 0 {
-		return nil
-	}
-	return list
+	return append(list, (&taskBrief{rec: brief.briefRecord, st: briefState{Log: brief.Log}}).dropped()...)
 }
 
 // briefResultOfTodo is how to-do t's work ended against its brief; nil while it has not, and for a to-do a later one

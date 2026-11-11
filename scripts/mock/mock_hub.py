@@ -3706,6 +3706,74 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
+# MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
+# step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
+# `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once
+# ("Reading 3 files"), `parallel` a search with two reads beside it ("+2"), `thinking` a thought after the calls came back.
+# The thought is pushed MOCK_LIVE_STEP_PUSH seconds (default 3) after the chat's latest page went out: a page folds the
+# finished calls and any thought with them (fold_work, as the hub does), a push never is. `thinking-folded`: the thought
+# is in the page from the start, so the newest step reaches the app inside a fold (its `latest_thinking`).
+LIVE_STEP = os.environ.get("MOCK_LIVE_STEP", "")
+LIVE_STEP_LATER = {"items": [], "due": None}
+if LIVE_STEP:
+    def _live_call(name, inp, ts_min):
+        """A call still running: its tool_use, no result yet."""
+        return it("assistant", "tool_use", ts_min, tool_use_id="toolu_live_%04d" % (_seq[0] + 1), tool_name=name, tool_input=inp)
+
+    _src = "/Users/me/code/weather/WeatherWidget/"
+    _turn = [it("user", "text", 1.1, text="把中号布局的降雨条做完，再跑一遍小组件的快照测试。"),
+             it("assistant", "thinking", 1.05, text="先看中号布局现在怎么画降雨条，再改颜色和间距。")]
+    _turn += tool("Read", {"file_path": _src + "MediumWidgetView.swift"}, "1\timport SwiftUI\n…", 1)
+    _turn += tool("Edit", {"file_path": _src + "MediumWidgetView.swift", "old_string": "RainBar(hours)", "new_string": "RainBar(hours, dry: 0.2)"},
+                  "The file " + _src + "MediumWidgetView.swift has been updated.", 0.95)
+    if LIVE_STEP == "bash":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests",
+                                         "description": "Run the widget snapshot tests"}, 0.9))
+    elif LIVE_STEP == "command":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests/testMediumRainBarDryThreshold"}, 0.9))
+    elif LIVE_STEP in ("reads", "parallel"):  # calls made together: every tool_use before any result
+        for _f in ("RainBar.swift", "Provider.swift", "SmallWidgetView.swift")[: 3 if LIVE_STEP == "reads" else 2]:
+            _turn.append(_live_call("Read", {"file_path": _src + _f}, 0.9))
+        if LIVE_STEP == "parallel":
+            _turn.append(_live_call("Grep", {"pattern": "precipitationChance", "path": "Sources"}, 0.9))
+    elif LIVE_STEP in ("thinking", "thinking-folded"):
+        _turn += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -only-testing:WeatherWidgetTests/SnapshotTests",
+                               "description": "Run the widget snapshot tests"}, "Test Suite 'SnapshotTests' passed.\n    Executed 6 tests, with 0 failures", 0.6)
+        _thought = [it("assistant", "thinking", 0.5, text="The snapshots match on both sizes, so only the dark rain bar is left.\n"
+                                                         "Its colors come from the app's palette; check how the app picks them first.")]
+        if LIVE_STEP == "thinking":
+            LIVE_STEP_LATER["items"] = _thought
+        else:
+            _turn += _thought
+    ITEMS[WIDGET] = ITEMS[WIDGET] + _turn
+
+
+def live_step_page_sent(sid):
+    """MOCK_LIVE_STEP=thinking: a page of the widget chat went out; the held thought follows it after a while."""
+    if sid != WIDGET or not LIVE_STEP_LATER["items"]:
+        return
+    first = LIVE_STEP_LATER["due"] is None
+    LIVE_STEP_LATER["due"] = time.time() + float(os.environ.get("MOCK_LIVE_STEP_PUSH", "3"))
+    if not first:
+        return
+
+    def push():
+        while time.time() < LIVE_STEP_LATER["due"]:
+            time.sleep(0.2)
+        before, new = ITEMS[sid][-1]["seq"], LIVE_STEP_LATER["items"]
+        LIVE_STEP_LATER["items"] = []
+        ITEMS[sid] = ITEMS[sid] + new
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try:
+                    out({"type": "items", "machine_id": "macbook", "session_id": sid, "items": new, **span(new, before)})
+                except Exception:
+                    pass
+    threading.Thread(target=push, daemon=True).start()
+
+
 # MOCK_TASKS=1: the unified entry (docs/assistant/unified-entry.md, #930). The main conversation dispatches tasks: a started plan
 # of two (the widget fix working, the unit tests waiting for an answer — ix_tests), a read-only one that finished with a
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
@@ -4034,7 +4102,11 @@ if MOCK_TASKS:
                                        "round": 0, "updated_at": ago(minutes=18),
                                        "reviews": [{"at": ago(minutes=18), "verdict": "accepted", "note": "Written to docs/release-notes.md",
                                                     "checks": [{"criterion": _release_done_when[0], "met": True,
-                                                                "evidence": "7 listed, the same as the repository shows"}]}]})
+                                                                "evidence": "7 listed, the same as the repository shows"}]}],
+                                       # the ledger's own per-criterion state (#3635): the page's one list of criteria
+                                       "criteria": [{"criterion": _release_done_when[0], "state": "met", "at": ago(minutes=18),
+                                                     "evidence": "7 listed, the same as the repository shows", "by": "supervisor:" + ASK1},
+                                                    {"criterion": _release_done_when[1], "state": "pending"}]})
         # The release notes' review line carries the result (the line of MOCK_TASKS_REPORTS when it is there), and its
         # receipt the criteria as they stood when the agent stopped.
         _review = next((i for i in TASK_FEED[ASK1] if i["id"] == "feed_v1"), None)
@@ -15372,6 +15444,7 @@ MOCK_HELP = [
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
@@ -16543,6 +16616,7 @@ class H(BaseHTTPRequestHandler):
             out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
+            live_step_page_sent(sid)
             return self.send_json(out)
         if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
             q = parse_qs(urlparse(self.path).query)
@@ -18552,6 +18626,7 @@ class H(BaseHTTPRequestHandler):
                                "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
+                        live_step_page_sent(sid)
                     # What is being generated, right after the backlog, as the hub's sendLiveText does (#1966).
                     if LIVE_TEXT.get(sid):
                         send({"type": "delta", "machine_id": mid, "session_id": sid, "text": LIVE_TEXT[sid]})

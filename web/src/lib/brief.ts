@@ -128,11 +128,20 @@ export function scopeChanges(brief: TaskBrief | undefined): BriefEvent[] {
   return (brief?.log ?? []).filter((e) => e.kind === "scope");
 }
 
-/** How the work of to-do `id` ended against its brief: the brief's result when it is this to-do's and names a
- *  criterion; a to-do another took the work over from has none (the result is that one's). */
+/** How the work of to-do `id` ended against its brief: the brief's result when it is this to-do's; a to-do another
+ *  took the work over from has none (the result is that one's). */
 export function resultOf(todo: { id: string; brief?: TaskBrief } | undefined): BriefResult | undefined {
   const r = todo?.brief?.result;
-  return r && r.criteria?.length > 0 && (!r.todo_id || r.todo_id === todo?.id) ? r : undefined;
+  return r && Array.isArray(r.criteria) && (!r.todo_id || r.todo_id === todo?.id) ? r : undefined;
+}
+
+/** What a finished to-do's result says that its criteria list (the supervision ledger's, #3635) cannot: the criteria a
+ *  scope change dropped, each with the change, and what was done beyond the brief. Undefined when there is neither. */
+export function resultExtras(todo: { id: string; brief?: TaskBrief } | undefined): { dropped: BriefCriterion[]; alsoDone: string[] } | undefined {
+  const r = resultOf(todo);
+  const dropped = r?.criteria.filter((c) => c.state === "dropped") ?? [];
+  const alsoDone = r?.also_done ?? [];
+  return dropped.length || alsoDone.length ? { dropped, alsoDone } : undefined;
 }
 
 /** Whether the lineage has something to tell: more than the one to-do. */

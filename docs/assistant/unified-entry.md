@@ -390,7 +390,8 @@ never writes `request`: a `brief` in the tool call is dropped.
 nothing is planned. The plan's task carries the brief (`tasks[i].brief`) from the moment the plan is made, so the card
 can show the owner's words, the criteria and the time, and "Start" confirms them. The brief is kept when the task
 starts, dated from the start. The web draws `tasks[i].brief` on the plan card and the to-do's `brief` and `lineage`
-on its page (`docs/web/web.md`, "Pages": **A task's brief**); the iOS and Android plan cards and task pages do not yet.
+on its page (the criteria stay in the page's one list, the ledger's; a finished task adds the dropped ones and
+`also_done` under it) (`docs/web/web.md`, "Pages": **A task's brief**); the iOS and Android plan cards and task pages do not yet.
 
 **Lineage.** A task that takes over from another gives `continues` (that task's to-do id) and `continues_why` in
 `task_plan`: a retry on another computer, a rework round, a new Agent after the first failed, a part split off. It
@@ -426,15 +427,19 @@ review's feed item carries it (`body.result`), and the tool's answer says it.
 Two more places list the criteria (`server/internal/assistant/task_brief_result.go`):
 
 - **The done receipt** (feed kind `receipt`, `state: "done"`) carries `criteria`: each criterion of the brief as it
-  stood when the Agent stopped, `{criterion, state, evidence?, change?, changed_at?}` with the states above (`met` /
-  `not_met` as the latest review that judged it found it, `unchecked` when none did, then the `dropped` ones). At
+  stood when the Agent stopped, `{criterion, state, evidence?, change?, changed_at?}` with the states above. They are
+  read from the supervision ledger's per-criterion state (`supervision.criteria`, #3635, `docs/assistant/assistant.md`,
+  "Per-criterion acceptance progress": what the Agent reported and what a review or the judge checked), not worked
+  out again: `met` / `not_met` with its evidence, `pending` there is `unchecked` here, then the `dropped` ones, which
+  the ledger no longer lists (from the brief's log). At
   most 8; `criteria_more` counts the rest. Absent for a to-do without a brief or criteria (no brief is made for a
   receipt), so a receipt from before reads as it did. `review {state, criteria}` (the count) is unchanged.
 - **The conclusion card** (`docs/extensions/bots.md`, "Conclusions") of a done or cannot-be-done conclusion lists the
   result under its goal: **Against what was asked**, one line a criterion ("✅ …", "❌ … (not met)", "▫️ … (not
   checked)", "➖ … (dropped: <the scope change>)"), the first 8 and "… and N more", then "Also done: …". Only once the
   work ended against its brief with this to-do carrying it; a decision's card lists nothing (it is about what to
-  choose). The card's other lines and the ask's fields are unchanged.
+  choose). It reads the brief's recorded `result`, the review's own checks at the moment the work ended, which is
+  also what the briefing tells; the ledger goes on living after that (a reopened task's criteria start again). The card's other lines and the ask's fields are unchanged.
 
 **The briefing.** The morning and evening routines' facts (`docs/assistant/assistant.md`, "Scheduled tasks") list, from
 the briefs: for each open piece of work that needs the owner, is overdue, or whose scope changed since the last
