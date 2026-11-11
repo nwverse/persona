@@ -370,6 +370,8 @@ extension Theme {
         static let photo = "photo"
         static let photos = "photo.on.rectangle"
         static let camera = "camera"
+        /// Scan Document: the document camera (VisionKit), the composer's item next to Take Photo (#3720).
+        static let scanDocument = "doc.viewfinder"
         /// Glasses Photo: a photo taken with the Meta glasses (Persona/Glasses), the composer's glasses item.
         static let glasses = "eyeglasses"
         static let list = "list.bullet.rectangle"

@@ -988,10 +988,13 @@ extension AttachPanel {
 extension AttachMoreSection {
     /// The rows every composer's + offers besides photos and files, in their order (#3225, #3805): the calls and the
     /// camera, then Mention. A row whose action is nil is not there (no call before a conversation exists, no camera).
-    static func common(voice: (() -> Void)?, camera: (() -> Void)?, glasses: (() -> Void)?, mention: @escaping () -> Void) -> [AttachMoreSection] {
+    /// `scan`: Scan Document (#3720), next to Take Photo.
+    static func common(voice: (() -> Void)?, camera: (() -> Void)?, scan: (() -> Void)? = nil, glasses: (() -> Void)?,
+                       mention: @escaping () -> Void) -> [AttachMoreSection] {
         var capture: [AttachMoreRow] = []
         if let voice { capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel, action: voice)) }
         if let camera { capture.append(AttachMoreRow(id: "composer-menu-camera", title: String(localized: "Take Photo [Chat View 6e3a10]"), symbol: Theme.Icon.camera, action: camera)) }
+        if let scan { capture.append(AttachMoreRow(id: "composer-menu-scan", title: String(localized: "Scan Document"), symbol: Theme.Icon.scanDocument, action: scan)) }
         if let glasses { capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses, action: glasses)) }
         var sections: [AttachMoreSection] = []
         if !capture.isEmpty { sections.append(AttachMoreSection(id: "capture", title: nil, rows: capture)) }

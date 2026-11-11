@@ -41311,6 +41311,29 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't save the scan.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't save the scan."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スキャンを保存できませんでした。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扫描件没能保存。"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Couldn't save: %@": {
       "extractionState": "manual",
       "localizations": {
@@ -109724,6 +109747,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "说做完了：%@"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Scan Document": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan Document"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "書類をスキャン"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "扫描文稿"
           }
         }
       },

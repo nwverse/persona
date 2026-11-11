@@ -4321,6 +4321,7 @@ struct Composer: View, Equatable {
     @State private var showPhotos = false
     @State private var showCamera = false
     @State private var showGlasses = false // Glasses Photo (Persona/Glasses), only when MetaGlasses.isBuiltIn
+    @State private var showScan = false // Scan Document (#3720), only where the device can scan
     /// The photos, videos and file uploads for the next message: the app keeps them per conversation, as it keeps the
     /// text (#2626), so a composer built again still has them.
     private var held: ComposerAttachments { model.composerAttachments(key) }
@@ -4927,7 +4928,7 @@ struct Composer: View, Equatable {
             }
         }
         #endif
-        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses) { add($0) })
+        .modifier(ComposerCaptureSheets(camera: $showCamera, glasses: $showGlasses, scan: $showScan, pages: { addScan($0) }) { add($0) })
         .sheet(isPresented: $typingModel) { SessionTypedModelSheet(key: key, session: model.session(key)) }
         .onChange(of: picks) { _, items in
             guard !items.isEmpty else { return }
@@ -4986,6 +4987,7 @@ struct Composer: View, Equatable {
     private var attachMoreSections: [AttachMoreSection] {
         var sections = AttachMoreSection.common(voice: VoicePlatform.current == .phone ? { startVoice() } : nil,
                                                 camera: CameraPicker.isAvailable ? { showCamera = true } : nil,
+                                                scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 glasses: MetaGlasses.isBuiltIn ? { showGlasses = true } : nil,
                                                 mention: { typeMention() })
         if !shellChat {
@@ -5094,6 +5096,13 @@ struct Composer: View, Equatable {
     }
 
     private func add(_ img: UIImage) { MessagePhotos.add(img, to: &images, model: model) }
+
+    /// A scan's pages: the next message's photos while they fit, else one PDF uploaded as a picked file is (#3720).
+    private func addScan(_ pages: [UIImage]) {
+        #if os(iOS)
+        DocumentScanner.deliver(pages, room: MessagePhotos.limit - images.count, model: model, add: { add($0) }, upload: { upload($0) })
+        #endif
+    }
 }
 
 /// The composer's "/" menu: Claude Code's own commands, and Persona' quick messages under a short word. Picking one
