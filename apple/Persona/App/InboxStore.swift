@@ -1,5 +1,10 @@
 import Foundation
 import Observation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 /// The unified inbox as the app knows it (docs/assistant/inbox.md): the hub's items, kept on disk so the list paints at once
 /// (offline too), refreshed when the hub says `inbox` and on (re)connect. Marking done applies at once and is sent
@@ -24,16 +29,34 @@ final class InboxStore {
     /// Done marks the hub may not have yet, by `InboxItem.key`, laid over every list that comes in (#2201): a list from
     /// before the hub took a mark must not bring a swiped-away item back.
     @ObservationIgnored private var marks = InboxMarks()
-    @ObservationIgnored private let saver = Debouncer(.seconds(1))
+    /// The list on disk paints a cold start: written at most once a minute (3.3 MB on a busy hub, #4740), and when the
+    /// app leaves.
+    @ObservationIgnored private let saver = Throttle(gap: .seconds(60))
     private static let stateName = "inbox-items"
     /// The hub's tag of the list `items` came from (`ETag`, #4739): sent with the next reload, which then costs a 304
     /// while nothing changed. Good only for that hub and while nothing changed `items` here since (`itemsRevision`); not
     /// kept on disk, where a done mark the hub never got could outlive it.
     @ObservationIgnored private var listTag: (etag: String, hub: URL, revision: UInt64)?
+    /// The cursor of the list held, for that hub (docs/protocol/protocol.md "Inbox delta", #4740): a reload asks for only
+    /// what changed since, a few KB where the whole list was about 700 KB (3.4 MB decoded) on a busy hub. Not kept on disk:
+    /// the first list after a launch is whole.
+    @ObservationIgnored private var cursor: (value: String, hub: URL)?
+    /// Hubs that answered without a cursor (older ones): they are asked with the tag instead.
+    @ObservationIgnored private var withoutDeltas: Set<URL> = []
 
     private init() {
         items = StateCache.load(Self.stateName, as: [InboxItem].self) ?? []
         teachLarkSync()
+        #if os(iOS) || os(visionOS)
+        let leaving = [UIApplication.didEnterBackgroundNotification, UIApplication.willTerminateNotification]
+        #else
+        let leaving = [NSApplication.willTerminateNotification]
+        #endif
+        for name in leaving {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { @Sendable _ in
+                MainActor.assumeIsolated { InboxStore.shared.saver.flush() }
+            }
+        }
     }
 
     var open: [InboxItem] { items.filter { !$0.isDone } }
@@ -142,6 +165,7 @@ final class InboxStore {
 
     /// Entering or leaving Demo Mode: the other side's items must not show for a moment.
     func forget() {
+        cursor = nil
         items = []
         history = []
         historyMore = true
@@ -182,12 +206,29 @@ final class InboxStore {
             marks.endList(seq)
         }
         do {
-            let answer = try await api.inboxListing(connectors: Self.drawsConnectors, etag: held)
-            if let listing = answer.listing {
-                apply(marks.lay(listing.items, seq: seq))
+            if withoutDeltas.contains(hub) {
+                let answer = try await api.inboxListing(connectors: Self.drawsConnectors, etag: held)
+                if let listing = answer.listing {
+                    apply(marks.lay(listing.items, seq: seq))
+                    if listing.triage != triage { triage = listing.triage }
+                }
+                listTag = answer.etag.map { (etag: $0, hub: hub, revision: itemsRevision) }
+            } else {
+                let since = cursor.flatMap { $0.hub == hub ? $0.value : nil } ?? InboxListing.noCursor
+                let listing = try await api.inboxListing(connectors: Self.drawsConnectors, since: since)
+                if listing.delta == true && since != InboxListing.noCursor {
+                    apply(marks.lay(listing.applied(to: items), seq: seq))
+                } else {
+                    apply(marks.lay(listing.items, seq: seq))
+                }
                 if listing.triage != triage { triage = listing.triage }
+                if let next = listing.cursor {
+                    cursor = (next, hub)
+                } else { // a hub without deltas: the tag from now on
+                    cursor = nil
+                    withoutDeltas.insert(hub)
+                }
             }
-            listTag = answer.etag.map { (etag: $0, hub: hub, revision: itemsRevision) }
             listed = true
             error = nil
         } catch {
@@ -195,8 +236,10 @@ final class InboxStore {
         }
     }
 
-    /// Pull to refresh: the hub collects Feishu and mail now.
+    /// Pull to refresh: the hub collects Feishu and mail now. Its whole list is none a cursor names: the next reload asks
+    /// for a whole one again.
     func refresh() async {
+        cursor = nil
         await fetch { try await $0.refreshInbox(connectors: Self.drawsConnectors) }
     }
 
