@@ -218,7 +218,7 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	// The models are counted per lane run (kb_lanes.go: kbCounted, through the run's context).
 	// Retries: the steps' backoffs carry over to the engine after this one (the hub's settings changed; #4247).
 	e := &kb.Engine{Store: k.store, Retries: &k.retries, Model: kbCounted(s.kbModel("inbox.triage")), ModelFor: func(id string) kb.Model { return kbCounted(s.kbModel(id)) },
-		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, MinutesWritten: s.minutesWritten, LiveChanged: s.meetingKick, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
+		Owner: s.owner(ctx), Logf: s.logf, TextDays: set.TextDays, AttachmentDays: set.AttachmentDays, AttachmentDaysBySource: set.AttachmentDaysBySource, HandleKey: k.key, Index: s.kbIndexEntity, Unindex: s.kbUnindex, RecordingDaysFunc: s.recordingDaysNow, MinutesDaysFunc: s.minutesDaysNow, MinutesWritten: s.minutesWritten, LiveChanged: s.meetingKick, MeetingChanged: s.meetingLiveChanged, EarlierMeetingsInAnswers: true, Changed: s.kbChanged, MineObserved: s.kbObserveOwner,
 		Selection: s.kbSelectionNow, TopicsOn: s.kbTopicsNow}
 	e.ObserveChanges()
 	e.ExtraDirs = kbReadDirs(set.ExtraDirs)
@@ -497,6 +497,7 @@ func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) 
 		if n := e.PruneRecordings(time.Now()); n > 0 {
 			s.logf("kb: pruned %d recording(s)", n)
 		}
+		s.meetingRoomsSweep(ctx, e) // the rooms of transcripts cut, and of recordings gone (meeting_room.go)
 		e.SummarizeRecordings(ctx, 3)
 	})
 	// Same work under two names, and the Moments (company feed) posts about each project: a few model calls every half hour.

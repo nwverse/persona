@@ -34,5 +34,6 @@
   "switch": "切换",
   "switch_label": "切换助手",
   "assistant_footer": "只显示「{name}」自己的内容。要改别的助手，先切换过去。",
-  "hub_footer": "这两组和当前是哪个助手无关。"
+  "hub_footer": "这两组和当前是哪个助手无关。",
+  "standing_authorizations": "长期授权"
 }
