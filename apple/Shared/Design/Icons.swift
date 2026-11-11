@@ -452,20 +452,22 @@ extension Theme {
         static let pluginStar = "star"
         /// UI version 6's icons for homes and markets (docs/extensions/extensions.md "UI version 6", #827), one meaning
         /// each. Meanings the app already has (home, lock, camera, play…) draw the app's own (`ExtensionUIStyle.icon`).
+        /// Unlock and bolt are not `lock.open` and `bolt`: the app draws those for other things (a session's permissions,
+        /// the terminal's quick commands).
         static let pluginSofa = "sofa"
         static let pluginLight = "lightbulb"
         static let pluginPower = "power"
         static let pluginFan = "fan"
         static let pluginThermometer = "thermometer.medium"
         static let pluginDroplet = "drop"
-        static let pluginUnlock = "lock.open"
+        static let pluginUnlock = "lock.open.fill"
         static let pluginDoor = "door.left.hand.closed"
         static let pluginWindow = "window.vertical.closed"
         static let pluginSpeaker = "hifispeaker"
         static let pluginTV = "tv"
         static let pluginPlug = "poweroutlet.type.b"
         static let pluginBattery = "battery.75percent"
-        static let pluginBolt = "bolt"
+        static let pluginBolt = "bolt.circle"
         static let pluginCloud = "cloud.fill"
         static let pluginRain = "cloud.rain"
         static let pluginSnow = "snowflake"
