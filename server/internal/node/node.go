@@ -1117,6 +1117,17 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 		}
 		var opts sendOpts
 		_ = json.Unmarshal(params, &opts)
+		if p.NewSessionID == "" && p.SessionID == "" && opts.ClientMsgID != "" {
+			// A new conversation's first message with its client_msg_id (one a person's own app opened, the manager's
+			// start.go humanStart): the conversation's id, the warm spare's or a new one, is known once it started, so
+			// its first line is expected from then on, as sent when it was typed (echo.go).
+			at := time.Now()
+			id, err := send()
+			if err == nil && id != "" {
+				n.expectFirstLine(id, opts.ClientMsgID, p.Text, len(p.Images), at)
+			}
+			return map[string]any{"session_id": id}, err
+		}
 		if p.NewSessionID == "" || opts.ClientMsgID == "" {
 			id, err := send()
 			return map[string]any{"session_id": id}, err
