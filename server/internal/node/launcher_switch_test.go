@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Switching a running Claude Code Agent to another launcher with the user's next message (launcher_switch.go, #5035).
@@ -236,13 +238,11 @@ func TestLauncherSwitchPickPreconditions(t *testing.T) {
 	}
 	// while a switch is carried out (the session listed as starting), a pick or a cancel is refused at once, not held
 	// for the minutes it takes
-	if err := n.starts.add(sidA, &startRec{done: make(chan struct{})}); err != nil {
-		t.Fatal(err)
-	}
+	n.switches().begin(sidA, proto.Session{SessionID: sidA, Starting: true})
 	if code, _ := refusalOf(t, pick(t, n, map[string]any{"launcher": "claude", "from": "claude"})); code != proto.CodeSwitchStale {
 		t.Errorf("a cancel during a switch: %q", code)
 	}
-	n.starts.finish(sidA, nil)
+	n.switches().end(sidA)
 	// nor while the message carrying it out still runs its checks, before the session is listed as starting
 	done := n.markSwitching(sidA)
 	if code, _ := refusalOf(t, pick(t, n, map[string]any{"launcher": "work", "from": "claude"})); code != proto.CodeSwitchStale {
@@ -425,7 +425,11 @@ func TestLauncherSwitchOnTheUsersNextMessage(t *testing.T) {
 	f.after(func(c herdrCall) {
 		if c.Method == "pane.send_input" {
 			mu.Lock()
-			starting = n.starts.listed(map[string]bool{})
+			for _, row := range cachedSessions(n) {
+				if row.SessionID == sidA {
+					starting = append(starting, row)
+				}
+			}
 			mu.Unlock()
 		}
 	})
@@ -452,7 +456,7 @@ func TestLauncherSwitchOnTheUsersNextMessage(t *testing.T) {
 		t.Errorf("listed while it switched: %+v", starting)
 	}
 	mu.Unlock()
-	if n.starts.get(sidA) != nil {
+	if n.switches().inFlight(sidA) {
 		t.Error("still listed as starting")
 	}
 	st, _ := n.state.get(sidA)
@@ -662,7 +666,7 @@ func TestLauncherSwitchFailureRollsBack(t *testing.T) {
 			if ps := n.pendingSwitch(sidA); ps != nil {
 				t.Errorf("a failed switch still waits: %+v", ps)
 			}
-			if n.starts.get(sidA) != nil {
+			if n.switches().inFlight(sidA) {
 				t.Error("left listed as starting")
 			}
 		})
@@ -818,30 +822,87 @@ func TestResumeKeepsAPendingSwitch(t *testing.T) {
 }
 
 // The user's Resume waits for a switch being carried out (the agent quit, its new one not up yet) instead of starting
-// a second claude in the shell it left.
+// a second claude in the shell it left: on the next connection's Node of a resident node too (the switch began on the
+// last one), which lists the session as starting meanwhile.
 func TestResumeWaitsForASwitch(t *testing.T) {
-	n, f, _ := keptAgent(t)
-	rec := &startRec{done: make(chan struct{})}
-	if err := n.starts.add(sidA, rec); err != nil {
-		t.Fatal(err)
+	old, _, _ := keptAgent(t)
+	next, _ := testNode(t)
+	next.share.Store(old.switches()) // a resident node's Nodes share it (attach.go)
+	old.switches().begin(sidA, proto.Session{SessionID: sidA, Launcher: "work", Starting: true})
+	if rows := next.switches().listed(map[string]bool{}); len(rows) != 1 || !rows[0].Starting || rows[0].Launcher != "work" {
+		t.Errorf("the next Node lists %+v", rows)
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		n.awaitSwitch(context.Background(), sidA)
+		next.awaitSwitch(context.Background(), sidA)
 	}()
 	select {
 	case <-done:
 		t.Fatal("the Resume did not wait for the switch")
 	case <-time.After(200 * time.Millisecond):
 	}
-	n.starts.finish(sidA, nil)
+	sent := make(chan struct{})
+	go func() { // a message on the next Node waits as well
+		defer close(sent)
+		if unlock, err := next.inputTurn(context.Background(), sidA); err == nil {
+			unlock()
+		}
+	}()
 	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the Resume still waits after the switch")
+	case <-sent:
+		t.Fatal("a message did not wait for the switch")
+	case <-time.After(200 * time.Millisecond):
 	}
-	_ = f
+	old.switches().end(sidA)
+	for _, ch := range []chan struct{}{done, sent} {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatal("still waiting after the switch")
+		}
+	}
+}
+
+// A switch whose Node's connection ended (a resident node's hub reconnected) runs to its end, and what it writes goes
+// to the next connection's Node, over the copy that Node loaded from the hub (taken before the switch was carried out:
+// the old launcher, the switch still waiting), and through it to the hub: the session is on the new launcher there,
+// with no switch waiting.
+func TestASwitchOutlivingItsConnectionIsWrittenByTheNextNode(t *testing.T) {
+	n, f, _, cwd, _ := switchNode(t, proto.StatusIdle, nil)
+	n.state.setPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "work", Model: "opus", At: time.Now()})
+	loaded, _ := n.state.get(sidA) // what the hub has
+
+	next, _ := testNode(t)
+	next.share.Store(n.switches())
+	var mu sync.Mutex
+	var written []sessionState
+	next.state.persist = func(id string, v sessionState) {
+		mu.Lock()
+		written = append(written, v)
+		mu.Unlock()
+	}
+	next.state.merge(map[string]sessionState{sidA: loaded})
+	next.switches().receive(next) // its state has loaded
+	// The old connection is gone: its Node's writes to the hub fail.
+	closed := rpc.New("n", io.Discard)
+	closed.Close(rpc.ErrClosed)
+	n.peer, n.state.persist = closed, n.persistState
+	quitsToShell(f, cwd)
+	comesUpWhen(f, "w1:p1", func(string) bool { return true })
+	_ = tell(t, n, "hello", true) // the message itself goes to a connection that is gone
+	if starts := typedStarts(f, "w1:p1"); len(starts) != 1 || !strings.Contains(starts[0], " launch work ") {
+		t.Fatalf("typed %q", starts)
+	}
+	st, ok := next.state.get(sidA)
+	if !ok || st.Launcher != "work" || st.Model != "opus" || st.PendingSwitch != nil {
+		t.Fatalf("the next Node has %+v", st)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(written) == 0 || written[len(written)-1].Launcher != "work" || written[len(written)-1].PendingSwitch != nil {
+		t.Fatalf("written to the hub: %+v", written)
+	}
 }
 
 // The probe tells a launcher that unsets $CLAUDE_CONFIG_DIR (env -u): it runs claude with ~/.claude.

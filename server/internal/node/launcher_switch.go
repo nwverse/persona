@@ -97,28 +97,15 @@ func (n *Node) pendingSwitch(id string) *proto.PendingSwitch {
 }
 
 // unrecordedSwitch is the switch session id waits with in the node's memory (a session with no record), nil when none.
-func (n *Node) unrecordedSwitch(id string) *proto.PendingSwitch {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if ps, ok := n.switches[id]; ok {
-		return &ps
-	}
-	return nil
-}
+func (n *Node) unrecordedSwitch(id string) *proto.PendingSwitch { return n.switches().pendingOf(id) }
 
 // putPendingSwitch sets session id's pending switch (nil: none) where it is kept, and tells the hub.
 func (n *Node) putPendingSwitch(id string, ps *proto.PendingSwitch) {
-	recorded := n.state.setPendingSwitch(id, ps)
-	n.mu.Lock()
-	if recorded || ps == nil {
-		delete(n.switches, id)
+	if n.state.setPendingSwitch(id, ps) {
+		n.switches().setPending(id, nil)
 	} else {
-		if n.switches == nil {
-			n.switches = map[string]proto.PendingSwitch{}
-		}
-		n.switches[id] = *ps
+		n.switches().setPending(id, ps)
 	}
-	n.mu.Unlock()
 	n.notifySessions()
 }
 
@@ -495,7 +482,7 @@ func (n *Node) switchBusy(ctx context.Context, id string) string {
 	if a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked {
 		return "the agent is " + a.AgentStatus
 	}
-	if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+	if r := n.starts.get(id); r != nil && r.ended.IsZero() || n.switches().inFlight(id) {
 		return "the agent is starting"
 	}
 	return n.backgroundWork(id)
@@ -605,27 +592,13 @@ func (n *Node) ranExecution(id string, prev sessionState) modelExecution {
 
 // markSwitching marks session id as having a switch carried out by a message, from before its checks until it ends
 // (the returned func): restarting says so.
-func (n *Node) markSwitching(id string) (done func()) {
-	n.mu.Lock()
-	if n.switching == nil {
-		n.switching = map[string]bool{}
-	}
-	n.switching[id] = true
-	n.mu.Unlock()
-	return func() {
-		n.mu.Lock()
-		delete(n.switching, id)
-		n.mu.Unlock()
-	}
-}
+func (n *Node) markSwitching(id string) (done func()) { return n.switches().mark(id) }
 
 // restarting: session id's agent is being started again right now, by a message carrying out a launcher switch (from
-// its checks on) or a start listed as starting: a pick or a stop is refused rather than held for it.
+// its checks on, on this connection's Node or the last one's) or a start listed as starting: a pick or a stop is
+// refused rather than held for it.
 func (n *Node) restarting(id string) bool {
-	n.mu.Lock()
-	switching := n.switching[id]
-	n.mu.Unlock()
-	if switching {
+	if n.switches().busy(id) {
 		return true
 	}
 	r := n.starts.get(id)
@@ -656,13 +629,15 @@ func withCdFirst(ctx context.Context) context.Context {
 func cdFirst(ctx context.Context) bool { v, _ := ctx.Value(cdFirstKey{}).(bool); return v }
 
 // awaitSwitch waits, before the user's Resume of session id, for a message carrying out a launcher switch right now:
-// it quits the agent and starts it again in its terminal, listed as starting (applySwitch). After it the Resume finds
-// the agent running, or resumes it as it is then. A start of the session in the background is waited for as well.
+// it quits the agent and starts it again in its terminal, listed as starting (applySwitch), maybe on the last
+// connection's Node. After it the Resume finds the agent running, or resumes it as it is then. A start of the session
+// in the background is waited for as well.
 func (n *Node) awaitSwitch(ctx context.Context, id string) {
 	if !validID(id) {
 		return
 	}
 	_ = n.starts.wait(ctx, id)
+	_ = n.switches().wait(ctx, id)
 	n.typing.lock(id)() // the message's turn, whose switch registers only once it is under way
 }
 
@@ -708,15 +683,14 @@ func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.Pendin
 	if err := n.checkPaneFor(ctx, pane, "claude", sendOpts{}); err != nil {
 		return "", false, err // as for any message: nothing done, the switch waits
 	}
-	rec := &startRec{done: make(chan struct{}), session: proto.Session{SessionID: id, Cwd: plan.cwd, Launcher: ps.Launcher,
-		Agent: "claude", Status: proto.StatusIdle, Starting: true, StartedByPersona: had, UpdatedAt: time.Now().UTC(),
-		WorkspaceID: plan.a.WorkspaceID, PendingSwitch: &ps}}
-	if err := n.starts.add(id, rec); err != nil {
-		n.logf("session %s: switch to launcher %s waits (%v); the message goes on %s", id, ps.Launcher, err, own)
-		return pane, false, nil // a start of it under way: the switch waits
+	row := proto.Session{SessionID: id, Cwd: plan.cwd, Launcher: ps.Launcher, Agent: "claude", Status: proto.StatusIdle,
+		Starting: true, StartedByPersona: had, UpdatedAt: time.Now().UTC(), WorkspaceID: plan.a.WorkspaceID, PendingSwitch: &ps}
+	if !n.switches().begin(id, row) {
+		n.logf("session %s: switch to launcher %s waits (another one is under way); the message goes on %s", id, ps.Launcher, own)
+		return pane, false, nil
 	}
 	defer func() {
-		n.starts.finish(id, nil) // whatever came of it: not a failed start of the session
+		n.switches().end(id) // last: what the switch wrote is written by then, here or by the next connection's Node
 		n.notifySessions()
 	}()
 	// From the first Ctrl+C on, on its own clock: a caller that goes away (a hub redeploy ends the connection) must
@@ -789,8 +763,8 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 // list showed until a reply.
 func (n *Node) switched(id string, ps proto.PendingSwitch) {
 	n.state.setPendingSwitch(id, nil)
+	n.switches().setPending(id, nil)
 	n.mu.Lock()
-	delete(n.switches, id)
 	if m, ok := n.modes[id]; ok {
 		m.Model = nil
 		n.modes[id] = m

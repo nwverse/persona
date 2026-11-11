@@ -216,6 +216,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		out = append(out, s)
 		seen[s.SessionID] = true
 	}
+	for _, s := range n.switches().listed(seen) { // an agent moving to another launcher, between its two (switch_share.go)
+		n.decorateIn(&s, pass)
+		out = append(out, s)
+		seen[s.SessionID] = true
+	}
 	// Runtimes (runtimes.go): listed as they say, appended straight into the list and dropped there when already seen.
 	from := len(out)
 	out = n.runtimes.appendSessions(out)

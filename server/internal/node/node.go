@@ -171,11 +171,9 @@ type Node struct {
 	sysOnce    sync.Once // system: read once (metrics.go)
 	sys        proto.System
 
-	// switches: the launcher switches waiting for a message, of sessions with no state record (launcher_switch.go); a
-	// recorded session keeps its own in the record. switching: the sessions a message is carrying a switch out for
-	// right now (markSwitching). Under mu; nil until the first.
-	switches  map[string]proto.PendingSwitch
-	switching map[string]bool
+	// share: what the node keeps of launcher switches outside the state records, shared by a resident node's Nodes
+	// (switch_share.go, attach.go); nil until the first use when attach set none (switches).
+	share atomic.Pointer[switchShare]
 
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
@@ -416,6 +414,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	go n.watchPorts(ctx)
 	n.startTodoTokensReconciler(ctx)
 	defer n.starts.close()
+	defer n.switches().leave(n) // the records of a switch still running go to the next connection's Node
 	return n.peer.Serve(ctx, r)
 }
 
@@ -459,11 +458,7 @@ const stateLoadTimeout = 20 * time.Second
 func (n *Node) loadState(ctx context.Context) bool {
 	defer n.ultracodeStateLoaded()
 	n.state.mu.Lock()
-	n.state.persist = func(id string, v sessionState) {
-		if n.peer != nil {
-			_ = n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v})
-		}
-	}
+	n.state.persist = n.persistState
 	n.state.mu.Unlock()
 	legacyPath := filepath.Join(n.dir, "sessions.json")
 	if legacy := legacyState(legacyPath, n.logf); len(legacy) > 0 {
@@ -504,6 +499,17 @@ func (n *Node) reloadState(ctx context.Context) bool {
 	}
 }
 
+// persistState writes session id's record v through the hub (state.put). One a launcher switch writes after this
+// connection ended (it runs on to its end) goes to the next connection's Node, which writes it (switch_share.go).
+func (n *Node) persistState(id string, v sessionState) {
+	if n.peer == nil {
+		return
+	}
+	if err := n.peer.Notify("state.put", map[string]any{"session_id": id, "state": v}); err != nil {
+		n.switches().keep(n, id, v)
+	}
+}
+
 // fetchState is one try of state.load: what it brings is merged under what this connection already has.
 func (n *Node) fetchState(ctx context.Context) bool {
 	if n.peer == nil {
@@ -519,6 +525,8 @@ func (n *Node) fetchState(ctx context.Context) bool {
 		return false
 	}
 	n.state.merge(res.Sessions)
+	// What a launcher switch that outlived the last connection wrote since, over what the hub had (switch_share.go).
+	n.switches().receive(n)
 	go n.recoverAssistantTasks(func(id, text string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
