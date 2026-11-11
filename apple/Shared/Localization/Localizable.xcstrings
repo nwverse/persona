@@ -86631,6 +86631,29 @@
         }
       }
     },
+    "Only applies to the Inbox's AI twin, not other Agents. Empty fields follow Agents. Changing the provider clears the previous model and thinking effort. Choose Follow Agents and save to clear the independent settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only applies to the Inbox's AI twin, not other Agents. Empty fields follow Agents. Changing the provider clears the previous model and thinking effort. Choose Follow Agents and save to clear the independent settings."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "受信トレイの AI 分身のみに適用され、他の Agents には影響しません。空欄は Agents の設定に従います。プロバイダーを変更すると、以前のモデルと思考量がクリアされます。「Agents に従う」を選んで保存すると、個別設定を解除できます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅用于收件箱的 AI 分身，不影响其他 Agents。留空的字段跟随 Agents。更换供应商会清除原来的模型和思考强度。选择「跟随 Agents」并保存，即可清除独立设置。"
+          }
+        }
+      }
+    },
     "Only changes the name on this device. Leave empty to use the hub's own name.": {
       "localizations": {
         "en": {

@@ -204,15 +204,19 @@ func TestModelConfigurationPreservesLegacyBaselines(t *testing.T) {
 			t.Errorf("%s: %+v %v", id, b, err)
 		}
 	}
-	if err := s.putSetting(ctx, modelKey(purposeLarkAgent), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.claude" {
-		t.Fatal("deprecated use override still applied")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if err := s.putSetting(ctx, modelKey(id), modelRecord{Revision: 9, Binding: ModelBinding{Provider: "launcher.old"}}); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.claude" {
+			t.Fatalf("%s: deprecated use override still applied", id)
+		}
 	}
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.new"})
-	if b, _ := s.resolveModel(ctx, "lark.agent"); b.Provider != "launcher.new" {
-		t.Fatal("category selection did not reach the slash agent")
+	for _, id := range []string{purposeLarkAgent, purposeAgent} {
+		if b, _ := s.resolveModel(ctx, id); b.Provider != "launcher.new" {
+			t.Fatalf("%s: category selection did not reach it", id)
+		}
 	}
 	// manager.json's inbox.agent.machine (the hub has it) is where the AI twin runs.
 	f.hello.Models.InboxAgentMachine = "server"
@@ -490,16 +494,16 @@ func TestFourModelCategoriesCatalog(t *testing.T) {
 	ids := []string{}
 	for _, p := range catalog.Purposes {
 		ids = append(ids, p.ID)
-		if p.ID == purposeLarkAgent {
+		if agentsOverride(p.ID) {
 			if p.CategoryID != "agent.new" || p.Parent != "agent.new" || len(p.Fields) == 0 {
-				t.Fatalf("Lark /agent missing independent editor: %+v", p)
+				t.Fatalf("%s missing independent editor: %+v", p.ID, p)
 			}
 		} else if p.CategoryID != p.ID || len(p.Uses) == 0 || len(p.Fields) == 0 {
 			t.Fatalf("category missing scope or editor: %+v", p)
 		}
 	}
 	if !reflect.DeepEqual(ids, modelConfigIDs) {
-		t.Fatalf("catalog is not the ordered categories and Lark /agent: %v", ids)
+		t.Fatalf("catalog is not the ordered categories, the AI twin and Lark /agent: %v", ids)
 	}
 }
 
@@ -518,7 +522,7 @@ func TestModelUsesAreReadOnlyAndIgnoreDeprecatedOverrides(t *testing.T) {
 	}
 	ids := []string{}
 	for _, p := range modelPurposes {
-		if p.Parent != "" && p.ID != purposeLarkAgent {
+		if p.Parent != "" && !agentsOverride(p.ID) {
 			ids = append(ids, p.ID)
 		}
 	}

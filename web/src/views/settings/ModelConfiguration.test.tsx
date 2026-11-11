@@ -27,8 +27,12 @@ const providers: ModelProvider[] = [
   { id: "launcher.custom", name: "Custom launcher", kind: "launcher" },
   { id: "api.messages", name: "Messages provider", kind: "api", api: "messages", model: "api-default" },
 ];
-const lark = (override: ModelBinding = {}, revision = 7): ModelPurpose => ({
-  id: "lark.agent", name: "Lark /agent", group: "Agents", kind: "launcher", parent: "agent.new", category_id: "agent.new",
+// The uses of Agents the hub lets the user set apart; each runs the same editor tests.
+const LARK = { id: "lark.agent", name: "Lark /agent" };
+const TWIN = { id: "inbox.agent", name: "AI twin runs" };
+let use = LARK;
+const child = (override: ModelBinding = {}, revision = 7): ModelPurpose => ({
+  id: use.id, name: use.name, group: "Agents", kind: "launcher", parent: "agent.new", category_id: "agent.new",
   override, effective: { ...agents.effective, ...override }, revision,
   inherited_from: Object.keys(override).length ? undefined : "agent.new",
   fields: ["provider", "model", "effort"], provider_ids: providers.map((p) => p.id),
@@ -50,12 +54,12 @@ const hub = async (input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     for (const field of ["provider", "model", "effort"] as const) {
       if (typeof body[field] === "string") override[field] = body[field];
     }
-    current = lark(override, current.revision + 1);
+    current = child(override, current.revision + 1);
     return json({ purpose: current, providers });
   }
   if (path.endsWith("/model-config")) return json({ purposes: [agents, current, readonly], providers });
-  if (path.endsWith("/purposes/lark.agent")) return json({ purpose: current, providers });
-  if (path.endsWith("/purposes/inbox.agent")) return json({ purpose: readonly, providers });
+  if (path.endsWith(`/purposes/${current.id}`)) return json({ purpose: current, providers });
+  if (path.endsWith(`/purposes/${readonly.id}`)) return json({ purpose: readonly, providers });
   if (path.endsWith("/models")) return listFails ? json({ error: "unavailable" }, 404) : json({
     agent: "claude", models: [
       { id: "default-model", name: "Default model", default: true, efforts: ["low", "medium", "high"] },
@@ -69,7 +73,7 @@ let root: Root;
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')!;
 const button = (label: string, scope: ParentNode = document) => [...scope.querySelectorAll("button")].find((b) => b.textContent === label)!;
-const row = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Lark /agent"))!;
+const row = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(use.name))!;
 const effort = () => dialog().querySelector<HTMLInputElement>('input[list="model-efforts"]')!;
 function type(input: HTMLInputElement, value: string) {
   act(() => {
@@ -99,8 +103,6 @@ async function render() {
 }
 beforeEach(async () => {
   await initI18n("zh-Hans");
-  current = lark();
-  readonly = { ...lark(), id: "inbox.agent", name: "Inbox Agent", fields: [] };
   writes = [];
   conflict = false;
   listFails = false;
@@ -116,7 +118,17 @@ afterEach(async () => {
   await initI18n("zh-Hans");
 });
 
-describe("Lark /agent model configuration", () => {
+describe.each([
+  // An older hub sets only Lark /agent apart: the twin stays read-only there.
+  { use: LARK, other: { id: TWIN.id, name: "Inbox Agent" } },
+  { use: TWIN, other: { id: LARK.id, name: "Slash agent" } },
+])("$use.name model configuration", ({ use: under, other }) => {
+  beforeEach(() => {
+    use = under;
+    current = child();
+    readonly = { ...child(), ...other, fields: [] };
+  });
+
   it.each([
     ["en", "Follow Agents", "Separately configured"],
     ["zh-Hans", "跟随 Agents", "单独设置"],
@@ -131,7 +143,7 @@ describe("Lark /agent model configuration", () => {
     expect(button(follow, dialog())).toBeDefined();
     await act(async () => button(t("common.cancel"), dialog()).click());
     // A model-only override is independent even when its effective value matches Agents.
-    current = lark({ model: "default-model" });
+    current = child({ model: "default-model" });
     await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-modelconfiguration.refresh")}"]`)!.click());
     await flush();
     expect(row().textContent).toContain(separate);
@@ -149,7 +161,7 @@ describe("Lark /agent model configuration", () => {
     type(effort(), "high");
     await act(async () => button(t("common.save"), dialog()).click());
     await flush();
-    expect(writes).toEqual([{ path: "/api/v1/model-config/purposes/lark.agent", method: "PATCH", body: {
+    expect(writes).toEqual([{ path: `/api/v1/model-config/purposes/${use.id}`, method: "PATCH", body: {
       revision: 7, provider: "launcher.custom", model: "custom-model", effort: "high",
     } }]);
     expect(row().textContent).toContain(t("settings-modelconfiguration.separately_configured"));
@@ -167,7 +179,7 @@ describe("Lark /agent model configuration", () => {
   });
 
   it("restores following by clearing all three fields using the child's revision", async () => {
-    current = lark({ provider: "launcher.custom", model: "custom-model", effort: "high" }, 12);
+    current = child({ provider: "launcher.custom", model: "custom-model", effort: "high" }, 12);
     await render();
     await open();
     await act(async () => button(t("settings-modelconfiguration.follow_agents"), dialog()).click());
@@ -195,7 +207,7 @@ describe("Lark /agent model configuration", () => {
     expect(button(t("common.save"), dialog()).disabled).toBe(true);
     expect(button(t("settings-modelconfiguration.follow_agents"), dialog()).disabled).toBe(true);
     expect(dialog().textContent).toContain(t("settings-modelconfiguration.conflict"));
-    current = lark({ model: "elsewhere" }, 8);
+    current = child({ model: "elsewhere" }, 8);
     conflict = false;
     await act(async () => button(t("settings-modelconfiguration.reload_discard"), dialog()).click());
     expect(model().value).toBe("elsewhere");
@@ -206,8 +218,8 @@ describe("Lark /agent model configuration", () => {
 
   it("keeps other children read-only when their fields are empty", async () => {
     await render();
-    const other = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Inbox Agent"))!;
-    await act(async () => other.click());
+    const sibling = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(other.name))!;
+    await act(async () => sibling.click());
     expect(dialog().querySelector("select")).toBeNull();
     expect(dialog().querySelector("input")).toBeNull();
     expect(button(t("common.save"), dialog()).disabled).toBe(true);

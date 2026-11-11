@@ -1,6 +1,7 @@
 import XCTest
 
-/// Exercises the shipping iOS editor against Fixtures/lark_agent_hub.py, never a production hub.
+/// Exercises the shipping iOS editor against Fixtures/lark_agent_hub.py, never a production hub: Lark /agent and the
+/// Inbox's AI twin, the uses of Agents the user can set apart.
 final class LarkAgentModelConfigurationTests: XCTestCase {
     private var hub: String!
 
@@ -135,6 +136,72 @@ final class LarkAgentModelConfigurationTests: XCTestCase {
 
     @MainActor func testDarkIndependentLauncherModelAndResetFromLarkSettings() async throws {
         try await exercise(scheme: "dark")
+    }
+
+    /// The AI twin (#4232) from the model catalog: its row says it follows Agents, a save keeps a launcher, model and
+    /// effort of its own, Follow Agents clears them; Agents and Lark /agent are never written.
+    @MainActor private func exerciseTwin(scheme: String) async throws {
+        _ = try await json("/mock/lark-agent/reset", method: "POST")
+        let app = launch(scheme: scheme, entry: ["-openModelConfiguration", "YES"])
+        let row = app.buttons["model-purpose-inbox.agent"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.label.contains("跟随 Agents"), row.label)
+        try shot(app, "\(scheme)-twin-catalog")
+        row.tapCenter()
+        XCTAssertTrue(app.navigationBars["AI 分身执行"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["跟随 Agents"].firstMatch.exists)
+
+        choose(app, picker: "model-config-provider", option: "示例启动器")
+        let models = app.buttons["model-config-model-list"]
+        XCTAssertTrue(models.waitForExistence(timeout: 10))
+        models.tapCenter()
+        let model = app.buttons["newChat.model.example-model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 10))
+        model.tapCenter()
+        choose(app, picker: "model-config-effort", option: "低")
+        saveAndWait(app, status: "单独配置")
+        var purpose = try await json("/api/v1/model-config/purposes/inbox.agent")["purpose"] as! [String: Any]
+        var binding = purpose["override"] as! [String: Any]
+        XCTAssertEqual(purpose["revision"] as? Int, 1)
+        XCTAssertEqual(binding["provider"] as? String, "launcher.demo")
+        XCTAssertEqual(binding["model"] as? String, "example-model")
+        XCTAssertEqual(binding["effort"] as? String, "low")
+        try shot(app, "\(scheme)-twin-independent")
+
+        let restore = app.buttons["model-config-restore"]
+        for _ in 0..<3 where !restore.isHittable { app.swipeUp() }
+        XCTAssertTrue(restore.isEnabled)
+        restore.tapCenter()
+        saveAndWait(app, status: "跟随 Agents")
+        app.swipeDown()
+        purpose = try await json("/api/v1/model-config/purposes/inbox.agent")["purpose"] as! [String: Any]
+        binding = purpose["override"] as! [String: Any]
+        let effective = purpose["effective"] as! [String: Any]
+        XCTAssertTrue(binding.isEmpty)
+        XCTAssertEqual(purpose["revision"] as? Int, 2)
+        XCTAssertEqual(effective["model"] as? String, "agents-default")
+        try shot(app, "\(scheme)-twin-following")
+
+        let audit = try await json("/mock/model-child/inbox.agent")
+        let writes = audit["writes"] as! [[String: Any]]
+        XCTAssertEqual(writes.count, 2)
+        XCTAssertEqual(writes[0]["revision"] as? Int, 0)
+        XCTAssertEqual(writes[1]["revision"] as? Int, 1)
+        XCTAssertTrue(writes[1]["provider"] is NSNull && writes[1]["model"] is NSNull && writes[1]["effort"] is NSNull)
+        let parent = audit["parent"] as! [String: Any]
+        XCTAssertEqual(parent["revision"] as? Int, 11)
+        let lark = (audit["others"] as! [String: Any])["lark.agent"] as! [String: Any]
+        XCTAssertEqual(lark["revision"] as? Int, 0)
+        print("TWIN_UI_READBACK \(scheme): save revision=\(writes[0]["revision"]!) provider=\(writes[0]["provider"]!) model=\(writes[0]["model"]!) effort=\(writes[0]["effort"]!); reset request_revision=\(writes[1]["revision"]!) result_revision=\(purpose["revision"]!) override_fields=\(binding.count) effective_model=\(effective["model"]!) parent_revision=\(parent["revision"]!) lark_revision=\(lark["revision"]!)")
+        app.terminate()
+    }
+
+    @MainActor func testLightTwinLauncherModelAndResetFromTheModelCatalog() async throws {
+        try await exerciseTwin(scheme: "light")
+    }
+
+    @MainActor func testDarkTwinLauncherModelAndResetFromTheModelCatalog() async throws {
+        try await exerciseTwin(scheme: "dark")
     }
 
     @MainActor func testModelCatalogOpensTheIndependentPurposeAndMessagesEffort() async throws {

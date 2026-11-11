@@ -108,6 +108,12 @@ export function supportsField(p: ModelPurpose, field: Exclude<keyof ModelDraft, 
   return (p.fields ?? ["provider", "model"]).includes(field);
 }
 
+/** A use of Agents the hub lets the user set apart (Lark /agent, the AI twin): it says so with fields of its own, and
+ * follows Agents while they are empty. Other uses of a category have no fields and stay read-only. */
+export function agentsOverride(p: ModelPurpose): boolean {
+  return p.parent === "agent.new" && (p.fields ?? []).some((field) => field === "provider" || field === "model" || field === "effort");
+}
+
 export function modelPatch(p: ModelPurpose, draft: ModelDraft): Record<string, string | number | null> {
   const patch: Record<string, string | number | null> = { revision: p.revision };
   for (const field of ["provider", "model", "effort"] as const) {
