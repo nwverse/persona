@@ -291,3 +291,28 @@ describe("geometry and colors", () => {
     expect(contextSize(1_500_000)).toBe("1.5M");
   });
 });
+
+describe("the running model's row", () => {
+  it("is the row named exactly what runs, not also an alias standing for it", () => {
+    const dflt: PanelModel = { id: "default", name: "Default", efforts: [], resolved: "gw-model" };
+    const typed: PanelModel = { id: "gw-model", name: "gw-model", efforts: [], custom: true };
+    const p: PanelProvider = { id: "gw", name: "gw", engine: "claude", models: [dflt, typed] };
+    const lit = panelSections({ providers: [p], state: { current: { provider: "gw", model: "gw-model" }, recommended: ["gw"] }, view: { kind: "provider", provider: "gw" }, query: "", favorites: [], recent: [], overrides: {} })
+      .flatMap((s) => s.rows).filter((r) => r.current).map((r) => r.model.id);
+    expect(lit).toEqual(["gw-model"]);
+    // an alias still lights when no row is named what runs
+    const alias = panelSections({ providers: [{ ...p, models: [dflt] }], state: { current: { provider: "gw", model: "gw-model" }, recommended: ["gw"] }, view: { kind: "provider", provider: "gw" }, query: "", favorites: [], recent: [], overrides: {} })
+      .flatMap((s) => s.rows).filter((r) => r.current).map((r) => r.model.id);
+    expect(alias).toEqual(["default"]);
+  });
+
+  it("shows its Fast as it runs, not a saved override", () => {
+    const m: PanelModel = { id: "gpt-x", name: "x", efforts: ["low", "high"], fast: true };
+    const p = { id: "codex", models: [m] };
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x" } }, { fast: true }).fast).toBeUndefined();
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "gpt-x", fast: true } }, {}).fast).toBe(true);
+    // another model's row still takes its override
+    expect(rowSetup(p, m, { current: { provider: "codex", model: "other" } }, { fast: true }).fast).toBe(true);
+  });
+});
+

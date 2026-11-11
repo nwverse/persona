@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
 import type { LauncherModels } from "./launcher-models";
 import { currentModelRow, forgetModel, modelLabel, modelList, pillView, readModels, type ModelList } from "./session-models";
-import { pickPlan, sessionPanel } from "./session-panel";
+import { pickPlan, sessionPanel, speedStep } from "./session-panel";
 import type { Launcher, Session } from "./types";
 
 const ALL = ["low", "medium", "high", "xhigh", "max"];
@@ -243,3 +243,16 @@ describe("reading the lists", () => {
     expect(modelList("m-forget", "gateway").list!.models.map((m) => m.id)).toEqual(["default", "opus", "haiku", "vendor/model-x"]);
   });
 });
+
+describe("a speed change", () => {
+  const tiers = [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }];
+  it("is sent only where the thread has Fast and only when it changes", () => {
+    expect(speedStep(session({ service_tiers: tiers }), true)).toEqual({ service_tier: "priority" });
+    expect(speedStep(session({ service_tiers: tiers }), false)).toBeUndefined();
+    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), false)).toEqual({ service_tier: "default" });
+    expect(speedStep(session({ service_tiers: tiers, service_tier: "priority" }), true)).toBeUndefined();
+    expect(speedStep(session(), true)).toBeUndefined();
+    expect(speedStep(session({ service_tiers: tiers }), undefined)).toBeUndefined();
+  });
+});
+

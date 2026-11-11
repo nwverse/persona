@@ -105,9 +105,14 @@ export function pickPlan(s: Session, config: PanelConfig, list: LauncherModels |
   if (!same) steps.push({ model: config.model });
   const effort = config.effort || (sessionEngine(s) === "agy" ? row?.default_effort : undefined);
   if (effort && effort !== s.effort) steps.push({ effort });
-  if (config.fast !== undefined && hasFast(s)) {
-    const tier = config.fast ? "priority" : "default";
-    if (tier !== (s.service_tier ?? "default")) steps.push({ service_tier: tier });
-  }
+  const speed = speedStep(s, config.fast);
+  if (speed) steps.push(speed);
   return steps;
+}
+
+/** The speed a setup asks for (Codex's service tier): only where the thread has a Fast speed, and only when it changes. */
+export function speedStep(s: Session, fast: boolean | undefined): ModeStep | undefined {
+  if (fast === undefined || !hasFast(s)) return undefined;
+  const tier = fast ? "priority" : "default";
+  return tier !== (s.service_tier ?? "default") ? { service_tier: tier } : undefined;
 }

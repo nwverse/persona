@@ -65,6 +65,9 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
   // what the right side says, in words: "Claude Code · High · Fast"
   const setupTitle = [agentName(provider.engine), effort && effortTitle(effort), row.setup.fast && t("ui-modelpanel.fast_short")].filter(Boolean).join(" · ");
   const off = Boolean(blocked) || Boolean(frozen);
+  // the running model's row stays reachable while picks are off: its Customize still opens the flyout (effort, Fast), so it
+  // is not announced as disabled (its pick is a no-op anyway, and Enter does nothing while blocked)
+  const ariaOff = off && !(row.current && customizable && !frozen);
   const starOff = Boolean(frozen) || (Boolean(blocked) && !starRemoves) || row.kind === "typed";
   const key = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget || e.nativeEvent.isComposing) return;
@@ -82,9 +85,9 @@ export function Row({ row, second, describes, blocked, customizable, flyoutOpen,
     <div
       role="option"
       aria-selected={row.current}
-      aria-disabled={off || undefined}
+      aria-disabled={ariaOff || undefined}
       aria-keyshortcuts={customizable ? "ArrowLeft" : undefined}
-      tabIndex={off ? -1 : 0}
+      tabIndex={ariaOff ? -1 : 0}
       title={blocked?.reason || undefined}
       aria-description={blocked?.reason || undefined}
       data-panel-row={row.key}

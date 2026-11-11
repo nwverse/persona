@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import type { PanelConfig } from "../../lib/model-panel";
 import { sessionLauncher } from "../../lib/model-switch";
-import { pickPlan, sessionPanel, type ModeStep } from "../../lib/session-panel";
+import { pickPlan, sessionPanel, speedStep, type ModeStep } from "../../lib/session-panel";
 import { forgetModel, machineLauncherList, modelList, readModels, useModelLists } from "../../lib/session-models";
 import { useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
@@ -41,7 +41,8 @@ export function SessionModelPanel({ session, anchor, onClose }: { session: Sessi
     const s = latest.current;
     const steps: ModeStep[] = [];
     if (patch.effort && patch.effort !== s.effort) steps.push({ effort: patch.effort });
-    if (patch.fast !== undefined) steps.push({ service_tier: patch.fast ? "priority" : "default" });
+    const speed = speedStep(s, patch.fast);
+    if (speed) steps.push(speed);
     return apply(steps);
   };
   const onReload = (provider: string) => void readModels(mid, provider, { again: true, first: provider === own });

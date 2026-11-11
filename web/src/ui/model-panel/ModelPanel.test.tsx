@@ -162,6 +162,16 @@ describe("the model panel", () => {
     expect(onPick).not.toHaveBeenCalled();
   });
 
+  it("while busy the running model's row stays reachable for its flyout, but Enter picks nothing", async () => {
+    const { onPick } = await open({ state: { ...baseState, busy: "Agent 正在工作" }, onApplyCurrent: async () => true });
+    const opus = row("Opus");
+    expect(opus.getAttribute("aria-disabled")).toBeNull();
+    expect(rows().filter((r) => r !== opus).every((r) => r.getAttribute("aria-disabled") === "true")).toBe(true);
+    key(opus, "Enter");
+    await flush();
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
   it("the flyout of the model that runs now applies an effort at once and stays open", async () => {
     const { onApplyCurrent } = await open({ onApplyCurrent: async () => true });
     key(row("Opus"), "ArrowLeft");
@@ -196,9 +206,13 @@ describe("the model panel", () => {
 
   it("Codex's current model takes effort and Fast in its flyout though its rows can't be picked", async () => {
     const state: PanelState = { current: { provider: "codex", model: "gpt-5.5", effort: "low" }, recommended: [] };
-    const { onApplyCurrent } = await open({ providers: [codex({ unavailable: "Codex 不能换模型" })], state, onApplyCurrent: async () => true });
+    const { onApplyCurrent, onPick } = await open({ providers: [codex({ unavailable: "Codex 不能换模型" })], state, onApplyCurrent: async () => true });
     const gpt = row("GPT");
-    expect(gpt.getAttribute("aria-disabled")).toBe("true");
+    // reachable for its flyout, so not announced as disabled; its pick is still off
+    expect(gpt.getAttribute("aria-disabled")).toBeNull();
+    key(gpt, "Enter");
+    await flush();
+    expect(onPick).not.toHaveBeenCalled();
     act(() => gpt.querySelector<HTMLButtonElement>("[data-row-customize]")!.click());
     const fast = flyout()!.querySelector<HTMLButtonElement>("[data-fast-toggle]")!;
     expect(fast.getAttribute("aria-pressed")).toBe("false");
