@@ -31,6 +31,7 @@ import { unlinkAgentFromTodo } from "../../lib/todos";
 import { LinkTodoDialog } from "../LinkTodoDialog";
 import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
+import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
 import { sendDraft } from "../../lib/drafts";
 import { chatLines, freshWords, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import type { Item, Session, Subagent } from "../../lib/types";
@@ -397,7 +398,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     setEditTarget({ key: draftKey, id: last.id });
     sendDraft(draftKey, { type: "replace", text: last.raw, edit: true });
   }, [canRewind, rewindLive, noRow, tr.loading, tr.error, draftKey]);
-  const commitEdit = useCallback(async (): Promise<boolean> => {
+  const commitEdit = useCallback(async (): Promise<boolean | { clearDraft: string }> => {
     const target = editNow.current;
     if (!target) return true;
     if (editLastBusy.current) return false;
@@ -423,9 +424,10 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
     try {
       const res = await rewindSession(mid, sid, at, "conversation");
       setEditTarget((cur) => (cur === target ? null : cur));
-      // the old prompt is still in Claude's input: the send is refused (input_draft), and its card offers to clear it
-      if (!res.input_cleared) toast(t("rewind.input_kept"), "info");
-      return true;
+      // Claude puts the old prompt back into its box a moment after the rewind answers, even when the node saw it empty
+      // (#4605): wait for that, then the send clears exactly that prompt before typing (refused otherwise, kept in the box)
+      await new Promise((r) => setTimeout(r, EDIT_SEND_SETTLE_MS));
+      return { clearDraft: res.prompt || at.prompt };
     } catch (e) {
       toast(errorText(e), "error");
       return false;
@@ -795,7 +797,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
   // ── sending ──
   // true: it went, or it stays in the chat as a failed bubble (`failed`); false: it never went and nothing shows it
   const deliver = useCallback(
-    async (out: Outgoing, id: string, clearDraft?: string, attempt = 0): Promise<boolean> => {
+    async (out: Outgoing, id: string, clearDraft?: string, attempt = 0, keepInBox = false): Promise<boolean> => {
       // the main conversation's setup gate holds every path that sends, not only the composer (4.4)
       if (blockedRef.current) {
         blockedRef.current.onClick?.();
@@ -844,6 +846,13 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
           return true;
         }
         setPending((ps) => ps.filter((x) => x.id !== id));
+        // an edit's send the node did not take (#4605): nothing went, so the words go back into the box with the node's
+        // reason (a draft in Claude's box…), not into a failed bubble whose Retry would send them without the rewind's care
+        if (keepInBox && e instanceof ApiError && e.body.delivered === "none") {
+          forgetOutgoing(key, id);
+          toast(errorText(e), "error");
+          return false;
+        }
         failed(e, out, p);
         return true;
       }
@@ -881,7 +890,7 @@ export function ChatView({ mid, sid, assistant, starting: launching, onToggleSid
         return false;
       }
     }
-    return deliver(out, uuid());
+    return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit));
   };
   // the composer is memoized: one function, running the latest onSend
   const sendNow = useRef(onSend);
