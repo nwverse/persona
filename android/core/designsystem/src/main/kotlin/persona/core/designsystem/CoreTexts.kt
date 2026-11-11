@@ -7,7 +7,7 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.platform.LocalResources
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreTextFailure
-import persona.core.domain.lines.compactUnits
+import persona.core.contracts.compactCount
 
 /**
  * [CoreText] (the words of the pure-JVM core modules) in the language of [resources]. The strings live in
@@ -23,8 +23,8 @@ fun CoreText.resolve(resources: Resources): String {
         CoreText.Key.CompactCount -> {
             val count = (args.first() as Number).toLong()
             val unit = resources.getString(R.string.designsystem_core_compact_unit).toLong()
-            return if (count < unit) count.toString()
-                else resources.getString(R.string.designsystem_core_compact_count, compactUnits(count, unit))
+            return compactCount(count, unit, { resources.getString(R.string.designsystem_core_compact_count, it) },
+                { resources.getString(R.string.designsystem_core_compact_millions, it) })
         }
         else -> Unit
     }
@@ -123,6 +123,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.StateUnread -> R.string.designsystem_core_state_unread
     CoreText.Key.StateAwaitingReply -> R.string.designsystem_core_state_awaiting_reply
     CoreText.Key.StateWorking -> R.string.designsystem_core_state_working
+    CoreText.Key.StateBackgroundWaiting -> R.string.designsystem_core_state_background_waiting
     CoreText.Key.StateWaiting -> R.string.designsystem_core_state_waiting
     CoreText.Key.StateMuted -> R.string.designsystem_core_state_muted
     CoreText.Key.StateIdle -> R.string.designsystem_core_state_idle
@@ -181,6 +182,24 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.WakeInMinutes -> -R.plurals.designsystem_core_wake_in_minutes
     CoreText.Key.WakeInHours -> -R.plurals.designsystem_core_wake_in_hours
     CoreText.Key.WakeInHoursMinutes -> R.string.designsystem_core_wake_in_hours_minutes
+    CoreText.Key.DotJoined -> R.string.designsystem_core_dot_joined
+    CoreText.Key.CloseoutMergedYes -> R.string.designsystem_core_closeout_merged_yes
+    CoreText.Key.CloseoutMergedNo -> R.string.designsystem_core_closeout_merged_no
+    CoreText.Key.CloseoutMergedConfirmed -> R.string.designsystem_core_closeout_merged_confirmed
+    CoreText.Key.CloseoutMergedContradicted -> R.string.designsystem_core_closeout_merged_contradicted
+    CoreText.Key.CloseoutDeployedYes -> R.string.designsystem_core_closeout_deployed_yes
+    CoreText.Key.CloseoutDeployedNo -> R.string.designsystem_core_closeout_deployed_no
+    CoreText.Key.CloseoutDeployedConfirmed -> R.string.designsystem_core_closeout_deployed_confirmed
+    CoreText.Key.CloseoutDeployedContradicted -> R.string.designsystem_core_closeout_deployed_contradicted
+    CoreText.Key.CloseoutBlockedOn -> R.string.designsystem_core_closeout_blocked_on
+    CoreText.Key.CloseoutBlocked -> R.string.designsystem_core_closeout_blocked
+    CoreText.Key.CloseoutNotDoneMissing -> R.string.designsystem_core_closeout_not_done_missing
+    CoreText.Key.CloseoutNotDone -> R.string.designsystem_core_closeout_not_done
+    CoreText.Key.CloseoutDone -> R.string.designsystem_core_closeout_done
+    CoreText.Key.TodoOrphaned -> R.string.designsystem_core_todo_orphaned
+    CoreText.Key.TodoOrphanedError -> R.string.designsystem_core_todo_orphaned_error
+    CoreText.Key.TodoOrphanedClosed -> R.string.designsystem_core_todo_orphaned_closed
+    CoreText.Key.TodoOrphanedOffline -> R.string.designsystem_core_todo_orphaned_offline
     CoreText.Key.SourceCodexLive -> R.string.designsystem_core_source_codex_live
     CoreText.Key.SourceCodexHistory -> R.string.designsystem_core_source_codex_history
     CoreText.Key.SourceIdentityConflict -> R.string.designsystem_core_source_identity_conflict

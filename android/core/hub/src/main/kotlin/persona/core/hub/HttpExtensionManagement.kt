@@ -427,8 +427,8 @@ class HttpExtensionManagement internal constructor(
         /** The hub takes at most 4 MB from an extension; a little room over it. */
         const val MaxImageBytes = 5L * 1024 * 1024
 
-        /** This phone's time zone (IANA) and language (a BCP 47 tag), the platform and the UI version it draws. */
-        fun deviceContext() = ExtensionUiContext(tz = java.util.TimeZone.getDefault().id, locale = java.util.Locale.getDefault().toLanguageTag(),
+        /** This phone's time zone (IANA) and the app's language with the phone's region (a BCP 47 tag), the platform and the UI version it draws. */
+        fun deviceContext() = ExtensionUiContext(tz = java.util.TimeZone.getDefault().id, locale = persona.core.contracts.ClientLanguage.localeTag(),
             platform = "android", uiVersion = UI_VERSION)
 
         private val json = "application/json; charset=utf-8".toMediaType()

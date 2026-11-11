@@ -198,6 +198,9 @@ type codexAppState struct {
 	assigned    map[string]string // thread → project id
 	projects    map[string]codexAppProject
 	sidebar     []string // the threads of both lists that are valid ids, sorted: what codexAppThreads looks up
+
+	namesOnce sync.Once
+	names     map[string]string // a project's folder (real path) → the App's name for it; see folderName
 }
 
 type codexAppProject struct {
@@ -306,6 +309,47 @@ func pathWithin(dir, root string) bool {
 	}
 	return dir == root || strings.HasPrefix(dir, root+string(filepath.Separator))
 }
+
+// folderName: the App's name for the project whose folder is root (a real path, as codexProjectRoot gives a
+// repository's root); "" when no project of the App has that folder. The App's sidebar shows a project by the name it
+// keeps, which need not be the folder's: a project the user renamed, a ChatGPT project the App keeps in
+// <CODEX_HOME>/.chatgpt-projects/g-p-<id>. A folder has one name whichever chat asks: of two projects with the same
+// folder, the name that sorts first.
+func (a *codexAppState) folderName(root string) string {
+	if a == nil || root == "" {
+		return ""
+	}
+	a.namesOnce.Do(func() {
+		a.names = map[string]string{}
+		for _, p := range a.projects {
+			name := strings.TrimSpace(p.Name)
+			if name == "" {
+				continue
+			}
+			for _, r := range p.RootPaths {
+				if !filepath.IsAbs(r) {
+					continue
+				}
+				k := folderKey(realPath(filepath.Clean(r)))
+				if old, ok := a.names[k]; !ok || name < old {
+					a.names[k] = name
+				}
+			}
+		}
+	})
+	return a.names[folderKey(root)]
+}
+
+// folderKey: Windows paths do not tell case apart (see pathWithin).
+func folderKey(p string) string {
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+// inNoProject: the App keeps chat thread in no project (its sidebar's chats outside every project).
+func (a *codexAppState) inNoProject(thread string) bool { return a != nil && a.projectless[thread] }
 
 // listed: the thread is one of the App's sidebar chats (put in a project, or a chat without one). Other tools that
 // run the App's own codex binary write "Codex Desktop" rollouts too; the App does not list those.

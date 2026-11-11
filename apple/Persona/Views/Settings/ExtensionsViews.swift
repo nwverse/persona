@@ -331,7 +331,7 @@ struct ExtensionDetailView: View {
         }
         if d.readOnly {
             Section {
-                Text("This extension is set in its manager's manager.json; change its switch and settings there, then restart the manager.")
+                Text("This extension is set in its assistant's manager.json; change its switch and settings there, then restart the assistant.")
                     .font(Theme.Font.label).foregroundStyle(.secondary)
             }
         }
@@ -517,7 +517,7 @@ struct ExtensionDetailView: View {
         if let members = d.extensionPack, !members.isEmpty {
             Section {
                 ForEach(members, id: \.id) { member in
-                    LabeledContent(member.id, value: member.version ?? "")
+                    ExtensionPackMemberRow(line: ExtensionPackMemberLine(member, name: page.memberNames[member.id]))
                 }
             } header: { SettingsHeading(String(localized: "Pack Members")) }
         }

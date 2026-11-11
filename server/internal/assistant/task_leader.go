@@ -450,6 +450,7 @@ func (s *Service) deliverToLeaderAgent(ctx context.Context, lead TodoAgent, list
 		return false
 	}
 	s.logf("supervise: %d signal(s) to task leader %s", len(entries), short(lead.SessionID))
+	s.parkedDueTold(ctx, kept)
 	return true
 }
 
@@ -487,9 +488,9 @@ func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string,
 }
 
 // sendToLeaderNow is one attempt to put text into the leader's session, resuming it if closed; it waits up to
-// leaderResumeWait. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
+// leaderResumeTime. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
 func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text string) error {
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaderResumeWait)
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.leaderResumeTime())
 	defer cancel()
 	return s.call(sctx, lead.MachineID, DeviceSessionSend, sendParams(lead.SessionID, text, false), nil)
 }
@@ -512,7 +513,7 @@ func (s *Service) escalateLeaderMessage(lead TodoAgent, kept []superviseSignal, 
 		}
 	}
 	go func() {
-		wait, deadline := leaderResumeWait, time.Now().Add(24*time.Hour)
+		wait, deadline := s.leaderResumeTime(), time.Now().Add(24*time.Hour)
 		for time.Now().Before(deadline) {
 			time.Sleep(wait)
 			if _, ok := s.taskOfAny(ctx, lead.MachineID, lead.SessionID); !ok {
@@ -639,9 +640,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		}
 		if verdict == reviewCancelled {
 			s.stopTaskAgents(ctx, t)
-			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being closed and archived.", t.ID), nil
+			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being stopped (its terminal stays) and archived.", t.ID), nil
 		}
-		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is closed once it stays still.", t.ID), nil
+		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is stopped once it stays still (its terminal stays).", t.ID), nil
 	case reviewNeedsUser:
 		why := cmp.Or(clip(oneLine(a.Reason), 200), clip(oneLine(note), 200))
 		if over && a.Reason == "" {
@@ -761,8 +762,17 @@ func (s *Service) leaderTaskOf(ctx context.Context, lead TodoAgent) (Todo, bool)
 }
 
 // leaderResumeWait bounds how long resuming a closed leader agent may take before the message goes up to the conversation
-// above it instead.
-var leaderResumeWait = 3 * time.Minute
+// above it instead (Service.leaderResume shortens it in tests).
+const leaderResumeWait = 3 * time.Minute
+
+// leaderResumeTime is s's own leaderResumeWait. Tests set it on their Service, so a retry goroutine left over from one
+// test (it may run for a day) never reads what another test's cleanup writes.
+func (s *Service) leaderResumeTime() time.Duration {
+	if s.leaderResume > 0 {
+		return s.leaderResume
+	}
+	return leaderResumeWait
+}
 
 // leaderTaskIDOf is the task leader agent lead belongs to ("" if none).
 func (s *Service) leaderTaskIDOf(lead TodoAgent) string {

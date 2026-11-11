@@ -69,10 +69,13 @@
     <string name="agents_range_all">全部</string>
     <string name="agents_range_history">历史</string>
     <string name="agents_grouping_current">分组：%1$s</string>
+    <string name="agents_group_by">分组方式</string>
+    <string name="agents_only_machine">只看 %1$s</string>
+    <string name="agents_only_machine_hint">显示全部机器</string>
     <string name="agents_grouping_repo">按仓库</string>
     <string name="agents_grouping_state">按状态</string>
     <string name="agents_grouping_todo">按待办</string>
-    <string name="agents_grouping_machine_space">按电脑和空间</string>
+    <string name="agents_grouping_project">按项目</string>
     <string name="agents_menu_compact">细列表</string>
     <string name="agents_menu_detailed">详细列表</string>
     <string name="agents_menu_collapse_all">全部折叠</string>
@@ -120,6 +123,8 @@
     <string name="agents_row_draft_attachments_text">草稿含附件：%1$s</string>
     <string name="agents_row_pinned">已置顶</string>
     <string name="agents_row_muted">已屏蔽</string>
+    <string name="agents_row_closeout_contradicted">hub 查到它的收尾说法不属实</string>
+    <string name="agents_row_not_finished">没做完</string>
     <string name="agents_action_open_read_only">只读打开</string>
     <string name="agents_action_delete_chat">删除对话</string>
     <string name="agents_action_unpin">取消置顶</string>

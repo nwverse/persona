@@ -70,11 +70,13 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.WorkflowIcon
+import persona.core.designsystem.rememberCopy
 import persona.core.domain.sort.WorkflowSummary
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.tasks.AssistantExtra
 import persona.core.domain.tasks.AssistantLines
+import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.QuickResult
 import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.InterruptBatch
@@ -117,7 +119,7 @@ internal class AssistantTaskHost(
     /** Original records remain inspectable from Progress, never discarded by the conversation projection. */
     val backgroundRecords: List<persona.core.domain.lines.ChatLine> = emptyList(),
     val onOpenBackground: (() -> Unit)? = null,
-    /** The conversation's own manager (its session row), for a plan's Start / Don't start; null: not known. */
+    /** The conversation's own manager (its session row), for plan and Brief writes; null: not known. */
     val manager: String? = null,
 ) {
     /** Each session's first card ([firstBySession]). */
@@ -239,13 +241,14 @@ private fun FeedLine(item: FeedItem, host: AssistantTaskHost) {
         "report" -> ReportCard(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
         // Persona's own message to the task's agent is folded, never the user's bubble (#1542, #1623).
         "routed" -> if (item.sentByPersona) SentLine(item, title, todos.firstOrNull { it.id == item.ref }?.let { todo -> { openTask(host, todo) } })
-        else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxxl), horizontalAlignment = Alignment.End,
+        else Column(Modifier.fillMaxWidth().padding(start = Tokens.Space.xxl), horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(stringResource(R.string.chat_tasks_routed_to, title), style = PersonaTheme.type.caption, color = PersonaTheme.palette.accent, maxLines = 1)
             Text(item.field("text").orEmpty(), Modifier.clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.surfaceStrong)
                 .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
         }
         "today" -> TodayCard(item, host, todos)
+        "brief" -> BriefCard(item, host)
         "message" -> if (item.ref != null && item.id !in later) MessageCard(item, host, todos)
         // A live card: drawn where it was created, as the hub's latest version of it (docs/assistant/assistant-views.md "Live cards").
         "view" -> item.ref?.let { id -> persona.core.designsystem.LocalViewBlocks.current?.live?.invoke(id) }
@@ -336,10 +339,10 @@ internal fun SentLine(item: FeedItem, title: String, onOpenTask: (() -> Unit)?) 
 /** The whole text Persona sent, newlines kept and selectable, with Copy under it. */
 @Composable
 private fun SentText(text: String, modifier: Modifier = Modifier) {
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val copy = rememberCopy()
     Column(modifier.fillMaxWidth().testTag("sent-detail"), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
         SelectionContainer { Text(text, style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink) }
-        JButton(stringResource(R.string.chat_menu_copy), { clipboard.setText(androidx.compose.ui.text.AnnotatedString(text)) },
+        JButton(stringResource(R.string.chat_menu_copy), { copy(text, null) },
             kind = JButtonKind.Quiet, size = JButtonSize.Small, icon = PhIcons.Copy)
     }
 }
@@ -538,7 +541,11 @@ private fun TaskCard(todo: Todo, host: AssistantTaskHost) {
             TaskSentList(todo.id, host)
             if (state == TaskState.Done && todo.supervision != null) ReviewTag(todo)
             if (state != TaskState.Done) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                Text(state.label.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.status(state.status()).text, maxLines = 1)
+                // nobody works on it (#3618): said in the state's place, unless its agent waits for the user
+                val orphaned = todo.orphanedLine.takeIf { state != TaskState.NeedsYou }
+                if (orphaned != null) Text(orphaned.text(), Modifier.weight(1f, fill = false).testTag("task-orphaned-${todo.id}"), style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.cautionText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                else Text(state.label.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.status(state.status()).text, maxLines = 1)
                 ReviewTag(todo, Modifier.weight(1f, fill = false))
                 Spacer(Modifier.weight(1f))
                 if (state == TaskState.Failed) {

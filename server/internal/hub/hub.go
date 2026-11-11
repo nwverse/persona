@@ -20,6 +20,7 @@ import (
 )
 
 type Hub struct {
+	passwordLogin passwordLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
 	errs hubErrors
 
@@ -76,6 +77,8 @@ type Hub struct {
 
 	inboxForms   inboxForms   // the inbox lists' items as localized lately (inbox_forms.go)
 	inboxAnswers inboxAnswers // the merged inbox answer, reused while no manager's inbox moved (inbox_answers.go)
+	// handoffRecorded: the refused approvals of hand-off cards recorded lately (secret_handoff.go).
+	handoffRecorded handoffRecorded
 
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
@@ -244,6 +247,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.live = newLiveActivities(h)
 	h.upd = newUpdater(h)
 	h.upd.confirmed = !updating // an update under way is confirmed by this process (its watchdog waits for that)
+	h.upd.logSource()
 	database, err := db.Open(ctx, cfg.DatabaseURL, db.HubSet)
 	if err != nil {
 		return err
@@ -449,6 +453,9 @@ func (h *Hub) callPhone(ctx context.Context, name string, args json.RawMessage) 
 	if c == nil && queue {
 		return h.enqueuePhoneWrite(ctx, name, args)
 	}
+	if c == nil && phoneOnScreenTools[name] {
+		return proto.TextResult(phoneNotOnScreen, true)
+	}
 	if c == nil {
 		c = h.wakePhone(ctx, name)
 	}
@@ -517,6 +524,20 @@ var phoneConfirmedTools = map[string]bool{
 	"phone_contacts_create":       true, // #2286
 	"phone_contacts_update":       true,
 }
+
+// phoneOnScreenTools work only while Persona is the app on the phone's screen (docs/apple/phone-tools.md
+// "Foreground restrictions"): iOS gives an app in the background no clipboard, so a silent push would wake Persona for a
+// call it can only refuse (#4192). With no phone connected that offers one, the hub answers at once instead, as it
+// already does for an Android phone, which stops offering them when Persona leaves the screen (and is never woken by
+// push). A phone connected in the background still gets the call and refuses it itself.
+var phoneOnScreenTools = map[string]bool{
+	"phone_clipboard_get": true,
+	"phone_clipboard_set": true,
+}
+
+// phoneNotOnScreen is the answer to a phoneOnScreenTools call no connected phone can take.
+const phoneNotOnScreen = "Persona is not open on the user's phone, and the phone lets only the app on screen use the " +
+	"clipboard: ask the user to open Persona, then retry."
 
 // requestPhoneWake selects a provider and asks iOS to wake it without waiting for a connection.
 // It reports whether a provider can be woken, including when a recent request throttles this push.
