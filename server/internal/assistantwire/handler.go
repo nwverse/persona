@@ -51,6 +51,20 @@ func HandoffApproverOf(ctx context.Context) (HandoffApprover, bool) {
 	return a, ok && a.DeviceID != ""
 }
 
+type humanStartKey struct{}
+
+// WithHumanStart is ctx of a new conversation's start that a person's own app asked for, as the hub vouched
+// (HTTPRequest.Human): its first message counts as theirs (StartParams.Human).
+func WithHumanStart(ctx context.Context) context.Context {
+	return context.WithValue(ctx, humanStartKey{}, true)
+}
+
+// HumanStartOf reports whether WithHumanStart marked ctx.
+func HumanStartOf(ctx context.Context) bool {
+	human, _ := ctx.Value(humanStartKey{}).(bool)
+	return human
+}
+
 // ToolCall is assistant.tool's params.
 type ToolCall struct {
 	Name      string          `json:"name"`

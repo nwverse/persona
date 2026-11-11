@@ -276,7 +276,7 @@ Clients calculate to-do runtime state live from linked active Agents; it is not 
 | 2.6 | Usage limit | A linked active Agent is stopped with `turn_error_kind` `usage_limit`, and the reset is not known or not more than 10 minutes past. Not red and not Interrupted: "Usage limit · resumes <time>" when the CLI or the hub will continue it, "Usage limit · resets <time>" when nothing will. An older hub that does not send the kind stays Interrupted |
 | 3 | Unread | A linked active Agent is `unread` (task finished, not viewed yet) |
 | 4 | Active | A linked active Agent is `working` (working or starting) and not waiting (next row) |
-| 4.5 | Waiting | A linked active Agent ended its turn but something brings it back (#3274): only background commands, subagents, Monitors or workflows it started still run (`background_working`), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure for it and wakes it (`work.phase` `blocked`, `work.on` `agent` / `external` / `transient`). Shown 等待中 with what it waits for (`work.line` / `work.wait`); under way like Active in the dock, the board, Today and the brief. The hub's `taskState` sends `waiting` on task cards. On a hub with bounded lists the web reads a task's agents from the list's rows (the Agents window, and `taskRows`: the list's deltas and one exact lookup for an open task's agent outside it), not only from opened chats |
+| 4.5 | Waiting | A linked active Agent ended its turn but something brings it back (#3274): only background commands, subagents, Monitors or workflows it started still run (`background_working`), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure for it and wakes it (`work.phase` `blocked`, `work.on` `agent` / `external` / `transient`). A wait only the agent's own process ends (background work, a /loop) is dropped once the node lists the agent as cut off (`interrupted`): its process is gone, so the task reads Follow up and, when nothing else brings it back, Nobody is working on this (#5124). Shown 等待中 with what it waits for (`work.line` / `work.wait`); under way like Active in the dock, the board, Today and the brief. The hub's `taskState` sends `waiting` on task cards. On a hub with bounded lists the web reads a task's agents from the list's rows (the Agents window, and `taskRows`: the list's deltas and one exact lookup for an open task's agent outside it), not only from opened chats |
 | 5 | Follow up | All linked active Agents are stalled (`idle` seen, `offline` not running, or launch failed) with nothing to bring them back |
 | 6 | Not started | No linked active Agents |
 
@@ -470,6 +470,11 @@ committed in the same transaction as the hook's resolved question or plan, befor
 presented as a fresh user click. The grant itself is managed through the main conversation's `persona_settings` key
 and the list/delete API in [Unified entry](unified-entry.md#standing-authorizations); established task decisions keep
 their provenance even after that grant is revoked.
+
+The owner's own decisions (`source` `card`, and the `manual` ones made by choosing a decision's option) are also what
+a suggested rule is counted from: after the same go-ahead three times in 14 days, the next decision offers to make it a
+standing authorization
+([Unified entry](unified-entry.md#a-rule-after-the-same-answer-three-times-4929)).
 
 
 The costliest long-task mistake is an Agent forgetting a decision already made: asking again or silently overturning it (#1618). Decisions scattered across Agent chats disappear when switching Agents or compacting, so collect them by to-do:
