@@ -15,7 +15,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -61,7 +60,7 @@ func (e *Engine) RefreshTopics(ctx context.Context, max int) int {
 		}
 		key := KindTopic + "/" + t.Slug
 		if err := e.mergeTopic(ctx, t.Slug); err != nil {
-			if ai.IsPaused(err) || ctx.Err() != nil {
+			if deferred(ctx, err) {
 				break
 			}
 			e.topicRetryLater(key, err, "merge")

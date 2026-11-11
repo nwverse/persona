@@ -113,6 +113,10 @@ type Engine struct {
 	projectRetries map[string]projectRetry // projects whose rewrite failed, by slug (RefreshProjects)
 	// topicRetries: sources whose distill call failed ("<kind>/<id>") and topics whose merge failed ("topics/<slug>").
 	topicRetries map[string]projectRetry
+	// recordingRetries: recordings whose summary failed, by id (SummarizeRecordings).
+	recordingRetries map[string]projectRetry
+	// itemRetries: documents, meetings and events whose tagging batch failed ("<kind>/<id>", TagItems).
+	itemRetries map[string]projectRetry
 }
 
 func (e *Engine) modelFor(id string) Model {
