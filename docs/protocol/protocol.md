@@ -1611,7 +1611,7 @@ makes it: a card with `tool_name: "secret_run"` from a node (`interaction.create
 ### Secret hand-off cards (`secret_handoff`, #3962)
 
 A `permission` interaction with `tool_name: "secret_handoff"` asks to hand secret values to one Agent run as environment variables
-(`docs/extensions/secret-providers.md` "Who may approve a hand-off"). Its `tool_input` is `{"variables":[{"name","provider","title"?}]}`
+(`docs/extensions/secret-providers.md` "Who may approve a hand-off"). Its `tool_input` is `{"variables":[{"name","provider","provider_name"?,"title"?}],"agent"?,"machine_name"?,"cwd"?,"prompt"?}`
 (the item as its provider describes it; never a reference or a value). Only the manager's Agent start makes it: a card with that tool
 name from a node or from `fleet.ask` is refused. Only a `full` device approves it, by a `resolve` request that itself carries
 `X-Persona-Features: secret_handoff`; a client sends that header on the card's own approve request only (not from a notification, a
