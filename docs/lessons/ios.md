@@ -1708,6 +1708,48 @@ DEBUG 的代码可能在 `Persona.debug.dylib` 中，40 KiB 的 `Persona` 只是
 下拉关闭的闸门不能用 `isTracking` 表示「已开始拖动」：手指按下即 tracking，方向尚未确定。用 `isDragging`、`isDecelerating` 判断；外层分页 pan 拒绝以向下为主的起手，避免抢走下拉关闭。
 
 
+## Opening and closing tool rows in the running turn (2026-11-10, #3005)
+
+- **Read the recording by what was pressed**: a tapped row's title dims for a frame or two. In the user's 21 s recording every row that "closed by itself"
+  had a dimmed title just before: the user closed it. What made it look like a reset was the list moving: the rows were pushed off the screen.
+- **A fold that keeps its space while it fades leaves a blank and a ghost**: `toggleInPlace` changed the height at once (the flipped lazy list cannot
+  animate a height without sliding everything above it), so opening revealed the content with a mask growing down over space already taken (a blank
+  band), and closing faded the content out for 0.2 s with its space held, then dropped it (a fading copy, then the rows under it jumping up). Close at
+  once; open with a plain fade over the whole space. The height is the layout's, so whatever animates must cover all of it from the first frame.
+- **A short pin hold is not a follow decision**: the pin's hold for a tapped row ends as soon as the row is back in place. Following was still on, so the
+  next push (`contentArrived`) scrolled to the newest end. Any toggle in the chat goes through `ChatFollow.toggledRow` (anchored, kept pin hold), runs of
+  chips and work lines opened while anchored included.
+- **A tap in a scroll view has a scroll phase**: SwiftUI reports a tap on a row as `tracking` → `idle`. Read as "the user's scrolling ended",
+  it ran `released()`, which ends any anchor and decides by "within 100 pt of the newest": every tap on a row near the bottom switched the chat
+  back to following. Only `interacting` / `decelerating` → `idle` is a scroll; `tracking` → `idle` is `tapped()`, which decides nothing. And the
+  row's action runs while the finger is still down (`touching`), so a rule that waits for no finger never applies to a tapped row.
+- **The list's bottom edge is part of "holding still"**: the pin corrects by the content alone, but the upside-down list is drawn from its bottom edge,
+  so when the footer under it changes (the queue strip leaving as its message is taken, the plan pill coming back as a work line folds) everything
+  moves by that much. Watch where that edge is on screen (`onGeometryChange` of the list's global frame, its `maxY`) and put the held row back
+  (`ChatPin.resized`), except for the keyboard. Not the scroll geometry's container height: its top edge moving (the chrome) moves nothing on the
+  list, and corrected by the height the pin moved a work line's header 40 pt by itself.
+- **UIKit's animated scroll and SwiftUI share the offset**: `setContentOffset(_:animated:)` started from where SwiftUI had moved the offset in the
+  same pass (about the height just folded) and ran its whole way from there: a header folded at the newest end went 209 → 619 → 1013 → 591 pt.
+  The pin's glide sets the offset itself every display frame (`CADisplayLink`) and puts back any other move at once (KVO on `contentOffset`).
+- **What moves the list's edge mid-glide moves the glide too**: a fold is reported a pass before the footer settles, so the glide started from where
+  the header was over the old edge; the plan pill came in, the edge went 40 pt up, and the header showed 40 pt up for a frame before it glided down.
+  `resized` shifts the glide's way by as much as it shifts the hold.
+- **SwiftUI's global frame can stay stale after the pin moves the list**: the pin sets the offset inside the header's geometry callback. Opening
+  a work line just above the newest end, the screen showed the header still (UIKit's layers, the simulator's screenshot) while its
+  `frame(in: .global)` said 40 pt up, for as long as it stayed open: a later part of that move never reached SwiftUI's geometry. Measure what
+  the screen shows from the layers: `DrawnProbe` in the header's background, read from the presentation layers on the display link
+  (`UnfoldTrace.Result.drawn`). Read from the views during the pass, it caught the new offset with the old layout, a state never drawn.
+- **A moved offset can be set back without a geometry report**: as a step came in under a held row, the pin moved the list by the step's height, and
+  now and then the list was back at the old offset before the next frame, the row 56 pt up, while the row's `onGeometryChange` still said it was
+  in place, so nothing asked the pin again. A kept hold now watches the offset itself (KVO on `contentOffset`, as the glide does) and puts it back
+  in the same pass. Only kept holds: those always end when the user or the app moves the list (↓, sending, a jump), a moment's hold does not.
+- **A delayed "back to following" is a jump too**: folding a work line anchored a moment before went back to following 1.5 s later and scrolled
+  to the newest end, 61 pt short of it, after the fold itself had held still. A fold stays anchored unless it took the list to the newest end.
+- **XCUITest scrolls an element into view before tapping it**: the "middle" tap of `UnfoldTests` dragged the header just off the screen, so the tap
+  scrolled it back first and ran 61 pt from the newest end, following. To test a row in the middle, tap a coordinate on one already there.
+- **Test it with a mock that pushes one step at a time** (`MOCK_TOOL_TURN=1`, `/mock/tool_turn?step=…`, `ToolFoldTests`): a step, the answer and the
+  next turn each as its own push, and `UnfoldTrace`'s per-frame `heights` to tell "gone in this frame" from "gone after a fade".
+
 ## A live card inside an `Equatable` work step (2026-11-07, #3436)
 
 - **`WorkStepView` compares only its item and `first`**: a value handed down from the chat (a workflow run's progress) never reaches a step that is already drawn, because the hub's pushes do not change the item. A card that changes on its own reads its data itself, by a key in the item: `WorkflowCallCard` reads `AppModel.workflow(_:call:)`, one observable cell per (session, Workflow call) set only when that run changes, so a push about another run or the rest of the session draws nothing.

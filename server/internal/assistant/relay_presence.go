@@ -106,10 +106,12 @@ func (msg relayMsg) decisionSince() time.Time {
 }
 
 // holdLocked is how long msg still has to wait before it may go into conversation to (0: it may go now); b.mu is
-// held. A message that waits on a decision and does not say when it queued is not held.
+// held. A message that waits on a decision and does not say when it queued is not held, and neither is the owner's
+// own answer on a card asked without waiting (relayMsg.Owner, #4928): the hold keeps the system out of the owner's
+// way, and that answer is the owner speaking.
 func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Duration {
 	spoke, ok := b.st.Spoke[to]
-	if !ok {
+	if !ok || msg.Owner {
 		return 0
 	}
 	until := spoke.Add(ownerPresentFor)
