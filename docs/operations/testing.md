@@ -1159,6 +1159,11 @@ DEBUG `-showPagePerf YES`: after 10 s measures 8 s idle (`frames-page-idle.json`
 then script `GET /mock/churn?n=12&ms=500` keeps pushes in segment), largest visible scroll view glides down 3 s/back 3 s at 2000 pt/s,
 `frames-page-glide.json`. Target args: Work `-tab dev -app.tab chats`, Inbox/Machines `-openShellPage inbox|machines`,
 Agent chat `-openSession <machine>/<session>`. `MOCK_AGENTS=1` ~130 Agents reveals list cost.
+The first 10 s are measured too (`frames-page-open.json`: launch, the page opening, its first layout). `-showPagePerfSpeed <pt/s>` and
+`-showPagePerfSeconds <s>` change the glide, `-showPagePerfRepeat <n>` glides n times (`frames-page-glide-2.json`, …: the first pass lays rows
+out, later ones come back to them). `-showListOffset <pt>` puts the main scroll view that far from its start 8 s after launch and writes
+`Documents/list-offset-set` (screenshots of one place in two builds). A chat is told a finger is on its list for both (`PagePerf.touchers`);
+without that it keeps following its newest end and the list does not move (#4970): check moves with `-scrollTrace YES`.
 
 2026-11-01 iPhone 17 Pro simulator, 2 runs/page:
 
@@ -1171,6 +1176,32 @@ Agent chat `-openSession <machine>/<session>`. `MOCK_AGENTS=1` ~130 Agents revea
 
 Work change: hub pushes sessions separately per machine, previously each recalculated session-reading pages. Coalesce arrivals within 25 ms
 (`AppModel.applyPendingSessions`), ~4 SwiftUI updates→1 per round.
+
+### Long Agent answer (#4970)
+
+`MOCK_LONG_REPORT=1`: an Agent chat (`-openSession macbook/a1f3c2d4-0000-4000-8000-000000000090`) ending in one ~33,000-character report
+(nine tables of 115 rows, a dozen code blocks, headings, lists, a quote) after 120 folded tool calls and eight subagent cards, the shape of a
+real planning session that scrolled badly. `MOCK_LONG_REPORT=<items.json>` serves a transcript's items instead (kept outside the repository; long
+tool outputs cut to the page's 4 KB as the hub does). DEBUG `-showAnswerWhole YES` draws every answer as one row, as before #4970, so one
+optimized build measures before and after; `-showAnswerPartLines <n>` changes the part size. Measure with `-showPagePerf` (open, first glide,
+glide back) and the chat's own `-showAutoScroll` (its sweep is programmatic animated jumps, its glide moves the chat's list).
+
+2026-11-12, iPhone 17 Pro simulator (iOS 27), optimized Debug build, one build measured both ways (`-showAnswerWhole YES` is
+before); median / worst. Opening was measured under the heavy-job lock, scrolling was not (other builds ran, load 18–105; runs interleaved).
+
+| Scenario | Metric | Before (one row) | After (parts) |
+| --- | --- | --- | --- |
+| Opening the chat, synthetic (6 runs) | longest frame | 1266 / 1757 ms | 448 / 1053 ms (launch's own frame) |
+| Opening the chat, synthetic | hitch time | 193 / 225 ms/s | 79 / 133 ms/s |
+| Opening the chat, real report (1 run locked, 3 not) | longest frame | 2229 ms; 2040–3156 ms | 551 ms; 590–663 ms |
+| Glide 2000 pt/s, real report (3 runs) | hitch time | 347 / 393 ms/s | 12 / 27 ms/s |
+| Glide, real report | longest frame; frames > 50 ms; blocks ≥ 100 ms | 262 ms; 12; 12 | 33 ms; 0; 0 |
+| Glide, synthetic | hitch time; p95 frame | 205 ms/s; 50 ms | 2 ms/s; 16.7 ms |
+| Sweep (8 animated jumps), real report | hitch time; longest frame; blocks ≥ 100 ms | 538 ms/s; 1459 ms; 21 | 434 ms/s; 374 ms; 6 |
+| Sweep, synthetic | hitch time; longest frame | 184 ms/s; 567 ms | 62 ms/s; 244 ms |
+
+The glide is `-showAutoScroll`'s, after its sweep. The sweep is the first pass over parts not laid out yet; there drawing many distinct CJK
+glyphs the first time is about 55% of the main thread (#5076).
 
 ### Lark pages (chat/Inbox, #674)
 
