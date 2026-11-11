@@ -105,6 +105,8 @@ var Routes = []string{
 	"POST /api/v1/sessions/{mid}/{sid}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/archive",
 	"GET /api/v1/assistant/conversations/{id}/always",
+	"GET /api/v1/assistant/standing-authorizations",
+	"DELETE /api/v1/assistant/standing-authorizations/{id}",
 	"DELETE /api/v1/assistant/conversations/{id}/always/{hash}",
 	"POST /api/v1/assistant/conversations/{id}/unarchive",
 	"POST /api/v1/assistant/conversations/{id}/stop",

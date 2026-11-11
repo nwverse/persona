@@ -296,3 +296,12 @@ the provisional record with an independent bounded context, including when the r
 Paseo's CLI `archive --force` skips
 a client-side busy check; its archive request has no force field and closes the provider runtime. Check the actual
 archive receipt before removing the Agent from a bridge's local list.
+
+## Standing authorization and notification evidence (#4398)
+
+A quoted instruction in task notes is not a durable grant. Keep explicit grants in manager storage, require the user's
+own approval when adding them, and compare revisions when a setting approval can race App revocation. Recheck the
+grant after condition reads and serialize its final answer against deletion in the database. Commit the answer and
+its task decision together before sending it to a hook. A plan approval must select `default` explicitly: an empty
+mode can fall back to bypass permissions on the node. Count confirmation dispatch at `tellUser`, not interaction
+creation or app presentation; quiet tasks and supervisor routing also show cards without ringing the user.
