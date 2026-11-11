@@ -1,6 +1,74 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%lld videos [Queue Strip]" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld video"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld videos"
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ビデオ%1$lld本"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 个视频"
+          }
+        }
+      }
+    },
+    "Moved back to the input box. %lld attachments couldn't be put back and stay in the message as text." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Moved back to the input box. %1$lld attachment couldn't be put back and stays in the message as text."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Moved back to the input box. %1$lld attachments couldn't be put back and stay in the message as text."
+                }
+              }
+            }
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入力欄に戻しました。%1$lld件の添付は戻せなかったため、テキストのままメッセージに残しています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已撤回到输入框，有 %1$lld 个附件没能放回，以文字留在消息里"
+          }
+        }
+      }
+    },
     "Pack partly uninstalled": {
       "extractionState": "manual",
       "localizations": {

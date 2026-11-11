@@ -127,6 +127,22 @@ from colliding with its buttons.
   the screen drew it over the bar and hid the bar's buttons; it starts at `AssistantTopBar.fogSolid`, the bar fog's solid end, and goes
   down from there. The bar, the shell's moving bar and the switcher share `fogSolid` and `fade` so they cannot drift apart.
 
+## Fog under the chat's footer (#3696)
+
+The chat list and its footer (Persona's capsules, cards, the composer) are stacked, not overlaid, so the keyboard shortens the
+page and the newest message stays over the composer. A fade drawn by the footer over the list's last 48 pt still left three faults:
+
+- **The list's own edge is a line.** The gradient ended at the list's bottom, where the scroll view clips: a card crossing it lost
+  its rounded bottom to a straight cut, and below it was only page. A fade must end where nothing is drawn any more: the fog is
+  solid at the list's bottom edge (`FooterFog`), so whatever the clip cuts is already invisible.
+- **A band under the capsules reads as a plate.** To fade behind the capsules, the list runs on under the footer by a fixed band
+  (`ChatView.underDock`, negative bottom padding on the list) and its newest end gets the same extra content margin. Positions,
+  `newestGap` (offset + inset) and the follow logic are unchanged; what reads the list's frame (`scratch.listFrame`, the scroll
+  geometry's height, the navigator, the arrow) takes the part over the footer. The band is a constant per chat type, never the
+  footer's measured height: margins that track the footer would move the list on every card, tray and line of text.
+- **Whatever is drawn after the fade covers what is drawn before it.** The footer's gradient also dimmed Jump to Latest, which is
+  an overlay of the list. The fog is now the list's first overlay; the navigator and the arrow come after it.
+
 ## Personal Agent entry availability (#2935)
 
 - Gate entry points on source setup, configured accounts and an unfiltered session list, not the personal page's search/unread preferences. Unknown availability starts hidden; a source/account response alone cannot reveal the chip. Keep an event listener alive while the Agents tab is visible so the first session can reveal a previously hidden entry, and fence cancelled reads and changed hub credentials.
