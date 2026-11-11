@@ -55,10 +55,11 @@ import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
-import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, triage, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
+import { FOLDED_SECTIONS, TRIAGE_SECTIONS, checksAsOpen, lastActivity, supersededFailedStarts, triageTodos, type TriageGroup, type TriageSection } from "../lib/todo-triage";
 import {
   TODO_LIST_FILTERS,
   TODO_LIST_SORTS,
+  hiddenWaiting,
   isTodoListFilter,
   isTodoListSort,
   listFilterCounts,
@@ -267,18 +268,23 @@ export function TodosView({
   const [grouping, setGrouping] = useState<"status" | "folder">(() => (pref(GROUPING_KEY) === "folder" ? "folder" : "status"));
   const byStatus = grouping === "status";
   const [restored, restoreTodo] = useRestoredTodos();
-  const triaged = useMemo(() => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored), [todos, lookup, restored, search, listFilter, tick]);
+  // whether a failed start was superseded by finished work (#3713) is decided on every to-do: a search or a filter that
+  // leaves the finished one out must not put it back in Needs you
+  const superseded = useMemo(() => supersededFailedStarts(todos), [todos]);
+  const triaged = useMemo(
+    () => triageTodos(todos.filter(filterTodo), lookup, Date.now(), restored, { superseded }),
+    [todos, lookup, restored, search, listFilter, superseded, tick],
+  );
   // the header's counts: what the filter shows, whatever is searched
   const triageAll = useMemo(
-    () => (search.trim() ? triageTodos(todos.filter(inFilter), lookup, Date.now(), restored) : triaged),
-    [todos, lookup, restored, search, listFilter, triaged, tick],
+    () => (search.trim() ? triageTodos(todos.filter(inFilter), lookup, Date.now(), restored, { superseded }) : triaged),
+    [todos, lookup, restored, search, listFilter, superseded, triaged, tick],
   );
   // what waits on the user that the filter leaves out: the line over the sections says how many (#3740)
-  const hiddenWaiting = useMemo(() => {
-    if (listFilter === "all") return 0;
-    const now = Date.now();
-    return todos.filter((td) => matchesSearch(td) && !inFilter(td) && triage(td, lookup, now, restored.get(td.id) ?? 0).section === "waiting").length;
-  }, [todos, lookup, restored, search, listFilter, tick]);
+  const hiddenWaitingCount = useMemo(
+    () => (listFilter === "all" ? 0 : hiddenWaiting(todos.filter(matchesSearch), inFilter, lookup, Date.now(), restored, superseded)),
+    [todos, lookup, restored, search, listFilter, superseded, tick],
+  );
   const filterCounts = useMemo(() => listFilterCounts(todos.filter(matchesSearch), tick), [todos, search, tick]);
   const onRestore = useCallback(
     (id: string) => {
@@ -551,7 +557,7 @@ export function TodosView({
               ) : listFilter !== "all" ? (
                 // the filter left nothing (#3740): which, and the way back to every to-do
                 <>
-                  {hiddenWaiting > 0 && <HiddenWaitingLine count={hiddenWaiting} filter={listFilter} onShowAll={() => chooseFilter("all")} />}
+                  {hiddenWaitingCount > 0 && <HiddenWaitingLine count={hiddenWaitingCount} filter={listFilter} onShowAll={() => chooseFilter("all")} />}
                   <Empty
                     icon="calendar"
                     title={t(`todos.filter_empty_${listFilter}`)}
@@ -580,7 +586,7 @@ export function TodosView({
             ) : (
               byStatus ? (
               <div className="flex flex-col gap-1" data-testid="todos-sections">
-                {hiddenWaiting > 0 && <HiddenWaitingLine count={hiddenWaiting} filter={listFilter} onShowAll={() => chooseFilter("all")} />}
+                {hiddenWaitingCount > 0 && <HiddenWaitingLine count={hiddenWaitingCount} filter={listFilter} onShowAll={() => chooseFilter("all")} />}
                 {TRIAGE_SECTIONS.map((sec) =>
                   triaged.sections[sec].length === 0 ? null : (
                     <TodoTriageSection

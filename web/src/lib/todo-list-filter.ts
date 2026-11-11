@@ -4,8 +4,8 @@
 // does; a sort orders the rows inside each section and never moves a section.
 
 import { addDays, startOfDay, startOfWeek, weekStartDay } from "./todo-calendar";
-import type { TriageGroup } from "./todo-triage";
-import { isOverdue, todoDueBy, todoDueDay, type Todo } from "./todos";
+import { triage, type TriageGroup } from "./todo-triage";
+import { isOverdue, todoDueBy, todoDueDay, type SessionLookup, type Todo } from "./todos";
 
 export type TodoListFilter = "all" | "no_due" | "today" | "week" | "month";
 export type TodoListSort = "recent" | "due" | "priority";
@@ -60,6 +60,20 @@ export function listFilterCounts(todos: Todo[], now: number, first = weekStartDa
 }
 
 /** high first, then normal, then low. */
+/** How many of `searched` wait on the user (SOP section Needs you) but are not `shown`: the line over the list (#3740).
+ *  `superseded` is decided on every to-do (`supersededFailedStarts`), so a failed start whose finished work the filter
+ *  leaves out is not counted as waiting (#3713). */
+export function hiddenWaiting(
+  searched: Todo[],
+  shown: (todo: Todo) => boolean,
+  lookup: SessionLookup | undefined,
+  now: number,
+  restored: ReadonlyMap<string, number>,
+  superseded: ReadonlySet<string>,
+): number {
+  return searched.filter((td) => !shown(td) && triage(td, lookup, now, restored.get(td.id) ?? 0, superseded.has(td.id)).section === "waiting").length;
+}
+
 export function priorityRank(todo: Todo): number {
   return todo.priority === "high" ? 0 : todo.priority === "low" ? 2 : 1;
 }

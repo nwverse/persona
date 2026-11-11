@@ -2,8 +2,8 @@
 // TodoListFilterTests. Local times: these run in whatever zone the machine has, as the page does. Wednesday 2026-11-11,
 // noon, is "now"; weeks start on Monday (1) unless a case says otherwise.
 import { describe, expect, it } from "vitest";
-import { listFilterCounts, matchesListFilter, sortTriageGroups, type TodoListFilter } from "./todo-list-filter";
-import type { TriageGroup } from "./todo-triage";
+import { hiddenWaiting, listFilterCounts, matchesListFilter, sortTriageGroups, type TodoListFilter } from "./todo-list-filter";
+import { supersededFailedStarts, triageTodos, type TriageGroup } from "./todo-triage";
 import type { Todo } from "./todos";
 
 const at = (day: number, hour = 9, month = 11) => new Date(2026, month - 1, day, hour).getTime();
@@ -77,5 +77,34 @@ describe("the list's sort inside a section", () => {
     const rows = [group([todo("lead"), todo("member", { due_date: "2026-11-12", priority: "high" })]), group([todo("other", { due_date: "2026-11-13" })])];
     expect(sortTriageGroups(rows, "due").map((g) => g.key)).toEqual(["lead", "other"]);
     expect(sortTriageGroups(rows, "priority").map((g) => g.key)).toEqual(["lead", "other"]);
+  });
+});
+
+// The same case as iOS TodoListFilterTests.aFilterNeverPutsASupersededFailedStartBackInNeedsYou (#3713 with #3740).
+describe("a failed start superseded by finished work, under a filter or a search", () => {
+  const closed = iso(NOW - 3600_000);
+  const failed = todo("failed", { due_date: "2026-11-11", done_at: closed, plan_id: "p", start_error: "no launcher" }); // due today: shown
+  const finished = todo("finished", { done_at: closed, plan_id: "p" }); // its plan's work, no due date: left out
+  const hiddenFailed = todo("hidden-failed", { done_at: closed, plan_id: "q", start_error: "no launcher" });
+  const hiddenFinished = todo("hidden-finished", { done_at: closed, plan_id: "q" });
+  const waiting = todo("waiting", { done_at: closed, start_error: "no launcher" }); // nothing finished beside it: waits
+  const all = [failed, finished, hiddenFailed, hiddenFinished, waiting];
+  const superseded = supersededFailedStarts(all);
+  const today = (td: Todo) => matchesListFilter(td, "today", NOW, MONDAY);
+  const ids = (gs: TriageGroup[]) => gs.flatMap((g) => g.members.map((m) => m.id));
+
+  it("stays out of Needs you when the filter leaves its finished work out", () => {
+    const r = triageTodos(all.filter(today), undefined, NOW, new Map(), { superseded });
+    expect(ids(r.sections.waiting)).toEqual([]);
+    expect(ids(r.sections.just_done)).toEqual(["failed"]);
+  });
+
+  it("is not counted in the line about those the filter leaves out", () => {
+    expect(hiddenWaiting(all, today, undefined, NOW, new Map(), superseded)).toBe(1);
+  });
+
+  it("stays out of Needs you when the search leaves its finished work out", () => {
+    const r = triageTodos([failed, waiting], undefined, NOW, new Map(), { superseded });
+    expect(ids(r.sections.waiting)).toEqual(["waiting"]);
   });
 });
