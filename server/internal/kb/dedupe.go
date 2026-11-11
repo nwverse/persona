@@ -425,11 +425,21 @@ func (e *Engine) relinkRefs(p *Project, manual bool, f func(ref string, projects
 		var list *[]string
 		switch kind {
 		case KindChat:
-			c, ok := e.Store.Chat(id)
+			// Under chatMu (editChatAs): an ingest's pending count and last message time written meanwhile stay.
+			if _, _, err := e.Store.editChatAs(id, manual, func(c *Chat) {
+				if l, changed := f(ref, c.Projects); changed {
+					c.Projects = l
+				}
+			}); err != nil {
+				return err
+			}
+			continue
+		case KindRecording:
+			r, ok := e.Store.Recording(id)
 			if !ok {
 				continue
 			}
-			v, t, list = c, &c.Tagging, &c.Projects
+			kind, id, v, t, list = KindRecording, r.ID, r, &r.Tagging, &r.Projects
 		case KindPerson:
 			// Read again under personMu: chats or handles the pipeline links meanwhile stay.
 			if _, _, err := e.Store.updatePerson(id, manual, nil, func(per *Person) bool {

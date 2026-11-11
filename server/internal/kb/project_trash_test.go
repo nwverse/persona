@@ -3,6 +3,7 @@ package kb
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -161,4 +162,106 @@ func TestProjectTrashIsReadOnlyWhenTheKnowledgeBaseIs(t *testing.T) {
 
 func sameSet(a, b []string) bool {
 	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+}
+
+// Review fixes (#4412): search, forgetting a source, merged projects, long slugs and a stray timeline.
+
+func TestDeletedProjectIsNotSearched(t *testing.T) {
+	e := trashFixture(t)
+	if err := e.Store.PutSummary(KindProject, "gone", "# gone\n\nzebrafishword\n"); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Search("zebrafishword", false, 10)) == 0 {
+		t.Fatal("the summary is not searchable before the delete")
+	}
+	if _, err := e.DeleteProject("gone", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if hits := e.Search("zebrafishword", false, 10); len(hits) != 0 {
+		t.Fatalf("a deleted project is still searched: %+v", hits)
+	}
+}
+
+func TestForgettingASourceEmptiesTheTrashEntriesThatHoldIt(t *testing.T) {
+	e := trashFixture(t)
+	_ = e.Store.PutChat(&Chat{ID: "src-chat", Connector: "src", Source: "src", Name: "Source chat"})
+	if _, err := e.Apply(KindChat, "src-chat", Update{Projects: []string{"gone"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.DeleteProject("gone", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.DeleteProject("other", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ForgetSource("src"); err != nil {
+		t.Fatal(err)
+	}
+	trash := e.Trash()
+	if len(trash) != 1 || trash[0].Slug != "other" {
+		t.Fatalf("trash after forgetting = %+v, want only the untouched project", trash)
+	}
+}
+
+func TestDeletingAProjectTakesTheProjectsMergedIntoIt(t *testing.T) {
+	e := trashFixture(t)
+	if _, err := e.Apply(KindProject, "other", Update{MergeInto: "gone"}); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := e.DeleteProject("gone", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(entry.Merged, []string{"other"}) || slices.Contains(e.Store.IDs(KindProject), "other") {
+		t.Fatalf("merged = %v, projects = %v", entry.Merged, e.Store.IDs(KindProject))
+	}
+	if n := len(e.Store.trashedProjects()[entry.ID]); n != 2 {
+		t.Errorf("trashed projects in the entry = %d, want 2", n)
+	}
+	if _, err := e.RestoreProject(entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	if o, ok := e.Store.Project("other"); !ok || o.MergedInto != "gone" {
+		t.Fatalf("merged project after restore = %+v, %v", o, ok)
+	}
+}
+
+func TestLongSlugsStayListedAndDeleteTwice(t *testing.T) {
+	e := testEngine(t, nil)
+	name := strings.Repeat("项目名称", 10)
+	slug, err := e.Apply(KindProject, name, Update{Name: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if i == 1 {
+			if _, err := e.Apply(KindProject, name, Update{Name: name}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := e.DeleteProject(slug, time.Now()); err != nil {
+			t.Fatalf("delete %d: %v", i+1, err)
+		}
+	}
+	if n := len(e.Trash()); n != 2 {
+		t.Fatalf("listed trash entries = %d, want 2", n)
+	}
+}
+
+func TestRestoreKeepsATimelineLineAppendedDuringTheDelete(t *testing.T) {
+	e := trashFixture(t)
+	entry, err := e.DeleteProject("gone", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What a racing AppendLog leaves: the directory with only log.md.
+	if err := e.Store.AppendLog("gone", time.Now(), "A chat", "late line"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RestoreProject(entry.ID); err != nil {
+		t.Fatalf("restore over a stray timeline: %v", err)
+	}
+	if lines := strings.Join(e.Store.timeline("gone"), "\n"); !strings.Contains(lines, "late line") {
+		t.Fatalf("the late line is lost: %q", lines)
+	}
 }

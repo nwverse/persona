@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { Toasts } from "../../ui/atoms";
 import { ListPane } from "./KBList";
-import { lists, searches } from "./cache";
+import { listKey, lists, searches } from "./cache";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -85,6 +85,8 @@ describe("deleting a project from the knowledge list", () => {
     expect(calls).toContain("DELETE /kb/projects/alpha");
     expect(row("Alpha")).toBeUndefined();
     expect(row("Beta")).toBeTruthy();
+    // The cached list a later visit shows first has lost it too.
+    expect(lists.get(listKey("projects"))?.items?.map((x) => x.id)).toEqual(["beta"]);
     expect(document.body.textContent).toContain(t("knowledge-kblist.deleted", { name: "Alpha" }));
     await act(async () => button(t("knowledge-kblist.undo"))!.click());
     await flush();

@@ -139,7 +139,7 @@ export function ListPane({
     }
     setConfirm(null);
     // Gone on the hub: drop it from every cached projects list now rather than after a reload.
-    for (const [k, v] of lists) if (k.startsWith("projects")) lists.set(k, { ...v, items: (v.items ?? []).filter((x) => x.id !== e.id) });
+    for (const [k, v] of lists) if (k.includes("|projects|")) lists.set(k, { ...v, items: (v.items ?? []).filter((x) => x.id !== e.id) });
     searches.clear();
     setList((l) => l && { ...l, items: (l.items ?? []).filter((x) => !(x.kind === e.kind && x.id === e.id)) });
     if (isSel(e)) navigate({ name: "kb", kind: "projects" });
