@@ -411,6 +411,9 @@ export function nestingKey(all: Subagent[]): string {
 }
 
 const stepTs = (s: Step) => (s.kind === "tool" ? s.use.ts : s.item.ts);
+/** The key a subagent card's open / closed state is kept under: by its call, so a link to the subagent can open it. */
+export const subagentCardKey = (scope: string, call: string) => `${scope}task:${call}`;
+
 /** The call a subagent's card is known by (its key, `data-tool-use`): the call that launched it, or for a fork the node
  *  names no call of, one of its own. */
 export const subagentCall = (a: Subagent): string => a.tool_use_id || `${NESTED}${a.id}`;

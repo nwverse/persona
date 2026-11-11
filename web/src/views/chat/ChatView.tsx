@@ -20,7 +20,7 @@ import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotic
 import { REVIEW_FEATURE } from "../../lib/session-review";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, useStore, viewSession } from "../../lib/store";
 import { PREVIEW_FEATURE } from "../../lib/preview";
-import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, terminalCalls, type TaskIndex } from "../../lib/tasks";
+import { agentsWorking, buildTaskIndex, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, terminalCalls, type TaskIndex } from "../../lib/tasks";
 import { stabilizeLines, stableValue } from "../../lib/stable-lines";
 import { planProgress, workLineStyle } from "../../lib/work-groups";
 import { echoed, taggedSeen } from "../../lib/echo";
@@ -71,7 +71,6 @@ import { backgroundLine, backgroundWaitLine, waitingOnWorkflow, workflowAgentFor
 import { waitingOnSubagents } from "../../lib/background-work";
 import { doneSubagentLink, useSubagentLink } from "../../lib/subagent-link";
 import { openExpanded } from "./expanded";
-import { subagentCardKey } from "./SubagentCard";
 import { seekCall } from "./jump";
 import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
 import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, USER_INPUT_PAGE_SIZE } from "../../lib/user-input-index";

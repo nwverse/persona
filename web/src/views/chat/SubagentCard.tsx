@@ -7,7 +7,7 @@
 // report comes back as a notice.
 import { memo, useState } from "react";
 import { t } from "../../i18n";
-import { agentSummary, isLaunchReceipt, modelChipLabel, subagentEnded, subagentFor, subagentTitle } from "../../lib/tasks";
+import { agentSummary, isLaunchReceipt, modelChipLabel, subagentCardKey, subagentEnded, subagentFor, subagentTitle } from "../../lib/tasks";
 import { compactTokens } from "../../lib/tokens";
 import type { Item, Subagent, TaskNote } from "../../lib/types";
 import { tsMs, workDuration, type AgentStatus, type ToolStep } from "../../lib/work-groups";
@@ -25,9 +25,6 @@ export function compactText(text: string | undefined, max: number): string {
   const chars = Array.from((text ?? "").replace(/\s+/g, " ").trim());
   return chars.length <= max ? chars.join("") : `${chars.slice(0, max - 1).join("")}…`;
 }
-
-/** The key a card's open / closed state is kept under: by its call, so a link to the subagent can open it. */
-export const subagentCardKey = (scope: string, call: string) => `${scope}task:${call}`;
 
 /** What a background subagent reported: its notice's words (the call's own result is only the launch receipt). */
 export function reportOf(result: Item | undefined, notes: TaskNote[] | undefined): string {

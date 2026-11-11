@@ -13,7 +13,8 @@ import type { Item, Subagent, TaskNote } from "../../lib/types";
 import type { AgentStatus, ToolStep } from "../../lib/work-groups";
 import { ChatContext, type ChatContextValue } from "./chat-context";
 import { forgetExpanded } from "./expanded";
-import { compactText, SubagentCard, subagentCardKey, subagentMeta } from "./SubagentCard";
+import { subagentCardKey } from "../../lib/tasks";
+import { compactText, SubagentCard, subagentMeta } from "./SubagentCard";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

@@ -1,5 +1,5 @@
 // One folded execution summary while running or completed; manual expansion reveals its complete trace (#2602).
-import { memo, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { lazy, memo, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useSessionLive } from "../../lib/live";
 import { useStore } from "../../lib/store";
 import type { Item } from "../../lib/types";
@@ -17,10 +17,12 @@ import { nodeItemIds } from "../../lib/chat-search";
 import { PlanCard } from "./PlanCard";
 import { Answer } from "./SegmentView";
 import { NoticeRow, Thumb } from "./Steps";
-import { SubagentCard } from "./SubagentCard";
 import { WorkflowCallCard } from "./WorkflowCard";
 import { ThinkingCard } from "./ThinkingCard";
 import { t } from "../../i18n";
+
+// Subagent cards sit inside the folded work (super rule 2), drawn only once a reader opens it: off the first screen.
+const SubagentCard = lazy(() => import("./SubagentCard").then((m) => ({ default: m.SubagentCard })));
 
 export interface WorkProps {
   mid: string;
@@ -196,7 +198,7 @@ export const StepView = memo(function StepView({ step, p, live, fade }: { step: 
   switch (step.kind) {
     case "tool":
       if (p.trace) return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} trace />;
-      if (isAgentStep(step)) return <SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} />;
+      if (isAgentStep(step)) return <Suspense fallback={null}><SubagentCard step={step} status={p.agentStatus(step)} mid={p.mid} sid={p.sid} scope={p.scope} /></Suspense>;
       if (isPlanStep(step)) return <PlanCard id={step.id} todos={planTodos(step)} live={live} mid={p.mid} sid={p.sid} />;
       if (workflowCard(step, p)) return <WorkflowCallCard step={step} mid={p.mid} sid={p.sid} scope={p.scope} />;
       return <ActionRow step={step} running={live && !step.result} mid={p.mid} sid={p.sid} />;
