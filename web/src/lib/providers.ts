@@ -3,7 +3,7 @@
 // in views/settings/Provider*.tsx only render it.
 import { ApiError, errorText } from "./api";
 import { hostOf as urlHost } from "./hubs";
-import { launcherNameProblem, testableKey } from "./launcher-presets";
+import { displayNameProblem, launcherNameProblem, testableKey } from "./launcher-presets";
 import type { ScopeView } from "./provider-scope";
 import { TIER_SLOTS, type TierSource } from "./provider-tiers";
 import { EFFORTS } from "./session-actions";
@@ -74,7 +74,10 @@ export interface ProviderForm {
   kind: "launcher" | "api";
   agent: "claude" | "codex" | "agy" | "omp";
   api: ProviderAPI;
+  /** The startup ID; left empty on a new provider, a hub with `launcher_auto_name` makes one (#5029). */
   name: string;
+  /** What people see, any language; "" shows the startup ID. */
+  display_name: string;
   base_url: string;
   auth: "bearer" | "api_key";
   api_key: string;
@@ -115,6 +118,7 @@ export function newForm(): ProviderForm {
     agent: "claude",
     api: "messages",
     name: "",
+    display_name: "",
     base_url: "",
     // gateways mostly want Bearer (ANTHROPIC_AUTH_TOKEN)
     auth: "bearer",
@@ -165,6 +169,7 @@ export function formFromView(v: ProviderView): ProviderForm {
     agent: (v.agent as ProviderForm["agent"]) || "claude",
     api: v.api ?? "messages",
     name: v.name,
+    display_name: v.display_name ?? "",
     base_url: v.base_url ?? "",
     auth: storedAuth(v),
     models,
@@ -291,22 +296,28 @@ export function proxyProblem(raw: string): string {
 
 /** What keeps each step from going on ("" when it can): the same rules the hub checks (launchers.go), said earlier. */
 export interface FormProblems {
-  /** The name, the address and the key: what keeps "Next" and "Save" from going on. */
+  /** The names, the address and the key: what keeps "Next" and "Save" from going on. */
   connect: string;
-  /** Only the address and the key: what keeps "Test connection" and "Fetch models" from running. The name plays no part
-   *  in reaching the gateway, so it never blocks them (#4881). */
+  /** Only the address and the key: what keeps "Test connection" and "Fetch models" from running. The names play no
+   *  part in reaching the gateway, so they never block them (#4881). */
   reach: string;
   models: string;
   advanced: string;
 }
 
-export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false): FormProblems {
+/** `autoName`: the hub makes up a new provider's startup ID when none is typed (`launcher_auto_name`, #5029); an older
+ *  hub needs one. */
+export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false, autoName = false): FormProblems {
   const requiresUrlAndKey = f.kind === "api" || !f.agent || f.agent === "claude";
   const reach =
     ((requiresUrlAndKey || f.base_url.trim() !== "") && gatewayProblem(f.base_url)) ||
     (requiresUrlAndKey && !f.api_key.trim() && (isNew || !hadKey) && t("lib-providers.key_required")) ||
     "";
-  const connect = (!f.name.trim() && t("lib-providers.name_required")) || (isNew && launcherNameProblem(f.name)) || reach;
+  const connect =
+    displayNameProblem(f.display_name) ||
+    (!f.name.trim() && !autoName && t("lib-providers.name_required")) ||
+    (isNew && launcherNameProblem(f.name)) ||
+    reach;
 
   const chat = f.kind === "api" && f.api === "chat";
   let models = "";
@@ -334,6 +345,15 @@ export function formProblems(f: ProviderForm, isNew: boolean, hadKey = false): F
     (f.kind !== "api" && f.args.split(/\s+/).some((a) => a && !a.startsWith("-")) && t("lib-providers.args_dash")) ||
     "";
   return { connect, reach, models, advanced };
+}
+
+/** What a provider is called when its display name is left empty, for the field's placeholder: its startup ID (typed,
+ *  or a saved one's), else, when the hub makes the ID up, the address's host, which the hub names it after (#5029); ""
+ *  while neither is known. */
+export function fallbackTitle(f: ProviderForm, autoName: boolean): string {
+  const id = f.name.trim();
+  if (id || !autoName || gatewayProblem(f.base_url)) return id;
+  return urlHost(f.base_url.trim());
 }
 
 /** Whether the Connect step checks the connection by itself (fetches the models, then tests one): a valid address and a
@@ -399,7 +419,8 @@ export function legacyChatClears(v: ProviderView | null): Record<string, string 
   return clears;
 }
 
-/** POST / PUT /api/v1/launchers' body. The base fields always go (the hub replaces them); #2455's fields on a PUT only
+/** POST / PUT /api/v1/launchers' body. The base fields always go (the hub replaces them), the display name too ("" on a
+ *  PUT clears it; on a POST with no startup ID the hub names it after the address, #5029); #2455's fields on a PUT only
  *  when they changed from `old` (left out keeps what is stored), the headers and the environment only when touched (""
  *  clears them), the key only when typed. */
 export function providerBody(f: ProviderForm, old: ProviderView | null, clearLegacyChat = false): Record<string, unknown> {
@@ -407,7 +428,9 @@ export function providerBody(f: ProviderForm, old: ProviderView | null, clearLeg
   const chat = api && f.api === "chat";
   const openAI = api && (f.api === "responses" || f.api === "chat");
   const body: Record<string, unknown> = {
+    // empty: the hub makes the startup ID up (launcher_auto_name)
     name: f.name.trim(),
+    display_name: f.display_name.trim(),
     kind: f.kind,
     ...(f.kind !== "api" && f.agent && f.agent !== "claude" ? { agent: f.agent } : {}),
     api: api ? f.api : "messages",
