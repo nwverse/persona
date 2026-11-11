@@ -19,7 +19,15 @@ import UIKit
     /// whether it is out (the sidebar clearing its search) do not redraw on every frame of a drag.
     private(set) var isOut = false
     /// The sidebar's width, measured by `AssistantDrawerLayout`.
-    @ObservationIgnored var width: CGFloat = 300
+    @ObservationIgnored var width: CGFloat = 300 {
+        didSet { if inPlace, width != oldValue { applyToUIKit() } }
+    }
+    /// Under iPhone Duo's side bars (`shellRailEdge`) the page stays where it is and the sidebar comes in over it from
+    /// the leading edge (#3755): the shell's pages hold navigation controllers, and moved sideways under those bars they
+    /// lay their pages out again on every frame. Set by `AssistantDrawerLayout`.
+    @ObservationIgnored var inPlace = false {
+        didSet { if inPlace != oldValue { applyToUIKit() } }
+    }
     @ObservationIgnored var dragStart: CGFloat = 0
     /// The tab bar fades out as the sidebar comes out (it would sit over the sidebar's bottom row and repeat its Settings).
     /// Faded, not hidden: hiding it changes the page's safe area, and the whole conversation was laid out again on the
@@ -51,11 +59,21 @@ import UIKit
             tabBar.accessibilityElementsHidden = progress > 0
         }
         if let sidebarView {
-            // The page is the upper sheet: sliding it away uncovers a sidebar that is already underneath.
-            // Keep every horizontal position and the text size fixed; only a subtle vertical lift adds depth.
-            sidebarView.transform = CGAffineTransform(translationX: 0, y: (1 - progress) * Theme.Motion.drawerLift)
+            if inPlace {
+                // Over the page, which stays (iPhone Duo's side bars): in from the leading edge, under the finger.
+                sidebarView.transform = CGAffineTransform(translationX: -(1 - progress) * width, y: 0)
+            } else {
+                // The page is the upper sheet: sliding it away uncovers a sidebar that is already underneath.
+                // Keep every horizontal position and the text size fixed; only a subtle vertical lift adds depth.
+                sidebarView.transform = CGAffineTransform(translationX: 0, y: (1 - progress) * Theme.Motion.drawerLift)
+            }
             let hidden = progress == 0 && !settling
-            sidebarView.alpha = hidden ? 0 : 1
+            if inPlace {
+                // Opaque all the way in: inside `settle` the alpha would fade in with the slide and show the page through.
+                UIView.performWithoutAnimation { sidebarView.alpha = hidden ? 0 : 1 }
+            } else {
+                sidebarView.alpha = hidden ? 0 : 1
+            }
             sidebarView.isHidden = hidden
             sidebarView.accessibilityElementsHidden = hidden
         }
@@ -129,7 +147,8 @@ import UIKit
 
 /// The sidebar under the page: the foreground page slides to the right, uncovering the stationary sidebar with a slight
 /// vertical lift. The page stays as a rounded card at the edge (a tap on it, or a drag back, closes). Dragging to the right
-/// anywhere on the page opens it (`DrawerPan`).
+/// anywhere on the page opens it (`DrawerPan`). Under iPhone Duo's side bars the page stays where it is, dimmed, and the
+/// sidebar slides in over it instead (`AssistantDrawer.inPlace`, #3755).
 ///
 /// The sidebar stays built while closed (hidden): building it on the first frame of a drag was most of that frame.
 /// While the finger moves only `DrawerPageMotion` reads the progress (the sidebar and the tab bar are moved by UIKit,
@@ -145,17 +164,22 @@ struct AssistantDrawerLayout<Sidebar: View, Page: View>: View {
     var pager: ShellPager? = nil
     @ViewBuilder var sidebar: Sidebar
     var page: Page
+    /// iPhone Duo's bars down the side (the shell's `shellRailEdge`): the page stays and the sidebar comes over it.
+    @Environment(\.shellRailEdge) private var railEdge
 
     var body: some View {
         GeometryReader { geo in
             let width = min(geo.size.width * 0.82, 380)
+            let inPlace = railEdge != nil
             ZStack(alignment: .leading) {
-                DrawerSidebarHost(drawer: drawer, content: sidebar.padding(.bottom, drawer.screenBottom))
+                DrawerSidebarHost(drawer: drawer, content: sidebar.padding(.bottom, drawer.screenBottom)
+                    .background { if inPlace { DrawerSidebarGround(backdrop: backdrop) } })
                     .frame(width: width)
                     // Down under the faded tab bar, to the screen's own edge.
                     .ignoresSafeArea(.container, edges: .bottom)
+                    .zIndex(inPlace ? 1 : 0)
                 page
-                    .modifier(DrawerPageMotion(drawer: drawer, width: width))
+                    .modifier(DrawerPageMotion(drawer: drawer, width: width, inPlace: inPlace))
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
             .background { backdrop.ignoresSafeArea() }
@@ -163,10 +187,38 @@ struct AssistantDrawerLayout<Sidebar: View, Page: View>: View {
             .gesture(DrawerPan(drawer: drawer, enabled: enabled, pager: pager))
             #endif
             .background { DrawerTabBarProbe(drawer: drawer) }
-            .onAppear { drawer.width = width }
+            .onAppear {
+                drawer.width = width
+                drawer.inPlace = inPlace
+            }
             .onChange(of: width) { drawer.width = width }
+            .onChange(of: inPlace) { drawer.inPlace = inPlace }
         }
     }
+}
+
+/// The sidebar's own ground while it lies over the page (iPhone Duo's side bars, `AssistantDrawer.inPlace`): the
+/// backdrop it otherwise lies on, with the page card's shadow and edge line along its trailing side.
+private struct DrawerSidebarGround: View {
+    let backdrop: Color
+
+    var body: some View {
+        Rectangle()
+            .fill(backdrop)
+            .shadow(color: DrawerEdge.shadow, radius: DrawerEdge.shadowRadius)
+            .overlay(alignment: .trailing) {
+                Rectangle().fill(DrawerEdge.line).frame(width: Theme.Size.line)
+            }
+            .ignoresSafeArea()
+    }
+}
+
+/// Where the page card (or, over the page, the sidebar) meets the other: a soft shadow, and in dark mode, where the
+/// shadow is invisible, a hairline.
+private enum DrawerEdge {
+    static let shadow = Color.black.opacity(0.18)
+    static let shadowRadius: CGFloat = 24
+    static let line = Color.primary.opacity(0.12)
 }
 
 /// Finds the tab bar and the screen's bottom inset for `AssistantDrawer`.
@@ -334,20 +386,24 @@ private struct DrawerSidebarHost<Content: View>: UIViewControllerRepresentable {
 private struct DrawerPageMotion: ViewModifier {
     let drawer: AssistantDrawer
     let width: CGFloat
+    /// iPhone Duo's side bars: the page stays where it is, only dimmed, and the sidebar comes over it
+    /// (`AssistantDrawer.inPlace`).
+    var inPlace = false
 
     func body(content: Content) -> some View {
         let p = drawer.progress
         let out = p > 0
         // The corners only change when the page leaves or comes back to full screen (where the screen's own, rounder
-        // corners hide them), so the mask and the shadow are not redrawn on every frame.
-        let card = RoundedRectangle(cornerRadius: out ? Theme.Radius.page : 0, style: .continuous)
+        // corners hide them), so the mask and the shadow are not redrawn on every frame. A page that stays is no card.
+        let card = RoundedRectangle(cornerRadius: out && !inPlace ? Theme.Radius.page : 0, style: .continuous)
+        let edge = inPlace ? 0 : p
         content
             // While the sidebar is out the page is only a card to tap back to (the overlay below says so).
             .accessibilityHidden(out)
             .mask { card.ignoresSafeArea() }
             .background {
                 ZStack {
-                    card.fill(Color.black).shadow(color: .black.opacity(0.18), radius: 24).opacity(p)
+                    card.fill(Color.black).shadow(color: DrawerEdge.shadow, radius: DrawerEdge.shadowRadius).opacity(edge)
                     card.fill(Theme.pageBackground)
                 }
                 .ignoresSafeArea()
@@ -355,28 +411,33 @@ private struct DrawerPageMotion: ViewModifier {
             .overlay {
                 if out {
                     // In dark mode the shadow is invisible: a hairline keeps the card apart from the sidebar.
-                    card.strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+                    card.strokeBorder(DrawerEdge.line, lineWidth: Theme.Size.line)
+                        .opacity(edge)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                    // The page at the edge: dimmed as the sidebar comes out (#334). The dimming is the card's shape: the
+                    // overlay is not under the mask, and a plain rectangle grayed the sidebar's color outside the card's
+                    // rounded corners (#1247).
+                    card.fill(Theme.Fill.scrim)
                         .opacity(p)
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
-                    // The page at the edge: dimmed as the sidebar comes out (#334), and a tap on it closes the sidebar.
-                    // The dimming is the card's shape: the overlay is not under the mask, and a plain rectangle grayed
-                    // the sidebar's color outside the card's rounded corners (#1247).
-                    card.fill(Theme.Fill.scrim)
-                        .opacity(p)
+                    // A tap on it closes the sidebar: the whole card, or the part beside the sidebar where the page stays.
+                    Color.clear
                         .contentShape(.rect)
-                        .ignoresSafeArea()
                         .onTapGesture { drawer.close() }
                         .accessibilityElement()
                         .accessibilityLabel("Close Sidebar")
                         .accessibilityAddTraits(.isButton)
                         .accessibilityAction { drawer.close() }
                         .accessibilityIdentifier("assistant-drawer-close")
+                        .padding(.leading, inPlace ? width : 0)
+                        .ignoresSafeArea()
                 }
             }
             // Slid aside whole, like ChatGPT (2026-11-01 user request): it used to shrink 6% too, which left gaps above
             // and below the card and dropped its top bar below the sidebar's, and moved every point of it each frame.
-            .offset(x: p * width)
+            .offset(x: inPlace ? 0 : p * width)
     }
 }
 

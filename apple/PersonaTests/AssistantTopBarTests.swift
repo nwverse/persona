@@ -76,6 +76,32 @@ struct AssistantTopBarTests {
         #expect(sidebar.transform == .identity)
     }
 
+    /// Under iPhone Duo's side bars the page stays and the sidebar slides in over it from the leading edge, under the
+    /// finger, without the lift (#3755); closed it is hidden as anywhere else. Back under horizontal bars it lifts again.
+    @Test @MainActor func sidebarSlidesOverAPageThatStaysUnderSideBars() {
+        let drawer = AssistantDrawer()
+        let sidebar = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 800))
+        drawer.sidebarView = sidebar
+        drawer.width = 300
+        drawer.inPlace = true
+        for progress in [CGFloat(0.01), 0.25, 0.5, 0.75, 1] {
+            drawer.progress = progress
+            #expect(sidebar.transform.tx == -(1 - progress) * 300)
+            #expect(sidebar.transform.ty == 0)
+            #expect(sidebar.transform.a == 1 && sidebar.transform.d == 1)
+            #expect(sidebar.alpha == 1 && !sidebar.isHidden && !sidebar.accessibilityElementsHidden)
+        }
+        drawer.progress = 0.5
+        drawer.width = 250
+        #expect(sidebar.transform.tx == -125)
+        drawer.progress = 0
+        #expect(sidebar.isHidden && sidebar.accessibilityElementsHidden)
+        drawer.inPlace = false
+        drawer.progress = 0.5
+        #expect(sidebar.transform.tx == 0)
+        #expect(sidebar.transform.ty == Theme.Motion.drawerLift / 2)
+    }
+
     /// Dragging back retraces the same lift and completely removes the closed sidebar from VoiceOver.
     @Test @MainActor func closingSidebarRetracesItsLiftAndHidesIt() {
         let drawer = AssistantDrawer()
