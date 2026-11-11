@@ -33,7 +33,6 @@ import { ChatView } from "./views/chat/ChatView";
 import { RequestPage } from "./views/RequestPage";
 import { Home } from "./views/Home";
 import { PersonaAssistant } from "./views/PersonaAssistant";
-import { Login } from "./views/Login";
 import { NewWorktreeHost } from "./views/NewWorktreeHost";
 import { WorktreeActionsHost } from "./views/WorktreeActions";
 import { openWorktreeActions } from "./lib/worktree-actions";
@@ -56,6 +55,9 @@ import { AttentionSignals } from "./lib/attention-signals";
 // The pages a first screen doesn't need load when they are opened (#1996), or as a link to their route is reached
 // (lib/lazy-page.ts); "Chat", Persona and "Overview" stay in the main bundle (the extensions' page too: the sidebar already has
 // ExtensionSlots for its icons).
+// The sign-in page is only for a browser that isn't signed in yet (#4603): every load after that would carry it on the
+// first screen for nothing. Its chunk (and its words, the login namespace) loads when it is drawn.
+const Login = lazyPage(() => import("./views/Login").then((m) => m.Login));
 const AgentsView = lazyPage(() => import("./views/agents/AgentsView").then((m) => m.AgentsView), { routes: ["agents"] });
 const WorkspaceBoard = lazyPage(() => import("./views/WorkspaceBoard").then((m) => m.WorkspaceBoard), { routes: ["workspace-board"] });
 const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines"] });
@@ -144,7 +146,17 @@ export function App() {
 
   return (
     <>
-      {joining ? <Joining /> : authed ? <Shell /> : <Login error={linkError} onDone={() => setAuthed(true)} />}
+      {joining ? (
+        <Joining />
+      ) : authed ? (
+        <Shell />
+      ) : (
+        <PageBoundary page="login">
+          <Suspense fallback={<PageLoading />}>
+            <Login error={linkError} onDone={() => setAuthed(true)} />
+          </Suspense>
+        </PageBoundary>
+      )}
       <Toasts />
     </>
   );

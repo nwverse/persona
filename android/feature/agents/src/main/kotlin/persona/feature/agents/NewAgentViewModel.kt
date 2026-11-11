@@ -484,5 +484,6 @@ private fun NewAgentState.filled(setup: RecentSetup): NewAgentState {
  */
 internal fun defaultLauncher(config: NewAgentModelConfig, defaults: AgentDefaults, launchers: List<AgentLauncher>): String = when (config) {
     is NewAgentModelConfig.Follow, is NewAgentModelConfig.Failed -> ""
-    else -> defaults.launcher.takeIf { name -> launchers.any { it.name == name } } ?: launchers.firstOrNull()?.name.orEmpty()
+    // A launcher blocked on this computer is not where the form starts (#4530): the last one used unless it is blocked.
+    else -> initialLauncher(defaults.launcher.takeIf { it.isNotEmpty() }, launchers)
 }
