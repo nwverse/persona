@@ -694,6 +694,10 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Claude Code's permission mode and effort level right now (`SessionModes`); nil while unknown and for Codex
     /// (a Codex thread the hub drives through its app-server has an effort, never a mode).
     var permissionMode: String? = nil
+    /// This Claude Code can be switched to bypassPermissions (Allow Everything) while it runs: its claude was started with
+    /// a flag that puts that mode in its shift+tab cycle (`bypass_available`, #1379, read off the process by the node).
+    /// False while unknown and from older hubs; then Allow Everything is only a start's choice.
+    var bypassAvailable: Bool = false
     var effort: String? = nil
     /// The levels `effort` may be set to when they are not Claude Code's (`SessionModes.effortOptions`): a Codex thread
     /// the hub drives through its app-server, where only the effort changes (node/codex_effort.go). Nil elsewhere.
@@ -983,7 +987,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case codexRoute = "codex_route", codexRouteNote = "codex_route_note"
         case agentLabelHint = "agent_label"
         case agentSurface = "agent_surface"
-        case permissionMode = "permission_mode"
+        case permissionMode = "permission_mode", bypassAvailable = "bypass_available"
         case contextTokens = "context_tokens", contextWindow = "context_window"
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root", worktree, branch
@@ -1032,6 +1036,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         launcher = try c.decodeIfPresent(String.self, forKey: .launcher)
         model = try c.decodeIfPresent(String.self, forKey: .model)
         permissionMode = try c.decodeIfPresent(String.self, forKey: .permissionMode)
+        bypassAvailable = (try? c.decodeIfPresent(Bool.self, forKey: .bypassAvailable)).flatMap { $0 } ?? false
         effort = try c.decodeIfPresent(String.self, forKey: .effort)
         efforts = try c.decodeIfPresent([String].self, forKey: .efforts)
         contextTokens = try? c.decodeIfPresent(Int.self, forKey: .contextTokens) // an odd one never drops the session
