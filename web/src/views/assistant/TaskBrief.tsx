@@ -1,10 +1,11 @@
 // A task's brief where the owner meets the task (#3822, docs/assistant/unified-entry.md "Briefs"): on the plan card
-// before "Start" (their own words with the date, the goal, the criteria, the expected time, what is out of bounds), on
+// before "Start" (their own words with the date and one line that counts the rest; the goal, the criteria, the
+// expected time and what is out of bounds open on demand, so the card's buttons stay in reach), on
 // the task's page above its criteria (a brief made later says so and shows the hand-over prompt as that), under them
 // the scope changes and who worked on it, and each criterion's result in the criteria box once the work ended. None of it is on
 // the first screen: every user is a lazy import, and the strings are the namespace `assistant-taskbrief`, which loads
 // with the rest of the catalog.
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { formatDate, formatNumber, t } from "../../i18n";
 import { briefAsked, briefCriteria, briefExpect, lineageTells, scopeChanges, type BriefCriterion, type LineageStep, type TaskBrief } from "../../lib/brief";
 import { useStore } from "../../lib/store";
@@ -15,22 +16,26 @@ import { useClamped } from "../../ui/use-clamped";
 
 const CLAMP = { 2: "line-clamp-2", 3: "line-clamp-3", 4: "line-clamp-4" } as const;
 
-/** Text held to a few lines; when they cut it, "Show all" / "Show less" under it opens the rest in place. */
-function Clamp({ lines, className, children }: { lines: keyof typeof CLAMP; className?: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+const TOGGLE = "touch-hit -ml-1 w-fit rounded-control px-1 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2";
+
+/** Whether the box around a clamp opens it (the plan card's one disclosure), and where it hears that the text is cut. */
+type Held = { open: boolean; onCut: (cut: boolean) => void };
+
+/** Text held to a few lines; when they cut it, "Show all" / "Show less" under it opens the rest in place. `held`: the
+ *  box around it has the one control, and this draws none. */
+function Clamp({ lines, className, children, held }: { lines: keyof typeof CLAMP; className?: string; children: ReactNode; held?: Held }) {
+  const [own, setOpen] = useState(false);
+  const open = held ? held.open : own;
   const { ref, cut } = useClamped<HTMLDivElement>(open);
+  const onCut = held?.onCut;
+  useEffect(() => onCut?.(cut), [cut, onCut]);
   return (
     <>
       <div ref={ref} data-brief-clamp={open ? "open" : ""} className={cx("whitespace-pre-wrap select-text [overflow-wrap:anywhere]", className, !open && CLAMP[lines])}>
         {children}
       </div>
-      {cut && (
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-          className="touch-hit -ml-1 w-fit rounded-control px-1 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors hover:bg-hover-2 hover:text-ink-2"
-        >
+      {cut && !held && (
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={TOGGLE}>
           {t(open ? "assistant-taskbrief.show_less" : "assistant-taskbrief.show_all")}
         </button>
       )}
@@ -46,14 +51,14 @@ export function expectText(minutes: number): string {
 
 /** Who asked: the owner's own words under "You asked on <date>:", who started it and why when it was not them, or
  *  that the brief was made later, with the hand-over prompt labelled as that. */
-function Asked({ brief, lines }: { brief: TaskBrief; lines: keyof typeof CLAMP }) {
+function Asked({ brief, lines, held }: { brief: TaskBrief; lines: keyof typeof CLAMP; held?: Held }) {
   const asked = briefAsked(brief);
   if (asked.kind === "owner") {
     return (
       <div data-brief-asked="owner" className="flex min-w-0 gap-2">
         <Icon name="quote" size={13} className="mt-0.5 shrink-0 text-ink-3" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <Clamp lines={lines} className="text-ink">
+          <Clamp lines={lines} className="text-ink" held={held}>
             <span className="mr-1 text-ink-2">{t("assistant-taskbrief.asked_owner", { date: formatDate(asked.at) })}</span>
             {asked.text}
           </Clamp>
@@ -72,7 +77,7 @@ function Asked({ brief, lines }: { brief: TaskBrief; lines: keyof typeof CLAMP }
         {brief.handover?.trim() && (
           <div className="flex min-w-0 flex-col gap-0.5 pl-[21px]">
             <span className="text-[12px] font-medium text-ink-3">{t("assistant-taskbrief.handover")}</span>
-            <Clamp lines={lines} className="text-ink-2">{brief.handover.trim()}</Clamp>
+            <Clamp lines={lines} className="text-ink-2" held={held}>{brief.handover.trim()}</Clamp>
           </div>
         )}
       </div>
@@ -84,7 +89,7 @@ function Asked({ brief, lines }: { brief: TaskBrief; lines: keyof typeof CLAMP }
     <div data-brief-asked={asked.kind === "started" ? asked.by : "unknown"} className="flex min-w-0 gap-2 text-ink-2">
       <Icon name={asked.kind === "started" ? "spark" : "info"} size={13} className="mt-0.5 shrink-0 text-ink-3" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <Clamp lines={lines}>{why ? t("assistant-taskbrief.started_why", { line, why }) : line}</Clamp>
+        <Clamp lines={lines} held={held}>{why ? t("assistant-taskbrief.started_why", { line, why }) : line}</Clamp>
       </div>
     </div>
   );
@@ -137,12 +142,39 @@ function Fields({ brief, title, criteria, expect }: { brief: TaskBrief; title: s
   );
 }
 
-/** A plan task's brief on the plan card, before "Start" confirms it. */
+/** "2 criteria · about 45 min · 1 out of bounds": what a plan card's folded brief holds, in one line. */
+export function briefSummary(brief: TaskBrief): string {
+  const criteria = briefCriteria(brief).length;
+  const minutes = briefExpect(brief);
+  const bounds = brief.out_of_bounds?.length ?? 0;
+  return [
+    criteria > 0 && t("assistant-taskbrief.summary_criteria", { count: criteria }),
+    minutes > 0 && (minutes < 120 ? t("assistant-taskbrief.summary_minutes", { minutes }) : t("assistant-taskbrief.summary_hours", { hours: formatNumber(Math.round(minutes / 6) / 10, { maximumFractionDigits: 1 }) })),
+    bounds > 0 && t("assistant-taskbrief.summary_bounds", { count: bounds }),
+  ].filter(Boolean).join(t("assistant-taskbrief.separator"));
+}
+
+/** A plan task's brief on the plan card, before "Start" confirms it. Folded, it is who asked (two lines) and one line
+ *  that counts the rest, so the card's own buttons stay in reach; "Show all", its one control, opens the whole request
+ *  and the goal, the criteria, the expected time and what is out of bounds in place. */
 export function PlanBrief({ brief, title }: { brief: TaskBrief; title: string }) {
+  const [open, setOpen] = useState(false);
+  const [cut, setCut] = useState(false);
+  const summary = briefSummary(brief);
+  const goal = brief.goal?.trim();
+  const more = cut || open || !!summary || (!!goal && goal !== title.trim());
   return (
-    <div data-plan-brief className="flex min-w-0 flex-col gap-1.5 rounded-control bg-inset px-3 py-2 text-[12.5px] leading-snug shadow-hairline">
-      <Asked brief={brief} lines={2} />
-      <Fields brief={brief} title={title} criteria expect />
+    <div data-plan-brief={open ? "open" : ""} className="flex min-w-0 flex-col gap-1 rounded-control bg-inset px-3 py-1.5 text-[12.5px] leading-snug shadow-hairline">
+      <Asked brief={brief} lines={2} held={{ open, onCut: setCut }} />
+      {open && <Fields brief={brief} title={title} criteria expect />}
+      {more && (
+        <div className="flex min-w-0 items-center gap-2">
+          {!open && summary && <span data-brief-summary className="min-w-0 truncate text-ink-3">{summary}</span>}
+          <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={cx(TOGGLE, "shrink-0")}>
+            {t(open ? "assistant-taskbrief.show_less" : "assistant-taskbrief.show_all")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

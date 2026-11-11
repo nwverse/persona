@@ -6,7 +6,7 @@ import { formatDate } from "../../i18n";
 import { briefAsked, resultOf, type BriefCriterion, type TaskBrief } from "../../lib/brief";
 import type { Todo } from "../../lib/todos";
 import { ReviewChecklist } from "./Supervision";
-import { BriefResultList, expectText, PlanBrief, TaskBriefHistory, TaskBriefPanel } from "./TaskBrief";
+import { BriefResultList, briefSummary, expectText, PlanBrief, TaskBriefHistory, TaskBriefPanel } from "./TaskBrief";
 
 const at = "2026-11-03T12:00:00Z";
 const brief: TaskBrief = {
@@ -45,21 +45,26 @@ describe("who asked (#3822)", () => {
 });
 
 describe("the brief on the plan card (#3822)", () => {
-  it("shows the owner's words with the date, the goal, the criteria, the time and what is out of bounds", () => {
+  it("folded, shows the owner's words with the date and one line that counts the rest", () => {
     const html = renderToStaticMarkup(<PlanBrief brief={brief} title="Fix the sign-in crash" />);
     expect(html).toContain('data-brief-asked="owner"');
     expect(html).toContain(`你在 ${formatDate(at)} 说：`);
     expect(html).toContain("Please fix the sign-in crash before Friday");
-    expect(html).toContain("The sign-in page no longer crashes in landscape");
-    expect(html).toContain("The fix is merged");
-    expect(html).toContain("A test covers landscape");
-    expect(html).toContain("约 30 分钟");
-    expect(html).toContain("Do not touch the payment flow");
     expect(html).toContain("line-clamp-2"); // long words are held to two lines, the rest on demand
+    expect(html).toContain("2 条验收标准 · 约 30 分钟 · 1 条不能做");
+    // the goal, the criteria and what is out of bounds are behind the one control
+    expect(html).not.toContain("The sign-in page no longer crashes in landscape");
+    expect(html).not.toContain("The fix is merged");
+    expect(html).not.toContain("Do not touch the payment flow");
+    expect(html.match(/aria-expanded="false"/g)).toHaveLength(1);
   });
-  it("does not repeat a goal that is the task's title", () => {
-    const html = renderToStaticMarkup(<PlanBrief brief={{ ...brief, goal: "Fix the sign-in crash" }} title="Fix the sign-in crash" />);
-    expect(html).not.toContain(">目标<");
+  it("counts only what the brief has", () => {
+    expect(briefSummary(brief)).toBe("2 条验收标准 · 约 30 分钟 · 1 条不能做");
+    expect(briefSummary({ ...brief, out_of_bounds: undefined, expect_minutes: 150 })).toBe("2 条验收标准 · 约 2.5 小时");
+    expect(briefSummary({ ...brief, done_when: [], criteria: [], out_of_bounds: [], expect_minutes: 0 })).toBe("");
+    // nothing to open: no control
+    const bare = renderToStaticMarkup(<PlanBrief brief={{ ...brief, goal: "x", done_when: [], criteria: [], out_of_bounds: [], expect_minutes: 0 }} title="x" />);
+    expect(bare).not.toContain("aria-expanded");
   });
   it("says who started it when the owner did not ask", () => {
     const html = renderToStaticMarkup(<PlanBrief brief={{ ...brief, request: undefined, started_by: "leader", reason: "The earlier agent stopped" }} title="x" />);

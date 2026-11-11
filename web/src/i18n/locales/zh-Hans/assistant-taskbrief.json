@@ -40,5 +40,9 @@
   "lineage_since": "{from} 起",
   "lineage_stopped": "停下原因：{why}",
   "lineage_going": "还在进行",
-  "separator": " · "
+  "separator": " · ",
+  "summary_criteria_other": "{count} 条验收标准",
+  "summary_minutes": "约 {minutes} 分钟",
+  "summary_hours": "约 {hours} 小时",
+  "summary_bounds_other": "{count} 条不能做"
 }

@@ -40,5 +40,11 @@
   "lineage_since": "Since {from}",
   "lineage_stopped": "Stopped: {why}",
   "lineage_going": "Still going",
-  "separator": " · "
+  "separator": " · ",
+  "summary_criteria_one": "{count} criterion",
+  "summary_criteria_other": "{count} criteria",
+  "summary_minutes": "about {minutes} min",
+  "summary_hours": "about {hours} h",
+  "summary_bounds_one": "{count} out of bounds",
+  "summary_bounds_other": "{count} out of bounds"
 }

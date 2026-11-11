@@ -25,9 +25,9 @@ const sid = "task-brief-demo";
 const day = (n, hour = 9) => new Date(Date.UTC(2026, 10, n, hour, 30)).toISOString();
 const AT = day(10);
 const words = {
-  en: { asked: "You asked on", started: "Started by the assistant on", reconstructed: "Reconstructed: the original request was not recorded", handover: "Hand-over prompt", overdue: "Overdue", showAll: "Show all", lineage: "Who worked on it", scope: "Scope changes", also: "Also done", states: ["Met", "Not met", "Not checked", "Dropped"] },
-  "zh-Hans": { asked: "你在", started: "由助理发起", reconstructed: "事后补建：当初的原话没有记录", handover: "交接提示词", overdue: "已超时", showAll: "展开全部", lineage: "谁做过", scope: "范围变更", also: "另外做了", states: ["已达成", "未达成", "未核对", "已去掉"] },
-  ja: { asked: "のあなたの依頼", started: "にアシスタントが開始", reconstructed: "後から再構成：元の依頼は記録されていません", handover: "引き継ぎ時のプロンプト", overdue: "期限超過", showAll: "すべて表示", lineage: "担当の履歴", scope: "範囲の変更", also: "ほかに実施", states: ["達成", "未達成", "未確認", "対象外に変更"] },
+  en: { summary: "2 criteria · about 45 min · 2 out of bounds", start: "Start 2 tasks", asked: "You asked on", started: "Started by the assistant on", reconstructed: "Reconstructed: the original request was not recorded", handover: "Hand-over prompt", overdue: "Overdue", showAll: "Show all", lineage: "Who worked on it", scope: "Scope changes", also: "Also done", states: ["Met", "Not met", "Not checked", "Dropped"] },
+  "zh-Hans": { summary: "2 条验收标准 · 约 45 分钟 · 2 条不能做", start: "开始 2 个任务", asked: "你在", started: "由助理发起", reconstructed: "事后补建：当初的原话没有记录", handover: "交接提示词", overdue: "已超时", showAll: "展开全部", lineage: "谁做过", scope: "范围变更", also: "另外做了", states: ["已达成", "未达成", "未核对", "已去掉"] },
+  ja: { summary: "完了条件 2 件 · 約 45 分 · 禁止事項 2 件", start: "2件を開始", asked: "のあなたの依頼", started: "にアシスタントが開始", reconstructed: "後から再構成：元の依頼は記録されていません", handover: "引き継ぎ時のプロンプト", overdue: "期限超過", showAll: "すべて表示", lineage: "担当の履歴", scope: "範囲の変更", also: "ほかに実施", states: ["達成", "未達成", "未確認", "対象外に変更"] },
 };
 
 const request = (at, text) => ({ text, at, conversation: sid, message_id: "demo-message" });
@@ -151,27 +151,44 @@ async function run(browser, size, theme, language) {
     const mine = card.locator("[data-plan-brief]").nth(0);
     const own = card.locator("[data-plan-brief]").nth(1);
     assert(new RegExp(w.asked).test(await mine.locator('[data-brief-asked="owner"]').innerText()), "the owner's words are introduced as theirs, with the date");
-    assert((await mine.innerText()).includes("Each review comment has a reply or a commit"), "the criteria are on the card");
-    assert((await mine.innerText()).includes("Do not merge the change"), "what is out of bounds is on the card");
     assert(new RegExp(w.started).test(await own.locator('[data-brief-asked="assistant"]').innerText()), "work the owner did not ask for says who started it");
     assert((await own.innerText()).includes("Left over from the example deploy"), "and why");
     assert.equal(await own.locator('[data-brief-asked="owner"]').count(), 0);
-    // long words are held to two lines, with the rest on demand
+    // folded: the words in two lines and one line that counts the rest, behind one control
+    assert.equal((await mine.locator("[data-brief-summary]").innerText()).trim(), w.summary, "the folded brief counts the criteria, the time and what is out of bounds");
+    assert(!(await mine.innerText()).includes("Each review comment has a reply or a commit"), "the criteria are folded");
+    assert.equal(await mine.locator("button").count(), 1, "one control per brief");
     const toggle = mine.getByRole("button", { name: w.showAll });
     await toggle.waitFor();
     const clamp = mine.locator("[data-brief-clamp]").first();
     const cut = await clamp.evaluate((el) => el.clientHeight);
     await oneLine(card.locator("button"), "plan card buttons");
     await noOverflow(page, "plan card");
-    await card.scrollIntoViewIfNeeded();
+    // with both briefs folded, Start is in reach: inside what the tray shows, without scrolling it
+    const tray = page.locator("section.assistant-action-tray");
+    const start = card.locator("button").filter({ hasText: w.start }).first();
+    const reach = async () => {
+      const [t, head, b] = await Promise.all([tray.boundingBox(), tray.locator("> div").first().boundingBox(), start.boundingBox()]);
+      return { top: Math.round(t.y + head.height), bottom: Math.round(t.y + t.height), startTop: Math.round(b.y), startBottom: Math.round(b.y + b.height), scrolled: await tray.evaluate((el) => el.scrollTop) };
+    };
+    const folded = await reach();
+    assert.equal(folded.scrolled, 0, "the tray was not scrolled");
+    assert(folded.startTop >= folded.top && folded.startBottom <= folded.bottom, `Start is visible in the tray with the briefs folded: ${JSON.stringify(folded)}`);
+    // what the briefs add to the card, against what the tray shows (the card's buttons stay at the tray's edge when it is taller)
+    const heights = { card: Math.round((await card.boundingBox()).height), briefs: await card.locator("[data-plan-brief]").evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().height))) };
     await page.waitForTimeout(300);
-    await card.screenshot({ path: name("plan") });
-    await page.screenshot({ path: name("plan-page") });
+    await page.screenshot({ path: name("plan") });
+    // the one control opens the whole request and the rest in place
     await toggle.click();
     assert.equal(await clamp.getAttribute("data-brief-clamp"), "open");
     assert((await clamp.evaluate((el) => el.clientHeight)) > cut, "Show all opens the whole request in place");
     assert((await clamp.innerText()).includes("with how long you think each would take"), "the end of the request is readable");
-    await card.screenshot({ path: name("plan-open") });
+    assert((await mine.innerText()).includes("Each review comment has a reply or a commit"), "the criteria are on the card");
+    assert((await mine.innerText()).includes("Do not merge the change"), "what is out of bounds is on the card");
+    assert.equal(await mine.locator("button").count(), 1, "still one control");
+    const opened = await reach();
+    assert(opened.startTop >= opened.top && opened.startBottom <= opened.bottom, `Start stays visible with a brief open: ${JSON.stringify(opened)}`);
+    await page.screenshot({ path: name("plan-open") });
 
     // 2. the task's page: the brief above the criteria, the scope changes and the lineage under them, the overdue mark
     await page.goto(`${base}/todos?id=demo-widget`);
@@ -221,7 +238,7 @@ async function run(browser, size, theme, language) {
     await page.screenshot({ path: name("result"), fullPage: true });
     assert.deepEqual(errors, []);
     assert.deepEqual(writes, [], "showing a brief writes nothing");
-    console.log(`PASS ${size} ${theme} ${language}: plan briefs=2, result rows=4, lineage steps=3`);
+    console.log(`PASS ${size} ${theme} ${language}: plan briefs=2, Start visible folded and open (tray ${folded.top}-${folded.bottom}, Start ${folded.startTop}-${folded.startBottom}; card ${heights.card}px, folded briefs ${heights.briefs.join("+")}px), result rows=4, lineage steps=3`);
   } catch (error) {
     await page.screenshot({ path: name("failed") }).catch(() => {});
     throw error;
