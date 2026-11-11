@@ -76,6 +76,22 @@ data class AgentLauncher(
     @SerialName("base_url") val baseUrl: String? = null,
     val model: String? = null,
     @SerialName("agent_type") val agentType: String = "claude",
+    /** Its health on this computer (docs/server/launcher-health.md); null when never checked or from an older hub. */
+    val health: LauncherHealth? = null,
+)
+
+/**
+ * A launcher's health on one computer as the hub records it (docs/server/launcher-health.md): [state] working, failing,
+ * repairing or blocked; [kind] the failure's class (auth, model_route, cli_outdated, timeout, not_in_terminal…);
+ * [error] the hub's redacted text.
+ */
+@Serializable
+data class LauncherHealth(
+    val state: String = "",
+    val kind: String? = null,
+    val error: String? = null,
+    @SerialName("checked_at") val checkedAt: String? = null,
+    @SerialName("resets_at") val resetsAt: String? = null,
 )
 
 @Serializable
