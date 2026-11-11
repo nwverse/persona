@@ -39876,6 +39876,29 @@
       },
       "extractionState": "manual"
     },
+    "Couldn't resume the session": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't resume the session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セッションを再開できませんでした"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没能恢复会话"
+          }
+        }
+      }
+    },
     "Couldn't revoke": {
       "localizations": {
         "en": {
@@ -104037,6 +104060,29 @@
       },
       "extractionState": "manual"
     },
+    "Resume Session": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume Session"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "セッションを再開"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复会话"
+          }
+        }
+      }
+    },
     "Resume Transcribing": {
       "localizations": {
         "en": {
@@ -134983,28 +135029,51 @@
         }
       }
     },
-    "This session isn't running in herdr. Resume it to see the terminal.": {
+    "This session isn't running on its computer. Resume it to open its terminal.": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This session isn't running in herdr. Resume it to see the terminal."
+            "value": "This session isn't running on its computer. Resume it to open its terminal."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "このセッションはherdrで実行されていません。セッションを再開するとターミナルが表示されます。"
+            "value": "このセッションはコンピュータで実行されていません。再開するとターミナルを開けます。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这个会话没有在 herdr 里运行，恢复会话后就能看到终端。"
+            "value": "这个会话没有在电脑上运行。恢复会话后就能打开它的终端。"
           }
         }
-      },
-      "extractionState": "manual"
+      }
+    },
+    "This session isn't running on its computer. Send it a message to resume it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This session isn't running on its computer. Send it a message to resume it."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このセッションはコンピュータで実行されていません。メッセージを送ると再開します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个会话没有在电脑上运行。给它发一条消息就会恢复。"
+          }
+        }
+      }
     },
     "This setting was changed elsewhere. Your edits are still here; reload, then save again.": {
       "localizations": {
