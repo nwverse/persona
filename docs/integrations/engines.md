@@ -30,7 +30,8 @@ iOS also offers "No Terminal Engine", the empty set, last in Choose Engine when 
   operations (reading the screen, sending, keys, closing) still go to the host the pane belongs to. Changing only the default resets nothing; changing
   the set itself works like switching engines did (live terminal views end, the session list is rebuilt). A session without a remembered terminal host
   continues in the default engine: Orca continues only Claude sessions (`orca_resume`); Paseo takes over sessions it can resume.
-  Retirement checks the session's own host: a stopped, resumable terminal session may close under any default, while runtime-owned sessions remain protected.
+  Retirement checks the session's own host under any default: it stops the agent and keeps its terminal,
+  unless the user requests closing it. Runtime-owned sessions remain protected.
 - **The empty set**: no terminal host. Agents shows transcripts, runtimes (DSH, pi, opencode) and botmux sessions only; starting or continuing a
   session from the phone is refused with "这台电脑没启用终端引擎" (`engine_missing`) and nothing is sent. This is the choice for a computer
   whose sessions are only the desktop apps' (Claude's and Codex's, `docs/integrations/claude-integration.md`, `docs/integrations/codex.md`):

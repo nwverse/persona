@@ -48,7 +48,7 @@ func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, 
 	}
 	defer unlock()
 	if n.externalCodex(id) {
-		if n.codexResumable(id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
+		if n.codexResumable(ctx, id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
 			return n.stoppedRefusal(id)
 		}
 		return n.sendCodex(ctx, id, text, images)
