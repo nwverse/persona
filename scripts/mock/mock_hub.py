@@ -6451,6 +6451,25 @@ if os.environ.get("MOCK_SECRET_RUN") in ("pending", "ran", "withheld", "long"):
             ensure_ascii=False), 1) + [
             it("assistant", "text", 0.5, text="第二条命令失败了（退出码 5）：launchd 没能加载这个任务。我先看看 plist 的权限再告诉你。")]
 
+# MOCK_SECRET_HANDOFF=1: the hand-off card (secret_handoff, #3962) in Persona's main conversation: the assistant asked to
+# start an Agent on the MacBook with two values from a made-up provider; nothing has been handed over. Its approval is
+# taken from the card alone (the app sends X-Persona-Features: secret_handoff with it).
+if os.environ.get("MOCK_SECRET_HANDOFF") == "1":
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2, text="在 MacBook 上开个 Agent 修发布的 CI，它要用 Example Vault 里的 registry token"),
+        it("assistant", "text", 1.5, text="我会把 token 交给这一个 Agent，你在卡片上批准后才会交出去，我这边看不到它。")]
+    INTERACTIONS.append(
+        {"id": "ix_secret_handoff", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+         "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=9),
+         "tool_name": "secret_handoff", "tool_title": "把密钥交给 Agent",
+         "tool_input": {"variables": [
+             {"name": "REGISTRY_TOKEN", "provider": "example-vault", "provider_name": "Example Vault", "title": "Registry token › credential"},
+             {"name": "DEPLOY_KEY", "provider": "example-vault", "provider_name": "Example Vault", "title": "Deploy key › private key"}],
+             "agent": "修发布的 CI", "machine_name": "MacBook", "cwd": "~/code/example-app",
+             "prompt": "修发布的 CI：publish 这一步登录 registry 失败。"},
+         "summary": "把 Example Vault › Registry token › credential（作为 REGISTRY_TOKEN）交给 MacBook 上的「修发布的 CI」，只用于这一次运行。请在 iPhone 或网页上批准。",
+         "always_label": "以后在你自己开的对话里，MacBook 上的 claude 用这些条目不再询问", "always_honored": True})
+
 # MOCK_SCREEN_DIALOG=1: a terminal dialog (screen interaction) as a newer hub reads it; MOCK_PROMPT_CHANGED=1 makes
 # answering it fail as if the dialog changed on the computer (409 prompt_changed).
 if os.environ.get("MOCK_SCREEN_DIALOG"):
@@ -16004,6 +16023,28 @@ PLUGINS["example-gateway"] = {
             "icon": "chart", "badge": {"text": "3", "tone": "danger"}},
            # UI version 3's components and pages (docs/extensions/extensions.md "UI version 3"): -openPlugin example-gateway -openPluginPage notes
            {"plugin": "example-gateway", "plugin_name": "Example 网关面板", "id": "notes", "title": "笔记（组件 v3）", "placement": "plugin_page", "size": "full"}]}
+# MOCK_SECRET_HANDOFF=1 (with MOCK_EXTENSIONS=1): secret references (docs/extensions/secret-providers.md). Example Notes'
+# API key holds a reference of a made-up provider, Example Vault, whose page lists who uses its references and one Always
+# rule; Persona's main conversation waits on a hand-off card (secret_handoff) for an Agent on the MacBook.
+SECRET_HANDOFF = os.environ.get("MOCK_SECRET_HANDOFF") == "1"
+if SECRET_HANDOFF and PLUGINS_MODE:
+    PLUGINS["example-notes"]["secrets"][0].update({"set": True, "reference": {
+        "provider": "example-vault", "provider_name": "Example Vault", "reference": "op://Example/Notes API/credential",
+        "title": "Notes API › credential"}})
+    PLUGINS["example-vault"] = {
+        "id": "example-vault", "name": "Example Vault", "kind": "secret_providers", "status": "running", "version": "0.2.0",
+        "source": "installed", "enabled": True, "description": "把 Example Vault 里的条目以引用的方式交给 Persona。",
+        "contributes": {"secret_providers": ["vault"]}, "publisher": "example", "form": {"fields": []}, "config": {},
+        "secrets": [], "permissions": [_RUNS],
+        "secret_users": [
+            {"kind": "extension", "extension": "example-notes", "extension_name": "Example Notes", "secret": "api_key",
+             "secret_title": "API Key", "reference": "op://Example/Notes API/credential"},
+            {"kind": "launcher", "launcher": "gateway", "launcher_name": "Example 网关", "machine": "macbook",
+             "reference": "op://Example/Gateway/key"}],
+        "handoff_rules": [{"id": "0123456789abcdef", "reference": "op://Example/Registry token/credential", "launcher": "claude",
+                           "machine": "macbook", "by": "device:d1", "at": "2026-01-01T10:00:00Z"}]}
+
+
 # MOCK_EXTENSION_PICKERS=1 (with MOCK_EXTENSIONS): a chat extension whose form picks one machine (format machine, Macs and
 # Linux) and launchers (format launcher) from the hub's lists, and steps whole numbers (#2385). Its auto-reply launcher
 # names one the hub no longer has, so its picker keeps it, marked.
@@ -17172,7 +17213,8 @@ _features_without_plugins = features
 def features():
     return _features_without_plugins() + (["plugins", "plugin_manager", "plugin_ui_slots", "plugin_auto_upgrade", "extension_ui_v3",
                                            "extension_widgets", "extension_shortcuts", "extension_notify_actions"] if PLUGINS_MODE else []) + (
-                                           ["extension_operations"] if EXT_OPS else [])
+                                           ["extension_operations"] if EXT_OPS else []) + (
+                                           ["plugin_secret_references"] if PLUGINS_MODE and SECRET_HANDOFF else [])
 
 
 def _plugin_needs(pl):
@@ -17252,6 +17294,19 @@ def plugins_route(handler, p, body):
             for send, _ in list(LIVE):
                 try: send({"type": "machines", "machines": out_machines()})
                 except Exception: pass
+    elif len(rest) == 2 and rest[0] == "handoff-rules" and method == "DELETE":
+        rules = pl.get("handoff_rules") or []
+        if not any(r["id"] == rest[1] for r in rules):
+            handler.send_json({"error": "no such rule", "code": "no_rule"}, 404)
+            return True
+        pl["handoff_rules"] = [r for r in rules if r["id"] != rest[1]]
+    elif len(rest) == 2 and rest[0] == "secrets" and method == "PUT" and req.get("reference"):
+        for s in pl.get("secrets", []):
+            if s["name"] == rest[1]:
+                s["set"] = True
+                s.pop("hint", None)
+                s["reference"] = {"provider": "example-vault", "provider_name": "Example Vault", "reference": req["reference"],
+                                  "title": req["reference"].rsplit("/", 2)[-2] if req["reference"].count("/") >= 3 else req["reference"]}
     elif len(rest) == 2 and rest[0] == "secrets" and method in ("PUT", "DELETE"):
         value = req.get("value") or ""
         if pl["id"] == "example-gateway-quota" and method == "PUT":
@@ -17263,6 +17318,7 @@ def plugins_route(handler, p, body):
             if s["name"] == rest[1]:
                 s["set"] = method == "PUT"
                 s.pop("hint", None)
+                s.pop("reference", None)
                 if pl["id"] == "example-gateway-quota" and method == "PUT" and len(value) >= 12: s["hint"] = value[-4:]
     else:
         handler.send_json({"error": "not found"}, 404)
