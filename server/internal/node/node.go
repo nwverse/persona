@@ -1009,7 +1009,27 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			}
 			sctx = withGuestKind(sctx, p.Guest.Tools, p.Guest.Kind)
 		}
-		id, err := n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, Interject: p.Interject})
+		send := func() (string, error) {
+			return n.assistantSend(sctx, p.SessionID, p.Cwd, p.Launcher, p.Text, p.Images, p.PermissionMode, p.Effort, modelExecution{PlanThen: p.PlanThen, Model: p.Model, Effort: p.Effort, UseEffort: p.ModelFingerprint != "", Fingerprint: p.ModelFingerprint, Runtime: assistantRuntimeOf(p.Runtime), IsMain: p.IsMain, Interject: p.Interject})
+		}
+		var opts sendOpts
+		_ = json.Unmarshal(params, &opts)
+		if p.NewSessionID == "" || opts.ClientMsgID == "" {
+			id, err := send()
+			return map[string]any{"session_id": id}, err
+		}
+		// A start under a given id with its first message's client_msg_id (a meeting's room, its follow-up, Just me's
+		// new main chat): sent once, and its transcript item carries the id, as a session.send's (echo.go).
+		var id string
+		err := n.sends.once(opts.ClientMsgID, func() error {
+			return n.sendEchoed(p.NewSessionID, opts.ClientMsgID, p.Text, len(p.Images), 0, func() (err error) {
+				id, err = send()
+				return err
+			})
+		})
+		if err == nil && id == "" {
+			id = p.NewSessionID // the same start asked again while it went: that conversation
+		}
 		return map[string]any{"session_id": id}, err
 	case "assistant.guest_prepare": // a guest conversation's directory (assistant_guest.go)
 		return n.assistantGuestPrepare(params)

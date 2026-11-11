@@ -171,7 +171,7 @@ func (n *Node) isAssistantSessionIn(id string, pass *codexListPass) bool {
 	if a.PaneID != "" {
 		return false
 	}
-	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || st.GuestKind == guestMeeting) {
+	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || n.roomState(st)) {
 		return true
 	}
 	if p := n.transcriptPathIn(id, pass); p != "" && (compat.IsAssistantTranscript(filepath.Base(filepath.Dir(p))) ||
@@ -260,6 +260,16 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	guest, guestKind := st.Guest, st.GuestKind
 	if !resume {
 		guest, guestKind = guestFrom(ctx), guestKindFrom(ctx)
+	} else if n.roomState(st) {
+		// A meeting's room: never resumed without its tools (its record lost them: refused), nor without its kind
+		// (lost by a manager that did not keep it: its directory says, and the record has it again).
+		if guest == nil {
+			return "", errRoomRecord
+		}
+		if guestKind != guestMeeting {
+			guestKind, st.GuestKind = guestMeeting, guestMeeting
+			n.state.put(id, st)
+		}
 	}
 	if guest != nil {
 		if resume {

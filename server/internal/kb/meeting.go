@@ -86,7 +86,8 @@ type MeetingRoom struct {
 type MeetingFollowup struct {
 	MachineID string `json:"machine_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
-	// Pending: its creation was asked of the node by the call OpID and is not settled yet.
+	// Pending: its creation was asked of the node by the call OpID and is not settled yet. OpID stays once it is made:
+	// that call repeated is answered as made, with nothing sent again.
 	Pending bool   `json:"pending,omitempty"`
 	OpID    string `json:"op_id,omitempty"`
 }
@@ -343,20 +344,19 @@ func (u *RecordingUpload) roomRole() (role, problem string) {
 	return role, ""
 }
 
-// putMeetingFields stores what upload u says of recording id's meeting (r is the stored recording, nil before its
-// first upload): its room (an upload with room makes it a room meeting for good; one without turns the role of a
+// putMeetingFields stores what upload u says of recording id's meeting: its room (an upload with room makes it a room meeting for good; one without turns the role of a
 // room meeting off and changes nothing else) and its first private mark (only a meeting's, only while it has none).
 // The caller holds recMu; meeting.json is written before meta.json, so a crash between leaves a role no older
 // manager reads. The upload's top-level attendance fields are cleared for a room meeting (they are ignored beside
 // room, and never written to its meta.json). The meeting after it, and the parts that changed.
-func (e *Engine) putMeetingFields(id string, u *RecordingUpload, r *Recording) (*Meeting, []string, error) {
+func (e *Engine) putMeetingFields(id string, u *RecordingUpload) (*Meeting, []string, error) {
 	st := e.Store
 	st.meetMu.Lock()
 	defer st.meetMu.Unlock()
+	// From the file, under meetMu: r was read before it, and a MeetingUpdate since (the private mark, the room, the
+	// follow-up) would be written back over.
 	var before Meeting
-	if r != nil && r.Conv != nil {
-		before = r.Conv.Clone()
-	} else if m, err := st.readMeeting(id); err != nil {
+	if m, err := st.readMeeting(id); err != nil {
 		return nil, nil, err
 	} else if m != nil {
 		before = m.Clone()

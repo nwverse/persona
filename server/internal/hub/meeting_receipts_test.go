@@ -94,6 +94,38 @@ func TestMeetingBodyIDReceipts(t *testing.T) {
 	}
 }
 
+// A Just me call the manager refused for sure (its computer offline, the recording gone, a relay error) is kept with
+// its answer: the repeat gets that answer, not 202 {"state":"unknown"}, and the phone asks again with a new id.
+func TestMeetingJustMeReceiptReplaysFailures(t *testing.T) {
+	for _, c := range []struct {
+		status     int
+		body, want string
+	}{
+		{http.StatusServiceUnavailable, `{"code":"machine_offline","error":"offline"}`, "machine_offline"},
+		{http.StatusNotFound, `{"code":"recording_not_found","error":"no such recording"}`, "recording_not_found"},
+		{http.StatusBadGateway, `{"error":"relay failed"}`, "relay failed"},
+	} {
+		store := reclaimingStore{&clientOpsStore{ops: map[string]db.ClientOp{}}}
+		h := &Hub{store: store}
+		var calls atomic.Int32
+		handler := h.withBodyIDReceipt(meetingJustMeOp, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(c.status)
+			_, _ = w.Write([]byte(c.body))
+		})
+		const p = "/api/v1/recordings/0f8fad5b-d9cb-469f-a165-70867728950e/just-me"
+		body := `{"id":"a0000000-0000-4000-8000-000000000001","text":"hello"}`
+		for i := range 2 {
+			rec := httptest.NewRecorder()
+			handler(rec, httptest.NewRequest("POST", p, strings.NewReader(body)))
+			if rec.Code != c.status || !strings.Contains(rec.Body.String(), c.want) || calls.Load() != 1 {
+				t.Fatalf("%d, call %d: %d %s, %d calls", c.status, i+1, rec.Code, rec.Body, calls.Load())
+			}
+		}
+	}
+}
+
 // A Just me turn's card (proto.Interaction.Private) is pushed as a health conversation's is: nothing of what it asks
 // on the Lock Screen, and no answer buttons that would show its options.
 func TestPrivateCardPush(t *testing.T) {

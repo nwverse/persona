@@ -316,6 +316,13 @@ func (s *Service) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb.Li
 	}
 	room := r.Conv.Room
 	if roomAskWaiting(l) {
+		// An ask a restart left pending is taken up again here too (settleAsksLocked), not only when the asks are
+		// read: a phone that only streams lines reads none, and the batches, the end batch too, would wait for it.
+		if fresh, _, err := s.asksRead(e, id); err == nil {
+			l = fresh
+		}
+	}
+	if roomAskWaiting(l) {
 		return now.Add(feedBusyPoll) // an ask goes first; the batch after it
 	}
 	if !end && !l.FedAt.IsZero() && now.Before(l.FedAt.Add(feedBatchEvery)) {

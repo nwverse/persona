@@ -93,12 +93,10 @@ func newIDFrom(ctx context.Context) string {
 	return id
 }
 
-// knowsConversation: the node has conversation id already (its state, a process, or its transcript): a start under it
-// is that conversation, not a second one.
+// knowsConversation: the node has conversation id already (a process, or its transcript): a start under it is that
+// conversation, not a second one. A state alone is not: a guest's is written before its first process starts, and
+// one that failed to start left nothing to resume; its start asked again starts it.
 func (n *Node) knowsConversation(id string) bool {
-	if _, ok := n.state.get(id); ok {
-		return true
-	}
 	n.mu.Lock()
 	p := n.procs[id]
 	n.mu.Unlock()
@@ -177,7 +175,7 @@ func (n *Node) assistantGuestDelete(params json.RawMessage) (any, error) {
 	transcript := n.transcriptPath(a.SessionID)
 	st, known := n.state.get(a.SessionID)
 	switch {
-	case known && st.GuestKind == guestMeeting && filepath.Clean(st.Cwd) == filepath.Clean(dir):
+	case known && n.roomState(st) && filepath.Clean(st.Cwd) == filepath.Clean(dir):
 	case known:
 		return nil, errors.New("not this meeting's room")
 	case transcript != "" && filepath.Base(filepath.Dir(transcript)) != claudeProjectName(dir):
@@ -218,8 +216,40 @@ func (n *Node) guestKindOf(id string) string {
 		return ""
 	}
 	st, _ := n.state.get(id)
+	if n.roomState(st) {
+		return guestMeeting
+	}
 	return st.GuestKind
 }
+
+// roomState: st is a meeting's room: its kind says so, or, a record that lost its kind (kept by a manager that did not
+// store it), its directory is a room's.
+func (n *Node) roomState(st sessionState) bool {
+	return st.GuestKind == guestMeeting || st.GuestKind == "" && n.roomCwd(st.Cwd)
+}
+
+// roomCwd: cwd is a meeting room's directory on this node, guestMeetingDir/<recording id> in its state directory (in
+// either spelling).
+func (n *Node) roomCwd(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	cwd = filepath.Clean(cwd)
+	name := filepath.Base(cwd)
+	if !uuidRe.MatchString(name) {
+		return false
+	}
+	for _, rel := range []string{guestMeetingDir + "/" + name, ".persona/guest-meeting/" + name} {
+		if filepath.Clean(n.assistantDirOf(rel)) == cwd {
+			return true
+		}
+	}
+	return false
+}
+
+// errRoomRecord refuses to run a meeting's room whose record lost its tools: without them its process would get the
+// assistant's.
+var errRoomRecord = errors.New("this meeting's room lost its record on this computer: it does not run without it")
 
 // meetingRoomArgs are what a room's process runs with besides a guest's flags, so that only the meeting CLAUDE.md
 // and what the node passes itself reach the model (docs/assistant/meeting-minutes.md "Nothing of the owner's Claude
@@ -257,16 +287,37 @@ func meetingRoomSettings(s map[string]any, cwd, home string) {
 	s["env"] = env
 }
 
-// meetingRoomSettingsFile writes room id's settings: settings (a file or JSON, "" for none) with meetingRoomSettings.
-func (n *Node) meetingRoomSettingsFile(id, cwd, settings string) (string, error) {
-	s := map[string]any{}
+// meetingRoomKeys are what a room's settings keep of the start's (a launcher's own --settings merged with Persona's):
+// the launcher's environment, its login and its model. Never the rest of that file: it is a user settings file
+// (`claude --settings ~/.claude/settings.work.json`) whose hooks, plugins, output style, status line or permissions
+// would reach the room, since flag settings load whatever --setting-sources says.
+var meetingRoomKeys = []string{"env", "model", "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod", "forceLoginOrgUUID",
+	"enableArtifact"}
+
+// meetingRoomSettingsFile writes room id's settings: meetingRoomKeys of settings (a file or JSON, "" for none), Persona's
+// own hooks when they go in --settings (personaHooks: no plugin carries them) and meetingRoomSettings.
+func (n *Node) meetingRoomSettingsFile(id, cwd, settings string, personaHooks bool) (string, error) {
+	start := map[string]any{}
 	if settings != "" {
 		var err error
-		if s, err = readLauncherSettings(settings, cwd, n.home); err != nil {
+		if start, err = readLauncherSettings(settings, cwd, n.home); err != nil {
 			if !os.IsNotExist(err) {
 				return "", err
 			}
-			s = map[string]any{}
+			start = map[string]any{}
+		}
+	}
+	s := map[string]any{}
+	for _, k := range meetingRoomKeys {
+		if v, ok := start[k]; ok {
+			s[k] = v
+		}
+	}
+	if personaHooks { // from Persona's own file: the merged one holds the launcher's hooks too
+		if ours, err := readLauncherSettings(filepath.Join(n.dir, "assistant-settings.json"), cwd, n.home); err == nil && ours["hooks"] != nil {
+			s["hooks"] = ours["hooks"]
+		} else if err != nil && !os.IsNotExist(err) {
+			return "", err
 		}
 	}
 	meetingRoomSettings(s, cwd, n.home)

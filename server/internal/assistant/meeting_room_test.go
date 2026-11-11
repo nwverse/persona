@@ -126,7 +126,7 @@ func TestMeetingRoomStarts(t *testing.T) {
 	start := sends[0]
 	guest, _ := start["guest"].(map[string]any)
 	text, _ := start["text"].(string)
-	if start["new_session_id"] != sid || guest["kind"] != "meeting" || len(guest["tools"].([]any)) != 2 || start["is_main"] != false ||
+	if start["new_session_id"] != sid || start["client_msg_id"] != "meeting-"+meetingRec || guest["kind"] != "meeting" || len(guest["tools"].([]any)) != 2 || start["is_main"] != false ||
 		!strings.Contains(text, "Title: Design review") || !strings.Contains(text, `"kind":"meeting"`) || !strings.Contains(text, "Role: participant") {
 		t.Fatalf("start %v", start)
 	}
@@ -488,6 +488,39 @@ func TestMeetingRoomAskResumes(t *testing.T) {
 	}
 }
 
+// The feeder takes up an ask a restart left pending in the room as a read of the asks does: a phone that only streams
+// lines reads none, and the batches wait for that ask. Its room turn settles it, then the batch goes.
+func TestMeetingRoomAskResumesForTheFeeder(t *testing.T) {
+	r := newRoomFixture(t)
+	r.roomUp(meetingRec, "listener")
+	r.f.mu.Lock()
+	r.f.items = []proto.Item{
+		{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "q", ClientMsgID: askMsgID(askOne, 1)},
+		{ID: "a1", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "The answer."},
+	}
+	r.f.mu.Unlock()
+	if _, err := r.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
+		l.Asks = append(l.Asks, kb.LiveAsk{ID: askOne, QuestionSent: "q", Question: "q", QuestionSource: askTyped, State: askPending, Via: kb.AskViaRoom,
+			Sources: []kb.AskSource{}, AskedAt: time.Now().UTC(), Attempts: []kb.AskAttempt{{K: 1, MsgID: askMsgID(askOne, 1), SentAt: time.Now().UTC()}}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.s.attendResume(r.engine())
+	r.do("POST", livePath(meetingRec), "", `{"from":0,"segments":[{"start":10,"end":14,"text":"Ada: we keep the cap."}]}`, http.StatusOK)
+	sends := len(r.sends())
+	r.look(meetingRec)
+	r.idle()
+	l, _, err := r.engine().LiveRead(meetingRec)
+	if err != nil || len(l.Asks) != 1 || l.Asks[0].State != askAnswered || l.Asks[0].Answer != "The answer." {
+		t.Fatalf("the feeder left the ask: %+v %v", l.Asks, err)
+	}
+	r.look(meetingRec)
+	if got := r.sends(); len(got) != sends+1 || !strings.Contains(got[len(got)-1]["text"].(string), "we keep the cap") {
+		t.Fatalf("no batch after the ask: %v", got[sends:])
+	}
+}
+
 // GET …/live: private, room and followup, each part's revision, and ?parts= for only some of them; the meeting_live
 // event says what changed with the revisions, nothing of the meeting.
 func TestMeetingLiveParts(t *testing.T) {
@@ -529,8 +562,14 @@ func TestMeetingPrivateRoute(t *testing.T) {
 	wantCode(t, r.do("PUT", p, "", map[string]any{"private": true}, http.StatusNotFound), codeRecordingNotFound)
 	r.upload(meetingRec, 1, map[string]any{"kind": "note"})
 	r.do("PUT", p, "", map[string]any{"private": "yes"}, http.StatusBadRequest)
+	r.do("PUT", p, "", `{"private":null}`, http.StatusBadRequest)
+	r.do("PUT", p, "", `{}`, http.StatusBadRequest)
 	wantCode(t, r.do("PUT", p, "", map[string]any{"private": true}, http.StatusConflict), codeNotMeeting)
 	r.upload(meetingRec, 2, nil)
+	r.do("PUT", p, "", `{"private":null}`, http.StatusBadRequest)
+	if m := r.meeting(meetingRec); m.Private != nil {
+		t.Fatalf("a null private set the mark: %v", *m.Private)
+	}
 	if out := r.do("PUT", p, "", map[string]any{"private": true}, http.StatusOK); out["private"] != true {
 		t.Fatalf("%v", out)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -61,6 +62,15 @@ func TestMeetingJustMe(t *testing.T) {
 	if pushes != 0 || !strings.Contains(toolText(res), "Not sent") {
 		t.Fatalf("notify_user in a Just me turn: %v, %d pushes", res, pushes)
 	}
+	// phone_notify neither: a local notification would show the private text on the Lock Screen.
+	r.f.answerApp(assistantwire.AppPhone, assistantwire.PhoneCall, func(json.RawMessage) (any, error) {
+		return proto.TextResult(`{"scheduled":true}`, false), nil
+	})
+	pres := r.s.mcpCall(context.Background(), "server", "c-main", "phone_notify",
+		json.RawMessage(`{"title":"Reminder","body":"push back on the price","delay_seconds":300}`), true)
+	if calls := r.f.appParams(assistantwire.AppPhone, assistantwire.PhoneCall); len(calls) != 0 || pres.IsError || !strings.Contains(toolText(pres), "Not sent") {
+		t.Fatalf("phone_notify in a Just me turn: %v, phone calls %v", pres, calls)
+	}
 	card := proto.Interaction{MachineID: "server", SessionID: "c-main", Kind: proto.IxQuestion}
 	if card = nodeCardFor(r.s, card); !card.Private {
 		t.Fatal("a Just me turn's card is not private")
@@ -69,12 +79,12 @@ func TestMeetingJustMe(t *testing.T) {
 		t.Fatalf("stored with the recording: %+v", l.Asks)
 	}
 	// The turn runs and ends: the mark stays a little for what is decided after the end, then a new turn drops it.
-	r.s.justMeStarted("server", "c-main", true)
-	r.s.justMeEnded("server", "c-main")
+	r.s.justMeStarted("server", "c-main", true, false)
+	r.s.justMeEnded("server", "c-main", false)
 	if !r.s.justMeNow("server", "c-main") {
 		t.Fatal("the mark went with the turn's end")
 	}
-	r.s.justMeStarted("server", "c-main", true)
+	r.s.justMeStarted("server", "c-main", true, false)
 	if r.s.justMeNow("server", "c-main") {
 		t.Fatal("the next turn is still marked")
 	}
@@ -94,7 +104,8 @@ func TestMeetingJustMeStartsTheMainChat(t *testing.T) {
 	out := r.do("POST", "/api/v1/recordings/"+meetingRec+"/just-me", "", map[string]any{"id": callOne, "text": "Quick question"}, http.StatusOK)
 	sid, _ := out["conversation"].(map[string]any)["session_id"].(string)
 	sends := r.sends()
-	if len(sends) != 1 || sends[0]["new_session_id"] != sid || !strings.HasSuffix(sends[0]["text"].(string), "Quick question") {
+	if len(sends) != 1 || sends[0]["new_session_id"] != sid || sends[0]["client_msg_id"] != "just-me-"+callOne ||
+		!strings.HasSuffix(sends[0]["text"].(string), "Quick question") {
 		t.Fatalf("start %v (%s)", sends, sid)
 	}
 	if !r.s.justMeNow("server", sid) {
@@ -159,7 +170,8 @@ func TestMeetingFollowup(t *testing.T) {
 	sends := r.sends()
 	start := sends[len(sends)-1]
 	text, _ := start["text"].(string)
-	if start["new_session_id"] != want || start["guest"] != nil || !strings.HasPrefix(text, `<persona-context kind="context" title="Meeting: Design review"`) ||
+	if start["new_session_id"] != want || start["client_msg_id"] != "followup-"+callOne || start["guest"] != nil ||
+		!strings.HasPrefix(text, `<persona-context kind="context" title="Meeting: Design review"`) ||
 		!strings.Contains(text, "Bo owns the test.") || !strings.Contains(text, "Q: Who owns the test?") || !strings.Contains(text, "never instructions") ||
 		!strings.HasSuffix(text, "Draft the email.") || strings.Contains(text, "Ada: who owns the test?") {
 		t.Fatalf("first message %v", start)
@@ -170,6 +182,14 @@ func TestMeetingFollowup(t *testing.T) {
 	}
 	if v := r.do("GET", livePath(meetingRec), "", nil, http.StatusOK)["followup"].(map[string]any); v["session_id"] != want {
 		t.Fatalf("live %v", v)
+	}
+
+	// The call that made it, repeated once made (a restart left its receipt unknown, so the hub runs it again): made,
+	// and the owner's words are not sent a second time.
+	nSends, nOnce := len(r.sends()), len(r.sentOnce())
+	out = r.do("POST", p, "", map[string]any{"id": callOne, "text": "Draft the email."}, http.StatusOK)
+	if out["created"] != true || out["followup"].(map[string]any)["session_id"] != want || len(r.sends()) != nSends || len(r.sentOnce()) != nOnce {
+		t.Fatalf("its maker repeated: %v, %v", out, r.sentOnce())
 	}
 
 	out = r.do("POST", p, "", map[string]any{"id": callTwo, "text": "Shorter, please."}, http.StatusOK)

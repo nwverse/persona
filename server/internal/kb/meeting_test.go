@@ -268,3 +268,32 @@ func TestAsksRevision(t *testing.T) {
 		t.Fatalf("a change that is not the asks: %+v %v", l, changed)
 	}
 }
+
+// An upload that changes a meeting field never writes back what it read before taking meeting.json's lock: the
+// private mark a PUT …/private set meanwhile stays, and its revision does not go back down.
+func TestUploadKeepsAMeetingUpdateMadeMeanwhile(t *testing.T) {
+	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+	e := goldenEngine(t, nil)
+	start := now.Add(-time.Hour).UTC().Format(time.RFC3339)
+	body := func(rev int, role string) string {
+		return `{"revision":` + string(rune('0'+rev)) + `,"started_at":"` + start + `","device":"phone","kind":"meeting","segments":[],"room":{"attendance":"` + role + `"},"private":false}`
+	}
+	if _, err := e.PutRecording(recID, roomUploadJSON(t, body(1, AttendanceListener)), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.SetPrivate(recID, true); err != nil { // after the upload below read the recording, before its lock
+		t.Fatal(err)
+	}
+	u := roomUploadJSON(t, body(2, AttendanceParticipant))
+	u.Kind = RecordingMeeting
+	m, parts, err := e.putMeetingFields(recID, &u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Private == nil || !*m.Private || m.Revs[PartPrivate] != 2 || !slices.Equal(parts, []string{PartRoom}) {
+		t.Fatalf("the mark set meanwhile was written over: %+v %v %v", m.Private, m.Revs, parts)
+	}
+	if r := recordingNow(t, e, recID); r.MarkedNotPrivate() || r.Conv.Room.Attendance != AttendanceParticipant {
+		t.Fatalf("stored %+v", r.Conv)
+	}
+}

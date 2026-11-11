@@ -91,6 +91,9 @@ type StartParams struct {
 	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
 	// that cannot picks its own. Never over the bus.
 	NewSessionID string `json:"-"`
+	// ClientMsgID: the first message's client_msg_id (with NewSessionID: the node sends it once and its transcript
+	// item carries it, as a send's). Never over the bus.
+	ClientMsgID string `json:"-"`
 }
 
 // SendParams is assistant.send_params's params: Params are the node's assistant.send / session.send params. Lang is

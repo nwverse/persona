@@ -320,12 +320,23 @@ func TestMeetingRoomStartsUnderItsID(t *testing.T) {
 	}
 }
 
-// assistant.send with new_session_id: an id the node has is that conversation, answered without sending anything;
-// one that is not a session id is refused, as is a new id beside a session's.
+// assistant.send with new_session_id: an id the node has (a process, or a transcript) is that conversation, answered
+// without sending anything; a state alone is not (a first start that failed left only that: its start asked again
+// starts it). One that is not a session id is refused, as is a new id beside a session's.
 func TestNewSessionIDStartsOnce(t *testing.T) {
 	n := codexTestNode(t)
 	room := "7d4a3c1e-1111-4222-8333-444455556666"
 	n.state.put(room, sessionState{Launcher: "claude", Guest: []string{"meeting_lines"}, GuestKind: guestMeeting})
+	if n.knowsConversation(room) {
+		t.Fatal("a state alone counts as the conversation: a failed first start is never started again")
+	}
+	transcript := filepath.Join(n.home, ".claude", "projects", "-home-me--persona-guest-meeting-r", room+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	out, err := n.handle(context.Background(), "assistant.send", json.RawMessage(`{"new_session_id":"`+room+`","text":"again","guest":{"tools":["meeting_lines"],"kind":"meeting"}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -412,5 +423,139 @@ func TestMeetingRoomIsAnAssistantConversation(t *testing.T) {
 	n.state.put(room, sessionState{Launcher: "claude", Cwd: "/somewhere/guest-meeting/" + rec, Guest: []string{"meeting_lines"}, GuestKind: guestMeeting})
 	if !n.isAssistantSession(room) {
 		t.Fatal("a room with no process is not an assistant conversation")
+	}
+}
+
+// A room's own --settings keeps of the start's settings only the launcher's environment, login and model, and
+// Persona's own hooks when no plugin carries them: an alias launcher's settings file (a user settings file) brings
+// none of its hooks, plugins, output style, status line, permissions or skill switches into the room.
+func TestMeetingRoomSettingsKeepNothingOfTheLaunchers(t *testing.T) {
+	n, home := testNode(t)
+	n.dir = filepath.Join(home, ".persona")
+	rec, room := "0f8fad5b-d9cb-469f-a165-70867728950e", "7d4a3c1e-1111-4222-8333-444455556666"
+	cwd := filepath.Join(n.dir, "guest-meeting", rec)
+	writeJSON := func(path string, v any) {
+		t.Helper()
+		raw, _ := json.Marshal(v)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ours := filepath.Join(n.dir, "assistant-settings.json")
+	writeJSON(ours, hookSettings("/opt/persona/personad", n.dir, true))
+	writeJSON(filepath.Join(home, ".claude", "settings.work.json"), map[string]any{
+		"env":            map[string]any{"ANTHROPIC_BASE_URL": "https://gateway.example.com"},
+		"apiKeyHelper":   "work-key-helper",
+		"model":          "work-model",
+		"hooks":          map[string]any{"SessionStart": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "cat ~/notes.md"}}}}},
+		"outputStyle":    "Explanatory",
+		"enabledPlugins": map[string]any{"notes@me": true},
+		"statusLine":     map[string]any{"type": "command", "command": "my-status"},
+		"permissions":    map[string]any{"allow": []any{"Bash"}},
+		"skillOverrides": map[string]any{"notes": true},
+	})
+	merged, err := n.mergeLauncherSettings("work", "~/.claude/settings.work.json", ours, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, personaHooks := range []bool{true, false} {
+		path, err := n.meetingRoomSettingsFile(room, cwd, merged, personaHooks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{"notes.md", "outputStyle", "Explanatory", "enabledPlugins", "notes@me", "statusLine", "my-status", "permissions", "skillOverrides"} {
+			if strings.Contains(string(raw), bad) {
+				t.Errorf("hooks in settings %v: the room's settings carry the launcher's %s: %s", personaHooks, bad, raw)
+			}
+		}
+		var s struct {
+			Env          map[string]string `json:"env"`
+			APIKeyHelper string            `json:"apiKeyHelper"`
+			Model        string            `json:"model"`
+			Hooks        map[string]any    `json:"hooks"`
+		}
+		if err := json.Unmarshal(raw, &s); err != nil {
+			t.Fatal(err)
+		}
+		if s.Env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" || s.Env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] != "1" || s.APIKeyHelper != "work-key-helper" ||
+			s.Model != "work-model" {
+			t.Errorf("hooks in settings %v: the launcher's environment or login lost: %s", personaHooks, raw)
+		}
+		if personaHooks != strings.Contains(string(raw), "/opt/persona/personad") || personaHooks != (s.Hooks != nil) {
+			t.Errorf("hooks in settings %v: Persona's hooks: %s", personaHooks, raw)
+		}
+	}
+}
+
+// A room whose record lost its kind (stored by a manager that did not keep it) is still a room by its directory: its
+// processes run as a room's, and it can be deleted. One that lost its tools too never runs: its process would get the
+// assistant's.
+func TestMeetingRoomByItsDirectory(t *testing.T) {
+	n, home := testNode(t)
+	n.dir = filepath.Join(home, ".persona")
+	rec, room := "0f8fad5b-d9cb-469f-a165-70867728950e", "7d4a3c1e-1111-4222-8333-444455556666"
+	rel := ".persona/guest-meeting/" + rec
+	dir := n.assistantDirOf(rel)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	n.state.put(room, sessionState{Launcher: "claude", Cwd: dir, Guest: []string{"meeting_lines"}})
+	if n.guestKindOf(room) != guestMeeting || !n.isAssistantSession(room) {
+		t.Fatal("a room that lost its kind is not a room")
+	}
+	other := "8e5b4d2f-2222-4333-8444-555566667777"
+	n.state.put(other, sessionState{Launcher: "claude", Cwd: filepath.Join(n.dir, "guest"), Guest: []string{"lark_send"}})
+	if n.guestKindOf(other) != "" {
+		t.Fatal("an extension's guest taken for a room")
+	}
+	if _, err := n.assistantGuestDelete(json.RawMessage(`{"dir":"` + rel + `","session_id":"` + room + `"}`)); err != nil {
+		t.Fatalf("a room that lost its kind is not deleted: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("its directory: %v", err)
+	}
+
+	n = codexTestNode(t)
+	n.dir = filepath.Join(n.home, ".persona")
+	dir = n.assistantDirOf(rel)
+	n.state.put(room, sessionState{Launcher: "claude", Cwd: dir})
+	if _, err := n.assistantSend(context.Background(), room, "", "", "a batch", nil, "", ""); !errors.Is(err, errRoomRecord) {
+		t.Fatalf("a room without its tools resumed: %v", err)
+	}
+	if _, err := n.spawnClaude(room, dir, "claude", true, false); !errors.Is(err, errRoomRecord) {
+		t.Fatalf("a room without its tools started: %v", err)
+	}
+}
+
+// A start under a given id with its first message's client_msg_id (a meeting's room, its follow-up, Just me's new main
+// chat): the node expects that message in the transcript under the id, as a session.send's, and a start asked again
+// is that conversation.
+func TestNewSessionIDFirstMessageID(t *testing.T) {
+	fakeClaudeHome(t, "read line\necho '{\"type\":\"system\",\"subtype\":\"init\"}'\nsleep 30\n")
+	n := codexTestNode(t)
+	withFakeHub(t, n)
+	id := "7d4a3c1e-1111-4222-8333-444455556666"
+	params := json.RawMessage(`{"new_session_id":"` + id + `","cwd":"` + t.TempDir() + `","launcher":"claude","text":"Draft the email to the vendor.","client_msg_id":"followup-x"}`)
+	out, err := n.handle(context.Background(), "assistant.send", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.stopAssistant(id) })
+	if out.(map[string]any)["session_id"] != id {
+		t.Fatalf("answer %v", out)
+	}
+	if r, ok := n.echoes.record(id, "followup-x"); !ok || r.Text != "Draft the email to the vendor." || r.AfterSeq != 0 {
+		t.Fatalf("its first message is not expected under its id: %+v %v", r, ok)
+	}
+	out, err = n.handle(context.Background(), "assistant.send", params)
+	if err != nil || out.(map[string]any)["existed"] != true {
+		t.Fatalf("asked again: %v %v", out, err)
 	}
 }

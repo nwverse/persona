@@ -18,8 +18,10 @@ import (
 // main chat (one is started when there is none) as their own message, with the meeting named in a collapsed context
 // block. Nothing of it is stored with the recording. The turn it starts carries a mark (justMeBook), kept with the
 // main chat until that turn ends and for at most justMeMax: while it stands nothing of the turn reaches a screen
-// other than the meeting page (no completion push, nothing mirrored to the Lark bot or the channels, notify_user
-// pushes nothing, a card it raises is pushed without its content).
+// other than the meeting page (no completion push, nothing mirrored to the Lark bot or the channels, notify_user and
+// phone_notify push nothing, a card it raises is pushed without its content). A turn that stops with background work
+// still running has not ended: the turn that work's report wakes is the same work, and keeps the mark (its end is the
+// held work's one completion push, fleet_push.go).
 
 const justMeKey = "assistant.just_me_turns"
 
@@ -37,6 +39,9 @@ type justMeTurn struct {
 	SentAt    time.Time `json:"sent_at"`
 	Started   bool      `json:"started,omitempty"`
 	EndedAt   time.Time `json:"ended_at,omitzero"`
+	// Held: the turn stopped with background work running. The mark stays (not only justMeAfter) for the turn the
+	// work's report wakes.
+	Held bool `json:"held,omitempty"`
 }
 
 type justMeBook struct {
@@ -73,7 +78,7 @@ func (s *Service) justMeLocked() bool {
 	}
 	now := b.clock()
 	for k, t := range b.m {
-		if now.Sub(t.SentAt) > justMeMax+justMeAfter || !t.EndedAt.IsZero() && now.Sub(t.EndedAt) > justMeAfter {
+		if now.Sub(t.SentAt) > justMeMax+justMeAfter || !t.Held && !t.EndedAt.IsZero() && now.Sub(t.EndedAt) > justMeAfter {
 			delete(b.m, k)
 		}
 	}
@@ -104,9 +109,11 @@ func (s *Service) justMeSent(machine, session string) {
 	s.saveJustMeLocked()
 }
 
-// justMeStarted: machine's session is seen working, a new turn when newTurn. A turn after the Just me one drops its
-// mark.
-func (s *Service) justMeStarted(machine, session string, newTurn bool) {
+// justMeStarted: machine's session is seen working, a new turn when newTurn, one a background task's report started
+// when woken. A turn after the Just me one drops its mark, unless it goes on with the Just me turn's work: one its
+// background work's report woke, or any after a stop that left that work running (its woken flag can be read later
+// than the start).
+func (s *Service) justMeStarted(machine, session string, newTurn, woken bool) {
 	b := &s.justMe
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -120,6 +127,8 @@ func (s *Service) justMeStarted(machine, session string, newTurn bool) {
 		return
 	case !t.Started:
 		t.Started = true
+	case !t.EndedAt.IsZero() && newTurn && (woken || t.Held):
+		t.EndedAt, t.Held = time.Time{}, false // the same work: its end decides again
 	case !t.EndedAt.IsZero() && newTurn:
 		delete(b.m, k)
 	default:
@@ -128,8 +137,9 @@ func (s *Service) justMeStarted(machine, session string, newTurn bool) {
 	s.saveJustMeLocked()
 }
 
-// justMeEnded: machine's session stopped: a Just me turn seen running ended.
-func (s *Service) justMeEnded(machine, session string) {
+// justMeEnded: machine's session stopped: a Just me turn seen running ended, with its background work still running
+// when held.
+func (s *Service) justMeEnded(machine, session string, held bool) {
 	b := &s.justMe
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -137,7 +147,7 @@ func (s *Service) justMeEnded(machine, session string) {
 		return
 	}
 	if t := b.m[s.meetingTurnKey(machine, session)]; t != nil && t.Started && t.EndedAt.IsZero() {
-		t.EndedAt = b.clock()
+		t.EndedAt, t.Held = b.clock(), held
 		s.saveJustMeLocked()
 	}
 }
@@ -217,7 +227,7 @@ func (s *Service) justMeSend(ctx context.Context, text string, images []proto.Im
 		if cfg.MachineID != "" {
 			s.justMeSent(cfg.MachineID, want)
 		}
-		sess, err := s.start(ctx, StartParams{Main: true, Text: text, Images: images, NewSessionID: want})
+		sess, err := s.start(ctx, StartParams{Main: true, Text: text, Images: images, NewSessionID: want, ClientMsgID: msgID})
 		if err != nil {
 			return "", "", err
 		}

@@ -220,7 +220,15 @@ func (s *Service) notifyFinished(machine, id string, gen int) {
 // notifyFinishedNow is notifyFinished once its delay is over, with the timings it was read with.
 func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings) {
 	if s.justMeNow(machine, id) {
-		return // a Just me turn: never on a screen but the meeting page (meeting_justme.go)
+		// A Just me turn: never on a screen but the meeting page (meeting_justme.go). Over all the same unless its
+		// background work goes on (the turn that work's report wakes keeps the mark): its start and its hold are not
+		// the next turn's (#4133).
+		if sess, ok := s.decoratedSession(machine, id); !ok || sess.Status != proto.StatusWorking && !backgroundRunning(sess) {
+			if start, dropped := s.turnsBook().drop(machine+"/"+id, gen); dropped {
+				s.reportTurn(id, start)
+			}
+		}
+		return
 	}
 	sess, ok := s.decoratedSession(machine, id)
 	if ok && s.completionChildrenRunning(machine, sess) {

@@ -249,7 +249,10 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		return nil, settingsErr
 	}
 	if n.guestKindOf(id) == guestMeeting { // a meeting's room: none of the owner's Claude Code setup (assistant_guest.go)
-		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, settings); settingsErr != nil {
+		if n.guestOf(id) == nil {
+			return nil, errRoomRecord // never with the assistant's tools
+		}
+		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, settings, hooks == ""); settingsErr != nil {
 			return nil, settingsErr
 		}
 		args = append(args, meetingRoomArgs()...)

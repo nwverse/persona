@@ -428,12 +428,8 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 		put.Status, put.Attendance = RecordingStale, r.AttendanceRole()
 		return put, false, nil
 	}
-	var stored *Recording
-	if exists {
-		stored = r
-	}
 	wasAttending := exists && r.Attending()
-	meeting, parts, err := e.putMeetingFields(id, &u, stored)
+	meeting, parts, err := e.putMeetingFields(id, &u)
 	if err != nil {
 		return put, false, err
 	}

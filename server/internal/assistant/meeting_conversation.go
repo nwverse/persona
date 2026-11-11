@@ -55,7 +55,8 @@ func (s *Service) meetingConversationRoutes() {
 			Private json.RawMessage `json:"private"`
 		}
 		var private bool
-		if json.Unmarshal(raw, &in) != nil || json.Unmarshal(in.Private, &private) != nil {
+		// null is not a boolean: read as false it would make the meeting material for later ones.
+		if json.Unmarshal(raw, &in) != nil || !given(in.Private) || json.Unmarshal(in.Private, &private) != nil {
 			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_private"))
 			return
 		}

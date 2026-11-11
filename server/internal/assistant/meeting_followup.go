@@ -103,6 +103,7 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 		// its message went with it); else a call other than the one making it drops the record and makes it now, and
 		// the one making it makes it again under the same id.
 		found, ok := s.followupFound(ctx, id, f)
+		found.OpID = f.OpID // the call that made it
 		switch {
 		case ok && f.OpID == msg.ID:
 			s.followupSet(e, id, &found)
@@ -116,6 +117,11 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 		}
 	}
 	if f := m.Followup; f != nil && !f.Pending && f.SessionID != "" {
+		if f.OpID == msg.ID {
+			// The call that made it, repeated (its answer lost, its receipt left unknown): its words went with the
+			// creation; nothing is sent again.
+			return kb.ConvView{MachineID: f.MachineID, SessionID: f.SessionID}, true, nil
+		}
 		p := map[string]any{"session_id": f.SessionID, "text": msg.Text, "client_msg_id": msgID}
 		if len(msg.Images) > 0 {
 			p["images"] = msg.Images
@@ -141,12 +147,12 @@ func (s *Service) followupSend(ctx context.Context, e *kb.Engine, id string, msg
 	}
 	text := s.followupSeed(ctx, e, rec, m, msg.Text)
 	sess, err := s.start(ctx, StartParams{Text: text, Images: msg.Images, Origin: OriginMeetingFollowup, OriginRef: id, MachineID: machine,
-		NewSessionID: want})
+		NewSessionID: want, ClientMsgID: msgID})
 	if err != nil {
 		return kb.ConvView{}, false, err
 	}
 	s.titleFixed(sess.MachineID, sess.SessionID, rec.StartedAt, titleMeeting, feedMeetingName(rec, s.location(ctx)))
-	made := &kb.MeetingFollowup{MachineID: sess.MachineID, SessionID: sess.SessionID}
+	made := &kb.MeetingFollowup{MachineID: sess.MachineID, SessionID: sess.SessionID, OpID: msg.ID}
 	s.followupSet(e, id, made)
 	return kb.ConvView{MachineID: sess.MachineID, SessionID: sess.SessionID}, true, nil
 }

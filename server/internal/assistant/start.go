@@ -257,6 +257,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	if p.NewSessionID != "" {
 		params["new_session_id"] = p.NewSessionID // node/assistant_guest.go: under this id, once
 	}
+	if p.ClientMsgID != "" {
+		params["client_msg_id"] = p.ClientMsgID // its first message's (node/node.go assistant.send)
+	}
 	purpose := p.Purpose
 	if purpose == "" {
 		purpose = "assistant"
