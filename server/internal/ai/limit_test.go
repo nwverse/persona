@@ -292,6 +292,51 @@ func TestBusyCapsTheRequestsInFlight(t *testing.T) {
 	}
 }
 
+// A request queued under the cap waits at most slotWait for a slot, then is put off without being sent, however long
+// its own deadline: a background call (three minutes) used to wait it all out behind the requests in flight.
+func TestSlotWaitIsBounded(t *testing.T) {
+	fakeClock(t)
+	oldWait := slotWait
+	slotWait = 100 * time.Millisecond
+	t.Cleanup(func() { slotWait = oldWait })
+	release := make(chan struct{})
+	u := newUpstream(t, func(w http.ResponseWriter) {
+		<-release
+		ok(w)
+	})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(free) // before the server's Close (cleanups run last first), so a failed test does not hang it
+	c := u.client("k")
+	g := gateFor(u.srv.URL, "k")
+	g.mu.Lock()
+	g.cap = 1
+	g.mu.Unlock()
+	first := make(chan error, 1)
+	go func() { first <- call(c) }()
+	for u.sent.Load() == 0 { // the first one holds the only slot
+		time.Sleep(5 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	start := time.Now()
+	var out struct{ OK bool }
+	err := c.JSON(ctx, "sys", "user", &out)
+	if waited := time.Since(start); !IsPaused(err) || waited > 5*time.Second {
+		t.Fatalf("queued call: %v after %v; want put off after about %v", err, waited, slotWait)
+	}
+	if n := u.sent.Load(); n != 1 {
+		t.Fatalf("sent %d, want only the first", n)
+	}
+	free()
+	if err := <-first; err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if err := call(c); err != nil { // the slot is free again
+		t.Fatalf("after the slot came back: %v", err)
+	}
+}
+
 func TestCapGrowsBackAndLifts(t *testing.T) {
 	fakeClock(t)
 	oldGrow, oldLift := growAfter, capLift

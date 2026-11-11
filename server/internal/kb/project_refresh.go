@@ -17,6 +17,20 @@ type projectRetry struct {
 	at       time.Time
 }
 
+// retryLater counts one more failure in a row of key in *retries (made on first use) and returns its new state: how
+// many failures, and when it may be tried again (retryWait). The knowledge base's steps that call the model per source
+// (projects, topics, recordings, items) put a failing one off this way, so it costs a call now and then, not every round.
+func retryLater(retries *map[string]projectRetry, key string) projectRetry {
+	if *retries == nil {
+		*retries = map[string]projectRetry{}
+	}
+	r := (*retries)[key]
+	r.failures++
+	r.at = time.Now().Add(retryWait(r.failures))
+	(*retries)[key] = r
+	return r
+}
+
 type projectDigest struct {
 	Summary    string     `json:"summary"`
 	OneLine    string     `json:"one_line"`
@@ -29,10 +43,10 @@ type projectDigest struct {
 	Keywords   []string   `json:"keywords"`
 }
 
-// RefreshProjects rewrites the summaries of projects with news, at most max per run. A project whose rewrite failed
-// waits like a chat whose compression failed (retryWait), so a model that keeps failing (2026-11-08: a model name the
-// endpoint did not serve, 404 every two minutes) does not cost a call and a log line every round. Only the knowledge
-// base loop calls it.
+// RefreshProjects rewrites the summaries of projects with news, at most max calls per run, failed ones included (they
+// cost a call as much as the others); it returns how many it rewrote. A project whose rewrite failed waits like a chat
+// whose compression failed (retryWait), so a model that keeps failing (2026-11-08: a model name the endpoint did not
+// serve, 404 every two minutes) does not cost a call and a log line every round. Only the knowledge base loop calls it.
 func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 	if e.Model == nil {
 		return 0
@@ -55,24 +69,18 @@ func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 		}
 	}
 	sort.Slice(dirty, func(i, j int) bool { return dirty[i].Relevance > dirty[j].Relevance })
-	n := 0
+	n, calls := 0, 0
 	for _, p := range dirty {
-		if n >= max || ctx.Err() != nil {
+		if calls >= max || ctx.Err() != nil {
 			break
 		}
+		calls++
 		if err := e.refreshProject(ctx, p); err != nil {
 			if ai.IsPaused(err) || ctx.Err() != nil { // the connection is held or the run ended: the rest wait (still dirty)
 				break
 			}
-			if e.projectRetries == nil {
-				e.projectRetries = map[string]projectRetry{}
-			}
-			r := e.projectRetries[p.Slug]
-			r.failures++
-			wait := retryWait(r.failures)
-			r.at = time.Now().Add(wait)
-			e.projectRetries[p.Slug] = r
-			e.logf("project %s: %v (failed %d time(s) in a row, next try in %s)", p.Slug, err, r.failures, wait)
+			r := retryLater(&e.projectRetries, p.Slug)
+			e.logf("project %s: %v (failed %d time(s) in a row, next try in %s)", p.Slug, err, r.failures, retryWait(r.failures))
 			continue
 		}
 		delete(e.projectRetries, p.Slug)

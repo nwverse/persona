@@ -47,6 +47,7 @@ const (
 	kbDebounce     = 5 * time.Second
 	kbItemsPoll    = 30 * time.Minute
 	kbCompressMax  = 8   // chats compressed per run
+	kbTagItemsMax  = 3   // item tagging calls per run (40 items each); what is left goes on next round
 	kbWaitingMost  = 200 // agents' turns kept until it opens
 	// kbRetryWaiting is how soon the loop tries to open again while agents' turns wait for it (the user's zone not
 	// read yet, the data directory still locked by the process before): not at the next round, two minutes on.
@@ -431,7 +432,10 @@ func (s *Service) kbLoop(ctx context.Context) {
 }
 
 // kbRounds is when the loop last did what it does less often than every round.
-type kbRounds struct{ items, prune, links time.Time }
+type kbRounds struct {
+	items, prune, links time.Time
+	tagMore             bool // item tagging stopped at its cap with untagged items left
+}
 
 // kbRound is one go of the loop.
 func (s *Service) kbRound(ctx context.Context, e *kb.Engine, r *kbRounds) {
@@ -446,18 +450,21 @@ func (s *Service) kbRound(ctx context.Context, e *kb.Engine, r *kbRounds) {
 	s.kbRun(ctx, func() { s.kbRezone(e.Store, loc) })
 	e.Owner = s.owner(ctx)                          // only this loop reads it (the models' prompts)
 	s.kbRun(ctx, func() { s.kbConnectors(ctx, e) }) // mail, GitHub, the plugins'…, each when it is due
-	for i, c := range e.DueForCompression(time.Now()) {
-		if i >= kbCompressMax || ctx.Err() != nil {
-			break
-		}
-		if err := e.Compress(ctx, c); err != nil {
-			if ai.IsPaused(err) { // the chats stay due: compressed once the connection is back
+	// Every step runs under kbRun: a panic in one is logged and the steps after it still run.
+	s.kbRun(ctx, func() {
+		for i, c := range e.DueForCompression(time.Now()) {
+			if i >= kbCompressMax || ctx.Err() != nil {
 				break
 			}
-			s.logf("kb: compress %s: %v", c.ID, err)
+			if err := e.Compress(ctx, c); err != nil {
+				if ai.IsPaused(err) { // the chats stay due: compressed once the connection is back
+					break
+				}
+				s.logf("kb: compress %s: %v", c.ID, err)
+			}
 		}
-	}
-	e.RefreshProjects(ctx, 3)
+	})
+	s.kbRun(ctx, func() { e.RefreshProjects(ctx, 3) })
 	// Knowledge points by topic (kb/topics.go; assistant.kb_topics): a couple of distill calls, then a couple of merges.
 	s.kbRun(ctx, func() {
 		e.DistillTopics(ctx, 2)
@@ -484,16 +491,21 @@ func (s *Service) kbRound(ctx context.Context, e *kb.Engine, r *kbRounds) {
 			}
 		})
 	}
-	if s.kbItemsDue(r.items) {
+	switch {
+	case s.kbItemsDue(r.items):
 		r.items = time.Now()
-		s.kbRun(ctx, func() { s.kbCollectItems(ctx, e) })
+		s.kbRun(ctx, func() { r.tagMore = s.kbCollectItems(ctx, e) })
+	case r.tagMore: // untagged items left past the last run's cap
+		s.kbRun(ctx, func() { r.tagMore = s.kbTagItems(ctx, e) })
 	}
 	daily := time.Since(r.prune) >= 24*time.Hour
 	if daily {
 		r.prune = time.Now()
-		if n := e.Prune(time.Now()); n > 0 {
-			s.logf("kb: pruned %d day(s) and document(s)", n)
-		}
+		s.kbRun(ctx, func() {
+			if n := e.Prune(time.Now()); n > 0 {
+				s.logf("kb: pruned %d day(s) and document(s)", n)
+			}
+		})
 	}
 	s.kbRun(ctx, func() { s.kbPostsUpkeep(e, daily) })
 }

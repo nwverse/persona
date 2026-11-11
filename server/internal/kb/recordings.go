@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -657,29 +658,48 @@ type recordingSummary struct {
 // recordingPromptChars bounds the transcript the model reads (the start and the end kept).
 const recordingPromptChars = 24000
 
-// SummarizeRecordings writes the summary and tags of up to max complete recordings whose latest revision has none
-// yet, newest first; how many it did.
+// SummarizeRecordings writes the summary and tags of complete recordings whose latest revision has none yet, newest
+// first, at most max calls per run (failed ones included); how many it did. A recording whose summary failed waits
+// like a project whose rewrite failed (retryWait) and the next one goes on, so one transcript the model keeps failing
+// on neither costs a call every round nor holds back the others. A paused connection stops the run without counting:
+// the rest stay due.
 func (e *Engine) SummarizeRecordings(ctx context.Context, max int) int {
 	if e.Model == nil && e.ModelFor == nil {
 		return 0
 	}
+	now := time.Now()
 	var todo []*Recording
+	due := map[string]bool{}
 	for _, r := range e.Store.Recordings() {
 		if r.Complete && r.SummarizedRev < r.Revision && r.Chars > 0 && !r.Trimmed() {
+			due[r.ID] = true
+			if now.Before(e.recordingRetries[r.ID].at) {
+				continue
+			}
 			todo = append(todo, r)
 		}
 	}
+	for id := range e.recordingRetries { // summarized, trimmed or gone in the meantime
+		if !due[id] {
+			delete(e.recordingRetries, id)
+		}
+	}
 	sort.Slice(todo, func(i, j int) bool { return todo[i].StartedAt.After(todo[j].StartedAt) })
-	n := 0
+	n, calls := 0, 0
 	for _, r := range todo {
-		if n >= max || ctx.Err() != nil {
+		if calls >= max || ctx.Err() != nil {
 			break
 		}
+		calls++
 		if err := e.summarizeRecording(ctx, r); err != nil {
-			// No model, the model paused or failing: the others would fail alike; they stay due for the next round.
-			e.logf("recording %s: %v", r.ID, err)
-			break
+			if ai.IsPaused(err) || ctx.Err() != nil { // the connection is held or the run ended: they stay due
+				break
+			}
+			f := retryLater(&e.recordingRetries, r.ID)
+			e.logf("recording %s: %v (failed %d time(s) in a row, next try in %s)", r.ID, err, f.failures, retryWait(f.failures))
+			continue
 		}
+		delete(e.recordingRetries, r.ID)
 		n++
 	}
 	return n

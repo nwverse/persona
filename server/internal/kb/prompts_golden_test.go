@@ -187,7 +187,7 @@ func TestGoldenItems(t *testing.T) {
 	} {
 		_ = e.Store.PutItem(it)
 	}
-	if err := e.TagItems(context.Background()); err != nil {
+	if _, err := e.TagItems(context.Background(), 10); err != nil {
 		t.Fatal(err)
 	}
 	m.golden(t, "items")

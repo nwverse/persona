@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -121,21 +122,43 @@ type itemTags struct {
 	} `json:"items"`
 }
 
-// TagItems tags documents, meetings and events that are new or changed, 40 per call.
-func (e *Engine) TagItems(ctx context.Context) error {
+// tagItemsBatch is how many items one tagging call reads.
+const tagItemsBatch = 40
+
+// TagItems tags documents, meetings and events that are new or changed, tagItemsBatch per call and at most max calls
+// per run; more reports that untagged ones are left for another run (the cap was reached). The items of a batch whose
+// call failed wait (retryWait, per item) and the next batch goes on, so a batch the model keeps failing on costs a call
+// now and then rather than every run, and does not hold back the rest. A paused connection returns its error at once
+// without counting: the items stay untagged for the next run.
+func (e *Engine) TagItems(ctx context.Context, max int) (more bool, err error) {
 	if e.Model == nil {
-		return nil
+		return false, nil
 	}
+	now := time.Now()
 	var todo []*Item
+	due := map[string]bool{}
 	for _, k := range []string{KindEvent, KindMeeting, KindDoc} {
 		for _, it := range e.Store.Items(k) {
 			if it.TaggedAt.IsZero() && it.Title != "" && !it.Locked {
+				key := it.Kind + "/" + it.ID
+				due[key] = true
+				if now.Before(e.itemRetries[key].at) {
+					continue
+				}
 				todo = append(todo, it)
 			}
 		}
 	}
-	for len(todo) > 0 && ctx.Err() == nil {
-		batch := todo[:min(40, len(todo))]
+	for key := range e.itemRetries { // tagged, locked or gone in the meantime
+		if !due[key] {
+			delete(e.itemRetries, key)
+		}
+	}
+	for calls := 0; len(todo) > 0 && ctx.Err() == nil; calls++ {
+		if calls >= max {
+			return true, nil
+		}
+		batch := todo[:min(tagItemsBatch, len(todo))]
 		todo = todo[len(batch):]
 		byID := map[string]*Item{}
 		in := prompts.KBItemsInput{Projects: e.knownProjects(), Tags: e.TopTags(40)}
@@ -157,7 +180,18 @@ func (e *Engine) TagItems(ctx context.Context) error {
 		err := e.modelFor("kb.items").JSONMax(cctx, prompts.RenderKBItems(prompts.KBOwner{Owner: e.Owner}), prompts.RenderKBItemsInput(in), 6000, &out)
 		cancel()
 		if err != nil {
-			return err
+			if ai.IsPaused(err) || ctx.Err() != nil {
+				return false, err
+			}
+			var f projectRetry
+			for _, it := range batch {
+				f = retryLater(&e.itemRetries, it.Kind+"/"+it.ID)
+			}
+			e.logf("tag items: %v (%d item(s), failed %d time(s) in a row, next try in %s)", err, len(batch), f.failures, retryWait(f.failures))
+			continue
+		}
+		for _, it := range batch {
+			delete(e.itemRetries, it.Kind+"/"+it.ID)
 		}
 		e.Store.applyMu.Lock()
 		now := time.Now().UTC()
@@ -191,7 +225,7 @@ func (e *Engine) TagItems(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // --- reading ---

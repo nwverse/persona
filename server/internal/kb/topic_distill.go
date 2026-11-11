@@ -191,15 +191,8 @@ func (e *Engine) DistillTopics(ctx context.Context, max int) int {
 }
 
 func (e *Engine) topicRetryLater(key string, err error, step string) {
-	if e.topicRetries == nil {
-		e.topicRetries = map[string]projectRetry{}
-	}
-	r := e.topicRetries[key]
-	r.failures++
-	wait := retryWait(r.failures)
-	r.at = time.Now().Add(wait)
-	e.topicRetries[key] = r
-	e.logf("topics: %s %s: %v (failed %d time(s) in a row, next try in %s)", step, key, err, r.failures, wait)
+	r := retryLater(&e.topicRetries, key)
+	e.logf("topics: %s %s: %v (failed %d time(s) in a row, next try in %s)", step, key, err, r.failures, retryWait(r.failures))
 }
 
 // errSourceGone: the source went (forgotten, merged) while it was being distilled.
