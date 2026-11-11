@@ -2705,6 +2705,7 @@ def recording_minutes(body, rid=None):
     out = {
         "title": cal.get("title") or body.get("title") or None,
         "when": "2027-01-15 16:00–17:00",
+        "start": "2027-01-15T16:00:00+08:00", "end": "2027-01-15T17:00:00+08:00",  # the same span, for the apps to format (#4713)
         "where": cal.get("location"),
         "attendees": cal.get("attendees"),
         "points": [item(x) for x in segs[:2]] + [
@@ -3164,7 +3165,8 @@ def meeting_answer(st, a):
         return
     zh = a["lang"].lower().startswith("zh")
     earlier = next((k for k, v in reversed(list(RECORDINGS.items())) if earlier_material(k, v) and k != st["id"]), None)
-    sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10"}]
+    sources = ([{"kind": "recordings", "id": earlier, "name": RECORDINGS[earlier].get("title") or "Design review", "when": "2026-11-03 14:00–15:10",
+                "start": "2026-11-03T14:00:00+08:00", "end": "2026-11-03T15:10:00+08:00"}]
                if earlier else []) + [{"kind": "projects", "id": "weather-app", "name": "天气 App"}]
     a.update(state="answered", sources=sources, answered_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
              answer="上次设计评审定了：这一版保留 4 MB 的导出上限，补充清楚的提示。回归测试由 Bo 负责，还没完成。" if zh else  # i18n-ignore: made-up model answer
