@@ -5,9 +5,18 @@ import {
   formFromView,
   formModel,
   formProblems,
+  importCanSplit,
+  importCount,
+  importDiffers,
   importErrorText,
+  importFrom,
+  importLeftOut,
+  importBrings,
   importRow,
+  importSources,
+  importStays,
   importSummary,
+  type ImportedProvider,
   mergeDiscovered,
   newForm,
   probeBody,
@@ -207,13 +216,64 @@ describe("probes", () => {
 });
 
 describe("import preview", () => {
+  const variant = (alias: string, model: string, extra: Partial<ImportedProvider> = {}): ImportedProvider =>
+    ({ name: alias, model, models: [{ id: model }], aliases: [alias], sources: [{ alias, file: "~/.zshrc", hide: "ok" }], ...extra });
+  const group: ImportedProvider = {
+    name: "cc_kimi", base_url: "https://api.example.com/anthropic", model: "kimi", models: [{ id: "kimi" }, { id: "kimi-fast" }],
+    aliases: ["cc_kimi", "cc_kimi_fast"], differs: ["tiers", "proxy"],
+    sources: [{ alias: "cc_kimi", file: "~/.zshrc", hide: "ok" }, { alias: "cc_kimi_fast", file: "~/.zshrc", hide: "in_use", uses: ["主对话"] }],
+    variants: [variant("cc_kimi", "kimi"), variant("cc_kimi_fast", "kimi-fast", { existing: "kimi_gw", sources: [{ alias: "cc_kimi_fast", file: "~/.zshrc", hide: "in_use", uses: ["主对话"] }] })],
+  };
+  const single: ImportedProvider = {
+    name: "cc_glm", model: "glm", aliases: ["cc_glm"], env_names: ["DISABLE_TELEMETRY"],
+    skipped_env: [{ name: "GLM_TOKEN", reason: "credential" }, { name: "PATH", reason: "computer" }, { name: "WORK", reason: "shell" }],
+    sources: [{ alias: "cc_glm", file: "~/.bashrc", hide: "elsewhere", elsewhere: ["Mac Studio"] }],
+  };
+
   it("shows the host, the model count, the aliases and where it merges", () => {
     const row = importRow({ name: "cc_glm", base_url: "https://open.example.com/api/anthropic", model: "glm-5", models: [{ id: "glm-5" }, { id: "glm-5-air" }], aliases: ["cc_glm", "cc_glm_air"], existing: "glm" });
     expect(row).toEqual({ name: "cc_glm", host: "open.example.com", models: "2 个模型", aliases: "cc_glm、cc_glm_air", action: "合并到 glm", merge: true });
     expect(importRow({ name: "a", model: "m", aliases: ["a"] })).toMatchObject({ host: "官方地址", models: "1 个模型", action: "新建", merge: false });
   });
+  it("counts a split group's providers on its row and on the Import button", () => {
+    expect(importCanSplit(group)).toBe(true);
+    expect(importCanSplit({ ...group, differs: undefined })).toBe(false);
+    expect(importCanSplit({ ...group, variants: [group.variants![0]!] })).toBe(false);
+    expect(importRow(group, true)).toMatchObject({ action: "2 个供应商", merge: false });
+    expect(importRow(group, false)).toMatchObject({ action: "新建" });
+    const picked = new Set(["cc_kimi", "cc_glm"]);
+    expect(importCount([group, single], picked, new Set(["cc_kimi"]))).toBe(3);
+    expect(importCount([group, single], picked, new Set())).toBe(2);
+    expect(importCount([group, single], new Set(["cc_glm"]), new Set(["cc_kimi"]))).toBe(1);
+    // a group without the choice never counts as split
+    expect(importCount([single], new Set(["cc_glm"]), new Set(["cc_glm"]))).toBe(1);
+  });
+  it("says where the aliases came from, what they bring and what they leave out", () => {
+    expect(importFrom(group)).toEqual(["来自 ~/.zshrc 里的 cc_kimi、cc_kimi_fast"]);
+    expect(importFrom({ ...single, aliases: ["cc_glm", "cc_x"], sources: [...single.sources!, { alias: "cc_x", file: "~/.zshrc", hide: "none" }] }))
+      .toEqual(["来自 ~/.bashrc 里的 cc_glm", "来自 ~/.zshrc 里的 cc_x"]);
+    // an older hub names no file
+    expect(importFrom({ name: "a", aliases: ["a", "b"] })).toEqual(["来自 a、b"]);
+    expect(importBrings(single)).toBe("一并带上 DISABLE_TELEMETRY。");
+    expect(importBrings(group)).toBe("");
+    expect(importLeftOut(single)).toEqual(["不带上 GLM_TOKEN：看起来是密钥或密码。", "不带上 WORK：它们的值要由 shell 运行时算出来。", "不带上 PATH：只适用于那台电脑。"]);
+    expect(importLeftOut({ ...single, skipped_env: [{ name: "A", reason: "limit" }, { name: "B", reason: "new" }] })).toEqual(["不带上 A：一个供应商最多带 50 个。", "不带上 B。"]);
+    expect(importDiffers(group)).toBe("这几个 alias 的各档模型和代理不一样。");
+    expect(importDiffers({ ...group, differs: ["effort", "someday"] })).toBe("这几个 alias 的默认思考档位和someday不一样。");
+    expect(importDiffers(single)).toBe("");
+  });
+  it("speaks for the sources of the providers the picked groups land in", () => {
+    const split = importSources([group, single], new Set(["cc_kimi", "cc_glm"]), new Set(["cc_kimi"]));
+    expect(split.map((s) => [s.alias, s.hide])).toEqual([["cc_kimi", "ok"], ["cc_kimi_fast", "in_use"], ["cc_glm", "elsewhere"]]);
+    expect(importSources([group, single], new Set(["cc_glm"]), new Set())).toEqual(single.sources);
+    expect(importStays(group.sources![1]!)).toBe("cc_kimi_fast 保留：主对话在用它。");
+    expect(importStays(single.sources![0]!)).toBe("cc_glm 保留：在 Mac Studio 上，新的供应商替代不了它。");
+    expect(importStays({ alias: "x", hide: "in_use" })).toBe("x 保留。");
+  });
   it("sums up and words the two errors the hub names", () => {
     expect(importSummary({ created: ["a", "b"], updated: ["c"] })).toBe("新建 2 个，合并 1 个");
+    expect(importSummary({ created: ["a", "b"], updated: ["c"], hidden: [], kept: [] })).toBe("新建 2 个，合并 1 个");
+    expect(importSummary({ created: ["a"], updated: [], hidden: ["a", "b"], kept: [{ alias: "c", hide: "in_use", uses: ["主对话"] }] })).toBe("新建 1 个，合并 0 个；隐藏 alias 2 个，保留 1 个");
     expect(importErrorText(new ApiError(409, "x", { code: "node_outdated" }))).toBe("这台电脑的 Persona 需要更新");
     expect(importErrorText(new ApiError(503, "x", { code: "offline" }))).toBe("这台电脑不在线");
     expect(importErrorText(new ApiError(502, "坏了", { code: "internal" }))).toContain("HTTP 502");
