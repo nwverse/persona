@@ -236,6 +236,9 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		return nil, err
 	}
 	var err error
+	if !resume && execution.ConfigDir == "" && n.sessionScope == nil && n.guestKindOf(id) == guestMeeting {
+		execution.ConfigDir = meetingRoomProfile // a new room signs in as the assistant does (assistant_guest.go)
+	}
 	execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), id, launcher, execution.Runtime, execution.ConfigDir, resume)
 	if err != nil {
 		return nil, err
@@ -262,7 +265,7 @@ func (n *Node) spawnClaude(id, cwd, launcher string, resume, spare bool, options
 		if n.guestOf(id) == nil {
 			return nil, errRoomRecord // never with the assistant's tools
 		}
-		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, settings, hooks == ""); settingsErr != nil {
+		if settings, settingsErr = n.meetingRoomSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
 			return nil, settingsErr
 		}
 		args = append(args, meetingRoomArgs()...)
