@@ -37,7 +37,7 @@ const HANDOFF = {
     agent: "Fix the release CI", machine_name: LAPTOP.name, cwd: "~/code/example-app", prompt: "Fix the release CI: the publish step fails to log in to the registry.",
   },
   summary: "Give Example Vault › Registry token › credential as REGISTRY_TOKEN to “Fix the release CI” on Laptop, for this run only. Approve on iPhone or the web.",
-  always_label: "never asks again for claude on Laptop", always_honored: true,
+  always_label: "skips this card for these items with claude on Laptop, in conversations you start yourself", always_honored: true,
 };
 const NOTES = {
   id: "example-notes", name: "Example Notes", kind: "process", status: "running", source: "installed", enabled: true, version: "1.2.0",
