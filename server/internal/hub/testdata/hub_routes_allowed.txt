@@ -197,3 +197,12 @@ PUT /api/v1/pins
 # Phone write delivery receipts (full credentials only).
 GET /api/v1/phone/write-queue
 POST /api/v1/phone/write-queue/{id}/cancel
+/api/v1/auth/password/
+GET /api/v1/auth/password/state
+POST /api/v1/auth/password/start
+POST /api/v1/auth/password/finish
+POST /api/v1/auth/password/exchange
+GET /api/v1/admin/password-login
+POST /api/v1/admin/password-login/register/start
+POST /api/v1/admin/password-login/register/finish
+PUT /api/v1/admin/password-login

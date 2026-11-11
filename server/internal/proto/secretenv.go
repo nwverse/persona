@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -98,7 +97,7 @@ func OpenSecretEnv(priv *ecdh.PrivateKey, keyID string, sealed []byte) ([]Secret
 	return env, nil
 }
 
-var secretEnvName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
+var secretEnvName = lazy(`^[A-Z_][A-Z0-9_]{0,63}$`)
 
 // secretEnvReserved are names a hand-off may not set: what the shell, the node and the launcher set for the Agent,
 // and what changes how a program is loaded or run.
@@ -130,7 +129,7 @@ var secretEnvReservedPrefixes = []string{"PERSONA_", "LD_", "DYLD_", "LC_", "HER
 // (capital letters, digits, underscores, not starting with a digit, at most 64), none of the reserved ones. The old
 // names' prefix is checked by compat.SecretEnvNameProblem, which callers use.
 func SecretEnvNameProblem(name string) string {
-	if !secretEnvName.MatchString(name) {
+	if !secretEnvName().MatchString(name) {
 		return "it is not an environment variable name (capital letters, digits and _, at most 64)"
 	}
 	if slices.Contains(secretEnvReserved, name) {

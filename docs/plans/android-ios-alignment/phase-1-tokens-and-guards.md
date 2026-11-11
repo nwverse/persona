@@ -125,7 +125,7 @@ Call sites of the names that change meaning:
 
 Android's springs use damping 0.82 or 0.9 at stiffness 400; Brief (140/240 ms) and Board (100/160 ms) use tweens. In `Tokens.Motion` only `reduced` is read.
 
-**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS.
+**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS. Done in two PRs: the tokens, the drift test and Glass's state and layout springs first (`IosSpring`), then the breathing ring, which changes how the mark looks.
 
 Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; Android's count and breathe timings have no iOS counterpart and stay Android-only until iOS has one.
 
@@ -161,7 +161,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 4. `StyleContrastTest` gets floors per style: Glass fails on the three iOS floors and reports the WCAG checks without failing, as `rules.json` does; Brief and Board keep 4.5:1.
 5. `GlassTokenContractTest`, `docs/android/android-design.md` and rule 7 of `DESIGN_SYSTEM.md` section 6 are updated in the same PR.
 
-**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it.
+**The cost.** Android's Glass text gets lighter: secondary text drops from 4.5:1 to about 3.3:1 to 3.4:1 in light mode, below WCAG AA. That is what decision 2 accepts; the contrast report keeps showing it. Done: the extension themes keep their 4.5:1 check, since a theme applies to every style and Brief and Board keep 4.5:1; places that picked black or white by contrast on the accent now use the palette's `onAccent` (white in Glass).
 
 ### T7. Icons by meaning
 
@@ -174,7 +174,7 @@ Risks: Glass leaves line height to the platform on purpose (see `Typography.kt`)
 3. A Python test that every name exists in `Icons.swift` and every glyph in the Phosphor list.
 4. A ratchet in `scripts/app/android_token_baseline.py` that moves pages from `PhIcons.*` to meaning names, file by file.
 
-Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout.
+Several meanings will share a glyph, which is fine. Adding a new glyph stays a local step, since CI has no Phosphor checkout. Done: `spec/icons/meanings.json` maps 168 of iOS's meanings (the ones with a fitting glyph among the 170 generated), `PersonaIcons` is generated from it, and the ratchet's `icon` category starts at the 1,190 direct glyph references in pages.
 
 ### T8. Guards
 
@@ -201,6 +201,8 @@ Outside the design system, 151 production files import `androidx.compose.materia
 
 Risks: layouts grow where these controls sit in rows, so screenshot baselines move. Brief and Board share the components and get the fix too.
 
+Finding (11-11): step 1 as written moved pixels. With `minimumInteractiveComponentSize()` before `size()`, a switch's row grew 12dp next to rows without one, and the Agents computer and space headings grew too (screenshots in #4209). Compose already stretches a small pointer target to the system's 48dp touch area where no other target is closer, so the switch, the search field's clear button and a heading action keep their size, the no-op calls go, and `TouchTargetTest` guards the 48dp reach (the heading action joins its cases; the clear button has its own test, since the text sits on its left). Steps 2 and 3 grow layouts as well; each needs a reason a target is missed (an overlapping neighbour) before it changes how a screen looks.
+
 ### T10. Haptics
 
 **Today.** iOS `Haptics` in `apple/Persona/App/AppModel.swift` has four kinds: tap (a light impact), success, error and attention (a warning). The code calls it 417 times in 130 files (tap 233, success 124, error 54, attention 13). `DESIGN_SYSTEM.md` section 4.3 still says about 393 and that a completed send plays success, while the code plays tap. Android's `Haptics.kt` maps the same four kinds onto platform feedback (tap to context click, success to confirm, attention to gesture threshold, error to reject) and fires them at about 20 places in 14 files.
@@ -221,6 +223,8 @@ Risks: layouts grow where these controls sit in rows, so screenshot baselines mo
 2. Each feedback style has a default haptic (T11), so errors and successes buzz from one place.
 3. One copy helper in the design system, moved out of `ReplyBlocks.kt` (`rememberCopy()`), used by every copy action.
 4. An explicit `Haptic.Tap` where a press should be felt; view models send haptics through a flow, as the Agents view model already does.
+
+Done (11-11): steps 1 to 3 (#4647, #4668); step 4 for the presses in the shared components (Send, Stop, every answer, the page switcher, the persona button; `PressHapticsTest`). An arriving request plays attention (`InteractionCenter.arrivals`, `ArrivingRequestsTest`). Left: archive, with its notice and Undo.
 
 Risks: a double buzz where a notice and its call site both play one; context click is faint on some phones; Android 13 and later show their own confirmation when something is copied, so the "Copied" toast shows only on older versions (verify on a device).
 
