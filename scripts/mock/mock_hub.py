@@ -1106,6 +1106,15 @@ if os.environ.get("MOCK_ORCA_CHILDREN"):
              "legacy-provider", 8, "codex", 1, 60, "Saved workspace history", space_kind="codex_app", space_id="provider-project",
              pane_id=None, workspace_id=None, capabilities={"read": True, "send": False}),
     ]
+# MOCK_STOPPED_AGENTS=1 (with MOCK_TERMINAL_PANES): a stopped Agent (#4754: read-only, its terminal stays) on the server,
+# whose tab is still open in the notes workspace (agent_session on its pane), and the plain panes name what runs in front.
+STOPPED_AGENT = "5d000000-0000-4000-8000-000000004754"
+if os.environ.get("MOCK_STOPPED_AGENTS"):
+    SESSIONS += [
+        sess("server", STOPPED_AGENT, "Fix the notes index", "/home/me/notes", "offline", "offline", "notes", 2, "fix-notes", 2, 45,
+             "Rebuilt the index and pushed the branch.", pane_id=None,
+             capabilities={"read": True, "terminal": True}, read_only_reason="Agent stopped"),
+    ]
 # MOCK_MANUAL_HERDR=1: two agents opened by hand in herdr (started_by_persona false) on no todo: Agents' "By to-do" lists them
 # in "Opened manually" (#2608 web, #2917 iOS / Mac).
 if os.environ.get("MOCK_MANUAL_HERDR"):
@@ -1632,6 +1641,20 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
+# MOCK_RECENT=1 (#4873): more of the user's own conversations, so the sidebar's Recent (the newest five that are not the main
+# conversation or a leader) has more than it lists and All chats holds the rest. Synthetic titles.
+if os.environ.get("MOCK_RECENT") == "1":
+    for i, (title, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles
+        ("1112 | 规划 | 周末去杭州的行程", 60 * 2, "两天的安排排好了。"),
+        ("1112 | 写作 | 给物业的报修邮件", 60 * 7, "邮件草稿在这里。"),
+        ("1111 | 研究 | 家用净水器怎么选", 60 * 26, "三款的对比如下……"),
+        ("1109 | 整理 | 孩子的疫苗时间表", 60 * 24 * 3, "下一针在 12 月。"),
+        ("1106 | 学习 | 每天 20 分钟西班牙语", 60 * 24 * 6, "第 6 课的单词表。"),
+    ]):
+        c = assistant_sess(f"mine{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
+        c["origin"] = "user"
+        ASSISTANT.append(c)
+
 # MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
 # /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
 # sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
@@ -1701,8 +1724,8 @@ WEEKDAYS = [1, 2, 3, 4, 5]
 
 
 # MOCK_ASSISTANT_SIDEBAR=1: the Persona sidebar's "Recent" holds more than the 30 it shows before "View all"
-# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (red dot), unread
-# (blue dot), working (spinner).
+# (`AssistantSidebar.recentCount`), and one row in each state it marks at the end: waiting for you (blue dot), unread
+# (green dot), working (spinner).
 if os.environ.get("MOCK_ASSISTANT_SIDEBAR") == "1":
     for _n, _state in enumerate(["needs_you", "unread", "working"] + ["idle"] * 33):
         _s = assistant_sess("b2e4d6f8-0000-4000-8000-%012d" % (100 + _n), "整理第 %d 周的周报" % (_n + 1),
@@ -1728,11 +1751,19 @@ if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1":
              ("task", "idle", "1104 | 定时 | 晨间简报", 60 * 27),
              ("lark_agent", "idle", "1105 | 整理 | 群里的需求", 60 * 2),
              ("spawned", "idle", "1103 | 研究 | 竞品的定价", 60 * 50)]
+    # MOCK_EXTERNAL=1 (#3758): one more, opened by an extension that isn't Lark /agent; with the Lark /agent one, the
+    # conversations the apps mark as external (their items are below, after ITEMS).
+    if os.environ.get("MOCK_EXTERNAL") == "1":
+        _AUTO[8] = ("lark_agent", "idle", "1105 | 研究 | 群里的需求汇总", 60 * 2)
+        _AUTO.append(("extension", "idle", "1104 | 文档 | 周报草稿", 60 * 26))
     for _n, (_origin, _state, _title, _min) in enumerate(_AUTO):
         _s = assistant_sess("b2e4d6f8-0000-4000-8000-%012d" % (300 + _n), _title, _min,
                             "这是收件箱里的一件事，你作为我的 AI 分身先处理它……" if _origin == "inbox" else "处理好了。")
         _s.update(origin=_origin, state=_state, status=STATUS_OF_STATE[_state],
                   pending_interactions=1 if _state == "needs_you" else 0)
+        if _origin in ("lark_agent", "extension"):
+            _s.update(origin_ref="example-ext" if _origin == "extension" else "larkext",
+                      opened_by="example-ext" if _origin == "extension" else "larkext")
         ASSISTANT.append(_s)
 
 def next_at(hhmm, weekdays):
@@ -2007,6 +2038,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # supervised task reach its supervisor (#4293), off by default; closed sessions archive themselves
                     # after this many idle days (#3618), 0 is never. Left out with MOCK_LEGACY_HUB.
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
+                    # idle Agents stop after this many hours, their terminal kept (#4754); 0 is never
+                    "idle_close_hours": 12,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
@@ -2033,7 +2066,7 @@ def assistant_state(space="", archived=False):
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
         out.update(agent_tasks=cfg["agent_tasks"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
-                   kb_topics=cfg["kb_topics"])
+                   idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -5987,28 +6020,43 @@ if MAIN_ACTIONS and os.environ.get("MOCK_COMPACTION") in ("running", "done", "fa
 
 ITEMS[ASK2] = [it("user", "text", 60 * 5, text="⏰ 早报")] + [it("assistant", "text", 60 * 5, text="早上好！今天 2 个会议，3 封邮件需要回复。")]
 ITEMS[ASK3] = [it("user", "text", 60 * 29, text="帮我约周五和韩梅梅吃饭")] + [it("assistant", "text", 60 * 28, text="已经在日历里加好了。")]
-# MOCK_LARK_AGENT=1: the Friday scheduling request is a Feishu /agent conversation instead (prompts/lark/chat_agent.md): the
-# instructions and context in <persona-context> blocks, only the request outside them (the apps fold the blocks, #876).
-if os.environ.get("MOCK_LARK_AGENT") == "1":
-    _lark_ctx = [
-        ("instructions", "给 Agent 的说明", "", "示例用户在飞书「发布群」里用 /agent 叫你。这不是在电脑上开的会话，你只知道下面给出的上下文。\n\n"
-         "他的请求是这条消息最后、所有 <persona-context> 标签外面的那段文字；其余标签里是 hub 收集好的上下文。\n\n## 怎么做\n\n"
-         "- 能做的直接做掉：查资料、读代码、看日志、跑命令。\n- 做完用 lark_agent_reply 回复一次。"),
-        ("context", "请求的位置", "", "位置：群聊「发布群」（feed_id 7000000000000000001）；请求消息 id 7000000000000000002，2026-11-03 16:48 发出。"),
-        ("context", "前面的聊天", "", "\n".join(f"11-03 16:{10 + n:02d} {'韩梅梅' if n % 2 else '李雷'}：第 {n + 1} 条讨论构建失败的消息" for n in range(30))),
-        ("context", "请求引用的消息", "", "韩梅梅：构建在 lint 那一步挂了，帮忙看下是哪里被拦截了"),
-        ("doc", "文档 · 发布手册", "https://example.feishu.cn/docx/AbC123", "# 发布手册\n\n1. 冻结提交\n2. 跑全部测试\n3. 上传构建"),
-        ("context", "会话档案 · 发布群", "", "# 发布群\n\n## 这是什么\n\n每周五发版的协调群。"),
-        ("context", "项目 · 周五发版", "", ""),
-    ]
-    _lark_text = "".join(
+def lark_agent_request(request):
+    """A Feishu /agent conversation's first message (prompts/lark/chat_agent.md): the instructions and context in
+    <persona-context> blocks, only the request outside them (the apps fold the blocks, #876)."""
+    return "".join(
         f'<persona-context kind="{k}" title="{t}"' + (f' url="{u}"' if u else "") + f">\n{b}\n</persona-context>\n"
-        for k, t, u, b in _lark_ctx) + "看看哪里被拦截了"
-    ITEMS[ASK3] = [it("user", "text", 60 * 29, text=_lark_text),
+        for k, t, u, b in _LARK_CTX) + request
+
+
+_LARK_CTX = [
+    ("instructions", "给 Agent 的说明", "", "示例用户在飞书「发布群」里用 /agent 叫你。这不是在电脑上开的会话，你只知道下面给出的上下文。\n\n"
+     "他的请求是这条消息最后、所有 <persona-context> 标签外面的那段文字；其余标签里是 hub 收集好的上下文。\n\n## 怎么做\n\n"
+     "- 能做的直接做掉：查资料、读代码、看日志、跑命令。\n- 做完用 lark_agent_reply 回复一次。"),
+    ("context", "请求的位置", "", "位置：群聊「发布群」（feed_id 7000000000000000001）；请求消息 id 7000000000000000002，2026-11-03 16:48 发出。"),
+    ("context", "前面的聊天", "", "\n".join(f"11-03 16:{10 + n:02d} {'韩梅梅' if n % 2 else '李雷'}：第 {n + 1} 条讨论构建失败的消息" for n in range(30))),
+    ("context", "请求引用的消息", "", "韩梅梅：构建在 lint 那一步挂了，帮忙看下是哪里被拦截了"),
+    ("doc", "文档 · 发布手册", "https://example.feishu.cn/docx/AbC123", "# 发布手册\n\n1. 冻结提交\n2. 跑全部测试\n3. 上传构建"),
+    ("context", "会话档案 · 发布群", "", "# 发布群\n\n## 这是什么\n\n每周五发版的协调群。"),
+    ("context", "项目 · 周五发版", "", ""),
+]
+# MOCK_LARK_AGENT=1: the Friday scheduling request is a Feishu /agent conversation instead.
+if os.environ.get("MOCK_LARK_AGENT") == "1":
+    ITEMS[ASK3] = [it("user", "text", 60 * 29, text=lark_agent_request("看看哪里被拦截了")),
                    it("assistant", "text", 60 * 28, text="lint 那一步被新加的隐私扫描拦下了：`site/` 里有一张截图带了内网地址。已经换成占位图，重跑通过。")]
 ITEMS[ASK4] = [x for n in range(1, 31) for x in (
     it("user", "text", 60 * 50 + 61 - 2 * n, text=f"第 {n} 本也整理一下"),
     it("assistant", "text", 60 * 50 + 60 - 2 * n, text=f"第 {n} 本整理好了：\n\n- 三个主要观点\n- 两段摘抄\n- 一条和上一本的联系\n\n要接着整理第 {n + 1} 本吗？"))]
+
+# MOCK_EXTERNAL=1 (with MOCK_AUTO_CONVERSATIONS=1, #3758): what the two conversations extensions opened say. The Lark /agent
+# one opens with the request and its context blocks; the other extension's with plain text. The apps write where each
+# came from under its first message.
+if os.environ.get("MOCK_EXTERNAL") == "1":
+    ITEMS["b2e4d6f8-0000-4000-8000-000000000308"] = [
+        it("user", "text", 60 * 2 + 1, text=lark_agent_request("把群里这周提的需求汇总一下")),
+        it("assistant", "text", 60 * 2, text="汇总好了，已经回复到群里：这周一共 5 条需求，2 条和发布有关，1 条要你拍板。")]
+    ITEMS["b2e4d6f8-0000-4000-8000-000000000310"] = [
+        it("user", "text", 60 * 26 + 1, text="把这周的工作记录整理成周报草稿"),
+        it("assistant", "text", 60 * 26, text="周报草稿写好了：完成 4 件，进行中 2 件，下周计划 3 件。")]
 
 INTERACTION_HISTORY = [  # GET /api/v1/interactions/history: requests already answered
     {"id": "ix_blog_done", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
@@ -6058,6 +6106,15 @@ def _long_lark_card(ix_id, machine, session, title, tool, verb, minutes, **extra
 # MOCK_ASK_LONG=perm: the main conversation waits on a long Feishu permission card instead.
 if os.environ.get("MOCK_ASK_LONG") == "perm":
     INTERACTIONS.append(_long_lark_card("ix_perm_long", "server", ASK1, "Persona", "mcp__lark__run", "list", 1))
+# MOCK_ASSISTANT_BASH=1: the main conversation's own first Bash waits for approval (#4883), its only card: the chat
+# shows it above the composer, "Waiting for your approval", not only in the closed Needs you tray.
+if os.environ.get("MOCK_ASSISTANT_BASH") == "1":
+    INTERACTIONS[:] = [x for x in INTERACTIONS if x["session_id"] != ASK1]
+    INTERACTIONS.append({"id": "ix_assistant_bash", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+                         "kind": "permission", "created_at": ago(minutes=3), "expires_at": later(minutes=27),
+                         "tool_name": "Bash", "summary": "ssh vps 'cat /etc/example/config.json'",
+                         "tool_input": {"command": "ssh vps 'cat /etc/example/config.json'",
+                                        "description": "Read the server config on the VPS"}})
 # MOCK_ASK_LONG=agent: two long Feishu permission cards on an agent's chat (the tests session on the MacBook) and no
 # other card there, whose cards a phone and a side panel fold under the composer (PendingCards): the first open, the
 # second behind "1 more".
@@ -6964,6 +7021,13 @@ def mock_panes(mid):
             tabs.append({"id": extra["tab_id"], "workspace_id": wid, "label": "shell-2", "number": 3})
     for pane in SPLIT_PANES.get(mid, []):
         panes.append(pane)
+    if os.environ.get("MOCK_STOPPED_AGENTS") and mid == "server":
+        for p in panes:
+            if not p.get("agent"):
+                p["foreground"] = "npm" if "npm" in (p.get("title") or "") else "zsh"
+        tabs.append({"id": "w2:t2", "workspace_id": "w2", "label": "fix-notes", "number": 2})
+        panes.append({"pane": "w2:p4", "terminal": "pane:w2:p4", "tab_id": "w2:t2", "workspace_id": "w2", "title": "zsh",
+                      "cwd": "/home/me/notes", "foreground": "zsh", "agent_session": STOPPED_AGENT})
     panes = [p for p in panes if p["pane"] not in CLOSED_PANES and p["tab_id"] not in CLOSED_TABS]
     tabs = [dict(t, label=TAB_NAMES.get(t["id"], t["label"])) for t in tabs if t["id"] not in CLOSED_TABS]
     if MARKS_AGENTS and mid == "server":  # MOCK_AGENT_MARKS: a workspace of its own, one tab per agent
@@ -7028,6 +7092,16 @@ def node_action(h, p, body):
     """POST /api/v1/machines/{mid}/{panes,tabs}/{close,split,agent,git,rename}: what the menus ask of a computer."""
     mid, area, verb = p.split("/")[4], p.split("/")[5], p.split("/")[6]
     NODE_ACTIONS.append({"machine": mid, "route": area + "/" + verb, **body})
+    if area == "panes" and verb == "close_finished":  # #4754: the stopped Agents' terminals, those confirmed
+        hosts = mock_panes(mid).get("hosts") or []
+        done = [{"pane": x["pane"], "session_id": x["agent_session"], "tab_id": x["tab_id"], "workspace_id": x["workspace_id"]}
+                for x in (hosts[0]["panes"] if hosts else []) if x.get("agent_session")]
+        want = [x for x in str(body.get("panes") or "").split(",") if x]
+        if want:
+            done = [x for x in done if x["pane"] in want]
+        if not body.get("preview"):
+            CLOSED_PANES.update(x["pane"] for x in done)
+        return h.send_json({"closed": done, "kept": [], "preview": bool(body.get("preview"))})
     if area == "panes" and verb == "close":
         CLOSED_PANES.add(body.get("pane"))
     elif area == "tabs" and verb == "close":
@@ -10093,8 +10167,14 @@ def providers_route(h, method, p, q, body):
     if not MOCK_PROVIDERS and not probe: return False
     if p == "/mock/providers/log":
         h.send_json(PROVIDER_LOG); return True
-    b = json.loads(body or b"{}") if method != "GET" else {}
-    if not MOCK_PROVIDERS and b.get("preset"): return False
+    if MOCK_PROVIDERS:
+        b = json.loads(body or b"{}") if method != "GET" else {}
+    else:  # a body that is not a typed-in gateway's probe goes on to the routes after this one
+        try:
+            b = json.loads(body or b"{}")
+        except ValueError:
+            return False
+        if not isinstance(b, dict) or b.get("preset"): return False
     if p == "/api/v1/launchers/import":
         machine = (q.get("machine") or [""])[0] if method == "GET" else b.get("machine", "")
         if machine == "studio":
@@ -10132,7 +10212,7 @@ def providers_route(h, method, p, q, body):
     if p == "/api/v1/launchers/discover" and method == "POST":
         PROVIDER_LOG["discover"].append(_provider_redacted(b))
         if "bad" in (b.get("base_url") or ""):
-            h.send_json({"models": [], "error": "网关没有 /v1/models"}); return True
+            h.send_json({"models": [], "error": "网关没有 /v1/models", "code": "not_found"}); return True
         h.send_json({"models": PROVIDER_DISCOVERED}); return True
     if p == "/api/v1/launchers" and method == "POST" and not b.get("preset"):
         PROVIDER_LOG["post"] = _provider_redacted(b)
@@ -18402,7 +18482,7 @@ class H(BaseHTTPRequestHandler):
         if doctor_route(self, p, "POST"): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
         if plugins_route(self, p, self.last_body): return
-        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|split|agent|git)|tabs/(close|rename))", p):
+        if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
             return node_action(self, p, json.loads(self.last_body or b"{}"))
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/worktree/(prepare|create)", p):
             return worktree_route(self, p, json.loads(self.last_body or b"{}"))
@@ -19510,6 +19590,11 @@ class H(BaseHTTPRequestHandler):
             for key, (low, high) in RETENTION_BOUNDS.items():
                 if key in body and (type(body[key]) is not int or not low <= body[key] <= high):
                     return self.send_json({"error": "%s must be %d–%d" % (key, low, high), "code": "bad_request"}, 400)
+            if "idle_close_hours" in body:  # 0–8760, as the hub checks it (#4754)
+                hours = body["idle_close_hours"]
+                if not isinstance(hours, int) or isinstance(hours, bool) or not 0 <= hours <= 8760:
+                    return self.send_json({"error": "idle_close_hours must be 0–8760"}, 400)
+                ASSISTANT_CONFIG["idle_close_hours"] = hours
             if "archive_closed_days" in body:  # 0–3650, as the hub checks it (#3618)
                 days = body["archive_closed_days"]
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
@@ -20426,6 +20511,7 @@ def features():
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
 MOCK_HELP.append("MOCK_MANAGER_NAS=1  （默认的三个管理者）NAS 归离线的「家里」：像 hub 一样显示成离线，error 是 hub 的「助手暂时连不上，稍后再试」；它的一个 agent（备份脚本）状态 unknown")
+MOCK_HELP.append("MOCK_ASSISTANT_BASH=1  主对话自己的第一条 Bash 在等批准（#4883），是它唯一的卡片：对话里输入区上方显示「在等你批准」，不只在收起的「需要你」里")
 MOCK_HELP.append("MOCK_ASK_LONG=1|perm|agent  卡片比输入区上方的盒子还高（#3112）：1 主对话的 ask_user 提问卡（八个带说明的选项）；perm 主对话的飞书授权卡（超长命令）；agent MacBook 上补测试的 Agent 对话里两张这样的授权卡、没有别的卡（手机和侧边面板把第二张折在「还有 1 件」后面）")
 MOCK_HELP.append("MOCK_MANAGER_NEEDS_YOU=0  名册不带 inbox_needs_you（旧 hub，或还不上报这个数的旧管理者）；默认每个在线的管理者带它收件箱里「需要你处理」的未完成条目数，数变了推 managers")
 MOCK_HELP.append("MOCK_MANAGER_OUTDATED=1  设置 › 管理者：「工作」带 needs_update（它还不读自己的 manager.json，hub 在它在线时这样标）")
@@ -20442,6 +20528,7 @@ MOCK_HELP.append("MOCK_EXCHANGES=1  主对话新布局的素材（#1666）：Per
 MOCK_HELP.append("MOCK_MARKDOWN=1  任务往来和回执里带 **粗体**、`代码`、标题的原话（#2363）：应渲染成 Markdown，不露标记")
 MOCK_HELP.append("MOCK_TASK_RENAMED=1  整理发布说明这个任务在回执写好后改了名：回执应显示新名字「写本周发布说明」（#3036）")
 MOCK_HELP.append("MOCK_AUTO_CONVERSATIONS=1  助手对话带来源 origin（feature conversation_origin）：另有 10 段自动对话（收件箱 6、定时任务 2、飞书 /agent、对话派生），侧边栏收进「自动对话」（#3264）")
+MOCK_HELP.append("MOCK_EXTERNAL=1  和 MOCK_AUTO_CONVERSATIONS=1 一起用：飞书 /agent 那段带上请求和上下文，另加一段别的扩展开的（origin extension），两段都是外部的（#3758）")
 
 
 
