@@ -72,6 +72,7 @@ final class HeaderModeShotTests: XCTestCase {
     /// The menu, and the confirmations for going into Allow Everything and for leaving it with no way back.
     @MainActor func testModeMenuShots() throws {
         guard phase == "after", !isPad else { throw XCTSkip("the mode menu is the change itself (iPhone shots)") }
+        continueAfterFailure = true // a missing title fails the test and still leaves every shot after it to look at
         for scheme in ["light", "dark"] {
             open(Self.widget, scheme: scheme)
             let mode = app.buttons["chat.permissionMode"]
@@ -114,7 +115,7 @@ final class HeaderModeShotTests: XCTestCase {
         let says = NSPredicate(format: "(label BEGINSWITH %@ OR label BEGINSWITH %@) AND identifier != %@",
                                "权限模式：", "Permission Mode: ", "chat.permissionMode") // i18n-ignore: the test runs in zh-Hans
         let title = app.descendants(matching: .any).matching(says).firstMatch
-        XCTAssertTrue(title.waitForExistence(timeout: 3), "the menu's title line")
+        if !title.waitForExistence(timeout: 3) { XCTFail("the menu's title line; the screen's elements:\n\(app.debugDescription)") }
     }
 
     /// View bodies and main-thread time under twelve rounds of the hub's pushes, with the busy widget agent's chat open
