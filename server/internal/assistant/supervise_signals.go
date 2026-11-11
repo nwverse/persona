@@ -339,6 +339,7 @@ func (s *Service) superviseLoop(ctx context.Context) {
 		case <-t.C:
 		}
 		s.rehomeLeaderlessWorkers(ctx) // a worker whose leader's task closed is rehomed even with no signal of its own
+		s.handOverFormerMainTasks(ctx) // what a replaced main conversation still holds goes to the main one (main_handover.go)
 		s.superviseWatch(ctx, time.Now())
 	}
 }
