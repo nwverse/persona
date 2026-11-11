@@ -215,7 +215,7 @@ The Lark app is one app used in two ways. The built-in bot uses its sealed App I
 
 `domain`: `feishu` (default), `lark`, or the Open Platform address of a private deployment. Switches, features and pairing are configured in the App and stored in settings `bots.feishu` (read / written by the hub); chat state (current target, thread bindings, processed messages, and which message each still-open question / approval card is in: only ids and the conversation it belongs to, never the card's content, at most 100 cards for 7 days, #4358) is stored in `bots.feishu.state` (read / written by the assistant), and pending answers in `channels.state`.
 
-These routes belong to the hub; `target` and `agents` in the response are queried from the assistant on demand (`feishu.view`). When the assistant isn't connected, these two fields are absent; everything else works as usual.
+These routes belong to the hub; `target` and `agents` in the response are queried from the assistant on demand (`feishu.view`). When the assistant isn't connected, these two fields are absent; everything else works as usual. `agents` is one row per Agent the owner has talked to in the chat — the threads bound to it folded together, the newest naming the row, newest first — not one row per thread: every card the bot posts about a conversation is bound to it so a reply finds it again, and the settings page shows the Agents, not the cards.
 
 | Method | Path | Description |
 | --- | --- | --- |
