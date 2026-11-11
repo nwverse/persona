@@ -11,8 +11,9 @@ import (
 // The owner comes first (#4925, docs/assistant/assistant.md "Messages from the system wait for the owner"): what the
 // system puts into an assistant conversation (supervision messages, task notices, late ask_user answers, messages from
 // other conversations) waits while the owner is talking there, and what waits goes in by rank, not in the order it
-// came. The rules hold for the main conversation and leader conversations alike; they are the manager's, and the
-// queue (assistant.relay) keeps its shape.
+// came. A scheduled run into such a conversation waits as well (runHold, schedule.go runDue). The rules hold for the
+// main conversation and leader conversations alike; they are the manager's, and the queue (assistant.relay) keeps
+// its shape.
 
 var (
 	// ownerPresentFor is how long after the owner's last message in a conversation nothing from the system is
@@ -57,9 +58,22 @@ func (msg relayMsg) rank() int {
 	return relayRankOther
 }
 
-// anyUrgent: one of the signals of a supervision message waits on a decision (relayMsg.Urgent).
-func anyUrgent(list []superviseSignal) bool {
-	return slices.ContainsFunc(list, func(g superviseSignal) bool { return g.urgent() })
+// waitsOnDecision: somebody waits on what the signal asks for. Narrower than urgent, which is how soon a supervision
+// message goes out: a start the supervisor's retry brought about and a report that the work is done are told soon, yet
+// nobody waits on them.
+func (g superviseSignal) waitsOnDecision() bool {
+	switch g.Kind {
+	case sigStarted:
+		return false
+	case sigReport:
+		return g.Report == upReportQuestion || g.Report == upReportBlocked
+	}
+	return g.urgent()
+}
+
+// anyDecision: one of the signals of a supervision message waits on a decision (relayMsg.Urgent).
+func anyDecision(list []superviseSignal) bool {
+	return slices.ContainsFunc(list, func(g superviseSignal) bool { return g.waitsOnDecision() })
 }
 
 // firstQueued is when the message that takes queued message old's place counts as queued: when old was, so a
@@ -92,10 +106,12 @@ func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Dura
 }
 
 // pickLocked is the index of the message of conversation to's queue that goes in next: the best rank among those not
-// held for the owner, the one that queued first within it. None may go (-1): wait is how long until the first may.
-// b.mu is held.
+// held for the owner, the one that queued first within it. The message that could not go in last time (b.stuck: its
+// agent's computer unreachable, a delivery that failed) is passed over while another may go, so it holds up nothing
+// but itself. None may go (-1): wait is how long until the first may. b.mu is held.
 func (b *relayBook) pickLocked(to string, now time.Time) (i int, wait time.Duration) {
 	i = -1
+	stuck := -1
 	q := b.st.Queue[to]
 	for j, m := range q {
 		if h := b.holdLocked(to, m, now); h > 0 {
@@ -104,9 +120,16 @@ func (b *relayBook) pickLocked(to string, now time.Time) (i int, wait time.Durat
 			}
 			continue
 		}
+		if last, ok := b.stuck[to]; ok && stuck < 0 && m == last {
+			stuck = j
+			continue
+		}
 		if i < 0 || m.rank() < q[i].rank() {
 			i = j
 		}
+	}
+	if i < 0 {
+		i = stuck // nothing else may go: it is tried again
 	}
 	if i >= 0 {
 		wait = 0
@@ -132,6 +155,43 @@ func (b *relayBook) ownerSpokeLocked(id string, now time.Time) {
 		b.st.Spoke = map[string]time.Time{}
 	}
 	b.st.Spoke[id] = now.UTC()
+}
+
+// ownersPresent is when the owner last spoke in each conversation they are present in at now.
+func (s *Service) ownersPresent(now time.Time) map[string]time.Time {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.relayLocked(context.Background()) {
+		return nil
+	}
+	present := map[string]time.Time{}
+	for id, spoke := range b.st.Spoke {
+		if now.Sub(spoke) < ownerPresentFor {
+			present[id] = spoke
+		}
+	}
+	return present
+}
+
+// runHold is how long the scheduled run of t that was due at due still waits at now, because the owner is talking
+// (present: ownersPresent) in the conversation it goes into: the one it came from, else its own. A run has a time
+// the owner set, so it waits relayDecisionMax past that time at most, as a message that waits on a decision does;
+// "Run now" is the owner's own and is not held (it does not come through runDue).
+func runHold(present map[string]time.Time, t Task, due, now time.Time) time.Duration {
+	id := t.SessionID
+	if id == "" {
+		id = t.RunSessionID
+	}
+	spoke, ok := present[id]
+	if !ok || id == "" {
+		return 0
+	}
+	until := spoke.Add(ownerPresentFor)
+	if latest := due.Add(relayDecisionMax); latest.Before(until) {
+		until = latest
+	}
+	return max(until.Sub(now), 0)
 }
 
 // relayWaits: msg can't go into conversation to right now even though it is not running: others wait in its queue

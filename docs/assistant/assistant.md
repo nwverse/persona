@@ -38,7 +38,7 @@ Changing trust does not erase context already delivered to a computer or termina
 | Return on a schedule | `schedule_followup` (`at` once; `every: "30m"` repeats by interval) / `list_followups` / `cancel_followup`; when due, hub sends the prompt (starting with "⏰") into the original chat (`assistant.send` uses `--resume`), or starts a new one on failure |
 | Scheduled tasks | One table ("Scheduled tasks" below), default "Morning briefing" on weekdays 09:00 enabled, "Evening review" weekdays 21:30 disabled; normal "completion" push afterward (with the task's `facts` on, as `docs/extensions/bots.md` "Morning and evening briefings" says, Persona computes what waits and what failed, and the push is the counts). When told "every day / on weekday X at…", the assistant creates one with `schedule_routine` (marked "Created by Persona" in the App), deletes with `delete_routine`. With `facts` on, the briefing is also the daily digest of handed-out work, told from each task's brief (#3822, `docs/assistant/unified-entry.md`, "Briefs"): "On <date> you said: <their words>" (or who started it and its goal), where it stands in a line, what is needed from the owner, overdue and scope changes since the last briefing; what ended since is listed once with each criterion's result, and work that needs nothing and has not changed is left out. The mark of the last briefing is the setting `assistant.brief_digest_at`; a list has at most 8 rows |
 | Run history | Every run (chat started successfully / failed to start / skipped because downtime missed it) is stored in settings `assistant.runs` (latest 200), `GET /api/v1/assistant/runs[?ref=]`; scheduled tasks include `last_status` |
-| Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt |
+| Due time | Scheduling sets a timer for the next due time (sleeps at most 30 seconds, recalculates on list changes), not 20-second polling. Follow-ups missed during hub downtime run once on return, with lateness stated in the prompt. A run into a conversation the owner is talking in waits for them, 5 minutes past its time at most ("Messages from the system wait for the owner") |
 | Background tasks / Monitor | The assistant can use Bash `run_in_background` and Monitor to watch events, then end its turn; command completion / events make claude start another turn itself (node considers it working, with normal push on completion). node learns running tasks from stream-json `system/background_tasks_changed`: don't reclaim the process while tasks exist (up to 12 hours); task lists live in `node_sessions.tasks`. personad restart (deployment) kills tasks with the process; on startup node sends these chats an explanation so the assistant decides whether to restart them |
 | Tools without approval | The assistant process allows Persona's MCP tools (notify_user, schedule_followup, agents_list, kb_*…) without phone approval each time; the registered and allowed namespaces follow the hub capability and resume policy in "Built-in MCP namespaces" below. Actions representing the user (mail_send, phone writes) are confirmed by hub itself; Lark writes are confirmed by a Bash gate ("Lark: skill supplied by the Lark extension" below). Other Bash / Monitor calls follow the session permission mode; assistant conversations default to `bypassPermissions` when no manager or conversation mode is selected |
 | Agents | `agents_list` / `agent_read` / `agent_send` / `agent_start`: use hub session state (`decorated`) and node `session.items` / `session.send` / `session.start` directly, not ssh. With `worktree.branch`, `agent_start` first has the computer's engine make the worktree through node `worktree.prepare` / `worktree.create` (the workspace found by `cwd`; herdr's or Orca's own, so Orca and the app list it), then starts the Agent in it, instead of the Agent running `git worktree add` itself (#5325, `assistant/agent_worktree.go`) |
@@ -795,9 +795,10 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   would have gone straight into an idle conversation is queued instead.
 - **Nothing hangs.** A message that waits on a decision is held for a present owner at most 5 minutes from when it queued
   (`relayDecisionMax`, the time a card stays on one rung, `askHoldFor`), however long the owner keeps talking. These are a
-  late `ask_user` answer, a supervision message carrying a decision-waiting signal (the queued message's `urgent`: the
-  signals supervision sends in its 2-minute gap, `docs/assistant/unified-entry.md` "Supervision"), and a task notice of
-  state `needs`, `interrupted` or `failed`.
+  late `ask_user` answer, a supervision message carrying a signal somebody waits on (the queued message's `urgent`,
+  `waitsOnDecision`: the signals supervision sends in its 2-minute gap, `docs/assistant/unified-entry.md` "Supervision",
+  except `started` and a `report` that is neither a question nor blocked, which are told soon but wait on nobody), and a
+  task notice of state `needs`, `interrupted` or `failed`.
 - **What ends the hold.** A timer per conversation drains its queue when the first hold ends. The supervision tick (30
   seconds) drains any conversation whose hold ended without a timer: after a manager restart (the queue and `spoke` are
   in settings, the timers are not), or when the conversation list could not be read at that moment. A conversation that is
@@ -807,12 +808,20 @@ other conversations) goes through one per-conversation queue (`assistant.relay`,
   (a task notice of state `done`; a concern's outcome reaches the conversation this way, since a concern has no message
   of its own), (4) everything else. One message goes per turn, as before. A supervision message or task notice that
   replaces the one still queued for the same conversation or task keeps the time the first one queued, so merging never
-  restarts its wait; one that only then starts to wait on a decision counts its 5 minutes from then.
+  restarts its wait; one that only then starts to wait on a decision counts its 5 minutes from then. A message that
+  could not go in (its agent's computer unreachable for a `needs` notice's recheck, a delivery that failed) is passed
+  over at the next drain while another may go, so it holds up nothing but itself.
+- **Scheduled runs wait too.** A follow-up or scheduled task that runs in a conversation the owner is present in (the
+  one it came from, else its own) is not started: it stays due, nothing is recorded or skipped, and the scheduler looks
+  again when the hold ends (`runHold`; nothing is stored, so a restart only looks again). It waits at most 5 minutes past
+  its time (`relayDecisionMax` again: a run has a time the owner set). Not held: "Run now", a run that starts a new
+  conversation, and the first run of a daily or cron task (its time is only looked back for 2 minutes, so waiting would
+  lose it).
 - **Compatibility.** `urgent` and `spoke` are optional fields; the queue's shape is otherwise unchanged. A previous
   version reads the queue as before and drops the two fields on its next save, after which those messages rank and wait
   as ordinary ones and no hold applies.
-- **Not covered**: a scheduled task or follow-up that runs in the conversation at its time, and a meeting's feed, do not
-  go through the queue and are not held. Interrupting a round already running is F2 of the proposal.
+- **Not covered**: a meeting's feed (`meeting_feed.go`) is the live words of a meeting the owner had the conversation
+  attend, so it is not held. Interrupting a round already running is F2 of the proposal.
 
 ## Chat titles
 

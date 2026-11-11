@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -55,8 +56,213 @@ func TestRelayRanks(t *testing.T) {
 				tc.msg.decisionWaiting(), tc.rank, tc.decision)
 		}
 	}
-	if !anyUrgent([]superviseSignal{{Kind: sigReview}, {Kind: sigNeedsYou}}) || anyUrgent([]superviseSignal{{Kind: sigReview}, {Kind: sigStalled}}) {
-		t.Fatal("a supervision message is urgent exactly when one of its signals is")
+	// A signal waits on a decision when somebody waits on its answer: not every signal that is told soon (urgent).
+	for _, tc := range []struct {
+		g    superviseSignal
+		want bool
+	}{
+		{superviseSignal{Kind: sigNeedsYou}, true},
+		{superviseSignal{Kind: sigIdle}, true},
+		{superviseSignal{Kind: sigInterrupted}, true},
+		{superviseSignal{Kind: sigFailed}, true},
+		{superviseSignal{Kind: sigOrphaned}, true},
+		{superviseSignal{Kind: sigAsk}, true},
+		{superviseSignal{Kind: sigReport, Report: upReportQuestion}, true},
+		{superviseSignal{Kind: sigReport, Report: upReportBlocked}, true},
+		{superviseSignal{Kind: sigReport, Report: upReportDone}, false},
+		{superviseSignal{Kind: sigReport, Report: upReportProgress}, false},
+		{superviseSignal{Kind: sigStarted}, false},
+		{superviseSignal{Kind: sigReview}, false},
+		{superviseSignal{Kind: sigStalled}, false},
+	} {
+		if got := tc.g.waitsOnDecision(); got != tc.want {
+			t.Errorf("%s %s waits on a decision: %v, want %v", tc.g.Kind, tc.g.Report, got, tc.want)
+		}
+	}
+	if !anyDecision([]superviseSignal{{Kind: sigReview}, {Kind: sigNeedsYou}}) || anyDecision([]superviseSignal{{Kind: sigStarted}, {Kind: sigStalled}}) {
+		t.Fatal("a supervision message waits on a decision exactly when one of its signals does")
+	}
+}
+
+// queuedRelays is a copy of conversation id's queue.
+func queuedRelays(s *Service, id string) []relayMsg {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]relayMsg(nil), b.st.Queue[id]...)
+}
+
+// The supervision message itself (deliverDigest): held for the owner in an idle conversation, it waits on a decision
+// exactly when one of its signals does, also once a later signal merged into the one still queued, and its
+// relayDecisionMax then counts from that merge.
+func TestSupervisionMessageWaitsOnADecisionByItsSignals(t *testing.T) {
+	presenceTimes(t, time.Hour, time.Hour)
+	s, f := newQuietService(t)
+	stopHolds(t, s)
+	ctx := context.Background()
+	var ids []string
+	for _, title := range []string{"one", "two"} {
+		todo, err := s.createTodo(ctx, title, "do "+title, "conv1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.superviseTodo(ctx, todo.ID, "conv1", []string{"merged"}, 0)
+		ids = append(ids, todo.ID)
+	}
+	if _, _, err := s.updateSupervision(ctx, ids[0], func(v *Supervision) bool { v.State = reviewPending; return true }); err != nil {
+		t.Fatal(err)
+	}
+	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
+	s.signal(superviseSignal{Todo: ids[0], Kind: sigReview, Key: "1", Detail: "looks finished"})
+	waitFor(t, "the supervision message to queue", func() bool { return s.queuedFor("conv1") == 1 })
+	first := queuedRelays(s, "conv1")[0]
+	if first.Tool != superviseTool || first.Urgent || first.rank() != relayRankOther || f.sentTo("conv1") != 0 {
+		t.Fatalf("a review alone: %+v, %d sent", first, f.sentTo("conv1"))
+	}
+	time.Sleep(5 * time.Millisecond)
+	s.signal(superviseSignal{Todo: ids[1], Kind: sigFailed, Key: "x", Detail: "its computer is offline"})
+	waitFor(t, "the failed start to merge in", func() bool {
+		q := queuedRelays(s, "conv1")
+		return len(q) == 1 && q[0].Urgent
+	})
+	merged := queuedRelays(s, "conv1")[0]
+	if merged.rank() != relayRankDecision || !merged.At.After(first.At) || f.sentTo("conv1") != 0 {
+		t.Fatalf("merged: rank %d, queued %s (the first %s), %d sent", merged.rank(), merged.At, first.At, f.sentTo("conv1"))
+	}
+}
+
+// A supervision message with a failed start goes straight to the queue as one that waits on a decision.
+func TestSupervisionMessageWithADecisionIsQueuedUrgent(t *testing.T) {
+	presenceTimes(t, time.Hour, time.Hour)
+	s, f := newQuietService(t)
+	stopHolds(t, s)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "one", "do one", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", []string{"merged"}, 0)
+	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
+	s.signal(superviseSignal{Todo: todo.ID, Kind: sigFailed, Key: "x", Detail: "its computer is offline"})
+	waitFor(t, "the supervision message to queue", func() bool { return s.queuedFor("conv1") == 1 })
+	if q := queuedRelays(s, "conv1"); !q[0].Urgent || q[0].rank() != relayRankDecision || f.sentTo("conv1") != 0 {
+		t.Fatalf("queued: %+v, %d sent", q[0], f.sentTo("conv1"))
+	}
+}
+
+// conversation_send to an idle conversation the owner is talking in: queued, the sender is told why, and it goes in
+// when the hold ends.
+func TestConversationSendWaitsForTheOwner(t *testing.T) {
+	presenceTimes(t, 300*time.Millisecond, time.Hour)
+	s, f := newQuietService(t)
+	stopHolds(t, s)
+	ctx := context.Background()
+	f.known["conv2"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "conv2", MachineID: "server", Assistant: true, Status: proto.StatusWorking, Title: "Research"})
+	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
+	out, err := s.toolConversationSend(ctx, "conv2", json.RawMessage(`{"id":"conv1","text":"the numbers are in"}`))
+	if err != nil || !strings.Contains(out, "the user is talking in it") || !strings.Contains(out, "queued (1 waiting)") {
+		t.Fatalf("result %q, %v", out, err)
+	}
+	if q, sent := s.queuedFor("conv1"), f.sentTo("conv1"); q != 1 || sent != 0 {
+		t.Fatalf("while the owner talks: %d queued, %d sent", q, sent)
+	}
+	waitFor(t, "the message once the owner is quiet", func() bool { return f.sentTo("conv1") == 1 && s.queuedFor("conv1") == 0 })
+	if n := f.notices()[0]; !strings.Contains(n, "the numbers are in") {
+		t.Fatalf("delivered:\n%s", n)
+	}
+	// The owner is quiet: the next one goes straight in.
+	out, err = s.toolConversationSend(ctx, "conv2", json.RawMessage(`{"id":"conv1","text":"one more"}`))
+	if err != nil || strings.Contains(out, "queued") || f.sentTo("conv1") != 2 {
+		t.Fatalf("after the hold: %q, %v, %d sent", out, err, f.sentTo("conv1"))
+	}
+}
+
+// A message that could not go in (its delivery failed) holds up nothing but itself: the next drain takes another one
+// first, whatever its rank, and the one after tries it again.
+func TestAMessageThatCannotGoDoesNotBlockTheQueue(t *testing.T) {
+	s, f := newQuietService(t)
+	idle := proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle}
+	at := time.Now().UTC()
+	s.queueRelay("conv1", relayMsg{From: "t1", Tool: noticeTool, State: "done", Text: "report-1", At: at})
+	s.queueRelay("conv1", relayMsg{From: "t2", Tool: noticeTool, State: "failed", Text: "decision-1", At: at})
+	draining := func() bool {
+		s.relays.mu.Lock()
+		defer s.relays.mu.Unlock()
+		return s.relays.draining["conv1"]
+	}
+	f.mu.Lock()
+	f.failAssistant = errors.New("the launcher did not start")
+	f.mu.Unlock()
+	s.drainRelays("server", []proto.Session{idle})
+	waitFor(t, "the failed delivery", func() bool {
+		s.relays.mu.Lock()
+		defer s.relays.mu.Unlock()
+		return s.relays.stuck["conv1"].Text == "decision-1"
+	})
+	f.mu.Lock()
+	f.failAssistant = nil
+	f.mu.Unlock()
+	if s.queuedFor("conv1") != 2 || draining() {
+		t.Fatalf("after the failure: %d queued", s.queuedFor("conv1"))
+	}
+	for i := range 2 {
+		s.drainRelays("server", []proto.Session{idle})
+		waitFor(t, "the next message", func() bool { return f.sentTo("conv1") == i+1 && !draining() })
+	}
+	if n := f.notices(); !strings.Contains(n[0], "report-1") || !strings.Contains(n[1], "decision-1") || s.queuedFor("conv1") != 0 {
+		t.Fatalf("went in as %q, %d left", n, s.queuedFor("conv1"))
+	}
+}
+
+// A follow-up or scheduled task that runs in a conversation the owner is talking in waits as well: it stays due,
+// nothing of it is consumed or recorded, and it runs when the hold ends. "Run now" and a task's first daily run are
+// not held, and no run waits more than relayDecisionMax past its time.
+func TestScheduledRunWaitsForTheOwner(t *testing.T) {
+	presenceTimes(t, 300*time.Millisecond, time.Hour)
+	s, f := newQuietService(t)
+	ctx := context.Background()
+	due := time.Now().Add(-time.Second)
+	setTasks(s, Task{ID: "fu_1", Title: "look again", Prompt: "look at the build again", Repeat: repeatOnce, At: due, Enabled: true,
+		MachineID: "server", SessionID: "conv1"})
+	s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
+	now := time.Now()
+	s.runDue(ctx, now)
+	s.sched.inflight.Wait()
+	if task, _ := taskByID(s, "fu_1"); !task.Enabled || !task.LastRun.IsZero() || f.sentTo("conv1") != 0 {
+		t.Fatalf("while the owner talks: %+v, %d sent", task, f.sentTo("conv1"))
+	}
+	if next := s.nextDue(ctx, now); !next.After(now) || next.After(now.Add(300*time.Millisecond)) {
+		t.Fatalf("looked at again %s after now, want when the hold ends", next.Sub(now))
+	}
+	time.Sleep(320 * time.Millisecond)
+	s.runDue(ctx, time.Now())
+	s.sched.inflight.Wait()
+	if task, _ := taskByID(s, "fu_1"); task.Enabled || f.sentTo("conv1") != 1 {
+		t.Fatalf("after the hold: %+v, %d sent", task, f.sentTo("conv1"))
+	}
+
+	// The hold itself, at the real times.
+	presenceTimes(t, 2*time.Minute, 5*time.Minute)
+	at := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	present := map[string]time.Time{"conv1": at.Add(-30 * time.Second), "own1": at.Add(-30 * time.Second)}
+	for _, tc := range []struct {
+		name string
+		t    Task
+		due  time.Time
+		want time.Duration
+	}{
+		{"into the conversation the owner talks in", Task{SessionID: "conv1"}, at, 90 * time.Second},
+		{"into its own conversation the owner talks in", Task{RunSessionID: "own1"}, at, 90 * time.Second},
+		{"due 4 minutes ago: one more", Task{SessionID: "conv1"}, at.Add(-4 * time.Minute), time.Minute},
+		{"due 5 minutes ago: it runs", Task{SessionID: "conv1"}, at.Add(-5 * time.Minute), 0},
+		{"into another conversation", Task{SessionID: "conv9"}, at, 0},
+		{"into a new conversation", Task{}, at, 0},
+	} {
+		if got := runHold(present, tc.t, tc.due, at); got != tc.want {
+			t.Errorf("%s: held %s, want %s", tc.name, got, tc.want)
+		}
 	}
 }
 

@@ -192,7 +192,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 				allEntries = append(allEntries, e)
 			}
 		}
-		msg.Text, msg.Urgent = render(allEntries), anyUrgent(all)
+		msg.Text, msg.Urgent = render(allEntries), anyDecision(all)
 		if s.replaceQueuedSupervise(to, msg) {
 			accepted = true
 			b.mu.Lock()
@@ -202,7 +202,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			return true
 		}
 	}
-	msg.Text, msg.Urgent = render(entries), anyUrgent(kept)
+	msg.Text, msg.Urgent = render(entries), anyDecision(kept)
 	if to != here.Main {
 		s.logf("supervise: %d signal(s) to conversation %s", len(entries), short(to))
 	} else {

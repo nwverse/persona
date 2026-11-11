@@ -218,6 +218,7 @@ type relayBook struct {
 	sent     map[[2]string][]time.Time // (from, to) -> when; in memory: a restart only resets the rate
 	draining map[string]bool
 	holds    map[string]*time.Timer // by conversation: drains its queue again when the hold for the owner ends
+	stuck    map[string]relayMsg    // by conversation: the message that could not go in at the last drain (pickLocked)
 }
 
 func (s *Service) relayLocked(ctx context.Context) bool {
@@ -243,6 +244,7 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 	}
 	b.st, b.loaded = rs, true
 	b.sent, b.draining, b.holds = map[[2]string][]time.Time{}, map[string]bool{}, map[string]*time.Timer{}
+	b.stuck = map[string]relayMsg{}
 	return true
 }
 
@@ -501,6 +503,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			cancel()
 			b.mu.Lock()
 			delete(b.draining, id)
+			delete(b.stuck, id)
 			// Delivered, answered just in time, or the conversation is gone for good: off the queue. An unreachable
 			// node or another delivery failure keeps it.
 			taken := false
@@ -513,6 +516,8 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				}
 				s.saveRelayLocked()
 				taken = true
+			} else {
+				b.stuck[id] = msg // the next drain takes another one first (pickLocked)
 			}
 			b.mu.Unlock()
 			if taken {
