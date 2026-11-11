@@ -166,10 +166,10 @@ type Node struct {
 	forked    map[string]bool // sessions "Branch to new chat" made (fork.go): listed however short they are
 	// freshForks: branches nothing has started yet, which a message may start (stopped.go); a stopped agent may not.
 	freshForks map[string]bool
-	starts    startLog        // sessions starting in the background (starting.go)
-	ups       uploads         // files arriving from the phone (upload.go)
-	sysOnce   sync.Once       // system: read once (metrics.go)
-	sys       proto.System
+	starts     startLog  // sessions starting in the background (starting.go)
+	ups        uploads   // files arriving from the phone (upload.go)
+	sysOnce    sync.Once // system: read once (metrics.go)
+	sys        proto.System
 
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
