@@ -251,7 +251,13 @@ func (s *Service) roomCreate(ctx context.Context, machine, sid string, r kb.Reco
 	var res struct {
 		SessionID string `json:"session_id"`
 	}
-	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
+	params["config_dir"] = meetingProfile
+	err := s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	if nodeOutdated(err) {
+		delete(params, "config_dir") // a node too old to be told a profile: its conversations all start in that one
+		err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
+	}
+	if err != nil {
 		switch {
 		case guestAgentRefused(err):
 			return "", kb.RoomRuntimeUnsupported, nil

@@ -236,6 +236,19 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
   (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
+## A new private profile and `--setting-sources project` both drop the login (2026-11-11, #3862)
+
+A meeting room (an assistant guest started with `--setting-sources project` so none of the owner's setup reaches it)
+answered every question "Not logged in · Please run /login" on a machine whose launcher is a shell function and whose
+gateway and token sit in `~/.claude/settings.json`'s `env`. Two things dropped that login: since #4310 a new assistant
+conversation that names no `config_dir` runs in `<PERSONA_HOME>/profiles/<launcher>`, a fresh config directory with no
+credentials and no `settings.json`; and `--setting-sources project` leaves the user's settings file out even in the right
+profile. A conversation that must sign in as the assistant does asks for `config_dir: "legacy"` and, when it limits the
+setting sources, carries the login keys (`env`, `apiKeyHelper`, the AWS and `forceLogin…` keys, `model`) of the profile's
+`settings.json` in its own `--settings`. The synthetic reply is an ordinary assistant text item (`isApiErrorMessage`,
+model `<synthetic>`, error `authentication_failed` only in the transcript); read the session row's `turn_error` before
+taking the turn's last words as an answer.
+
 ## Read colors to determine whether Claude's input box is empty (#1434)
 
 After each turn, Claude Code puts a suggested next message in dim text (SGR 2), such as `❯ 现在部署一下 hub` ("deploy the hub now"). Plain-text screen reads can't distinguish it from typed text.

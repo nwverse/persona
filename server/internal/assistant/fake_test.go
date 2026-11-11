@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // fakeHub is the hub as the assistant sees it in unit tests: its hello, the machines with their sessions, a node on
@@ -133,6 +134,8 @@ type fakeHub struct {
 	failSendOnce   map[string]error    // session.send_once fails with these, by "machine/session"
 	failInterrupt  error               // session.interrupt fails with it
 	failAssistant  error               // assistant.send fails with it (a launcher that cannot start)
+	// refuseConfigDir: assistant.send with a config_dir fails as the hub refuses it for a node too old for one
+	refuseConfigDir bool
 
 	// The launchers' health (launcher_health.go): launchers.check's answers by "machine/launcher" (none: it works),
 	// the checks and repairs asked for, launchers.repair's answer (nil: the node has no such method) and what a repair
@@ -468,6 +471,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 		if f.failAssistant != nil {
 			return nil, f.failAssistant
+		}
+		if _, set := a["config_dir"]; set && f.refuseConfigDir {
+			return nil, &rpc.Error{Code: proto.CodeNodeOutdated, Message: "update Persona on this computer"}
 		}
 		f.sends = append(f.sends, a)
 		id, _ := a["session_id"].(string)
