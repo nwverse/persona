@@ -211,9 +211,14 @@ func (s *Service) briefStart(ctx context.Context, t Task, now time.Time) string 
 // retry of a run that failed (retried) adds no item: the conversation has the first one, and the retry's facts are the
 // card's and the model's.
 func (s *Service) briefSent(id, session string, retried bool) {
-	if run := s.briefAttach(id, session); run != nil && !retried {
+	run := s.briefAttach(id, session)
+	if run == nil {
+		return
+	}
+	if !retried {
 		s.briefFeed(session, id, run.label, run.facts)
 	}
+	s.briefListed(run.facts) // the decisions that waited for a briefing are put to the owner now (decision_wait.go)
 }
 
 // briefAttach moves the run of task id from the tasks to conversation session, nil when there is none.

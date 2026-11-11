@@ -110,8 +110,14 @@ func (s *Service) assistantAccepts(ctx context.Context, t Todo, a acceptAsk) {
 // NoCard), for retryAcceptance.
 func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	b := &s.accept
-	st, stErr := s.feishuStatus(ctx)
+	var st FeishuStatus
+	var stErr error
+	if !a.ForBriefing {
+		st, stErr = s.feishuStatus(ctx)
+	}
 	switch {
+	case a.ForBriefing:
+		a.NoCard = true // a decision that can wait: the briefing lists it, or its card goes out later (decision_wait.go)
 	case stErr != nil:
 		s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, stErr)
 	case st.Ready && st.Features.Reports:

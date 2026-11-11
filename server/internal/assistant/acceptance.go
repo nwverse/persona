@@ -76,6 +76,9 @@ type acceptAsk struct {
 	Response      string           `json:"response,omitempty"`
 	// Chosen: the option the owner chose when it was not the recommended one.
 	Chosen string `json:"chosen,omitempty"`
+	// ForBriefing: a decision that can wait (#4930, decision_wait.go), raised without a push and without a card, while
+	// it waits for a briefing to list it; cleared once one did, or once it was pushed after all.
+	ForBriefing bool `json:"for_briefing,omitempty"`
 }
 
 // acceptPostWindow is how long after an ask its card that did not go out (the bot's status could not be read, the send
