@@ -109,9 +109,10 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
  * added 312 B: views/chat/QueueStrip.tsx's own and relayed rows, the photos a take-back brings back, the Persona Send now
  * words and the relayed line), and 1,536 B for the refusal fallback (#2528 added 1,115 B to ja: the refusal notice
  * line, the fallback card above the composer with its way back to the configured model, lib/model-fallback.ts and
- * lib/refusal-public.ts, their words). Raise it on purpose, in the change that needs it.
+ * lib/refusal-public.ts, their words), and 640 B for holding earlier feed cards off the newest page until their page
+ * loads (#4485 added 520 B to ja: the first-screen feed-page gate). Raise it on purpose, in the change that needs it.
  */
-export const FIRST_SCREEN_BUDGET = 594_560;
+export const FIRST_SCREEN_BUDGET = 595_200;
 
 /** What the built-in hub sends for `files` (paths below `dir`) to a browser that takes br: each one's brotli copy, or
  *  the file itself when it has none. Build time only. */
