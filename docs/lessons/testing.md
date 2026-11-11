@@ -516,6 +516,10 @@ Ordinary `go test` and CI do not include `//go:build herdrlive`, so a node helpe
   Since 2026-11-02 the invisible layer is absent from the tree, leaving only the onscreen Back (`ChatHeaderTests`). The collapsed strip stays below the status bar in both styles;
   "title bar is in the status bar" was actually the invisible Back frame.
   In BeautifulUI's new shell, use `probe.chat` (page `agents`) to detect open chats, not Back.
+- A list row scrolled up under the navigation bar's blur still reports `isHittable`, and a tap on it lands on the bar (2026-11-11, #4062):
+  `MeetingRecordingUITests` scrolled "until Regenerate is hittable", did no swipe because it already was, and its tap never reached the hub
+  (the mock's log had no `POST …/minutes`). Check that the element's frame is below `app.navigationBars.firstMatch.frame.maxY` and above the
+  window's bottom before tapping (`onScreen` in that test), and assert it, so a missed tap fails where it happens, not ten seconds later.
 - Chat-content UI tests always use `-openChatsFresh YES` (clear disk chat caches). Every mock reset starts chats at the same seq; prior churn-generated steps
   stay cached at this round's `/mock/say` seq, hiding new replies as "already present", leaving previous "Tool 21 · Reply 5" onscreen.
   On 2026-11-02 `ChatFollowTests.testPersonaChatFollows` failed after `ScrollUnderPushTests` / `ScreenTruthTests`, resembling missing Persona replies in the new shell but actually environmental. Real hub seq positions in transcripts increase without reuse.
