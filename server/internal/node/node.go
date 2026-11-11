@@ -257,6 +257,12 @@ type Node struct {
 
 	// agentFilters: the extensions' filters of sessions kept out of the list (node.configure, agentfilters.go)
 	agentFilters []proto.AgentFilter
+
+	// assistantLife: a conversation's process is taken, compacted or closed by one of assistantSend,
+	// assistantCompact, compactIdle and restoreModel at a time (model_restore.go, #2528)
+	assistantLife typingLocks
+	restores      restoreMarks // "back to the configured model" asked, until newer model evidence (model_restore.go)
+	hookFlights   hookFlights  // hook calls in progress by session: their process waits on them (model_restore.go)
 }
 
 func New(version string) (*Node, error) {
@@ -662,6 +668,9 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 	if method == "session.retire" { // before the runtimes: a session another tool owns is refused, not handed on
 		closed, err := n.retire(ctx, p.SessionID)
 		return map[string]any{"closed": closed}, err
+	}
+	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing
+		return n.restoreModel(ctx, p.SessionID)
 	}
 	if method == "session.speed" {
 		return ok(n.setCodexSpeed(ctx, p.SessionID, p.ServiceTier))
@@ -1546,10 +1555,17 @@ func (n *Node) handle(ctx context.Context, method string, params json.RawMessage
 			Keep []int `json:"keep"`
 		}
 		_ = json.Unmarshal(params, &a)
+		if n.isAssistantSession(p.SessionID) { // a Persona conversation's queue is claude's, over stream-json (#4342)
+			return n.assistantEditQueue(ctx, p.SessionID, a.Keep)
+		}
 		queue, err := n.editQueue(ctx, p.SessionID, a.Keep)
 		return map[string]any{"queue": queue}, err
 	case "session.queue.send_now": // #6088
-		if err := n.sendQueuedNow(ctx, p.SessionID); err != nil {
+		send := n.sendQueuedNow
+		if n.isAssistantSession(p.SessionID) {
+			send = n.assistantSendNow // #4342
+		}
+		if err := send(ctx, p.SessionID); err != nil {
 			return nil, err
 		}
 		return map[string]any{"sent": true}, nil

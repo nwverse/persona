@@ -3,6 +3,7 @@ import { BASE } from "./base";
 import { credentialEpoch } from "./credential-epoch";
 import type { Item } from "./types";
 import { injectedOf } from "./injected";
+import { hasPrivateRefusal, publicRefusalItem } from "./refusal-public";
 import { taskCalls } from "./task-association";
 
 const PREFIX = "persona.feedCache.v1:";
@@ -136,7 +137,8 @@ export function readFeedCache(scope: string | null = feedCacheScope()): FeedCach
     const parsed: unknown = JSON.parse(raw);
     if (!validFeed(parsed)) return null;
     // A record with embedded image bytes was not written by this version. Never hydrate an unsanitized record.
-    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw)) {
+    // Nor one an older version wrote with a refusal record's whole line in it (#2528): it is never shown again.
+    if (JSON.stringify(parsed, withoutImageBodies) !== JSON.stringify(parsed) || containsCredential(raw) || parsed.items.some(hasPrivateRefusal)) {
       discardFeedCache(scope);
       return null;
     }
@@ -176,7 +178,7 @@ function newestTurns(value: FeedCache): FeedCache {
   while (start > 0 && value.items[start].seq === value.items[start - 1].seq) start--;
   return {
     machineID: value.machineID, sessionID: value.sessionID, manager: value.manager,
-    items: value.items.slice(start), hasMore: value.hasMore || start > 0, history: value.history,
+    items: value.items.slice(start).map(publicRefusalItem), hasMore: value.hasMore || start > 0, history: value.history,
   };
 }
 

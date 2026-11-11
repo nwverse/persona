@@ -287,7 +287,7 @@ fun HomeNavigation(
                     val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
                     val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
                     val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
-                    val fittedSize = maxOf(Tokens.Type.Chip.size.value, labelStyle.fontSize.value * fit).sp
+                    val fittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
                     Box(Modifier.width(HomeTokens.segmentWidth * scale).height(HomeTokens.segmentHeight * scale)
                         .clip(CircleShape).background(if (chosen) {
                             if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
