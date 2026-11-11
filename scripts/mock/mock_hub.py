@@ -1257,6 +1257,15 @@ if os.environ.get("MOCK_OVERVIEW_DENSE"):
                          source_kind="runtime", agent_label="claude", state_since=ago(minutes=2),
                          capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True, "attach": False}))
 
+# MOCK_SESSIONS_MANY=<n> (#4410): n more idle sessions, enough to page an Agents list several pages deep with
+# MOCK_SESSIONS_LIST=1. GET /mock/sessions/touch moves the newest of them to now: the list's revision changes and every
+# cursor of the old one answers 409 cursor_expired, as the hub's do once a frozen view has expired.
+if os.environ.get("MOCK_SESSIONS_MANY"):
+    for _i in range(int(os.environ["MOCK_SESSIONS_MANY"])):
+        SESSIONS.append(sess("server", "e4410a00-0000-4000-8000-%012d" % (_i + 1), "Session %03d" % (_i + 1),
+                             "/home/me/code/fixture", "idle", "idle", "fixture", 24, "fixture-%03d" % (_i + 1), _i + 1,
+                             60 * (_i + 1), "Done."))
+
 # MOCK_OPENCODE=1 (#3070, docs/integrations/opencode.md): opencode in herdr panes on the server. Four are herdr sessions the Persona
 # plugin completes (working, needs you with a permission card, finished unread, idle with a long conversation), one has
 # no plugin (terminal only, with why), and gemini is an agent nothing reads (terminal only).
@@ -1336,6 +1345,18 @@ if os.environ.get("MOCK_DESKTOP_APPS"):
             kw.update(source_kind="claude_desktop", capabilities=_desktop_caps)  # a live one, through its peer inbox
         SESSIONS.append(sess("macbook", sid, title, f"/Users/me/code/{project}", status, state, "", 0, "", 0, mins,
                              "好的，我先看一下。", agent=agent, **kw))
+    # The CSV chat's subagents (thread_spawn): the node lists each with its chat (codex_registry.go); the Agents list puts
+    # them under that chat's Subtasks, as the Codex App does.
+    CSV_CHAT = "d3a0e7a0-0000-4000-8000-000000000005"
+    for n, (title, status, state, mins) in enumerate([("检查 BOM 和换行符", "working", "working", 1),
+                                                      ("找出所有导出入口", "offline", "offline", 3),
+                                                      ("补编码的回归测试", "offline", "offline", 3)], start=1):
+        sid = f"d3a0e7a0-0000-4000-8000-00000000010{n}"
+        SESSIONS.append(sess("macbook", sid, title, "/Users/me/code/billing", status, state, "", 0, "", 0, mins, "看完了。",
+                             agent="codex", **dict(NO_SPACE, agent_surface="desktop", started_by_persona=False, space_kind="codex_app",
+                             space_id="codex-project:/Users/me/code/billing", space_name="billing", agent_name="Codex App",
+                             source_kind="codex_history", source_thread_id=sid, capabilities={"read": True},
+                             is_subagent=True, parent_session_id=CSV_CHAT, root_session_id=CSV_CHAT, parent_thread_id=CSV_CHAT)))
 
 # MOCK_SPLIT_TABS=1: herdr's layout for the sidebar's "By machine" tree and the chat's pane tabs (#1963): two machines (the
 # NAS offline, its agent only under "Recent"), workspaces whose tabs hold one pane or two (claude and codex in one slot),
@@ -15550,6 +15571,7 @@ MOCK_HELP = [
     "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
+    "MOCK_SESSIONS_MANY=<n>  n more idle sessions to page through; GET /mock/sessions/touch expires the old cursors (#4410)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
     "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
@@ -16061,6 +16083,9 @@ class H(BaseHTTPRequestHandler):
                 threading.Thread(target=narrate, args=args, daemon=True).start()
                 return self.send_json({"ok": True})
             return self.send_json(narrate(*args))
+        if p == "/mock/sessions/touch" and os.environ.get("MOCK_SESSIONS_MANY"):  # #4410: expire the paged list's cursors
+            SESSIONS[[s["session_id"] for s in SESSIONS].index("e4410a00-0000-4000-8000-000000000001")]["updated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            return self.send_json({"ok": True})
         if p == "/mock/say":  # ChatFollowTests: a reply arrives in every open conversation (?text=…, ?user=… a message before it)
             # &steps=50&ms=80: the hub's own pace (a delta every 80 ms, node/assistant.go).
             # &history=mock-1.r1: the transcript's history token from now on, on pushes and pages alike (a branch was abandoned,

@@ -557,8 +557,12 @@ Each authorization has `id`, `machine_id`, `directory`, `actions`, `conditions`,
 and `spend`. Conditions retain the user's wording; `ci_green` and `no_conflicts` have independent runtime checks
 (see [Agent work](agent-work.md#standing-authorization-answers)). The original words and source remain inspectable.
 Directories are specific absolute paths on one computer, matched by path segment: `/code/example` includes its
-subdirectories but not `/code/example-copy`. Roots, single-level paths and wildcards are rejected. Linked worktrees
-outside that directory need their own directory grant; repository basenames never establish identity.
+subdirectories but not `/code/example-copy`. Roots, single-level paths and wildcards are rejected. The node verifies repository identity through local Git metadata: matching common Git directories cover linked worktrees outside that path.
+Origin URLs are descriptive metadata, never authorization evidence: an arbitrary `git init` can copy a remote URL.
+Independent clones require separate registration. A subdirectory grant retains its relative directory
+boundary across worktrees. Different common Git directories and similar path prefixes do not match; repository basenames never
+establish identity. If an older or unavailable node cannot return identity, only the exact registered directory
+matches. A child directory may contain an independent repository, so a path prefix alone cannot extend a grant.
 
 At actual `task_plan` dispatch and `agent_send` with `task`, the manager reads matching grants and appends the prompt
 template containing scope, actions, conditions and the user's words. No other repository receives them. Pending plans
