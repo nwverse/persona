@@ -3,12 +3,13 @@ package assistant
 import (
 	"cmp"
 	"context"
-	"github.com/nwverse/persona/server/internal/closeout"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -162,16 +163,20 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	defer func() {
 		if !accepted {
 			rollback()
+			return
 		}
+		s.parkedDueTold(ctx, kept) // told for good: not again after a restart (parked.go)
 	}()
 	leader := to != here.Main
 	render := func(list []prompts.SuperviseEntry) string {
 		return prompts.RenderSupervise(prompts.Supervise{Entries: sortEntries(list), Leader: leader, Escalated: escalatedIn(list),
 			LeaderStuck: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigLeaderStuck }),
 			Overdue:     slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigOverdue }),
+			ParkedDue:   slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigParkedDue }),
 			Decisions: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool {
 				return e.Kind == sigRecheck || e.Kind == sigUndecidable || e.Kind == sigOwnerCannot
 			}),
+			Inbox: slices.ContainsFunc(list, func(e prompts.SuperviseEntry) bool { return e.Kind == sigInbox }),
 			Asked: askedIn(list), AskMinutes: int(askHoldFor.Minutes())})
 	}
 	b.mu.Lock()
@@ -274,6 +279,8 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, a
 			b.pending[id] = g
 		} else if g.Kind == sigReport && cur.Key != g.Key {
 			b.pending[id] = joinReports(g, cur) // both reports are told, this one first
+		} else if g.Kind == sigInbox && cur.Key != g.Key {
+			b.pending[id] = joinInbox(g, cur) // the newer item, with the messages of both
 		}
 	}
 	s.retryDigestLocked(retry)
@@ -287,6 +294,9 @@ func mergeSignals(a, b []superviseSignal) []superviseSignal {
 		if i := slices.IndexFunc(out, func(x superviseSignal) bool { return x.id() == g.id() }); i >= 0 {
 			if g.Kind == sigReport && out[i].Key != g.Key {
 				g = joinReports(out[i], g)
+			}
+			if g.Kind == sigInbox && out[i].Key != g.Key {
+				g = joinInbox(out[i], g)
 			}
 			out[i] = g
 		} else {
@@ -343,8 +353,16 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 			return prompts.SuperviseEntry{}, false // decided meanwhile
 		}
 	case sigOverdue:
-		if b, ok := s.briefOfTodo(t.ID); !ok || b.Overdue == nil || st == reviewNeedsUser {
-			return prompts.SuperviseEntry{}, false // re-scoped, or with the owner, meanwhile
+		if b, ok := s.briefOfTodo(t.ID); !ok || b.Overdue == nil || st == reviewNeedsUser || st == reviewParked {
+			return prompts.SuperviseEntry{}, false // re-scoped, with the owner, or parked meanwhile
+		}
+	case sigIdle, sigUnjudged, sigStalled:
+		if st == reviewParked {
+			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
+		}
+	case sigParkedDue:
+		if r := v.parking(); st != reviewParked || r == nil || parkKey(r) != g.Key {
+			return prompts.SuperviseEntry{}, false // its agent works again, or it was reviewed again, meanwhile
 		}
 	case sigOrphaned:
 		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
@@ -358,6 +376,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 		if a, ok := s.askCopy(t.ID); st != reviewNeedsUser || !ok || !a.AcceptedAt.IsZero() ||
 			"recheck@"+a.AskedAt.UTC().Format(time.RFC3339Nano) != g.Key {
 			return prompts.SuperviseEntry{}, false // answered, or asked again, meanwhile
+		}
+	case sigInbox:
+		if g.Inbox == nil || !s.inboxSignalHolds(t) || !s.inboxSignalsOn(ctx) {
+			return prompts.SuperviseEntry{}, false // waits for the owner's decision, or the switch went off, meanwhile
 		}
 	}
 	var asks []prompts.SuperviseAsk
@@ -386,17 +408,32 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 	if g.Kind == sigReport { // what it said is the report itself, not a reason in brackets
 		e.Detail, e.Report, e.Said, e.Evidence, e.Step, e.Steps = "", g.Report, g.Detail, g.Evidence, g.Step, g.Steps
 	}
+	// Progress reports stay quiet. Their persisted evidence accompanies the next
+	// real supervision event, even after restart or a report of a different kind.
+	for i, c := range v.Criteria {
+		if c.At != nil {
+			e.Evidence = append(e.Evidence, fmt.Sprintf("criterion %d [%s] %s — %s (%s at %s)",
+				i+1, c.State, c.Criterion, c.Evidence, c.By, c.At.UTC().Format(time.RFC3339)))
+		}
+	}
 	if g.Kind == sigOrphaned {
 		e.Orphan = g.Orphan
 	}
 	if g.Kind == sigRecheck || g.Kind == sigOwnerCannot {
 		e.Decision = g.Decision
 	}
+	if g.Kind == sigParkedDue { // what it waited for is the signal, not a reason in brackets
+		e.Detail, e.Parked = "", s.parkedEntry(ctx, v.parking())
+	}
 	if g.Kind == sigOwnerCannot { // the owner's answer is the signal, not a reason in brackets
 		e.Detail, e.Response = "", g.Detail
 	}
 	if g.Kind == sigFailed {
 		s.remedyEntry(ctx, t, &e) // its kept tab, and the turn that hears of it (start_remedy.go)
+	}
+	if g.Kind == sigInbox {
+		in := *g.Inbox
+		e.Inbox = &in
 	}
 	b := &s.supervise
 	b.mu.Lock()
@@ -447,7 +484,7 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigOverdue: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigRecheck: 1, sigParkedDue: 2, sigIdle: 2, sigUnjudged: 2, sigFailed: 3, sigStarted: 3, sigInterrupted: 4, sigOrphaned: 4, sigReview: 5, sigStalled: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind != sigReport:

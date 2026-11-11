@@ -23,6 +23,7 @@ import { Group, Pill, Row, settingsInputClass, Switch } from "../settings/Settin
 import { SkillsGroup } from "./Skills";
 import { Tag, textareaClass } from "../assistant/parts";
 import { PersonaAvatar, usePersona } from "../assistant/Persona";
+import { TaskTrust } from "./TaskTrust";
 
 interface AssistantState {
   manager?: string;
@@ -38,6 +39,9 @@ interface AssistantState {
   main_tasks_quiet?: boolean;
   /** "Start what I asked for in the chat right away" (#2559): on by default; tasks the user asked for start without the plan card's "Start". */
   start_requested_tasks?: boolean;
+  task_workspace_preference?: "prefer-existing" | "prefer-new";
+  /** "Fold background rounds" (#4314, docs/assistant/assistant.md "Background rounds"): on by default; unset from a hub before it (on). */
+  main_background_folded?: boolean;
   /** The role a meeting recording pre-selects (#2981, docs/assistant/meeting-minutes.md "Attendance fields"); only from a hub
    *  that attends meetings. */
   meeting_attendance_default?: string;
@@ -48,6 +52,9 @@ interface AssistantState {
   /** "Follow up every agent Persona starts" (#3617, docs/assistant/unified-entry.md "Agent tasks"): off by default; unset
    *  from a hub before it. */
   agent_tasks?: boolean;
+  /** "Tell supervisors about new messages" (#4293, docs/assistant/unified-entry.md "Supervision (#3124)"): off
+   *  by default; unset from a hub before it. */
+  inbox_signals?: boolean;
   /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
    *  archive themselves"): 0 is never, at most 3650; unset from a hub before it. */
   archive_closed_days?: number;
@@ -80,8 +87,20 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const [memoryError, setMemoryError] = useState("");
   const [open, setOpen] = useState<{ file: MemoryFile; index?: boolean } | null>(null);
   const [quietBusy, setQuietBusy] = useState(false);
+  const [foldBusy, setFoldBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [permissionBusy, setPermissionBusy] = useState(false);
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const setWorkspacePreference = async (value: "prefer-existing" | "prefer-new") => {
+    setWorkspaceBusy(true);
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { task_workspace_preference: value } });
+      if (r.manager !== manager || r.task_workspace_preference !== value) throw new Error(t("settings-assistantsettings.workspace_unconfirmed"));
+      setInfo((i) => i ? { ...i, task_workspace_preference: r.task_workspace_preference } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setWorkspaceBusy(false); }
+  };
   const setPermission = async (mode: string) => {
     setPermissionBusy(true);
     try {
@@ -119,6 +138,22 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } finally { setRetentionBusy(false); setRetentionTries((n) => n + 1); }
   };
 
+  const setFolded = async (on: boolean) => {
+    setFoldBusy(true);
+    setInfo((i) => (i ? { ...i, main_background_folded: on } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { main_background_folded: on } });
+      setInfo((i) => (i ? { ...i, main_background_folded: r.main_background_folded ?? on } : i));
+      // the main conversation reads it from the store's /assistant answer
+      void refreshAssistant().catch(() => {});
+    } catch (e) {
+      setInfo((i) => (i ? { ...i, main_background_folded: !on } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setFoldBusy(false);
+    }
+  };
+
   const setQuiet = async (on: boolean) => {
     setQuietBusy(true);
     setInfo((i) => (i ? { ...i, main_tasks_quiet: on } : i));
@@ -134,17 +169,17 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   };
 
   const [agentsBusy, setAgentsBusy] = useState(false);
-  // One field of the Agents group (#3617, #3618): shown as chosen at once, taken back with the reason when the hub refuses.
-  const setAgents = async (patch: { agent_tasks: boolean } | { archive_closed_days: number }) => {
+  // One field of the Agents group (#3617, #3618, #4293): shown as chosen at once, taken back with the reason when the hub refuses.
+  const setAgents = async (patch: { agent_tasks: boolean } | { inbox_signals: boolean } | { archive_closed_days: number }) => {
     const before = info;
     setAgentsBusy(true);
     setInfo((i) => (i ? { ...i, ...patch } : i));
     try {
       const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: patch });
       // what the hub saved, when it says
-      setInfo((i) => (i ? { ...i, agent_tasks: r.agent_tasks ?? i.agent_tasks, archive_closed_days: r.archive_closed_days ?? i.archive_closed_days } : i));
+      setInfo((i) => (i ? { ...i, agent_tasks: r.agent_tasks ?? i.agent_tasks, inbox_signals: r.inbox_signals ?? i.inbox_signals, archive_closed_days: r.archive_closed_days ?? i.archive_closed_days } : i));
     } catch (e) {
-      setInfo((i) => (i && before ? { ...i, agent_tasks: before.agent_tasks, archive_closed_days: before.archive_closed_days } : i));
+      setInfo((i) => (i && before ? { ...i, agent_tasks: before.agent_tasks, inbox_signals: before.inbox_signals, archive_closed_days: before.archive_closed_days } : i));
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally {
       setAgentsBusy(false);
@@ -231,18 +266,39 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
+      <Group footer={t("settings-assistantsettings.background_folded_footer")} anchor="background-folded">
+        <Row label={t("settings-assistantsettings.background_folded")}>
+          <Switch on={info?.main_background_folded ?? true} onChange={(on) => void setFolded(on)} disabled={!info || foldBusy} label={t("settings-assistantsettings.background_folded")} />
+        </Row>
+      </Group>
+
       <Group title={t("settings-assistantsettings.start_title")} footer={t("settings-assistantsettings.start_footer")}>
         <Row label={t("settings-assistantsettings.start_requested")}>
           <Switch on={info?.start_requested_tasks ?? true} onChange={(on) => void setStartRequested(on)} disabled={!info || startBusy} label={t("settings-assistantsettings.start_requested")} />
         </Row>
+        <Row label={t("settings-assistantsettings.workspace_preference")} hint={t("settings-assistantsettings.workspace_hint")} wrapHint stackOnNarrow>
+          <select aria-label={t("settings-assistantsettings.workspace_preference")} value={info?.task_workspace_preference ?? "prefer-existing"}
+            disabled={!info || info.manager !== manager || workspaceBusy}
+            className="w-full min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-[13px] text-ink shadow-inset-field sm:w-auto [@media(pointer:coarse)]:min-h-11"
+            onChange={(e) => void setWorkspacePreference(e.target.value as "prefer-existing" | "prefer-new")}>
+            <option value="prefer-existing">{t("settings-assistantsettings.workspace_prefer_existing")}</option>
+            <option value="prefer-new">{t("settings-assistantsettings.workspace_prefer_new")}</option>
+          </select>
+        </Row>
+        <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
 
-      {/* Following up agents and tidying closed ones (#3617, #3618): each row only from a hub that has its setting */}
-      {(typeof info?.agent_tasks === "boolean" || typeof info?.archive_closed_days === "number") && (
+      {/* Following up agents, their tasks' new messages and tidying closed ones (#3617, #4293, #3618): each row only from a hub that has its setting */}
+      {(typeof info?.agent_tasks === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.archive_closed_days === "number") && (
         <Group anchor="agents" title={t("settings-assistantsettings.agents_title")}>
           {typeof info.agent_tasks === "boolean" && (
             <Row label={t("settings-assistantsettings.agent_tasks")} hint={t("settings-assistantsettings.agent_tasks_hint")} wrapHint>
               <Switch on={info.agent_tasks} onChange={(on) => void setAgents({ agent_tasks: on })} disabled={agentsBusy} label={t("settings-assistantsettings.agent_tasks")} />
+            </Row>
+          )}
+          {typeof info.inbox_signals === "boolean" && (
+            <Row label={t("settings-assistantsettings.inbox_signals")} hint={t("settings-assistantsettings.inbox_signals_hint")} wrapHint>
+              <Switch on={info.inbox_signals} onChange={(on) => void setAgents({ inbox_signals: on })} disabled={agentsBusy} label={t("settings-assistantsettings.inbox_signals")} />
             </Row>
           )}
           {typeof info.archive_closed_days === "number" && (
@@ -255,10 +311,10 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       )}
 
       <Group title={t("settings-nav.tab_model_config")}>
-        <a href={BASE + settingsHref("models", "agent.new", false, manager, "model-config")} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
+        <a href={BASE + settingsHref("models", "agent.new", false, null, "model-config")} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
           <span>{t("settings-assistantsettings.task_models")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
         </a>
-        <a href={BASE + settingsHref("models", "assistant", false, manager, "model-config")} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
+        <a href={BASE + settingsHref("models", "assistant", false, null, "model-config")} className="flex items-center justify-between px-4 py-3 text-[13px] text-ink hover:bg-hover">
           <span>{t("settings-assistantsettings.main_chat_model")}</span><Icon name="chevronRight" size={12} className="text-ink-3" />
         </a>
       </Group>

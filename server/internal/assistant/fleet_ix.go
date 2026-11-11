@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -102,6 +105,9 @@ func (s *Service) elicitationReachable(ix proto.Interaction) bool {
 // card goes to its supervisor first when leaders are configured (ask_route.go); a question the assistant may answer for
 // the user goes to it first (fleet_delegate.go).
 func (s *Service) announce(ix proto.Interaction) {
+	if s.approveStandingInteraction(ix) {
+		return
+	}
 	if !s.agentSupervisedSession(ix.MachineID, ix.SessionID) && s.routeAsk(ix) { // a worker's card stays the user's (task_leader.go)
 		return
 	}
@@ -138,6 +144,7 @@ func (s *Service) tellApps(ix proto.Interaction) proto.Interaction {
 // tellUser rings card ix, already on the apps: the push (push false: one of several going out as one push, ask_route.go)
 // and the topic of the agent's todo unless the agent is muted, and the Feishu bot and the channels.
 func (s *Service) tellUser(ix proto.Interaction, push bool) {
+	s.recordConfirmationNotification(ix)
 	if push && !s.muted(ix.MachineID, ix.SessionID) {
 		s.notifyInteraction(ix, s.machineName(ix.MachineID), s.linkCovers(ix))
 		go s.threadAgentAsks(ix) // and the topic of the todo this agent works on, if it has one
@@ -176,6 +183,35 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	// Defense behind the node hook: question-text-keyed answers could not be kept apart on a duplicate card.
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
+	}
+	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
+	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
+	report := ix.Kind == proto.IxPermission && slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), ix.ToolName)
+	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
+		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
+			plans, err := s.conversationPlans(ctx, todo.Origin)
+			if err != nil {
+				return proto.Resolution{}, err
+			}
+			for _, plan := range plans {
+				if plan.State != planStarted {
+					continue
+				}
+				for _, task := range plan.Tasks {
+					if task.TodoID == todo.ID && task.Readonly {
+						if report {
+							if todo.Supervision == nil || todo.Supervision.Supervisor == "" {
+								continue
+							}
+							allow := true
+							return proto.Resolution{Allow: &allow}, nil
+						}
+						approve := false
+						return proto.Resolution{Approve: &approve, Feedback: prompts.RenderReadonlyTaskPlanExit()}, nil
+					}
+				}
+			}
+		}
 	}
 	ix = nodeCard(ix, s.fleetStore() != nil, s.ixInHealth(ctx, ix))
 	if r, ok := s.alwaysAllowed(ctx, ix); ok {
@@ -442,6 +478,10 @@ func (s *Service) resolve(id string, r proto.Resolution) error {
 
 // Automatically replayed grants must not write themselves back after a concurrent revocation.
 func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool) error {
+	return s.resolveWithStanding(id, r, remember, nil)
+}
+
+func (s *Service) resolveWithStanding(id string, r proto.Resolution, remember bool, authorization *standingResolution) error {
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[id]
 	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
@@ -481,6 +521,10 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 		}
 		p = nil // answered a moment ago: the first answer is the one the hook and the history get
 	}
+	if p != nil && p.local != nil && authorization != nil {
+		s.fleet.mu.Unlock()
+		return fmt.Errorf("standing authorizations require a hook-waited card")
+	}
 	if p != nil && p.local != nil {
 		delete(s.fleet.interactions, id) // claimed: a second answer to the same card is not pending any more
 		if p.ix.Kind == proto.IxScreen && !r.Dismiss {
@@ -500,7 +544,7 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 	} else if p != nil {
 		p.claimed = true
 		p.resolution = &r
-		if durableQuestion(p.ix) {
+		if durableQuestion(p.ix) || authorization != nil {
 			p.persisting = &questionPersistence{done: make(chan struct{})}
 			p.persistenceErr = nil
 		}
@@ -549,7 +593,11 @@ func (s *Service) resolveRemembered(id string, r proto.Resolution, remember bool
 		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 		return err
 	}
-	if durableQuestion(p.ix) {
+	if authorization != nil {
+		if err := s.persistStandingInteraction(p, told, authorization); err != nil {
+			return err
+		}
+	} else if durableQuestion(p.ix) {
 		if err := s.persistQuestion(p, status, told); err != nil {
 			return err
 		}

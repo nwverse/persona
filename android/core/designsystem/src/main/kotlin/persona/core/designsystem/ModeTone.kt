@@ -18,7 +18,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import persona.core.designsystem.icons.PhIcon
 
-// A permission mode's tone (#3957, iOS `Theme.ModeTone` from #3719, docs/design/DESIGN_SYSTEM.md "ModeTone"): how much a
+// A permission mode's tone (#3957, iOS `Theme.ModeTone` from #3719, docs/design/DESIGN_SYSTEM.md): how much a
 // mode lets an agent do without asking. None is an agent state's color: amber would read as Working, blue as Needs you.
 
 /** Ask First (the quiet gray), Plan Only (teal), Auto-Edit and Auto (purple), Allow Everything (danger); Unknown: not reported yet. */

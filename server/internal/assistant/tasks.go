@@ -39,13 +39,18 @@ type PlanTask struct {
 	Prompt  string `json:"prompt"`
 	Machine string `json:"machine"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
-	MachinePolicy string `json:"machine_policy,omitempty"`
-	Cwd           string `json:"cwd"`
-	Launcher      string `json:"launcher,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Effort        string `json:"effort,omitempty"`
-	Tier          string `json:"tier,omitempty"`
-	Permission    string `json:"permission,omitempty"`
+	MachinePolicy     string                 `json:"machine_policy,omitempty"`
+	Cwd               string                 `json:"cwd"`
+	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
+	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
+	// Hub-owned identity for the default branch's preview, before a todo exists.
+	ReservedTodoID    string `json:"reserved_todo_id,omitempty"`
+	WorkspaceInferred bool   `json:"workspace_inferred,omitempty"`
+	Launcher          string `json:"launcher,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Effort            string `json:"effort,omitempty"`
+	Tier              string `json:"tier,omitempty"`
+	Permission        string `json:"permission,omitempty"`
 	// Ultracode: the agent starts with Claude Code's ultracode on (#12). A pointer so that an edit from the card can
 	// turn it off, and one from a client that does not know it keeps the assistant's choice.
 	Ultracode *bool `json:"ultracode,omitempty"`
@@ -95,7 +100,8 @@ type PlanTask struct {
 	Attachments []string `json:"attachments,omitempty"`
 	Mentioned   []string `json:"mentioned,omitempty"`
 	AttachFrom  string   `json:"attach_from,omitempty"`
-	// Set once started: the todo the task is, and why its agent did not start. ErrorCode and ErrorArgs: the start's
+	// Set once started: the todo the task is, and why its agent did not start. TodoID is cleared when another plan
+	// takes over that to-do; ReuseTodo keeps the historical target. ErrorCode and ErrorArgs: the start's
 	// coded refusal when it was one (launcher_missing, claude_missing… with its details, as a session's
 	// start_error_code / start_error_args), for a card to offer its remedy (#1642).
 	TodoID    string            `json:"todo_id,omitempty"`
@@ -108,7 +114,9 @@ type PlanTask struct {
 	// whoever planned the task, so a retry may still swap it for one its computer has (launcher_fit.go).
 	defaulted bool
 	// inPane: the kept tab this try starts in (task_retry), "" for a new one.
-	inPane string
+	inPane    string
+	planID    string
+	planIndex int
 }
 
 // Readonly is a launch constraint, including for older saved plans and card edits.
@@ -207,6 +215,10 @@ type tasksState struct {
 	// trustMu serializes the read-modify-writes of tasks.trust (trustKinds, forgetTrust), so that two plans
 	// remembered at once, or a forget racing a remember, do not drop each other's kinds.
 	trustMu sync.Mutex
+	// Admission is serialized through claiming the resolved cwd; claims last until
+	// the task's agent link or failure is recorded.
+	workspaceMu     sync.Mutex
+	workspaceClaims map[string]string
 }
 
 func newTasksState() tasksState {
@@ -255,6 +267,31 @@ func (s *Service) loadPlan(ctx context.Context, id string) (*TaskPlan, error) {
 		return nil, err
 	}
 	return planFromRow(*row), nil
+}
+
+// conversationPlans reads persisted plans, or snapshots the storeless plans, without relying on list order.
+func (s *Service) conversationPlans(ctx context.Context, conversation string) ([]*TaskPlan, error) {
+	var plans []*TaskPlan
+	if st := s.store(); st != nil {
+		rows, err := st.TaskPlans(ctx, conversation)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			plans = append(plans, planFromRow(row))
+		}
+	} else {
+		s.tasks.mu.Lock()
+		defer s.tasks.mu.Unlock()
+		for _, plan := range s.tasks.plans {
+			if plan.Conversation == conversation {
+				cp := *plan
+				cp.Tasks = append([]PlanTask(nil), plan.Tasks...)
+				plans = append(plans, &cp)
+			}
+		}
+	}
+	return plans, nil
 }
 
 func planFromRow(row db.TaskPlanRow) *TaskPlan {
@@ -518,6 +555,7 @@ func (s *Service) trustKinds(ctx context.Context, tasks []PlanTask) {
 func (s *Service) taskRoutes() {
 	s.draftDecisionRoutes()
 	s.doneCheckRoute()
+	s.handle("POST /api/v1/task-plans/{id}/workspace-preview", s.previewPlanWorkspaces)
 	s.handle("GET /api/v1/task-plans/{id}", func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.loadPlan(r.Context(), r.PathValue("id"))
 		if err != nil {

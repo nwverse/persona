@@ -44,7 +44,10 @@ export function portLink(url: string, hostnames: readonly string[] = []): PortLi
   if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return null;
   const host = u.hostname.toLowerCase();
   if (!(LOOPBACK.has(host) || host.endsWith(".localhost") || names(hostnames).has(host))) return null;
-  const port = Number(u.port);
+  // URL.port erases an explicit :80/:443 for its scheme. Read only the original authority's trailing port,
+  // never a scheme default or a colon in credentials, path, query or fragment. URL still validates the address.
+  const authority = /^https?:\/\/([^/?#\\]*)/i.exec(url.trim())?.[1] ?? "";
+  const port = Number(u.port || /:(\d+)$/.exec(authority)?.[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
   return { port, path: u.pathname + u.search + u.hash || "/", secure: u.protocol === "https:" };
 }

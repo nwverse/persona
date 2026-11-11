@@ -17,11 +17,14 @@ import {
 import { modelIdRule, TYPED_MODELS_FEATURE, typedModelProblem } from "../../lib/model-id";
 import { runtimeFallbackText } from "../../lib/model-config";
 import { personaState } from "../../lib/persona";
+import { conversationPage } from "../../lib/conversation-page";
+import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import { hubHas, refreshAssistant, useStore } from "../../lib/store";
 import type { Item, Session } from "../../lib/types";
 import { Button, copyText, Dialog, IconButton, Menu, Spinner, toast, useMenu, type MenuItem } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { ModelFallbackCard } from "../chat/ModelFallbackCard";
 import { Chip } from "../chat/SessionDialogs";
 import { Switch } from "./parts";
 import { PersonaDot, usePersona } from "./Persona";
@@ -289,7 +292,7 @@ export function useAssistantMenu(session: Session | undefined): { items: MenuIte
   const items: MenuItem[] = [
     { key: "profile", label: t("assistant-assistantchat.details"), icon: "info", onSelect: () => navigate({ name: "profile" }) },
     { key: "kb", label: t("assistant-assistantchat.knowledge"), icon: "book", onSelect: () => navigate({ name: "kb" }) },
-    ...(assistant?.main && !isMain ? [{ key: "main", label: t("assistant-assistantchat.back_to_main"), icon: "home" as const, onSelect: () => navigate({ name: "persona", sid: assistant.main }) }] : []),
+    ...(assistant?.main && !isMain ? [{ key: "main", label: t("assistant-assistantchat.back_to_main"), icon: "home" as const, onSelect: () => navigate(conversationPage(assistant.main!, assistant.machine_id, shownManager())) }] : []),
     ...(isMain && canCompact
       ? [{ key: "compact", label: compacting ? t("assistant-assistantchat.compacting") : t("assistant-assistantchat.compact"), icon: "layers" as const, disabled: compacting, onSelect: () => void startCompaction(session) }]
       : []),
@@ -331,7 +334,23 @@ export function CompactionStrip({ session }: { session: Session }) {
   return (
     <>
       {session.runtime_fallback && <RuntimeFallbackNote reason={session.runtime_fallback} />}
+      {session.model_fallback && <AssistantModelFallback session={session} />}
       <Compaction session={session} />
+    </>
+  );
+}
+
+/** The refusal fallback's card in a Persona conversation (#2528): "Back to the configured model", and in the main
+ *  conversation the existing "New main chat" too (the same dialog as the menu's). */
+function AssistantModelFallback({ session }: { session: Session }) {
+  const isMain = useStore((s) => s.assistant?.main === session.session_id);
+  const canNewMain = useStore((s) => hubHas(s.features, NEW_MAIN_FEATURE));
+  const [open, setOpen] = useState(false);
+  const offer = isMain && canNewMain;
+  return (
+    <>
+      <ModelFallbackCard session={session} headless onNewMain={offer ? () => setOpen(true) : undefined} />
+      {offer && <NewMainDialog open={open} onClose={() => setOpen(false)} session={session} />}
     </>
   );
 }

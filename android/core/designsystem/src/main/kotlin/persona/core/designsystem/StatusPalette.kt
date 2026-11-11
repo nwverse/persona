@@ -84,6 +84,10 @@ data class PersonaPalette(
     /** Media overlays stay readable over a photograph/video, independent of the page's appearance. */
     val mediaBackdrop: Color get() = Color.Black
     val onMediaBackdrop: Color get() = Color.White
+    /** Outside the circle an avatar crop keeps (New from photo, #2407): dimmed in every style and appearance, as iOS `Theme.Crop.outside`. */
+    val cropOutside: Color get() = mediaBackdrop.copy(alpha = 0.5f)
+    /** The crop circle's edge, as iOS `Theme.Crop.edge`. */
+    val cropEdge: Color get() = onMediaBackdrop.copy(alpha = 0.9f)
     val mediaScrim: Color get() = mediaBackdrop.copy(alpha = 0.85f)
     val mediaControlFill: Color get() = mediaBackdrop.copy(alpha = 0.6f)
     val mediaLabelFill: Color get() = mediaBackdrop.copy(alpha = 0.7f)
@@ -140,7 +144,7 @@ internal object Palettes {
     }
 
     // Liquid Glass on the system's white/black pages. The translucent fill retains the Android glass fallback.
-    // Generated NeedsYou and colored tints predate the current iPhone StatusPalette; reuse only matching values.
+    // State dots and texts come from the generated iPhone StatusPalette; every state keeps the neutral tint (Offline's).
     val GlassDark = PersonaPalette(
         background = Tokens.Semantic.Glass.Dark.pageBackground,
         surface = Tokens.Semantic.Glass.Dark.card.copy(alpha = 0x14 / 255f),
@@ -153,7 +157,7 @@ internal object Palettes {
         action = Tokens.Semantic.Glass.Dark.text, onAction = Tokens.Semantic.Glass.Dark.pageBackground,
         accent = Tokens.Semantic.Glass.Dark.accent, accentSoft = Tokens.Semantic.Glass.Dark.accent.copy(alpha = 0.16f),
         marker = Tokens.Semantic.Glass.Dark.accent.copy(alpha = 0.16f), onMarker = Tokens.Semantic.Glass.Dark.text,
-        needsYou = StatusColors(Tokens.Semantic.Glass.Dark.accent, Color(0xFF409CFF), Tokens.Status.Dark.Offline.tint, Color.Black),
+        needsYou = StatusColors(Tokens.Status.Dark.NeedsYou.dot, Tokens.Status.Dark.NeedsYou.text, Tokens.Status.Dark.Offline.tint, Color.Black),
         working = StatusColors(Tokens.Status.Dark.Working.dot, Tokens.Status.Dark.Working.text, Tokens.Status.Dark.Offline.tint, Color.Black),
         done = StatusColors(Tokens.Status.Dark.Unread.dot, Tokens.Status.Dark.Unread.text, Tokens.Status.Dark.Offline.tint, Color.Black),
         idle = StatusColors(Tokens.Status.Dark.Idle.dot, Tokens.Status.Dark.Idle.text, Tokens.Status.Dark.Idle.tint),
@@ -178,7 +182,7 @@ internal object Palettes {
         action = Tokens.Semantic.Glass.Light.text, onAction = Tokens.Semantic.Glass.Light.pageBackground,
         accent = Tokens.Semantic.Glass.Light.accent, accentSoft = Tokens.Semantic.Glass.Light.accent.copy(alpha = 0.12f),
         marker = Tokens.Semantic.Glass.Light.accent.copy(alpha = 0.12f), onMarker = Tokens.Semantic.Glass.Light.text,
-        needsYou = StatusColors(Tokens.Semantic.Glass.Light.accent, Color(0xFF0064C8), Tokens.Status.Light.Offline.tint, Color.Black),
+        needsYou = StatusColors(Tokens.Status.Light.NeedsYou.dot, Tokens.Status.Light.NeedsYou.text, Tokens.Status.Light.Offline.tint, Color.Black),
         working = StatusColors(Tokens.Status.Light.Working.dot, Tokens.Status.Light.Working.text, Tokens.Status.Light.Offline.tint, Color.Black),
         done = StatusColors(Tokens.Status.Light.Unread.dot, Tokens.Status.Light.Unread.text, Tokens.Status.Light.Offline.tint, Color.Black),
         idle = StatusColors(Tokens.Status.Light.Idle.dot, Tokens.Status.Light.Idle.text, Tokens.Status.Light.Idle.tint),

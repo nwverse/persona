@@ -74,6 +74,8 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 
 ### 2.2 Components
 
+A component with a composable slot ends with a function-typed parameter, so a caller can pass the slot as a trailing lambda. Add a parameter before the slots, never after (#4146, checked by `scripts/app/android_slot_order.py`; see [android.md](android.md) "Design-system slot order").
+
 | Component | Use |
 | --- | --- |
 | `JPage` | A page with custom content. Pass the `PaddingValues` it gives you as the scroll container's contentPadding: in Glass the top bar and input overlays float over the content, and this is what leaves room for them |
@@ -85,10 +87,10 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 | `JSectionHeader` | Section heading within a page, optionally with a count and an action |
 | `JGroupItem` + `GroupPosition` | One item in a group. In lazy lists, one item per entry; the component draws a continuous container by position (glass panel, rows with dividers, a bordered table); `separate = true` makes them independent cards |
 | `JGroup` | Small groups that need no lazy loading (settings pages) |
-| `JRow` / `JSwitchRow` | Settings-style rows: icon, title, subtitle, value, switch, chevron. For multi-line content in the middle (wrapping addresses, tags, test results, a leading status dot) use the slot form `JRow(onClick = …, trailing = …) { … }`: horizontal padding, minimum height, tap and long press, selection, dimming when disabled, trailing controls and chevron are the same as a normal row and align automatically in every style. `rowPadding` is the row's horizontal padding (Glass 16, Brief 0, Board 14); use it for content hung under a row that must align with the row's text (long values, explanations) |
+| `JRow` / `JSwitchRow` | Settings-style rows: icon, title, subtitle, value, switch, chevron. For multi-line content in the middle (wrapping addresses, tags, test results, a leading status dot) use the slot form `JRow(onClick = …, trailing = …) { … }`: horizontal padding, minimum height, tap and long press, selection, dimming when disabled, trailing controls and chevron are the same as a normal row and align automatically in every style. `rowPadding` is the row's horizontal padding (Glass 16, Brief 0, Board 14); use it for content hung under a row that must align with the row's text (long values, explanations). `rowTitleStart` is where the title starts behind a default-size leading icon: a line hung under such a row (a conversation's state and time) starts there, under the title rather than the icon |
 | `JCard` | Card; `status` gives the glass stroke the state color, or adds a thin state edge in Board |
 | `JNotice` | In-page notice (connection lost, permission needed), with one action |
-| `JEmptyState` / `JLoading` | Empty state, loading |
+| `JEmptyState` / `JLoading` | Empty state (an icon, or a `leading` slot in its place), loading |
 | `JButton` (Primary / Secondary / Quiet / Destructive, Large / Medium / Small), `JTextButton`, `JIconButton` | Buttons. Text is always one line |
 | `Modifier.stableAlpha` | Changing opacity (dimming when disabled). Do not use `Modifier.alpha`: switching between 1 and another value adds or removes a layer, and placed after `clip` + `background` the background color gets lost (`docs/android/android.md` lessons) |
 | `JTextField` / `JSearchField` | Input fields |
@@ -99,6 +101,8 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 | `JStatusDot` / `JStatusMark` / `StatusLabel` / `StatusLine` / `PendingBadge` | State: small dot, the mark before a session row (glowing in Glass, spinner and check mark in Brief, square in Board), status text, the status line in a chat |
 | `JAvatar` | People, groups, sources; a corner badge marks Lark / mail |
 | `JManagerAvatar`, `JAssistantSwitcherHeader`, `JAssistantSwitcherRow` | The sidebar's assistant switcher: an assistant's monogram on its colour (`managerHue`) with its presence dot (`managerPresenceColor`), the head with the current one, a roster row (faded as a whole when offline) |
+| `JAssistantOffline` | A list's empty state while the current assistant is offline (`CurrentAssistant.offline`, several assistants): its faded monogram with the offline mark, "<name> is offline", when it last synced |
+| `JAssistantSettingsHeader`, `LocalAssistantWaiting` | The head of Settings' first group: the current assistant's monogram with its presence dot, "<name>'s settings" and a **Switch** text button that opens the same roster as the sidebar; the badges the roster shows, provided by the shell |
 | `JSwipeActions` | Left/right swipe actions on rows (Inbox: swipe right for done, left to hand to Persona) |
 | `JCodeBlock` | Commands and code |
 | `JSheet` / `JActionSheet` / `JMenu` / `JDialog` | Bottom sheet, long-press action sheet (instead of long dropdowns), small anchored menu (its `content` slot goes above the actions: the assistant switcher's roster), confirmation dialog |
@@ -106,6 +110,7 @@ The old `PersonaTypography.*`, `statusTone(...)`, `PrimaryButton` / `SecondaryBu
 | `DecisionCard` | "Things for you to decide" in lists |
 | `DecisionDock` | Pending requests in a chat, replacing the input field |
 | `DecisionOption` / `DecisionButtons` / `DecisionAdvice` | Options (the recommended one is emphasized differently in each of the three styles), answer buttons, Persona's suggestion |
+| `DecisionAnswers` | The answers of a decision on its row (#3804): the options that fit on one line as buttons (the first the only solid one, always shown, its label cut when alone and too wide), a quiet "Other…", and a menu with the options that did not fit and the answers that are no option. Never a second line of buttons |
 | `MachineChip` | Computer chips at the top of the Agents page (all machines + each computer): the style's filter chip, an online dot on the corner of the device icon, a count after the name |
 | `AgentTreeHeader` / `AgentSpaceHeader` / `AgentRow` / `AgentTabRow` / `AgentIdleRow` | The Agents tree (see section 2.4): the first level (computers, also used for the pinned, by-state and past-projects sections), spaces (also repos and worktrees when grouped by repo, with `icon`), session rows (a row on the background in Glass and Brief, a flight strip in Board; row flags `RowFlag`, facts `RowFact`; the initiator's `launcher` mark, the branch's thin `branch` line), the tab row when one tab has several Agents ("N agents" at the row end collapses / expands), "N more idle". Small icon buttons in headers (gauge, a space's `⋯`) are `HeadingAction`. The Agents page, the space page, the component catalog and the interface style previews all use this set; nothing is written separately |
 | `UserBubbleFrame` / `UserBubble` / `WorkGroup` / `WorkStep` / `PlanCard` / `TimelineMark` | Chat: default Glass uses the shared pale-blue `userBubble` for your own messages, with uniform 20dp corners; forwarded messages use `surface`. Brief and Board retain their neutral message surfaces. The ownership check is `isOwnMessage` in `core/domain`. Other components show collapsed work, individual steps, plan cards and dividers |
@@ -127,7 +132,7 @@ when chart labels and series count are unchanged, bars / lines move to the new v
 
 ### 2.3 Rules for writing pages
 
-1. Assemble pages only from the components above. Do not use Material 3 visual components directly: `Scaffold`, `TopAppBar`, `NavigationBar`, the `Button` family, `Card`, `OutlinedTextField`, `FilterChip`, `AlertDialog`, `ModalBottomSheet`, or multi-item `DropdownMenu`. Primitives such as `Text`, `LazyColumn`, `Box` / `Row` / `Column` are fine.
+1. Assemble pages only from the components above. Do not use Material 3 visual components directly: `Scaffold`, `TopAppBar`, `NavigationBar`, the `Button` family (icon buttons and floating action buttons included), `Card`, `TextField` / `OutlinedTextField`, `FilterChip` and the other chips, `AlertDialog`, `ModalBottomSheet`, `DropdownMenu`, `Snackbar` / `SnackbarHost`, `Checkbox`, `Switch`, `RadioButton` or segmented buttons. Primitives such as `Text`, `LazyColumn`, `Box` / `Row` / `Column` are fine, and so are `MaterialTheme`, `Local*` and `material3.adaptive`. Import Material 3 names one by one: no wildcard `material3` imports outside the design system. `scripts/app/android_token_baseline.py` counts these components per file and lets the existing ones only go down ([android.md](android.md) "Design token adoption baseline").
 2. Colors come only from `PersonaTheme.palette`, font sizes only from `PersonaTheme.type`, corner radii only from `PersonaTheme.shapes`; no `Color(0x…)` or numeric font sizes. Icons use `PhIcons` + `JIcon`, not material-icons.
 3. Page structure: root pages use `JListPage` (without `onBack`, automatically a large title); secondary pages use `JListPage(onBack = …)`; non-list content (chat, terminal, reader) uses `JPage`.
 4. Always use the padding provided by `JPage` as the scroll container's contentPadding, not just padding on the outer container (otherwise content in Glass does not slide under the overlays).

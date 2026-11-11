@@ -30,6 +30,7 @@
   "chat-mentionmenu",
   "chat-messageactions",
   "chat-messages",
+  "chat-modelfallback",
   "chat-navrail",
   "chat-outboxbubbles",
   "chat-panetabs",
@@ -175,5 +176,7 @@
   "usage",
   "voice",
   "workspace-board",
-  "worktree"
+  "workspace-tree",
+  "worktree",
+  "worktree-actions"
 ]

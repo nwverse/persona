@@ -23,11 +23,15 @@ import (
 
 func (s *Service) launcherRoutes() {
 	s.handle("GET /api/v1/launchers", func(w http.ResponseWriter, r *http.Request) {
-		// Each machine gets launcherSyncTimeout: one that is slow or gone never holds the page (sync says which).
 		ctx, cancel := context.WithTimeout(r.Context(), launcherSyncTimeout+5*time.Second)
 		defer cancel()
-		// A launcher just added to an rc file shows up (the node caches a minute).
-		zshrc := s.zshrcLaunchers(ctx, true)
+		// A last-seen snapshot answers at once; a first-ever list still fills before it answers.
+		zshrc, cached := s.zshrcLaunchersLastSeen(ctx)
+		if cached {
+			s.refreshZshrcLaunchers(r.Context())
+		} else {
+			zshrc = s.zshrcLaunchers(ctx, true)
+		}
 		views := s.withKeyMachines(ctx, s.launcherViewsOf(ctx, zshrc))
 		if b, ok := s.builtinClaude(ctx, zshrc); ok {
 			views = append(views, b)
@@ -151,6 +155,10 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-models_launchers.err_name_taken", i18n.Args{"name": in.Name}))
 			return
 		}
+		if err := s.sealKeyReferences(ctx, &in, false); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		l, err := s.saveLauncher(ctx, in, nil)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -202,6 +210,10 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		if err := s.sealKeyReferences(r.Context(), &in, true); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		saved, err := s.saveLauncher(r.Context(), in, old)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -240,15 +252,14 @@ func (s *Service) launcherRoutes() {
 				apierr.Write(w, 409, i18n.Err("assistant-models_launchers.err_in_use", i18n.Args{"uses": strings.Join(uses, i18n.T(s.requestCtxLang(r.Context()), "assistant-models_launchers.list_sep"))}))
 				return
 			}
+			s.forgetLauncherSecrets(name) // what was kept of its keys (launcher_secrets.go)
 			apierr.WriteJSON(w, map[string]any{"ok": true, "deleted": true})
 			return
 		}
 		s.models.mu.Unlock()
-		if name == "claude" { // plain claude is every machine's default launcher: there is nothing to hide
-			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-models_launchers.err_builtin_hide"))
-			return
-		}
-		hidden := s.hiddenLaunchers(ctx) // an rc-file launcher: hidden in Persona, the file is not touched
+		// an rc-file launcher, or plain claude (#4384): hidden in Persona, the file is not touched; a start that names it,
+		// or a default that runs it, still runs it
+		hidden := s.hiddenLaunchers(ctx)
 		if !slices.Contains(hidden, name) {
 			hidden = append(hidden, name)
 		}

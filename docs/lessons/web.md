@@ -1,5 +1,20 @@
 # Lessons: web UI and interactions
 
+## Remembered task rules need their exact owner and retry context (#4418)
+
+A remembered task rule's key is opaque: encode the returned value as a query parameter, not a reconstruction from its
+computer and directory. A manager may flag a key as ambiguous; show its raw identifier as unresolved rather than
+presenting a guessed directory. A failed or unconfirmed removal can be omitted by a later list read, so keep the rule
+and its retry context in session memory scoped to the assistant and credential generation, including across unmounts.
+When a lost reply is followed by a not-remembered response, let the user dismiss the local warning without calling
+the removal confirmed; a later list can show the rule again. Include access type in each row action's spoken name.
+Synchronous admission prevents a second delete after reopening while the first is pending. Fence reads, confirmation,
+refresh and callbacks on manager changes (including a round trip), credential replacement and unmount. A retired
+request's 401 must not sign out a later view, even when it uses the same credential; a current request keeps the normal
+401 policy. A proxy login page or redirect can also reload the whole app: apply the same context and credential fence
+before that side effect, while retaining unowned pairing probes and validated 304 responses. A successful removal does not rule out a matching plan remembering it
+again, and an older manager's empty response is not proof that storage was read successfully.
+
 ## Dismiss a draft, not its source item (#3743)
 
 A task-progress reply card has its own feed id; its Inbox reference can be shared by later progress drafts. Persist
@@ -740,6 +755,7 @@ If the header grows, elements below it (App.tsx connection-status pill) cannot a
 - Pages scroll in their own `overflow-y-auto` box under `<main>`, not the window, so the browser's scroll restoration does nothing for them. Overview unmounts when a card opens a conversation, and Settings' phone list shares one scroller with every category (the category's shorter content clamps `scrollTop`), so Back landed at the top. The inbox never had the problem: its list stays mounted, hidden, under the opened item.
 - `useScrollMemory(ref, key)` (`lib/scroll-memory.ts`) remembers `scrollTop` per key and restores it only when the router saw Back / Forward land on the current address (`takeReturn`); a link or a tap starts at the top. Decide the target once per key: React's StrictMode runs the layout effect twice in development, and the second run would find the return already taken.
 - Checking it in a browser: an edit made while Vite is running can keep serving the old module (the "negative control" passed with the hook disabled). Restart Vite with `--force` and fetch the module to confirm before trusting a before/after comparison.
+- The key names the page the scroller shows, not everything in the address. Settings keyed it `settings/<tab>/<sub>`, and on Models `sub` is the purpose whose dialog is open: opening and closing the dialog each read as a fresh visit and put the page at the top, away from the row just saved (#4282). Include an item in the key only where it replaces the page (`itemIsPage`). A row opened from the page in view also passes no section to `pick`: naming one scrolls that section to the top of the page the row is already on. A link from another page still names it.
 
 ## Keep background task drawers open across turn status changes (2026-11-06)
 
@@ -808,6 +824,14 @@ A narrow shell can unmount its sidebar list and mount the same list in the Agent
 - Check each known page revision before appending; retain known revisions across unversioned pages, but remove the aggregate revision when any accepted page lacks metadata. Legacy compatibility cannot prove a snapshot.
 - A complete-read helper must reject page failures, caps and retired owners instead of resolving the loaded prefix. Share the actual pending page result with concurrent readers, and scope callbacks to machine, path, working directory and reload so an old reader cannot borrow the new file. Keep an ordinary failed page retryable at its original offset; a known revision change requires a fresh read from the beginning. Explicit bounded previews need a separate completion flag, preserving a deliberate CSV/TSV cap without permitting partial exports. Go omits an empty text field: complete zero-byte text metadata is a valid empty file, while arbitrary missing content is not.
 
+## Validate MCP scalar text before JavaScript normalizes it (#3332)
+
+`Date.parse` can normalize an impossible day, and `Number.isInteger(Number(text))` can accept a rounded fraction or underflowed value. Check the original date-time components and decimal/exponent wholeness before constructing an answer; also require a safe numeric integer. A safe-integer check alone misses fractions that round to a safe integer. Preserve exact integral forms such as `2.0`, `2e3` and zero with a negative exponent. Test both the public validation/resolution helpers and the card: invalid input must disable Submit and produce no resolve request, while correcting it submits the intended value once.
+
+## Explicit default ports disappear during URL normalization (#4233)
+
+`URL.port` is empty for both an implicit port and an explicitly written HTTP `:80` or HTTPS `:443`. When recognizing links to an Agent's dev server, retain explicit authority-port intent from the original text after validating its URL, protocol and host. Do not infer a scheme default for a URL with no port, or borrow a colon from credentials, a path, query or fragment. Regress the public helper, reply chips and click routing together; keep hub-owned pages and preview capability/session/folder checks ahead of opening a preview. Recognition alone does not establish HTTPS preview transport support.
+
 ## Connection tests must use the form's credential choice (#1903)
 
 A saved credential and an empty input are different from explicitly removing that credential. Send the removal flag through the test API and give it the same precedence as saving, including when a new key was typed before removal was selected. Changing the credential choice invalidates both the displayed test result and any pending result for the old form. Test against a synthetic source and assert that the saved configuration stays unchanged.
@@ -839,3 +863,38 @@ supervised task spends most of its life stopped between rounds (`follow_up`: the
 is not done), so the owner saw one task out of four and asked what the others were doing. The #2920 Progress tray went the
 other way and listed every slot ever dispatched, closed ones included. "Open" is a property of the task (`done_at`,
 `start_error`, an open plan), not of its agent: filter on that, sort what needs the user first, and fold the closed ones.
+
+## Workspace identity outlives its Agents
+
+An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
+
+The current assistant and the roster's default are different scopes. Workspace discovery and management entry points follow `shownManager`, while an item without a manager still belongs to `defaultManager`. A choice change must cancel reads and invalidate deletion previews immediately, even if the user switches back before a response arrives; subscribing only to changes of the roster's default misses that transition.
+
+## Preserve referenced design section numbers during integration
+
+When parallel design additions occupy the same section number, keep the upstream
+section and its references together. Move the feature section to the next free
+number instead of replacing either contract (#3223). The pending-request rules
+remain section 4.8; workspace selection and management follow in section 4.10.
+
+## Keep workspace action resolution behind its lazy entry
+
+A lazy menu still adds to the first screen when its always-mounted opener imports
+its permission and catalog resolvers. Keep only request routing and immediate scope
+invalidation in that opener module; import resolution and child-request assembly
+from the lazy menu (#3223).
+Check the real production bundle against the fixed main baseline and retain the
+same owner, manager, host and workspace safety checks.
+
+## Preserve workspace controls when adopting shared fold motion
+
+A workspace row has separate disclosure, selection and action controls. When merging shared sidebar fold timing, keep that structure and apply `sidebarFoldMotion` to its disclosure chevron and `sidebarFold` to the matching `Collapse`. Choosing either side wholesale drops either workspace controls or the shared timing; child-workspace folds need the same motion contract.
+
+The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
+
+## Archive refusals must roll back optimistic removal (#4277)
+
+A connected delta hub keeps its pushed session rows during REST refresh. Refresh cannot restore a row the page
+optimistically removed. Keep the pre-request session snapshot and restore it immediately on archive failure,
+before refreshing. Preserve a newer pushed row if one arrived meanwhile. Exercise mounted rows and the real
+store refresh with both delta and bounded list negotiation.
