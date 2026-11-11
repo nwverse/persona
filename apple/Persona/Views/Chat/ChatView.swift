@@ -178,6 +178,9 @@ struct ChatView: View {
     @State private var footerRoom = FooterRoom()
     @Environment(\.openSpace) private var openSpace
     @State private var link: LinkTarget?
+    /// ⋯ › Preview's list of the session's dev servers, and the one picked there, opened once the list is gone (#150).
+    @State private var previewing = false
+    @State private var previewPicked: PreviewOption?
     /// Where a Model Not Connected card's Fix It goes (`ReadinessSheets`).
     @State private var readinessRoute: ReadinessRoute?
     /// The image viewer, shown by the page rather than the row it was opened from (`viewImages`).
@@ -786,8 +789,15 @@ struct ChatView: View {
         #if os(macOS)
         .macLinkPanel($link, key: key) // the Mac's panel at the trailing edge (Mac/Link/MacLinkPanel.swift)
         #else
-        .sheet(item: $link) { t in LinkSheet(target: t, key: key) }
+        .sheet(item: $link) { t in LinkSheet(target: t, key: key, choosePreview: { openPort($0.link, name: $0.name) }) }
         .readinessSheets($readinessRoute)
+        #endif
+        #if os(iOS)
+        .sheet(isPresented: $previewing, onDismiss: {
+            if let o = previewPicked { previewPicked = nil; openPort(o.link, name: o.name) }
+        }) {
+            if let cwd = session?.cwd { PreviewChooser(key: key, cwd: cwd) { o in previewPicked = o; previewing = false } }
+        }
         #endif
         .environment(\.attachImage, actions.attachImage)
         .environment(\.loadImage, actions.loadImage)
@@ -1119,13 +1129,27 @@ struct ChatView: View {
         return true
     }
 
-    private func openPort(_ l: PortLink) {
+    /// The session's dev servers to preview (#150): an Agent chat on a computer whose hub has previews (the iPhone; the
+    /// iPad keeps the card too, the Mac app is frozen).
+    private var canPreview: Bool {
+        #if os(iOS)
+        guard style == .dev, let s = session, s.assistant != true, !s.cwd.isEmpty,
+              model.api(key.group)?.config.isDemo == false else { return false }
+        return model.features(key.group).contains(PreviewLogic.feature)
+        #else
+        false
+        #endif
+    }
+
+    /// Opens a port of the session's computer in the link card; `name`: the dev server it is (the card's subtitle).
+    private func openPort(_ l: PortLink, name server: String? = nil) {
         let machine = key.machineRef
         Task {
             do {
                 let url = try await model.forwardedURL(l, machine: machine)
                 let name = model.machine(machine)?.title ?? machine.id
-                link = LinkTarget(url: url, forwarded: "\(name) :\(l.port)")
+                let named = server.flatMap { $0 == ":\(l.port)" ? nil : $0 }
+                link = LinkTarget(url: url, forwarded: "\(name) :\(l.port)" + (named.map { " · \($0)" } ?? ""))
             } catch {
                 model.toast = Toast(error.localizedDescription, style: .error)
             }
@@ -1905,6 +1929,7 @@ struct ChatView: View {
     @ViewBuilder private var chatPane: some View {
         // The list above, the composer below — stacked, not overlaid: with the keyboard up the whole page gets
         // shorter and the newest message (offset 0 of the flipped list) stays right above the composer.
+        let under = underFooter
         VStack(spacing: 0) {
             // A hairline above the list: a scroll view touching the top safe area extends under it and adds its
             // inset — at the wrong end once flipped. Not touching it, the list gets no safe area at all (the
@@ -1912,9 +1937,12 @@ struct ChatView: View {
             Color.clear.frame(height: Theme.Size.line)
             ChatRegion(name: "ChatTranscript.body") {
                 chatScroll()
-                    .overlay { if layout.on { EdgeScrubOverlay(state: scrub) } }
+                    // What reaches the footer fades out behind it, under everything drawn over the list (#3696).
+                    .overlay(alignment: .bottom) { footerFog(under: under) }
+                    // The navigator and the arrow keep to the part of the list over the footer.
+                    .overlay { if layout.on { EdgeScrubOverlay(state: scrub).padding(.bottom, under) } }
                     .modifier(EdgeScrubbing(on: layout.on, band: scrubBand, changed: scrubbed))
-                    .overlay(alignment: .bottomTrailing) { arrowLayer }
+                    .overlay(alignment: .bottomTrailing) { arrowLayer.padding(.bottom, under) }
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
                     .screenProbe("chat", page: style == .assistant ? "assistant" : "agents",
@@ -1930,6 +1958,8 @@ struct ChatView: View {
             }
             // It may get as short as the cards make it while the keyboard is up (its margins set no minimum of their own).
             .frame(minHeight: .zero)
+            // On behind the top of the footer, which is drawn after it, over it (`underFooter`).
+            .padding(.bottom, -under)
             // A stack of its own, laid out before the list (which may get as short as nothing): with an attachment over the
             // shell's composer (a photo, a quote) the footer kept its height while the draft grew, and the field held a line
             // and a half of it, cut at its top (#3703, the open iPhone Duo on its side with the keyboard up). Priority on
@@ -2315,7 +2345,7 @@ struct ChatView: View {
                     Text(reason).font(Theme.Font.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.persona.name)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
-                         onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 })
+                         covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 })
                     // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                     // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
                     .layoutIsland(enabled: !usesShellComposer && !AppStyle.current.usesBeautifulUI)
@@ -2489,6 +2519,7 @@ struct ChatView: View {
         let store = store
         let lines = currentLines()
         let pending = shownPending
+        let under = underFooter
         // Two statements: as one expression Swift 6.2 could not type-check it in time.
         let list = ScrollView {
             chatRows(store: store, lines: lines, pending: pending)
@@ -2512,17 +2543,24 @@ struct ChatView: View {
         // go right down to the footer.
         // The header floats over the list (Agents): the oldest end leaves its full height free, so nothing hides
         // under it; the list's own frame never changes as it folds, so folding never moves the messages.
-        .contentMargins(.top, Self.endRoom, for: .scrollContent)
+        // Where the list runs on behind the footer (`underFooter`) its newest end has that much more room: every message
+        // rests where it would on a list ending at the footer, and the offset past the inset (`newestGap`) is the same.
+        .contentMargins(.top, Self.endRoom + under, for: .scrollContent)
         .contentMargins(.bottom, headerRoom + 10, for: .scrollContent)
         .scrollIndicators(.hidden)
         // iOS 26's soft edge blur works out its region on the unflipped view and fogged the whole list.
         .scrollEdgeEffectHidden(true, for: .all)
         .scrollPosition($position)
-        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { scratch.listFrame = $0 }
+        // The part over the footer: what the page shows of the list, as the follow, the landings and the navigator take it.
+        .onGeometryChange(for: CGRect.self, of: { g in
+            var f = g.frame(in: .global)
+            f.size.height = max(0, f.height - under)
+            return f
+        }) { scratch.listFrame = $0 }
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { menu.dismiss(); Keyboard.dismiss() })
         // Only the user's own scrolling closes the bar; content streaming in also moves the offset (.animating).
-        .onScrollGeometryChange(for: ListScroll.self, of: { ListScroll(offset: $0.contentOffset.y, height: $0.containerSize.height, x: $0.contentOffset.x, top: $0.contentInsets.top, content: $0.contentSize.height) }) { old, new in
+        .onScrollGeometryChange(for: ListScroll.self, of: { ListScroll(offset: $0.contentOffset.y, height: $0.containerSize.height - under, x: $0.contentOffset.x, top: $0.contentInsets.top, content: $0.contentSize.height) }) { old, new in
             scratch.offsetX = new.x
             #if DEBUG
             scratch.scrollY = new.offset
@@ -2903,6 +2941,10 @@ struct ChatView: View {
                     Button { open(nil) } label: { Label("Review Changes", systemImage: Theme.Icon.reviewChanges).lineLimit(1) }
                 }
                 #endif
+                if canPreview {
+                    Button { previewing = true } label: { Label("Preview", systemImage: Theme.Icon.servedPage).lineLimit(1) }
+                        .accessibilityIdentifier("chat-preview")
+                }
                 #if !os(macOS)
                 // The header's status line shows only running subagents: finished and nested ones are here (the Mac's
                 // strip and a hosted one still have their own "All subagents").
@@ -3218,6 +3260,34 @@ struct ChatView: View {
     /// end marker takes no room and the footer adds none. The first message of a new conversation is laid out with it
     /// before the chat takes over (`FirstMessagePending`, #1911).
     static let newestGap: CGFloat = Theme.Space.l + endRoom
+    /// From the top of Persona's footer to its composer at the default text size: the capsule row's 8 pt margin, a 28 pt
+    /// capsule and the footer's 12 pt (`AssistantActionBar`). Larger text makes the row taller, and the list then ends a
+    /// little above the composer, where `FooterFog` is already solid.
+    static let underDock: CGFloat = Theme.Space.xxl + Theme.Space.l
+    /// The last of it, between the capsules and the composer: solid page in the fog, so nothing shows faintly there.
+    static let underDockSolid: CGFloat = Theme.Space.m
+
+    /// How far the list runs on behind the top of the footer (#3696). In Persona's chats, behind the capsule row over the
+    /// composer, so the chat fades out behind the capsules instead of ending in a band of page above them; the newest end
+    /// has that much more room, so at rest nothing is behind them. None where the footer starts with the composer itself
+    /// (Agents chats, a subagent's transcript, a voice call, which puts the capsules away): there the chat is gone by the
+    /// composer's top edge. The Mac's chat is frozen as it was.
+    private var underFooter: CGFloat {
+        #if os(macOS)
+        0
+        #else
+        style == .assistant && viewing == nil && !VoiceCalls.shared.isLive(on: key) ? Self.underDock : 0
+        #endif
+    }
+
+    /// The fog over the list's end: clear `newestGap` above the footer, where the newest message rests, and solid from
+    /// the bottom of the capsules behind the footer down to the list's bottom edge. A fixed size at the list's bottom:
+    /// scrolling and typing do not draw it again.
+    @ViewBuilder private func footerFog(under: CGFloat) -> some View {
+        #if !os(macOS)
+        FooterFog(height: Self.newestGap + under, solid: under > 0 ? Self.underDockSolid : 0)
+        #endif
+    }
 
     /// An Agents chat whose actions are in the system's side column (no header of its own).
     private var sideBars: Bool { style == .dev && barsVertical }
@@ -3588,6 +3658,9 @@ struct ChatView: View {
                         if let s = session, s.canDelete { deleting = s; break }
                     }
                 }
+            }
+            if UserDefaults.standard.bool(forKey: "openPreviewServers") { // `-openPreviewServers YES`: ⋯ › Preview's list (#150, screenshots)
+                Task { try? await Task.sleep(for: .seconds(2)); if canPreview { previewing = true } }
             }
             if let u = UserDefaults.standard.string(forKey: "openLinkURL").flatMap(URL.init(string:)) { // `-openLinkURL <url>`
                 Task { try? await Task.sleep(for: .seconds(3)); actions.openLink(u) } // as a tap would: localhost is the machine's
@@ -4139,6 +4212,7 @@ struct Composer: View, Equatable {
     /// conversation, and the composer (a text field, its buttons, the mode chips) used to go with it.
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.status == b.status && a.placeholder == b.placeholder && (a.onCleared == nil) == (b.onCleared == nil)
+            && a.covered == b.covered
     }
 
     @Environment(AppModel.self) private var model
@@ -4152,6 +4226,9 @@ struct Composer: View, Equatable {
     let key: SessionKey
     var status: SessionStatus
     var placeholder: String?
+    /// The link card covers the chat (ChatView's `link`): a picture handed in (a preview's screenshot, #150) lands without
+    /// raising the keyboard, which would close the card.
+    var covered = false
     /// Glow While Replying (Settings › Appearance, off by default): the assistant's composer glows while its reply is
     /// being written (`working`), not while it waits on the user (`blocked`) and not in an Agent's chat.
     @StoredValue(ComposerGlowPrefs.enabledKey) private var glowEnabled = false
@@ -4782,7 +4859,7 @@ struct Composer: View, Equatable {
             guard n > 0, let incoming = model.composerInbox[key] else { return }
             model.composerInbox[key] = nil
             for img in incoming { add(img) }
-            focused = true
+            if !covered { focused = true }
         }
         #if os(macOS)
         // Files dropped on the chat's page, not on the box (`macChatDrop`): as if dropped here.
@@ -5234,6 +5311,7 @@ struct QueueStrip: View {
     private var rows: some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             ForEach(Array(queued.enumerated()), id: \.offset) { i, q in
+                let draft = QueuedDraft(q)
                 Menu {
                     Button { act(i, delete: false) } label: { Label("Take Back to Edit", systemImage: Theme.Icon.edit) }
                     if steers, queued.count > 1 {
@@ -5244,7 +5322,7 @@ struct QueueStrip: View {
                             .disabled(i == queued.count - 1)
                             .accessibilityIdentifier("queue-move-down")
                     }
-                    Button { UIPasteboard.general.string = q } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
+                    Button { UIPasteboard.general.string = draft.text.isEmpty ? q : draft.text } label: { Label("Copy [Readiness Views d37380]", systemImage: Theme.Icon.copy) }
                     Button(role: .destructive) { act(i, delete: true) } label: { Label("Delete", systemImage: Theme.Icon.delete) }
                 } label: {
                     HStack(alignment: .top, spacing: Theme.Space.s) {
@@ -5253,7 +5331,7 @@ struct QueueStrip: View {
                             .foregroundStyle(Theme.accent)
                             .scaledFrame(width: Theme.Size.badge, height: Theme.Size.badge)
                             .background(Theme.accent.opacity(0.14), in: .circle)
-                        Text(q).font(Theme.Font.secondary).foregroundStyle(Color.primary).lineLimit(2).multilineTextAlignment(.leading)
+                        QueuedWords(draft: draft)
                         Spacer(minLength: 0)
                         ThemedIcon(Theme.Icon.more).font(Theme.Font.label).foregroundStyle(.secondary).padding(.top, Theme.Space.xs)
                     }
@@ -5262,7 +5340,7 @@ struct QueueStrip: View {
                     .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
                 }
                 .disabled(busy)
-                .accessibilityLabel(Text("Item \(i + 1): \(q)"))
+                .accessibilityLabel(Text("Item \(i + 1): \(QueuedWords.spoken(draft))"))
                 .accessibilityIdentifier("queue-item")
                 .accessibilityHint(Text("Edit, copy or delete"))
             }
@@ -5294,6 +5372,47 @@ struct QueueStrip: View {
             await model.sendQueuedNow(key)
             busy = false
         }
+    }
+}
+
+/// A queued message in its row (#3022): a mark for the photos, videos and quotes it carries, then its words; never the
+/// text Claude's queue keeps of them (`[Image #n]`, the photos' tag and paths).
+struct QueuedWords: View {
+    var draft: QueuedDraft
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            if !draft.imagePaths.isEmpty { mark(Theme.Icon.photo, draft.imagePaths.count) }
+            if !draft.files.isEmpty { mark(Theme.Icon.video, draft.files.count) }
+            if !draft.contexts.isEmpty { mark(Theme.Icon.quote, draft.contexts.count) }
+            Text(draft.text.isEmpty ? Self.spoken(draft) : draft.text)
+                .font(Theme.Font.secondary)
+                .foregroundStyle(draft.text.isEmpty ? Color.secondary : Color.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The count beside the mark only next to words: without them the words' place says it ("3 images").
+    private func mark(_ icon: String, _ count: Int) -> some View {
+        HStack(spacing: Theme.Space.xxs) {
+            ThemedIcon(icon)
+            if count > 1, !draft.text.isEmpty { Text(count, format: .number) }
+        }
+        .font(Theme.Font.label)
+        .foregroundStyle(.secondary)
+        .fixedSize()
+    }
+
+    /// What VoiceOver reads, and the row's words when it has none: what it carries, then its words.
+    static func spoken(_ draft: QueuedDraft) -> String {
+        var parts: [String] = []
+        if !draft.imagePaths.isEmpty { parts.append(String(localized: "\(draft.imagePaths.count) images")) }
+        if !draft.files.isEmpty { parts.append(String(localized: "\(draft.files.count) videos [Queue Strip]")) }
+        if !draft.contexts.isEmpty { parts.append(ContextRef.summary(draft.contexts)) }
+        if !draft.text.isEmpty { parts.append(draft.text) }
+        return ListFormatter.localizedString(byJoining: parts)
     }
 }
 
