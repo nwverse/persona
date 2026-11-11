@@ -125,7 +125,7 @@ Call sites of the names that change meaning:
 
 Android's springs use damping 0.82 or 0.9 at stiffness 400; Brief (140/240 ms) and Board (100/160 ms) use tweens. In `Tokens.Motion` only `reduced` is read.
 
-**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS.
+**Change.** Write flat leaves in `motion.json`: a duration in milliseconds, a bounce as a number, or a named curve. SwiftUI reads them as `.spring(duration:bounce:)`. Compose maps a spring to `spring(dampingRatio = 1 − bounce, stiffness = (2π / duration)²)`; for state, 250 ms with SwiftUI's snappy bounce of 0.15 (Apple's documented default), that gives a damping ratio of 0.85 and a stiffness of about 632. Timed curves map to `tween` with a `CubicBezierEasing`. Only Glass reads the new set, and the Swift drift test covers it. The needs-you mark breathes as on iOS. Done in two PRs: the tokens, the drift test and Glass's state and layout springs first (`IosSpring`), then the breathing ring, which changes how the mark looks.
 
 Risks: the CSS reduced-motion variables and `Tokens.Motion.state` are renamed; Android's count and breathe timings have no iOS counterpart and stay Android-only until iOS has one.
 

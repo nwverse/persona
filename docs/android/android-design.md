@@ -98,7 +98,7 @@ A component with a composable slot ends with a function-typed parameter, so a ca
 | `JSwitch` / `JCheckbox` / `JRadio` | Switch, checkbox, radio |
 | `JBadge` / `JTag` | Count of things waiting for you, small static tags (draft, demo) |
 | `JChangingText` | Values that change on redraw: numbers count to the new value, other text fades in (numbers in extension Views, row values) |
-| `JStatusDot` / `JStatusMark` / `StatusLabel` / `StatusLine` / `PendingBadge` | State: small dot, the mark before a session row (glowing in Glass, spinner and check mark in Brief, square in Board), status text, the status line in a chat |
+| `JStatusDot` / `JStatusMark` / `StatusLabel` / `StatusLine` / `PendingBadge` | State: small dot, the mark before a session row (glowing in Glass, spinner and check mark in Brief, square in Board), status text, the status line in a chat. In Glass a Needs You dot or mark breathes as on iOS: a ring leaves it and fades every second (`Tokens.Motion.NeedsYouBreath`), still when motion is reduced |
 | `JAvatar` | People, groups, sources; a corner badge marks Lark / mail |
 | `JManagerAvatar`, `JAssistantSwitcherHeader`, `JAssistantSwitcherRow` | The sidebar's assistant switcher: an assistant's monogram on its colour (`managerHue`) with its presence dot (`managerPresenceColor`), the head with the current one, a roster row (faded as a whole when offline) |
 | `JAssistantOffline` | A list's empty state while the current assistant is offline (`CurrentAssistant.offline`, several assistants): its faded monogram with the offline mark, "<name> is offline", when it last synced |

@@ -1,5 +1,14 @@
 # Lessons: hub / node and networking
 
+## Virtual-file sizes and EOF (#4425)
+
+Some Linux sysfs attributes report a stable page-sized length even when their readable contents are shorter. A short
+read must end pagination only after a real EOF, filesystem identification on the opened descriptor, and checks that
+the opened object and guarded path still have the same identity and metadata. An ordinary file truncated during a read
+and a non-EOF I/O failure must remain errors; a zero-byte device must not be read as an open-ended virtual file. The
+size and modification-time revision cannot detect virtual values that change without metadata changing, or a writer
+that restores metadata, so these checks do not make pages from separate requests an atomic snapshot.
+
 ## A shared package that imports a manager's drags it into the hub (2026-11-11, #4371, #4446)
 
 `persona-hub` links every package a shared one (`depguard.Shared`) imports, so one import of a manager-side package in
@@ -290,6 +299,16 @@ A custom `http.Transport.DialContext` conservatively disables Go's automatic HTT
 `update.SwapProgram` recorded `Prev: ""` when copying the old program to `.prev` or putting the new build in place failed, and `Prev: ""` is how a swap says the program was new, so going back deleted a program the failed swap had never touched.
 A failing step reports what it actually changed: `copyFile` writes `.new` and renames, so a failed swap changed nothing (the zero `Swapped`, which `RestoreAll` skips) or only wrote `.prev` (putting that back is harmless).
 Don't add a `pending.json` field for it: older edges and watchdogs read the same file and know only `Prev == ""`.
+
+## Migrating a long-poll channel without duplicate consumers (#2020)
+
+A connector switch alone does not free a built-in extension ID for installation: the registry must explicitly
+opt into `Registry.Yields` for the approved handoff. Keep sealed connector state under the unchanged connector
+ID and finish stopping the old process before starting the replacement; two long-pollers with the same token
+can consume each other's messages. Publish the extension and signed catalog, verify an isolated hub with
+synthetic state, and approve the production handoff before removing the built-in. Never copy production
+tokens into a test hub. Retired artifact-name parsers may remain for old releases, but a new manifest must
+not republish a retired program merely because its old artifact was left in the build directory.
 
 ## Extension public identity is not storage or token authority (#1493)
 
@@ -875,6 +894,11 @@ back) and only keeps the entry. Tell them apart by git's `CONFLICT` lines plus `
 
 ## Knowledge base (docs/assistant/knowledge.md)
 
+- A Messages ROWID can be associated with more than one chat (#4440). Deduplicate by canonical conversation and ROWID,
+  before page and search limits, and count unread messages by that same identity. A numeric changes cursor can only
+  advance after every selected ROWID's associations are read; select the boundary and expand it in one SQLite snapshot,
+  bound the expansion, and fail without returning a cursor when it cannot fit. A previously advanced cursor cannot
+  reconstruct associations already skipped by older code.
 - Forever is a sentinel, not zero days (#3780, #3862). Preserve `minutes_days: 0` before applying the transcript-retention floor, calculating an expiry date or confirming an echoed setting. A trimmed recording's metadata proves it has retained minutes even if `minutes.json` cannot be read; a parse failure must not turn forever retention into deletion. Test repeated sweeps, unreadable trimmed minutes, switching back to finite retention and explicit user deletion.
 - A meeting answer may be spoken in front of others (#3862). Until private meetings can be marked, gate earlier minutes, their linked projects and action-item states together before retrieval; a prompt warning cannot hide material already sent to the model. Keep opt-in retrieval tests as well as a default-off test that checks the model input and returned citations.
 
