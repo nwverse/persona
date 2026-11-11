@@ -9,7 +9,8 @@ import type { PickerTier } from "../lib/launcher-models";
 import type { ModelBinding } from "../lib/model-config";
 import type { PanelConfig } from "../lib/model-panel";
 import { formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "../lib/new-agent-panel";
-import { forgetModel, modelList, readModels, useModelLists } from "../lib/session-models";
+import { launcherBlock } from "../lib/launcher-health";
+import { forgetModel, modelList, readModels, useModelList, useModelLists } from "../lib/session-models";
 import type { Launcher } from "../lib/types";
 import { toast } from "../ui/atoms";
 import { ModelPanel } from "../ui/model-panel/ModelPanel";
@@ -43,36 +44,51 @@ export interface NewAgentModelProps {
   onConfigure: () => void;
 }
 
-export function NewAgentModel({ mid, launchers, ready, choice, runs, configured, tiers, follow, fallback, ultracode, ultracodeOn, onChoice, onPreset, onFollow, onHelp, onConfigure }: NewAgentModelProps) {
-  const version = useModelLists();
+export function NewAgentModel(props: NewAgentModelProps) {
+  const { mid, launchers, ready, choice, runs, configured, fallback, ultracodeOn } = props;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const close = useCallback(() => setAnchor(null), []);
-  const shown = Boolean(anchor) && ready;
-  // every launcher's list again behind the ones shown, once per opening, the one that runs first (at most three at a
-  // time: each may start its agent's CLI on the computer)
-  const names = launchers.map((l) => l.name).join("\n");
-  useEffect(() => {
-    if (!shown) return;
-    for (const name of names.split("\n")) if (name) void readModels(mid, name, { again: true, first: name === runs });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening, for the computer it opened on
-  }, [shown, mid, names]);
   // a different computer closes it (its providers are another computer's)
   const opened = useRef(mid);
   useEffect(() => {
     if (opened.current !== mid) setAnchor(null);
     opened.current = mid;
   }, [mid]);
-
-  // built only while the panel is open (the pill needs one list, not every launcher's rows)
-  const panel = useMemo(
-    () => (shown ? newAgentPanel({ launchers, listOf: (name) => modelList(mid, name), choice, configured, runs, tiers }) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
-    [shown, launchers, mid, choice.launcher, choice.model, choice.effort, configured, runs, tiers, version],
+  // the pill follows the one list it names; the panel, mounted only while open, follows every launcher's
+  const pill = newAgentPill({ launchers, runs, list: useModelList(mid, runs), choice, configured, fallback });
+  return (
+    <>
+      <ModelPill
+        current={pill}
+        loading={pill.loading || !ready}
+        failed={pill.failed}
+        open={Boolean(anchor)}
+        disabled={!ready}
+        onOpen={(el) => setAnchor((a) => (a ? null : el))}
+        workflow={ultracodeOn ? {} : undefined}
+      />
+      {anchor && ready && <NewAgentPanel {...props} anchor={anchor} onClose={close} />}
+    </>
   );
-  const pill = newAgentPill({ launchers, runs, list: runs ? modelList(mid, runs) : {}, choice, configured, fallback });
+}
+
+/** The panel while it is open: the computer's launchers with their lists, read again behind the ones shown once per
+ *  opening (the one that runs first; not the ones that can't start here, whose rows are off anyway; at most three at a
+ *  time, as each may start its agent's CLI on the computer). */
+function NewAgentPanel({ mid, launchers, choice, runs, configured, tiers, follow, ultracode, onChoice, onPreset, onFollow, onHelp, onConfigure, anchor, onClose }: NewAgentModelProps & { anchor: HTMLElement; onClose: () => void }) {
+  const version = useModelLists();
+  useEffect(() => {
+    for (const l of launchers) if (l.name === runs || !launcherBlock(l)) void readModels(mid, l.name, { again: true, first: l.name === runs });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening, for the computer it opened on
+  }, []);
+  const { providers, state, presets } = useMemo(
+    () => newAgentPanel({ launchers, listOf: (name) => modelList(mid, name), choice, configured, runs, tiers }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` stands for what was read
+    [launchers, mid, choice.launcher, choice.model, choice.effort, configured, runs, tiers, version],
+  );
 
   const onPick = async (config: PanelConfig) => {
-    onChoice(formChoice(config, modelList(mid, config.provider).list));
+    onChoice(formChoice(config));
     return true;
   };
   const onApplyCurrent = async (patch: { effort?: string; fast?: boolean }) => {
@@ -85,39 +101,26 @@ export function NewAgentModel({ mid, launchers, ready, choice, runs, configured,
   };
 
   return (
-    <>
-      <ModelPill
-        current={pill}
-        loading={pill.loading || !ready}
-        failed={pill.failed}
-        open={Boolean(anchor)}
-        disabled={!ready}
-        onOpen={(el) => setAnchor((a) => (a ? null : el))}
-        workflow={ultracodeOn ? {} : undefined}
-      />
-      {panel && anchor && (
-        <ModelPanel
-          anchor={anchor}
-          onClose={close}
-          providers={panel.providers}
-          state={panel.state}
-          scope="agent"
-          onPick={onPick}
-          onApplyCurrent={onApplyCurrent}
-          onReload={(provider) => void readModels(mid, provider, { again: true, first: provider === runs })}
-          onForget={onForget}
-          currentExtra={ultracode}
-          follow={follow && { ...follow, onFollow: () => (onFollow(), true) }}
-          presets={panel.presets}
-          onPreset={(key) => (onPreset(key), true)}
-          engines
-          onHelp={(launcher) => {
-            close();
-            onHelp(launcher);
-          }}
-          onConfigure={onConfigure}
-        />
-      )}
-    </>
+    <ModelPanel
+      anchor={anchor}
+      onClose={onClose}
+      providers={providers}
+      state={state}
+      scope="agent"
+      onPick={onPick}
+      onApplyCurrent={onApplyCurrent}
+      onReload={(provider) => void readModels(mid, provider, { again: true, first: provider === runs })}
+      onForget={onForget}
+      currentExtra={ultracode}
+      follow={follow && { ...follow, onFollow: () => (onFollow(), true) }}
+      presets={presets}
+      onPreset={(key) => (onPreset(key), true)}
+      engines
+      onHelp={(launcher) => {
+        onClose();
+        onHelp(launcher);
+      }}
+      onConfigure={onConfigure}
+    />
   );
 }

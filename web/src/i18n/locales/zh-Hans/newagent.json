@@ -49,5 +49,6 @@
   "preset_left_out": "这里用不上：{what}，会按启动器或模型自己的设置运行。",
   "follow_row": "跟随模型配置",
   "carry_dropped": "{computer} 上用不了 {name}，已换回这台电脑的默认设置。",
-  "preset_picked": "预设 {name} · {what}"
+  "preset_picked": "预设 {name} · {what}",
+  "typed_now": "这次手输的模型 ID"
 }

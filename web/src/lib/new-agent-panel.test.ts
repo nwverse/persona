@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { LauncherModels, PickerTier } from "./launcher-models";
 import { engineChoices, engineSetup, panelSections, type PanelProvider, type SectionsInput } from "./model-panel";
-import { choiceCarries, defaultRowId, formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "./new-agent-panel";
+import { choiceCarries, formChoice, newAgentPanel, newAgentPill, type ModelChoice } from "./new-agent-panel";
 import type { ModelList } from "./session-models";
 import type { Launcher } from "./types";
 
@@ -97,6 +97,17 @@ describe("the panel's providers", () => {
     expect(typed.flatMap((s) => s.rows).filter((r) => r.kind === "typed").map((r) => r.provider.id)).toEqual(["claude", "codex"]);
   });
 
+  it("a real model its list marks default (Codex's) keeps a row of its own; the Default row names it", () => {
+    const codex = provider(panel({ configured: null }), "codex");
+    expect(codex.models?.map((m) => [m.id, m.name])).toEqual([["default", "默认：5.5"], ["gpt-5.5", "5.5"], ["gateway/glm-5.3", "glm-5.3"]]);
+  });
+
+  it("an ID typed for this start is not one the hub remembers: no Typed before, nothing to forget", () => {
+    const row = provider(panel({ choice: { launcher: "claude", model: "vendor/new", effort: "" }, configured: null }), "claude").models?.at(-1);
+    expect(row?.custom).toBeUndefined();
+    expect(row?.description).toBe("这次手输的模型 ID");
+  });
+
   it("Codex has no effort here (a start doesn't set it); a list still read is a spinner", () => {
     const p = panel();
     expect(provider(p, "codex").models?.every((m) => m.efforts.length === 0)).toBe(true);
@@ -105,7 +116,7 @@ describe("the panel's providers", () => {
 
   it("an ID typed for this start that the list lacks gets its own row, so it is lit", () => {
     const p = panel({ choice: { launcher: "claude", model: "vendor/new", effort: "" }, configured: null });
-    expect(provider(p, "claude").models?.at(-1)).toMatchObject({ id: "vendor/new", custom: true, efforts: EFFORTS });
+    expect(provider(p, "claude").models?.at(-1)).toMatchObject({ id: "vendor/new", efforts: EFFORTS });
     expect(p.state.current).toEqual({ provider: "claude", model: "vendor/new" });
   });
 });
@@ -171,10 +182,10 @@ describe("presets", () => {
 
 describe("what a pick puts in the form", () => {
   it("a model: its launcher, model and effort; a Default row: no model", () => {
-    expect(formChoice({ provider: "claude", model: "opus", effort: "high" }, claudeList)).toEqual({ launcher: "claude", model: "opus", effort: "high" });
-    expect(formChoice({ provider: "claude", model: "default" }, claudeList)).toEqual({ launcher: "claude", model: "", effort: "" });
-    expect(formChoice({ provider: "work_gw", model: "default" }, { agent: "claude", models: [] })).toEqual({ launcher: "work_gw", model: "", effort: "" });
-    expect(defaultRowId(codexList)).toBe("gpt-5.5");
+    expect(formChoice({ provider: "claude", model: "opus", effort: "high" })).toEqual({ launcher: "claude", model: "opus", effort: "high" });
+    expect(formChoice({ provider: "claude", model: "default" })).toEqual({ launcher: "claude", model: "", effort: "" });
+    // a model its list marks default (Codex's) is that model, not "no model"
+    expect(formChoice({ provider: "codex", model: "gpt-5.5" })).toEqual({ launcher: "codex", model: "gpt-5.5", effort: "" });
   });
 });
 

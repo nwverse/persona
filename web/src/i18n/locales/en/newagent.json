@@ -49,5 +49,6 @@
   "preset_left_out": "Not applied here: {what}. The launcher's or model's own setting runs.",
   "follow_row": "Follow Model settings",
   "carry_dropped": "{name} can’t run on {computer}, so its default is used.",
-  "preset_picked": "Preset {name} · {what}"
+  "preset_picked": "Preset {name} · {what}",
+  "typed_now": "Typed for this start"
 }

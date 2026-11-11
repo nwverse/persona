@@ -159,6 +159,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the choice was made by hand in this opening (a model, a preset, the follow row): only that one goes along; one a
   // computer's pick merely restored gives way to the next computer's own (#2134)
   const touched = useRef(false);
+  // that choice on its way to the computer picked next, until its launchers are read (another pick before then passes it on)
+  const carrying = useRef<ModelChoice | null>(null);
   const firstMessage = useRef<HTMLTextAreaElement>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
@@ -168,6 +170,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setForward(null); // a forward goes with the sheet it came in, not into the next one
       shownMid.current = "";
       touched.current = false;
+      carrying.current = null;
       readThisTime.current.clear();
       return;
     }
@@ -297,14 +300,17 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     // another computer picked while the sheet is open: the choice made on the one before goes along if this one can run it
     const before = shownMid.current;
     shownMid.current = mid;
-    const carry = before && before !== mid && touched.current ? choiceNow.current : null;
+    const carry = before && before !== mid ? (carrying.current ?? (touched.current ? choiceNow.current : null)) : null;
+    carrying.current = carry;
     touched.current = false;
     setLaunchers([]);
     setProviderNames([]);
     setHelpFor("");
     setDropped(null);
     const controller = new AbortController();
+    // nothing of the computer before goes to this one unless restoreLauncher puts it back (a read that fails leaves none)
     setLauncher("");
+    setModel("");
     setTiers([]);
     setTier(null);
     setModelDefault("");
@@ -333,6 +339,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
         }
         const card = pendingSetup.current?.machine === mid ? pendingSetup.current : null;
         if (card) pendingSetup.current = null;
+        carrying.current = null;
         restoreLauncher(mid, card, ls, config ? (config.purpose.effective ?? {}) : null, carry);
       })
       .catch((e) => { if (!controller.signal.aborted) toast(errorText(e), "error"); })
@@ -380,6 +387,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // effort it runs on. A preset is marked until something else is picked (picking its own setup again keeps it).
   const pickModel = (c: ModelChoice, preset: PickerTier | null = null) => {
     touched.current = true;
+    carrying.current = null;
     setHelpFor("");
     setDropped(null);
     if (preset || c.launcher !== launcher || c.model !== model || c.effort !== effort) setTier(preset);
@@ -434,6 +442,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setPickedSetup(setupKey(setup));
     setTier(null);
     touched.current = false;
+    carrying.current = null;
     setEffort(setup.agent_type === "claude" ? setup.effort : "");
     pendingSetup.current = null;
     if (setup.machine !== mid) {

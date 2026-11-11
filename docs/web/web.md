@@ -1604,7 +1604,9 @@ and Android follow in #5117.
   rail cell's tooltip (#5029). Each group begins with **Default** ("Default: Opus 5.5"), which sends no
   model (Model settings' model on their launcher, else the launcher's own), then the models its agent lists (`GET
   …/launchers/{name}/models`, kept for the page's life with the chat's lists in `lib/session-models.ts`: the one that runs
-  is read again on each opening of the sheet, every other one when the panel opens, at most three at a time). A launcher
+  is read again once per opening of the sheet, every other one when the panel opens, at most three at a time; a launcher
+  that can't start here is not asked, and its group shows its Default row, off). Claude Code's `default` entry is the
+  Default row; a model a list marks as its default (Codex's) keeps a row of its own, so a favorite of it is that model. A launcher
   that fixes its own `--model` has its Default row alone, with why under it; Claude Code and Codex take a typed ID ("Use
   “…”", #1644), and an ID typed for this start that the list lacks has its own row. A list that couldn't be read says why
   with **Retry**, and its launcher still offers its Default row (and, for Claude Code and Codex, a typed ID). An older hub
@@ -1615,7 +1617,8 @@ and Android follow in #5117.
   Model settings › New agent runs under it, a warning when that can't start here, and a check while it is followed; a
   click goes back to it. The profile's Agent presets (#2225) are a **Presets** group after Favorites, in the place Cindy
   keeps for Recommended (Cindy's new task has no Recommended group, so New Agent has none): a row per preset, named by
-  it, its description (or launcher · model · effort) under it, no star or flyout. A preset fills launcher, model and
+  it, its description (or launcher · model · effort) under it, no star or flyout; one whose launcher can't start here is
+  off, like that launcher's rows. A preset fills launcher, model and
   effort, and a line under the box names it, or says what of it this launcher can't take.
 - **The row lit**: the model picked, else the Default row of the launcher that runs. Following Model settings lights that
   Default row as well as the follow row: the follow row says where the choice comes from, the lit row what runs, and its

@@ -5,7 +5,8 @@
 // back; the picked model's flyout changes the effort ("Reset to recommended" clears it) and its engine pills pick the
 // launcher that runs the same model with another engine; a pick goes along to another computer that has its launcher and
 // falls back, saying so, on one that hasn't; a typed ID is sent; a model pick leaves the permission mode and folder alone;
-// a list that can't be read is said under the box.
+// a list that can't be read is said under the box; a pick goes on past a computer whose launchers are still being read,
+// and none of it to one whose launchers can't be read; a launcher that can't start here isn't asked for its list.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,6 +38,7 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const LAUNCHERS: Record<string, Launcher[]> = {
   mac: [{ name: "claude", agent: "claude" }, { name: "relay", agent: "claude" }, { name: "codex", agent: "codex" }, { name: "only-mac", agent: "claude" }],
   studio: [{ name: "claude", agent: "claude" }, { name: "relay", agent: "claude" }],
+  mini: [{ name: "claude", agent: "claude" }, { name: "relay", agent: "claude" }],
 };
 const LISTS: Record<string, unknown> = {
   claude: { agent: "claude", models: [{ id: "default", name: "Default", default: true, efforts: EFFORTS }, { id: "opus", name: "Opus 5.5", efforts: EFFORTS, default_effort: "high" }, { id: "sonnet", name: "Sonnet 5", efforts: EFFORTS }] },
@@ -47,6 +49,8 @@ const LISTS: Record<string, unknown> = {
 // Model settings › New agent: Claude Code's Opus at High
 const PURPOSE = { purpose: { id: "agent.new", effective: { provider: "launcher.claude", model: "opus", effort: "high" } }, providers: [] };
 let failList = "";
+let failLaunchersOf = "";
+const asked: string[] = [];
 
 let host: HTMLDivElement;
 let root: Root;
@@ -76,6 +80,8 @@ beforeEach(() => {
   state.machines = [{ id: "mac", name: "Mac", online: true }, { id: "studio", name: "Studio", online: true }];
   launched.length = 0;
   failList = "";
+  failLaunchersOf = "";
+  asked.length = 0;
   localStorage.clear();
   localStorage.setItem("new.machine", "mac");
   localStorage.setItem("new.cwd.mac", "/code/app");
@@ -83,10 +89,12 @@ beforeEach(() => {
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    asked.push(url);
     if (url.includes("/model-config/purposes/")) return json(PURPOSE);
     const list = /\/machines\/([^/]+)\/launchers\/([^/?]+)\/models/.exec(url);
     if (list) return decodeURIComponent(list[2]) === failList ? json({ error: "节点没有回应" }, 500) : json(LISTS[decodeURIComponent(list[2])] ?? { models: [] });
     const ls = /\/machines\/([^/]+)\/launchers/.exec(url);
+    if (ls && decodeURIComponent(ls[1]) === failLaunchersOf) return json({ error: "节点没有回应" }, 500);
     if (ls) return json({ launchers: LAUNCHERS[decodeURIComponent(ls[1])] ?? [], default: { provider: "claude", model: "opus", effort: "high" } });
     return json({ path: "/code", entries: [] });
   }));
@@ -261,6 +269,44 @@ describe("New agent's model panel (#5104)", () => {
     start();
     expect(launched[0]).toMatchObject({ machineId: "studio", launcher: "relay" });
     expect(launched[0].model).toBeUndefined();
+  });
+
+  it("a pick goes on to the computer after the next one when that one's launchers were still being read", async () => {
+    state.machines = [...state.machines, { id: "mini", name: "Mini", online: true }];
+    localStorage.setItem("new.cwd.mini", "/code/mini-app");
+    await open();
+    await pick("model:relay\nglm-5");
+    act(() => machineChip("Studio").click());
+    act(() => machineChip("Mini").click());
+    await flush();
+    expect(pill().title).toBe("Claude Code · GLM 5 · relay · 高");
+    start();
+    expect(launched[0]).toMatchObject({ machineId: "mini", launcher: "relay", model: "glm-5" });
+  });
+
+  it("a computer whose launchers can't be read gets nothing of the model picked on the one before", async () => {
+    failLaunchersOf = "studio";
+    await open();
+    await pick("model:claude\nsonnet");
+    act(() => machineChip("Studio").click());
+    await flush();
+    start();
+    expect(launched[0]).toMatchObject({ machineId: "studio", launcher: "" });
+    expect(launched[0].model).toBeUndefined();
+  });
+
+  it("doesn't ask a launcher that can't start here for its list when the panel opens", async () => {
+    LAUNCHERS.mac = [...LAUNCHERS.mac, { name: "broken", agent: "claude", health: { state: "blocked", kind: "auth" } }];
+    try {
+      await open();
+      await openPanel();
+      expect(asked.some((u) => u.includes("/launchers/relay/models"))).toBe(true);
+      expect(asked.some((u) => u.includes("/launchers/broken/models"))).toBe(false);
+      // still listed, its Default row off
+      expect(row("model:broken\ndefault").getAttribute("aria-disabled")).toBe("true");
+    } finally {
+      LAUNCHERS.mac = LAUNCHERS.mac.filter((l) => l.name !== "broken");
+    }
   });
 
   it("sends a model ID typed in the search (Enter picks its “Use …” row)", async () => {
