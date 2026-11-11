@@ -201,6 +201,8 @@ Outside the design system, 151 production files import `androidx.compose.materia
 
 Risks: layouts grow where these controls sit in rows, so screenshot baselines move. Brief and Board share the components and get the fix too.
 
+Finding (11-11): step 1 as written moved pixels. With `minimumInteractiveComponentSize()` before `size()`, a switch's row grew 12dp next to rows without one, and the Agents computer and space headings grew too (screenshots in #4209). Compose already stretches a small pointer target to the system's 48dp touch area where no other target is closer, so the switch, the search field's clear button and a heading action keep their size, the no-op calls go, and `TouchTargetTest` guards the 48dp reach (the heading action joins its cases; the clear button has its own test, since the text sits on its left). Steps 2 and 3 grow layouts as well; each needs a reason a target is missed (an overlapping neighbour) before it changes how a screen looks.
+
 ### T10. Haptics
 
 **Today.** iOS `Haptics` in `apple/Persona/App/AppModel.swift` has four kinds: tap (a light impact), success, error and attention (a warning). The code calls it 417 times in 130 files (tap 233, success 124, error 54, attention 13). `DESIGN_SYSTEM.md` section 4.3 still says about 393 and that a completed send plays success, while the code plays tap. Android's `Haptics.kt` maps the same four kinds onto platform feedback (tap to context click, success to confirm, attention to gesture threshold, error to reject) and fires them at about 20 places in 14 files.
