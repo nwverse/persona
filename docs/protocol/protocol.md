@@ -2038,6 +2038,7 @@ The foundation shared by the file page and the various previews (spreadsheets, O
 **+** › **Files** in the App's chat input box (for Agents and for the assistant in the chat tab): the chosen file is uploaded to a temporary directory on **the computer the session runs on** (the node's
 `os.TempDir()`: usually `/tmp` on Linux, `$TMPDIR` on macOS, and also `/tmp` for an ssh node without that variable), and its absolute path is inserted at the cursor in the input box,
 **without sending automatically**. The assistant runs on its own machine (the hub machine by default), so files go there. Images still go as image attachments; for videos from the photo library, see "Sending videos" below.
+Share › Persona on iOS uploads shared files the same way to the target's computer and sends their paths with the message (docs/apple/ios.md "Share to Persona").
 
 - `POST /api/v1/machines/{mid}/files?name=<original file name>`, the body is the file itself (`Content-Length` required) → `{path, name, size}`.
   Limit 200 MB (`proto.MaxUploadBytes`): over that returns 413 `code: too_large` (the App checks the size right after picking and won't upload).
