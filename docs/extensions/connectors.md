@@ -75,6 +75,18 @@ the hub drops unknown tiers and leaves classification to the model.
   five methods hardcoded in `node/node.go`; new nodes also answer through `plugin.node.call {id: "imessage"}`, see `docs/extensions/extensions.md` ("Built-in node programs"));
   the hub-side `imessage.Remote` is the connector. Choose the Mac in the built-in extension "Messages (iMessage)" (#1830 step 6); without a selection, use `imessage.machine` in the manager's manager.json.
 
+  Messages identifies an entry by its canonical conversation and physical message ROWID. Multiple SMS/iMessage chat
+  associations for that conversation count once in message pages, search results and unread counts; an association to
+  another conversation remains a separate entry. A changes page's limit counts distinct physical messages, so a message
+  belonging to several conversations may produce more entries than that limit. The page selects its boundary and expands
+  all its chat associations in one SQLite snapshot; `more` counts distinct messages and the numeric `next` cursor advances
+  only after the last selected ROWID's associations are processed, including conversations filtered out by the keep rule.
+  History reads reject a conversation with more than 200 associated chats; changes and search reject a read that exceeds
+  10,000 or 40,000 expanded associations respectively. Failed reads return no page cursor. Search considers at most
+  20,000 distinct physical messages before applying its result limit. Existing numeric cursors remain valid, but a cursor
+  already advanced by an older version cannot recover an association that version skipped; no stored state is reset.
+  Message history keeps its existing join-date order and message-date cursor semantics.
+
 ### Gate
 
 - The gate handles only **AI-initiated** writes (assistant tools, `tg` CLI / skill, Agents, all through the node's `mcp.call`): `Registry.Call` →
