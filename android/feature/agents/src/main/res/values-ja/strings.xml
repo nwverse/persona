@@ -495,7 +495,9 @@
     <string name="agents_herdr_why_timeout">herdr の起動に時間がかかっています。しばらくしてからもう一度確認してください</string>
     <string name="agents_empty_no_computer_title">まだパソコンがありません</string>
     <string name="agents_empty_no_computer_hint">1 台追加すると、Persona がそのパソコンで作業できます。</string>
-    <string name="agents_page_loaded">%2$d 件中 %1$d 件を読み込み済み</string>
+    <plurals name="agents_page_loaded">
+        <item quantity="other">%2$d 件中 %1$d 件を読み込み済み</item>
+    </plurals>
     <string name="agents_page_more">さらに読み込む</string>
     <string name="agents_page_previous">前のセッションを読み込む</string>
     <!-- To-do status sections (#3206, docs/assistant/todo-status-sop.md) -->
