@@ -1,5 +1,12 @@
 # Lessons: hub / node and networking
 
+## Shared web fixtures belong in the Docker build context (2026-11-11, #4260)
+
+The web production build typechecks test files. A JSON fixture imported from `spec/fixtures/` needs both a
+`.dockerignore` exception and a `COPY` into the web stage at the same relative path. A native build sees the
+whole checkout and can pass while the Docker build fails with TS2307. The Docker entrypoint suite now checks
+shared JSON imports, including globs, against both files, catching new fixture groups before an image build.
+
 ## Sharing frontiers and migration lanes (#3604)
 
 - Migration numbers are global across the hub and manager sets, even though their
@@ -1124,6 +1131,7 @@ and add that directory to image workflow PR paths.
 
 - `-race` always flagged devices and connector: tests only `defer cancel()` without waiting for `Machine.run` / `watchOne`, so the next test changed `reconnectGrace` / `watchBackoffFirst` while old goroutines read them (even already-finished reads race without synchronization). devices tests use `runMachine(t, m)` (Cleanup cancels, then waits with timeout for `run`); connector `Start` reads backoff parameters once and passes them to watchers.
 - Waiting for `run` exposed another bug: a tailcat connection stuck writing in `configureNode` (peer not reading) outlived ctx, while `watchTailcat` exited without closing it; `run` never returned and hub `workers.Wait()` hung at shutdown. `serve` now closes tailcat on ctx end (`context.AfterFunc`). Cancel-without-wait tests hid the hang.
+- A goroutine stopped before it starts still reads what it reads when it does start (2026-11-11, #3942). `TestPlanThenWatchStopsWhenTheCardAnswers` cancels the plan-then watch at once, and the goroutine read `planThenEvery` after `fastPlanThen`'s cleanup had put it back; `planThenAfterTerminal` now reads it before `go`. The same holds for fields: `setCatalog` prefetches a pushed entry in a goroutine that reads `n.peer`, so a test gives the node its hub before `setCatalog`, never after.
 
 
 ## Knowledge corrections and extension permissions (#1908)
@@ -1727,3 +1735,9 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 
 - `uid_t` is unsigned, but macOS `ps -o uid` prints it signed: `nobody` (4294967294) shows as `-2`. Linux prints 65534, so hosted CI (Ubuntu) never sees a negative owner. `parseProcessTable` treated one as a corrupt row and failed the whole table, so `personad manager maintenance prepare|observe` broke on any Mac running a `nobody` process (`dhcp6d`, the DHCPv6 client, once a network uses DHCPv6).
 - When a check covers every row of a system table, validate the format (a number), not a range taken from one platform; keep the real constraint (the target is the current user's) on the row it is about.
+
+## A field that pushes a row past its size class (2026-11-11, #3937)
+
+- `proto.Session` is copied row by row all over the hub, the manager and the node, and the allocator rounds every allocation up to a size class. #3897 added two fields (40 bytes) and took the struct from 1,528 to 1,568 bytes. A row copied on its own went from the 1,536-byte class to 1,792 (+256 B), every list copy grew by 40 B a row plus page rounding, and four allocation budgets in the assistant failed at once, none of them near the change. The readers copied no more rows than before.
+- When a budget is over by one size-class step per row it keeps, or by rows × a few bytes, compare the row type's `unsafe.Sizeof` at both commits before hunting for new copies.
+- Make room before raising a budget. The 17 bools sat in 10 separate words, 63 bytes of padding; moving bools beside other bools brought the row back to 1,528 bytes without dropping a field. Reordering fields reorders the reflect encoder's keys, so `appendSession` and `sessionWireLayout` follow, and byte goldens change only in key order (check that every line decodes to the same object). `TestSessionFitsItsSizeClass` now fails in `proto`, listing the bools that sit alone, instead of in another package's budgets.

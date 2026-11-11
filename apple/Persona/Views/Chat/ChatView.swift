@@ -4,6 +4,9 @@ import OSLog
 import PersonaKit
 import PhotosUI
 import SwiftUI
+#if DEBUG
+import notify
+#endif
 
 enum ChatStyle {
     /// Develop: every step visible, tab bar hidden.
@@ -125,6 +128,10 @@ struct ChatView: View {
     @State private var scratch = ChatScratch()
     /// Keeps a tapped header in place while what it opens settles (`ChatPin`).
     @State private var pin = ChatPin()
+    #if os(iOS) || os(visionOS)
+    /// ↓'s jump to the newest end, run on the list itself (#3027).
+    @State private var jumpRun = ChatJumpRun()
+    #endif
     /// Work lines just opened, until when their steps reveal themselves as they appear (they arrive from the hub after
     /// the tap); and ones folding away before they close (`Unfolding`).
     @State private var revealUntil: [String: Date] = [:]
@@ -149,6 +156,8 @@ struct ChatView: View {
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
     @Environment(\.splitDetail) private var split
     @Environment(\.splitShowList) private var showList
+    /// A phone's tabs (iPhone Duo open, #2623): on its side the system's Show Sidebar brings a folded list back (#3680).
+    @Environment(\.pageTabSwitch) private var pageTabSwitch
     /// The Persona conversation in the shell (docs/apple/ios.md「New shell」).
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
@@ -1543,6 +1552,11 @@ struct ChatView: View {
         if pin.list?.isTracking == true { return }
         #endif
         guard follow.follows, !pin.holding else { return }
+        #if os(iOS) || os(visionOS)
+        // ↓ is on its way to the newest end: it gets there whatever arrives meanwhile (the flipped list's newest end is
+        // offset 0 however much comes in), and a jump of this one's would cut its glide short. It looks again once there.
+        if jumpRun.running { return }
+        #endif
         // More than a screen away while following: a work line opened at the newest end of a running turn, its steps
         // between the header and the newest. Its next step glides there rather than jumping a screen or more.
         scrollToEnd(animated: scratch.listFrame.height > 0 && scratch.newestGap > scratch.listFrame.height)
@@ -1651,9 +1665,34 @@ struct ChatView: View {
         }
     }
 
+    /// ↓: to the newest end, following, from anywhere and at any moment, a glide included (#3027). On the phone the jump
+    /// runs on the list itself (`ChatJumpRun`): it stops the glide where it is, comes from a screen away at most and
+    /// says when it is there; then what came in meanwhile is caught up with, and the geometry read from the list.
     private func jumpToEnd() {
+        #if DEBUG && (os(iOS) || os(visionOS))
+        if pin.list?.isDecelerating == true { scratch.glideTaps += 1 }
+        #endif
         Haptics.tap()
         setFollow { $0.follow() }
+        #if os(iOS) || os(visionOS)
+        if let list = pin.list {
+            if pin.holding { pin.release() } // a tapped header held in place would put the list back each frame
+            #if DEBUG
+            scratch.endJumps += 1
+            let tapped = CACurrentMediaTime()
+            #endif
+            jumpRun.start(list) { _ in
+                #if DEBUG
+                scratch.jumpMs = Int((CACurrentMediaTime() - tapped) * 1000)
+                #endif
+                reconcileNewestGeometry()
+                // A reply that streamed on, or held-back lines let in by ↓: the list stays at offset 0, and this
+                // makes sure of it (a finger that took the list meanwhile has decided already).
+                if follow.follows, !scratch.atNewest { scrollToEnd() }
+            }
+            return
+        }
+        #endif
         scrollToEnd(animated: true)
     }
 
@@ -1872,7 +1911,7 @@ struct ChatView: View {
                 chatScroll()
                     .overlay { if layout.on { EdgeScrubOverlay(state: scrub) } }
                     .modifier(EdgeScrubbing(on: layout.on, band: scrubBand, changed: scrubbed))
-                    .overlay(alignment: .bottomTrailing) { jumpArrow }
+                    .overlay(alignment: .bottomTrailing) { arrowLayer }
                     #if DEBUG
                     .overlay(alignment: .topLeading) { if Self.scrollProbe { scrollState } }
                     .screenProbe("chat", page: style == .assistant ? "assistant" : "agents",
@@ -2103,7 +2142,8 @@ struct ChatView: View {
                                            frozen: frozen != nil, ids: order.suffix(4).map { String($0.suffix(16)) },
                                            x: Int(scratch.offsetX.rounded()),
                                            near: follow.near, mode: "\(follow.mode)", arrow: arrowShows, gap: Int(scratch.newestGap.rounded()),
-                                           dragging: scratch.userDragging, held: pin.holding, blank: scratch.blankLandings))
+                                           dragging: scratch.userDragging, held: pin.holding, blank: scratch.blankLandings,
+                                           glideTaps: scratch.glideTaps, jumpMs: scratch.jumpMs))
         }
     }
 
@@ -2136,6 +2176,16 @@ struct ChatView: View {
     }
     #endif
 
+    /// ↓ over the list. On the phone it comes and goes with a short scale and fade, not at once (#3027); the Mac's is as
+    /// it was (frozen).
+    @ViewBuilder private var arrowLayer: some View {
+        #if os(macOS)
+        jumpArrow
+        #else
+        ZStack { jumpArrow }.animation(Theme.Motion.state, value: arrowShows)
+        #endif
+    }
+
     @ViewBuilder private var jumpArrow: some View {
             if arrowShows {
                 Button(action: jumpToEnd) {
@@ -2149,6 +2199,11 @@ struct ChatView: View {
                 #endif
                 .themedButton()
                 .clipShape(.circle)
+                #if os(iOS)
+                // The finger is taken by a UIKit view over the button, on touch-down: on a phone, a tap on the button
+                // while the list still glided did nothing (`JumpArrowTouch`, #3027).
+                .overlay { JumpArrowTouch(action: jumpToEnd) }
+                #endif
                 .padding(Theme.Space.l)
                 .transition(.scale.combined(with: .opacity))
             }
@@ -2492,6 +2547,10 @@ struct ChatView: View {
             // on the entry line produced it with no finger down and folded the chrome on open.
             if phase != .idle { scratch.lastActivity = .now }
             let flick = phase == .decelerating && (old == .tracking || old == .interacting || scratch.userDragging)
+            #if DEBUG
+            // The user's flick glides on: UI tests that tap during the glide wait for this (`TouchScript`, #3027).
+            if flick, old != .decelerating, ScreenProbe.enabled { notify_post(Self.glideNote) }
+            #endif
             scratch.userDragging = phase == .tracking || phase == .interacting || flick
             if phase == .idle, old != .idle, old != .animating {
                 settleChrome() // the finger lifted, the glide ended
@@ -2610,11 +2669,14 @@ struct ChatView: View {
     }
 
     #if DEBUG
+    /// Posted (Darwin notification) when a flick of the user's starts to glide, with `-probes YES`.
+    static let glideNote = "dev.persona.test.chat-glide"
+
     /// One `ScrollTrace` state line. Out of the modifier chain: inline, its interpolation helped the chain time out (#2963).
     private static func traceLine(follow: ChatFollow, frozen: Frozen?, scratch: ChatScratch, store: ChatStore) -> String {
         let mode = "\(follow.mode) near \(follow.near ? 1 : 0) touch \(follow.touching ? 1 : 0) drag \(scratch.userDragging ? 1 : 0)"
         let held = "frozen \(frozen == nil ? 0 : 1) ftext \(frozen?.text.count ?? -1)"
-        return "\(mode) \(held) live \(store.liveText.count) items \(store.items.count) gap \(Int(scratch.newestGap))"
+        return "\(mode) \(held) live \(store.liveText.count) items \(store.items.count) gap \(Int(scratch.newestGap)) jumps \(scratch.endJumps)"
     }
     #endif
 
@@ -3336,11 +3398,20 @@ struct ChatView: View {
         }
     }
 
-    /// The first page of a split's detail column, on the chat: nothing to go back to (the list is beside it).
-    private var hidesBack: Bool { host == nil && split?.isFirstPage == true && split?.listHidden != true && pane == .chat }
+    /// The first page of a split's detail column, on the chat: nothing to go back to (the list is beside it). On iPhone
+    /// Duo open on its side also with the list folded (#3680): the chat's actions are in the system's side bars, whose
+    /// Show Sidebar at the top left brings the list back, and a ‹ that did the same read as a Back that opened the
+    /// sidebar instead of going back.
+    private var hidesBack: Bool {
+        host == nil && split?.isFirstPage == true && (split?.listHidden != true || systemShowsList) && pane == .chat
+    }
     /// The split's first page with its list column closed: ‹ brings the list back. There is nothing to go back to, and
-    /// with this page's own header no system button to open the list (iPhone Duo open, iPad).
-    private var backShowsList: Bool { host == nil && split?.isFirstPage == true && split?.listHidden == true && pane == .chat }
+    /// with this page's own header no system button to open the list (the iPad; the open Duo upright).
+    private var backShowsList: Bool {
+        host == nil && split?.isFirstPage == true && split?.listHidden == true && !systemShowsList && pane == .chat
+    }
+    /// The system's Show Sidebar is on screen beside a folded list: the side bars' column on a phone's tabs.
+    private var systemShowsList: Bool { pageTabSwitch && sideBars }
 
     /// The header's leading button: back to the chat from files / Git; on the chat ‹, or a hosting page's ✕ / ‹.
     private var backSymbol: String { pane == .git || pane == .files ? Theme.Icon.back : host?.leaveSymbol ?? Theme.Icon.back }
@@ -4715,6 +4786,7 @@ struct Composer: View, Equatable {
         .mediaPicker(isPresented: $showPhotos, selection: $picks)
         #if os(iOS)
         .modifier(attachHost)
+        .task { if attachOpener != nil { AttachLibrary.prewarm() } }
         #endif
         .fileUploadPicker(isPresented: $showFiles) { urls in
             uploads.start(urls, machine: key.machineRef, model: model, dest: uploadDest) { insertPath($0) }
@@ -5958,7 +6030,7 @@ struct WorkLine: View, Equatable {
     /// The closures are the line's own (keyed by its id): a hub push re-evaluating the page leaves unchanged lines alone.
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.isEmpty == b.isEmpty && a.counts == b.counts && a.live == b.live && a.start == b.start && a.end == b.end
-            && a.open == b.open && (a.openTerminal == nil) == (b.openTerminal == nil) && a.agents == b.agents
+            && a.open == b.open && (a.openTerminal == nil) == (b.openTerminal == nil) && a.agents == b.agents && a.doing == b.doing
     }
 
     private let isEmpty: Bool
@@ -5969,6 +6041,12 @@ struct WorkLine: View, Equatable {
     let open: Bool
     /// The subagents the running line waits on: what it says instead of its counts.
     let agents: AgentsWorking?
+    /// Otherwise, while it runs, the step it names instead of its counts (#2987); drawn as `shown`, which follows it at
+    /// most about twice a second.
+    private let doing: WorkNow?
+    @State private var shown: WorkNow?
+    @State private var shownAt = Date.distantPast
+    @Environment(\.dynamicTypeSize) private var typeSize
     let openTerminal: (() -> Void)?
     let toggle: () -> Void
 
@@ -5981,6 +6059,8 @@ struct WorkLine: View, Equatable {
         self.end = end
         self.open = open
         self.agents = live ? agents : nil
+        doing = live && self.agents == nil ? WorkNow.of(items) : nil
+        _shown = State(initialValue: doing)
         self.openTerminal = openTerminal
         self.toggle = toggle
     }
@@ -5989,8 +6069,25 @@ struct WorkLine: View, Equatable {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("WorkLine")
         #endif
-        if AppStyle.current.usesBeautifulUI { beautiful } else { plain }
+        Group { if AppStyle.current.usesBeautifulUI { beautiful } else { plain } }
+            .task(id: doing) { await follow(doing) }
     }
+
+    /// Lets `next` through once half a second has passed since the last step shown (`WorkNow.hold`); a newer step in
+    /// the meantime replaces this wait (`task(id:)`), so a run of quick calls shows the newest, not each name in turn.
+    private func follow(_ next: WorkNow?) async {
+        guard next != shown else { return }
+        let wait = WorkNow.hold(next, shown: shown, shownAt: shownAt, now: .now)
+        if wait > 0 {
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled else { return }
+        }
+        shown = next
+        shownAt = .now
+    }
+
+    /// The step the line names now, when it names one (`doing` is already nil on a finished line and under subagents).
+    private var step: WorkNow? { WorkNow.named(doing: doing, shown: shown) }
 
     /// BeautifulUI's tool run header: ⌄, the counts and the time; working, a spinner and a shimmer.
     private var beautiful: some View {
@@ -6061,7 +6158,33 @@ struct WorkLine: View, Equatable {
         }
     }
 
-    private func summary(now: Date) -> some View {
+    @ViewBuilder private func summary(now: Date) -> some View {
+        if let step { stepSummary(step, now: now) } else { counted(now: now) }
+    }
+
+    /// One line: the step's words give way (a path or a command in the middle, a sentence at the end), "+2" and the
+    /// time stay whole. At the accessibility text sizes, where beside those the words kept a letter: up to two lines of
+    /// words, room for both always kept so the line holds still as the steps change, and "+2" and the time on a line under them.
+    @ViewBuilder private func stepSummary(_ step: WorkNow, now: Date) -> some View {
+        let took = Self.duration(from: start, to: now)
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: Theme.Space.flush) {
+                Text(step.text).truncationMode(step.tail ? .tail : .middle).lineLimit(2, reservesSpace: true)
+                // Whole: on a line too narrow it wraps rather than cuts.
+                Text(step.trailer(took: took, alone: true)).lineLimit(nil)
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            HStack(spacing: Theme.Space.flush) {
+                Text(step.text).truncationMode(step.tail ? .tail : .middle)
+                Text(step.trailer(took: took)).fixedSize()
+            }
+            .lineLimit(1)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func counted(now: Date) -> some View {
         FirstFitting { // ViewThatFits measured both at every width of a window resize (#1337)
             Text(label(now: now, short: false)).fixedSize()
             Text(label(now: now, short: true)).fixedSize()
@@ -6070,6 +6193,8 @@ struct WorkLine: View, Equatable {
     }
 
     private func label(now: Date, short: Bool) -> String {
+        // The step in full: the line may have cut it.
+        if let step { return step.text + step.trailer(took: Self.duration(from: start, to: now)) }
         let parts = agents.map { [SubagentGridText.working(count: $0.count, doing: $0.doing, short: short)] } ?? (short ? counts.short : counts.full)
         let took = Self.duration(from: start, to: now)
         guard AppStyle.current.usesBeautifulUI else {
@@ -6354,6 +6479,8 @@ final class ChatScratch {
     var offsetX: CGFloat = 0
     #if DEBUG
     var endJumps = 0 // jumps to the newest (scrollToEnd), for the scroll probe
+    var glideTaps = 0 // ↓ tapped while the list glided (#3027), for the scroll probe
+    var jumpMs = -1 // how long the last ↓ took to the newest end (#3027), for the scroll probe
     var lineY: [String: CGFloat] = [:] // each line's top on screen, for the fold probe (-showFoldProbe)
     #endif
 }
@@ -6461,5 +6588,9 @@ nonisolated struct ChatRowsShown: Encodable, Equatable {
     var held: Bool
     /// Landings that left nothing drawn and were mended (`ChatView.mendBlankLanding`).
     var blank: Int
+    /// ↓ taps that came while the list still glided after a flick (#3027), and how long the last ↓ took to the newest
+    /// end (ms; -1: none yet).
+    var glideTaps: Int
+    var jumpMs: Int
 }
 #endif

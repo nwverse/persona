@@ -445,7 +445,7 @@ struct SpaceView: View {
                 }
             }
         }
-        .navigationDestination(item: $started) { key in ChatView(key: key).id(key) }
+        .navigationDestination(item: $started) { key in ChatView(key: key).id(key).splitDetailPage(ownsBack: true) }
         .renameSpaceAlert($renaming)
     }
 }

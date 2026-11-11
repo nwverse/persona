@@ -1550,15 +1550,30 @@ if os.environ.get("MOCK_ORIGINS") == "1":
     for c in ASSISTANT[:4]:
         c.setdefault("origin", "user")
 
-# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): two side conversations are leaders. GET
-# /api/v1/assistant lists them in `leaders`; the web sidebar shows them first among the Persona chats, pinned, on any browser.
+# MOCK_LEADERS=1 (#3623, docs/assistant/unified-entry.md "Leader conversations"): four side conversations are leaders. GET
+# /api/v1/assistant lists them in `leaders`; GET /api/v1/assistant/leaders names each direction (#3695), and the web
+# sidebar shows them first among the Persona chats as the "Directions" group under those names, on any browser.
 MOCK_LEADERS = []
+MOCK_DIRECTION_NAMES = {}
 if os.environ.get("MOCK_LEADERS") == "1":
-    for i, (title, minutes, last) in enumerate([("增长方向", 60 * 30, "本周两个实验都在跑。"), ("支付方向", 60 * 45, "对账任务已派出。")]):
+    for i, (title, name, minutes, last) in enumerate([  # i18n-ignore: the hub's own titles and names
+        ("1110 | 探索 | 你是「Persona 产品」方向的主管", "Persona 产品", 60 * 30, "本周两个实验都在跑。"),
+        ("1110 | 探索 | 你是「基础设施」方向的主管", "基础设施", 60 * 45, "部署脚本的改动已派出。"),
+        ("1109 | 探索 | 你是「增长」方向的主管", "增长", 60 * 50, "注册转化的对比看完了。"),
+        ("1108 | 探索 | 你是「支付对账」方向的主管", "支付对账", 60 * 55, "对账任务已派出。"),
+    ]):
         c = assistant_sess(f"lead{i:04d}-0000-4000-8000-{i:012d}", title, minutes, last)
         c["origin"] = "user"
         ASSISTANT.append(c)
         MOCK_LEADERS.append(c["session_id"])
+        MOCK_DIRECTION_NAMES[c["session_id"]] = name
+
+
+def mock_leaders_list():
+    """GET /api/v1/assistant/leaders as the hub lists it (assistant/directions.go): each leader with its direction's name."""
+    titles = {c["session_id"]: c.get("title", "") for c in ASSISTANT}
+    return {"leaders": [{"id": sid, "title": titles.get(sid, ""), "name": MOCK_DIRECTION_NAMES.get(sid, ""), "by": "user",
+                         "at": "2026-11-10T08:00:00Z"} for sid in MOCK_LEADERS]}
 
 # The health space (docs/assistant/health.md): its conversations run in a directory of their own and carry space "health"; they
 # are listed by GET /api/v1/assistant?space=health only, and its memory is its own (?space=health).
@@ -1847,7 +1862,9 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
                     # went (#3780, MOCK_MINUTES_DAYS): 0 means forever; finite windows are never fewer than the recordings'.
                     "recording_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
-                    "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0"))}
+                    "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0")),
+                    # Knowledge points by topic (#3783), on by default.
+                    "kb_topics": True}
 # What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
 RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
 
@@ -1865,7 +1882,7 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
-        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"])
+        out.update(agent_tasks=cfg["agent_tasks"], archive_closed_days=cfg["archive_closed_days"], kb_topics=cfg["kb_topics"])
     if cfg["notes"] is not None:
         out["notes"] = cfg["notes"]
     if cfg["main"]:
@@ -2195,6 +2212,78 @@ def _triage_fixture():
 
 if os.environ.get("MOCK_TODO_TRIAGE") == "1":
     TODOS_INIT.extend(_triage_fixture())
+
+
+# MOCK_TODO_LIST=1|calm|failed (#3712, #3740): only these to-dos, for the To-dos list's header, filter and sort
+# screenshots. Every section has rows; due dates fall today, later this week, later this month, before today (an open PR,
+# overdue) and nowhere; two are high priority, two low; a fix and its regression test share issue #412 (one row,
+# "1 related"). The selected-cache decision waits on the owner (an ask). calm: nothing needs the owner. failed: also three
+# closed to-dos whose agent never started (#3713), one in the same plan as a to-do that really finished.
+def _todo_list_fixture(variant):
+    out = []
+    local = NOW.astimezone()
+    today = local.date()
+    week_end = today + timedelta(days=6 - today.weekday())  # Monday-first, as the calendar view in zh-Hans
+    nxt = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_end = nxt - timedelta(days=1)
+
+    def day(n, cap=None):
+        d = today + timedelta(days=n)
+        return (min(d, cap) if cap else d).isoformat()
+
+    def agent(n, title, cwd, state, minutes, last, **kw):
+        sid = f"c3d5e7f9-0000-4000-8000-{3712000 + n:012d}"
+        status = {"working": "working", "needs_you": "blocked", "unread": "done", "idle": "idle"}[state]
+        space = cwd.rstrip("/").rsplit("/", 1)[-1]
+        SESSIONS.append(sess("macbook", sid, title, cwd, status, state, space, 7, "1", 1, minutes, last, **kw))
+        return {"machine_id": "macbook", "session_id": sid, "linked_at": ago(minutes=minutes + 30), "released_at": None,
+                "title": title, "cwd": cwd, "agent": "claude", "start_error": "", "source": "spawned", "via": ""}
+
+    def todo(tid, title, minutes, agents=(), **kw):
+        t = {"id": tid, "title": title, "notes": "", "done_at": None, "created_at": ago(minutes=minutes + 600),
+             "updated_at": ago(minutes=minutes), "origin": "conv_demo", "spaces": [], "agents": list(agents), "priority": ""}
+        t.update(kw)
+        out.append(t)
+
+    evening = local.replace(hour=18, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    p = "/Users/me/code/persona"
+    if variant != "calm":
+        todo("tl_migrate", "数据库升级到 18", 12, [agent(1, "数据库升级", "/home/me/code/shop-api", "needs_you", 12,
+             "要不要先在备份库上演练一遍？", pending=1)], due_at=evening.isoformat().replace("+00:00", "Z"))
+        todo("tl_cache", "选缓存方案", 120, [agent(2, "缓存方案", p, "idle", 120, "测试已通过，是否继续更换缓存方案？")],
+             priority="high")
+    todo("tl_inbox", "收件箱分拣加批量操作", 4, [agent(3, "收件箱批量操作", p, "working", 4, "批量标记已处理的接口写好了，正在补单测。")],
+         due_date=day(2, week_end), priority="high")
+    todo("tl_widget", "修小组件横屏崩溃", 1, [agent(4, "小组件横屏", "/Users/me/code/weather", "working", 1,
+         "在模拟器里复现了横屏崩溃，正在改布局。")], due_date=day(9, month_end))
+    todo("tl_push_fix", "修复 #412 推送丢失", 50, [agent(5, "推送丢失", p, "unread", 50, "修好了：重连后补拉漏掉的推送，单测已加。")])
+    todo("tl_push_test", "#412 推送丢失：补回归测试", 60 * 20, [agent(6, "推送回归测试", p, "idle", 60 * 20, "回归测试写完了。")],
+         priority="low")
+    todo("tl_speed", "网页加载提速", 60, done_at=ago(hours=1), done_by="review", done_reason="验收通过", due_date=day(0),
+         delivery={"state": "live", "at": ago(hours=1)})
+    todo("tl_search_pr", "设置页加搜索", 60 * 24 * 6, [agent(7, "设置页搜索", p, "idle", 60 * 24 * 6, "PR 已经开好了，等合并。")],
+         stage="review", pr_url="https://github.com/example/app/pull/31", due_date=day(-4),
+         delivery={"state": "pr", "gate": "等你批准合并", "unblock": "user", "at": ago(days=6)})
+    todo("tl_minutes", "整理本周会议纪要", 125, [agent(8, "会议纪要", "/Users/me/work", "idle", 125, "纪要初稿放在知识库里了。")],
+         due_date=day(3, week_end), priority="low")
+    todo("tl_nas", "给 NAS 配自动备份", 180, origin="", due_date=day(17, month_end))
+    for i, title in enumerate(["排查 node 内存上涨", "试一下新的启动器", "清理旧的构建缓存", "看一下日志轮转", "调研新引擎", "修 Android 深色模式的边框"]):
+        todo(f"tl_stale_{i}", title, 60 * 24 * (3 + i), [agent(20 + i, title, p, "idle", 60 * 24 * (3 + i), "先到这里。")])
+    for i, (title, days) in enumerate([("换一套设置页图标", 2), ("整理发布说明", 3), ("博客迁移到 Astro", 4), ("接入支付回调", 5)]):
+        todo(f"tl_done_{i}", title, 60 * 24 * days, done_at=ago(days=days), **({"due_date": day(-8)} if i == 0 else {}))
+    if variant == "failed":
+        failed = dict(done_at=ago(hours=12), start_error="rpc: connection closed", agents=[])
+        todo("tl_failed_rce", "修复控制台远程执行漏洞", 60 * 12, plan_id="plan_tl_rce", **failed)
+        todo("tl_rce_done", "控制台远程执行漏洞：上线验证", 60 * 10, plan_id="plan_tl_rce", done_at=ago(hours=10), done_by="review",
+             done_reason="验收通过")
+        todo("tl_failed_panel_a", "部署自托管面板", 60 * 24, **dict(failed, done_at=ago(hours=24)))
+        todo("tl_failed_panel_b", "部署自托管面板", 60 * 28, **dict(failed, done_at=ago(hours=28)))
+    return out
+
+
+_TODO_LIST = os.environ.get("MOCK_TODO_LIST", "")
+if _TODO_LIST:
+    TODOS_INIT[:] = _todo_list_fixture(_TODO_LIST)
 TODOS = copy.deepcopy(TODOS_INIT)
 
 
@@ -2262,7 +2351,7 @@ def apply_todo_plan(t, body):
 
 # MOCK_TODO_ASKS=1 (#2056, docs/assistant/todos.md "Waiting for the owner"): to-dos carry the ask they wait on, as GET
 # /api/v1/todos lists it: a decision with a recommendation (the PR check, its agent idle), a conclusion that cannot be done
-# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" (the brief's accept row). POST …/accept takes one
+# (the blog) and, with MOCK_TASKS, the release notes' "Please verify" and the cache decision (the brief's accept rows). POST …/accept takes one
 # (accept_brief): its ask is gone from the list, and a second press is 409.
 TODO_ASKS = {
     "todo_review": {"outcome": "decide", "verdict": "🤔 要你拍板：PR #42 改了公开接口，旧接口留不留", "recommend": "先合入，下个版本再删旧接口"},
@@ -2270,6 +2359,9 @@ TODO_ASKS = {
     "todo_task_release": {"verdict": "✅ 做完了：已部署，按下面验收"},
 } if os.environ.get("MOCK_TODO_ASKS") == "1" else {}
 TODO_ASKED_AT = ago(hours=2)
+if _TODO_LIST and _TODO_LIST != "calm":  # MOCK_TODO_LIST: the cache decision waits on the owner
+    TODO_ASKS["tl_cache"] = {"outcome": "decide", "verdict": "🤔 要你拍板：测试已通过，是否继续更换缓存方案？",
+                             "recommend": "保留当前缓存，下次再评估新方案"}
 
 # MOCK_ORPHANED=1 (#3618, docs/assistant/todos.md "Nobody is working on this"): open to-dos whose agents are gone, as GET
 # /api/v1/todos carries it, on to-dos whose agents have stopped, one per reason: closed after a model error (the PR
@@ -3186,6 +3278,67 @@ if os.environ.get("MOCK_KB_MANY_LINKS") == "1":
         [kb_link("people", "p_sample_%d" % _i) for _i in range(4)]
 
 
+# MOCK_KB_TOPICS=1: knowledge points curated by topic (#3783, docs/assistant/knowledge.md "Topics"), out of the example
+# projects and chats, for the Topics tab, a topic's page and the knowledge map's Topics view.
+def kb_topic(slug, name, note, points, tags=()):
+    """A topic: its list entry (extra is its point count, as the hub's) and its detail (points, the entries they came from)."""
+    pts = [dict(p, id="p%d" % (i + 1)) for i, p in enumerate(points)]
+    srcs = sorted({(x["kind"], x["id"]) for p in pts for x in p.get("sources", [])})
+    KB.setdefault("topics", []).append({"kind": "topics", "id": slug, "name": name, "one_line": note, "importance": "P2",
+                                        "relevance": 60, "tags": list(tags), "updated": ago(hours=len(KB.get("topics", [])) + 1),
+                                        "extra": str(len(pts))})
+    KB_DETAIL[("topics", slug)] = {"summary": "# %s\n\n%s" % (name, note), "points": pts, "links": [kb_link(k, i) for k, i in srcs],
+                                   "meta": {"name": name, "note": note, "points": len(pts), "tags": list(tags),
+                                            "projects": sorted({i for k, i in srcs if k == "projects"}),
+                                            "chats": sorted({i for k, i in srcs if k == "chats"})}}
+
+
+def kb_point(kind, text, path=(), why="", src=(("projects", "weather-app"),), when="2026-10-30"):
+    return {"path": list(path), "kind": kind, "text": text, "why": why, "when": when,
+            "sources": [{"kind": k, "id": i, "day": when} for k, i in src]}
+
+
+if os.environ.get("MOCK_KB_TOPICS") == "1":
+    _team = (("projects", "weather-app"), ("chats", "oc_team"))
+    kb_topic("ios-widgets", "iOS 小组件", "小组件的刷新、布局和降雨条怎么做", [
+        kb_point("concept", "小组件靠时间线刷新：一次给出未来几个时间点的条目，系统按时切换", ("时间线刷新",)),
+        kb_point("decision", "时间线按小时刷新", ("时间线刷新",), "逐小时预报本来就按小时更新，再密只是多耗电", when="2026-10-30"),
+        kb_point("pitfall", "刷新预算有限，频繁 reload 会被系统限流", ("时间线刷新",), "后台刷新次数按天计", when="2026-10-28"),
+        kb_point("practice", "数据层复用逐小时预报，小组件不单独请求", ("时间线刷新", "数据"), when="2026-10-28"),
+        kb_point("decision", "先做小号和中号两种尺寸", ("布局",), "大号的信息量和 App 首页重复", _team, "2026-10-24"),
+        kb_point("fact", "设计稿 v3 定了小号、中号两种布局", ("布局",), src=(("docs", "doc_widget"),), when="2026-10-29"),
+        kb_point("decision", "降雨条改成逐小时柱状", ("降雨条",), "连续色带看不出哪个小时下雨", (("meetings", "m_review"),), "2026-10-26"),
+        kb_point("pitfall", "中号的降雨条颜色太浅，看不清", ("降雨条",), "浅色背景上对比度不够", (("chats", "oc_team"),), "2026-10-30"),
+        kb_point("practice", "降雨概率先格式化成整数百分比再画", ("降雨条",), when="2026-10-31"),
+        kb_point("question", "深色模式下降雨条用哪种蓝", ("降雨条",), src=_team, when="2026-10-31"),
+        kb_point("fact", "周五前要一版能装的给产品试用", src=_team, when="2026-10-30"),
+    ], ("iOS",))
+    kb_topic("photo-pipeline", "照片处理", "HEIC 转换和同步到相册的做法", [
+        kb_point("concept", "HEIC 是 iPhone 默认的照片格式，很多网页和旧软件打不开", ("HEIC 转换",), src=(("projects", "photo-sync"),)),
+        kb_point("decision", "同步前统一转成 JPEG", ("HEIC 转换",), "家里的电视和相框只认 JPEG", (("projects", "photo-sync"),), "2026-10-27"),
+        kb_point("pitfall", "转换时会丢掉拍摄时间", ("HEIC 转换",), "默认不复制 EXIF", (("projects", "photo-sync"),), "2026-10-27"),
+        kb_point("practice", "转换后把 EXIF 原样写回", ("HEIC 转换",), src=(("projects", "photo-sync"),), when="2026-10-28"),
+        kb_point("practice", "按文件哈希去重，重复的不再上传", ("同步",), src=(("projects", "photo-sync"),), when="2026-10-29"),
+        kb_point("question", "Live Photo 的视频部分要不要一起同步", ("同步",), src=(("projects", "photo-sync"),), when="2026-10-29"),
+    ], ("脚本",))
+    kb_topic("static-blog", "静态博客", "博客从旧系统迁到 Astro 的经验", [
+        kb_point("decision", "博客迁到 Astro", ("迁移",), "文章都是 Markdown，构建快，不用维护服务器", (("projects", "blog"),), "2026-10-20"),
+        kb_point("fact", "32 篇文章已经迁完", ("迁移",), src=(("projects", "blog"),), when="2026-10-25"),
+        kb_point("pitfall", "旧文章的链接带日期目录，直接迁过去全部 404", ("链接",), "新站按标题生成路径", (("projects", "blog"),), "2026-10-22"),
+        kb_point("practice", "旧链接都加 301 跳到新地址", ("链接",), src=(("projects", "blog"),), when="2026-10-23"),
+        kb_point("practice", "图片放到文章同目录，用相对路径引用", ("迁移",), src=(("projects", "blog"),), when="2026-10-21"),
+    ], ("前端",))
+    kb_topic("design-review", "设计评审", "评审怎么开、结论怎么落地", [
+        kb_point("practice", "评审前一天把设计稿发到群里，会上只讨论有分歧的地方", src=(("chats", "design-review"),), when="2026-10-29"),
+        kb_point("decision", "结论当场写进设计稿的评论", why="会后再整理容易漏", src=(("chats", "design-review"), ("people", "lilei")), when="2026-10-29"),
+        kb_point("fact", "每周三下午开", src=(("chats", "design-review"),), when="2026-10-22"),
+    ], ("工作",))
+    kb_topic("reading", "读书方法", "读书笔记的整理方式", [
+        kb_point("practice", "每季度把读书笔记整理一次，只留能用上的", src=(("projects", "reading"),), when="2026-10-01"),
+        kb_point("concept", "读完一本书写三句话：讲了什么、哪里有用、哪里不同意", src=(("projects", "reading"),), when="2026-10-01"),
+    ], ("个人",))
+
+
 # ---------- items ----------
 _seq = [0]
 
@@ -3568,6 +3721,74 @@ if os.environ.get("MOCK_COMMENTS") == "1":
             "整体可以，改完这三处再提交。"])),
         it("assistant", "text", 0.4, text="好，三处都改：城市名改成可选，解析失败回退到上次的缓存，保存按钮改成整行宽的主按钮。"),
     ]
+# MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded (#2987): the widget chat is a minute into a new turn whose newest
+# step is still going, for the running work line that names it: `bash` a command Claude described (its description alone),
+# `command` a long command with no description (cut in its middle, the clock whole), `reads` three files read at once
+# ("Reading 3 files"), `parallel` a search with two reads beside it ("+2"), `thinking` a thought after the calls came back.
+# The thought is pushed MOCK_LIVE_STEP_PUSH seconds (default 3) after the chat's latest page went out: a page folds the
+# finished calls and any thought with them (fold_work, as the hub does), a push never is. `thinking-folded`: the thought
+# is in the page from the start, so the newest step reaches the app inside a fold (its `latest_thinking`).
+LIVE_STEP = os.environ.get("MOCK_LIVE_STEP", "")
+LIVE_STEP_LATER = {"items": [], "due": None}
+if LIVE_STEP:
+    def _live_call(name, inp, ts_min):
+        """A call still running: its tool_use, no result yet."""
+        return it("assistant", "tool_use", ts_min, tool_use_id="toolu_live_%04d" % (_seq[0] + 1), tool_name=name, tool_input=inp)
+
+    _src = "/Users/me/code/weather/WeatherWidget/"
+    _turn = [it("user", "text", 1.1, text="把中号布局的降雨条做完，再跑一遍小组件的快照测试。"),
+             it("assistant", "thinking", 1.05, text="先看中号布局现在怎么画降雨条，再改颜色和间距。")]
+    _turn += tool("Read", {"file_path": _src + "MediumWidgetView.swift"}, "1\timport SwiftUI\n…", 1)
+    _turn += tool("Edit", {"file_path": _src + "MediumWidgetView.swift", "old_string": "RainBar(hours)", "new_string": "RainBar(hours, dry: 0.2)"},
+                  "The file " + _src + "MediumWidgetView.swift has been updated.", 0.95)
+    if LIVE_STEP == "bash":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests",
+                                         "description": "Run the widget snapshot tests"}, 0.9))
+    elif LIVE_STEP == "command":
+        _turn.append(_live_call("Bash", {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max' "
+                                                    "-only-testing:WeatherWidgetTests/SnapshotTests/testMediumRainBarDryThreshold"}, 0.9))
+    elif LIVE_STEP in ("reads", "parallel"):  # calls made together: every tool_use before any result
+        for _f in ("RainBar.swift", "Provider.swift", "SmallWidgetView.swift")[: 3 if LIVE_STEP == "reads" else 2]:
+            _turn.append(_live_call("Read", {"file_path": _src + _f}, 0.9))
+        if LIVE_STEP == "parallel":
+            _turn.append(_live_call("Grep", {"pattern": "precipitationChance", "path": "Sources"}, 0.9))
+    elif LIVE_STEP in ("thinking", "thinking-folded"):
+        _turn += tool("Bash", {"command": "xcodebuild test -scheme WeatherWidget -only-testing:WeatherWidgetTests/SnapshotTests",
+                               "description": "Run the widget snapshot tests"}, "Test Suite 'SnapshotTests' passed.\n    Executed 6 tests, with 0 failures", 0.6)
+        _thought = [it("assistant", "thinking", 0.5, text="The snapshots match on both sizes, so only the dark rain bar is left.\n"
+                                                         "Its colors come from the app's palette; check how the app picks them first.")]
+        if LIVE_STEP == "thinking":
+            LIVE_STEP_LATER["items"] = _thought
+        else:
+            _turn += _thought
+    ITEMS[WIDGET] = ITEMS[WIDGET] + _turn
+
+
+def live_step_page_sent(sid):
+    """MOCK_LIVE_STEP=thinking: a page of the widget chat went out; the held thought follows it after a while."""
+    if sid != WIDGET or not LIVE_STEP_LATER["items"]:
+        return
+    first = LIVE_STEP_LATER["due"] is None
+    LIVE_STEP_LATER["due"] = time.time() + float(os.environ.get("MOCK_LIVE_STEP_PUSH", "3"))
+    if not first:
+        return
+
+    def push():
+        while time.time() < LIVE_STEP_LATER["due"]:
+            time.sleep(0.2)
+        before, new = ITEMS[sid][-1]["seq"], LIVE_STEP_LATER["items"]
+        LIVE_STEP_LATER["items"] = []
+        ITEMS[sid] = ITEMS[sid] + new
+        for out, subs in list(LIVE):
+            if sid in subs:
+                try:
+                    out({"type": "items", "machine_id": "macbook", "session_id": sid, "items": new, **span(new, before)})
+                except Exception:
+                    pass
+    threading.Thread(target=push, daemon=True).start()
+
+
 # MOCK_TASKS=1: the unified entry (docs/assistant/unified-entry.md, #930). The main conversation dispatches tasks: a started plan
 # of two (the widget fix working, the unit tests waiting for an answer — ix_tests), a read-only one that finished with a
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
@@ -3586,6 +3807,8 @@ if MOCK_TASKS:
                    "/Users/me/code/weather", 44, "plan_mock_1"),
         _task_todo("todo_task_tests", "补齐网络层的单元测试", "网络层的单元测试补到 80% 覆盖。", "macbook", TESTS,
                    "/Users/me/code/weather", 44, "plan_mock_1"),
+        _task_todo("todo_task_cache", "选缓存方案", "本地缓存还是 Redis，选定后交给网络层 Agent。", "macbook", TESTS,
+                   "/Users/me/code/weather", 130, ""),
         _task_todo("todo_task_release", "整理发布说明", "把这周合并的 PR 整理成发布说明，只读。", "macbook", RELEASE,
                    "/Users/me/code/weather", 30, "plan_mock_2"),
         _task_todo("todo_task_blog", "博客迁移到 Astro", "把博客从 Hexo 迁到 Astro。", "studio", BLOG,
@@ -3636,6 +3859,11 @@ if MOCK_TASKS:
             if _t["id"] == "todo_task_blog":
                 _t["check"] = {"verdict": "waiting", "reason": "等 Vercel 部署跑完", "at": ago(minutes=11),  # i18n-ignore
                                "work_since": ago(minutes=40)}
+    if os.environ.get("MOCK_TODO_ASKS") == "1":
+        TODO_ASKS["todo_task_cache"] = {
+            "outcome": "decide", "verdict": "需要你拍板：本地缓存还是 Redis",  # i18n-ignore
+            "recommend": "本地缓存，先不引入 Redis",
+        }
     TODOS = copy.deepcopy(TODOS_INIT)
     # MOCK_TASK_DECISION=1: a stopped task whose owner can finish without another Agent turn.
     if os.environ.get("MOCK_TASK_DECISION") == "1":
@@ -3748,8 +3976,8 @@ if MOCK_TASKS:
                      {"id": "todo_task_icons", "title": "换一套设置页图标", "at": ago(hours=6)}], "done_total": 6,
             # A deployed to-do (Accept) and a decision with a recommendation (Take recommendation, #1226).
             "accept": [{"id": "todo_task_release", "title": "整理发布说明", "detail": "发布说明写好了，放在 docs/release-notes.md", "from": "来自 Agent「发布」",
-                        "waited_s": 7 * 3600, "asked_at": ago(hours=7)},
-                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": ago(hours=2),
+                        "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT},
+                       {"id": "todo_task_cache", "title": "选缓存方案", "from": "来自 Agent「网络层测试」", "waited_s": 2 * 3600, "asked_at": TODO_ASKED_AT,
                         "verdict": "需要你拍板：本地缓存还是 Redis", "outcome": "decide", "recommend": "本地缓存，先不引入 Redis"}],
             # Questions an Agent left to wait for a briefing (later.go): the Handled button posts to /api/v1/later/{id}/handled.
             "later": [{"id": "lt_mock_1", "title": "统一用 snake_case 还是 camelCase 命名新接口？", "from": "来自 Agent「网络层测试」",
@@ -3808,6 +4036,102 @@ if MOCK_TASKS:
             _feed("feed_r3", 3.5, "report", "todo_task_tests", {"kind": "question", "text": "统一用 snake_case 还是 camelCase 命名新接口？", "later": True}),
             _feed("feed_r2", 3, "routed", "todo_task_tests", {"text": "用协议注入，先改网络层那 6 个文件", "interrupted": True, "from": "assistant"}),
         ]
+    # MOCK_BRIEFS=1 (#3822, docs/assistant/unified-entry.md "Briefs"): tasks carry the brief they are held to. The open
+    # plan's task has a real one (the owner's own words, long enough to be cut, the goal, criteria, time and what is out
+    # of bounds). The widget fix has a real one too, taken over twice (a lineage of three), with one scope change and an
+    # overdue mark. The blog move's was made later (reconstructed: no request, the hand-over prompt). The release notes
+    # ended against theirs: a criterion met, one not checked, one dropped by a scope change, and something done beyond
+    # it, on its page, its review line and its receipt.
+    if os.environ.get("MOCK_BRIEFS") == "1":
+        def _brief(bid, minutes, goal, done_when, expect, **more):
+            b = {"id": bid, "created_at": ago(minutes=minutes), "started_by": "owner", "goal": goal, "done_when": done_when,
+                 "criteria": done_when, "expect_minutes": expect, "expect_minutes_now": expect, "log": [],
+                 "clock_at": ago(minutes=minutes), "due_at": later(hours=24)}
+            b.update(more)
+            return b
+
+        def _asked(minutes, text):
+            return {"text": text, "at": ago(minutes=minutes), "conversation": ASK1, "message_id": "mock-brief-%d" % int(minutes)}
+
+        TASK_PLANS["plan_mock_3"]["tasks"][0]["brief"] = _brief(
+            "brief_mock_pr42", 2, "Every review comment on PR #42 is answered or fixed",
+            ["Each review comment has a reply or a commit", "The checks on PR #42 pass"], 45,
+            request=_asked(3, "The reviewers left a pile of comments on PR #42 yesterday. Go through all of them: fix what is "
+                              "clearly right, and for anything you disagree with write a short reply saying why instead of "
+                              "changing the code. Do not merge it, I want to read the replies first. If a comment needs a "
+                              "bigger refactor, leave it and list it for me at the end."),
+            out_of_bounds=["Do not merge the PR", "No refactors beyond what a comment asks for"])
+        _widget_done_when = ["The fix is merged", "A snapshot test covers landscape"]
+        _widget_brief = _brief(
+            "brief_mock_widget", 3 * 24 * 60, "The home screen widget no longer crashes in landscape",
+            ["The fix is merged", "Landscape screenshots are in the PR"], 60,
+            request=_asked(3 * 24 * 60 + 2, "The weather widget crashes when I rotate the phone. Fix it and add a test so it stays fixed."),
+            out_of_bounds=["Do not change the widget's layout"], criteria=_widget_done_when, expect_minutes_now=90,
+            clock_at=ago(days=2), due_at=ago(days=1), overdue_at=ago(hours=20),
+            log=[{"at": ago(days=2), "kind": "scope", "todo_id": "todo_brief_widget_2", "by": ASK1,
+                  "change": "A snapshot test replaces the screenshots", "why": "A test keeps it fixed; screenshots go stale",
+                  "done_when": _widget_done_when, "expect_minutes": 90, "added": ["A snapshot test covers landscape"],
+                  "dropped": ["Landscape screenshots are in the PR"]},
+                 {"at": ago(hours=20), "kind": "overdue", "todo_id": "todo_task_widget"}])
+        _widget_lineage = [
+            {"todo_id": "todo_brief_widget_1", "title": "Fix the widget's landscape crash", "agent": "claude", "machine": "studio",
+             "session_id": "mock-brief-a", "started": ago(days=3), "ended": ago(days=2, hours=12), "why": "Its computer went offline",
+             "superseded_by": "todo_brief_widget_2"},
+            {"todo_id": "todo_brief_widget_2", "title": "Take over the widget fix", "agent": "codex", "machine": "macbook",
+             "session_id": "mock-brief-b", "started": ago(days=2, hours=12), "ended": ago(minutes=45),
+             "why": "The model service kept failing", "continues": "todo_brief_widget_1", "superseded_by": "todo_task_widget"},
+            {"todo_id": "todo_task_widget", "title": "修小组件横屏崩溃", "agent": "claude", "machine": "macbook", "session_id": WIDGET,
+             "started": ago(minutes=44), "continues": "todo_brief_widget_2", "current": True},
+        ]
+        _release_done_when = ["Every change merged this week is listed", "Grouped as features, fixes and other"]
+        _release_result = {"at": ago(minutes=18), "todo_id": "todo_task_release", "verdict": "accepted", "criteria": [
+            {"criterion": "Every change merged this week is listed", "state": "met", "evidence": "7 listed, the same as the repository shows"},
+            {"criterion": "Grouped as features, fixes and other", "state": "unchecked"},
+            {"criterion": "Each entry links its issue", "state": "dropped", "change": "Links are added by the release script",
+             "changed_at": ago(minutes=25)}], "also_done": ["Fixed two typos in last week's notes"]}
+        _release_brief = _brief(
+            "brief_mock_release", 30, "This week's release notes are ready to send",
+            _release_done_when + ["Each entry links its issue"], 20, criteria=_release_done_when, result=_release_result,
+            request=_asked(31, "Write up this week's release notes from what was merged."),
+            log=[{"at": ago(minutes=25), "kind": "scope", "todo_id": "todo_task_release", "by": ASK1,
+                  "change": "Links are added by the release script", "why": "The script already adds them when it publishes",
+                  "done_when": _release_done_when, "dropped": ["Each entry links its issue"]}])
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_widget":
+                _t.update(brief=_widget_brief, lineage=_widget_lineage)
+                _t.setdefault("supervision", {"supervisor": ASK1, "state": "", "round": 0, "reviews": [], "updated_at": ago(minutes=40)})
+                _t["supervision"].update(done_when=_widget_done_when, expect_minutes=90, state="", reviews=[])
+            if _t["id"] == "todo_task_blog":
+                _t["brief"] = _brief("brief_mock_blog", 60 * 26, _t["title"], [], 0, started_by="unknown", reconstructed=True,
+                                     handover="You are taking over a session that stopped half way: the posts are converted, "
+                                              "the theme is not. Carry on from the branch it left, and keep the old URLs working.")
+                _t["lineage"] = [{"todo_id": _t["id"], "title": _t["title"], "agent": "claude", "machine": "studio", "session_id": BLOG,
+                                  "started": ago(minutes=60 * 26), "current": True}]
+            if _t["id"] == "todo_task_release":
+                _t.update(done_at=ago(minutes=18), done_by="review", done_reason="The notes are written and can be sent",
+                          brief=_release_brief,
+                          lineage=[{"todo_id": _t["id"], "title": _t["title"], "agent": "claude", "machine": "macbook", "session_id": RELEASE,
+                                    "started": ago(minutes=30), "ended": ago(minutes=18), "why": "The notes are written and can be sent",
+                                    "current": True}],
+                          supervision={"supervisor": ASK1, "done_when": _release_done_when, "expect_minutes": 20, "state": "accepted",
+                                       "round": 0, "updated_at": ago(minutes=18),
+                                       "reviews": [{"at": ago(minutes=18), "verdict": "accepted", "note": "Written to docs/release-notes.md",
+                                                    "checks": [{"criterion": _release_done_when[0], "met": True,
+                                                                "evidence": "7 listed, the same as the repository shows"}]}],
+                                       # the ledger's own per-criterion state (#3635): the page's one list of criteria
+                                       "criteria": [{"criterion": _release_done_when[0], "state": "met", "at": ago(minutes=18),
+                                                     "evidence": "7 listed, the same as the repository shows", "by": "supervisor:" + ASK1},
+                                                    {"criterion": _release_done_when[1], "state": "pending"}]})
+        # The release notes' review line carries the result (the line of MOCK_TASKS_REPORTS when it is there), and its
+        # receipt the criteria as they stood when the agent stopped.
+        _review = next((i for i in TASK_FEED[ASK1] if i["id"] == "feed_v1"), None)
+        if _review is None:
+            _review = _feed("feed_v1", 18, "review", "todo_task_release", {"title": "整理发布说明", "verdict": "accepted",
+                                                                          "note": "Written to docs/release-notes.md"})
+            TASK_FEED[ASK1].append(_review)
+        _review["body"]["result"] = _release_result
+        next(i for i in TASK_FEED[ASK1] if i["id"] == "feed_m7")["body"]["criteria"] = [
+            {"criterion": c, "state": "unchecked"} for c in _release_done_when]
     # MOCK_TASKS_PENDING_REVIEW=1: the Today card lists the stopped release-notes task waiting for review (#4889).
     if os.environ.get("MOCK_TASKS_PENDING_REVIEW") == "1":
         for _t in TODOS_INIT + TODOS:
@@ -3816,6 +4140,21 @@ if MOCK_TASKS:
                           "done_when": ["List this week's merged changes"], "reviews": [], "updated_at": ago(minutes=20)})
         next(i for i in TASK_FEED[ASK1] if i["kind"] == "today")["body"]["pending_review"] = [
             {"id": "todo_task_release", "title": "整理发布说明"}]
+    # MOCK_TASKS_PARKED=1: the blog migration is parked by its supervisor (#3804): open, in In progress with until when
+    # and why, never in Needs you.
+    if os.environ.get("MOCK_TASKS_PARKED") == "1":
+        _PARKED = {"reason": "The new theme has to be picked before the pages are moved", "until": ago(days=-3),
+                   "waiting_on": "owner_priority", "count": 1}
+        for _t in TODOS_INIT + TODOS:
+            if _t["id"] == "todo_task_blog":
+                _t.update(done_at=None, supervision={
+                    "supervisor": ASK1, "state": "parked", "parked": _PARKED, "round": 0, "done_when": ["Every page renders in Astro"],
+                    "updated_at": ago(minutes=50),
+                    "reviews": [{"at": ago(minutes=50), "verdict": "parked", "reason": _PARKED["reason"], "until": _PARKED["until"],
+                                 "waiting_on": _PARKED["waiting_on"], "parks": 1}]})
+        TASK_FEED[ASK1] += [_feed("feed_parked", 50, "review", "todo_task_blog", {
+            "title": "博客迁移到 Astro", "verdict": "parked", "note": _PARKED["reason"], "until": _PARKED["until"],
+            "waiting_on": _PARKED["waiting_on"]})]
     # MOCK_TASKS_AUTO_REVIEW=1 (with MOCK_TASKS_PENDING_REVIEW=1): the independent reviewer looked at the release notes
     # task's change first (#2173): nothing blocking, one finding, its report under the criteria.
     if os.environ.get("MOCK_TASKS_AUTO_REVIEW") == "1":
@@ -4230,9 +4569,16 @@ def tasks_area(h, method, p, raw):
         h.send_json({"plan": plan})
         return True
     if method == "POST" and p.startswith("/api/v1/todos/") and p.endswith("/accept"):
-        # The Accept button of a brief item: the first press verifies the task, a second one is a round that is over (409).
+        # Accept only the current round; a Brief's older row is already handled, while an ordinary card uses its current ask.
         tid = p.split("/")[4]
-        if tid in BRIEF_ACCEPTED:
+        sent = json.loads(h.last_body or b"{}")
+        brief = next((row for feeds in TASK_FEED.values() for item in feeds if item.get("kind") == "brief"
+                      for row in item.get("body", {}).get("accept", []) if row.get("id") == tid), None)
+        current = next((t for t in sorted_todos() if t["id"] == tid), None)
+        current_ask = (current or {}).get("ask")
+        # With asks shown the hub accepts only the current round; MOCK_TASKS_NO_ASKS hides that state for visual tests.
+        expected = current_ask.get("asked_at") if current_ask is not None else (brief or {}).get("asked_at")
+        if tid in BRIEF_ACCEPTED or expected is None or sent.get("asked_at") != expected:
             h.send_json({"error": "已经处理过了"}, 409)
         else:
             BRIEF_ACCEPTED.add(tid)
@@ -9272,6 +9618,103 @@ def mock_edit_diff():
 
 if os.environ.get("MOCK_EDIT_DIFF") == "1":
     mock_edit_diff()
+
+
+# MOCK_TOOL_NAMES=1 (#2986): one finished turn that calls Claude Code's newer tools (ToolSearch, TaskCreate, TaskUpdate,
+# NotebookEdit, Monitor, SendMessage, ScheduleWakeup), another server's MCP tool (mcp__github__create_issue) and a tool
+# no table knows, with nested arguments (RenderChart), so each reads in words, the MCP one as "GitHub · Create issue",
+# and the last two list their arguments instead of JSON. The MCP call, the unknown one, a review's ReportFindings and the
+# Monitor also have a chat of their own (…2987, …2988, …2989, …298a), so its opened detail (or the Monitor's Background
+# badge, at the largest text size) ends its chat and a screenshot shows it without scrolling. Made-up content.
+TOOLNAMES = "a1f3c2d4-0000-4000-8000-0000000c2986"
+TOOLNAMES_ONE = {"mcp": "a1f3c2d4-0000-4000-8000-0000000c2987", "unknown": "a1f3c2d4-0000-4000-8000-0000000c2988",
+                 "findings": "a1f3c2d4-0000-4000-8000-0000000c2989", "monitor": "a1f3c2d4-0000-4000-8000-0000000c298a"}
+
+
+def mock_tool_names():
+    notebook = "/Users/me/code/weather/notebooks/export-times.ipynb"
+    calls = {
+        "mcp": lambda t: tool("mcp__github__create_issue", {
+            "owner": "example-org", "repo": "weather", "title": "CSV export times out on a year of hourly data",
+            "body": "Exporting 8,760 hourly rows takes 41 s and the request gives up at 30 s.\n\nSteps: Settings › Export › Last year.",
+            "labels": ["bug", "export"], "assignees": ["me"]},
+            '{"number": 128, "html_url": "https://github.com/example-org/weather/issues/128", "state": "open"}', t),
+        "unknown": lambda t: tool("RenderChart", {
+            "title": "Export time by row count", "kind": "line",
+            "series": [{"name": "before", "points": [[1000, 4.8], [4000, 19.6], [8760, 41.2]]},
+                       {"name": "after", "points": [[1000, 0.9], [4000, 2.7], [8760, 5.6]]}],
+            "axes": {"x": {"label": "rows"}, "y": {"label": "seconds", "min": 0}}, "width": 640, "dark": False},
+            "Rendered chart: charts/export-time.png (640 × 400)", t),
+        "findings": lambda t: tool("ReportFindings", {"findings": [
+            {"file": "/Users/me/code/weather/export/csv.py", "line": 88, "short_summary": "Last batch dropped",
+             "summary": "The final batch is skipped when the row count is a multiple of 500, so the last 500 rows go missing."},
+            {"file": "/Users/me/code/weather/export/csv.py", "line": 41, "short_summary": "Header written twice",
+             "summary": "A retried export writes the CSV header again in the middle of the file."}]},
+            "Findings reported", t),
+        "monitor": lambda t: tool("Monitor", {"command": "tail -f logs/export.log | grep --line-buffered 'rows/s'",
+                                              "description": "Watch the export's throughput"}, "Monitor started (task m7q2)", t),
+    }
+    asks = {"mcp": ("File the export timeout as an issue", "Filed example-org/weather#128."),
+            "unknown": ("Chart the export times before and after", "The chart is in charts/export-time.png."),
+            "findings": ("Review the batched export", "Two problems: the last batch can go missing and a retry repeats the header."),
+            "monitor": ("Watch the export while it runs", "Watching the export log.")}
+
+    _t = [it("user", "text", 40, text="The CSV export times out on a year of data: find out why, track it, and tell the reviewer")]
+    _t += tool("ToolSearch", {"query": "select:NotebookEdit,Monitor", "max_results": 2}, "Loaded 2 tools: NotebookEdit, Monitor", 39.9)
+    _t += tool("TaskCreate", {"subject": "Find why the CSV export times out", "description": "A year of hourly rows takes 41 s.",
+                              "activeForm": "Finding why the CSV export times out"}, "Task #1 created successfully", 39.8)
+    _t += tool("TaskUpdate", {"taskId": "1", "status": "in_progress"}, "Updated task #1 status", 39.7)
+    _t += tool("NotebookEdit", {"notebook_path": notebook, "cell_id": "cell-3", "cell_type": "code", "edit_mode": "replace",
+                                "new_source": "rows = load_hourly(year=2026)\n%time export_csv(rows, batch=500)\n%time export_csv(rows, batch=None)"},
+               "Updated cell cell-3", 39.6)
+    _t += calls["monitor"](39.5)
+    _t += calls["mcp"](39.4)
+    _t += tool("SendMessage", {"to": "reviewer", "summary": "Export timeout: cause found, fix in review",
+                               "message": "The export wrote one row per query. Batching 500 rows takes a year of data from 41 s to 5.6 s."},
+               "Message sent to reviewer", 39.3)
+    _t += calls["unknown"](39.2)
+    _t += tool("TaskUpdate", {"taskId": "1", "status": "completed"}, "Updated task #1 status", 39.1)
+    _t += tool("ScheduleWakeup", {"delaySeconds": 1200, "reason": "Check the nightly export after the fix lands",
+                                  "prompt": "Check that last night's export finished under 30 s"}, "Wake-up scheduled in 20 min", 39)
+    _t.append(it("assistant", "text", 38.9, text="The export wrote one row per query; batching 500 rows brings a year of data from "
+                                                 "41 s to 5.6 s. I filed #128, told the reviewer and will check the nightly export in 20 minutes."))
+    ITEMS[TOOLNAMES] = _t
+    SESSIONS.append(sess("macbook", TOOLNAMES, "Why the CSV export times out", "/Users/me/code/weather", "done", "read", "weather", 1,
+                         "tools", 13, 38.9, "The export wrote one row per query."))
+    for n, (name, sid) in enumerate(TOOLNAMES_ONE.items()):
+        ask, done = asks[name]
+        ITEMS[sid] = [it("user", "text", 37 - n, text=ask)] + calls[name](36.9 - n) + [it("assistant", "text", 36.8 - n, text=done)]
+        SESSIONS.append(sess("macbook", sid, ask, "/Users/me/code/weather", "done", "read", "weather", 1, "tools-" + name,
+                             14 + n, 36.8 - n, done))
+
+
+if os.environ.get("MOCK_TOOL_NAMES") == "1":
+    mock_tool_names()
+
+
+# MOCK_REPLY_MARKDOWN=1 (#3863): a reply with a table whose delimiter row aligns its columns (leading, trailing, centered;
+# decimals that line up), headings at levels 4 to 6 and bold labels next to full-width punctuation (`**注意：**后文`,
+# `**「必须」**`), which CommonMark alone leaves as literal asterisks; in an Agents chat of its own and at the end of
+# Persona's conversation. Made-up content.
+REPLY_MD = "a1f3c2d4-0000-4000-8000-0000000c3863"
+REPLY_MD_TEXT = ("导出耗时按行数整理好了：\n\n"
+                 "| 行数 | 之前（秒） | 之后（秒） | 结果 |\n| :--- | ---: | ---: | :---: |\n"
+                 "| 1,000 | 4.8 | 0.9 | 通过 |\n| 4,000 | 19.6 | 2.7 | 通过 |\n| 8,760 | 41.2 | 5.6 | 通过 |\n\n"
+                 "#### 原因\n每行查一次数据库，一年的数据要查 8,760 次。\n\n"
+                 "##### 改法\n按 500 行一批查询，导出时间降到原来的七分之一。\n\n"
+                 "###### 备注\n旧的导出接口先保留一周。\n\n"
+                 "**注意：**夜间导出要等这次修复上线后才会变快。\n\n这是**「必须」**在周五前合并的改动。")
+
+
+def mock_reply_markdown():
+    ITEMS[REPLY_MD] = [it("user", "text", 6, text="导出现在多快了？"), it("assistant", "text", 5, text=REPLY_MD_TEXT)]
+    SESSIONS.append(sess("macbook", REPLY_MD, "导出耗时整理", "/Users/me/code/weather", "done", "unread", "weather", 1, "reply-md", 20, 5,
+                         "这是必须在周五前合并的改动。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="导出现在多快了？"), it("assistant", "text", 1, text=REPLY_MD_TEXT)]
+
+
+if os.environ.get("MOCK_REPLY_MARKDOWN") == "1":
+    mock_reply_markdown()
 
 
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
@@ -15011,10 +15454,12 @@ VOICE_VOICES = {
 # What --help lists after the options.
 MOCK_HELP = [
     "MOCK_CF_ACCESS=<client id>:<client secret>  The hub behind Cloudflare Access: /api/ requests without those two CF-Access-Client-* headers get a 302 to an Access login (no token) or Access's 403 page (wrong token) (#3502)",
+    "MOCK_KB_TOPICS=1  Knowledge base: five topics of knowledge points from the example projects and chats (Topics tab, a topic's page, the knowledge map)",
     "MOCK_KB_SELECTION=missing|future|fail  Settings › Knowledge selection: a hub from before it (404) / a document with a field clients don't know / a save the hub refuses (503)",
     "MOCK_SESSIONS_LIST=1  Paged Agents, counts and exact lookup; list-mode sockets send hints instead of full lists (#6362)",
     "MOCK_MANUAL_HERDR=1  没挂待办的 herdr Agent 算手动开的（started_by_persona 为假），Agents「按待办」里出「手动开的」一段（#2917）",
     "MOCK_ORCA_CHILDREN=1  MacBook 上一个 Orca 工作区带三个子工作区（其中一个还有子项，parent_space_id，#2073）",
+    "MOCK_LIVE_STEP=bash|command|reads|parallel|thinking|thinking-folded  The widget chat a minute into a turn whose newest step is still going: the running work line names it (#2987)",
     "MOCK_MENTIONS=1  The review agent read README.md and WeatherWidget/Provider.swift in unfolded calls: its composer's @ list starts with them (#2319)",
     "MOCK_EXTENSIONS=1  设置 › 插件：五个示例插件（需要设置 / 运行中 / hub.json / 已停用 / 不兼容），表单、密钥、开关在内存里",
     "MOCK_CONNECTOR_PLUGIN=1  设置 › 连接器：一个插件提供的通用连接器「示例笔记」，令牌 example-token 一步登录",
@@ -15804,6 +16249,7 @@ class H(BaseHTTPRequestHandler):
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
             if p in ("/api/v1/assistant/tasks", "/api/v1/assistant/runs"): return self.send_json({"tasks": [], "runs": []})
+        if p == "/api/v1/assistant/leaders": return self.send_json(mock_leaders_list())
         if p == "/api/v1/assistant":
             q = parse_qs(urlparse(self.path).query)
             return self.send_json(assistant_state(q.get("space", [""])[0], q.get("archived", [""])[0] == "1"))
@@ -16186,6 +16632,7 @@ class H(BaseHTTPRequestHandler):
             out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
+            live_step_page_sent(sid)
             return self.send_json(out)
         if p == "/mock/images":  # MOCK_IMAGES_FAIL: ?ok=1 lets lazy images through, ?asked=1 reads, anything else fails them again
             q = parse_qs(urlparse(self.path).query)
@@ -17511,6 +17958,8 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["archive_closed_days"] = days
             if isinstance(body.get("agent_tasks"), bool):
                 ASSISTANT_CONFIG["agent_tasks"] = body["agent_tasks"]
+            if isinstance(body.get("kb_topics"), bool):
+                ASSISTANT_CONFIG["kb_topics"] = body["kb_topics"]
             if body.get("machine_id"):
                 if not any(m["id"] == body["machine_id"] for m in MACHINES):
                     return self.send_json({"error": "unknown machine"}, 400)
@@ -18193,6 +18642,7 @@ class H(BaseHTTPRequestHandler):
                                "items": lazy_images(fold_work(page) if msg.get("fold_work") else page)}
                         served(sid, "backlog", out)
                         send(out)
+                        live_step_page_sent(sid)
                     # What is being generated, right after the backlog, as the hub's sendLiveText does (#1966).
                     if LIVE_TEXT.get(sid):
                         send({"type": "delta", "machine_id": mid, "session_id": sid, "text": LIVE_TEXT[sid]})
@@ -19859,6 +20309,8 @@ MOCK_HELP.append("MOCK_AGENT_ARCHIVES=1|archive  Agent 归档：features 带 age
                  "先有两个已归档的 Agent；忙的 Agent 回 409 agent_busy；?close=1 关闭开着的 Claude Agent。MOCK_ARCHIVE_CLOSE=refuse|offline：电脑没关它")
 MOCK_HELP.append("MOCK_CLOSEOUT=1  Four stopped agents on the server that ended their turn with a closeout (#3612): done with merged and deployed confirmed by the hub; "
                  "done saying merged where the hub found it is not; blocked on someone, nothing checked; not done, its reply only the block. Each last reply carries the raw block")
+MOCK_HELP.append("MOCK_TASKS_PARKED=1  With MOCK_TASKS=1: the blog migration task is parked by its supervisor (#3804): `supervision.state` "
+                 "`parked` with `supervision.parked` {reason, until, waiting_on, count}; it is In progress, not in Needs you")
 MOCK_HELP.append("MOCK_ORPHANED=1  Open to-dos nobody is working on (#3618): `orphaned` on the PR check (error), the blog (offline) and, "
                  "with MOCK_TASKS=1, the blog task (closed) and the release notes task (error)")
 
