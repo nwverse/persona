@@ -885,9 +885,9 @@ sees a wait it can't name, and a following `dequeue` pops whatever it guessed. G
   (`-c model_reasoning_effort=…`) counts. Besides the terminal-only route, Codex then makes its startup requests
   with the pane's environment rather than the daemon's.
 - One computer reached `chatgpt.com` only through a proxy. The user's `codex` shell function set the proxy, and the
-  daemon had inherited it. `personad codex-start` runs the `codex` on `PATH`, so a tier with an effort made every
-  start fail with `account/read failed during TUI bootstrap: … workspace routing discovery timed out`. The same
-  launcher with no effort worked, and so did a manual `codex`.
+  daemon had inherited it. `personad codex-start` ran the `codex` on `PATH` (#4876 covers that part), so a tier
+  with an effort made every start fail with `account/read failed during TUI bootstrap: … workspace routing discovery
+  timed out`. The same launcher with no effort worked, and so did a manual `codex`.
 - To tell the two modes apart, look in Codex's log database (`<CODEX_HOME>/logs_2.sqlite`, table `logs`). The span
   for `account/read` says `rpc.transport="in-process"` (its own app-server) or `unix_socket` (the daemon). The TUI
   also shows a warning that it runs without the shared background server.

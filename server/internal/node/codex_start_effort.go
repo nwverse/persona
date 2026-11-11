@@ -15,9 +15,8 @@ import (
 // A purpose's or tier's effort reaches a new Codex as `-c model_reasoning_effort=<effort>` (control.go), but any -c
 // keeps a 0.163+ Codex off the shared app-server: it runs one of its own in the pane (codexConfigFlags), so Persona
 // gets only the terminal route, and Codex starts up with the pane's environment instead of the daemon's. Where only
-// the daemon (or the user's `codex` shell function, which codex-start does not run) has the proxy Codex needs, such a
-// start fails before its first turn ("workspace routing discovery timed out", #4860). An effort Codex would run at
-// anyway is therefore left out.
+// the daemon had the proxy Codex needs, such a start failed before its first turn ("workspace routing discovery timed
+// out", #4860). An effort Codex would run at anyway is therefore left out.
 
 // codexProfileKey matches a line that selects a Codex profile (`profile = "…"`, quoted or not), in any table.
 var codexProfileKey = lazyre.New(`(?m)^[ \t]*"?profile"?[ \t]*=`)
