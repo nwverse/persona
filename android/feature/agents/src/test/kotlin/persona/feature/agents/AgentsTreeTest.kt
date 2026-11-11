@@ -139,6 +139,27 @@ class AgentsTreeTest {
         assertEquals(listOf("group:repo/mac//code/app", "group:tree/mac//code/notes"), folded.take(2).map { it.key })
     }
 
+    @Test fun aSharedCheckoutPathKeepsEachRepositoryAndItsSessionsInTheTree() {
+        val path = "/home/user"
+        fun at(id: String, repo: String) = AgentSession(Session(machineId = "mac", sessionId = id,
+            state = "working", cwd = "$path/project", repoRoot = repo, worktree = path))
+        val sessions = listOf(at("main", path), at("first", "/code/first"), at("second", "/code/second"))
+        val settings = AgentListSettings(grouping = AgentGrouping.Repo)
+        fun entries(rows: List<AgentSession>) = agentTreeEntries(buildAgentList(rows, machines, settings = settings), "")
+        val all = entries(sessions)
+        assertEquals(all.size, all.map { it.key }.toSet().size)
+        assertEquals(setOf("main", "first", "second"), all.filterIsInstance<TreeRowEntry>().map { it.row.session.sessionId }.toSet())
+        val groups = all.filterIsInstance<TreeGroupEntry>().filter { it.group.rows.isNotEmpty() }.map { it.group }
+        val main = groups.single { it.rows.single().session.sessionId == "main" }
+        assertEquals("tree/mac/$path", main.id)
+        for (session in sessions.drop(1)) {
+            val group = groups.single { it.rows.single().id == session.id }
+            assertEquals("repo/mac/${session.session.repoRoot}", group.under)
+            val filtered = entries(listOf(session)).filterIsInstance<TreeGroupEntry>().single { it.group.rows.isNotEmpty() }
+            assertEquals(group.id, filtered.group.id)
+        }
+    }
+
     // #2320: a herdr tab holding the launcher and two panes it split off, beside a tab of one agent and a tab of two peers
     private fun pane(id: String, state: String, slot: String, place: Int?, index: Int, at: String = "2026-01-01T00:00:00Z") =
         AgentSession(Session(machineId = "mac", sessionId = id, state = state, spaceId = "w1", spaceName = "app", slotId = slot,

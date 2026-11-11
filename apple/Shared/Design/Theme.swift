@@ -440,6 +440,8 @@ nonisolated enum Theme {
     /// inbox's Select, #2059; the web uses the same 45%).
     enum Fade {
         static let unavailable: Double = 0.45
+        /// An offline assistant's row in the switcher's list: the whole row, still pickable (the web and Android use 55%).
+        static let offline: Double = 0.55
     }
 
     /// How much of a rich card must intersect the scroll viewport before its isolated content runs.
@@ -544,8 +546,9 @@ nonisolated enum Theme {
         static let box72: CGFloat = 72
         static let box76: CGFloat = 76
         static let box80: CGFloat = 80
-        /// The height of a saved place's map in its editor: the reminder's circle and a street or two around it.
-        static let placeMap: CGFloat = 160
+        /// The height of the map in a saved place's editor: the reminder's circle with the streets around it, and room to
+        /// pan the map and tap where the place is (#4248).
+        static let placeMap: CGFloat = 220
         static let box110: CGFloat = 110
         static let box120: CGFloat = 120
         /// The longest a tab's name gets in the chat header's strip of the space's tabs: one long name cannot push the

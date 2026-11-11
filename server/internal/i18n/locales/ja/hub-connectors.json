@@ -1,7 +1,4 @@
 {
-  "program_missing": "{name}のプログラムが見つかりません（{path}）",
-  "program_fails": "{name}のプログラムを実行できません：{err}",
-  "program_version": "{name}のプログラムとハブのバージョンが一致しません（{got} / {want}）",
   "not_installed": "ハブのマシンに lark-cli がインストールされていません",
   "install_guide": "ハブのマシンに lark-cli をインストールするか、lark.cli.bin に実行ファイルを設定してください",
   "old_version": "lark-cli {got} は古すぎます。Persona には {want} 以降が必要です",

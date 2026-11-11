@@ -1,7 +1,4 @@
 {
-  "program_missing": "Can’t find {name}’s program ({path})",
-  "program_fails": "{name}’s program won’t run: {err}",
-  "program_version": "{name}’s program isn’t the same version as the hub ({got} / {want})",
   "not_installed": "lark-cli is not installed on the hub machine",
   "install_guide": "Install lark-cli on the hub machine, or set lark.cli.bin to its executable",
   "old_version": "lark-cli {got} is too old; Persona needs {want} or newer",

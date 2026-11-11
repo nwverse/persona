@@ -44,14 +44,17 @@ export function portLink(url: string, hostnames: readonly string[] = []): PortLi
   if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return null;
   const host = u.hostname.toLowerCase();
   if (!(LOOPBACK.has(host) || host.endsWith(".localhost") || names(hostnames).has(host))) return null;
-  const port = Number(u.port);
+  // URL.port erases an explicit :80/:443 for its scheme. Read only the original authority's trailing port,
+  // never a scheme default or a colon in credentials, path, query or fragment. URL still validates the address.
+  const authority = /^https?:\/\/([^/?#\\]*)/i.exec(url.trim())?.[1] ?? "";
+  const port = Number(u.port || /:(\d+)$/.exec(authority)?.[1]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
   return { port, path: u.pathname + u.search + u.hash || "/", secure: u.protocol === "https:" };
 }
 
-/** http(s) URLs in prose, Markdown links and <autolinks>: they end at whitespace, quotes, brackets and CJK punctuation. */
+/** http(s) URLs in prose, Markdown links and <autolinks>: keep a bracketed IPv6 authority, but stop at surrounding delimiters. */
 // i18n-ignore: CJK punctuation that ends a URL in an agent's reply
-const SCHEME_URL = /\bhttps?:\/\/[^\s<>"'`()[\]{}，。；！？、（）「」]+/gi;
+const SCHEME_URL = /\bhttps?:\/\/(?:\[[0-9a-f:.]+\])?[^\s<>"'`()[\]{}，。；！？、（）「」]+/gi;
 /** Bare `localhost:3000/x`, as servers often print it; not part of a longer name (`mylocalhost:3000`) or path. */
 const BARE = /(^|[^A-Za-z0-9_./:@-])((?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):\d{1,5}(?:\/[A-Za-z0-9_.~!$&'()*+,;=:@%/?#-]*)?)/g;
 /** Sentence punctuation after a link is not part of it. */

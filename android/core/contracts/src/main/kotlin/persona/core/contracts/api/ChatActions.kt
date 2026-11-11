@@ -53,6 +53,14 @@ interface ChatActions {
 
     /** What the node reads from the session's transcript (GET …/info). */
     suspend fun info(session: Session): SessionInfo = throw UnsupportedOperationException("Session info unavailable")
+
+    /**
+     * "Back to the configured model" after a refusal fallback (#2528, POST …/restore-model, no body): the node closes a
+     * Persona conversation's idle headless process so its next start uses the configured model. Sends no message; the
+     * session's next push carries `model_restore`. Refusals are 409 with a `code` (restore_busy, restore_unsupported,
+     * restore_nothing, restore_unknown, restore_gone, node_outdated). Not retried.
+     */
+    suspend fun restoreModel(session: Session): Unit = throw UnsupportedOperationException("Restore model unavailable")
 }
 
 /** What "Rewind to here" restores: the conversation alone, or the files changed after the message too. */

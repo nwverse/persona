@@ -12,10 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
-	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // hostTextSlack: the transcript's words this long after the host's record of the answer still belong to that turn.
@@ -126,6 +126,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Status, s.AttentionReason = proto.StatusBlocked, head
 			}
 		}
+		// An allow its Claude did not take: the dialog it left holds the terminal, whatever herdr says (allowwatch.go).
+		if head := n.allowDialog(id); head != "" && !onList[id] && !n.isDriving(id) {
+			s.Status, s.AttentionReason = proto.StatusBlocked, head
+		}
 		if !onList[id] { // the list's prompt is no suggestion of its
 			s.Suggestion = n.noteStatus(id, a.Agent, a.PaneID, s.Status) // suggestion.go
 		}
@@ -179,7 +183,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if !a.LastTextAt.IsZero() && promptAt.After(a.LastTextAt) {
 				s.Asks = ""
 			} else {
-				s.Asks = transcript.AskOf(a.LastText)
+				s.Asks = closeout.AskOf(a.LastText)
 			}
 			s.AsksRead = true
 		}

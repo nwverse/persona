@@ -334,6 +334,11 @@ fun TodoDetailScreen(
                 }
             }
 
+            // Due date, reminder and priority (#4636, iOS TodoPlanSection), saved as they change
+            item(key = "plan") {
+                val feedback = LocalAppFeedback.current
+                JCard { TodoPlanSection(todo, tasks) { feedback?.failure(it) } }
+            }
             // Decisions made on it, under the notes as on iOS and the web (#1618)
             todoDecisionsSection(decisionsState, todo, sessionLookup, now)
 
@@ -419,7 +424,7 @@ fun TodoDetailScreen(
                             )
                             if (!agent.startError.isNullOrBlank()) {
                                 Row(
-                                    Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.l, vertical = ContentTokens.tightGap),
+                                    Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.sm),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(

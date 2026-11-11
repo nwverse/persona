@@ -1,4 +1,6 @@
 {
+  "title_task_workspace_preference": "Task workspace preference",
+  "change_task_workspace_preference": "Task workspace preference: {before} → {after}",
   "title_notes": "About me",
   "title_main_tasks_quiet": "Notify tasks from the main chat only in the main chat",
   "title_start_requested_tasks": "Start what I asked for in the chat right away",
@@ -22,6 +24,8 @@
   "change_interject_background": "“Move running work to the background when I interject”: {before} → {after}",
   "title_agent_tasks": "Every Agent Persona starts is a supervised task",
   "change_agent_tasks": "“Every Agent Persona starts is a supervised task”: {before} → {after}",
+  "title_inbox_signals": "Tell a task's supervisor about new Inbox messages on it",
+  "change_inbox_signals": "“Tell a task's supervisor about new Inbox messages on it”: {before} → {after}",
   "title_model_tiers": "Agent presets",
   "change_model_tier": "{profile} · {tier}: {before} → {after}",
   "title_review_sample_percent": "Share of finished tasks to spot-check",
@@ -37,5 +41,8 @@
   "minutes_forever": "Forever",
   "minutes_days_value": "{days} days",
   "minutes_unchanged": "Meeting minutes retention is unchanged: {saved} is saved; {after} is in effect.",
-  "minutes_applied": "Meeting minutes retention is saved as {saved}; {after} is in effect. Transcripts still follow the recording retention."
+  "minutes_applied": "Meeting minutes retention is saved as {saved}; {after} is in effect. Transcripts still follow the recording retention.",
+  "title_main_background_folded": "Fold background rounds",
+  "change_main_background_folded": "“Fold background rounds”: {before} → {after}",
+  "title_standing_authorizations": "Standing authorizations"
 }

@@ -28,6 +28,8 @@ export interface ModelPurpose {
   name: string;
   group: string;
   kind: "api" | "launcher" | "plugin";
+  /** Read-only execution form; absent for direct API/plugin purposes and older hubs. */
+  launch?: "headless" | "engine";
   parent?: string;
   /** Owning category; a child with nonempty fields can still have its own editable record. */
   category_id?: string;
@@ -108,6 +110,12 @@ export function supportsField(p: ModelPurpose, field: Exclude<keyof ModelDraft, 
   return (p.fields ?? ["provider", "model"]).includes(field);
 }
 
+/** A use of Agents the hub lets the user set apart (Lark /agent, the AI twin): it says so with fields of its own, and
+ * follows Agents while they are empty. Other uses of a category have no fields and stay read-only. */
+export function agentsOverride(p: ModelPurpose): boolean {
+  return p.parent === "agent.new" && (p.fields ?? []).some((field) => field === "provider" || field === "model" || field === "effort");
+}
+
 export function modelPatch(p: ModelPurpose, draft: ModelDraft): Record<string, string | number | null> {
   const patch: Record<string, string | number | null> = { revision: p.revision };
   for (const field of ["provider", "model", "effort"] as const) {
@@ -149,15 +157,4 @@ export function modelSummary(p: ModelPurpose, providers: ModelProvider[] = []): 
 /** The main chat's note when it asked for the Agent SDK and runs on the CLI (the session's `runtime_fallback`). */
 export function runtimeFallbackText(reason: string): string {
   return t("lib-model-config.runtime_fallback", { reason: reason.trim() });
-}
-
-export function purposeGroups(purposes: ModelPurpose[], query: string): [string, ModelPurpose[]][] {
-  const q = query.trim().toLocaleLowerCase();
-  const groups = new Map<string, ModelPurpose[]>();
-  for (const p of purposes) {
-    if (q && ![p.name, p.group, p.id, modelSummary(p)].some((s) => s.toLocaleLowerCase().includes(q))) continue;
-    const group = p.group || t("lib-model-config.group_misc");
-    groups.set(group, [...(groups.get(group) ?? []), p]);
-  }
-  return [...groups.entries()];
 }
