@@ -43,8 +43,8 @@
     <string name="designsystem_loading">加载中</string>
     <string name="designsystem_processing">正在处理…</string>
     <string name="designsystem_with_state">%1$s，%2$s</string>
-    <string name="designsystem_decision_command">需要你授权</string>
-    <string name="designsystem_decision_tool">需要你授权</string>
+    <string name="designsystem_decision_command">在等你批准</string>
+    <string name="designsystem_decision_tool">在等你批准</string>
     <string name="designsystem_decision_plan">计划等你审批</string>
     <string name="designsystem_decision_question">在问你</string>
     <string name="designsystem_decision_form">要你填几项</string>

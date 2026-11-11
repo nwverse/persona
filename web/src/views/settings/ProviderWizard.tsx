@@ -81,6 +81,10 @@ const stepTitle = (s: Step) =>
 /** A preset's key test: running, or what it answered. */
 type KeyTest = { running: true } | { running: false; result: TestResult };
 
+/** What fetching a gateway's models found: how many, or why not; `check` when it was the Connect step's check
+ *  (which goes on to test), `seq` the request it answers. */
+type Found = { n: number; error?: string; check: boolean; seq: number };
+
 /** How long a pasted or typed key (a gateway's address and key) has to stay the same before it is tested on its own. */
 const AUTO_TEST_MS = 700;
 
@@ -97,14 +101,17 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
   const [test, setTest] = useState<TestResult | null>(null);
   const [probeModel, setProbeModel] = useState("");
   const [discovering, setDiscovering] = useState(false);
-  const [found, setFound] = useState<{ n: number; error?: string } | null>(null);
+  const [found, setFound] = useState<Found | null>(null);
   const connectionGeneration = useRef(0);
   const discoverySeq = useRef(0);
   const connectionTestSeq = useRef(0);
-  // The Connect step's own check (#4881): whether this connection was already checked (by itself or by hand), and the
-  // connection generation whose fetched models are still to be tested once.
+  // The Connect step's own check (#4881): whether this connection was already checked (by itself or by hand); the
+  // discovery (its sequence number) whose end starts the check's test, 0 when none; whether the address is being typed
+  // (a key never goes to a half-typed address: it counts once pasted or left), and whether the next change is a paste.
   const [checked, setChecked] = useState(false);
-  const testAfterDiscovery = useRef(0);
+  const testAfter = useRef(0);
+  const [urlTyping, setUrlTyping] = useState(false);
+  const urlPasting = useRef(false);
   const modelToTest = probeModel.trim() || testModel(f);
   // the hub's providers (built-in ones, then the extensions'); null while loading
   const [presets, setPresets] = useState<LauncherPreset[] | null>(null);
@@ -161,6 +168,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
     setTest(null);
     setFound(null);
     setProbeModel("");
+    setUrlTyping(false);
     setF(old ? formFromView(old) : newForm());
     setScope(scopeFromView(old) ?? newScope());
     setDevicesOpen(false);
@@ -245,11 +253,17 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
       if (current()) setTesting(false);
     }
   };
-  const runDiscover = async () => {
+  const testByHand = () => {
+    testAfter.current = 0;
+    void runTest();
+  };
+  /** `check`: part of the step's check, so its end tests the connection (by hand it only fetches). */
+  const runDiscover = async (check = false) => {
     if (hasLegacyChat) return;
     setChecked(true);
     const generation = connectionGeneration.current;
     const seq = ++discoverySeq.current;
+    testAfter.current = check ? seq : 0;
     const current = () => generation === connectionGeneration.current && seq === discoverySeq.current;
     setDiscovering(true);
     setFound(null);
@@ -262,32 +276,30 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
         const models = mergeDiscovered(x.models, list, x.kind === "api" && x.api === "chat");
         return { ...x, models, model: x.model || models.find((m) => m.checked)?.id || "" };
       });
-      setFound({ n: list.length, error: r.error });
+      setFound({ n: list.length, error: r.error, check, seq });
     } catch (e) {
-      if (current()) setFound({ n: 0, error: errorText(e) });
+      if (current()) setFound({ n: 0, error: errorText(e), check, seq });
     } finally {
       if (current()) setDiscovering(false);
     }
   };
-  // Fetch the models, then test the default one (the first found when there is none) once they are in the form.
-  const runCheck = () => {
-    testAfterDiscovery.current = connectionGeneration.current;
-    void runDiscover();
-  };
-
-  // A gateway's address and key are checked by themselves once they stop changing, once per connection (#4881).
-  const autoCheck = existing !== null && step === "connect" && !checked && !hasLegacyChat && autoCheckable(f, old);
+  // A gateway's address and key are checked by themselves once they stop changing, once per connection (#4881):
+  // the models are fetched, then the connection is tested.
+  const autoCheck = existing !== null && step === "connect" && !checked && !hasLegacyChat && !urlTyping && autoCheckable(f, old);
   useEffect(() => {
     if (!autoCheck) return;
-    const timer = setTimeout(runCheck, AUTO_TEST_MS);
+    const timer = setTimeout(() => void runDiscover(true), AUTO_TEST_MS);
     return () => clearTimeout(timer);
   }, [autoCheck, existing, f.kind, f.agent, f.api, f.base_url, f.auth, f.api_key, f.headers, f.headers_touched]);
 
-  // After the render that put the fetched models in the form (and retired any test of the model before them).
+  // The check's test, after the render that put the fetched models in the form (and retired any test of the model
+  // before them): the default model, else the first found, else the one typed to test with. A failed or empty fetch
+  // still tests a model already known (a gateway may list none); none known, nothing to test. A test or fetch pressed
+  // by hand meanwhile takes over (testAfter is 0).
   useEffect(() => {
-    if (!found || testAfterDiscovery.current !== connectionGeneration.current) return;
-    testAfterDiscovery.current = 0;
-    if (!found.error && found.n > 0 && modelToTest) void runTest();
+    if (!found || found.seq !== testAfter.current) return;
+    testAfter.current = 0;
+    if (modelToTest) void runTest();
   }, [found]);
 
   const save = async () => {
@@ -463,7 +475,14 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
                 <Segmented<ProviderForm["api"]> wrap label={t("settings-providerwizard.api_protocol")} value={f.api} onChange={set("api")} options={[{ v: "messages", label: "Anthropic Messages" }, { v: "responses", label: "OpenAI Responses" }, { v: "chat", label: t("settings-providerwizard.protocol_chat") }]} />
               </Labelled>
             )}
-            <TextField label={t("settings-providerwizard.base_url")} value={f.base_url} onChange={set("base_url")} mono inputMode="url" placeholder="https://…"
+            <TextField label={t("settings-providerwizard.base_url")} value={f.base_url} mono inputMode="url" placeholder="https://…"
+              onChange={(v) => {
+                setUrlTyping(!urlPasting.current);
+                urlPasting.current = false;
+                set("base_url")(v);
+              }}
+              onPaste={() => void (urlPasting.current = true)}
+              onBlur={() => setUrlTyping(false)}
               hint={f.kind === "api" && f.api === "chat" ? t("settings-providerwizard.url_chat_hint") : openAI ? t("settings-providerwizard.url_responses_hint") : t("settings-providerwizard.url_gateway_hint")} />
             {!openAI && (
               <Labelled label={t("settings-providerwizard.auth")} hint={f.auth === "bearer" ? t("settings-providerwizard.auth_bearer_hint") : t("settings-providerwizard.auth_key_hint")}>
@@ -475,7 +494,7 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
                 <div className="flex flex-wrap items-center gap-2">
                   <input value={probeModel} onChange={(e) => setProbeModel(e.target.value)} placeholder={testModel(f) || t("settings-providerwizard.test_model")} aria-label={t("settings-providerwizard.test_model")} autoComplete="off" spellCheck={false}
                     className={cx(FIELD, "h-8 w-full min-w-0 px-2.5 font-mono text-[12.5px] sm:w-auto sm:flex-1")} />
-                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.reach || hasLegacyChat} onClick={() => void runTest()}>
+                  <Button tone="secondary" icon="run" busy={testing} disabled={!!problems.reach || hasLegacyChat} onClick={testByHand}>
                     {t("settings-providerwizard.test")}
                   </Button>
                   <Button tone="secondary" icon="download" busy={discovering} disabled={!!problems.reach || hasLegacyChat} onClick={() => void runDiscover()}>
@@ -491,8 +510,8 @@ export function ProviderWizard({ existing, onClose, onSaved }: { existing: Provi
                     test={test}
                     // before anything ran: a new gateway says it checks itself, and both say when it is about to
                     waiting={autoCheck ? "wait" : isNew && !checked ? "hint" : null}
-                    onRetryCheck={runCheck}
-                    onRetryTest={() => void runTest()}
+                    onRetryFetch={() => void runDiscover(!!found?.check)}
+                    onRetryTest={testByHand}
                   />
                 )}
               </div>
@@ -657,15 +676,28 @@ function KeyStep({ preset, pf, setPf, keyTest, onRetest, onOther, assign, setAss
   );
 }
 
+/** A check running: a spinner and what it is doing. */
+function BusyLine({ children }: { children: React.ReactNode }) {
+  return (
+    <p role="status" className="flex items-center gap-1.5 text-[12px] text-ink-2">
+      <Spinner />
+      {children}
+    </p>
+  );
+}
+
+/** The one action at the end of a check's failed line (Retry, Test again, Use another), in the line's color. */
+function LineAction({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="touch-hit shrink-0 whitespace-nowrap font-medium hover:underline">
+      {children}
+    </button>
+  );
+}
+
 function KeyTestStatus({ keyTest, hasKey, onRetest, onOther }: { keyTest: KeyTest | null; hasKey: boolean; onRetest: () => void; onOther: () => void }) {
   if (!keyTest) return <p className="text-[11.5px] leading-relaxed text-ink-3">{hasKey ? t("settings-providerwizard.key_test_wait") : t("settings-providerwizard.key_test_cost")}</p>;
-  if (keyTest.running)
-    return (
-      <p role="status" className="flex items-center gap-1.5 text-[12px] text-ink-2">
-        <Spinner />
-        {t("settings-providerwizard.key_testing")}
-      </p>
-    );
+  if (keyTest.running) return <BusyLine>{t("settings-providerwizard.key_testing")}</BusyLine>;
   const r = keyTest.result;
   return (
     <div role="status" className={cx("flex items-start gap-2 rounded-card p-3 text-[12px]", r.ok ? "bg-green-tint text-green" : "bg-red-tint text-red")}>
@@ -675,9 +707,9 @@ function KeyTestStatus({ keyTest, hasKey, onRetest, onOther }: { keyTest: KeyTes
       </span>
       {!r.ok && (
         // the region, not the key: testing again or another key will not help, another provider will (#4526)
-        <button type="button" onClick={regionBlocked(r) ? onOther : onRetest} className="touch-hit shrink-0 whitespace-nowrap font-medium hover:underline">
+        <LineAction onClick={regionBlocked(r) ? onOther : onRetest}>
           {regionBlocked(r) ? t("settings-providerwizard.other_provider") : t("settings-providerwizard.retest")}
-        </button>
+        </LineAction>
       )}
     </div>
   );
@@ -685,27 +717,19 @@ function KeyTestStatus({ keyTest, hasKey, onRetest, onOther }: { keyTest: KeyTes
 
 /** The Connect step's check: the connection test, then what fetching the models found (it runs first; its line ends
  *  pointing at the next step). A failure says the hub's own words and offers Retry, like a preset's key test (KeyTestStatus). */
-function ConnectStatus({ discovering, found, testing, test, waiting, onRetryCheck, onRetryTest }: {
+function ConnectStatus({ discovering, found, testing, test, waiting, onRetryFetch, onRetryTest }: {
   discovering: boolean;
-  found: { n: number; error?: string } | null;
+  found: Found | null;
   testing: boolean;
   test: TestResult | null;
   /** Nothing ran yet: "wait" the address and key are in and the check starts when typing stops; "hint" it will once they are. */
   waiting: "wait" | "hint" | null;
-  onRetryCheck: () => void;
+  /** Fetches again, and tests too when the failed fetch was the step's check. */
+  onRetryFetch: () => void;
   onRetryTest: () => void;
 }) {
-  const busy = (text: string) => (
-    <p role="status" className="flex items-center gap-1.5 text-[12px] text-ink-2">
-      <Spinner />
-      {text}
-    </p>
-  );
-  const retry = (onClick: () => void) => (
-    <button type="button" onClick={onClick} className="touch-hit shrink-0 whitespace-nowrap font-medium hover:underline">
-      {t("settings-providerwizard.retry")}
-    </button>
-  );
+  const busy = (text: string) => <BusyLine>{text}</BusyLine>;
+  const retry = (onClick: () => void) => <LineAction onClick={onClick}>{t("settings-providerwizard.retry")}</LineAction>;
   if (!discovering && !found && !testing && !test) {
     if (!waiting) return null;
     return <p className="text-[11.5px] leading-relaxed text-ink-3">{waiting === "wait" ? t("settings-providerwizard.check_wait") : t("settings-providerwizard.check_hint")}</p>;
@@ -728,7 +752,7 @@ function ConnectStatus({ discovering, found, testing, test, waiting, onRetryChec
               <span className="min-w-0 flex-1 break-words">
                 {found.error ? t("settings-providerwizard.discover_failed", { error: found.error }) : t("settings-providerwizard.discover_found", { count: found.n })}
               </span>
-              {found.error && retry(onRetryCheck)}
+              {found.error && retry(onRetryFetch)}
             </div>
           )}
     </>

@@ -113,10 +113,6 @@
  "apple/PersonaLink/Sources/PersonaLink/NativeCompatibility.swift": {
   "keychain-read": 1
  },
- "apple/PersonaShare/ShareViewController.swift": {
-  "image-decode": 1,
-  "keychain-read": 1
- },
  "apple/PersonaWatch/WatchPetView.swift": {
   "directory-listing": 1,
   "file-read": 2,

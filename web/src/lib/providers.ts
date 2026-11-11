@@ -315,7 +315,7 @@ export function autoCheckable(f: ProviderForm, old: ProviderView | null): boolea
   if (key && !testableKey(key)) return false;
   if (!old) return !!key;
   if (!key && !old.has_key) return false;
-  return !!key || f.base_url.trim() !== (old.base_url ?? "").trim() || f.auth !== formFromView(old).auth;
+  return !!key || f.base_url.trim() !== (old.base_url ?? "").trim() || f.auth !== (old.auth ?? "api_key"); // formFromView's default
 }
 
 const int = (s: string) => (s.trim() ? parseInt(s.trim(), 10) : 0);
