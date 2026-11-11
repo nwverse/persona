@@ -9498,6 +9498,31 @@ if os.environ.get("MOCK_TOOL_NAMES") == "1":
     mock_tool_names()
 
 
+# MOCK_REPLY_MARKDOWN=1 (#3863): a reply with a table whose delimiter row aligns its columns (leading, trailing, centered;
+# decimals that line up), headings at levels 4 to 6 and bold labels next to full-width punctuation (`**注意：**后文`,
+# `**「必须」**`), which CommonMark alone leaves as literal asterisks; in an Agents chat of its own and at the end of
+# Persona's conversation. Made-up content.
+REPLY_MD = "a1f3c2d4-0000-4000-8000-0000000c3863"
+REPLY_MD_TEXT = ("导出耗时按行数整理好了：\n\n"
+                 "| 行数 | 之前（秒） | 之后（秒） | 结果 |\n| :--- | ---: | ---: | :---: |\n"
+                 "| 1,000 | 4.8 | 0.9 | 通过 |\n| 4,000 | 19.6 | 2.7 | 通过 |\n| 8,760 | 41.2 | 5.6 | 通过 |\n\n"
+                 "#### 原因\n每行查一次数据库，一年的数据要查 8,760 次。\n\n"
+                 "##### 改法\n按 500 行一批查询，导出时间降到原来的七分之一。\n\n"
+                 "###### 备注\n旧的导出接口先保留一周。\n\n"
+                 "**注意：**夜间导出要等这次修复上线后才会变快。\n\n这是**「必须」**在周五前合并的改动。")
+
+
+def mock_reply_markdown():
+    ITEMS[REPLY_MD] = [it("user", "text", 6, text="导出现在多快了？"), it("assistant", "text", 5, text=REPLY_MD_TEXT)]
+    SESSIONS.append(sess("macbook", REPLY_MD, "导出耗时整理", "/Users/me/code/weather", "done", "unread", "weather", 1, "reply-md", 20, 5,
+                         "这是必须在周五前合并的改动。"))
+    ITEMS[ASK1] = ITEMS[ASK1] + [it("user", "text", 2, text="导出现在多快了？"), it("assistant", "text", 1, text=REPLY_MD_TEXT)]
+
+
+if os.environ.get("MOCK_REPLY_MARKDOWN") == "1":
+    mock_reply_markdown()
+
+
 # MOCK_API_ERRORS=1: model API errors as Claude Code writes them when it gives up. The home conversation ends with the
 # same 502 three times (the user said "Continue" twice in between); an idle Agent's last answer is a login error. The texts
 # follow real ones with every id, host and region replaced.
