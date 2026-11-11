@@ -571,3 +571,7 @@ On the JVM, closing a server socket with a blocked accept can defer the actual d
 Keep a message's last rendered parse while its next parse runs; switching to raw text for every delta changes list and code-block geometry twice. Reset that retained state when the message identity or cache changes, and include stream completion in the parse effect keys. The Markdown renderer also defaults to a text-size spring: chat text should use its measured size immediately, without animating every line wrap.
 
 Measure pending and parsed frames with the real chat row and reverse list. A fixed scroll index and offset can still accompany visible height oscillation. Replay both Assistant and Agent styles, completion, rapid deltas, history reading and return-to-latest. Check selection and exact copied text in the APK as well. Write a PASS evidence file only after every assertion has completed; cleanup must not turn an earlier failure into a successful verdict.
+
+## Bound divider settling frames (#4756)
+
+A non-bouncy spring can still overshoot with a fling velocity. Clamp every divider animation frame to the current drag range before writing PaneExpansionState; negative widths can collide with its unset sentinel. Exercise the production splitter in a measured two-pane scaffold at both edges, including collapse and expand. State-only tests miss the visible width reset.
