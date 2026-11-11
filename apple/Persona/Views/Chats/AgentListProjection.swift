@@ -323,7 +323,7 @@ nonisolated struct AgentListProjection: Sendable {
         // are the others'. A working one hangs under its parent only while the list draws a row above it (`runs`): the
         // groupings that list what runs draw the pinned and live agents; Recently Used and By App draw every one.
         let runs: ((Session) -> Bool)? = settings.grouping == "recent" || settings.grouping == "app" ? nil
-            : { settings.pinned($0.key) || $0.state.isLive }
+            : { $0.state.isLive || settings.pinned($0.key) }
         // A row a quick filter showed stays a row while it is on, a subtask answered under Needs You too.
         let forest = CodexTasks.build(input.sessions, ownRows: settings.filter == .all ? [] : settings.kept, runs: runs)
         let admits: (Session) -> Bool = { session in

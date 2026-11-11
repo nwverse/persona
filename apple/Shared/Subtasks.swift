@@ -30,7 +30,7 @@ extension Session {
     /// that needs the user is not: it is a row of its own, in Needs You and counted (docs/design/DESIGN_SYSTEM.md 3.4)
     /// until it no longer needs them. One whose parent the list does not draw is a row of its own too
     /// (`CodexTasks.build`), still not counted.
-    nonisolated var isNestedSubtask: Bool { state != .needsYou && isSubtask }
+    nonisolated var isNestedSubtask: Bool { isSubtask && state != .needsYou }
 }
 
 /// Subtasks under the session that started them: Codex subagents under their chat, as the Codex App's sidebar shows
@@ -61,65 +61,110 @@ nonisolated struct CodexTasks: Sendable {
     /// user opened under a quick filter, which stay where they were while it is on (a subtask that needed the user and was
     /// answered, too).
     static func build(_ sessions: [Session], ownRows: Set<SessionKey> = [], runs: ((Session) -> Bool)? = nil) -> Self {
-        guard sessions.contains(where: { $0.isNestedSubtask && !ownRows.contains($0.key) }) else { return Self(roots: sessions) }
-        var bySession: [SessionKey: Session] = [:]
-        for s in sessions where bySession[s.key] == nil { bySession[s.key] = s }
-        struct Thread: Hashable { var machine: MachineRef; var instance: String?; var thread: String }
-        var byThread: [Thread: [Session]] = [:]
-        for s in sessions where s.hasCodexIdentity {
-            guard let thread = s.sourceThreadID, !thread.isEmpty else { continue }
-            byThread[Thread(machine: s.machineRef, instance: s.sourceInstanceID, thread: thread), default: []].append(s)
-        }
-        /// The session `id` names beside `s`; with `codex`, only a Codex one.
-        func named(_ s: Session, _ id: String?, codex: Bool) -> Session? {
-            guard let id, !id.isEmpty, let named = bySession[SessionKey(group: s.group, machineID: s.machineID, sessionID: id)],
-                  !codex || named.hasCodexIdentity else { return nil }
-            return named
-        }
-        var parents: [SessionKey: SessionKey] = [:]
-        for s in sessions where s.isNestedSubtask && !ownRows.contains(s.key) {
-            var parent: Session?
-            if s.sourceKind == "runtime" {
-                parent = named(s, s.parentSessionID, codex: false) ?? named(s, s.rootSessionID, codex: false)
-            } else {
-                parent = named(s, s.parentSessionID, codex: true)
-                if parent == nil, s.parentSessionID?.isEmpty ?? true, let thread = s.parentThreadID, !thread.isEmpty,
-                   let same = byThread[Thread(machine: s.machineRef, instance: s.sourceInstanceID, thread: thread)], same.count == 1 {
-                    parent = same[0]
-                }
-                if parent == nil { parent = named(s, s.rootSessionID, codex: true) }
-            }
-            if let parent, parent.key != s.key { parents[s.key] = parent.key }
-        }
-        // A cycle keeps one member as a root, the same one every time: walking from each start in a fixed order, the
-        // first member met twice loses its parent.
-        for start in parents.keys.sorted(by: { order($0) < order($1) }) {
-            var visited = Set<SessionKey>()
-            var current: SessionKey? = start
-            while let c = current, visited.insert(c).inserted { current = parents[c] }
-            if let c = current { parents[c] = nil }
-        }
-        if let runs {
-            var running = Set<SessionKey>()
-            for s in sessions where runs(s) { running.insert(s.key) }
-            // Decided on the whole tree first: one subtask let go does not let go of the ones under it.
-            var loose: [SessionKey] = []
-            for key in parents.keys where running.contains(key) {
-                var above = parents[key]
-                while let a = above, !running.contains(a) { above = parents[a] }
-                if above == nil { loose.append(key) }
-            }
-            for key in loose { parents[key] = nil }
+        guard let parent = parents(sessions, ownRows: ownRows, runs: runs) else { return Self(roots: sessions) }
+        var roots: [Session] = []
+        var members: [Int: [Int]] = [:]
+        for i in sessions.indices {
+            if parent[i] >= 0 { members[parent[i], default: []].append(i) } else { roots.append(sessions[i]) }
         }
         var children: [SessionKey: [Session]] = [:]
-        for s in sessions { if let parent = parents[s.key] { children[parent, default: []].append(s) } }
-        for (parent, members) in children {
-            children[parent] = members.sorted {
-                let a = $0.updatedAt ?? .distantPast, b = $1.updatedAt ?? .distantPast
-                return a != b ? a > b : order($0.key) < order($1.key)
+        for (p, list) in members {
+            let newestFirst = list.map { (index: $0, at: sessions[$0].updatedAt ?? .distantPast, order: order(sessions[$0].key)) }
+                .sorted { $0.at != $1.at ? $0.at > $1.at : $0.order < $1.order }
+            children[sessions[p].key] = newestFirst.map { sessions[$0.index] }
+        }
+        return Self(roots: roots, children: children)
+    }
+
+    /// Where each of `sessions` hangs (`build`'s rule): the index of its parent among them, -1 for none; nil when none
+    /// hangs at all, the usual list, so that one costs a single pass. Works on indices: a session is a large value, and
+    /// a list of thousands copied into dictionaries made the pass several times slower (#4767).
+    static func parents(_ sessions: [Session], ownRows: Set<SessionKey> = [], runs: ((Session) -> Bool)? = nil) -> [Int]? {
+        let nested = nestedSubtasks(sessions, ownRows: ownRows)
+        guard !nested.isEmpty else { return nil }
+        return parents(sessions, nested: nested, runs: runs)
+    }
+
+    /// The indices of the `isNestedSubtask` ones that are not in `ownRows`. A function of its own: inside the one below,
+    /// whose local functions capture the list, the same loop read each session ten times slower (measured, #4767).
+    private static func nestedSubtasks(_ sessions: [Session], ownRows: Set<SessionKey>) -> [Int] {
+        var nested: [Int] = []
+        for i in sessions.indices where sessions[i].isNestedSubtask && (ownRows.isEmpty || !ownRows.contains(sessions[i].key)) {
+            nested.append(i)
+        }
+        return nested
+    }
+
+    private static func parents(_ sessions: [Session], nested: [Int], runs: ((Session) -> Bool)?) -> [Int] {
+        var index: [SessionKey: Int] = [:]
+        index.reserveCapacity(sessions.count)
+        for i in sessions.indices where index[sessions[i].key] == nil { index[sessions[i].key] = i }
+        struct Thread: Hashable { var machine: MachineRef; var instance: String?; var thread: String }
+        var byThread: [Thread: [Int]] = [:]
+        for i in sessions.indices where sessions[i].hasCodexIdentity {
+            guard let thread = sessions[i].sourceThreadID, !thread.isEmpty else { continue }
+            byThread[Thread(machine: sessions[i].machineRef, instance: sessions[i].sourceInstanceID, thread: thread), default: []].append(i)
+        }
+        /// The session `id` names beside `s`; with `codex`, only a Codex one.
+        func named(_ s: Session, _ id: String?, codex: Bool) -> Int? {
+            guard let id, !id.isEmpty, let i = index[SessionKey(group: s.group, machineID: s.machineID, sessionID: id)],
+                  !codex || sessions[i].hasCodexIdentity else { return nil }
+            return i
+        }
+        var parent = [Int](repeating: -1, count: sessions.count)
+        for i in nested {
+            let s = sessions[i]
+            var found: Int?
+            if s.sourceKind == "runtime" {
+                found = named(s, s.parentSessionID, codex: false) ?? named(s, s.rootSessionID, codex: false)
+            } else {
+                found = named(s, s.parentSessionID, codex: true)
+                if found == nil, s.parentSessionID?.isEmpty ?? true, let thread = s.parentThreadID, !thread.isEmpty,
+                   let same = byThread[Thread(machine: s.machineRef, instance: s.sourceInstanceID, thread: thread)], same.count == 1 {
+                    found = same[0]
+                }
+                if found == nil { found = named(s, s.rootSessionID, codex: true) }
+            }
+            if let found, sessions[found].key != s.key { parent[i] = found }
+        }
+        // A cycle keeps one member as a root, the same one every time: walking from each start in a fixed order, the
+        // first member met twice loses its parent. Corrupt parents are rare: one linear pass looks for a cycle first.
+        var mark = [UInt8](repeating: 0, count: sessions.count) // 1: on this walk, 2: walked
+        var cycle = false
+        for start in nested where mark[start] == 0 {
+            var walk: [Int] = []
+            var c = start
+            while c >= 0 && mark[c] == 0 { mark[c] = 1; walk.append(c); c = parent[c] }
+            if c >= 0 && mark[c] == 1 { cycle = true }
+            for w in walk { mark[w] = 2 }
+        }
+        if cycle {
+            let starts = nested.filter { parent[$0] >= 0 }.map { (order: order(sessions[$0].key), index: $0) }
+                .sorted { $0.order < $1.order }
+            for start in starts {
+                var visited = Set<Int>()
+                var c = start.index
+                while c >= 0, visited.insert(c).inserted { c = parent[c] }
+                if c >= 0 { parent[c] = -1 }
             }
         }
-        return Self(roots: sessions.filter { parents[$0.key] == nil }, children: children)
+        if let runs {
+            // Asked only of the subtasks and the sessions above them, once each.
+            var drawn = [Int8](repeating: -1, count: sessions.count)
+            func draws(_ i: Int) -> Bool {
+                if drawn[i] < 0 { drawn[i] = runs(sessions[i]) ? 1 : 0 }
+                return drawn[i] == 1
+            }
+            // Decided on the whole tree first: one subtask let go does not let go of the ones under it.
+            var loose: [Int] = []
+            for i in nested where parent[i] >= 0 && draws(i) {
+                var above = parent[i]
+                while above >= 0 && !draws(above) { above = parent[above] }
+                if above < 0 { loose.append(i) }
+            }
+            for i in loose { parent[i] = -1 }
+        }
+        return parent
     }
 
     private static func order(_ k: SessionKey) -> String { "\(k.hubGroup ?? "")/\(k.machineID)/\(k.sessionID)" }
