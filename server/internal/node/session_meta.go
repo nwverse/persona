@@ -357,7 +357,10 @@ func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
 	}
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	if sc.pending || sc.off > m.size {
+	if sc.pending || sc.off != m.size {
+		if !m.titleManual {
+			m.titleSource = ""
+		}
 		return
 	}
 	m.outputTokens = sc.meta.OutputTokens

@@ -41,7 +41,9 @@ func contextWindowOf(model string, recorded, used int) int {
 func setContext(s *proto.Session, m quickMeta) {
 	s.OutputTokens = m.outputTokens
 	s.TitleManual = s.TitleManual || m.titleManual
-	if m.title != "" && s.Title == m.title {
+	if m.title != "" && s.Title == m.title || m.title == "" && m.titleSource == "prompt" {
+		// A terminal's tool-only fallback still has known transcript provenance
+		// once the complete scan proves that no custom/AI title exists.
 		s.TitleSource = proto.ParseTitleSource(m.titleSource)
 	}
 	if m.contextTokens <= 0 {

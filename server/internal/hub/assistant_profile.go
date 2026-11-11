@@ -231,7 +231,7 @@ func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	out := json.RawMessage(`{"ok":true}`)
-	if s, _ := m.session(sid); m.isAssistant(s) {
+	if p["title"] != nil || p["tab_name"] != nil {
 		ext := ""
 		if pr := principalOf(r.Context()); pr.Role == roleExtension {
 			ext = pr.Extension
@@ -243,12 +243,6 @@ func (h *Hub) renameSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 		}
 		if len(res) > 0 {
 			out = res
-		}
-	} else if p["title"] != nil || p["tab_name"] != nil {
-		p["session_id"] = sid
-		if err := m.call(ctx, "session.rename", p, &out); err != nil {
-			callErr(w, err)
-			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

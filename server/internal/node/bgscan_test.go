@@ -105,6 +105,28 @@ func TestNodeNamingMetadataSources(t *testing.T) {
 	}
 }
 
+func TestToolOnlyTitleKeepsKnownPromptProvenance(t *testing.T) {
+	s := proto.Session{Title: "◐ Claude Code"}
+	setContext(&s, quickMeta{titleSource: "prompt", outputTokens: 10})
+	if s.TitleSource != proto.TitleSourcePrompt || s.OutputTokens != 10 {
+		t.Fatal("tool fallback lost its proved transcript provenance")
+	}
+	unknown := proto.Session{Title: "◐ Claude Code"}
+	setContext(&unknown, quickMeta{})
+	if unknown.TitleSource != proto.TitleSourceUnknown || unknown.TitleManual {
+		t.Fatal("missing metadata implied known title provenance")
+	}
+}
+
+func TestIncompleteNamingScanDoesNotProveAutomaticTitle(t *testing.T) {
+	m := quickMeta{title: "Generated", titleSource: "auto", size: 100}
+	n := &Node{bgScans: map[string]*bgScan{"s": {off: 50}}}
+	n.mergeNamingMetadata("s", &m)
+	if m.titleSource != "" {
+		t.Fatal("an incomplete or failed historical scan proved automatic provenance")
+	}
+}
+
 func TestPendingNamingScanDoesNotProveAutomaticTitle(t *testing.T) {
 	m := quickMeta{title: "Generated", size: 100}
 	n := &Node{bgScans: map[string]*bgScan{"s": {pending: true, meta: transcript.Meta{Title: "Manual", TitleManual: true, TitleSource: "manual", OutputTokens: 42}}}}
@@ -113,6 +135,7 @@ func TestPendingNamingScanDoesNotProveAutomaticTitle(t *testing.T) {
 		t.Fatal("pending scan published unverified metadata")
 	}
 	n.bgScans["s"].pending = false
+	n.bgScans["s"].off = m.size // the historical scan really completed, not merely stopped
 	n.mergeNamingMetadata("s", &m)
 	if m.title != "Manual" || !m.titleManual || m.titleSource != "manual" || m.outputTokens != 42 {
 		t.Fatal("completed scan did not restore historical manual title and cumulative output")

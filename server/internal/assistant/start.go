@@ -1029,6 +1029,9 @@ func (s *Service) Rename(ctx context.Context, p RenameParams) (json.RawMessage, 
 	if strings.TrimSpace(title) != "" && s.isMain(ctx, p.SessionID) {
 		return nil, badRequest(errRenameMain, s.lang(ctx)) // the apps show the persona there (#1313)
 	}
+	if c, found := s.session(ctx, p.MachineID, p.SessionID); found && !c.Assistant {
+		return s.renameAgent(ctx, p, c)
+	}
 	if c, _ := s.session(ctx, p.MachineID, p.SessionID); c.Agent == "codex" {
 		delete(params, "title") // only the assistant's title for Codex (its conversation_rename does the same)
 	}
