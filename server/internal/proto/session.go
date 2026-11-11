@@ -78,9 +78,19 @@ type Session struct {
 	Assistant        bool `json:"assistant"` // runs in the assistant directory (the app's "Chat" tab)
 	// Archived: a retained conversation moved out of the normal list. Assistant
 	// conversations and Claude/Codex Agents are managed by their owning manager.
-	Archived bool   `json:"archived,omitempty"`
-	Title    string `json:"title"`
-	Cwd      string `json:"cwd"`
+	Archived bool `json:"archived,omitempty"`
+	// BypassAvailable and UltracodePending sit here, beside the bools before them, not with the fields they go with
+	// (PermissionMode, Ultracode): alone between two wider fields the two took an 8-byte word, and a Session must stay
+	// at most 1,528 bytes (see BackgroundWorking below); PendingSwitch got that word (#5035).
+	// BypassAvailable: this Claude Code can be switched to bypassPermissions (Allow All) while it runs, since it was
+	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
+	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
+	// hooks run under; false while unknown (no hook yet, a node too old to say).
+	BypassAvailable bool `json:"bypass_available,omitempty"`
+	// UltracodePending: a requested ultracode change waits for an idle input box (see Ultracode).
+	UltracodePending bool   `json:"ultracode_pending,omitempty"`
+	Title            string `json:"title"`
+	Cwd              string `json:"cwd"`
 	// WorkspaceCwd is the node-verified physical directory for Cwd. Consumers
 	// matching workspace bindings prefer it and fall back to Cwd on older nodes.
 	WorkspaceCwd string `json:"workspace_cwd,omitempty"`
@@ -123,18 +133,13 @@ type Session struct {
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
-	// BypassAvailable: this Claude Code can be switched to bypassPermissions (Allow All) while it runs, since it was
-	// started with --dangerously-skip-permissions, --allow-dangerously-skip-permissions or --permission-mode
-	// bypassPermissions, which put that mode in its shift+tab cycle (#1379). The node reads it off the claude process its
-	// hooks run under; false while unknown (no hook yet, a node too old to say).
-	BypassAvailable bool `json:"bypass_available,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
-	// Pending means a requested change waits for an idle input box; LostAt asks the client to offer reopening
-	// after a resumed process reset an enabled switch. Reopening or dismissing the notice clears LostAt.
-	UltracodePending bool       `json:"ultracode_pending,omitempty"`
-	Ultracode        *bool      `json:"ultracode,omitempty"`
-	UltracodeNote    string     `json:"ultracode_note,omitempty"`
-	UltracodeLostAt  *time.Time `json:"ultracode_lost_at,omitempty"`
+	// UltracodePending (beside Archived) means a requested change waits for an idle input box; LostAt asks the client
+	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
+	// LostAt.
+	Ultracode       *bool      `json:"ultracode,omitempty"`
+	UltracodeNote   string     `json:"ultracode_note,omitempty"`
+	UltracodeLostAt *time.Time `json:"ultracode_lost_at,omitempty"`
 	// PendingSwitch is a switch of this running Claude Code Agent to another launcher (model provider) of the same
 	// engine that the user picked and that waits for the next message (#5035, docs/integrations/claude-integration.md
 	// "Switching a running Agent to another provider"): that message quits the agent and resumes the same conversation

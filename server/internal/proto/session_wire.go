@@ -21,7 +21,7 @@ import (
 // fields differ from them (a field added, renamed, retyped or retagged by a change that did not update this file),
 // appendSession leaves every session to the reflect encoder: the session is sent whole, only slower, until its line
 // here and this hash are brought up to date. TestSessionWireMatchesReflect fails meanwhile and prints the new hash.
-const sessionWireLayout = 0xf482c60828e66b6c
+const sessionWireLayout = 0x59fc7da5da369a2c
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout
 
@@ -86,6 +86,8 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.boolean(`"started_by_persona":`, s.StartedByPersona, false)
 	w.boolean(`"assistant":`, s.Assistant, false)
 	w.boolean(`"archived":`, s.Archived, true)
+	w.boolean(`"bypass_available":`, s.BypassAvailable, true)
+	w.boolean(`"ultracode_pending":`, s.UltracodePending, true)
 	w.str(`"title":`, s.Title, false)
 	w.str(`"cwd":`, s.Cwd, false)
 	w.str(`"workspace_cwd":`, s.WorkspaceCwd, true)
@@ -106,8 +108,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	w.str(`"model":`, s.Model, true)
 	w.str(`"permission_mode":`, s.PermissionMode, true)
 	w.str(`"effort":`, s.Effort, true)
-	w.boolean(`"bypass_available":`, s.BypassAvailable, true)
-	w.boolean(`"ultracode_pending":`, s.UltracodePending, true)
 	if s.Ultracode != nil {
 		w.boolean(`"ultracode":`, *s.Ultracode, false)
 	}
